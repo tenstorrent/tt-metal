@@ -15,6 +15,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
+#include "ttnn/config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -214,6 +215,18 @@ static bool get_post_process_bias(
     return post_process_bias;
 }
 
+static bool config_fuses_activation(const MatmulProgramConfig& config) {
+    return std::visit(
+        [](const auto& c) {
+            if constexpr (requires { c.fused_activation; }) {
+                return c.fused_activation.has_value();
+            } else {
+                return false;
+            }
+        },
+        config);
+}
+
 static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
@@ -294,9 +307,16 @@ static ttnn::Tensor bound_matmul(
         parameters.transpose_b = false;
     }
 
+    // The new default selector (ttnn.CONFIG.matmul_auto_config_v2) decides bias and activation fusion from
+    // the config it actually chose; the legacy path guesses what the auto-selection will pick.
+    const bool use_chosen_config = ttnn::CONFIG.get<"matmul_auto_config_v2">();
+    std::optional<const MatmulProgramConfig> bias_decision_config = parameters.program_config;
+    if (use_chosen_config) {
+        bias_decision_config.emplace(chosen_program_config);
+    }
     bool post_process_bias = get_post_process_bias(
         bias,
-        parameters.program_config,
+        bias_decision_config,
         parameters.user_core_coord,
         parameters.output_mem_config,
         input_tensor_a_adjusted,
@@ -352,7 +372,9 @@ static ttnn::Tensor bound_matmul(
         output_tensor = ttnn::reshape(output_tensor, result_shape);
     }
 
-    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
+    const bool activation_fused =
+        use_chosen_config ? config_fuses_activation(chosen_program_config) : parameters.user_core_coord.has_value();
+    if (parameters.user_fused_activation.has_value() && !activation_fused) {
         const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
         output_tensor =

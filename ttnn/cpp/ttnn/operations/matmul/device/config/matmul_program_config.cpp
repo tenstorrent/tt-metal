@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
 #include <algorithm>
@@ -1011,6 +1013,25 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 }
 }  // namespace bmm_op_utils
 
+namespace {
+// Last auto-generated config, recorded for tests and benchmarks (see get_last_auto_program_config).
+thread_local std::optional<MatmulProgramConfig> last_auto_program_config;
+thread_local bool last_auto_program_config_fallback = false;
+thread_local std::string last_auto_fallback_reason;
+}  // namespace
+
+bool last_auto_program_config_fell_back() { return last_auto_program_config_fallback; }
+
+const std::string& last_auto_program_config_fallback_reason() { return last_auto_fallback_reason; }
+
+std::optional<MatmulProgramConfig> get_last_auto_program_config(bool reset) {
+    auto config = last_auto_program_config;
+    if (reset) {
+        last_auto_program_config.reset();
+    }
+    return config;
+}
+
 MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1021,19 +1042,33 @@ MatmulProgramConfig get_program_config(
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }
-    auto config = generate_matmul_program_config(
-        input_tensor_a,
-        input_tensor_b,
-        transpose_a,
-        transpose_b,
-        bias_single_tile_size,
-        attributes.output_mem_config,
-        attributes.compute_kernel_config,
-        attributes.user_core_coord,
-        attributes.user_fused_activation,
-        attributes.user_run_batched,
-        attributes.output_dtype.value_or(input_tensor_a.dtype()));
+    std::optional<MatmulProgramConfig> auto_config;
+    const bool use_v2 = ttnn::CONFIG.get<"matmul_auto_config_v2">();
+    std::string unsupported;
+    if (use_v2) {
+        auto_config = auto_config::select_program_config(
+            input_tensor_a, input_tensor_b, transpose_a, transpose_b, bias_single_tile_size, attributes, &unsupported);
+    }
+    last_auto_program_config_fallback = use_v2 && !auto_config.has_value();
+    last_auto_fallback_reason = last_auto_program_config_fallback ? unsupported : std::string();
+    if (last_auto_program_config_fallback) {
+        log_debug(tt::LogOp, "matmul_auto_config_v2 fell back to the legacy selection: {}", unsupported);
+    }
+    auto config = auto_config.has_value() ? std::move(auto_config.value())
+                                          : generate_matmul_program_config(
+                                                input_tensor_a,
+                                                input_tensor_b,
+                                                transpose_a,
+                                                transpose_b,
+                                                bias_single_tile_size,
+                                                attributes.output_mem_config,
+                                                attributes.compute_kernel_config,
+                                                attributes.user_core_coord,
+                                                attributes.user_fused_activation,
+                                                attributes.user_run_batched,
+                                                attributes.output_dtype.value_or(input_tensor_a.dtype()));
     log_debug(tt::LogOp, "Auto generated program config: {}", config);
+    last_auto_program_config = config;
 
     // Sanity checks for matmul program configs
     std::visit(

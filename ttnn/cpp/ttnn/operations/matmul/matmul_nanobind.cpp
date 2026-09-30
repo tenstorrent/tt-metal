@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
@@ -1260,6 +1261,41 @@ void py_module(nb::module_& mod) {
         &ttnn::prim::MatmulDeviceOperation::select_program_factory,
         nb::arg("operation_attributes"),
         nb::arg("tensor_args"));
+
+    mod.def(
+        "matmul_last_auto_program_config",
+        [](bool reset) -> std::optional<std::string> {
+            auto config = ttnn::operations::matmul::get_last_auto_program_config(reset);
+            return config ? std::optional(fmt::format("{}", *config)) : std::nullopt;
+        },
+        nb::arg("reset") = false,
+        R"doc(
+        Testing/benchmark only, not part of the public API.
+
+        Returns the program config most recently auto-selected on this thread by a matmul called without a
+        program_config, formatted as a string (None if there hasn't been one). After ttnn.matmul/ttnn.linear,
+        this is the config that ran. With reset=True the recorded config is cleared after it is read.
+    )doc");
+
+    mod.def(
+        "matmul_last_auto_config_fell_back",
+        &ttnn::operations::matmul::last_auto_program_config_fell_back,
+        R"doc(
+        Testing/benchmark only, not part of the public API.
+
+        Whether the config returned by matmul_last_auto_program_config came from the legacy selection although
+        ttnn.CONFIG.matmul_auto_config_v2 was set, because the new selector doesn't handle those inputs yet.
+    )doc");
+
+    mod.def(
+        "matmul_last_auto_config_fallback_reason",
+        []() { return ttnn::operations::matmul::last_auto_program_config_fallback_reason(); },
+        R"doc(
+        Testing/benchmark only, not part of the public API.
+
+        Why the new selector didn't handle the inputs of the last auto-selected config (empty unless
+        matmul_last_auto_config_fell_back is True).
+    )doc");
 
     // Bind create_matmul_attributes helper
     mod.def(

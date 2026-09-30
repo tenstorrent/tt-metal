@@ -119,7 +119,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     uint32_t batch_scale_factor = per_core_M > M ? per_core_M / M : 1;
     uint32_t per_core_M_per_batch = per_core_M > M ? M : per_core_M;
     uint32_t num_blocks = (K / in0_block_w);
-    bool packer_l1_acc_en = packer_l1_acc && (num_blocks > 2);
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -415,6 +417,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
+    // A core's consecutive output blocks walk the M blocks of a batch, then move to the next batch
+    // (per_core_N == N, so a batch has no N blocks to walk).
+    const uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
+    const uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
+    const uint32_t out_m_block_stride = per_core_M_per_batch * N;
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Build KernelSpecs
     ////////////////////////////////////////////////////////////////////////////
@@ -453,10 +461,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"num_blocks", num_blocks},
                 {"bcast_B", static_cast<uint32_t>(bcast_batch)},
                 {"MtKt", M * K},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"in0_m_block_stride", in0_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch"},
+                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch", "start_m_block"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -513,10 +523,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"out_num_subblocks_w", out_num_subblocks_w},
                 {"out_num_subblocks_h", out_num_subblocks_h},
                 {"MtNt", M * N},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"out_m_block_stride", out_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id"},
+                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id", "start_m_block"},
             },
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -652,12 +664,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
     const auto cores = corerange_to_cores(all_cores, num_cores, row_major);
 
-    uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
     uint32_t n_blocks_per_batch = N / per_core_N;
     uint32_t blocks_per_batch = m_blocks_per_batch * n_blocks_per_batch;
     uint32_t in0_batch_stride = M * K;
     uint32_t in1_batch_stride = K * N;
-    uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
     uint32_t in1_n_block_stride = per_core_N * (transpose_b ? K : 1);
 
     KernelRunArgs reader_run_args{.kernel = READER};
@@ -680,7 +690,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"in0_tensor_start_tile_id", in0_start_tile_id}, {"batch", num_output_blocks_per_core}});
+            {{"in0_tensor_start_tile_id", in0_start_tile_id},
+             {"batch", num_output_blocks_per_core},
+             {"start_m_block", start_m_block}});
 
         uint32_t out_start_tile_id =
             (start_batch * M * N) + (start_m_block * per_core_M_per_batch * N) + (start_n_block * per_core_N);
@@ -689,7 +701,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             core,
             {{"in1_tensor_start_tile_id", in1_start_tile_id},
              {"batch", num_output_blocks_per_core},
-             {"out_tensor_start_tile_id", out_start_tile_id}});
+             {"out_tensor_start_tile_id", out_start_tile_id},
+             {"start_m_block", start_m_block}});
         if (bias.has_value()) {
             // Broadcast over batch, single block per element (start_m_block == start_n_block == 0
             // under the bias FATAL): the whole [M, N] bias starts at tile 0.

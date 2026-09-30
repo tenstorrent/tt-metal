@@ -1,0 +1,42 @@
+case,tier,source,tags,a_shape,b_shape,a_dtype,b_dtype,out_dtype,a_mem,b_mem,out_mem,a_shard,b_shard,out_shard,transpose_a,transpose_b,op,bias,activation,core_grid,fidelity,fp32_acc,packer_l1_acc
+i56976_gemma4_mlp-dram.dram.dram,issues,#56976,,1024x5376,5376x5376,bf16,bfp8,,dram,dram,dram,,,,0,0,matmul,0,,,HiFi2,0,1
+i35396_attn_qk-grid,issues,#35396,,64x6x256x64,64x6x256x64,bf16,bf16,,dram,dram,dram,,,,0,1,matmul,0,,device,HiFi2,0,1
+i29716_dit_5632x2048x3072-grid,issues,#29716,large,5632x2048,2048x3072,bf16,bf16,,dram,dram,dram,,,,0,0,matmul,0,,device,HiFi2,1,1
+i25503_768_n4,issues,#25503,,768x768x128,128x4,bf16,bf16,,dram,dram,dram,,,,0,0,matmul,0,,,HiFi2,0,1
+m_llama8b_qkv_decode-l1,models,llm,decode,1x1x32x4096,4096x6144,bf16,bfp8,,l1,dram,l1,,,,0,0,linear,0,,,HiFi2,0,1
+m_llama8b_w2_decode128-l1,models,llm,decode128,1x1x128x14336,14336x4096,bf16,bfp8,,l1,dram,l1,,,,0,0,linear,0,,,HiFi2,0,1
+m_llama70b_tp8_w2_prefill8k,models,llm,prefill8k,1x1x8192x3584,3584x8192,bf16,bfp8,,dram,dram,dram,,,,0,0,linear,0,,,HiFi2,0,1
+g_32x4096x1024_bf16_l1,generic,,,32x4096,4096x1024,bf16,bf16,,l1,dram,l1,,,,0,0,matmul,0,,,HiFi2,0,1
+g_256x1024x16384_bf16_l1,generic,,,256x1024,1024x16384,bf16,bf16,,l1,dram,l1,,,,0,0,matmul,0,,,HiFi2,0,1
+g_1024x1024x4096_bf16_l1,generic,,,1024x1024,1024x4096,bf16,bf16,,l1,dram,l1,,,,0,0,matmul,0,,,HiFi2,0,1
+g_4096x1024x1024_bf16_l1,generic,,,4096x1024,1024x1024,bf16,bf16,,l1,dram,l1,,,,0,0,matmul,0,,,HiFi2,0,1
+g_4096x4096x16384_bf16_l1,generic,,,4096x4096,4096x16384,bf16,bf16,,l1,dram,l1,,,,0,0,matmul,0,,,HiFi2,0,1
+t_matmul_174f667b8b,traced,ttnn.matmul,default,16x2x32x32,16x2x32x6,fp32,fp32,fp32,dram,dram,dram,,,,0,0,matmul,0,,,HiFi2,0,1
+t_matmul_5533365590,traced,ttnn.matmul,core_grid,1x1x32x4544,4544x65024,bf16,bfp8,bf16,dram,dram,dram,,,,0,0,matmul,0,,"(8, 7)",HiFi2,0,1
+t_matmul_9df6dba0b1,traced,ttnn.matmul,default,16x2x32x32,16x2x32x32,fp32,fp32,fp32,dram,dram,dram,,,,0,0,matmul,0,,,HiFi2,0,1
+t_linear_001615004e,traced,ttnn.linear,core_grid,2x1x1500x5120,5120x1280,bf16,bf16,,l1,dram,l1,,,,0,0,linear,1,,"(8, 8)",HiFi2,0,1
+t_linear_0ef34714ad,traced,ttnn.linear,default,1x1x3577x5120,5120x2048,bf16,bfp8,,dram,dram,dram,,,,0,0,linear,0,,,HiFi2,0,1
+t_linear_1ddd665d29,traced,ttnn.linear,core_grid,16x64x384,384x384,bf16,bf16,,l1,dram,l1,,,,0,0,linear,1,,"(8, 8)",LoFi,0,0
+t_linear_368e776877,traced,ttnn.linear,default,1x1x4096x2560,1x1x2560x6144,bf16,bf16,,dram,dram,dram,,,,0,0,linear,0,,,HiFi2,0,1
+t_linear_4269984d8e,traced,ttnn.linear,core_grid,2x1x1x5120,5120x1280,bf16,bf16,,l1,dram,l1,,,,0,0,linear,1,,"(11, 10)",HiFi2,0,1
+t_linear_51661c5958,traced,ttnn.linear,default,1x1x1x4096,4096x4096,bf16,bf16,,dram,dram,dram,,,,0,0,linear,1,relu,,HiFi2,0,1
+t_s_linear_63389a09a8,traced,ttnn.linear,core_grid,1x1x16384x32,32x32,bfp8,bfp8,bfp8,l1_height,dram,l1_height,"(0,0)-(7,7):256x32:row",,,0,0,linear,1,,"(8, 8)",HiFi2,0,1
+t_linear_73f110f73d,traced,ttnn.linear,core_grid,2x1x1x1280,1280x3840,bf16,bf16,bf16,dram,dram,l1,,,,0,0,linear,1,,"(11, 10)",HiFi2,0,1
+t_s_linear_8955fe4354,traced,ttnn.linear,core_grid,1x1x256x256,256x1024,bfp8,bfp8,bfp8,l1_block,dram,l1_block,"(0,0)-(7,7):32x32:row",,,0,0,linear,1,,"(8, 8)",HiFi2,0,1
+t_linear_a9e06f83f3,traced,ttnn.linear,core_grid,4x64x768,768x2304,bf16,bf16,,l1,dram,l1,,,,0,0,linear,1,,"(8, 8)",LoFi,0,0
+t_linear_c6d965ea6c,traced,ttnn.linear,core_grid,1x1x3x5120,5120x1280,bf16,bf16,,l1,dram,l1,,,,0,0,linear,1,,"(11, 10)",HiFi2,0,1
+t_linear_df6cffd541,traced,ttnn.linear,default,1x1x3577x5120,5120x5120,bf16,bfp8,,dram,dram,dram,,,,0,0,linear,0,,,HiFi2,0,1
+i29716_dit_11264x3072x4608,issues,#29716,large,11264x3072,3072x4608,bf16,bf16,,dram,dram,dram,,,,0,0,matmul,0,,,HiFi2,1,1
+i29716_dit_5632x3072x2304-grid,issues,#29716,large,5632x3072,3072x2304,bf16,bf16,,dram,dram,dram,,,,0,0,matmul,0,,device,HiFi2,1,1
+i29716_dit_37888x5120x3456,issues,#29716,large,37888x5120,5120x3456,bf16,bf16,,dram,dram,dram,,,,0,0,matmul,0,,,HiFi2,1,1
+i29716_dit_9472x5120x3456-grid,issues,#29716,large,9472x5120,5120x3456,bf16,bf16,,dram,dram,dram,,,,0,0,matmul,0,,device,HiFi2,1,1
+i29716_dit_9472x6912x5120,issues,#29716,large,9472x6912,6912x5120,bf16,bf16,,dram,dram,dram,,,,0,0,matmul,0,,,HiFi2,1,1
+s_h_8192x256x256,sharded,,,1x1x8192x256,256x256,bf16,bf16,,l1_height,dram,dram,,,,0,0,matmul,0,,,HiFi2,0,1
+s_o_w_32x4096x8192,sharded,,,32x4096,4096x8192,bf16,bfp8,,dram,dram,l1_width,,,,0,0,matmul,0,,,HiFi2,0,1
+t_s_matmul_8418341090,traced,ttnn.matmul,default,1x8x256x32,1x8x32x256,bfp8,bfp8,bfp8,l1_height,l1,l1_height,"(0,0)-(1,3):256x32:row",,,0,0,matmul,0,,,HiFi2,0,1
+t_matmul_c58f7ad0eb,traced,ttnn.matmul,default,1x12x77x64,1x12x64x77,bf16,bf16,,dram,dram,dram,,,,0,0,matmul,0,,,HiFi4,1,1
+t_s_linear_142c110e2a,traced,ttnn.linear,default,1x1x1x768,768x768,bf16,bf16,,l1_width,dram,l1,"(0,0)-(7,2):32x32:row",,,0,0,linear,1,,,HiFi4,1,0
+t_s_linear_3e403c2e05,traced,ttnn.linear,core_grid,1x1x256x64,64x64,bfp8,bfp8,bfp8,l1_height,dram,l1_height,"(0,0)-(0,7):32x64:row",,,0,0,linear,1,,"(1, 8)",HiFi2,0,1
+t_linear_58a119a101,traced,ttnn.linear,default,1x50x768,768x160,fp32,fp32,,l1,dram,l1,,,,0,0,linear,1,,,HiFi4,1,0
+t_s_linear_6bdaa3572f,traced,ttnn.linear,core_grid,1x1x1024x640,640x160,bfp8,bfp8,bfp8,l1_block,dram,l1_block,"(0,0)-(4,7):128x128:row",,,0,0,linear,1,,"(5, 8)",HiFi2,0,1
+t_s_linear_9dd5b5a1c0,traced,ttnn.linear,default,1x1x1x768,768x2304,bf16,bf16,,l1_width,dram,l1,"(0,0)-(7,2):32x32:row",,,0,0,linear,1,,,HiFi4,1,0
