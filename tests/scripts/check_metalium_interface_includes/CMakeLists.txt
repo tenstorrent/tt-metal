@@ -2,12 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Configure-only regression check for #58511: an installed TT::Metalium must not put the
-# whole libexec/tt-metalium JIT/device header tree on a consumer's include path.
-#
-# Must look at two things: plain INTERFACE_INCLUDE_DIRECTORIES, and the base dirs of exported
-# interface header file sets (CMake turns those into include dirs for consumers, but they do not
-# appear in INTERFACE_INCLUDE_DIRECTORIES).
+# Fails if the installed TT::Metalium exports libexec/tt-metalium as an include dir (#58511).
+# Exported header file set base dirs are checked too: they do not show up in INTERFACE_INCLUDE_DIRECTORIES.
 cmake_minimum_required(VERSION 3.24)
 project(check_metalium_interface_includes LANGUAGES CXX)
 
@@ -54,13 +50,11 @@ message(STATUS "TT::Metalium interface include dirs (from ${seen_count} targets)
 set(leaks "")
 foreach(dir IN LISTS dirs)
     message(STATUS "  ${dir}")
-    # The libexec/tt-metalium root itself, not its api/ subdirectories.
     if(dir MATCHES "/libexec/tt-metalium/?>?$")
         list(APPEND leaks ${dir})
     endif()
 endforeach()
 
 if(leaks)
-    message(FATAL_ERROR "TT::Metalium exports the libexec/tt-metalium header tree to consumers: ${leaks}\n"
-        "This exposes every internal JIT/device header (see #58511). Do not use a repo-root BASE_DIRS in a PUBLIC/INTERFACE file set.")
+    message(FATAL_ERROR "TT::Metalium exports the libexec/tt-metalium header tree to consumers: ${leaks}")
 endif()

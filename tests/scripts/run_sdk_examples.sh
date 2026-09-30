@@ -13,7 +13,7 @@ ASAN_BUILD="${ASAN_BUILD:-false}"
 
 FAILED_EXAMPLES=""
 
-# Regression check for #58511: the installed TT::Metalium must not export libexec/tt-metalium as an include dir.
+# #58511: installed TT::Metalium must not export libexec/tt-metalium as an include dir.
 echo "::group::TT::Metalium interface include directories"
 check_dir="$(dirname "$(readlink -f "$0")")/check_metalium_interface_includes"
 if ! LD_PRELOAD="" cmake -G Ninja -S "$check_dir" -B "$(mktemp -d)"; then

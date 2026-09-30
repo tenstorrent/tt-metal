@@ -73,10 +73,7 @@ inline uint16_t unpack_k(uint32_t weight_k) { return (uint16_t)(weight_k >> 16);
 
 // ===== Sparse-multicast grouped route_info =====
 //
-// Destinations one grouped slot can carry is NOC_SPARSE_MCAST_WRITE_MAX_DESTS: that is how many
-// address slots the fabric packet header holds, and one slot is one sparse multicast. The fabric
-// header is internal to tt_metal and only reachable from kernel builds, so the host sees a local
-// copy of the value; kernel builds pin it to the fabric macro.
+// Local copy of NOC_SPARSE_MCAST_WRITE_MAX_DESTS: the fabric header is only reachable from kernel builds.
 constexpr uint32_t GROUPED_ROUTE_MAX_DESTS = 4;
 #if defined(KERNEL_BUILD)
 static_assert(
