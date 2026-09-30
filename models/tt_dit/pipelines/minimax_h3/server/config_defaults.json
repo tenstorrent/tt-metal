@@ -29,7 +29,7 @@
    "precomputed_adaln": false,
    "profile": null,
    "qkv_dtype": "bfloat16",
-   "why": "the (1,4) preset asks for no quant profile; TP=4 divides the DiT to ~16.6 GB/chip and the measured default already clears the 90 s budget at 75.5 s, so there is nothing to buy by quantizing"
+   "why": "the (1,4) preset asks for no quant profile; TP=4 divides the DiT to ~16.6 GB/chip and the measured default already clears the 90 s budget at 75.5 s, so there is nothing to buy by quantizing ON LATENCY -- but see p300x2.quality_fix_measured: stage 06 found the served-point quality defect lives on this bf16 path and goes away at bf8 for free, so the reason to quantize this mesh is accuracy, not speed. This block records the stage-05 sweep as it was taken."
   },
   "p300x2_text_encoder": "device",
   "rejected": [
@@ -628,7 +628,7 @@
    80.6,
    80.6
   ],
-  "frames_headroom_NOT_measured": "NFE 4 plausibly puts 124 frames inside the 180 s budget (~165 s by arithmetic from stage 05's 180.2 s at NFE 4 on the un-optimized tree), for 5.2 s of video instead of 3.0 s. That is an extrapolation and a SECOND knob; nobody has measured it. Stage 07/09 should.",
+  "frames_headroom_MEASURED": "MEASURED, not extrapolated: 1344x768 x124 at NFE 4 on this served profile is 157.9 / 161.9 s over two prompts (worst 161.9), INSIDE the 180 s budget, 16/16 content checks and 0 critical on both, CLIP 0.3366 / 0.3260 -- for 5.2 s of video instead of 3.0. The earlier ~165 s arithmetic was right. artifacts/s06/controls/ctlB_p150_x124.json. It is still NOT taken as the default here: that is a SECOND working-point knob and stage 06 had already moved one (NFE 8 -> 4), so stage 07/09 owns the decision -- but it now owns a measurement instead of an estimate.",
   "frames_max": {
    "1344x768": 124,
    "768x448": 124,
@@ -701,7 +701,7 @@
  },
  "p300x2": {
   "audio_shift": 3.0,
-  "choice_reason": "within budget. Stage 06 took the e2e from 75.5 s to 71.7 s here: the (1,4) preset has sp_axis 0 over a mesh of shape (1,4), so sp_factor is 1 and the ring-free windowed SDPA path applies on this mesh too -- but with 14 heads per device rather than p150's 56, and the chunk-size optimum moves with head count, so this mesh takes (512, 128) where p150 takes (384, 256). Measured at 14 heads at all three lengths this profile can serve: 19328 -11.8%, 22464 -4.2%, 37760 -4.8% against the 56-head pick. CLIP 0.3344 against stage 05's 0.3087 at the same point; the chunking changes flash attention's reduction order, so this is a different trajectory rather than the same clip measured again, and the delta is inside the point-to-point CLIP spread this file documents under datatype_sweep.clip_bar_note.",
+  "choice_reason": "chosen on LATENCY ONLY, and the output at this point is DEFECTIVE -- read `quality` before using any of this block. within budget. Stage 06 took the e2e from 75.5 s to 71.7 s here: the (1,4) preset has sp_axis 0 over a mesh of shape (1,4), so sp_factor is 1 and the ring-free windowed SDPA path applies on this mesh too -- but with 14 heads per device rather than p150's 56, and the chunk-size optimum moves with head count, so this mesh takes (512, 128) where p150 takes (384, 256). Measured at 14 heads at all three lengths this profile can serve: 19328 -11.8%, 22464 -4.2%, 37760 -4.8% against the 56-head pick. CLIP 0.3344 against stage 05's 0.3087 at the same point; the chunking changes flash attention's reduction order, so this is a different trajectory rather than the same clip measured again, and the delta is inside the point-to-point CLIP spread this file documents under datatype_sweep.clip_bar_note.",
   "clip": 0.3344,
   "dit_dtype_policy": {
    "activation_dtype": null,
@@ -711,7 +711,7 @@
    "precomputed_adaln": false,
    "profile": null,
    "qkv_dtype": "bfloat16",
-   "why": "the (1,4) preset asks for no quant profile; TP=4 divides the DiT to ~16.6 GB/chip and the measured default already clears the 90 s budget at 75.5 s, so there is nothing to buy by quantizing"
+   "why": "the (1,4) preset asks for no quant profile: TP=4 divides the DiT to ~16.6 GB/chip and the measured default already clears the 90 s budget at 75.5 s, so there was nothing to buy by quantizing ON LATENCY. CORRECTED 2026-09-30 (06 fix2): that is no longer the whole story. The bf16 path here is where the served-point quality defect lives -- ctlE runs this point at bf8_weights_bf8_out_nofp32acc and the defect goes away at equal or better wall time. See `quality_fix_measured`. The reason to quantize this mesh is ACCURACY, which is not a sentence anyone expected to write."
   },
   "dit_quant_profile": null,
   "e2e_s": 71.7,
@@ -734,12 +734,16 @@
    "encoder": 0.006,
    "vae": 11.177
   },
+  "quality": "DEFECTIVE -- DO NOT SERVE THIS PROFILE ON THIS EVIDENCE. Five prompts at this exact point produce model-visible degenerate output: one clip fails a critical content check with the video ~4x darker than the same prompt and seed on p150 (mean 4.0 against 13.9), temporal motion collapses 4-5x to a 0.70-0.89 floor on 3 of 5 prompts where p150 gives 2.94-4.51, and one served prompt renders as content-free flat texture (CLIP 0.1867). prove_h3's ABSOLUTE floors cannot see any of it (its CLIP floor is 0.1449 and its motion floor 0.3), which is why the single clip behind `clip: 0.3344` below passed 16/16. Nothing in stage 06 caused this -- it is proven arm-matched across the optimization and the conditioner is eliminated -- and stage 06's e2e numbers in this block are correct as LATENCY. They are not a statement that the output is good. See artifacts/s06/results.json p300x2_served_point_quality_anomaly.",
+  "quality_fix_measured": "A one-axis bisect (ctlD/ctlE) puts the cause on the DiT DTYPE, not the mesh: this same point run at p150's bf8_weights_bf8_out_nofp32acc profile, with mesh and adaLN branch held at the served values, clears the failing critical check (1 -> 0), restores the dark prompt to 11.2/19.6 against p150's 13.9/22.1 and its motion to 2.97 against p150's 3.15, and takes the content-free prompt's CLIP from 0.1867 to 0.3653 -- at 59.1/64.5 s, no slower. That is 2 prompts x 1 sample, so it is a diagnosis and a candidate, NOT a landed default. Stage 07 should re-measure it properly and, if it holds, set a quant profile on the (1,4) preset. artifacts/s06/controls/ctlE_p300x2_bf8.json.",
+  "quality_ok": false,
   "short_edge_max": 768,
   "steps": 5,
   "text_encoder": "device",
   "turbo_file": "minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors",
   "video_shift": 6.0,
   "width": 1344,
-  "within_budget": true
+  "within_budget": true,
+  "within_budget_note": "`within_budget` and `e2e_s` are latency facts and remain true. They say nothing about whether the clip is correct; see `quality`."
  }
 }

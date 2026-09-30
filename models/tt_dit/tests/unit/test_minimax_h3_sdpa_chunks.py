@@ -23,10 +23,12 @@ from models.tt_dit.models.transformers.minimax_h3.attention_minimax_h3 import Mi
 # Galaxy PER-DEVICE lengths, so all three must come from the plain-windowed rule.
 P150_SERVED_LENGTHS = (19328, 22464, 37760)
 
-# The two the p300x2 server exposes, a subset of the above. On the 1x4 the DiT fractures its 56
-# heads over TP=4, so each device runs the SAME packed length with 14 heads, and the chunk-size
-# optimum is different there -- see `plain_windowed_sdpa_chunk_sizes_few_heads`.
-P300X2_SERVED_LENGTHS = (19328, 37760)
+# Three of the lengths the p300x2 server can be asked for, a subset of the above. On the 1x4 the
+# DiT fractures its 56 heads over TP=4, so each device runs the SAME packed length with 14 heads,
+# and the chunk-size optimum is different there -- see `plain_windowed_sdpa_chunk_sizes_few_heads`.
+# 22464 is in here because it IS a legal request (1344x768 x73, a stage-05 matrix row), not only the
+# two the served default happens to produce; the rule was swept at all three.
+P300X2_SERVED_LENGTHS = (19328, 22464, 37760)
 
 P150_LOCAL_HEADS = 56  # TP=1
 P300X2_LOCAL_HEADS = 14  # 56 // TP=4
@@ -129,9 +131,13 @@ def test_a_served_length_with_no_pad_rows_bypasses_the_head_count_rule(seq_local
     `seq_len < padded_len`. A prompt whose packed sequence happens to land on a tile boundary has no
     pad rows, takes the unwindowed branch, and gets the generic rule at ANY head count -- observed
     live on the 1x4: one of five prompts packed to exactly 37728 rows and produced bit-identical
-    output on both sides of a head-count-rule flip, at 8.96 s a step against ~10.53 for the four
-    windowed ones. Pinned so that widening the rule to the unwindowed path is a deliberate act with
-    a failing test in front of it, rather than a change nobody notices.
+    output on both sides of a head-count-rule flip. The step-time comparison this docstring used to
+    make (8.96 s against ~10.53 for the four windowed clips) was WRONG: those four span two padded
+    lengths, so it mixed the branch flip with a length difference. Measured properly, by moving
+    `--num-text` and nothing else, the fence costs 14.7% of a block at the served pad fraction
+    (205.85 ms with one pad row vs 175.65 unwindowed with none, same padded length) -- see
+    results.json `pad_row_fence_price`. Pinned so that widening the rule to the unwindowed path is a
+    deliberate act with a failing test in front of it, rather than a change nobody notices.
     """
     cfg = _config(seq_local, ring=False, windowed=False, n_local_heads=P300X2_LOCAL_HEADS)
     assert (cfg.q_chunk_size, cfg.k_chunk_size) != MiniMaxH3Attention.plain_windowed_sdpa_chunk_sizes_few_heads
