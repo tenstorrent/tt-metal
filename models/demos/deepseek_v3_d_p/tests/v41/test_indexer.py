@@ -2,18 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DeepSeek-V4.1 index keys, indexer, candidates, top-k (bead F4) vs the reference at real dims.
+"""DeepSeek-V4.1 index keys, indexer, candidates, top-k (beads F4, F10) vs the reference at real dims.
 
-Uses the oracle's V4.1 layers 2 -> 3 -> 20 -> 21 -> 24 reference (synthetic weights, 96 candidate blocks) and tests
-layers 2 (ratio-2 KV+index source), 20 (ratio-1 candidate source), 24 (candidate-constrained index source). Bars (G1): index scores >= 0.999; selection exact given identical
-scores (checked on tie-free scores fed to both sides); determinism. Recall of the device selection against
-the reference under device scores is reported as a diagnostic only.
+``test_v41_indexer`` uses the oracle's V4.1 layers 2 -> 3 -> 20 -> 21 -> 24 reference (synthetic weights, 96
+candidate blocks) and tests layers 2 (ratio-2 KV+index source), 20 (ratio-1 candidate source), 24
+(candidate-constrained index source). Bars (G1): index scores >= 0.999; selection exact given identical scores
+(checked on tie-free scores fed to both sides, through the module's ``select``: candidate block sets and top-k row
+sets, with 96 candidate blocks (one-level candidates) and 32 (two-level)); determinism. Recall of the device
+selection against the reference under device scores is reported as a diagnostic only.
+
+``test_v41_indexer_selection_long`` feeds tie-free scores of chunks starting at 0 / 20,480 / 65,536 with the
+production 2048 candidate blocks (all blocks candidates / one-level / two-level candidates and the gathered
+candidate top-k) and checks the same exactness against ``v41.select_candidate_blocks`` + ``torch.topk``.
 """
 
 import pytest
 import torch
 
 import ttnn
+from models.common.timing_events import phase
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41.kernel_cpu import fp4_act_quant
@@ -21,12 +28,91 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import Dee
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import dequant
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables
-from models.demos.deepseek_v3_d_p.tt.v41.indexer import SENTINEL, TtV41Indexer, TtV41IndexKeys
+from models.demos.deepseek_v3_d_p.tt.v41.indexer import SENTINEL, CandidateBlocks, TtV41Indexer, TtV41IndexKeys
 from tests.ttnn.utils_for_testing import comp_pcc
 
 SCORE_PCC = 0.999
 LAYERS = (2, 3, 20, 21, 24)
 SEQ = 2048
+MESH_2X4 = [
+    pytest.param(
+        (2, 4),
+        fabric2d_device_params(),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+        id="fabric2d-mesh-2x4",
+    )
+]
+
+
+def _per_query(t):
+    """Per-query device outputs (queries split over SP then TP) -> host [1, 1, S, W] in token order."""
+    return torch.cat([ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)], dim=2)
+
+
+def _feed(mesh_device, scores: torch.Tensor):
+    """Host [S, W] scores -> per-chip row-major [1, 1, S/(sp*tp), W] bf16 (the indexer's score layout)."""
+    sp, tp = tuple(mesh_device.shape)
+    seq, width = scores.shape
+    return ttnn.from_torch(
+        scores.to(torch.bfloat16).reshape(sp, tp, seq // (sp * tp), width),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, (sp, tp), dims=(0, 1)),
+    )
+
+
+def _rows(t: torch.Tensor) -> list[set]:
+    """[S, k] device picks (sentinel = none) -> per-query sets; asserts the sentinels form a tail."""
+    t = t.long()
+    out = []
+    for row in t:
+        valid = row != SENTINEL
+        n = int(valid.sum())
+        assert bool(valid[:n].all()), "sentinel picks are not a tail"
+        out.append(set(row[:n].tolist()))
+    return out
+
+
+def _ref_rows(scores: torch.Tensor, k: int) -> list[set]:
+    top = scores.topk(k, dim=-1)
+    return [set(i[v > float("-inf")].tolist()) for i, v in zip(top.indices, top.values)]
+
+
+def _ref_blocks(mask: torch.Tensor, block: int) -> list[set]:
+    """``select_candidate_blocks`` row mask [S, W] -> per-query kept block sets."""
+    return [set((torch.nonzero(row[::block]).flatten()).tolist()) for row in mask]
+
+
+def _check_selection(mesh_device, cfg, tables, scores: torch.Tensor, start: int, results: dict, tag: str):
+    """Exactness of the candidate source's blocks and top-k and of a candidate index source's top-k on the same
+    host ``scores`` [S, W] (-inf where not visible), through ``TtV41Indexer.select``."""
+    seq, width = scores.shape
+    visible = start + seq
+    weights = {
+        "wq_b": torch.zeros(cfg.INDEX_N_HEADS * cfg.INDEX_HEAD_DIM, cfg.Q_LORA_RANK),
+        "weights_proj": torch.zeros(cfg.INDEX_N_HEADS, cfg.EMB_SIZE),
+    }
+    source = TtV41Indexer(mesh_device, cfg, cfg.CANDIDATE_SOURCE_LAYER, weights)
+    consumer = TtV41Indexer(mesh_device, cfg, 24, weights)
+    feed = _feed(mesh_device, scores)
+    k = min(cfg.INDEX_TOPK, visible)
+    compress_lens = (torch.arange(start + 1, start + seq + 1)).unsqueeze(-1)
+    ref_mask = v41.select_candidate_blocks(
+        scores.clone(), compress_lens, cfg.CANDIDATE_TOPK_BLOCKS, cfg.CANDIDATE_BLOCK_SIZE
+    )
+    idx, published = source.select(feed, tables, start, visible)
+    assert isinstance(published, CandidateBlocks)
+    if published.ids is None:
+        results[f"{tag}_candidates_exact"] = bool(ref_mask[torch.isfinite(scores)].all())
+    else:
+        dev_blocks = _rows(_per_query(published.ids)[0, 0])
+        results[f"{tag}_candidates_exact"] = dev_blocks == _ref_blocks(ref_mask, cfg.CANDIDATE_BLOCK_SIZE)
+    results[f"{tag}_source_topk_exact"] = _rows(_per_query(idx)[0, 0]) == _ref_rows(scores, k)
+    idx, _ = consumer.select(feed, tables, start, visible, published)
+    masked = scores.masked_fill(~ref_mask, float("-inf"))
+    results[f"{tag}_consumer_topk_exact"] = _rows(_per_query(idx)[0, 0]) == _ref_rows(masked, k)
+    return published
 
 
 def _reference_scores(attn, x, qr):
@@ -46,18 +132,7 @@ def _reference_scores(attn, x, qr):
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-mesh-2x4",
-        )
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("mesh_device, device_params", MESH_2X4, indirect=True)
 def test_v41_indexer(mesh_device, device_params):
     cfg = type("V41TestConfig", (C,), {"CANDIDATE_TOPK_BLOCKS": 96})  # match the oracle's candidate count
     spec = orc.real_spec(LAYERS, SEQ, candidate_topk_blocks=96)
@@ -67,9 +142,7 @@ def test_v41_indexer(mesh_device, device_params):
     seq = SEQ
     down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, shape, dims=(2, 3)))
 
-    def per_query(t):
-        """Per-query device outputs (queries split over SP then TP) -> host [1, 1, S, W] in token order."""
-        return torch.cat([ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)], dim=2)
+    per_query = _per_query
 
     def up(t, dims=(2, None), dtype=ttnn.bfloat16):
         return ttnn.from_torch(
@@ -80,7 +153,7 @@ def test_v41_indexer(mesh_device, device_params):
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, shape, dims=dims),
         )
 
-    results, ref_candidates, real_candidates, synthetic_candidates = {}, None, None, None
+    results, real_candidates = {}, None
     tables = V41ChunkTables(mesh_device, cfg, seq, seq, list(LAYERS))  # the forward's position tables
     for layer in (2, 20, 24):
         attn = reference.layers[LAYERS.index(layer)].attn
@@ -130,46 +203,25 @@ def test_v41_indexer(mesh_device, device_params):
         codes = torch.stack([torch.randperm(0x4000, generator=g)[:visible] + 0x3000 for _ in range(seq)])
         rows = codes.to(torch.int16).view(torch.bfloat16).float()
         tie_free = torch.where(finite, rows, float("-inf"))
-        feed = ttnn.from_torch(
-            tie_free.to(torch.bfloat16).reshape(sp, tp, seq // (sp * tp), visible),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(0, 1)),
-        )
-        # reference selection on the same scores
-        compress_lens = (torch.arange(1, seq + 1) // ratio).unsqueeze(-1)
-        ref_scores_sel = tie_free.clone()
         if layer == cfg.CANDIDATE_SOURCE_LAYER:
-            ref_candidates = v41.select_candidate_blocks(
-                ref_scores_sel, compress_lens, cfg.CANDIDATE_TOPK_BLOCKS, cfg.CANDIDATE_BLOCK_SIZE
-            )
-            dev_mask = per_query(indexer.candidates(feed, tables, 0, seq // (sp * tp), visible))[0, 0, :, :visible]
-            assert torch.equal(ref_candidates, torch.isfinite(dev_mask)), "candidate blocks differ"
-            real_candidates = indexer.candidates(score, tables, 0, seq // (sp * tp), visible)
-            synthetic_candidates = indexer.candidates(feed, tables, 0, seq // (sp * tp), visible)
-        elif layer > cfg.CANDIDATE_SOURCE_LAYER:
-            ref_scores_sel = ref_scores_sel.masked_fill(~ref_candidates, float("-inf"))
-            feed = ttnn.to_layout(
-                ttnn.add(ttnn.to_layout(feed, ttnn.TILE_LAYOUT), synthetic_candidates), ttnn.ROW_MAJOR_LAYOUT
-            )
-        k = min(cfg.INDEX_TOPK, visible)
-        ref_sel = ref_scores_sel.topk(k, dim=-1).indices
-        ref_sel = torch.where(torch.gather(ref_scores_sel, -1, ref_sel) > float("-inf"), ref_sel, -1)
-        dev_sel = per_query(ttnn.experimental.topk_large_indices(feed, k=max(16, -(-k // 16) * 16)))[0, 0, :, :k].long()
-        dev_sel = torch.where(dev_sel == SENTINEL, -1, dev_sel)
-        same = all(set(a.tolist()) == set(b.tolist()) for a, b in zip(ref_sel, dev_sel))
-        results[f"L{layer}_selection_exact"] = same
+            # candidate source + candidate index source on the same scores: one-level (96 blocks of 256 per
+            # row, 64 superblocks) and two-level (32 blocks) candidate selection
+            for blocks in (96, 32):
+                sel_cfg = type(f"V41TestConfigK{blocks}", (C,), {"CANDIDATE_TOPK_BLOCKS": blocks})
+                _check_selection(mesh_device, sel_cfg, tables, tie_free, 0, results, f"K{blocks}")
+            real_candidates = indexer.candidates(score, tables, 0)
+        elif layer < cfg.CANDIDATE_SOURCE_LAYER:
+            idx, _ = indexer.select(_feed(mesh_device, tie_free), tables, 0, visible)
+            k = min(cfg.INDEX_TOPK, visible)
+            results[f"L{layer}_selection_exact"] = _rows(per_query(idx)[0, 0]) == _ref_rows(tie_free, k)
 
         # determinism of the full indexer on real scores
-        idx1, _ = indexer(
-            tt_x, tt_qr, index_k, tables, 0, seq, real_candidates if layer > cfg.CANDIDATE_SOURCE_LAYER else None
-        )
-        idx2, _ = indexer(
-            tt_x, tt_qr, index_k, tables, 0, seq, real_candidates if layer > cfg.CANDIDATE_SOURCE_LAYER else None
-        )
+        cands = real_candidates if layer > cfg.CANDIDATE_SOURCE_LAYER else None
+        idx1, _ = indexer(tt_x, tt_qr, index_k, tables, 0, seq, cands)
+        idx2, _ = indexer(tt_x, tt_qr, index_k, tables, 0, seq, cands)
         a, b = per_query(idx1)[0, 0], per_query(idx2)[0, 0]
         results[f"L{layer}_deterministic"] = bool(torch.equal(a, b))
+        k = min(cfg.INDEX_TOPK, visible)
         dev_rows = torch.where(a[:, :k].long() == SENTINEL, -1, a[:, :k].long())
         ref_rows = torch.where(ref_idx >= 0, ref_idx, -1)
         recall = [
@@ -183,3 +235,41 @@ def test_v41_indexer(mesh_device, device_params):
             assert value >= SCORE_PCC, (key, results)
         if key.endswith("_exact") or key.endswith("_deterministic"):
             assert value, (key, results)
+
+
+def _tie_free_scores(seq: int, start: int, g) -> torch.Tensor:
+    """[seq, W] scores of a ratio-1 chunk at ``start`` (-inf where not visible, W = visible rows rounded to 32):
+    per row a random 30 % (at least 4096) of the visible rows get distinct positive bf16 values and the rest one lower
+    value, so block maxima and the top picks are tie-free while rows may hold more elements than bf16 has distinct
+    values."""
+    width = _round32(start + seq)
+    p = torch.arange(start, start + seq).view(-1, 1)
+    t = torch.arange(width).view(1, -1)
+    out = torch.full((seq, width), -100.0)
+    for i in range(seq):
+        n = start + i + 1
+        top = torch.randperm(n, generator=g)[: min(n, max(4096, (3 * n) // 10))]
+        codes = torch.randperm(0x7F00 - 0x0080, generator=g)[: top.numel()] + 0x0080
+        out[i, top] = codes.to(torch.int16).view(torch.bfloat16).float()
+    return torch.where(t <= p, out, float("-inf"))
+
+
+def _round32(x: int) -> int:
+    return -(-x // 32) * 32
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("start", [0, 20480, 65536], ids=lambda s: f"start{s}")
+@pytest.mark.parametrize("mesh_device, device_params", MESH_2X4, indirect=True)
+def test_v41_indexer_selection_long(mesh_device, device_params, start):
+    """Production candidate count (2048 blocks) on long rows: all-candidates / one-level / two-level paths."""
+    seq = 1024
+    g = torch.Generator().manual_seed(start)
+    with phase("reference", what="tie-free scores"):
+        scores = _tie_free_scores(seq, start, g)
+    results = {}
+    with phase("compute", what="tables + select + reference selection"):
+        tables = V41ChunkTables(mesh_device, C, start + seq, seq, [2, 20, 24])
+        _check_selection(mesh_device, C, tables, scores, start, results, f"start{start}")
+    print(f"indexer selection: {results}")
+    assert all(results.values()), results
