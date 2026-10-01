@@ -18,7 +18,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt_stl/indestructible.hpp>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -153,13 +152,6 @@ void HostRegion::release() {
     provisioned_ = false;
 }
 
-HostRegion& HostRegion::storage() {
-    // Indestructible, per BestPractices §17: an ordinary static would drop PinnedMemory at
-    // exit, unmapping DMA on a cluster torn down long before. release() is the way out.
-    static ttsl::Indestructible<HostRegion> r;
-    return r.get();
-}
-
 // Makes every page resident so the pin does not fault the whole region inside an ioctl,
 // and clears it -- minus the spans a socket's own metadata owns.
 void HostRegion::zero_around_aliases(uint64_t want) {
@@ -259,11 +251,6 @@ void HostRegion::provision(
     if (provisioned_) {
         throw std::runtime_error("HostRegion::provision called twice; release() first to provision again");
     }
-    // One object for the process, holding one mesh's pin, device address and alias geometry.
-    // Outlives release(), because the aliases a later mesh inherits were declared before it.
-    if (owner_ != nullptr && owner_ != mesh_device.get()) {
-        throw std::runtime_error("HostRegion::provision: this region already belongs to another mesh");
-    }
     // The overlays MAP_FIXED onto the mapping, so it has to exist before they are built,
     // which puts reserved_base() ahead of this call rather than inside it.
     if (region_ == nullptr) {
@@ -356,8 +343,6 @@ void HostRegion::provision(
     reset_arenas();
     publish_header(header(), cores_in_use, topology, grid, chip, want, device_);
     provisioned_ = true;
-    // Only now: a throw above leaves the region unbound rather than owned by a failed mesh.
-    owner_ = mesh_device.get();
 }
 
 void HostRegion::reset_arenas(uint8_t fill) {

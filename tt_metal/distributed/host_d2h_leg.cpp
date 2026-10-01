@@ -12,6 +12,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <internal/cluster_noc_helpers.hpp>
 
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
@@ -149,7 +150,7 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
     }
 
     // Refuses if the region is already pinned; see RingAlias.
-    im.alias = RingAlias::map(cfg.alias_region_base, AliasArena::Tx, slots, err);
+    im.alias = RingAlias::map(mesh->impl().host_region(), cfg.alias_region_base, AliasArena::Tx, slots, err);
     if (!im.alias) {
         return nullptr;
     }

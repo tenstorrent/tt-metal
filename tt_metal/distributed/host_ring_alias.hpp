@@ -24,8 +24,10 @@ public:
         uint32_t fifo_size = 0;
     };
 
+    // The region is held by reference for the overlay's whole life, so a RingAlias must not
+    // outlive it -- both belong to the same mesh device.
     static std::unique_ptr<RingAlias> map(
-        uint8_t* region_base, AliasArena arena, const std::vector<Slot>& slots, std::string& err);
+        HostRegion& region, uint8_t* region_base, AliasArena arena, const std::vector<Slot>& slots, std::string& err);
 
     // Restores anonymous pages over each slot and clears the region's declarations.
     ~RingAlias();
