@@ -6,9 +6,12 @@
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 // Blackhole hands each operand tile to the math thread as one source bank; with one tile per DEST section (the
-// interleaved layout, compile-time argument 0 equal to 1) at LoFi that costs the packer one cycle per tile, so those
-// kernels keep the per-face hand-off. The multiply above LoFi keeps the per-tile hand-off (2.2 times faster at HiFi4).
-#define ELTWISE_BINARY_PER_FACE_HANDOFF (get_compile_time_arg_val(0) == 1 && MATH_FIDELITY == MathFidelity::LoFi)
+// interleaved layout, compile-time argument 0 equal to 1) that costs the packer one cycle per tile at LoFi, so those
+// kernels keep the per-face hand-off. The expression is evaluated on all three threads and may only use values every
+// thread has (MATH_FIDELITY is declared for the math and pack threads only), so the switch does not depend on the
+// fidelity: a one-tile section forgoes the per-tile hand-off's multiply gain above LoFi (HiFi4 96 to 52 cycles per
+// tile in the tt-llk perf harness); the sharded layouts, 2 to 8 tiles per section, take it at every fidelity.
+#define ELTWISE_BINARY_PER_FACE_HANDOFF (get_compile_time_arg_val(0) == 1)
 #include "api/compute/eltwise_binary.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"

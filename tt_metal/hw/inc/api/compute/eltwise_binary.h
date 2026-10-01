@@ -29,8 +29,10 @@ namespace detail {
 // other architectures). The per-tile hand-off writes a tile's eight row blocks back to back; a kernel that computes
 // one tile per DEST section at LoFi packs one cycle per tile slower with it, because the packer reads the other DEST
 // half while that burst lands, and gains nothing from it there (its LoFi pipeline is unpack-bound), so such a kernel
-// defines the switch, for example as (get_compile_time_arg_val(0) == 1 && MATH_FIDELITY == MathFidelity::LoFi). The
-// multiply above LoFi and the dest-reuse ops are faster with the per-tile hand-off in every measured configuration.
+// defines the switch, for example as (get_compile_time_arg_val(0) == 1). The expression is evaluated on all three
+// threads and must use only values every thread has: MATH_FIDELITY is declared for the math and pack threads only,
+// so it cannot be part of the expression. The multiply above LoFi and the dest-reuse ops are faster with the
+// per-tile hand-off in every measured configuration.
 #if defined(ARCH_BLACKHOLE)
 #if defined(ELTWISE_BINARY_PER_FACE_HANDOFF)
 constexpr SrcDvalid BINARY_SRC_DVALID = (ELTWISE_BINARY_PER_FACE_HANDOFF) ? SrcDvalid::PerFace : SrcDvalid::PerTile;
