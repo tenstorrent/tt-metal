@@ -790,12 +790,23 @@ inline void prep_chunk_c1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t ep
     const uint32_t B = gb_flat ? cb.ointer : cb.beta;
     const uint32_t Q = qk_norm ? cb.supd : cb.q;
     const uint32_t Kk = qk_norm ? cb.stmp : cb.k;
+    // Q and Kk are fp32 CBs: the in-kernel norm's outputs, or the prenormalized fp32 q/k (GDN_QK_FP32, set with
+    // qk_fp32). Every other CB this body reads is fp32 too, so the unpack formats set for one fp32 op serve the next.
+#if defined(GDN_QK_FP32)
+    constexpr bool kQFp32 = true;
+#else
+    constexpr bool kQFp32 = qk_norm;
+#endif
 
     // n tiles of a (op) bcast-col(b) -> o, one acquire. op: mul.
-    auto bcast_cols_mul_n = [&](uint32_t a, uint32_t col, uint32_t o, uint32_t n) {
+    // skip_init: the previous op was this same bcast-col multiply on the same (fp32) formats, so the unpacker formats
+    // and the bcast-col op init are still in place.
+    auto bcast_cols_mul_n = [&](uint32_t a, uint32_t col, uint32_t o, uint32_t n, bool skip_init = false) {
         cb_reserve_back(o, n);
-        reconfig_data_format(a, col);
-        mul_bcast_cols_init(a, col);
+        if (!skip_init) {
+            reconfig_data_format(a, col);
+            mul_bcast_cols_init(a, col);
+        }
         tile_regs_acquire();
         for (uint32_t i = 0; i < n; i++) {
             mul_tiles_bcast_cols(a, col, i, 0, i);
@@ -1070,7 +1081,7 @@ inline void prep_chunk_c1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t ep
         bcast_cols_mul_n(Kk, B, cb.kbeta, ck);
         POP(B, 1);
         WAIT(cb.decayfac, 1);
-        bcast_cols_mul_n(Kk, cb.decayfac, cb.sck, ck);  // k * exp(g_sum - decay)
+        bcast_cols_mul_n(Kk, cb.decayfac, cb.sck, ck, true);  // k * exp(g_sum - decay), right after k_beta (same op)
 #if defined(GDN_DECAY_SFPU)
         POP(cb.decayfac, 1);
         // SFPU decay pass 2: L_mask -> lmask (consumed in S8), dl*I -> dl (writer). Placed after three independent
@@ -1102,7 +1113,7 @@ inline void prep_chunk_c1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t ep
         for (uint32_t ki = 0; ki < ck; ki++) {
             matmul_tiles(cb.kbeta, Kk, ki, ki, 0);
         }
-        if constexpr (qk_norm) {  // Q is fp32 like k_beta: the same unpack formats serve both products
+        if constexpr (kQFp32) {  // Q is fp32 like k_beta: the same unpack formats serve both products
             for (uint32_t ki = 0; ki < ck; ki++) {
                 matmul_tiles(Q, Kk, ki, ki, 1);
             }
@@ -1110,12 +1121,12 @@ inline void prep_chunk_c1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t ep
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb.S, 0);
-        if constexpr (qk_norm) {
+        if constexpr (kQFp32) {
             pack_tile(1, cb.s3, 0);
         }
         tile_regs_release();
         cb_push_back(cb.S, 1);
-        if constexpr (!qk_norm) {  // bf16 Q: its own unpack format config
+        if constexpr (!kQFp32) {  // bf16 Q: its own unpack format config
             reconfig_data_format(Kk, Q);
             matmul_init(Q, Kk, 1);
             tile_regs_acquire();
@@ -1196,7 +1207,13 @@ inline void prep_chunk_c1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t ep
         WAIT(cb.scr1, 1);
         ew1(cb.scr1, cb.eye, cb.scr2, 2);
 #endif
+#if defined(GDN_TINV_SFPU)
+        // Directly after S8's q_decay (the same bcast-col multiply on fp32 operands): its init and formats are in
+        // place.
+        bcast_cols_mul_n(cb.kbeta, cb.decay_exp, cb.w, ck, kQFp32);  // kd (output)
+#else
         bcast_cols_mul_n(cb.kbeta, cb.decay_exp, cb.w, ck);  // kd (output)
+#endif
         POP(cb.kbeta, ck);
         POP(cb.decay_exp, 1);
     }

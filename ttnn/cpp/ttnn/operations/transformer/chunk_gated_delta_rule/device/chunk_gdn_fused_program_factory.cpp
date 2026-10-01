@@ -417,6 +417,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     }
     if (attrs.qk_fp32) {
         prep_reader.defines.emplace_back("GDN_QK_FP32", "1");  // fp32 q/k tiles (qk_prenormed)
+        prep_compute.defines.emplace_back("GDN_QK_FP32", "1");
     }
     if (attrs.decay_sfpu) {
         prep_compute.defines.emplace_back("GDN_DECAY_SFPU", "1");  // the fp32 SFPU decay chain (Ct == 1)
