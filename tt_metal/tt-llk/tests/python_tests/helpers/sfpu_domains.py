@@ -1902,6 +1902,7 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.Cosh,
         MathOperation.Elu,
         MathOperation.EqualZero,
+        MathOperation.Erfinv,
         MathOperation.Exp,  # exp(+inf) = +inf, exp(-inf) = 0, exp(+/-0) = 1
         MathOperation.Exp2,
         MathOperation.ExpWithBase,
