@@ -561,13 +561,14 @@ void py_module(nb::module_& mod) {
 
     matmul_multi_core_reuse_multicast_dram_sharded_program_config
         .def(
-            nb::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>, std::size_t>(),
+            nb::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>, std::size_t, std::size_t>(),
             nb::kw_only(),
             nb::arg("in0_block_w").noconvert(),
             nb::arg("per_core_M").noconvert(),
             nb::arg("per_core_N").noconvert(),
             nb::arg("fused_activation") = nb::none(),
-            nb::arg("num_workers_per_dram_bank") = 1)
+            nb::arg("num_workers_per_dram_bank") = 1,
+            nb::arg("cores_per_bank") = 0)
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
@@ -608,18 +609,37 @@ void py_module(nb::module_& mod) {
             for one bank use NOC0 and the same allocator-selected DRAM endpoint. The per-bank shard
             width in tiles must equal this value times the reader width.
         )doc")
+        .def_rw(
+            "cores_per_bank",
+            &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::cores_per_bank,
+            R"doc(
+            Number of compute cores per DRAM bank for the multi-core decode variant (0 keeps the
+            single-reader factory, which is the default).
+
+            With N > 0 the bank's weight columns are split over N cores placed next to the bank
+            (unevenly when N does not divide the shard width; when N exceeds the shard width it is
+            rounded down to a multiple of it and the extra cores split K and reduce their partial
+            sums). Every core reads the activation straight from its L1 shards and keeps its whole
+            K in fp32 Dest at full-sync capacity, whatever compute_kernel_config says about Dest
+            (fidelity and approximation modes are taken from it), and writes its output columns
+            straight into the width-sharded output. On Blackhole both data-movement RISCs
+            stream the weight (one per NoC); on Wormhole one NoC0 stream reads it. in0_block_w is
+            the number of K tiles per streamed weight block. Requires per_core_M = 1,
+            num_workers_per_dram_bank = 1, no bias and no fused activation.
+        )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             // Include fused_activation in the repr for full visibility during tracing/debugging.
             std::string fused_activation_repr =
                 config.fused_activation.has_value() ? fmt::format("{}", config.fused_activation.value()) : "None";
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={}, "
-                "fused_activation={}, num_workers_per_dram_bank={})",
+                "fused_activation={}, num_workers_per_dram_bank={}, cores_per_bank={})",
                 config.in0_block_w,
                 config.per_core_M,
                 config.per_core_N,
                 fused_activation_repr,
-                config.num_workers_per_dram_bank);
+                config.num_workers_per_dram_bank,
+                config.cores_per_bank);
         });
 
     auto matmul_multi_core_reuse_multicast_batched_dram_sharded_program_config =

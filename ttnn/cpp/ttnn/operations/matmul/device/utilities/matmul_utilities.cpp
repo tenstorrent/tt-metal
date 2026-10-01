@@ -468,4 +468,46 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     }
     return assignments;
 }
+
+std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
+    tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc, uint32_t cores_per_bank, uint32_t num_banks) {
+    const auto anchors = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    TT_FATAL(num_banks <= anchors.size(), "{} banks requested, the device has {}", num_banks, anchors.size());
+    const auto grid = device.compute_with_storage_grid_size();
+    TT_FATAL(
+        static_cast<std::size_t>(cores_per_bank) * num_banks <= grid.x * grid.y,
+        "{} cores per bank over {} banks do not fit the {}x{} worker grid",
+        cores_per_bank,
+        num_banks,
+        grid.x,
+        grid.y);
+    std::vector<std::vector<tt::tt_metal::CoreCoord>> cores(num_banks);
+    std::set<tt::tt_metal::CoreCoord> taken;
+    auto dist = [](uint32_t a, uint32_t b) { return a > b ? a - b : b - a; };
+    for (uint32_t c = 0; c < cores_per_bank; ++c) {
+        for (uint32_t bank = 0; bank < num_banks; ++bank) {
+            const auto& anchor = anchors[bank];
+            std::pair<uint32_t, uint32_t> best_key{std::numeric_limits<uint32_t>::max(), 0};
+            tt::tt_metal::CoreCoord best{};
+            // Row-major scan: among equal keys the first core in (y, x) order wins.
+            for (uint32_t y = 0; y < grid.y; ++y) {
+                for (uint32_t x = 0; x < grid.x; ++x) {
+                    const tt::tt_metal::CoreCoord candidate{x, y};
+                    if (taken.contains(candidate)) {
+                        continue;
+                    }
+                    const std::pair<uint32_t, uint32_t> key{
+                        dist(x, anchor.x) + dist(y, anchor.y), dist(y, anchor.y)};
+                    if (key < best_key) {
+                        best_key = key;
+                        best = candidate;
+                    }
+                }
+            }
+            taken.insert(best);
+            cores[bank].push_back(best);
+        }
+    }
+    return cores;
+}
 }  // namespace ttnn::prim::dram_sharded_helpers
