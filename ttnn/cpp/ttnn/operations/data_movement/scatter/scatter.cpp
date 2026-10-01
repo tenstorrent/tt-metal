@@ -408,6 +408,22 @@ Tensor scatter_codegen_dispatch(
         /*force_row_major=*/false,
         index_tensor.logical_shape());
 
+    // A TILE scatter with few tile-rows starves the tile-row-parallel interleaved/streaming kernels
+    // of cores (their work unit is a 32-row tile band). Converting to ROW_MAJOR, scattering per
+    // logical row through the same RM factory a naturally-ROW_MAJOR call reaches, and converting the
+    // result back reaches one core per row instead and wins in that regime; above it, the
+    // tile-row-parallel kernels already keep the device busy and the extra conversion is not worth
+    // paying. This is an internal choice of which in-scope factory serves an already-supported TILE
+    // call, not a change to what supported_by_codegen() accepts.
+    const bool use_rm_strategy = transformed_input_tensor.layout() == Layout::TILE &&
+                                 ttnn::prim::scatter_tile_prefers_rm_strategy(
+                                     transformed_input_tensor, transformed_index_tensor, transformed_source_tensor);
+    if (use_rm_strategy) {
+        transformed_input_tensor = ttnn::to_layout(transformed_input_tensor, Layout::ROW_MAJOR);
+        transformed_index_tensor = ttnn::to_layout(transformed_index_tensor, Layout::ROW_MAJOR);
+        transformed_source_tensor = ttnn::to_layout(transformed_source_tensor, Layout::ROW_MAJOR);
+    }
+
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
     const uint32_t reduction_mode = scatter_reduction_mode(opt_reduction_string);
@@ -421,6 +437,9 @@ Tensor scatter_codegen_dispatch(
         sub_core_grid);
     Tensor output = ttnn::prim::scatter_codegen(
         params, transformed_input_tensor, transformed_index_tensor, transformed_source_tensor, std::nullopt);
+    if (use_rm_strategy) {
+        output = ttnn::to_layout(output, Layout::TILE);
+    }
     return post_scatter_transform_tensor(
         output,
         normalized_dim,
