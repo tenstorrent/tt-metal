@@ -67,3 +67,26 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
      passed, after its fixture was changed to open the whole box when the case mesh (2x2) does not match it (a 2x2
      submesh of the 4x2 box fails the FABRIC_2D handshake; as P.2 did for mhc_post).
    - Needed by: xing40_a4b_d_p (tt/mhc.py, tt/collapse.py; XING_HC_IMPL=composed keeps the op chain).
+
+5. Port to the new multicast helpers (#57547; kernel helper library @ `73027b6e6ff`, 2026-10-01). The old
+   `kernel_lib/host/mcast_host.hpp` / `kernel_lib/mcast_pipe.hpp` became `kernel_lib/mcast/{host,kernel}/` with a new
+   wire (11-word CT block with a FAMILY / ABSENT tag; RT block with sender coords, rectangle records and a role word)
+   and attach()-only host queries; host and kernels move together.
+   - Host (C++ factory and Python builder): `device/mcast_wire.hpp` / `_McastWire` attach each family to a scratch
+     kernel (adopting the program's SEM_W_READY / SEM_MCAST_READY by `sem_ids`) and read the blocks back, so the
+     writer still decodes them at `MCAST_CT_BASE` 22 / `MCAST_RT_BASE` 18. W broadcast: `Mcast1D(PerColumn,
+     Mcast1DRotatingSenderConfig())` (was `rotating_sender=True`); group combine: `Mcast2DFixedSenderConfig(root)`.
+     One-core groups and no-W-broadcast plans get the one-word ABSENT block and no RT words (were 6-word inactive
+     wires + 4 zero RT words).
+   - Writer kernel: group pipes via `optional_sender` / `optional_receiver`. W all-gather: the share is sent through a
+     NON-rotating `SenderPipe` built from this core's sender record of the same wire (`send_w_share`), and the receive
+     waits once for `w_events` (receive(round) now waits for round + 1). The family's own rotating Counter sender
+     counts its own send with a local non-atomic `+=` (`LOCAL_NONATOMIC` on BH DM) that races the other rows' NoC
+     atomic increments on the same word; with it the unit suite hung deterministically (1x1x640x7168, W broadcast).
+     The send is the old pipe's (payload + inc_multicast to the rest of the column, no self-count). Upstream issue,
+     worth reporting to the helper owners.
+   - Default behaviour unchanged (same transfers, same semaphores). Tests (2026-10-01): unit 115 passed / 1 skipped,
+     golden 206 passed, model cases 97 passed (87 on the 4x2 box; the 10 glm53 2x2 cases on cards 0,1,4,5).
+   - Needed by: rebase onto origin/malimpic/llk_helper_library_rebased_0110_2 (the fork no longer compiled).
+   - Files: `device/mcast_wire.hpp` (new), `device/mhc_pre_ttnn_program_factory.cpp`, `mhc_pre_program_descriptor.py`,
+     `kernels/mhc_pre_writer.cpp`.

@@ -20,7 +20,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "mcast_wire.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::bringup::mhc_pre_ttnn {
@@ -117,7 +118,8 @@ constexpr bool PLACEMENT_LEVERS_BF16_X_BF16_W = false;
 constexpr bool PLACEMENT_LEVERS_BF16_W_R1 = false;
 constexpr int64_t OWNER_C_DISCOUNT = 7;
 constexpr uint32_t W_ROLE_DRAM = 0, W_ROLE_SPREAD = 1;
-const std::vector<uint32_t> W_MCAST_PLACEHOLDER_CT = {0, SEM_W_READY, 0xFFFFFFFFu, 0, 0x2, 0};
+// #57547: an absent multicast block is one ABSENT tag word, with no runtime words and no semaphores.
+const std::vector<uint32_t> W_MCAST_PLACEHOLDER_CT = mcast_wire::absent_compile_time_args();
 
 // Address slots of the per-core runtime args, read by override_runtime_arguments.
 constexpr size_t READER_RT_X = 0, READER_RT_W = 6, READER_RT_LEN = 10;
@@ -551,7 +553,7 @@ ProgramDescriptor create_program_descriptor(
     }
 
     // ---- W column broadcast (R2): one Mcast1D(PerColumn) over the active rectangle per reader-NoC set ----
-    std::map<uint32_t, kh::Mcast1D> w_mcast;
+    std::map<uint32_t, mcast_wire::McastWire> w_mcast;
     if (L.w_bcast) {
         const CoreRangeSet w_rect(
             CoreRange(CoreCoord(0, 0), CoreCoord(plan.groups_x * plan.group_w - 1, L.active_rows - 1)));
@@ -559,17 +561,21 @@ ProgramDescriptor create_program_descriptor(
             kh::McastConfig w_cfg;
             w_cfg.noc = other_noc(rnoc);
             w_cfg.handshake = false;
-            w_cfg.data_ready = kh::DataReadyMode::Counter;
-            w_cfg.rotating_sender = true;
+            w_cfg.data_ready = dataflow_kernel_lib::DataReadySignal::Counter;
             w_cfg.sem_ids = std::vector<uint32_t>{SEM_W_READY};
             w_mcast.emplace(
-                static_cast<uint32_t>(rnoc), kh::Mcast1D(device, w_rect, kh::Mcast1DShape::PerColumn, 0, w_cfg));
+                static_cast<uint32_t>(rnoc),
+                mcast_wire::extract(
+                    kh::Mcast1D(device, w_rect, kh::Mcast1DShape::PerColumn, kh::Mcast1DRotatingSenderConfig{}, w_cfg),
+                    w_rect,
+                    w_cfg.noc,
+                    desc.semaphores));
         }
     }
     const bool w_presplit = !w_mcast.empty() && w_pieces(w.dtype()) > 1 && x_pieces(x.dtype()) == 1;
 
     // ---- group combine mcast (one Mcast2D per group; identical CT wire within a reader-NoC set) ----
-    std::map<int64_t, kh::Mcast2D> helpers;
+    std::map<int64_t, mcast_wire::McastWire> helpers;
     std::map<uint32_t, std::vector<uint32_t>> mcast_ct;
     if (G > 1) {
         for (const auto& gr : L.groups) {
@@ -580,7 +586,19 @@ ProgramDescriptor create_program_descriptor(
             mcast_cfg.sem_ids = std::vector<uint32_t>{SEM_MCAST_READY};
             const CoreRangeSet rect(
                 CoreRange(CoreCoord(gr.gx0, gr.gy0), CoreCoord(gr.gx0 + plan.group_w - 1, gr.gy0 + plan.group_h - 1)));
-            auto it = helpers.emplace(gr.g, kh::Mcast2D(device, rect, CoreCoord(gr.gx0, gr.gy0), mcast_cfg)).first;
+            auto it = helpers
+                          .emplace(
+                              gr.g,
+                              mcast_wire::extract(
+                                  kh::Mcast2D(
+                                      device,
+                                      rect,
+                                      kh::Mcast2DFixedSenderConfig{.sender = CoreCoord(gr.gx0, gr.gy0)},
+                                      mcast_cfg),
+                                  rect,
+                                  mcast_cfg.noc,
+                                  desc.semaphores))
+                          .first;
             const auto ct = it->second.compile_time_args();
             const auto key = static_cast<uint32_t>(rnoc);
             TT_FATAL(
@@ -590,7 +608,7 @@ ProgramDescriptor create_program_descriptor(
         }
     } else {
         for (NOC rnoc : L.reader_nocs) {
-            mcast_ct[static_cast<uint32_t>(rnoc)] = {0, SEM_MCAST_READY, SEM_MCAST_CONSUMED, 0, 1, 0};
+            mcast_ct[static_cast<uint32_t>(rnoc)] = mcast_wire::absent_compile_time_args();
         }
     }
 
@@ -730,7 +748,7 @@ ProgramDescriptor create_program_descriptor(
                 std::vector<uint32_t> w_rt, w_mc_rt;
                 if (w_mcast.empty()) {
                     w_rt = {W_ROLE_DRAM, 0, 0, 0, 0};
-                    w_mc_rt = {0, 0, 0, 0};
+                    w_mc_rt = {};  // absent block: no runtime words
                 } else {
                     const Split sh = split(n * cc, L.active_rows);
                     own = {static_cast<uint32_t>(sh.starts[cy]), static_cast<uint32_t>(sh.starts[cy] + sh.sizes[cy])};
@@ -756,7 +774,7 @@ ProgramDescriptor create_program_descriptor(
                     own[1]};  // smuggled-rta-ok: patched in override_runtime_arguments
                 reader_rt[key].emplace_back(core, std::move(r));
                 const std::vector<uint32_t> mcast_rt =
-                    G > 1 ? helpers.at(gr.g).runtime_args(core) : std::vector<uint32_t>{0, 0, 0, 0};
+                    G > 1 ? helpers.at(gr.g).runtime_args(core) : std::vector<uint32_t>{};
                 std::vector<uint32_t> wr = {
                     address(y),
                     address(post),
