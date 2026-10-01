@@ -159,7 +159,11 @@ bool supported_by_codegen(
     // reduction is requested, plus the smallest NOC-alignment-safe index/src chunk) fits the device's
     // STATIC per-core L1 window.
     const uint32_t input_stick_elems = input_tensor.logical_shape()[axis];
-    const uint64_t input_page_bytes = static_cast<uint64_t>(input_stick_elems) * input_tensor.element_size();
+    // scatter_rm_stick_page_bytes() is the same formula the RM factories' CB/TensorAccessor sizing
+    // uses once the post-transpose stick has a real buffer, not the raw unaligned byte width: the
+    // minimum viable RM plan's resident footprint is exactly what that formula reports, and the two
+    // must not compute it differently or this ceiling admits a call the factory cannot build.
+    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, input_stick_elems);
     const bool bf16_reduce = reduction_mode == 1 || reduction_mode == 2;
     return ttnn::prim::scatter_rm_min_plan_fits_l1(
         ttnn::prim::scatter_static_l1(input_tensor),
