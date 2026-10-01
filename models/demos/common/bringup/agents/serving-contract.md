@@ -94,6 +94,10 @@ PCC for the last block); otherwise from the bring-up's spec thresholds. Never lo
 One entry per test: `test` (path), `checks` (one line), `section` (the how-to section), `gates` (the model step
 whose gate runs it: a component step name such as `attention` or `embedding`, or `adapter` for the runner test).
 
+Tests that start processes (runner, producer) wait with bounds: they fail at once with a clear message when a
+process exits non-zero or stops making progress, never hang. Read the engine's current APIs (table encoding, producer
+signatures) from the code at this commit, not from earlier tests.
+
 ## Check before you finish
 
 - Every test collects and fails cleanly when the model part does not exist yet (a clear "not built" failure, never
