@@ -35,7 +35,7 @@ CHUNK = 32  # the phased op's supported chunk size (Ct=1); 64 splits the WY matr
 # The simulator runs are much slower than silicon (roughly x100),
 # so the long cases run on hardware only.
 _SIM = bool(os.environ.get("TT_METAL_SIMULATOR"))
-_hw_only = pytest.mark.skipif(_SIM, reason="silicon only: too slow on the simulator for the coverage it adds")
+_hw_only = pytest.mark.skipif(_SIM, reason="hardware test only: too slow on the simulator for the coverage it adds")
 REPEATS = 0 if _SIM else 8  # extra multicast runs per shape, to give a non-deterministic race a chance to show
 
 # Measured:
