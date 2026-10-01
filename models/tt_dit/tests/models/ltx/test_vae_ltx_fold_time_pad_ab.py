@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""One arm of the LTX_VAE_FOLD_TIME_PAD decode A/B: conv VAE decode on a 2x4 submesh at 544x960/145f.
+"""One arm of the conv VAE decode fold A/B on a 2x4 submesh at 544x960/145f.
 
-On 2x4 this gives each chip the same shard as 1088x1920/145f on the production 4x8. Run once with
-LTX_VAE_FOLD_TIME_PAD=0 and once with =1 (separate jobs); each run saves its yuv output to
-$AB_OUT_DIR/yuv_fold<0|1>.pt and prints AB44 timing lines. Outputs must be identical.
+On 2x4 this gives each chip the same shard as 1088x1920/145f on the production 4x8. One job per arm; the
+arm is set by LTX_VAE_FOLD_TIME_PAD (conv3d replicate T pad) and LTX_VAE_FOLD_W_MASK (neighbor_pad
+logical_w). Each run saves its yuv output to $AB_OUT_DIR/yuv_t<0|1>w<0|1>.pt and prints AB timing lines;
+all arms' outputs must be identical.
 AB_VAE_LTX_OVERLAY: optional path to a vae_ltx.py loaded in place of the tree's copy.
 """
 
@@ -63,6 +64,8 @@ def test_vae_ltx_fold_time_pad_ab(mesh_device, device_params):
     )
 
     fold = os.environ.get("LTX_VAE_FOLD_TIME_PAD", "1")
+    wmask = os.environ.get("LTX_VAE_FOLD_W_MASK", "0")
+    arm = f"t{fold}w{wmask}"
     torch.manual_seed(42)
     tdec = _TorchLTXVideoDecoder(
         decoder_blocks=_LTX_PROD_DECODER_BLOCKS,
@@ -103,8 +106,10 @@ def test_vae_ltx_fold_time_pad_ab(mesh_device, device_params):
             yield from walk(c)
 
     n_folded = sum(1 for m in walk(dec) if getattr(m, "fold_time_pad", False))
-    print(f"AB44 fold={fold} folded_convs={n_folded}")
+    n_wmask = sum(1 for m in walk(dec) if getattr(m, "fold_w_mask", False))
+    print(f"AB arm={arm} folded_convs={n_folded} w_mask_convs={n_wmask}")
     assert (n_folded > 0) == (fold == "1")
+    assert (n_wmask > 0) == (wmask == "1")
 
     lat = _latent()
     out = dec(lat, output_type="yuv")  # warmup: kernel compile + program cache
@@ -115,9 +120,9 @@ def test_vae_ltx_fold_time_pad_ab(mesh_device, device_params):
         out = dec(lat, output_type="yuv")
         ttnn.synchronize_device(mesh_device)
         times.append(time.perf_counter() - t0)
-    print(f"AB44 fold={fold} decode_s={' '.join(f'{t:.4f}' for t in times)} min={min(times):.4f}")
+    print(f"AB arm={arm} decode_s={' '.join(f'{t:.4f}' for t in times)} min={min(times):.4f}")
 
     out_dir = os.environ.get("AB_OUT_DIR")
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-        torch.save(torch.as_tensor(out), os.path.join(out_dir, f"yuv_fold{fold}.pt"))
+        torch.save(torch.as_tensor(out), os.path.join(out_dir, f"yuv_{arm}.pt"))

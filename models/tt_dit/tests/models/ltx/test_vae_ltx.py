@@ -504,6 +504,64 @@ def test_ltx_conv3d_fold_time_pad(mesh_device, device_params, monkeypatch, in_c,
 
 
 @pytest.mark.parametrize(
+    "in_c, out_c, T, H, W, Hp, Wp",
+    [
+        (128, 128, 19, 17, 30, 18, 32),  # s0 res conv, 544x960/145f latent grid (mesh-padded to 18x32)
+        (512, 512, 37, 34, 60, 36, 64),  # s1 res conv after the first upsample
+    ],
+    ids=["s0_res", "s1_res"],
+)
+@pytest.mark.parametrize("fold_time_pad", ["0", "1"], ids=["tpad_concat", "tpad_fold"])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_ltx_conv3d_fold_w_mask(mesh_device, device_params, monkeypatch, in_c, out_c, T, H, W, Hp, Wp, fold_time_pad):
+    """LTX_VAE_FOLD_W_MASK=1 (neighbor_pad logical_w) must match the mask-multiply path bit for bit.
+
+    The mesh-pad rows/columns hold garbage, as they do after any conv in the decoder, so a missed mask
+    changes the output. Opens the full galaxy mesh and runs on a 2x4 submesh: a bare 2x4 open fails
+    fabric init on BH galaxy.
+    """
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    monkeypatch.setenv("LTX_VAE_FOLD_TIME_PAD", fold_time_pad)
+    vae_mods = _require_diffusers_ltx_vae()
+    torch.manual_seed(42)
+    torch_model = vae_mods["causal_conv"](in_channels=in_c, out_channels=out_c, kernel_size=3, stride=1).eval()
+    x = torch.randn(1, in_c, T, H, W)
+    with torch.no_grad():
+        torch_out = _run_diffusers_causal_conv(torch_model, x, causal=False, ltx2=vae_mods["ltx2"])
+
+    x_pad = torch.randn(1, T, Hp, Wp, in_c) + 3.0
+    x_pad[:, :, :H, :W] = x.permute(0, 2, 3, 4, 1)
+    x_tt = typed_tensor_2dshard(
+        conv_pad_in_channels(x_pad),
+        mesh_device,
+        shard_mapping={0: 2, 1: 3},
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 3])
+
+    outs = {}
+    for fold in ("0", "1"):
+        monkeypatch.setenv("LTX_VAE_FOLD_W_MASK", fold)
+        tt_model = LTXCausalConv3d(
+            in_channels=in_c,
+            out_channels=out_c,
+            kernel_size=3,
+            stride=1,
+            mesh_device=mesh_device,
+            **_vae_parallel_kwargs(mesh_device),
+        )
+        assert tt_model.fold_w_mask == (fold == "1")
+        tt_model.load_torch_state_dict(torch_model.state_dict())
+        tt_out = tt_model(x_tt, causal=False, logical_h=H, logical_w=W)
+        out = ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, :H, :W, :out_c]
+        outs[fold] = out.permute(0, 4, 1, 2, 3)
+
+    assert torch.equal(outs["0"], outs["1"])
+    assert_quality(torch_out, outs["1"], pcc=0.999)
+
+
+@pytest.mark.parametrize(
     "in_c, out_c, T, H, W",
     [
         (128, 128, 3, 16, 16),  # same channels (no shortcut)
