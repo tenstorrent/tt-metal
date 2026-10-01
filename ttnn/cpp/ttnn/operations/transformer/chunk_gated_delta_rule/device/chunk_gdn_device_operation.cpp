@@ -204,30 +204,53 @@ ChunkGdnDeviceOperation::tensor_return_value_t ChunkGdnDeviceOperation::create_o
 // Fused geometry cost model and placement
 // ---------------------------------------------------------------------------------------------------
 namespace {
-// QB2 constants, re-measured 2026-09-25 (Tracy device time, NC=64) after the scan folded its o and
-// state adds into DST accumulation: producer item under load, receiver step (period) per V-slice
-// width, pipeline fill, and the phased device-time reference.
-constexpr float kFillUs = 65.0f;
-// Producer item (Horner WY inverse): 31 us with <= 28 concurrent producers, 34 us with >= 84 (the
-// fused producer measures 33 at BH=12); linear in between. The SFPU inverse lowers it to ~26.5.
-constexpr float w_p_us(uint32_t producers) {
-    const float f = std::min(1.0f, std::max(0.0f, (static_cast<float>(producers) - 28.0f) / 56.0f));
-    return 31.0f + 3.0f * f;
-}
-constexpr float t_step_us(uint32_t Vtl) {
+// QB2 constants, re-measured 2026-10-01 (Tracy device time, T=2048 -> NC=64, C=32, K=V=128, medians of 5)
+// with the SFPU forward-substitution solve in the producer.
+constexpr float kWpUs = 18.5f;               // producer item; flat from 36 to 96 concurrent producers
+constexpr float kTailUs = 9.0f;              // last scan step -> kernel end (head skew)
+constexpr float kPaceMarginUs = 0.4f;        // depth-2 jitter exposure with the supply within 10 % of the step
+constexpr float kRowMajorPenalty = 1.7f;     // row-major placement, link-bound chain (BH=16: 1.66x and 1.72x)
+constexpr uint32_t kHandoffTiles = 19;       // fp32 tiles per hand-off slot (C=32, K=V=128)
+constexpr uint32_t kProducerPrepTiles = 48;  // the producer's prep CBs, in fp32-tile units
+constexpr uint32_t kTileBytes = 4096;
+constexpr uint32_t kL1BudgetBytes = 1400u * 1024u;  // Wormhole's 1464 KB less the system map and the small region
+// Pipeline fill (first scan step done): 25.0 + 0.88*BH, fitted to BH=4..32.
+constexpr float fill_us(uint32_t BH) { return 25.0f + 0.88f * BH; }
+// Producer item. Load-independent since the solve; the argument stays for load-dependent variants.
+constexpr float w_p_us(uint32_t /*producers*/) { return kWpUs; }
+// Receiver step (period) per V-slice width. Vtl=1 computes in ~1.4 us: at depth 2 the hand-off round
+// trip (credit -> send -> VALID) is its floor; depth >= 3 keeps two hand-offs in flight.
+constexpr float t_step_us(uint32_t Vtl, uint32_t depth = 2) {
     switch (Vtl) {
-        case 1: return 2.4f;    // compute 1.43; the depth-2 hand-off round trip (~2.4) is the period floor
-        case 2: return 2.9f;    // period 2.92 chain-bound, compute 2.8
-        case 4: return 5.0f;    // period 4.97 chain-bound, compute 4.83
+        case 1: return depth >= 3 ? 3.3f : 4.2f;
+        case 2: return 2.78f;
+        case 4: return 4.67f;
         default: return -1.0f;  // unmeasured width
     }
 }
+// Per-chunk period of one head: the slower of the receiver step and its producers' supply (w_p / NP from
+// its own NP producers, BH * w_p / P from a pool of P). At depth 2 with the supply within 10 % of the step,
+// producer jitter exposes the round trip (~2.1 us at NV=2, most of the 2.78 step); at Vtl=4 (~1.3 us of
+// 4.67) it stays hidden.
+constexpr float pace_us(uint32_t Vtl, float supply, uint32_t depth) {
+    const float step = t_step_us(Vtl, depth);
+    float pace = std::max(step, supply);
+    if (depth <= 2 && Vtl <= 2 && supply >= 0.9f * step && supply <= 1.1f * step) {
+        pace += kPaceMarginUs;
+    }
+    return pace;
+}
+// L1 at hand-off depth `depth` on the fuller side: the slots, the 4-tile u/credit CB and the larger of
+// the receiver's scan CBs at the slice width (20*Vtl + 1 tiles) and the producer's prep CBs.
+constexpr bool handoff_fits_l1(uint32_t Vtl, uint32_t depth) {
+    const uint32_t tiles = kHandoffTiles * depth + 4 + std::max(20 * Vtl + 1, kProducerPrepTiles);
+    return tiles * kTileBytes <= kL1BudgetBytes;
+}
 constexpr float t_phased_us(uint32_t BH, uint32_t NC) {
-    // Measured device time at NC=64 (prep + scan): 4 -> 404, 8 -> 518, 12 -> 635, 16 -> 806,
-    // 32 -> 1292, 48 -> 2054. Linear 277 + 31.7*BH to BH=32, then interpolated to the DRAM-saturated
-    // BH=48 point.
-    const float t32 = 277.0f + 31.7f * 32.0f;
-    float t = (BH <= 32) ? (277.0f + 31.7f * BH) : (t32 + (2054.0f - t32) * (std::min<uint32_t>(BH, 48) - 32) / 16.0f);
+    // Measured device time at NC=64 (prep + scan, 2026-10-01): 4 -> 367, 8 -> 473, 12 -> 604, 16 -> 783,
+    // 32 -> 1300, 48 -> 1933. Linear 217 + 33.9*BH to BH=32, then interpolated to the BH=48 point.
+    const float t32 = 217.0f + 33.9f * 32.0f;
+    float t = (BH <= 32) ? (217.0f + 33.9f * BH) : (t32 + (1933.0f - t32) * (std::min<uint32_t>(BH, 48) - 32) / 16.0f);
     if (BH > 48) {
         t *= BH / 48.0f;
     }
@@ -407,34 +430,52 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t Vt,
     uint32_t fixed_nv,
     uint32_t fixed_np,
+    uint32_t fixed_nbuf,
     FusedCandidates candidates) {
     FusedGeometryChoice best;
     best.t_phased_us = t_phased_us(BH, NC);
     bool have = false;
     uint32_t best_cores = 0;
-    // ties -> fewer cores, then smaller NV
-    auto consider = [&](uint32_t nv, uint32_t np, uint32_t placement, float t, uint32_t cores) {
-        const bool better = !have || t < best.t_fused_us ||
-                            (t == best.t_fused_us && (cores < best_cores || (cores == best_cores && nv < best.nv)));
+    // Hand-off depths the model chooses between (deeper measured no better); a pinned depth is taken as is.
+    const uint32_t depths[2] = {fixed_nbuf ? fixed_nbuf : 2u, fixed_nbuf ? fixed_nbuf : 3u};
+    const uint32_t n_depths = fixed_nbuf ? 1u : 2u;
+    // One candidate: NP producers per head (placements 0/1) or a pool of NP serving every head (placement 2).
+    auto consider = [&](uint32_t nv, uint32_t np, uint32_t placement, uint32_t depth) {
+        const uint32_t Vtl = Vt / nv;
+        if (!fixed_nbuf && !handoff_fits_l1(Vtl, depth)) {
+            return;
+        }
+        const uint32_t producers = placement == 2 ? np : BH * np;
+        const uint32_t cores = BH * nv + producers;
+        const float supply = BH * w_p_us(producers) / producers;  // us per chunk of one head
+        float t = fill_us(BH) + NC * pace_us(Vtl, supply, depth) + kTailUs;
+        // Row-major: the receiver rows' shared links saturate unless the chain is well supply-bound.
+        if (placement == 0 && supply < 2.0f * t_step_us(Vtl, depth)) {
+            t *= kRowMajorPenalty;
+        }
+        // ties -> fewer cores, then smaller NV, then the shallower ring
+        const bool better =
+            !have || t < best.t_fused_us ||
+            (t == best.t_fused_us &&
+             (cores < best_cores || (cores == best_cores && (nv < best.nv || (nv == best.nv && depth < best.nbuf)))));
         if (better) {
             best.nv = nv;
             best.np = np;
             best.placement = placement;
+            best.nbuf = depth;
             best.t_fused_us = t;
             best_cores = cores;
             have = true;
         }
     };
-    // Per-head form: NP producers per head, T = NC * max(w_p(BH*NP) / NP, t_step) + fill.
-    auto consider_per_head = [&](uint32_t nv, uint32_t np, uint32_t placement) {
-        const float ts = t_step_us(Vt / nv);
-        if (ts < 0.0f) {
-            return;
+    auto consider_depths = [&](uint32_t nv, uint32_t np, uint32_t placement) {
+        for (uint32_t i = 0; i < n_depths; i++) {
+            consider(nv, np, placement, depths[i]);
         }
-        const float t = NC * std::max(w_p_us(BH * np) / np, ts) + kFillUs;
-        consider(nv, np, placement, t, BH * (nv + np));
     };
-    auto nv_ok = [&](uint32_t nv) { return Vt % nv == 0 && (fixed_nv == 0 || nv == fixed_nv); };
+    auto nv_ok = [&](uint32_t nv) {
+        return Vt % nv == 0 && t_step_us(Vt / nv) >= 0.0f && (fixed_nv == 0 || nv == fixed_nv);
+    };
     auto np_ok = [&](uint32_t np) { return fixed_np == 0 || np == std::min(fixed_np, NC); };
     if (candidates != FusedCandidates::Pool) {
         for (uint32_t nv : {1u, 2u, 4u, 8u}) {
@@ -447,11 +488,11 @@ FusedGeometryChoice choose_fused_geometry(
                     break;
                 }
                 if (np_ok(np_eff) && fused_row_local_feasible(grid_x, grid_y, BH, nv, np_eff)) {
-                    consider_per_head(nv, np_eff, 1);
+                    consider_depths(nv, np_eff, 1);
                 }
             }
         }
-        if (!have) {  // no row-local layout: the row-major fallback (optimistic — ignores link sharing)
+        if (!have) {  // no row-local layout: the row-major fallback, penalised for its shared links
             for (uint32_t nv : {1u, 2u, 4u, 8u}) {
                 if (!nv_ok(nv) || nv > grid_x || BH > (grid_x / nv) * grid_y) {
                     continue;
@@ -459,25 +500,22 @@ FusedGeometryChoice choose_fused_geometry(
                 const uint32_t free = grid_x * grid_y - BH * nv;
                 const uint32_t np = fixed_np ? std::min(fixed_np, NC) : std::min(free / BH, NC);
                 if (np >= 1 && BH * (nv + np) <= grid_x * grid_y) {
-                    consider_per_head(nv, np, 0);
+                    consider_depths(nv, np, 0);
                 }
             }
         }
     }
     if (candidates != FusedCandidates::PerHead) {
-        // Producer pool: P = every core the receivers leave (or the pinned size), at most one per item;
-        // T = NC * max(BH * w_p(P) / P, t_step) + fill.
+        // Producer pool: P = every core the receivers leave (or the pinned size), at most one per item.
         for (uint32_t nv : {1u, 2u, 4u}) {
-            const float ts = t_step_us(Vt / nv);
-            if (!nv_ok(nv) || ts < 0.0f || BH * nv >= grid_x * grid_y) {
+            if (!nv_ok(nv) || BH * nv >= grid_x * grid_y) {
                 continue;
             }
             const uint32_t P = std::min<uint32_t>(fixed_np ? fixed_np : grid_x * grid_y - BH * nv, BH * NC);
             if (!fused_pool_feasible(grid_x, grid_y, BH, nv, P)) {
                 continue;
             }
-            const float t = NC * std::max(BH * w_p_us(P) / P, ts) + kFillUs;
-            consider(nv, P, 2, t, BH * nv + P);
+            consider_depths(nv, P, 2);
         }
     }
     best.fused_pays = have && best.t_fused_us < best.t_phased_us;
@@ -563,6 +601,7 @@ std::vector<Tensor> chunk_gdn(
             val_dim / tt::constants::TILE_WIDTH,
             nv_pin,
             np_pin,
+            /*fixed_nbuf=*/0,
             pool ? FusedCandidates::Pool : FusedCandidates::PerHead);
         TT_FATAL(
             choice.nv >= 1,

@@ -4,8 +4,9 @@
 
 No device needed. The fused op's geometry is three pure C++ functions, bound through nanobind:
 
-* ``chunk_gdn_fused_geometry``           — the calibrated cost model (NV, NP, placement) the op picks
-                                           when the fused program config leaves those fields free;
+* ``chunk_gdn_fused_geometry``           — the calibrated cost model (NV, NP, placement, hand-off depth)
+                                           the op picks when the fused program config leaves those
+                                           fields free;
 * ``chunk_gdn_fused_row_local_feasible`` — the row-local feasibility predicate;
 * ``chunk_gdn_fused_pool_feasible`` / ``chunk_gdn_fused_pool_home_producers`` — the producer pool's;
 * ``chunk_gdn_fused_placement``          — the core map, computed by the SAME function the program
@@ -39,28 +40,62 @@ VT = 4  # V = 128 -> 4 tiles; invariant across the Qwen GDN family
 # Inlined Python oracle of the fused geometry. Kept self-contained on purpose:
 # it is an independent re-derivation of chunk_gdn_device_operation.cpp (choose_fused_geometry,
 # fused_row_local_feasible, fused_placement), so a bug has to be made twice to pass.
-# Cost-model constants: QB2, re-measured 2026-09-25 (Tracy device time, per-RISC zones) after the scan
-# folded its o and state adds into DST accumulation (the Horner WY inverse's producer item).
+# Cost-model constants: QB2, re-measured 2026-10-01 (Tracy device time, T=2048 -> NC=64, C=32, K=V=128) with
+# the SFPU forward-substitution solve in the producer.
 # ---------------------------------------------------------------------------------------------
-_W_P_US = 34.0  # producer us per (head, chunk) item at >= 84 concurrent producers
-_W_P_LOW_US, _W_P_LOW_PRODUCERS, _W_P_HIGH_PRODUCERS = 31.0, 28, 84  # lighter load -> faster, linear
-_T_STEP_US = {1: 2.4, 2: 2.9, 4: 5.0}  # receiver period at V-slice width Vtl (tiles); Vtl=1 is the hand-off floor
-_FILL_US = 65.0
-_PHASED_A_MS, _PHASED_B_MS, _PHASED_BH48_MS, _PHASED_LINEAR_TO_BH = 0.0317, 0.277, 2.054, 32
+_W_P_US = 18.5  # producer us per (head, chunk) item; flat from 36 to 96 concurrent producers
+_T_STEP_US = {
+    1: (4.2, 3.3),
+    2: (2.78, 2.78),
+    4: (4.67, 4.67),
+}  # receiver period per V-slice width Vtl: (depth <= 2, depth >= 3)
+_FILL_A_US, _FILL_B_US = 25.0, 0.88  # pipeline fill (first scan step done) = A + B * BH
+_TAIL_US = 9.0  # last scan step -> kernel end
+_PACE_MARGIN_US = 0.4  # depth-2 jitter exposure with the supply within 10 % of the step (Vtl <= 2)
+_ROW_MAJOR_PENALTY = 1.7  # row-major placement with a link-bound chain (supply < 2 * step)
+_DEPTHS = (2, 3)  # hand-off depths the model chooses between
+_HANDOFF_TILES, _PRODUCER_PREP_TILES, _TILE_BYTES, _L1_BUDGET_BYTES = 19, 48, 4096, 1400 * 1024
+_PHASED_A_US, _PHASED_B_US, _PHASED_BH48_US, _PHASED_LINEAR_TO_BH = 33.9, 217.0, 1933.0, 32
 
 
-def _w_p_at(producers):
-    f = min(1.0, max(0.0, (producers - _W_P_LOW_PRODUCERS) / float(_W_P_HIGH_PRODUCERS - _W_P_LOW_PRODUCERS)))
-    return _W_P_LOW_US + (_W_P_US - _W_P_LOW_US) * f
+def _t_step(vtl, depth):
+    return _T_STEP_US[vtl][0 if depth <= 2 else 1]
+
+
+def _supply(bh, np_, placement):
+    """One head's producer supply, us per chunk: w_p / NP from its own producers, BH * w_p / P from a pool."""
+    return bh * _W_P_US / np_ if placement == 2 else _W_P_US / np_
+
+
+def _pace(vtl, supply, depth):
+    step = _t_step(vtl, depth)
+    pace = max(step, supply)
+    if depth <= 2 and vtl <= 2 and 0.9 * step <= supply <= 1.1 * step:
+        pace += _PACE_MARGIN_US
+    return pace
+
+
+def _handoff_fits_l1(vtl, depth):
+    tiles = _HANDOFF_TILES * depth + 4 + max(20 * vtl + 1, _PRODUCER_PREP_TILES)
+    return tiles * _TILE_BYTES <= _L1_BUDGET_BYTES
+
+
+def _t_fused(bh, nc, nv, np_, depth, placement):
+    vtl = VT // nv
+    supply = _supply(bh, np_, placement)
+    t = _FILL_A_US + _FILL_B_US * bh + nc * _pace(vtl, supply, depth) + _TAIL_US
+    if placement == 0 and supply < 2.0 * _t_step(vtl, depth):
+        t *= _ROW_MAJOR_PENALTY
+    return t
 
 
 def _t_phased_us(bh, nc):
     lin = _PHASED_LINEAR_TO_BH
-    t_lin = (_PHASED_A_MS * lin + _PHASED_B_MS) * 1000.0
+    t_lin = _PHASED_A_US * lin + _PHASED_B_US
     if bh <= lin:
-        t = (_PHASED_A_MS * bh + _PHASED_B_MS) * 1000.0
+        t = _PHASED_A_US * bh + _PHASED_B_US
     else:  # DRAM-saturated: interpolate to the measured BH=48 point, then scale linearly
-        t = t_lin + (_PHASED_BH48_MS * 1000.0 - t_lin) * (min(bh, 48) - lin) / float(48 - lin)
+        t = t_lin + (_PHASED_BH48_US - t_lin) * (min(bh, 48) - lin) / float(48 - lin)
         if bh > 48:
             t *= bh / 48.0
     return t * nc / 64.0
@@ -101,23 +136,32 @@ def _pool_feasible(gx, gy, bh, nv, P):
 PER_HEAD, POOL, BOTH = 0, 1, 2  # chunk_gdn_fused_geometry's `candidates`
 
 
-def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, candidates=PER_HEAD):
-    """Per-head candidates: over NV | Vt and NP with a feasible row-local layout, minimise
-    T_fused = NC * max(w_p(BH*NP) / NP, t_step(Vt / NV)) + fill; with no row-local layout, fall back to
-    row-major placement with the same formula. Pool candidates: NV in {1, 2, 4}, P = every core the receivers
-    leave (or the pinned size), at most BH*NC, T = NC * max(BH * w_p(P) / P, t_step) + fill. Ties -> fewer
-    cores in total, then smaller NV."""
+def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, fixed_nbuf=0, candidates=PER_HEAD):
+    """Per-head candidates: over NV | Vt, NP with a feasible row-local layout and depth in {2, 3} (a pinned
+    depth as is), minimise T_fused = fill(BH) + NC * pace(Vt / NV, supply, depth) + tail; with no row-local
+    layout, fall back to row-major placement with the link-sharing penalty. Pool candidates: NV in {1, 2, 4},
+    P = every core the receivers leave (or the pinned size), at most BH*NC, supply BH * w_p / P. Ties ->
+    fewer cores in total, then smaller NV, then the shallower ring."""
     gx, gy = grid
+    depths = (fixed_nbuf,) if fixed_nbuf else _DEPTHS
     best = None
 
-    def consider(key, nv, np_, pl):
+    def consider(nv, np_, placement):
         nonlocal best
-        if best is None or key < best[0]:
-            best = (key, nv, np_, pl)
+        cores = bh * nv + (np_ if placement == 2 else bh * np_)
+        for depth in depths:
+            if not fixed_nbuf and not _handoff_fits_l1(VT // nv, depth):
+                continue
+            key = (_t_fused(bh, nc, nv, np_, depth, placement), cores, nv, depth)
+            if best is None or key < best[0]:
+                best = (key, nv, np_, placement, depth)
+
+    def nv_ok(nv):
+        return VT % nv == 0 and (VT // nv) in _T_STEP_US and (not fixed_nv or nv == fixed_nv)
 
     if candidates != POOL:
         for nv in (1, 2, 4, 8):
-            if VT % nv or (fixed_nv and nv != fixed_nv) or (VT // nv) not in _T_STEP_US:
+            if not nv_ok(nv):
                 continue
             for np_ in range(1, gx - nv + 1):
                 np_eff = min(np_, nc)
@@ -125,35 +169,36 @@ def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, candidates=PER_HEAD):
                     break
                 if fixed_np and np_eff != min(fixed_np, nc):
                     continue
-                if not _row_local_feasible(gx, gy, bh, nv, np_eff):
-                    continue
-                t = nc * max(_w_p_at(bh * np_eff) / np_eff, _T_STEP_US[VT // nv]) + _FILL_US
-                consider((t, bh * (nv + np_eff), nv), nv, np_eff, 1)
+                if _row_local_feasible(gx, gy, bh, nv, np_eff):
+                    consider(nv, np_eff, 1)
         if best is None:
             for nv in (1, 2, 4, 8):
-                if VT % nv or (VT // nv) not in _T_STEP_US or (fixed_nv and nv != fixed_nv):
-                    continue
-                if not _row_major_feasible(gx, gy, bh, nv) or gx * gy - bh * nv < 1:
+                if not nv_ok(nv) or not _row_major_feasible(gx, gy, bh, nv) or gx * gy - bh * nv < 1:
                     continue
                 np_ = min(fixed_np, nc) if fixed_np else min((gx * gy - bh * nv) // bh, nc)
-                if np_ < 1 or bh * (nv + np_) > gx * gy:
-                    continue
-                t = nc * max(_w_p_at(bh * np_) / np_, _T_STEP_US[VT // nv]) + _FILL_US
-                consider((t, bh * (nv + np_), nv), nv, np_, 0)
+                if np_ >= 1 and bh * (nv + np_) <= gx * gy:
+                    consider(nv, np_, 0)
     if candidates != PER_HEAD:
         for nv in (1, 2, 4):
-            if VT % nv or (fixed_nv and nv != fixed_nv) or (VT // nv) not in _T_STEP_US or bh * nv >= gx * gy:
+            if not nv_ok(nv) or bh * nv >= gx * gy:
                 continue
             P = min(fixed_np if fixed_np else gx * gy - bh * nv, bh * nc)
-            if not _pool_feasible(gx, gy, bh, nv, P):
-                continue
-            t = nc * max(bh * _w_p_at(P) / P, _T_STEP_US[VT // nv]) + _FILL_US
-            consider((t, bh * nv + P, nv), nv, P, 2)
+            if _pool_feasible(gx, gy, bh, nv, P):
+                consider(nv, P, 2)
     t_ph = _t_phased_us(bh, nc)
+    none = {
+        "nv": None,
+        "np": None,
+        "placement": None,
+        "nbuf": None,
+        "T_fused": None,
+        "T_phased": t_ph,
+        "fused_pays": False,
+    }
     if best is None:
-        return {"nv": None, "np": None, "placement": None, "T_fused": None, "T_phased": t_ph, "fused_pays": False}
-    (t, _, _), nv, np_, pl = best
-    return {"nv": nv, "np": np_, "placement": pl, "T_fused": t, "T_phased": t_ph, "fused_pays": t < t_ph}
+        return none
+    (t, _, _, _), nv, np_, pl, depth = best
+    return {"nv": nv, "np": np_, "placement": pl, "nbuf": depth, "T_fused": t, "T_phased": t_ph, "fused_pays": t < t_ph}
 
 
 def _placement_row_major(gx, gy, bh, nv, np_):
@@ -261,16 +306,23 @@ def _feasible_layouts(gx, gy, bh):
 @pytest.mark.parametrize("bh", BHS)
 @pytest.mark.parametrize("grid", GRIDS, ids=GRID_IDS)
 def test_cost_model_mirror(grid, bh, nc, candidates):
-    """The C++ cost model and the oracle pick the same (NV, NP, placement) and agree on T_fused and
+    """The C++ cost model and the oracle pick the same (NV, NP, placement, depth) and agree on T_fused and
     T_phased — so the op's default dispatch (per-head candidates) is the documented model on every grid,
     and so is the pool geometry producer_pool=True resolves to."""
-    nv, np_, pl, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(grid[0], grid[1], bh, nc, VT, 0, 0, candidates)
+    nv, np_, pl, nbuf, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(
+        grid[0], grid[1], bh, nc, VT, candidates=candidates
+    )
     o = _choose_geometry(grid, bh, nc, candidates=candidates)
     if o["nv"] is None:
         assert nv == 0, f"oracle: no fused geometry fits; C++ picked NV={nv} NP={np_}"
         assert not pays
         return
-    assert (nv, np_, pl) == (o["nv"], o["np"], o["placement"]), f"C++ {(nv, np_, pl)} vs oracle {o}"
+    assert (nv, np_, pl, nbuf) == (
+        o["nv"],
+        o["np"],
+        o["placement"],
+        o["nbuf"],
+    ), f"C++ {(nv, np_, pl, nbuf)} vs oracle {o}"
     assert abs(t_f - o["T_fused"]) < 0.5 and abs(t_ph - o["T_phased"]) < 0.5, (t_f, t_ph, o)
     assert pays == o["fused_pays"]
 
@@ -299,24 +351,48 @@ def test_pool_feasibility_mirror(grid, bh):
             assert got == (nph >= 1), (nv, P, got, nph)
 
 
-@pytest.mark.parametrize("fixed", [(1, 0), (2, 0), (4, 0), (0, 1), (0, 2), (0, 5), (0, 8), (2, 2), (4, 5)])
+@pytest.mark.parametrize(
+    "fixed",
+    [
+        (1, 0, 0),
+        (2, 0, 0),
+        (4, 0, 0),
+        (0, 1, 0),
+        (0, 2, 0),
+        (0, 5, 0),
+        (0, 8, 0),
+        (2, 2, 0),
+        (4, 5, 0),
+        (0, 0, 2),
+        (0, 0, 3),
+        (0, 0, 4),
+        (2, 7, 2),
+        (4, 5, 1),
+        (1, 4, 3),
+    ],
+    ids=lambda v: "nv%d_np%d_d%d" % v,
+)
 @pytest.mark.parametrize("bh", [4, 12, 16, 32])
 @pytest.mark.parametrize("grid", [(11, 10), (12, 10)], ids=["11x10", "12x10"])
 def test_constrained_choice_mirror(grid, bh, fixed):
-    """A partially pinned fused config (num_receivers or num_producers alone) fixes that field; C++ and
-    the oracle fill in the other one identically, and the result always fits the grid."""
-    fnv, fnp = fixed
-    nv, np_, pl, _, _, _ = _t.chunk_gdn_fused_geometry(grid[0], grid[1], bh, 16, VT, fnv, fnp)
-    o = _choose_geometry(grid, bh, 16, fixed_nv=fnv, fixed_np=fnp)
+    """A partially pinned fused config (any of num_receivers / num_producers / handoff_depth) fixes those
+    fields; C++ and the oracle fill in the rest identically, agree on T_fused, and the result always fits
+    the grid."""
+    fnv, fnp, fnb = fixed
+    nv, np_, pl, nbuf, t_f, _, _ = _t.chunk_gdn_fused_geometry(grid[0], grid[1], bh, 16, VT, fnv, fnp, fnb)
+    o = _choose_geometry(grid, bh, 16, fixed_nv=fnv, fixed_np=fnp, fixed_nbuf=fnb)
     if o["nv"] is None:
         assert nv == 0
         return
-    assert (nv, np_, pl) == (o["nv"], o["np"], o["placement"]), ((nv, np_, pl), o)
+    assert (nv, np_, pl, nbuf) == (o["nv"], o["np"], o["placement"], o["nbuf"]), ((nv, np_, pl, nbuf), o)
+    assert abs(t_f - o["T_fused"]) < 0.5, (t_f, o)
     assert bh * (nv + np_) <= grid[0] * grid[1]
     if fnv:
         assert nv == fnv
     if fnp:
         assert np_ == min(fnp, 16)
+    if fnb:
+        assert nbuf == fnb
 
 
 # ---------------------------------------------------------------------------------------------
@@ -458,7 +534,7 @@ def test_item_map_per_head_form(bh, nc, np_):
 def test_chosen_layout_shares_no_links(grid, bh):
     """The layout the cost model picks (at the production chunk count) keeps each head's hand-off
     traffic on its own NoC links. Checked on the factory's actual core map."""
-    nv, np_, pl, _, _, _ = _t.chunk_gdn_fused_geometry(grid[0], grid[1], bh, 64, VT)
+    nv, np_, pl, _, _, _, _ = _t.chunk_gdn_fused_geometry(grid[0], grid[1], bh, 64, VT)
     if nv == 0 or pl != 1:
         pytest.skip("no row-local geometry for this (grid, BH)")
     rcv, prod = _t.chunk_gdn_fused_placement(grid[0], grid[1], bh, nv, np_, pl)
@@ -489,33 +565,70 @@ def test_infeasible_placement_raises(expect_error, grid, bh, nv, np_, placement,
 
 
 def test_phased_model_matches_measurements():
-    """T_phased reproduces the measured phased device-time points (QB2, NC=64, prep + scan, 2026-09-25)
+    """T_phased reproduces the measured phased device-time points (QB2, NC=64, prep + scan, 2026-10-01)
     within 5 %."""
-    for bh, meas in ((4, 404), (8, 518), (12, 635), (16, 806), (32, 1292), (48, 2054)):
-        t_ph = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)[4]
+    for bh, meas in ((4, 367.1), (8, 473.0), (12, 604.4), (16, 782.5), (32, 1299.6), (48, 1933.1)):
+        t_ph = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)[5]
         assert abs(t_ph - meas) / meas < 0.05, (bh, t_ph, meas)
 
 
-def test_fused_model_matches_measurements():
-    """T_fused at the model's own picks reproduces the measured fused device-time points (QB2, NC=64,
-    2026-09-25: BH=4 and 8 at NV=2/NP=9, 12 at NV=2/NP=7, 16 at NV=1/NP=4, 32 at NV=1/NP=2) within 10 %."""
-    for bh, meas in ((4, 286), (8, 302), (12, 373), (16, 582), (32, 1104)):
-        nv, np_, _, t_f, _, _ = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)
-        assert abs(t_f - meas) / meas < 0.10, (bh, nv, np_, t_f, meas)
+# QB2 fused device time, NC=64, 2026-10-01: (BH, NV, NP, handoff_depth, placement, us). The model reproduces
+# every row within 5 % except NV=4 at BH=12, which runs ~10 % above it at both depths (tolerance 12 %; the
+# model never picks NV=4 there).
+_FUSED_MEASUREMENTS = [
+    (4, 2, 9, 2, 1, 206.8),
+    (4, 2, 9, 3, 1, 207.1),
+    (4, 4, 7, 2, 1, 296.4),
+    (4, 4, 7, 4, 1, 244.1),
+    (8, 2, 9, 2, 1, 220.1),
+    (8, 2, 9, 3, 1, 221.1),
+    (8, 4, 7, 2, 1, 312.8),
+    (8, 4, 7, 3, 1, 258.4),
+    (8, 4, 7, 4, 1, 263.1),
+    (12, 2, 7, 2, 1, 250.2),
+    (12, 2, 7, 3, 1, 231.1),
+    (12, 2, 7, 4, 1, 232.7),
+    (12, 4, 5, 2, 1, 350.4),
+    (12, 4, 5, 4, 1, 315.9),
+    (16, 1, 4, 2, 1, 347.4),
+    (16, 1, 4, 3, 1, 351.6),
+    (16, 2, 3, 2, 1, 436.9),
+    (16, 2, 3, 3, 1, 436.9),
+    (16, 2, 4, 2, 0, 572.1),
+    (16, 1, 5, 2, 0, 598.3),
+    (16, 4, 2, 2, 0, 637.2),
+    (24, 1, 3, 2, 1, 454.5),
+    (24, 1, 3, 3, 1, 454.0),
+    (24, 2, 2, 2, 1, 637.3),
+    (32, 1, 2, 2, 1, 648.9),
+    (32, 2, 1, 2, 1, 1232.5),
+    (48, 1, 1, 2, 1, 1203.0),
+]
+
+
+@pytest.mark.parametrize("bh, nv, np_, depth, placement, meas", _FUSED_MEASUREMENTS, ids=lambda v: str(v))
+def test_fused_model_matches_measurements(bh, nv, np_, depth, placement, meas):
+    """T_fused at a pinned (NV, NP, depth) reproduces the measured fused device time; the row-major rows
+    (no row-local layout at BH=16 for them) go through the fallback and its link-sharing penalty."""
+    got_nv, got_np, pl, nbuf, t_f, _, _ = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT, nv, np_, depth)
+    assert (got_nv, got_np, pl, nbuf) == (nv, np_, placement, depth)
+    tol = 0.12 if (bh, nv) == (12, 4) else 0.05
+    assert abs(t_f - meas) / meas < tol, f"model {t_f:.1f} vs measured {meas} ({(t_f - meas) / meas:+.1%})"
 
 
 def test_qb2_operating_points():
-    """The Qwen3.6-27B TP-4 shape (BH=12) on QB2 picks NV=2, NP=7 row-local, ~376 us (producer-bound
-    with the Horner inverse) vs phased ~657; BH=48 no longer pays (2241 vs the phased 2054); BH=64 needs
-    >= 128 cores, so no fused geometry exists and the op must dispatch phased."""
-    nv, np_, pl, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(11, 10, 12, 64, VT)
-    assert (nv, np_, pl) == (2, 7, 1) and pays
-    assert 360 <= t_f <= 400 and 630 <= t_ph <= 690
-    nv, np_, _, _, _, pays = _t.chunk_gdn_fused_geometry(11, 10, 4, 64, VT)
-    assert (nv, np_) == (2, 9), (nv, np_)
-    _, _, _, _, _, pays48 = _t.chunk_gdn_fused_geometry(11, 10, 48, 64, VT)
-    assert not pays48
-    nv, _, _, _, _, pays = _t.chunk_gdn_fused_geometry(11, 10, 64, 64, VT)
+    """The Qwen3.6-27B TP-4 shape (BH=12) on QB2 picks NV=2, NP=7 row-local at hand-off depth 3 (the
+    supply 18.5/7 is within 10 % of the 2.78 step, so depth 2 would expose the round trip), ~222 us vs
+    phased ~624; BH=4 the same geometry; BH=48 pays again (one producer per head, ~1260 vs the phased
+    1933); BH=64 needs >= 128 cores, so no fused geometry exists and the op must dispatch phased."""
+    nv, np_, pl, nbuf, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(11, 10, 12, 64, VT)
+    assert (nv, np_, pl, nbuf) == (2, 7, 1, 3) and pays
+    assert 215 <= t_f <= 230 and 600 <= t_ph <= 650
+    nv, np_, _, nbuf, _, _, pays = _t.chunk_gdn_fused_geometry(11, 10, 4, 64, VT)
+    assert (nv, np_, nbuf) == (2, 7, 3), (nv, np_, nbuf)
+    nv, np_, _, nbuf, t_f, t_ph, pays48 = _t.chunk_gdn_fused_geometry(11, 10, 48, 64, VT)
+    assert (nv, np_, nbuf) == (1, 1, 2) and pays48 and t_f < 0.7 * t_ph
+    nv, _, _, _, _, _, pays = _t.chunk_gdn_fused_geometry(11, 10, 64, 64, VT)
     assert nv == 0 and not pays
 
 
@@ -523,22 +636,21 @@ def test_qb2_pool_operating_points():
     """The producer pool on QB2 (what producer_pool=True resolves to with the geometry left free): every
     core the receivers leave, in the row-local map of the largest NPH the pool allows plus the extras.
     BH=16 NV=2: 78 producers = 3 per head in the rows + 30 extras; BH=12 NV=2: 86 = 7 per head + 2;
-    BH=8 NV=2: 94 = 9 per head + 22. At the per-head constants the pool candidate is predicted faster than
-    the per-head pick everywhere (BH=16 NV=2: 507 vs 592 us) and, production-bound, the model would take
-    NV=1 with 94 producers (435) over NV=2 with 78; the default dispatch keeps the per-head candidates
-    until the pool is calibrated."""
+    BH=8 NV=2: 94 = 9 per head + 22. At the recalibrated constants the pool beats the per-head pick where
+    that pick is supply-bound (BH=16: 291 vs 347 us; BH=48: 993 vs 1260) and ties it where the receiver
+    step bounds both (BH=12, 8, 4: the tie goes to the per-head form's fewer cores); the default dispatch
+    keeps the per-head candidates until the pool is calibrated."""
     for bh, nv, P, nph in ((16, 2, 78, 3), (12, 2, 86, 7), (8, 2, 94, 9), (4, 2, 102, 9), (48, 1, 62, 1)):
-        got_nv, got_np, pl, t_pool, _, pays = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT, nv, 0, POOL)
+        got_nv, got_np, pl, _, t_pool, _, pays = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT, nv, candidates=POOL)
         assert (got_nv, got_np, pl) == (nv, P, 2), (bh, nv, got_nv, got_np, pl)
         assert _t.chunk_gdn_fused_pool_home_producers(11, 10, bh, nv, P) == nph, (bh, nv, P)
         assert pays
-        _, _, _, t_head, _, _ = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)
-        assert t_pool < t_head, (bh, t_pool, t_head)
-    _, _, _, t_pool, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 2, 0, POOL)
-    assert 495 <= t_pool <= 520, t_pool
-    nv, P, pl, t_pool, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 0, 0, POOL)
-    assert (nv, P, pl) == (1, 94, 2) and 425 <= t_pool <= 445, (nv, P, pl, t_pool)
-    nv, P, pl, _, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 0, 0, BOTH)
-    assert (nv, P, pl) == (1, 94, 2), "the pool wins at BH=16 when the model may consider it"
-    nv, P, pl, _, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT)
+        _, _, _, _, t_head, _, _ = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)
+        assert t_pool <= t_head, (bh, t_pool, t_head)
+        assert (t_pool < t_head) == (bh in (16, 48)), (bh, t_pool, t_head)
+    nv, P, pl, nbuf, t_pool, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, candidates=POOL)
+    assert (nv, P, pl, nbuf) == (2, 78, 2, 2) and 285 <= t_pool <= 295, (nv, P, pl, nbuf, t_pool)
+    nv, P, pl, _, _, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, candidates=BOTH)
+    assert (nv, P, pl) == (2, 78, 2), "the pool wins at BH=16 when the model may consider it"
+    nv, P, pl, _, _, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT)
     assert pl != 2, "the default dispatch does not consider the pool"
