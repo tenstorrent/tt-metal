@@ -14,10 +14,11 @@ std::vector<std::optional<ttnn::Tensor>> sdpa_fw(
     const ttnn::Tensor& value,
     AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& mask,
+    const std::optional<ttnn::Tensor>& gate,
     const float dropout_probability,
     const bool return_intermediates) {
     auto result =
-        ttnn::prim::ttml_sdpa_fw(query, key, value, mask_type, mask, dropout_probability, return_intermediates);
+        ttnn::prim::ttml_sdpa_fw(query, key, value, mask_type, mask, gate, dropout_probability, return_intermediates);
 
     if (result.size() == 1U) {
         return {result[0], std::nullopt};

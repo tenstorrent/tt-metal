@@ -156,6 +156,29 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
         "Use AttentionMaskType::Arbitrary to apply a custom mask, "
         "or remove the mask tensor for None/Causal modes.");
 
+    // Validate gate input shape if provided
+    if (tensor_args.gate.has_value()) {
+        const auto& gate = tensor_args.gate.value();
+        check_tensor(gate, "Gate", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+
+        const auto gate_shape = gate.logical_shape();
+        // Gate shape (B, H, S, vE) - heads NOT fused, inner dim matches V
+        TT_FATAL(
+            gate_shape[0] == query_shape[0] &&      // B
+                gate_shape[1] == qHt &&             // H (heads NOT fused)
+                gate_shape[2] == query_shape[2] &&  // S
+                gate_shape[3] == vEt,               // D (matches V inner dim)
+            "Invalid gate shape. Expected (B, H, S, vE) = ({}, {}, {}, {}), got {}. "
+            "Query shape={}, Value shape={}",
+            query_shape[0],
+            qHt,
+            query_shape[2],
+            vEt,
+            gate_shape,
+            query_shape,
+            value_shape);
+    }
+
     if (preallocated_output.has_value()) {
         check_tensor(
             preallocated_output.value(),
@@ -279,6 +302,7 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const ttnn::Tensor& value_tensor,
     ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& mask,
+    const std::optional<ttnn::Tensor>& gate,
     const float dropout_probability,
     const bool return_intermediates,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
@@ -288,12 +312,14 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     auto operation_attributes = OperationType::operation_attributes_t{
         .return_intermediates = return_intermediates,
         .mask_type = mask_type,
-        .dropout_probability = dropout_probability};
+        .dropout_probability = dropout_probability,
+        .has_gate = gate.has_value()};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query_tensor,
         .key = key_tensor,
         .value = value_tensor,
         .mask = mask,
+        .gate = gate,
         .preallocated_intermediate = preallocated_intermediate,
         .preallocated_output = preallocated_output,
     };
