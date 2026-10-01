@@ -1855,7 +1855,9 @@ class WELFORD_RECIP_SIZE(TemplateParameter):
     welford_recip_size: int = 256
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t WELFORD_RECIP_SIZE = {self.welford_recip_size}u;"
+        return (
+            f"constexpr std::uint32_t WELFORD_RECIP_SIZE = {self.welford_recip_size}u;"
+        )
 
 
 @dataclass
@@ -1866,7 +1868,9 @@ class WELFORD_RECIP_BASE(TemplateParameter):
     welford_recip_base: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t WELFORD_RECIP_BASE = {self.welford_recip_base}u;"
+        return (
+            f"constexpr std::uint32_t WELFORD_RECIP_BASE = {self.welford_recip_base}u;"
+        )
 
 
 @dataclass

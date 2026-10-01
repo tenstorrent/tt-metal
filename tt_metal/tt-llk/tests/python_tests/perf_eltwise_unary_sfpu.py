@@ -423,7 +423,9 @@ def _cumsum_dest_acc(formats):
     dest_acc=lambda formats: _cumsum_dest_acc(formats),
     input_dimensions=_EXTRA_SLICE_DIMS,
 )
-def test_perf_eltwise_unary_sfpu_cumsum(perf_report, formats, dest_acc, input_dimensions):
+def test_perf_eltwise_unary_sfpu_cumsum(
+    perf_report, formats, dest_acc, input_dimensions
+):
     _extra_slice_config(
         formats,
         MathOperation.Cumsum,

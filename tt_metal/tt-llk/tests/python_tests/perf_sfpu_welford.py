@@ -42,7 +42,9 @@ def _dest_acc_modes(formats):
     loop_factor=[16],  # amortise profiler overhead
     input_dimensions=[[128, 64]],  # tile_cnt: 8
 )
-def test_perf_sfpu_welford(perf_report, formats, dest_acc, recip_size, loop_factor, input_dimensions):
+def test_perf_sfpu_welford(
+    perf_report, formats, dest_acc, recip_size, loop_factor, input_dimensions
+):
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )

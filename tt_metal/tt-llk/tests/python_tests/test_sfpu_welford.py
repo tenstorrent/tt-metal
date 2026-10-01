@@ -39,17 +39,25 @@ RECIPROCAL_TABLE_SIZES = [256, 0]
 )
 def test_sfpu_welford(formats, dest_acc, num_tiles, recip_size):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("a Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST")
+        pytest.skip(
+            "a Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST"
+        )
 
     torch.manual_seed(0)
     torch_format = format_dict[formats.input_format]
 
     # [rows, cols] = [num_tiles * 32 samples, 32 parallel columns].
     input_dimensions = [num_tiles * TILE_DIM, TILE_DIM]
-    src_A = torch.empty((num_tiles * ELEMENTS_PER_TILE,), dtype=torch_format).uniform_(-4.0, 4.0)
+    src_A = torch.empty((num_tiles * ELEMENTS_PER_TILE,), dtype=torch_format).uniform_(
+        -4.0, 4.0
+    )
     src_B = torch.zeros_like(src_A)
-    golden_input = src_A.view(input_dimensions[0], input_dimensions[1]).to(torch.float64)
-    src_A_tilized = tilize_block(src_A, input_dimensions, stimuli_format=formats.input_format).flatten()
+    golden_input = src_A.view(input_dimensions[0], input_dimensions[1]).to(
+        torch.float64
+    )
+    src_A_tilized = tilize_block(
+        src_A, input_dimensions, stimuli_format=formats.input_format
+    ).flatten()
 
     configuration = TestConfig(
         "sources/sfpu_welford_test.cpp",
@@ -74,8 +82,12 @@ def test_sfpu_welford(formats, dest_acc, num_tiles, recip_size):
     res_from_L1 = configuration.run().result
 
     res = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-    mean_tile = untilize_block(res[:ELEMENTS_PER_TILE], formats.output_format, [TILE_DIM, TILE_DIM])
-    var_tile = untilize_block(res[ELEMENTS_PER_TILE:], formats.output_format, [TILE_DIM, TILE_DIM])
+    mean_tile = untilize_block(
+        res[:ELEMENTS_PER_TILE], formats.output_format, [TILE_DIM, TILE_DIM]
+    )
+    var_tile = untilize_block(
+        res[ELEMENTS_PER_TILE:], formats.output_format, [TILE_DIM, TILE_DIM]
+    )
     # The kernel writes the statistics into row 0 of each tile.
     mean_dev = mean_tile.reshape(TILE_DIM, TILE_DIM)[0].to(torch.float32)
     var_dev = var_tile.reshape(TILE_DIM, TILE_DIM)[0].to(torch.float32)
@@ -83,8 +95,12 @@ def test_sfpu_welford(formats, dest_acc, num_tiles, recip_size):
     mean_ref = golden_input.mean(dim=0).to(torch.float32)
     var_ref = golden_input.var(dim=0, unbiased=False).to(torch.float32)
 
-    assert passed_test(mean_ref, mean_dev, formats.output_format), "Welford mean does not match golden"
-    assert passed_test(var_ref, var_dev, formats.output_format), "Welford variance does not match golden"
+    assert passed_test(
+        mean_ref, mean_dev, formats.output_format
+    ), "Welford mean does not match golden"
+    assert passed_test(
+        var_ref, var_dev, formats.output_format
+    ), "Welford variance does not match golden"
 
 
 # 32 reciprocals per result tile; 128 tiles of Float32 (512 KiB of L1) per run.
@@ -137,7 +153,9 @@ def test_sfpu_welford_reciprocal(base):
     slabs_not_uniform = 0
     for tile in range(_RECIP_TILES):
         tile_values = untilize_block(
-            res[tile * ELEMENTS_PER_TILE : (tile + 1) * ELEMENTS_PER_TILE], DataFormat.Float32, [TILE_DIM, TILE_DIM]
+            res[tile * ELEMENTS_PER_TILE : (tile + 1) * ELEMENTS_PER_TILE],
+            DataFormat.Float32,
+            [TILE_DIM, TILE_DIM],
         )
         bits = tile_values.reshape(TILE_DIM, TILE_DIM).numpy().view(np.uint32)
         for slab in range(32):
@@ -148,7 +166,9 @@ def test_sfpu_welford_reciprocal(base):
                 slabs_not_uniform += 1
             want = expected[tile * 32 + slab]
             if got[0, 0] != want:
-                mismatches.append((int(counts[tile * 32 + slab]), int(want), int(got[0, 0])))
+                mismatches.append(
+                    (int(counts[tile * 32 + slab]), int(want), int(got[0, 0]))
+                )
 
     # The multiply-add truncates its product, so the result is the correctly rounded reciprocal or its
     # upper neighbour; both are positive normals, so one ulp is one step of the bit pattern.
