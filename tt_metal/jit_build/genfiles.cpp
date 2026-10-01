@@ -222,15 +222,36 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         vector<string> template_args;
     };
 
+    // Represent a class of Binding (e.g. Scratchpad binding)
     struct Binding {
-        string name, emission_namespace, includes, binding_type;
-        BindingEntry entries;
+        // Object invariant:
+        // - If is_binding_type_templated is false,
+        //   then for all entries, BindingEntry::template_args must be empty.
+
+        string name, emission_namespace, binding_type;
+        bool is_binding_type_templated = false;
+        set<string> includes;
+        vector<BindingEntry> entries;
+        bool omit_programmatic_binding_token_getter = false;
+    };
+
+    Binding general_dfb_binding{
+        .name = "DFBBindingToken",
+        .emission_namespace = "dfb",
+        .binding_type = "DFBBindingToken",
+        .includes = {"api/dataflow/dataflow_buffer.h"},
+        .omit_programmatic_binding_token_getter = true};
+
+    Binding relay_dfb_binding{
+        .name = "RelayDFBBindingToken",
+        .emission_namespace = "dfb",
+        .binding_type = "RelayDFBBindingToken",
+        .includes = {"api/dataflow/dataflow_buffer.h"},
     };
 
     // Get the DFB bindings from the settings callback
     // Sort them to ensure the file output is deterministic for the JIT build cache
     // (aka the on-disk per-object dephash cache)
-    vector<BindingEntry> relay_dfb_entries, general_dfb_entries;
     settings.process_dataflow_buffer_binding_handles([&](const string& name,
                                                          uint16_t id,
                                                          bool is_relay,
@@ -244,27 +265,32 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             if (prefetcher_pipe_id != 0xFF) {
                 entry.args.push_back(std::to_string(static_cast<uint32_t>(prefetcher_pipe_id)));
             }
-            relay_dfb_entries.push_back(std::move(entry));
+            relay_dfb_binding.entries.push_back(std::move(entry));
         } else {
             BindingEntry entry{.name = name, .args = {std::to_string(id)}};
             if (metadata.has_value()) {
                 entry.args.push_back(serialize_llk_metadata(*metadata));
             }
-            general_dfb_entries.push_back(std::move(entry));
+            general_dfb_binding.entries.push_back(std::move(entry));
         }
     });
     // TODO: fix this.
     // sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
+    Binding semaphore_binding{
+        .name = "SemaphoreBindingToken",
+        .emission_namespace = "sem",
+        .binding_type = "SemaphoreBindingToken",
+        .includes = {"api/dataflow/semaphore_binding_token.h"},
+    };
+
     // Get the semaphore bindings from the settings callback
     // Sort them to ensure the file output is deterministic, as explained above
-    vector<BindingEntry> sem_entries;
-    settings.process_semaphore_binding_handles(
-        [&sem_entries](const string& name, uint16_t id, SemScope scope, uint32_t) {
-            sem_entries.push_back(BindingEntry{
-                .name = name,
-                .args = {fmt::format("{}u", id), fmt::format("::SemScope::{}", sem_scope_enumerator(scope))}});
-        });
+    settings.process_semaphore_binding_handles([&](const string& name, uint16_t id, SemScope scope, uint32_t) {
+        semaphore_binding.entries.push_back(BindingEntry{
+            .name = name,
+            .args = {fmt::format("{}u", id), fmt::format("::SemScope::{}", sem_scope_enumerator(scope))}});
+    });
     // TODO: fix this ordering.
     // sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
@@ -272,14 +298,21 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
     // (Kernel::compute_hash also hashes them in the same order... these two must be the same.)
 
+    Binding tensor_binding{
+        .name = "TensorBindingToken",
+        .emission_namespace = "tensor",
+        .binding_type = "TensorBindingToken",
+        .is_binding_type_templated = true,
+        .includes = {"api/tensor/tensor_binding_token.h"},
+    };
+
     // TODO: ordering && hashing
-    vector<BindingEntry> tensor_binding_entries;
     settings.process_tensor_binding_handles([&](const string& name,
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
                                                 uint32_t /*num_rt_words*/,
                                                 const LLKMetadata& metadata) {
-        tensor_binding_entries.push_back(BindingEntry{
+        tensor_binding.entries.push_back(BindingEntry{
             .name = name,
             .args = {serialize_llk_metadata(metadata)},
             .template_args = {fmt::format("{}u", cta_offset), fmt::format("{}u", addr_crta_offset)},
@@ -289,9 +322,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
     // (Kernel::compute_hash hashes them in the same order — the two must agree).
-    //
+
+    Binding scratchpad_binding{
+        .name = "ScratchpadBindingToken",
+        .emission_namespace = "scratch",
+        .binding_type = "ScratchpadBindingToken",
+        .includes = {"api/scratchpad.h"},
+        .entries = {},  // assigned later
+    };
+
     // TODO: ordering && hashing
-    vector<BindingEntry> scratch_entries;
     settings.process_scratchpad_binding_handles([&](const string& name,
                                                     uint32_t size_bytes,
                                                     uint32_t addr_crta_word,
@@ -300,27 +340,56 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         if (metadata.has_value()) {
             entry.args.push_back(serialize_llk_metadata(*metadata));
         }
-        scratch_entries.push_back(std::move(entry));
+        scratchpad_binding.entries.push_back(std::move(entry));
     });
 
     // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
     // hashes them in binding order; both orders carry the same set, so the cache key is stable).
-    vector<BindingEntry> pipe_entries;
+
+    Binding prefetcher_pipe_binding{
+        .name = "PrefetcherPipeBindingToken",
+        .emission_namespace = "pipe",
+        .binding_type = "PrefetcherPipeBindingToken",
+        .includes = {"api/dataflow/prefetcher_pipe_binding_token.h"},
+        .entries = {},  // assigned later
+    };
     settings.process_prefetcher_pipe_binding_handles([&](const string& name, uint8_t prefetcher_pipe_id) {
-        pipe_entries.push_back(BindingEntry{.name = name, .args = {fmt::format("{}u", prefetcher_pipe_id)}});
+        prefetcher_pipe_binding.entries.push_back(
+            BindingEntry{.name = name, .args = {fmt::format("{}u", prefetcher_pipe_id)}});
     });
     // TODO: ordering
     // sort(pipe_entries.begin(), pipe_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
-    vector<BindingEntry> tensor_binding_sequence_entries;
+
+    Binding tensor_binding_sequence_binding{
+        .name = "TensorBindingSequenceToken",
+        .emission_namespace = "tensor",
+        .binding_type = "TensorBindingSequenceToken",
+        .includes = {"<tuple>"},
+        .entries = {},  // assigned later
+    };
+
     settings.process_tensor_binding_sequences([&](const string& name, const vector<string>& members) {
-        tensor_binding_sequence_entries.push_back(BindingEntry{
+        tensor_binding_sequence_binding.entries.push_back(BindingEntry{
             .name = name,
             .args = {
                 fmt::format("std::make_tuple({})", fmt::join(members, ", ")),
             }});
     });
+
+    vector all_bindings{
+        general_dfb_binding,
+        relay_dfb_binding,
+        semaphore_binding,
+        tensor_binding,
+        scratchpad_binding,
+        prefetcher_pipe_binding,
+        tensor_binding_sequence_binding,
+    };
+
+    auto bindings_with_token_getters = ranges::filter_view(
+        all_bindings, [](const auto& binding) { return binding.omit_programmatic_binding_token_getter; });
 
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
@@ -343,130 +412,109 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
 
-    // Emit Includes:
-    // Support get_token_if_present() helper.
-    content << "#include \"internal/template_string.h\"\n";
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Includes:
 
-    if (!relay_dfb_entries.empty() || !general_dfb_entries.empty()) {
-        content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
-    }
-    if (!pipe_entries.empty()) {
-        // Defines PrefetcherPipeBindingToken. Header-only and dependency-free (the token is just
-        // the slot id); the kernel includes api/dataflow/prefetcher_pipe.h itself to use it.
-        content << "#include \"api/dataflow/prefetcher_pipe_binding_token.h\"\n";
-    }
+    // Set of includes to emit
+    set<string> includes;
 
-    if (!sem_entries.empty()) {
-        // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
-        // so it is safe on compute builds too.
-        content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
+    // Collect the set of includes from all bindings
+    for (const auto& binding : all_bindings) {
+        // We don't need to emit the include for a binding if it has no entries.
+        if (binding.entries.empty()) {
+            continue;
+        }
+        includes.insert(binding.includes.begin(), binding.includes.end());
     }
 
-    // This is included unconditionally for the `get_token_if_present()` helper, as it needs to see the full templated
-    // definition of TensorBindingToken.
-    content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+    // get_token_if_present() helper need to pull additional includes.
+    includes.insert("internal/template_string.h");
 
-    if (!scratch_entries.empty()) {
-        content << "#include \"api/scratchpad.h\"\n";
+    // If a binding needs programmatic binding token getter and have a templated type,
+    // we must emit the includes for it's types as we cannot forward declare them.
+    for (const auto& binding : bindings_with_token_getters) {
+        if (binding.is_binding_type_templated) {
+            includes.insert(binding.includes.begin(), binding.includes.end());
+        }
     }
 
-    if (!tensor_binding_sequence_entries.empty()) {
-        content << "#include <tuple>\n";
+    // Emit the includes
+    for (const auto& include : includes) {
+        content << fmt::format("#include <{}>\n", include);
     }
+
     content << "\n";
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Forward declarations:
+
     // get_token_if_present() is always emitted. When this kernel has no DFB / scratchpad bindings,
-    // the headers that define those token types are omitted, but the empty getter still returns
+    // the headers that define those token types are omitted from includes, but the empty getter still returns
     // const BindingTokenType*{nullptr} and needs those types in scope.
-    if (general_dfb_entries.empty()) {
-        content << "struct DFBBindingToken;\n";
-    }
-    if (scratch_entries.empty()) {
-        content << "struct ScratchpadBindingToken;\n";
-    }
 
-    // Emit DFB bindings
-    content << "namespace dfb {\n";
+    auto bindings_need_forward_declarations = ranges::filter_view(bindings_with_token_getters, [](const auto& binding) {
+        // Token getter needs to be able to reference the binding type.
+        //
+        // We need to forward declare the ones that does not have their includes pulled in.
+        return binding.entries.empty() && !binding.is_binding_type_templated;
+    });
 
-    for (const auto& [name, args, _] : relay_dfb_entries) {
-        content << fmt::format("constexpr RelayDFBBindingToken {}({});", name, fmt::join(args, ", "));
-    }
-    for (const auto& [name, args, _] : general_dfb_entries) {
-        content << fmt::format("constexpr DFBBindingToken {}({});", name, fmt::join(args, ", "));
+    // Omit binding
+    for (const auto& binding : bindings_need_forward_declarations) {
+        content << fmt::format("struct {0};\n", binding.binding_type);
     }
 
-    // TODO: fix this.
-    // emit_programmatic_binding_token_getter(content, dfb_entries, "DFBBindingToken");
-    content << "}  // namespace dfb\n";
+    // Section spacing
+    if (!ranges::empty(bindings_need_forward_declarations)) {
+        content << "\n";
+    }
 
-    // Emit PrefetcherPipe bindings: one token per accessor, carrying the program slot id.
-    if (!pipe_entries.empty()) {
-        content << "namespace pipe {\n";
-        for (const auto& entry : pipe_entries) {
-            content << fmt::format(
-                "constexpr PrefetcherPipeBindingToken {}({});", entry.name, fmt::join(entry.args, ", "));
+    content << "\n";
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Resource binding entries:
+
+    auto emit_binding_entries = [&](string_view namespace_, const vector<BindingEntry>& entries) {
+        for (const auto& entry : entries) {
+            if (entry.template_args.empty()) {
+                content << fmt::format("constexpr {}({});", entry.name, fmt::join(entry.args, ", "));
+            } else {
+                content << fmt::format(
+                    "using {0}_t = ::{1}::{2}<{3}>;\n",
+                    entry.name,
+                    namespace_,
+                    entry.name,
+                    fmt::join(entry.template_args, ", "));
+                content << fmt::format(
+                    "constexpr {0}_t {1}({2});", entry.name, entry.name, fmt::join(entry.args, ", "));
+            }
         }
-        content << "}  // namespace pipe\n";
-    }
+    };
 
-    // Emit Semaphore bindings
-    content << "namespace sem {\n";
-    for (const auto& entry : sem_entries) {
-        content << fmt::format("constexpr ::SemaphoreBindingToken {}({});", entry.name, fmt::join(entry.args, ", "));
-    }
-    content << "}  // namespace sem\n";
-
-    // Emit Tensor bindings
-    content << "namespace tensor {\n";
-
-    // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
-    // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-    // its implicit base-address CRTA.
-    // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
+    // Group all bindings by their namespace
     //
-    // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
-    // template with extra metadata in the future without touching kernel source.
-    //
-    // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
-    for (const auto& entry : tensor_binding_entries) {
-        content << fmt::format(
-            "using {0}_t = ::tensor_accessor::TensorBindingToken<{1}>;\n",
-            entry.name,
-            fmt::join(entry.template_args, ", "));
-        content << fmt::format("constexpr {0}_t {1}({2});", entry.name, entry.name, fmt::join(entry.args, ", "));
-        content << "};\n";
+    // Using map to get alphabetical order of namespaces.
+    // Invariant: no nullptrs in all vectors of bindings_by_namespace
+    map<string, vector<const Binding*>> bindings_by_namespace;
+    for (const auto& binding : all_bindings) {
+        bindings_by_namespace[binding.emission_namespace].push_back(&binding);
     }
 
-    // TODO: fix this.
-    // // Unlike other binding token types, TensorBindingToken has meaningful template parameters associated with it.
-    // // Thus, a dedicated type is needed to represent the absence of a binding.
-    // emit_programmatic_binding_token_getter(content, ta_entries, "::tensor_accessor::NullTensorBindingToken");
+    // Emit binding by namespace
+    for (const auto& [namespace_, bindings] : bindings_by_namespace) {
+        // Here we group all the bindings by their namespace and emit them all at once.
+        content << fmt::format("namespace {0} {{\n", namespace_);
 
-    // Emit TensorBindingToken sequences
-    for (const auto& entry : tensor_binding_sequence_entries) {
-        // Here entry.args only have a single element.
-        content << fmt::format("constexpr auto {}({})", entry.name, fmt::join(entry.args, ", "));
+        for (const auto& binding : bindings) {
+            emit_binding_entries(binding->binding_type, binding->entries);
+
+            // if (binding->omit_programmatic_binding_token_getter) {
+            //     emit_programmatic_binding_token_getter(content, binding->entries, binding->binding_type);
+            // }
+        }
+
+        content << "}  // namespace " << namespace_ << "\n";
     }
-
-    content << "}  // namespace tensor\n";
-
-    // Emit Scratchpad bindings
-    content << "namespace scratch {\n";
-
-    // ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
-    // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
-    // and the scratchpad's compile-time per-node size.
-    // The kernel-side Scratchpad(token) constructor unpacks both.
-    // The token's members are opaque, so the framework can extend it later without touching
-    // kernel source.
-    for (const auto& entry : scratch_entries) {
-        content << fmt::format("constexpr ScratchpadBindingToken {}({});", entry.name, fmt::join(entry.args, ", "));
-    }
-
-    // TODO: fix this.
-    // emit_programmatic_binding_token_getter(content, scratch_entries, "ScratchpadBindingToken");
-
-    content << "}  // namespace scratch\n";
 
     write_file(path, content.str());
 }
