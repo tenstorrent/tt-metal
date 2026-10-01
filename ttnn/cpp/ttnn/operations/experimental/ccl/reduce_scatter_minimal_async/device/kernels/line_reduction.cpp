@@ -1,14 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.hpp"
-#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
-
-namespace sched = ttnn::ccl::schedule;
 #include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
@@ -39,25 +35,44 @@ void kernel_main() {
         tiles_read_end = ttnn::runtime_length::balanced_end(worker_id, output_channel_num_pages, num_workers);
     }
 
-    // Hardware startup stays with the kernel; the accumulator owns only the op-level init.
-    // (upstream renamed binary_op_init_common -> compute_kernel_hw_startup + per-op add_init.)
+    CircularBuffer cb_input(input_cb_id);
+    CircularBuffer cb_intermediate(intermediate_cb);
+    CircularBuffer cb_output(output_cb);
+
     compute_kernel_hw_startup(input_cb_id, intermediate_cb, output_cb);
-
-    // Arm once: hoists add_init out of the chunk loop and asserts tile_granularity fits DEST.
-    auto acc = compute_kernel_lib::BlockAccumulate::arm(input_cb_id, intermediate_cb, output_cb, tile_granularity);
-
-    // The same channel/chunk walk the reader and writer drive, so the three kernels' chunk
-    // boundaries — and therefore the CB protocol — cannot drift. The step count is host-computed
-    // (targets after the first device, plus the final reduction), which is why this kernel never
-    // reproduces the reader/writer phase logic.
-    sched::LineChannelWalk walk(slice_C, tile_granularity, tiles_read_begin, tiles_read_end);
+    add_init(input_cb_id, intermediate_cb, false);
 
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice
-            walk.reset();
-            while (walk.next_channel()) {
-                while (walk.next_chunk()) {
-                    acc.run(walk.tiles_this_chunk());
+            for (uint32_t c = 0; c < slice_C; ++c) {
+                uint32_t tiles_read = tiles_read_begin;
+                uint32_t tiles_to_read = tiles_read_end;
+
+                while (tiles_read < tiles_to_read) {
+                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                    uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
+
+                    cb_input.wait_front(tile_granularity);
+                    cb_intermediate.wait_front(tile_granularity);
+
+                    tile_regs_acquire();
+                    for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
+                        add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
+                    }
+                    tile_regs_commit();
+
+                    cb_input.pop_front(tile_granularity);
+                    cb_intermediate.pop_front(tile_granularity);
+
+                    cb_output.reserve_back(tile_granularity);
+                    tile_regs_wait();
+                    for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
+                        pack_tile(tile_id, output_cb);
+                    }
+                    tile_regs_release();
+                    cb_output.push_back(tile_granularity);
+
+                    tiles_read += num_pages_to_read;
                 }
             }
         }
