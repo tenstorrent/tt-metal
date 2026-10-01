@@ -147,12 +147,18 @@ void kernel_main() {
     cb_reserve_back(cb_id_ctrl, 1U);
     const uint32_t ctrl_addr = get_write_ptr(cb_id_ctrl);
     volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_addr);
-    ctrl_l1[0] = my_total_active_steps * num_chunks;
+    const uint32_t active_block_count = my_total_active_steps * num_chunks;
     if (report_offsets_status && my_core_idx == 0U) {
-        ctrl_l1[1] = offsets_status;
-        noc_async_write(ctrl_addr + sizeof(uint32_t), status_addrgen.get_noc_addr(0), sizeof(uint32_t));
+        // NoC writes require an aligned L1 source address. Writing the second
+        // word at ctrl_addr + 4 silently rounded the source down on Blackhole,
+        // reporting active_block_count (1 for the valid test descriptor)
+        // instead of offsets_status. Reuse the aligned first word before the
+        // control CB is published, then restore its compute payload below.
+        ctrl_l1[0] = offsets_status;
+        noc_async_write(ctrl_addr, status_addrgen.get_noc_addr(0), sizeof(uint32_t));
         noc_async_write_barrier();
     }
+    ctrl_l1[0] = active_block_count;
     cb_push_back(cb_id_ctrl, 1U);
 
     for (uint32_t e = 0; e < e_local; ++e) {
