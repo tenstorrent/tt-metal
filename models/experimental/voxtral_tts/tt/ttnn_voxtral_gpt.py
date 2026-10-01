@@ -71,7 +71,19 @@ def _rope_shard_for(batch, device_grid):
     spec tt_transformers' RotarySetupHF builds). batch=1 is _ROPE_SHARD, unchanged."""
     if batch == 1:
         return _ROPE_SHARD
-    cores = ttnn.num_cores_to_corerangeset(batch, device_grid, row_wise=True)
+    # ONE rectangle of exactly `batch` cores. nlp_concat_heads_decode dereferences an optional
+    # sub-core grid when the input grid is more than one range (bad optional access on a 13-wide
+    # chip, where num_cores_to_corerangeset(32) is 13+13+6), so lay the users out 8 per row like
+    # tt_transformers' attention-output shard does.
+    if batch <= 8:
+        x, y = batch, 1
+    elif batch % 8 == 0:
+        x, y = 8, batch // 8
+    else:
+        raise ValueError(f"max_batch must be <= 8 or a multiple of 8 for a rectangular user grid, got {batch}")
+    if x > device_grid.x or y > device_grid.y:
+        raise RuntimeError(f"device grid {device_grid.x}x{device_grid.y} cannot hold a {x}x{y} user grid")
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x - 1, y - 1))})
     return ttnn.create_sharded_memory_config(
         (TILE, HEAD_DIM),
         core_grid=cores,
