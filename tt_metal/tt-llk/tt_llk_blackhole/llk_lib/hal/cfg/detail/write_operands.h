@@ -12,6 +12,7 @@
 #include "../../utils/gpr.h"
 #include "../access_types.h"
 #include "../field.h"
+#include "register_layout.h"
 
 namespace hal::cfg
 {
@@ -63,8 +64,8 @@ public:
  * @brief One destination-bound whole-word GPR transfer.
  *
  * Use @ref from_gpr to construct one. Unlike a field assignment, this operation
- * replaces one or four complete state-CFG words and acts as an ordering barrier
- * between automatically grouped assignment runs.
+ * replaces one or four complete state-CFG words and gets its own entry in the
+ * write plan. Field assignments can be grouped across GPR transfers.
  */
 template <const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
 class GprWrite
@@ -77,6 +78,9 @@ public:
     static constexpr RegisterScope scope = F.scope;
     static constexpr std::uint32_t addr  = F.addr32(S);
     static constexpr std::uint32_t words = Size == GprTransferSize::Bits128 ? 4u : 1u;
+
+    static_assert(addr < detail::StateCfgWordCount, "CFG write destination lies outside its register scope");
+    static_assert(words <= detail::StateCfgWordCount - addr, "GPR write crosses the end of its CFG bank");
 
     hal::Gpr<GprIndex> source;
 };
@@ -119,55 +123,6 @@ inline constexpr bool is_gpr_write_v<GprWrite<F, S, GprIndex, Size, Completion>>
 // Accept FieldAssignment, ConstantFieldAssignment, or GprWrite.
 template <typename T>
 inline constexpr bool is_write_operation_v = is_field_assignment_v<T> || is_gpr_write_v<T>;
-
-// Destination and overlap checks.
-
-// Assignments share a physical word only when both scope and address match.
-template <typename Lhs, typename Rhs>
-inline constexpr bool assignments_share_word_v = Lhs::scope == Rhs::scope && Lhs::addr == Rhs::addr;
-
-// Compare FieldAssignment/ConstantFieldAssignment masks or GprWrite word ranges.
-template <typename Lhs, typename Rhs>
-inline constexpr bool write_operations_disjoint_pair()
-{
-    if constexpr (is_field_assignment_v<Lhs> && is_field_assignment_v<Rhs>)
-    {
-        return !assignments_share_word_v<Lhs, Rhs> || ((Lhs::mask & Rhs::mask) == 0u);
-    }
-    else if constexpr (is_field_assignment_v<Lhs> && is_gpr_write_v<Rhs>)
-    {
-        return Lhs::scope != Rhs::scope || Lhs::addr < Rhs::addr || Lhs::addr >= Rhs::addr + Rhs::words;
-    }
-    else if constexpr (is_gpr_write_v<Lhs> && is_field_assignment_v<Rhs>)
-    {
-        return write_operations_disjoint_pair<Rhs, Lhs>();
-    }
-    else if constexpr (is_gpr_write_v<Lhs> && is_gpr_write_v<Rhs>)
-    {
-        return Lhs::scope != Rhs::scope || Lhs::addr + Lhs::words <= Rhs::addr || Rhs::addr + Rhs::words <= Lhs::addr;
-    }
-    else
-    {
-        return false;
-    }
-}
-
-// Require every pair of write operations to have non-overlapping destinations.
-template <typename... Operations>
-class write_operations_disjoint;
-
-// An empty list has no overlapping operations; this ends the recursion.
-template <>
-class write_operations_disjoint<> : public std::true_type
-{
-};
-
-// Check the first operation against the rest, then repeat for the rest.
-template <typename First, typename... Rest>
-class write_operations_disjoint<First, Rest...>
-    : public std::bool_constant<(write_operations_disjoint_pair<First, Rest>() && ...) && write_operations_disjoint<Rest...>::value>
-{
-};
 
 // Position the value in its field and clear bits outside the field mask.
 template <typename Assignment>
