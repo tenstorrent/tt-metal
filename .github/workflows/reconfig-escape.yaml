@@ -1,10 +1,10 @@
-name: "Config Pollution"
+name: "Reconfig escape sweep"
 
 on:
   workflow_dispatch:
     inputs:
       architecture:
-        description: "Architecture to run the config-pollution sweep on"
+        description: "Architecture to run the reconfig-escape sweep on"
         required: true
         default: all
         type: choice
@@ -40,7 +40,7 @@ jobs:
       inputs.architecture == 'all' ||
       inputs.architecture == 'wormhole'
     needs: build-images
-    uses: ./.github/workflows/cfg-pollution-impl.yaml
+    uses: ./.github/workflows/reconfig-escape-impl.yaml
     with:
       architecture: wormhole
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
@@ -52,7 +52,7 @@ jobs:
       inputs.architecture == 'all' ||
       inputs.architecture == 'blackhole'
     needs: build-images
-    uses: ./.github/workflows/cfg-pollution-impl.yaml
+    uses: ./.github/workflows/reconfig-escape-impl.yaml
     with:
       architecture: blackhole
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
@@ -74,8 +74,6 @@ jobs:
           WORMHOLE: ${{ needs.wormhole.result }}
           BLACKHOLE: ${{ needs.blackhole.result }}
         run: |
-          # A skipped arch (architecture filter excluded it) is not a failure; only an
-          # actual failure/cancellation on a job that ran should fail the summary.
           status=success
           for r in "$WORMHOLE" "$BLACKHOLE"; do
             [[ "$r" == "failure" || "$r" == "cancelled" ]] && status=failure
@@ -84,7 +82,7 @@ jobs:
       - name: Report status
         uses: ./.github/actions/report-failure
         with:
-          test_name: "Config pollution sweep"
+          test_name: "Reconfig escape sweep"
           slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
           status: ${{ steps.overall.outputs.status }}

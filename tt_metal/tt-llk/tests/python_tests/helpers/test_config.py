@@ -30,7 +30,7 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
-from .cfg_pollution import maybe_pollute_cfg_from_env
+from .cfg_restore import maybe_restore_cfg_from_env
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
@@ -1993,10 +1993,10 @@ class TestConfig:
                 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             ):
                 # WH's combined cache-update+start command releases the TRISCs and
-                # returns before the fall-through pollution below ever runs, so this
+                # returns before the fall-through restore below ever runs, so this
                 # reload path needs its own injection (TRISCs still in reset here).
                 # See the comment on the fall-through call for the rationale.
-                maybe_pollute_cfg_from_env(TestConfig.TENSIX_LOCATION)
+                maybe_restore_cfg_from_env(TestConfig.TENSIX_LOCATION)
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
                     BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
@@ -2004,12 +2004,12 @@ class TestConfig:
                 )
                 return
 
-        # Config-pollution sweep: while the TRISCs are still held in reset (ELFs loaded,
+        # Reconfig-escape sweep: while the TRISCs are still held in reset (ELFs loaded,
         # not yet released), optionally replay a captured restore plan into the CFG space.
         # Anything the victim's init fails to (re)write stays at that replayed residue.
-        # No-op unless an LLK_POLLUTE_INKERNEL_RESTORE* env var is set. CFG is not reset
-        # at launch, so this survives.
-        maybe_pollute_cfg_from_env(TestConfig.TENSIX_LOCATION)
+        # No-op unless an LLK_CFG_RESTORE* env var is set. CFG is not reset at launch, so
+        # this survives.
+        maybe_restore_cfg_from_env(TestConfig.TENSIX_LOCATION)
 
         match boot_mode:
             case BootMode.BRISC:

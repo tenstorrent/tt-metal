@@ -1,123 +1,115 @@
-# Config-pollution weekly job: sharded 4 ways per architecture (one shard per machine in the
+# Weekly reconfig-escape job: sharded 4 ways per architecture (one shard per machine in the
 # available pool). No pytest-collection sharding here -- the driver is a custom Python sweep
 # (discover_catalog.py + pair_sweep.py), not a pytest suite -- so each shard independently
 # rebuilds the full catalog itself (the weekly seed makes this deterministic across machines)
 # and then sweeps only its own --splits/--group slice of polluters against the full victim set.
-#
-# Real numbers from the first full (unsharded) run on blackhole: 364 ops, 132132 pair trials,
-# 33min catalog discovery + ~12h38m sweep+verify+report = ~13h11m end to end, single shard.
-# Sharding the sweep phase 4 ways (~91 polluters/shard) projects to roughly 33min catalog +
-# ~3h/shard sweep + verify/report overhead, ~3h30m-3h50m per shard -- accepted as the real
-# number rather than trimming catalog coverage or raising --jobs past the validated 8 to force
-# a fit under 3h. wormhole is unmeasured; using the same shard count and a generous timeout
-# until a real wormhole run gives its own number.
 
-- name: cfg_pollution_wormhole group 1/4
+- name: reconfig_escape_wormhole group 1/4
   split_group: 1
   team: llk
-  budget_type: cfg_pollution
+  budget_type: reconfig_escape
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/cfg_pollution
+    cd tests/python_tests/reconfig_escape
     ./ci.sh --arch wormhole --splits 4 --group 1 --report-dir reports/wormhole-1
   skus:
     wh_n150_civ2:
       timeout: 300
   owner_id: U09UC143684
 
-- name: cfg_pollution_wormhole group 2/4
+- name: reconfig_escape_wormhole group 2/4
   split_group: 2
   team: llk
-  budget_type: cfg_pollution
+  budget_type: reconfig_escape
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/cfg_pollution
+    cd tests/python_tests/reconfig_escape
     ./ci.sh --arch wormhole --splits 4 --group 2 --report-dir reports/wormhole-2
   skus:
     wh_n150_civ2:
       timeout: 300
   owner_id: U09UC143684
 
-- name: cfg_pollution_wormhole group 3/4
+- name: reconfig_escape_wormhole group 3/4
   split_group: 3
   team: llk
-  budget_type: cfg_pollution
+  budget_type: reconfig_escape
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/cfg_pollution
+    cd tests/python_tests/reconfig_escape
     ./ci.sh --arch wormhole --splits 4 --group 3 --report-dir reports/wormhole-3
   skus:
     wh_n150_civ2:
       timeout: 300
   owner_id: U09UC143684
 
-- name: cfg_pollution_wormhole group 4/4
+- name: reconfig_escape_wormhole group 4/4
   split_group: 4
   team: llk
-  budget_type: cfg_pollution
+  budget_type: reconfig_escape
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/cfg_pollution
+    cd tests/python_tests/reconfig_escape
     ./ci.sh --arch wormhole --splits 4 --group 4 --report-dir reports/wormhole-4
   skus:
     wh_n150_civ2:
       timeout: 300
   owner_id: U09UC143684
 
-- name: cfg_pollution_blackhole group 1/4
+- name: reconfig_escape_blackhole group 1/4
   split_group: 1
   team: llk
-  budget_type: cfg_pollution
+  budget_type: reconfig_escape
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/cfg_pollution
+    cd tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 1 --report-dir reports/blackhole-1
   skus:
     bh_p150b_civ2:
       timeout: 300
   owner_id: U09UC143684
 
-- name: cfg_pollution_blackhole group 2/4
+- name: reconfig_escape_blackhole group 2/4
   split_group: 2
   team: llk
-  budget_type: cfg_pollution
+  budget_type: reconfig_escape
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/cfg_pollution
+    cd tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 2 --report-dir reports/blackhole-2
   skus:
     bh_p150b_civ2:
       timeout: 300
   owner_id: U09UC143684
 
-- name: cfg_pollution_blackhole group 3/4
+- name: reconfig_escape_blackhole group 3/4
   split_group: 3
   team: llk
-  budget_type: cfg_pollution
+  budget_type: reconfig_escape
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/cfg_pollution
+    cd tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 3 --report-dir reports/blackhole-3
   skus:
     bh_p150b_civ2:
       timeout: 300
   owner_id: U09UC143684
 
-- name: cfg_pollution_blackhole group 4/4
+- name: reconfig_escape_blackhole group 4/4
   split_group: 4
   team: llk
-  budget_type: cfg_pollution
+  budget_type: reconfig_escape
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/cfg_pollution
+    cd tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 4 --report-dir reports/blackhole-4
   skus:
     bh_p150b_civ2:

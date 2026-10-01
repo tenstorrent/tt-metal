@@ -87,8 +87,8 @@ _BOOT_OWNED = {"blackhole": set(), "wormhole": {158, 159, 160, 161}}
 # addr32 0 bit 0 = CFG_STATE_ID (thread-private, preserved); addr32 2 bits 22-31 = firmware
 # DISABLE_RISC_BP (over-reach). Both are skipped by restore so we never write firmware-owned bits.
 _RESTORE_MASK_OVERRIDE = {2: 0x003FFFFF}
-# Reachable write surface (written bits per addr32) -- mirror of cfg_pollution._LIVE_MASK (BH),
-# used only to exclude non-write-surface addresses from the dedup signature below.
+# Reachable write surface (written bits per addr32), used only to exclude non-write-surface
+# addresses from the dedup signature below.
 _WRITE_MASK = {
     "blackhole": {
         0: 0x0000FFFF,
@@ -213,7 +213,7 @@ def build_addrmod_restore_entries(addrmod_path):
 # generated plugin dir at runtime so `-p xdist_capture_plugin` resolves by bare name. The GATE
 # round's `-p xdist_plan_plugin` (below) resolves the real sibling file instead -- pair_sweep.py
 # already needs that one as a standalone file, so discovery just reuses it via PYTHONPATH
-# (pytest_env puts the real cfg_pollution/ dir on the path) rather than embedding a second copy.
+# (pytest_env puts the real reconfig_escape/ dir on the path) rather than embedding a second copy.
 _XDIST_CAPTURE_PLUGIN_SRC = '''\
 """pytest plugin: one-shot restore-to-pristine + direct post-exec residue capture, per test item.
 
@@ -221,9 +221,9 @@ Discovery doesn't need the "2nd launch's pre-launch snapshot is launch 1's post-
 trick snapshot_build.py uses (which needs two launches to land on the same core -- a real risk
 under xdist, since nothing guarantees the same worker runs two separate pytest invocations for
 the same nodeid). Instead: restore-to-pristine in pytest_runtest_setup (same mechanism
-cfg_pollution.py already uses), then read the CFG state directly via snapshot_cfg/thread_items in
+cfg_restore.py already uses), then read the CFG state directly via snapshot_cfg/thread_items in
 pytest_runtest_teardown -- same process, same core, right after that item's own kernel finished,
-no second launch needed. cfg_pollution.py's own capture trick already proves residue survives a
+no second launch needed. cfg_restore.py's own capture trick already proves residue survives a
 full test-to-test boundary (fixture teardown + the next test's setup); this only needs it to
 survive from test-body-end to that SAME test's own teardown, a strictly smaller window.
 
@@ -241,7 +241,7 @@ import json
 import os
 import re
 
-_RESTORE_VAR = "LLK_POLLUTE_INKERNEL_RESTORE"
+_RESTORE_VAR = "LLK_CFG_RESTORE"
 
 
 def _sanitize(nodeid):
@@ -282,7 +282,7 @@ def pytest_runtest_teardown(item, nextitem):
     os.environ.pop(_RESTORE_VAR, None)
     if item.nodeid not in item.config._llk_candidates or not item.config._llk_outdir:
         return
-    from helpers.cfg_pollution import snapshot_addr_mod, snapshot_adc_ch1x, snapshot_cfg, thread_items
+    from helpers.cfg_restore import snapshot_addr_mod, snapshot_adc_ch1x, snapshot_cfg, thread_items
     from helpers.chip_architecture import get_chip_architecture
     from helpers.test_config import TestConfig
 
@@ -341,7 +341,7 @@ def capture_pristine(worktree, arch, test_file, test_id, port, timeout, out_path
         "--timeout",
         str(timeout),
     ]
-    env = {**os.environ, "LLK_POLLUTE_SNAPSHOT": out_path}
+    env = {**os.environ, "LLK_CFG_SNAPSHOT": out_path}
     subprocess.run(cmd, env=env, capture_output=True, text=True)
     if not os.path.exists(out_path):
         raise RuntimeError(f"pristine capture failed for {test_id}")
@@ -349,8 +349,8 @@ def capture_pristine(worktree, arch, test_file, test_id, port, timeout, out_path
 
 def pytest_env(worktree, plugin_dir=None):
     env = dict(os.environ)
-    cfg_pollution_dir = os.path.join(worktree, "tests", "python_tests", "cfg_pollution")
-    path_parts = [plugin_dir, cfg_pollution_dir] if plugin_dir else [cfg_pollution_dir]
+    reconfig_escape_dir = os.path.join(worktree, "tests", "python_tests", "reconfig_escape")
+    path_parts = [plugin_dir, reconfig_escape_dir] if plugin_dir else [reconfig_escape_dir]
     env["PYTHONPATH"] = (
         os.pathsep.join(path_parts) + os.pathsep + env.get("PYTHONPATH", "")
     )
@@ -422,7 +422,7 @@ def compile_all(worktree, arch, nodeids, jobs, timeout):
     session compile-producer mode already assumes, with no OS argv-length exposure at all.
     """
     nodeids_path = os.path.join(
-        worktree, "tests", "python_tests", "cfg_pollution", "_compile_all_nodeids.json"
+        worktree, "tests", "python_tests", "reconfig_escape", "_compile_all_nodeids.json"
     )
     with open(nodeids_path, "w") as f:
         json.dump(nodeids, f)
@@ -492,7 +492,7 @@ def run_discovery_round(
             merged_cases.extend(ET.parse(batch_junit).getroot().iter("testcase"))
     if merged_cases:
         suite = ET.Element(
-            "testsuite", name="cfg_pollution_discovery", tests=str(len(merged_cases))
+            "testsuite", name="reconfig_escape_discovery", tests=str(len(merged_cases))
         )
         suite.extend(merged_cases)
         root = ET.Element("testsuites")
@@ -535,7 +535,7 @@ def run_gate_round(
             merged_cases.extend(ET.parse(batch_junit).getroot().iter("testcase"))
     if merged_cases:
         suite = ET.Element(
-            "testsuite", name="cfg_pollution_gate", tests=str(len(merged_cases))
+            "testsuite", name="reconfig_escape_gate", tests=str(len(merged_cases))
         )
         suite.extend(merged_cases)
         root = ET.Element("testsuites")

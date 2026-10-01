@@ -1,5 +1,5 @@
-name: "Config Pollution implementation"
-# Entry points: workflow_call only. Schedule / workflow_dispatch live in cfg-pollution.yaml.
+name: "Reconfig escape sweep test"
+# Entry points: workflow_call only. Schedule / workflow_dispatch live in reconfig-escape.yaml.
 
 on:
   workflow_call:
@@ -27,7 +27,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_cfg_pollution_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_reconfig_escape_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -62,7 +62,7 @@ jobs:
           enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
           sku-config: ./.github/sku_config.yaml
 
-  cfg-pollution-exec:
+  reconfig-sweep-exec:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     env:
@@ -96,10 +96,10 @@ jobs:
           from helpers.hardware_controller import HardwareController
 
           HardwareController().reset_card()
-          print("card reset OK")
+          print("card reset")
           PY
 
-      - name: Run config-pollution sweep
+      - name: Run the sweep
         id: sweep
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
@@ -110,15 +110,14 @@ jobs:
           ${{ matrix.test-group.cmd }}
           ) || status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
-          echo "config-pollution sweep exited $status"
+          echo "reconfig sweep exited $status"
 
-      - name: Fail if the sweep found a config-pollution escape
+      - name: Fail if the sweep found a reconfig escape
         if: steps.sweep.outputs.status == '1'
         shell: bash
         run: |
-          echo "::error::A real op left CFG-register residue that broke a real victim op's" \
-               "own correctness check. See the report artifact for the (polluter, victim)" \
-               "pair and the pair-sweep junit artifact for every trial."
+          echo "::error::A kernel left config space residue that broke another kernel." \
+               "See the report artifact for the breaking pair."
           exit 1
 
       - name: Fail if the sweep did not complete
@@ -127,34 +126,34 @@ jobs:
           steps.sweep.outputs.status != '1'
         shell: bash
         run: |
-          echo "::error::The config-pollution sweep did not complete (exit" \
+          echo "::error::The reconfig sweep did not complete (exit" \
                "${{ steps.sweep.outputs.status }}). No results were produced, so nothing" \
                "was actually tested. See the sweep step's log."
           exit 1
 
-      - name: Upload config-pollution report
+      - name: Upload report
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
-          name: cfg-pollution-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          name: reconfig-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: |
-            ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/report.md
-            ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/manifest.json
-            ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/findings.jsonl
+            ${{ env.LLK_PATH }}/tests/python_tests/reconfig_escape/reports/**/report.md
+            ${{ env.LLK_PATH }}/tests/python_tests/reconfig_escape/reports/**/manifest.json
+            ${{ env.LLK_PATH }}/tests/python_tests/reconfig_escape/reports/**/findings.jsonl
           if-no-files-found: warn
 
-      - name: Upload config-pollution junit results
+      - name: Upload junit results
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
-          name: cfg-pollution-junit-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/junit.xml
+          name: reconfig-escape-junit-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/reconfig_escape/reports/**/junit.xml
           if-no-files-found: warn
 
       - name: Publish Test Results
         uses: mikepenz/action-junit-report@v5
         if: always()
         with:
-          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/junit.xml
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/reconfig_escape/reports/**/junit.xml
           include_passed: true
           annotate_only: true

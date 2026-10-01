@@ -1,18 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Host-side Tensix CFG (THCON) register pollution for init-completeness testing.
+"""Host-side Tensix CFG (THCON) register snapshot/restore for the reconfig-escape pair sweep.
 
-The premise: a correct kernel's init must (re)write every config register it
-depends on. To test that, we scribble garbage into the CFG space *before* the
-kernel runs. Anything the kernel rewrites is harmless; anything it silently
-relies on (a reset/leftover value it never sets) stays polluted and the kernel
-either miscomputes (PCC fail) or hangs.
+The premise: a correct kernel's init must (re)write every config register it depends on. To
+test that, we capture a real op X's actual post-execution CFG residue, then replay that exact
+residue in-kernel before a victim op K runs. Anything K rewrites is harmless; anything it
+silently relies on (a reset/leftover value it never sets) stays as X left it and K either
+miscomputes (PCC fail) or hangs.
 
-This works because the CFG space is NOT reset at kernel launch: firmware boot
-only flips the shadow id (`reset_cfg_state_id`) and zeroes PRNG_SEED, so values
-written while the TRISCs are held in reset persist into kernel execution. See
-`run_elf_files()` for the injection point.
+This works because the CFG space is NOT reset at kernel launch: firmware boot only flips the
+shadow id (`reset_cfg_state_id`) and zeroes PRNG_SEED, so values written while the TRISCs are
+held in reset persist into kernel execution. See `run_elf_files()` for the injection point.
 
 Access mechanism — important:
   The CFG register file at TENSIX_CFG_BASE (0xFFEF0000) is *core-private* address
@@ -271,29 +270,29 @@ def snapshot_adc_ch1x(location: str, *, device_id: int = 0, context=None) -> dic
     }
 
 
-def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=None):
+def maybe_restore_cfg_from_env(location: str, *, device_id: int = 0, context=None):
     """Restore / snapshot CFG based on env. No-op (returns None) unless one is set.
 
     Modes (checked in order):
-      LLK_POLLUTE_INKERNEL_RESTORE=<path>          Restore plan, JSON {entries:[[addr32,value,
+      LLK_CFG_RESTORE=<path>          Restore plan, JSON {entries:[[addr32,value,
                                    port,mask]..]}. Replayed in-kernel before the victim's own
                                    init runs, so the trial starts from that captured residue
                                    WITHOUT a per-trial tt-smi -r.
-      LLK_POLLUTE_INKERNEL_ADDRMOD_RESTORE=<path>  Per-thread addr-mod restore, JSON
+      LLK_CFG_ADDRMOD_RESTORE=<path>  Per-thread addr-mod restore, JSON
                                    {entries:[[addr32,v0,v1,v2]..], ch1x:[unpacker,packer]}.
                                    ch1x is optional (address_counters channel1-X, see
                                    snapshot_adc_ch1x). Applied alongside (after)
-                                   LLK_POLLUTE_INKERNEL_RESTORE, overwriting that plan's
+                                   LLK_CFG_RESTORE, overwriting that plan's
                                    addr-mod force-zero default with real captured residue.
-      LLK_POLLUTE_SNAPSHOT=<path>  Read every kernel-owned word (both shadows) and dump a
-                                   JSON clean reference to <path>; do NOT pollute. Run this
+      LLK_CFG_SNAPSHOT=<path>  Read every kernel-owned word (both shadows) and dump a
+                                   JSON clean reference to <path>; do NOT restore. Run this
                                    once on a device where the kernel passes — the snapshot is
                                    that passing run's pre-kernel CFG, the pair-sweep baseline.
     """
     arch = get_chip_architecture()
 
     # Restore-mode: replay the captured baseline before the victim's own init runs.
-    restore_path = os.environ.get("LLK_POLLUTE_INKERNEL_RESTORE")
+    restore_path = os.environ.get("LLK_CFG_RESTORE")
     if restore_path:
         with open(restore_path) as f:
             rplan = json.load(f)
@@ -301,13 +300,13 @@ def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=Non
         nr = write_inkernel_restore(
             location, rentries, device_id=device_id, context=context
         )
-        msg = f"[CFG-POLLUTE] restore entries={nr} -> L1 0x{_INKERNEL_RESTORE_BASE:X}"
+        msg = f"[CFG-RESTORE] restore entries={nr} -> L1 0x{_INKERNEL_RESTORE_BASE:X}"
         print(msg, file=sys.stderr, flush=True)
         logger.warning(msg)
 
     # Per-thread addr-mod restore: written alongside — and applied AFTER — the restore plan above,
     # so real captured per-thread residue overwrites that plan's addr-mod force-zero default.
-    addrmod_restore_path = os.environ.get("LLK_POLLUTE_INKERNEL_ADDRMOD_RESTORE")
+    addrmod_restore_path = os.environ.get("LLK_CFG_ADDRMOD_RESTORE")
     if addrmod_restore_path:
         with open(addrmod_restore_path) as f:
             arplan = json.load(f)
@@ -316,18 +315,18 @@ def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=Non
         nar = write_inkernel_addrmod_restore(
             location, arentries, ch1x=ch1x, device_id=device_id, context=context
         )
-        msg = f"[CFG-POLLUTE] addrmod restore entries={nar} -> L1 0x{_INKERNEL_ADDRMOD_RESTORE_BASE:X}"
+        msg = f"[CFG-RESTORE] addrmod restore entries={nar} -> L1 0x{_INKERNEL_ADDRMOD_RESTORE_BASE:X}"
         print(msg, file=sys.stderr, flush=True)
         logger.warning(msg)
 
-    snap_path = os.environ.get("LLK_POLLUTE_SNAPSHOT")
+    snap_path = os.environ.get("LLK_CFG_SNAPSHOT")
     if snap_path:
         items = thread_items(arch)
         snap = snapshot_cfg(location, items, device_id=device_id, context=context)
         with open(snap_path, "w") as f:
             json.dump([[s, a, v] for (s, a), v in snap.items()], f)
         msg = (
-            f"[CFG-POLLUTE] snapshot arch={arch.value} words={len(snap)} -> {snap_path}"
+            f"[CFG-RESTORE] snapshot arch={arch.value} words={len(snap)} -> {snap_path}"
         )
         print(msg, file=sys.stderr, flush=True)
         logger.warning(msg)

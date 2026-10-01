@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Weekly config-pollution sweep: empirically discover a catalog of real ops' post-execution CFG
+# Weekly reconfig-escape sweep: empirically discover a catalog of real ops' post-execution CFG
 # residue (discover_catalog.py), gate each one's restore-mode fidelity, then sweep every (X, K)
 # pair and report escapes (a real op X leaves CFG residue that breaks a real op K's own
 # correctness check).
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKTREE="$(cd "$HERE/../../.." && pwd)"   # tests/python_tests/cfg_pollution -> tt-llk root
+WORKTREE="$(cd "$HERE/../../.." && pwd)"   # tests/python_tests/reconfig_escape -> tt-llk root
 
 ARCH=""
 REPORT_DIR="$HERE/reports"
@@ -41,12 +41,12 @@ while [[ $# -gt 0 ]]; do
         --timeout) TIMEOUT="$2"; shift 2 ;;
         --splits) SPLITS="$2"; shift 2 ;;
         --group) GROUP="$2"; shift 2 ;;
-        *) echo "cfg_pollution/ci.sh: unknown option $1" >&2; exit 4 ;;
+        *) echo "reconfig_escape/ci.sh: unknown option $1" >&2; exit 4 ;;
     esac
 done
 
 if [[ -z "$ARCH" ]]; then
-    echo "cfg_pollution/ci.sh: --arch blackhole|wormhole is required" >&2
+    echo "reconfig_escape/ci.sh: --arch blackhole|wormhole is required" >&2
     exit 4
 fi
 

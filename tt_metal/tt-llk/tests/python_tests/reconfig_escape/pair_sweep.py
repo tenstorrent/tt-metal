@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Pair-trial phase for the weekly config-pollution CI job.
+"""Pair-trial phase for the weekly reconfig-escape CI job.
 
 Consumes the manifest from discover_catalog.py (or snapshot_build.py -- same shape) and sweeps
 every (X, K) ordered pair in the catalog, checking whether K still passes after X's residue.
@@ -78,8 +78,8 @@ def reset():
 
 def pytest_env(worktree):
     env = dict(os.environ)
-    cfg_pollution_dir = os.path.join(worktree, "tests", "python_tests", "cfg_pollution")
-    env["PYTHONPATH"] = cfg_pollution_dir + os.pathsep + env.get("PYTHONPATH", "")
+    reconfig_escape_dir = os.path.join(worktree, "tests", "python_tests", "reconfig_escape")
+    env["PYTHONPATH"] = reconfig_escape_dir + os.pathsep + env.get("PYTHONPATH", "")
     return env
 
 

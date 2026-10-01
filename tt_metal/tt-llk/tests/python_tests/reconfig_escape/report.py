@@ -116,14 +116,14 @@ def render_junit(records: list, path: Path) -> Path:
     for r in records:
         name = f"{r['polluter']}__then__{r['victim']}"
         element = ElementTree.Element(
-            "testcase", classname="cfg_pollution.pair_sweep", name=_clean(name)
+            "testcase", classname="reconfig_escape.pair_sweep", name=_clean(name)
         )
         if r["verdict"] != r["victim_baseline"]:
             failed += 1
             failure = ElementTree.SubElement(
                 element,
                 "failure",
-                type="ConfigPollutionEscape",
+                type="ReconfigEscape",
                 message=_clean(
                     f"{r['victim']} was {r['verdict']} after {r['polluter']} "
                     f"(baseline {r['victim_baseline']})"
@@ -134,7 +134,7 @@ def render_junit(records: list, path: Path) -> Path:
 
     suite = ElementTree.Element(
         "testsuite",
-        name="cfg_pollution",
+        name="reconfig_escape",
         tests=str(len(cases)),
         failures=str(failed),
         errors="0",
