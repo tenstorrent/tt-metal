@@ -32,24 +32,28 @@ def test_conv1x1_matmul_stress(device):
         b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     # Conv1x1.compute_kernel_config in models/tt_dit/models/vae/vae_mochi.py
+    fp32_dest_acc = os.environ.get("MM_STRESS_FP32", "1") == "1"
+    use_bias = os.environ.get("MM_STRESS_BIAS", "1") == "1"
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=fp32_dest_acc,
         packer_l1_acc=False,
     )
     grid = device.core_grid
     if os.environ.get("MM_STRESS_GRID"):
         gy, gx = (int(v) for v in os.environ["MM_STRESS_GRID"].split("x"))
         grid = ttnn.CoreGrid(y=gy, x=gx)
-    logger.info(f"conv1x1 matmul stress: core_grid={grid} (device default {device.core_grid})")
+    logger.info(
+        f"conv1x1 matmul stress: core_grid={grid} (device default {device.core_grid}) fp32_dest_acc={fp32_dest_acc} bias={use_bias}"
+    )
     t0 = time.time()
     for i in range(iterations):
         x_tile = ttnn.to_layout(x_rm, ttnn.TILE_LAYOUT)
         out_tile = ttnn.linear(
             x_tile,
             weight,
-            bias=bias,
+            bias=bias if use_bias else None,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
