@@ -16,6 +16,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--no-async-scheduling", action="store_true", help="Explicit scheduler comparison experiment")
     parser.add_argument("--tool-calls", action="store_true", help="Enable the CI Gemma tool parser for agent probes")
+    parser.add_argument("--seed", type=int, help="Explicit engine seed for matched agent probes")
+    parser.add_argument("--thinking", action="store_true", help="Canonical Gemma thinking and reasoning parser")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     plan = profile_plan(32)
@@ -26,6 +28,12 @@ def main():
         ]
     if args.tool_calls:
         plan["command"].extend(["--enable-auto-tool-choice", "--tool-call-parser", "gemma4"])
+    if args.seed is not None:
+        plan["command"].extend(["--seed", str(args.seed)])
+    if args.thinking:
+        plan["command"].extend(
+            ["--default-chat-template-kwargs", '{"enable_thinking":true}', "--reasoning-parser", "gemma4"]
+        )
     plan["status"] = "launch_intent_execve_pending_not_running_identity"
     plan["required_before_launch"] = [
         "Verify exclusive device ownership before invoking this launcher.",

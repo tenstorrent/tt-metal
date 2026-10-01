@@ -1,0 +1,22 @@
+[
+  {
+    "case": "control",
+    "prompt_tokens": 12028,
+    "elapsed_s": 7.76098920032382,
+    "output": "call:bash{command:grep -rn \"CheckConstraint\" django/db/models/sql/compiler.py}",
+    "usage": {
+      "prompt_tokens": 12028,
+      "total_tokens": 12058,
+      "completion_tokens": 30
+    },
+    "finish_reason": "stop",
+    "diagnostic_wall_cap_reached": false,
+    "prompt_format": "pinned HF chat template with mini-swe bash schema",
+    "quality_scope": "next-action diagnostic only; no tools executed; no solve/reward claim",
+    "repetition_detection": {
+      "min_pattern_size": 16,
+      "max_pattern_size": 128,
+      "min_count": 8
+    }
+  }
+]
