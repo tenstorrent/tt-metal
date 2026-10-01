@@ -193,3 +193,15 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   - S.full_dense.02: PASS.
 - Probe (not kept): chunk 0 (first-mask path), then chunk 1 on the same cache, ran the split path at rows [0.996, 1.013], before W_lo was added.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_swap_sliding_moe_02_attention.py` (the first `FAIL pcc=0` lines come from the precompile collect pass).
+
+## C.sliding_moe.attn_residual.test.1 (test review)
+- Ported the prior mimo_v2_6_d_p reviewed test (same golden, s4096 chunk 1, [2048, 4096]): PCC gate plus rel L2 <= 0.01, per-token norm ratio [0.99, 1.01], and attn-term checks on delta = out - in (coef in [0.95, 1.05], rel <= 0.3). These are needed because the sink keeps attn_out at ~1% of h_mid.
+- Added for CP=4: every check is also asserted per CP slice (rows [r*S/4, (r+1)*S/4)). CPU study on the golden, per slice (rel / coef / attn rel):
+  - bf16 add: 0.0029 / 0.998-0.999 / 0.139-0.166.
+  - Slices 1 and 2 of attn_out swapped: 0.0067 / 0.83-0.86 / 0.57-0.59.
+  - Slice 0 written to slice 1: 0.0064 / 0.79 / 0.54.
+  - Slice 3 dropped: 0.0123 / 0 / 1.0.
+  - The per-slice rel L2 alone misses misplaced slices (both cases pass it). The per-slice attn-term checks catch them.
+- Results: reference PASS (rel 0.0024, attn rel 0). Stub FAIL (pcc 0). Gate on device PASS: pcc 0.999996, rel 0.0029, ratio [0.9990, 1.0015], coef 1.020, attn rel 0.155, per-slice attn rel 0.142-0.171.
+- The first `FAIL pcc=0` line in each run comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_attn_residual.py`
