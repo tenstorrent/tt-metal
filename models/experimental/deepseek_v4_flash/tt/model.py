@@ -1405,6 +1405,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """Release a session's blocks back to the pool, and its seat group's window block
         once the last member of that group has gone."""
         paged = self._require_paged()
+        self._wait_replays_dispatched()
         if sid in self._resident:
             # Vacated, not removed: the slot a session sat in is where its window rows
             # live, so compacting the list would misalign every slot after it.
@@ -1425,6 +1426,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         compressor window state (keeping its sliding-ring blocks ``[B, 1, W, Dh]``, whose
         stale rows are masked until rewritten)."""
         paged = self._require_paged()
+        self._wait_replays_dispatched()
         paged.reset_session(sid)
         self._session_pos[sid] = 0
         if sid in self._resident:
@@ -1485,6 +1487,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if sids == self._resident:
             return
 
+        self._wait_replays_dispatched()
         group = self._seat_group(sids)
         if group is not self._resident_group:
             if self._resident_group is not None:
@@ -2836,10 +2839,28 @@ class DeepSeekV4Model(DeepSeekV4Module):
         def _run() -> None:
             """Dispatch every queued position until the ``None`` sentinel arrives."""
             for pos in iter(self._replay_queue.get, None):
-                self._execute_traces(pos)
+                try:
+                    self._execute_traces(pos)
+                finally:
+                    self._replay_queue.task_done()
 
         self._replay_thread = threading.Thread(target=_run, name="decode-replay", daemon=True)
         self._replay_thread.start()
+
+    def _wait_replays_dispatched(self) -> None:
+        """Block until the replay thread has dispatched every step queued so far.
+
+        Its entries read the resident sessions when they run, not when they were queued,
+        so this must come before anything that changes who is seated. It only waits for
+        the non-blocking ``execute_trace`` calls to be issued, not for the device to run them.
+        """
+        thread = self._replay_thread
+        if thread is None or thread is threading.current_thread():
+            return
+        done = self._replay_queue.all_tasks_done
+        with done:
+            while self._replay_queue.unfinished_tasks and thread.is_alive():
+                done.wait(0.1)
 
     def _execute_traces(self, pos: int) -> None:
         """Replay the variant step ``pos`` selects on every submesh (replay-thread body).

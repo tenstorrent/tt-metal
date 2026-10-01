@@ -19,45 +19,62 @@ themselves:
 every turn is a handful of traced decode steps. Each step pushes the token to the
 model through the **host->device socket** (``DeepSeekV4Model.write_step_packet``
 -- the only host->device traffic of a traced step) and receives the logits back
-off the **device->host socket** (``DeepSeekV4Model.read_decoded_output``). There
-is no prefill op: a prompt is replayed one decode step per token at ascending
-absolute positions, so a follow-up turn only feeds the tokens it adds.
+off the **device->host socket** (``DeepSeekV4Model.read_decoded_output``).
+
+**Prefill.** A prompt that starts a session (a first turn, or a re-prefill from the
+request) is prefilled the way ``tests/prefill/test_prefill_decode_demo.py`` does it: on
+a 32-chip Galaxy the decode model and a :class:`DeepSeekV4PrefillModel` share eight
+``1 x 4`` TP4 stages (one per mesh row), the prompt's 128-aligned prefix (up to
+``--prefill-max-len``, by default the whole context) runs through the traced, pipelined
+prefill (one trace per stage, ``--prefill-trace-chunk`` tokens per chunk, the stages on
+consecutive chunks at once),
+its attention state is committed into the session's decode buffers on device, and the
+ragged tail is replayed through decode. A follow-up turn feeds only the tokens it adds
+through decode, unless rewinding and prefilling the whole conversation is estimated to
+be faster (a long new turn); short prompts skip the prefill model for the same reason.
+Decode runs with the DRISC prefetcher off on this path (a prefill replay
+overwrites decode's L1, which is snapshot and written back; a GCB cannot be).
+``--no-prefill`` replays every prompt token through decode instead, on the profile's
+own decode layout with the prefetcher on.
 
 **Users & KV cache.** ``--num-users`` paged KV-cache sessions (8 by default) are claimed
 at startup -- one captured trace, one block pool holding ``--total-context`` tokens
 across everyone -- and then handed out a turn at a time, so ``--num-users`` is the number
 of requests that can generate at once. Raising it costs little memory (a session's
 sliding ring is bounded by ``sliding_window``, and the compressed blocks come from the
-shared budget) but divides the device's token rate: the rounds interleave the users'
-steps, they do not batch them, so more users means more total throughput and a slower
-reply each. A slot holds a warm cache, so a request is given the slot whose stored
+shared budget). The users' steps are pipelined through the stages rather than batched, so
+up to one user per stage adds throughput at little cost to each reply; past that the
+stages are full and the users share their rate. A slot holds a warm cache, so a request is given the slot whose stored
 conversation its ``messages`` continue -- then only the new turn's tokens are fed --
 falling back to an empty slot, or to the least recently used one, which is re-prefilled
 from the request. The OpenAI ``user`` field only labels who last held a slot: clients
 that send one identifier for all their traffic, or none, still run in parallel.
 
-**Concurrency.** Up to ``--num-users`` turns generate at once. One scheduler thread
-owns the device and walks the active turns in rounds. Prefill is the pipelined
-round-robin of ``tests/decode/test_multi_user_paged_decode_demo.py``: a prompt is fed
-``--prefill-chunk`` tokens per round, traces posted before packets, logits read the
-next round. Decode posts ``_DECODE_REPLAY_AHEAD`` (32) ``execute_trace`` calls for a
-turn before writing that burst's packets -- the same look-ahead as ``chat_cli`` --
-and reads them inline so leftover traces cannot block another user on the shared
-FIFO. This single thread is required, not incidental: the trace replays and the
-paged session state have to be driven from one thread, and each step's output must
-be collected in dispatch order. HTTP threads never touch the device -- they submit
-a turn and relay its reply -- so total throughput scales with the users while each
-reply streams independently. A request that arrives with every slot busy waits for
-one to free.
+**Concurrency.** Up to ``--num-users`` turns generate at once, their steps in the
+stage pipeline together, as ``tests/decode/test_multi_user_paged_decode_demo.py`` runs
+its users: every decoding turn has one step in flight, and its next step is seated,
+posted and packed as soon as the previous one's token is back, so with as many users as
+stages each stage works on a different user's step. Prompt tokens replayed through decode
+keep up to ``--prefill-chunk`` steps in flight per turn. Outputs are read off the socket
+by a reader thread, in dispatch order. A traced prefill waits for every step in flight
+to come back and then holds the device for that prompt. One scheduler thread does all
+the dispatch, which is required, not incidental: the trace replays and the paged session
+state have to be driven from one thread, and each step's output must be matched in
+dispatch order. HTTP threads never touch the device -- they submit a turn and relay its
+reply -- so total throughput scales with the users while each reply streams
+independently. A request that arrives with every slot busy waits for one to free.
 
 **Live console.** On a terminal the server runs a split view (``demo/tui.py``): a status
 header with uptime, active turns, throughput and the KV block pool, a row per cache slot
 showing who holds it and how fast it is decoding, and under it the log with the time in a
-left column and the message on the right. The arrow and page keys scroll that log back
-(home for the oldest line, end to follow the newest again), since the live view owns the
-alternate screen and the terminal's own scrollback cannot reach it. ``d`` toggles the
+left column and the message on the right. The mouse wheel, the arrow keys and
+page-up/page-down scroll that log (home for the oldest line, end to follow the newest
+again); shift-drag still selects text. The live view owns the alternate screen, so the
+terminal's own scrollback cannot reach it. ``d`` toggles the
 debug lines (each request's sender, options and messages, admissions, slot assignments,
-page allocations, prefill lengths, per-user tok/s), ``p`` pauses the scroll,
+page allocations, prefill lengths, per-user tok/s), ``v`` switches those logged prompts
+between the full text and a 200-character snippet (``--prompt-snippet`` starts on the
+snippet), ``p`` pauses the scroll,
 ``c`` clears it and ``q`` quits. ``--debug`` starts with those lines on and ``--no-tui``
 (or a redirected stdout) falls back to plain logging.
 
@@ -90,11 +107,11 @@ page allocations, prefill lengths, per-user tok/s), ``p`` pauses the scroll,
 * Errors use the OpenAI envelope ``{"error": {"message", "type", "code"}}``; for
   ``stream=true`` the error arrives as an SSE event before ``[DONE]``.
 
-Run it (ttnn venv, from the repo root)::
+Run it (ttnn venv, from the repo root; 32-chip Galaxy for the prefill model)::
 
-    DEEPSEEK_V4_DECODE_LAYERS=4 DEEPSEEK_V4_CACHE_DIR=/path/to/cache \\
+    DEEPSEEK_V4_CACHE_DIR=/path/to/cache \\
     python models/experimental/deepseek_v4_flash/demo/server.py \\
-        --num-users 8 --max-context 16384 --host 0.0.0.0 --port 8000 --debug
+        --num-users 8 --max-context 131072 --host 0.0.0.0 --port 8000 --debug
 
 Then, from any other shell (see ``demo/client.py`` for the full client)::
 
@@ -123,12 +140,12 @@ from urllib.parse import unquote, urlparse
 import torch
 from loguru import logger
 
+import ttnn
 from models.experimental.deepseek_v4_flash.demo import tui
 from models.experimental.deepseek_v4_flash.demo.chat_cli import (
     ChatEngine,
     ContextFull,
     UserSession,
-    _DECODE_REPLAY_AHEAD,
     open_mesh_device,
 )
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
@@ -136,7 +153,14 @@ from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
     render_message,
     sort_tool_results_by_call_order,
 )
+from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
+    _ATTENTION_WEIGHT_DTYPE,
+    _TP_SIZE,
+)
 from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import PagedCacheFull
+from models.experimental.deepseek_v4_flash.tt.model import prefill_bias_slots
+from models.experimental.deepseek_v4_flash.tt.prefill.attention import ALIGNMENT
+from models.experimental.deepseek_v4_flash.tt.prefill.weights import checkpoint_weights
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 
 _VENDOR = "tenstorrent"
@@ -219,14 +243,31 @@ def _content_text(content, index: int) -> str:
     return "".join(text)
 
 
+_PROMPT_SNIPPET_CHARS = 200
+# Whether a logged message is shown whole or cut to its first ``_PROMPT_SNIPPET_CHARS``
+# characters. A one-element list so the console's 'v' key can flip it from its own thread;
+# it applies to requests logged after the flip, not to lines already in the log.
+_LOG_FULL_PROMPT = [True]
+
+
+def _toggle_full_prompt() -> bool:
+    """Flip between full prompts and snippets in the log; returns whether it is now full."""
+    _LOG_FULL_PROMPT[0] = not _LOG_FULL_PROMPT[0]
+    return _LOG_FULL_PROMPT[0]
+
+
 def _one_line(text: str) -> str:
     """``text`` with its whitespace collapsed, so a message logs as a single record.
 
-    Logged whole rather than previewed: the log is what a prompt gets debugged with. The
-    console folds a long record across as many screen lines as it needs, so length here
-    costs readability nothing.
+    Whole by default, since the log is what a prompt gets debugged with and the console folds
+    a long record across as many screen lines as it needs. With snippets on, a message longer
+    than ``_PROMPT_SNIPPET_CHARS`` is cut there and says how much was left out, so a long
+    prompt does not push everything else out of the log.
     """
-    return " ".join(text.split())
+    line = " ".join(text.split())
+    if _LOG_FULL_PROMPT[0] or len(line) <= _PROMPT_SNIPPET_CHARS:
+        return line
+    return f"{line[:_PROMPT_SNIPPET_CHARS]}... [+{len(line) - _PROMPT_SNIPPET_CHARS} chars, 'v' shows full]"
 
 
 def _describe_request(completion_id: str, client: str, user_key: str, body: dict) -> str:
@@ -411,6 +452,10 @@ def _parse_tool_calls(block: str) -> list[dict]:
 
 
 SAMPLER_TOP_K = 64
+
+_REPLAY_RATE_SEED = 130.0
+# Prompt tokens a replay must span before its rate is trusted: a few rounds' latency dominates shorter ones.
+_REPLAY_RATE_MIN_TOKENS = 64
 
 # Generated tokens the live decode rate is averaged over, as
 # ``tests/decode/test_full_model_decode_demo.py`` reports throughput over a rolling window
@@ -680,6 +725,160 @@ class _SlotPool:
             return [i for i, owner in enumerate(self.owner) if owner == user_key]
 
 
+class _Prefiller:
+    """Traced, pipelined prefill on the decode model's own stages, as
+    ``tests/prefill/test_prefill_decode_demo.py`` runs it.
+
+    The prefill model is built by :meth:`DeepSeekV4Model.build_prefill`, one layer on each
+    decode layer's submesh, sharing decode's routed experts, embedding table and
+    ``lm_head``. A prompt's 128-aligned prefix is prefilled by replaying one trace per
+    stage per chunk (the stages work on consecutive chunks at once), its attention state
+    is committed into the session's decode buffers on device, and the ragged tail goes
+    through decode as before.
+
+    Construction is the test's steps 2-3 (decode compile, then the prefill build and
+    compile with decode's L1 tensors parked); :meth:`capture` is step 4, after
+    :meth:`ChatEngine.warmup` has captured the decode traces. Requires a model built with
+    the prefetcher off: a prefill replay would also overwrite the GCB config pages, which
+    cannot be snapshot.
+    """
+
+    def __init__(self, engine: ChatEngine, args, prefetcher: contextlib.ExitStack):
+        model = engine.model
+        self.engine = engine
+        self.chunk_size = args.prefill_trace_chunk
+        # Every chunk attends the whole FIFO sized for ``max_len``, so this is a speed knob too.
+        self.max_len = min(args.prefill_max_len or engine.max_seq, engine.max_seq - 1) // ALIGNMENT * ALIGNMENT
+        if self.max_len < ALIGNMENT:
+            raise ValueError(f"traced prefill needs a context of at least {ALIGNMENT + 1} tokens")
+        self.num_stages = len(dict.fromkeys(model.layer_submesh_ids))
+        # What a prefill costs, for choosing it over replaying the prompt through decode: the first chunk
+        # crosses every stage before its logits arrive (plus the write-back and the commit), each later one
+        # lands a stage behind it. Seeded from test_prefill_decode_demo.py on 8 stages with 1024-token
+        # chunks; every prefill folds its own timings in.
+        self.fill_seconds = 1.6
+        self.chunk_seconds = 0.23
+        self._loud = True
+        tokenizer = engine.tokenizer
+        pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else engine.eos_id
+
+        # Decode's ops keep buffers of their own (global semaphores, cached constants) that no snapshot can
+        # reach; compiling first allocates them before prefill lays out its memory, so its replays keep off them.
+        t0 = time.perf_counter()
+        model.compile_traces(pad_id, 0)
+        logger.info(f"decode compile: {time.perf_counter() - t0:.1f}s")
+        model.release_prefetch_buffers()
+        indexer = os.environ.get("DEEPSEEK_V4_PREFILL_INDEXER", "1") == "1"
+        t0 = time.perf_counter()
+        self.model = model.build_prefill(
+            engine.rope,
+            checkpoint_weights(engine.loader, engine.config, model.num_layers),
+            lm_head=engine.lm_head,
+            cache=engine.weight_cache,
+            weight_dtype=_ATTENTION_WEIGHT_DTYPE,
+            dense_csa=True,
+            lightning_indexer=indexer,
+            progress=self._note,
+        )
+        self.model.synchronize("uploads")
+        logger.info(f"prefill model built in {time.perf_counter() - t0:.1f}s (lightning indexer {indexer})")
+        t0 = time.perf_counter()
+        self.model.compile_traced_prefill(self.max_len, self.chunk_size)
+        logger.info(
+            f"traced prefill compiled in {time.perf_counter() - t0:.1f}s: prompts of up to {self.max_len} "
+            f"tokens in chunks of {self.chunk_size}, {self.num_stages} pipelined stage(s)"
+        )
+        # Unwinds before the decode model's shutdown (LIFO).
+        prefetcher.callback(self.model.release_traced_prefill)
+        self.bias_slots = prefill_bias_slots(self.model)
+        model.restore_prefetch_buffers()
+
+    def _note(self, message: str, important: bool = False) -> None:
+        if important:
+            (logger.info if self._loud else logger.debug)(f"[prefill] {message}")
+
+    def capture(self) -> None:
+        """Capture one prefill trace per stage, after the decode traces exist.
+
+        Decode's L1 tensors are parked meanwhile and put back at the addresses the decode
+        traces recorded; they then sit under prefill's buffers, so they are copied to the
+        host for :meth:`run` to write back after every replay."""
+        model = self.engine.model
+        t0 = time.perf_counter()
+        model.release_prefetch_buffers()
+        self.model.capture_traced_prefill()
+        model.restore_prefetch_buffers()
+        model.snapshot_resident_state()
+        self._loud = False
+        logger.info(f"traced prefill captured in {time.perf_counter() - t0:.1f}s")
+
+    def aligned(self, n_tokens: int) -> int:
+        """How many of a fresh ``n_tokens``-token prompt the prefill takes; decode replays the rest."""
+        return min(n_tokens // ALIGNMENT * ALIGNMENT, self.max_len)
+
+    def seconds(self, n_tokens: int) -> float:
+        """Expected wall time of :meth:`run` over ``n_tokens`` (a multiple of 128)."""
+        return self.fill_seconds + (-(-n_tokens // self.chunk_size) - 1) * self.chunk_seconds
+
+    def run(self, user: UserSession, ids: list[int], on_progress=None) -> torch.Tensor:
+        """Prefill ``ids`` (a multiple of 128 tokens) into ``user``'s empty session; returns
+        the next-token logits ``[V]`` (host fp32) and leaves ``user.pos`` at ``len(ids)``.
+
+        Must run with no decode step in flight: the replays share decode's command queue and
+        overwrite its L1 tensors, which are written back before anything else runs."""
+        engine, model, prefill = self.engine, self.engine.model, self.model
+        if engine._replay_q:
+            raise RuntimeError("prefill with decode traces still posted")
+        # Seated first, so the previous occupant's window state is saved to its own (DRAM)
+        # block before the replay overwrites the resident L1 copies.
+        user.activate()
+        n = len(ids)
+        num_chunks = -(-n // self.chunk_size)
+        chunk_times: list[tuple[int, float]] = []
+        t0 = time.perf_counter()
+
+        def on_chunk(_i, start, end, seconds):
+            chunk_times.append((end - start, seconds))
+            if on_progress is not None:
+                on_progress(end)  # the status pane reads this from another thread
+
+        try:
+            logits, states = prefill.prefill_traced(torch.tensor(ids, dtype=torch.long).unsqueeze(0), on_chunk=on_chunk)
+        finally:
+            model.reload_resident_state()
+        prefill_seconds = time.perf_counter() - t0
+        t1 = time.perf_counter()
+        try:
+            # The previous conversation (or the capture step) must not leak into this one.
+            model.reset_session(user.sid)
+            model.reset_static_caches()
+            committed = model.commit_prefill_state(states, user.sid, bias_slots=self.bias_slots)
+        except Exception:
+            with contextlib.suppress(Exception):
+                user.reset()
+            raise
+        finally:
+            prefill.free_traced_states(states)
+        user.pos = committed
+        total_seconds = time.perf_counter() - t0
+        steady = chunk_times[1:] or chunk_times
+        steady_seconds = sum(seconds for _, seconds in steady)
+        piped = f"{sum(t for t, _ in steady) / steady_seconds:.1f}" if steady_seconds else "-"
+        if len(chunk_times) > 1:
+            self.chunk_seconds = 0.5 * self.chunk_seconds + 0.5 * steady_seconds / len(steady)
+        fill_seconds = max(total_seconds - (num_chunks - 1) * self.chunk_seconds, 0.0)
+        self.fill_seconds = 0.5 * self.fill_seconds + 0.5 * fill_seconds
+        logger.info(
+            f"prefill model (user {user.index}): {n} tokens in {prefill_seconds:.2f}s = "
+            f"{n / prefill_seconds:.1f} tok/s, {num_chunks} chunk(s) of up to {self.chunk_size} through "
+            f"{self.num_stages} stage(s), {piped} tok/s pipelined; commit {time.perf_counter() - t1:.2f}s"
+        )
+        row = logits.reshape(-1)
+        if not torch.isfinite(row).all():
+            raise RuntimeError("prefill produced non-finite logits")
+        return row
+
+
 class _Turn:
     """One in-flight chat turn: the request's decode state plus its output channel.
 
@@ -689,7 +888,10 @@ class _Turn:
     (the client hung up), both of which are thread-safe.
 
     A turn starts in the ``prefill`` phase, feeding its prompt tokens, and moves to
-    ``decode`` once the last of them has been fed. :attr:`pending` records the steps
+    ``decode`` once the last of them has been fed. A turn that starts a session from
+    position 0 has its 128-aligned prefix (:attr:`device_prefill` tokens) run by the
+    traced prefill model in one go, and only the rest replayed through decode.
+    :attr:`pending` records the steps
     this turn has in flight, in dispatch order, so the scheduler knows how many
     outputs to collect for it and whether each one is a prompt token's (discarded) or
     a generated token's.
@@ -722,6 +924,10 @@ class _Turn:
         self.phase = self.PREFILL
         self.ids: list[int] = []  # the turn's prompt tokens
         self.fed = 0  # how many of them have been dispatched
+        self.device_prefill = 0  # leading prompt tokens still to go through the traced prefill model
+        self.prefilled_on_device = 0  # ... and how many it took, once it has run
+        self.rebuilt = False  # a continued conversation rewound and re-prefilled whole, since that was faster
+        self.t_replay = 0.0  # when this turn's prompt tokens started going through decode
         self.next_id: int | None = None  # produced but not yet fed back
         self.generated: list[int] = []
         self.pending: deque[bool] = deque()  # per in-flight step: is it the last prompt token?
@@ -794,10 +1000,49 @@ class _Turn:
             "generated": len(self.generated),
             "max_tokens": self.max_tokens,
             "prefill_seconds": self.prefill_seconds,
+            "prefill_rate": self.fed / self.prefill_seconds if self.prefill_seconds > 0 else 0.0,
             "decode_rate": self.decode_rate,
             "mean_decode_rate": self.mean_decode_rate,
             "cancelled": self.cancelled.is_set(),
         }
+
+
+class _OutputReader:
+    """Reads traced decode outputs off the device->host socket on a thread of its own.
+
+    The socket FIFO holds a single output page, so with several steps in flight the last
+    stage can only move on once the host has taken the previous output -- and the host may
+    meanwhile be blocked writing the next step's packet. Reading on a separate thread keeps
+    the device draining whatever the scheduler is doing, as ``_OutputReader`` in
+    ``tests/decode/test_multi_user_paged_decode_demo.py`` does. :meth:`expect` is called once
+    per step, in dispatch order; :attr:`results` yields ``(ticket, logits [1, V])`` in that
+    order, or ``(ticket, exception)`` once a read fails, after which it stops.
+    """
+
+    _STOP = object()
+
+    def __init__(self, model):
+        self._model = model
+        self._tickets: queue.Queue = queue.Queue()
+        self.results: queue.Queue = queue.Queue()
+        self._thread = threading.Thread(target=self._run, name="decode-reader", daemon=True)
+        self._thread.start()
+
+    def expect(self, ticket) -> None:
+        self._tickets.put(ticket)
+
+    def close(self) -> None:
+        self._tickets.put(self._STOP)
+        self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        for ticket in iter(self._tickets.get, self._STOP):
+            try:
+                out = self._model.read_decoded_output().reshape(1, -1).float()
+            except BaseException as e:  # noqa: BLE001 - handed to the scheduler, which aborts
+                self.results.put((ticket, e))
+                return
+            self.results.put((ticket, out))
 
 
 class _Scheduler:
@@ -807,20 +1052,20 @@ class _Scheduler:
     state must be driven from a single thread, and ``read_decoded_output`` returns the
     *oldest* in-flight step, so outputs have to be collected in dispatch order. Both
     are met by keeping all model work here and tracking dispatch order explicitly in
-    :attr:`_inflight`.
+    :attr:`_inflight`; the reads themselves happen on an :class:`_OutputReader`.
 
-    Each round walks the active turns in a stable order and collects the outputs of
-    any steps still in flight (prefill chunks). Decode then runs as a per-turn burst:
-    up to ``_DECODE_REPLAY_AHEAD`` (32) ``execute_trace`` calls are posted on the
-    replay thread before any of that burst's packets, matching ``chat_cli`` and
-    ``test_full_model_decode_demo``. The burst write/reads those steps immediately so
-    leftover traces never sit in front of another user's packets on the shared FIFO.
-    Prefill stays chunked: every prompt token of the round is posted, then packed,
-    and the logits are read next round -- they have no step-to-step dependency.
+    Every active turn keeps its steps in the stage pipeline at once, the way
+    ``tests/decode/test_multi_user_paged_decode_demo.py`` runs its batches: a decoding turn
+    has one step in flight, and its next is dispatched as soon as that step's token comes
+    back, while the other turns' steps are still crossing the stages. A step is seated
+    (``activate_sessions`` swaps that user's window state and page tables in, queued on
+    the command queue behind the previous user's traces), its traces are posted, then its
+    packet is written. With as many decoding users as stages every stage stays busy.
 
-    Prompt tokens are dispatched ``prefill_chunk`` at a time. A decode burst's input
-    tokens are sampled from the previous step, so only the traces (not the packets)
-    can be issued ahead of time.
+    Prompt tokens replayed through decode have no step-to-step dependency, so a prompt
+    turn keeps up to ``prefill_chunk`` of them in flight, topped up as they come back. A
+    traced prefill needs the device to itself: it waits until every step in flight has
+    been read back, then runs between steps.
     """
 
     def __init__(self, server: "GenerationServer", prefill_chunk: int = 16):
@@ -830,22 +1075,28 @@ class _Scheduler:
         self._new: deque[_Turn] = deque()
         self._chores: deque[tuple] = deque()  # (callable, done event, result box)
         self._active: list[_Turn] = []
-        self._inflight: deque[_Turn] = deque()  # dispatch order across all turns
+        self._inflight: deque[_Turn | None] = deque()  # dispatch order across all turns; None is discarded
+        self._reader: _OutputReader | None = None  # started with the scheduler thread
         self._wake = threading.Condition()
         self._stop = False
         self._broken: Exception | None = None  # a failed readback; see _abort_all
+        # Prompt tokens/s replayed through decode, for :meth:`_choose_feed`. Seeded with what the
+        # 8 x TP4 layout replays with the prefetcher off; each long enough replay refines it.
+        self.replay_rate = _REPLAY_RATE_SEED
         # Counters for the status pane and the periodic debug lines.
         self._pool_seen: dict = {}
         self.rounds = 0
         self.steps = 0
         self._window_t0 = time.perf_counter()
         self._window_steps = 0
+        self._window_dispatch = 0.0  # host seconds spent seating, posting and packing steps
         self.step_rate = 0.0  # steps/s across all users, over the last window
         self._t_started = time.perf_counter()
         self._thread = threading.Thread(target=self._loop, name="decode-scheduler", daemon=True)
 
     # -- lifecycle -------------------------------------------------------------- #
     def start(self) -> None:
+        self._reader = _OutputReader(self.engine.model)
         self._thread.start()
 
     def stop(self) -> None:
@@ -915,6 +1166,8 @@ class _Scheduler:
             self._broken = e if isinstance(e, Exception) else RuntimeError(str(e))
             self._drain(RequestError(503, f"decode scheduler died: {e}", "server_error"))
             raise
+        finally:
+            self._reader.close()
 
     def _serve(self) -> None:
         while True:
@@ -931,6 +1184,10 @@ class _Scheduler:
                     continue
                 admitting, self._new = list(self._new), deque()
                 chores, self._chores = list(self._chores), deque()
+            if admitting or chores:
+                # Both may rewind a session (free its blocks, rewrite page tables), which
+                # must not land between another step's dispatch and its readback.
+                self._settle()
             for fn, done, box in chores:
                 try:
                     box.append(fn())
@@ -969,21 +1226,83 @@ class _Scheduler:
                 user.messages = user.messages + [turn.message]
                 user._next_render = 0
                 turn.ids = self.server._render_ids(user, include_assistant=True)
+            self._choose_feed(user, turn, continuing)
             self._check_capacity(user, turn.ids)
         except Exception as e:  # noqa: BLE001 - reported to the client, the server stays up
-            if continuing:
+            if turn.rebuilt:
+                user.reset()  # the cache was already rewound: start the conversation afresh next time
+            elif continuing:
                 user.messages.pop()  # nothing was fed: leave the conversation as it was
             logger.debug(f"user {turn.user_key!r} rejected at admission: {type(e).__name__}: {e}")
             turn.events.put(("error", e))
             return
         user._next_render = len(user.messages)
+        turn.t_replay = turn.t_admit
         turn.stream = _Streamer(self.engine.tokenizer, lambda r, c: turn.events.put(("delta", r, c)))
         self._active.append(turn)
+        how = "re-prefill whole conversation" if turn.rebuilt else "continuing" if continuing else "fresh session"
         logger.debug(
-            f"user {turn.user_key!r} admitted: prefill {len(turn.ids)} tokens "
-            f"({'continuing' if continuing else 're-prefill from request'}), "
+            f"user {turn.user_key!r} admitted: prefill {len(turn.ids)} tokens ({how}"
+            f"{f', {turn.device_prefill} by the prefill model' if turn.device_prefill else ', all through decode'}), "
             f"cap {turn.max_tokens} new tokens, pool {self._pool_summary()}"
         )
+
+    def _choose_feed(self, user: UserSession, turn: _Turn, continuing: bool) -> None:
+        """Pick the faster way to get this turn's prompt into the cache.
+
+        The prefill model only starts an empty session and takes 128-aligned prefixes, and a
+        single chunk already costs a pass through every stage, so replaying a short prompt
+        through decode is quicker. For a fresh session the choice is how much the prefill
+        model takes (:attr:`_Turn.device_prefill`). A continued conversation can either
+        replay just its new turn onto the warm cache or rewind and re-prefill the whole
+        conversation with the prefill model; the latter wins once the new turn is long.
+        """
+        prefiller = self.server.prefiller
+        if prefiller is None:
+            return
+        rate = self.replay_rate
+
+        def with_prefill(n_tokens: int) -> tuple[int, float]:
+            n = prefiller.aligned(n_tokens)
+            return n, (prefiller.seconds(n) + (n_tokens - n) / rate if n else float("inf"))
+
+        def note_overflow(n_tokens: int) -> None:
+            if n_tokens > prefiller.max_len:
+                logger.info(
+                    f"user {turn.user_key!r}: {n_tokens}-token prompt is longer than the {prefiller.max_len} "
+                    f"the prefill model was compiled for (--prefill-max-len); replaying the last "
+                    f"{n_tokens - prefiller.max_len} through decode at ~{rate:.0f} tok/s"
+                )
+
+        replay_seconds = len(turn.ids) / rate
+        if not continuing:
+            n, seconds = with_prefill(len(turn.ids))
+            if seconds < replay_seconds:
+                turn.device_prefill = n
+                note_overflow(len(turn.ids))
+            return
+        if replay_seconds <= prefiller.fill_seconds:
+            return  # no prefill can beat appending the new turn to the warm cache
+        next_render, user._next_render = user._next_render, 0
+        try:
+            full = self.server._render_ids(user, include_assistant=True)
+        finally:
+            user._next_render = next_render
+        n, seconds = with_prefill(len(full))
+        if seconds >= replay_seconds or len(full) >= self.engine.max_seq:
+            return
+        logger.debug(
+            f"user {turn.user_key!r}: re-prefilling the {len(full)}-token conversation (~{seconds:.1f}s) "
+            f"instead of replaying its {len(turn.ids)} new tokens (~{replay_seconds:.1f}s)"
+        )
+        conversation = list(user.messages)
+        user.reset()
+        user.messages = conversation
+        user._next_render = 0
+        turn.ids = full
+        turn.device_prefill = n
+        turn.rebuilt = True
+        note_overflow(len(full))
 
     # -- KV pool reporting ------------------------------------------------------- #
     def pool_usage(self) -> dict:
@@ -1053,179 +1372,209 @@ class _Scheduler:
             logger.debug(
                 f"round {self.rounds}: {self.step_rate:.2f} steps/s total, {per_user} steps/s/user "
                 f"over {len(active)} active turns ({len(decoding)} decoding), "
-                f"{self._window_steps} steps in {elapsed:.1f}s"
+                f"{self._window_steps} steps in {elapsed:.1f}s, "
+                f"host dispatch {1e3 * self._window_dispatch / self._window_steps:.1f} ms/step"
             )
         self._window_t0 = time.perf_counter()
         self._window_steps = 0
+        self._window_dispatch = 0.0
 
     def _round_turns(self) -> None:
-        prefill: list[tuple] = []
-        decode: list[_Turn] = []
+        """Dispatch the next steps of every turn that can take one, then read back at least one output.
+
+        A decoding turn takes its next step once the previous one's token is back; a prompt
+        turn tops its in-flight steps back up to ``prefill_chunk`` once half of them have
+        returned. The read at the end waits for the oldest step in flight only, so the other
+        turns' steps stay on the stages while that turn moves on.
+        """
         for turn in list(self._active):
-            try:
-                self._collect(turn)
-            except Exception as e:  # noqa: BLE001 - see _abort_all: ordering is lost
-                self._abort_all(e)
-                return
-            if turn.error is not None:
-                self._fail(turn, turn.error)  # its in-flight steps have now been drained
-                continue
-            try:
-                if turn.phase == _Turn.PREFILL:
-                    prefill.extend(self._plan(turn))
-                else:
-                    decode.append(turn)
-            except Exception as e:  # noqa: BLE001 - one bad turn must not stop the others
-                # No device work for this turn this round; fail it now rather than
-                # posting a trace that would have no packet.
-                self._fail(turn, e)
-        # Decode bursts read the output socket inline, so they run while it is empty
-        # (prefill packets of this round have not been written yet).
-        for turn in decode:
             if turn not in self._active:
                 continue
+            if turn.error is not None:
+                if not turn.pending:
+                    self._fail(turn, turn.error)  # its in-flight steps have now been read back
+                continue
             try:
-                self._decode_ahead(turn)
+                if turn.phase == _Turn.PREFILL and turn.device_prefill:
+                    if not self._settle():
+                        return
+                    self._prefill_on_device(turn)
+                steps = self._plan(turn)
             except Exception as e:  # noqa: BLE001 - one bad turn must not stop the others
-                with contextlib.suppress(Exception):
-                    self.engine.drain_traced(turn.next_id if turn.next_id is not None else 0)
-                self._fail(turn, e)
-        self._post(prefill)
-        self._feed(prefill)
+                if turn.pending:
+                    turn.error = e
+                else:
+                    self._fail(turn, e)
+                continue
+            if steps:
+                self._dispatch(turn, steps)
+        if self._inflight:
+            try:
+                self._collect(block=True)
+            except Exception as e:  # noqa: BLE001 - see _abort_all: ordering is lost
+                self._abort_all(e)
 
-    def _collect(self, turn: _Turn) -> None:
-        """Read back every step this turn has in flight, in dispatch order.
+    def _settle(self) -> bool:
+        """Read back every step in flight, e.g. before a traced prefill takes the device.
 
-        The turn's steps sit at the head of :attr:`_inflight` because the rounds walk
-        the turns in a stable order and each turn's steps were dispatched
-        contiguously, so its own are the oldest outstanding ones."""
-        while turn.pending:
-            assert self._inflight and self._inflight[0] is turn, "decode outputs read out of dispatch order"
-            self._inflight.popleft()
-            last_prompt_token = turn.pending.popleft()
-            out = self.engine.model.read_decoded_output().reshape(1, -1).float()
-            if turn.phase == _Turn.DECODE or last_prompt_token:
-                turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
-            if last_prompt_token:
-                turn.phase = _Turn.DECODE
-                turn.t_prefill_done = time.perf_counter()
-                seconds = turn.prefill_seconds
-                rate = f"{len(turn.ids) / seconds:.1f}" if seconds > 0 else "-"
-                logger.debug(
-                    f"user {turn.user_key!r}: prefill of {len(turn.ids)} tokens done in "
-                    f"{seconds:.2f}s ({rate} tok/s), cache at {self.engine.users[turn.slot].pos} tokens"
-                )
+        Returns ``False`` if a read failed, in which case every turn has been aborted."""
+        try:
+            while self._inflight:
+                self._collect(block=True)
+        except Exception as e:  # noqa: BLE001 - see _abort_all: ordering is lost
+            self._abort_all(e)
+            return False
+        return True
 
-    def _plan(self, turn: _Turn) -> list[tuple]:
-        """Prefill steps for this round, without touching the device.
+    def _collect(self, block: bool) -> None:
+        """Take every output that has come back, first waiting for the oldest one if ``block``.
 
-        Returns ``(turn, user, token_id, pos, last_prompt_token)`` tuples. Decode is
-        handled by :meth:`_decode_ahead` instead: its traces are posted as a burst
-        whose packets are written and read before the next turn runs.
-        """
+        Outputs arrive in dispatch order, so each belongs to the turn at the head of
+        :attr:`_inflight`. Raises if a read failed."""
+        results = self._reader.results
+        try:
+            item = results.get() if block else results.get_nowait()
+        except queue.Empty:
+            return
+        while True:
+            self._take(*item)
+            try:
+                item = results.get_nowait()
+            except queue.Empty:
+                return
+
+    def _take(self, turn: _Turn | None, out) -> None:
+        """Hand one step's logits ``[1, V]`` to the turn that dispatched it."""
+        assert self._inflight and self._inflight[0] is turn, "decode outputs read out of dispatch order"
+        self._inflight.popleft()
+        if isinstance(out, BaseException):
+            raise RuntimeError(f"reading a decode output failed: {out}") from out
+        if turn is None:
+            return  # a posted trace fed a dummy packet after a failed dispatch
+        last_prompt_token = turn.pending.popleft()
+        if turn.error is not None:
+            return
+        if turn.phase == _Turn.DECODE or last_prompt_token:
+            turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
+        if last_prompt_token:
+            self._prompt_done(turn)
+
+    def _prompt_done(self, turn: _Turn) -> None:
+        """Move a turn whose last prompt token has produced its logits on to decode."""
+        turn.phase = _Turn.DECODE
+        turn.t_prefill_done = time.perf_counter()
+        replayed = len(turn.ids) - turn.prefilled_on_device
+        replay_seconds = turn.t_prefill_done - turn.t_replay
+        if replayed >= _REPLAY_RATE_MIN_TOKENS and replay_seconds > 0:
+            self.replay_rate = 0.5 * self.replay_rate + 0.5 * replayed / replay_seconds
+        seconds = turn.prefill_seconds
+        rate = f"{len(turn.ids) / seconds:.1f}" if seconds > 0 else "-"
+        logger.debug(
+            f"user {turn.user_key!r}: prefill of {len(turn.ids)} tokens done in "
+            f"{seconds:.2f}s ({rate} tok/s), cache at {self.engine.users[turn.slot].pos} tokens"
+        )
+
+    def _prefill_on_device(self, turn: _Turn) -> None:
+        """Run the turn's aligned prompt prefix through the traced prefill model.
+
+        Blocks the scheduler for the whole prefill: every stage of the device is busy with
+        this prompt meanwhile, so the other turns' decode resumes once it is done."""
         user = self.engine.users[turn.slot]
-        # A client that hangs up mid-prompt is not abandoned here: the prompt is fed
-        # to the end so the KV cache matches the stored conversation, and the turn
-        # then finishes in :meth:`_decode_ahead` with an empty reply.
-        n = min(self.prefill_chunk, turn.prompt_left)
-        if turn.fed == 0:
-            logger.debug(
-                f"user {turn.user_key!r}: prefilling {len(turn.ids)} tokens from pos {user.pos} "
-                f"in chunks of {self.prefill_chunk}"
-            )
-        start = user.pos
-        base = turn.fed
-        planned: list[tuple] = []
-        for i in range(n):
-            token_id = turn.ids[base + i]
-            planned.append((turn, user, int(token_id), start + i, base + i + 1 == len(turn.ids)))
-        return planned
+        n, turn.device_prefill = turn.device_prefill, 0
+        assert user.pos == 0 and turn.fed == 0, "the prefill model only starts a session"
+        logger.debug(
+            f"user {turn.user_key!r}: prefilling {n} of {len(turn.ids)} tokens with the prefill model "
+            f"({len(self._active) - 1} other turn(s) wait)"
+        )
+        # The turn's own clock starts here, so the pane's prefill tok/s covers this prefill.
+        turn.t_admit = turn.t_admit or time.perf_counter()
 
-    def _decode_ahead(self, turn: _Turn) -> None:
-        """Generate up to ``_DECODE_REPLAY_AHEAD`` tokens, traces posted before packets.
+        def progress(done: int) -> None:
+            turn.fed = done
 
-        Same rolling window as ``chat_cli.UserSession.generate``: the burst's
-        ``execute_trace`` calls sit on the replay thread (device parked on recv)
-        before any H2D packet. Outputs are read inline so this turn's leftover
-        traces cannot block another user on the shared FIFO. A long reply comes
-        back next round for another burst.
+        row = self.server.prefiller.run(user, turn.ids[:n], on_progress=progress)
+        turn.fed = turn.prefilled_on_device = n
+        turn.t_replay = time.perf_counter()
+        self.steps += n
+        if n == len(turn.ids):
+            out = row.reshape(1, -1)
+            turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
+            self._prompt_done(turn)
+
+    def _plan(self, turn: _Turn) -> list[tuple[int, int, bool]]:
+        """The steps this turn dispatches now, as ``(token_id, pos, last_prompt_token)``.
+
+        Touches no device state, but finishes a decoding turn that is done (EOS, its
+        ``max_tokens``, the context, or a client that hung up).
         """
         engine = self.engine
         user = engine.users[turn.slot]
+        if turn.phase == _Turn.PREFILL:
+            # A client that hangs up mid-prompt is not abandoned here: the prompt is fed
+            # to the end so the KV cache matches the stored conversation, and the turn
+            # then finishes with an empty reply.
+            room = self.prefill_chunk - len(turn.pending)
+            if not turn.prompt_left or room < (self.prefill_chunk + 1) // 2:
+                return []
+            if turn.fed == turn.prefilled_on_device:
+                logger.debug(
+                    f"user {turn.user_key!r}: replaying {turn.prompt_left} prompt tokens through decode "
+                    f"from pos {user.pos}, up to {self.prefill_chunk} in flight"
+                )
+            n = min(room, turn.prompt_left)
+            return [(int(turn.ids[turn.fed + i]), user.pos + i, turn.fed + i + 1 == len(turn.ids)) for i in range(n)]
+        if turn.pending:
+            return []
         if turn.cancelled.is_set() or turn.next_id == engine.eos_id:
             self._finish(turn)
-            return
+            return []
         if len(turn.generated) >= turn.max_tokens or user.pos >= engine.max_seq - 1:
             turn.hit_cap = True
             self._finish(turn)
-            return
+            return []
+        turn.generated.append(turn.next_id)
+        turn.mark_token()
+        turn.stream.push(turn.generated)
+        if len(turn.generated) % 32 == 0:
+            logger.debug(
+                f"user {turn.user_key!r}: {len(turn.generated)}/{turn.max_tokens} tokens "
+                f"at {turn.decode_rate:.2f} tok/s over the last {DECODE_RATE_WINDOW} "
+                f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
+                f"cache at {user.pos}/{engine.max_seq}"
+            )
+        return [(int(turn.next_id), user.pos, False)]
 
-        remaining = min(turn.max_tokens - len(turn.generated), engine.max_seq - 1 - user.pos)
-        n = min(_DECODE_REPLAY_AHEAD, remaining)
-        try:
-            if n > 0:
-                engine.post_traced(user, range(user.pos, user.pos + n))
-            for _ in range(n):
-                if turn.cancelled.is_set() or turn.next_id == engine.eos_id:
-                    break
-                if user.pos >= engine.max_seq - 1:
-                    turn.hit_cap = True
-                    break
-                turn.generated.append(turn.next_id)
-                turn.mark_token()
-                turn.stream.push(turn.generated)
-                if len(turn.generated) % 32 == 0:
-                    logger.debug(
-                        f"user {turn.user_key!r}: {len(turn.generated)}/{turn.max_tokens} tokens "
-                        f"at {turn.decode_rate:.2f} tok/s over the last {DECODE_RATE_WINDOW} "
-                        f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
-                        f"cache at {user.pos}/{engine.max_seq}"
-                    )
-                engine.write_traced(int(turn.next_id), int(user.pos))
-                out = engine.model.read_decoded_output().reshape(1, -1).float()
-                turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
-                user.pos += 1
-                self.steps += 1
-        finally:
-            engine.drain_traced(turn.next_id if turn.next_id is not None else 0)
+    def _dispatch(self, turn: _Turn, steps: list[tuple[int, int, bool]]) -> None:
+        """Seat the turn's user, post its steps' traces, then write their packets.
 
-        if (
-            turn.cancelled.is_set()
-            or turn.next_id == engine.eos_id
-            or len(turn.generated) >= turn.max_tokens
-            or user.pos >= engine.max_seq - 1
-        ):
-            if turn.next_id != engine.eos_id and not turn.cancelled.is_set():
-                turn.hit_cap = True
-            self._finish(turn)
-
-    def _post(self, steps: list[tuple]) -> None:
-        """Queue every step's ``execute_trace`` before any of this round's packets.
-
-        Consecutive steps of one user share one seat swap and one ``replay_traced_ahead``,
-        matching ``Batch.post`` in the multi-user paged demo.
+        The seat swap is queued on the command queue behind the previous user's traces,
+        so it lands on each stage only once that stage has finished with them. A failure
+        marks the turn (see :attr:`_Turn.error`); any trace already posted is fed a dummy
+        packet so it does not sit on in-trace recv in front of the next user's packet.
         """
-        if not steps:
-            return
-        i = 0
-        while i < len(steps):
-            _turn, user, _token_id, _pos, _last = steps[i]
-            j = i + 1
-            while j < len(steps) and steps[j][1] is user:
-                j += 1
-            self.engine.post_traced(user, [steps[k][3] for k in range(i, j)])
-            i = j
-
-    def _feed(self, steps: list[tuple]) -> None:
-        """Write each posted step's packet, in the same order as :meth:`_post`."""
-        for turn, user, token_id, pos, last_prompt_token in steps:
-            self.engine.write_traced(int(token_id), int(pos))
-            user.pos += 1
-            if turn.phase == _Turn.PREFILL:
-                turn.fed += 1
-            turn.pending.append(last_prompt_token)
-            self._inflight.append(turn)
-            self.steps += 1
+        engine = self.engine
+        user = engine.users[turn.slot]
+        t0 = time.perf_counter()
+        try:
+            engine.post_traced(user, [pos for _, pos, _ in steps])
+            for token_id, pos, last_prompt_token in steps:
+                engine.write_traced(token_id, pos)
+                self._reader.expect(turn)
+                self._inflight.append(turn)
+                turn.pending.append(last_prompt_token)
+                user.pos += 1
+                if turn.phase == _Turn.PREFILL:
+                    turn.fed += 1
+                self.steps += 1
+        except Exception as e:  # noqa: BLE001 - one bad turn must not stop the others
+            turn.error = e
+            with contextlib.suppress(Exception):
+                while engine._replay_q:
+                    engine.write_traced(0, engine._replay_q[0])
+                    self._reader.expect(None)
+                    self._inflight.append(None)
+        finally:
+            self._window_dispatch += time.perf_counter() - t0
 
     # -- completion ------------------------------------------------------------- #
     def _finish(self, turn: _Turn) -> None:
@@ -1247,9 +1596,17 @@ class _Scheduler:
         user.messages.append(assistant)
         user._next_render = len(user.messages)
         self._retire(turn)
+        replayed = len(turn.ids) - turn.prefilled_on_device
+        if turn.prefilled_on_device:
+            how = f"{turn.prefilled_on_device} by the prefill model + {replayed} through decode"
+        else:
+            how = "all through decode"
+        if turn.rebuilt:
+            how += ", whole conversation re-prefilled"
+        prefill_rate = len(turn.ids) / turn.prefill_seconds if turn.prefill_seconds > 0 else 0.0
         logger.info(
-            f"user {turn.user_key!r} (slot {user.index}): prefill {len(turn.ids)} tokens in "
-            f"{turn.prefill_seconds:.2f}s, decoded {len(turn.generated)} at "
+            f"user {turn.user_key!r} (slot {user.index}): prefill {len(turn.ids)} tokens ({how}) in "
+            f"{turn.prefill_seconds:.2f}s = {prefill_rate:.1f} tok/s, decoded {len(turn.generated)} at "
             f"{turn.mean_decode_rate:.2f} tok/s mean, {turn.decode_rate:.2f} tok/s at the end, "
             f"context {user.pos}/{self.engine.max_seq}, finish={'length' if turn.hit_cap else 'stop'}"
             f"{', client gone' if turn.cancelled.is_set() else ''}, {len(self._active)} turns still active"
@@ -1323,10 +1680,12 @@ class GenerationServer:
         model_id: str,
         max_body_bytes: int = 16 << 20,
         prefill_chunk: int = 16,
+        prefiller: _Prefiller | None = None,
     ):
         self.engine = engine
         self.model_id = model_id
         self.max_body_bytes = max_body_bytes
+        self.prefiller = prefiller
         self.pool = _SlotPool(engine)
         self._created = int(time.time())
         self.scheduler = _Scheduler(self, prefill_chunk)
@@ -1783,9 +2142,9 @@ def _add_model_args(p: argparse.ArgumentParser, sys_cfg) -> None:
         type=int,
         default=decode.num_users,
         help="turns that can generate at once, each with its own KV session (fixed at "
-        "startup: their cache blocks cannot be allocated once the traces exist). Note "
-        "the rounds interleave rather than batch, so the device's token rate is shared: "
-        "more users means more total throughput but a slower reply each",
+        "startup: their cache blocks cannot be allocated once the traces exist). Their "
+        "steps are pipelined through the stages rather than batched: up to one user per "
+        "stage adds throughput, past that the users share the stages' rate",
     )
     p.add_argument(
         "--max-context",
@@ -1873,9 +2232,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--prefill-chunk",
         type=int,
         default=int(os.environ.get("DEEPSEEK_V4_PREFILL_CHUNK", "16")),
-        help="prompt tokens a turn feeds per scheduling round (their logits are discarded, "
-        "so they pipeline freely); higher prefills faster, lower keeps replies smoother "
-        "for users already generating",
+        help="prompt tokens a turn keeps in flight while replaying them through decode (a continued "
+        "conversation's new turn, or the ragged tail after the prefill model); higher "
+        "prefills faster, lower keeps replies smoother for users already generating",
+    )
+    p.add_argument(
+        "--no-prefill",
+        dest="prefill",
+        action="store_false",
+        help="replay every prompt token through decode instead of running the traced prefill "
+        "model (keeps the profile's decode layout and the DRISC prefetcher on)",
+    )
+    p.add_argument(
+        "--prefill-max-len",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V4_PREFILL_MAX_LEN", "0")),
+        help="longest prompt prefix the prefill model takes (rounded down to 128, capped by the "
+        "context; 0, the default, = the whole --max-context); the rest is replayed through "
+        "decode, ~30x slower. Every chunk attends buffers sized for it, so a smaller value "
+        "prefills shorter prompts faster but replays the excess of longer ones",
+    )
+    p.add_argument(
+        "--prefill-trace-chunk",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V4_E2E_CHUNK", "1024")),
+        help="tokens per traced prefill chunk (a multiple of 128); the stages pipeline consecutive chunks",
+    )
+    p.add_argument(
+        "--l1-small-size",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "4096")),
+        help="bytes of L1_SMALL reserved for the CCL semaphores when the prefill model is on",
     )
     p.add_argument(
         "--max-body-bytes",
@@ -1888,6 +2275,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="log every scheduler event: admissions, slot assignments, KV page allocations, "
         "prefill lengths and per-user decode rates (in the live console, the 'd' key toggles it)",
+    )
+    p.add_argument(
+        "--prompt-snippet",
+        action="store_true",
+        help=f"log only the first {_PROMPT_SNIPPET_CHARS} characters of each message instead of the "
+        "whole prompt (in the live console, the 'v' key toggles it)",
     )
     p.add_argument(
         "--no-tui",
@@ -1920,6 +2313,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error("--port must be a TCP port number")
     if args.prefill_chunk < 1:
         p.error("--prefill-chunk must be at least 1")
+    if args.prefill_trace_chunk <= 0 or args.prefill_trace_chunk % ALIGNMENT:
+        p.error(f"--prefill-trace-chunk must be a positive multiple of {ALIGNMENT}")
+    if args.prefill_max_len and args.prefill_max_len < ALIGNMENT:
+        p.error(f"--prefill-max-len must be 0 (the whole context) or at least {ALIGNMENT}")
     if args.quiet and args.debug:
         p.error("--quiet and --debug ask for opposite things")
     return args
@@ -1941,19 +2338,51 @@ def main(argv: list[str] | None = None) -> int:
         print(f"checkpoint not found: {args.model_dir}", file=sys.stderr)
         return 1
     torch.manual_seed(0)
+    _LOG_FULL_PROMPT[0] = not args.prompt_snippet
     logger.info(
         f"KV budget: {args.num_users} concurrent users x {args.max_context} tokens, "
-        f"shared pool {args.total_context} tokens. The rounds interleave rather than batch, so "
-        f"expect the device's token rate to be split across the users that are decoding."
+        f"shared pool {args.total_context} tokens. The users' steps are pipelined through the "
+        f"stages rather than batched."
     )
-    with open_mesh_device(args.trace_region_size, system_config=args.system_config) as mesh_device:
+    mesh_shape = l1_small_size = None
+    if args.prefill:
+        # The layout of tests/prefill/test_prefill_decode_demo.py: ``1 x 4`` TP4 stages, one per
+        # mesh row (8 x 4 = all 32 chips of a Galaxy), shared by the decode and the prefill model.
+        chips = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        if chips % _TP_SIZE:
+            print(f"the prefill model needs TP{_TP_SIZE} stages, but the system has {chips} chips", file=sys.stderr)
+            return 1
+        args.tp_size, args.num_stages = _TP_SIZE, chips // _TP_SIZE
+        # Prefill replays overwrite decode's L1, which is snapshot and written back; a GCB's
+        # config pages cannot be, so decode copies its weights DRAM -> L1 per call instead.
+        args.use_prefetcher = False
+        mesh_shape, l1_small_size = (args.num_stages, _TP_SIZE), args.l1_small_size
+        # MTP disabled (read by DeepSeekV4Model.__init__): every row is a pipeline stage.
+        os.environ["DEEPSEEK_V4_DSPARK"] = "0"
+        logger.info(
+            f"traced prefill on: {args.num_stages} x TP{_TP_SIZE} stages ({chips} chips) shared with decode, "
+            f"decode prefetcher off"
+        )
+    with open_mesh_device(
+        args.trace_region_size, system_config=args.system_config, mesh_shape=mesh_shape, l1_small_size=l1_small_size
+    ) as mesh_device:
+        if args.prefill:
+            args.submeshes = [
+                mesh_device.create_submesh(ttnn.MeshShape(1, _TP_SIZE), ttnn.MeshCoordinate(i, 0))
+                for i in range(args.num_stages)
+            ]
         # The prefetcher session spans the trace capture, the warmup and every served
         # turn, so it is opened inside ``ChatEngine`` (once the model exists) against
         # this stack, and the senders are stopped before the mesh device is closed.
         with contextlib.ExitStack() as prefetcher:
             engine = ChatEngine(mesh_device, args, prefetcher)
+            # Decode compile, then prefill build + compile (decode's L1 parked): both before any
+            # trace exists. The warmup then captures decode, and prefill is captured after it.
+            prefiller = _Prefiller(engine, args, prefetcher) if args.prefill else None
             engine.warmup()
-            api = GenerationServer(engine, args.model_id, args.max_body_bytes, args.prefill_chunk)
+            if prefiller is not None:
+                prefiller.capture()
+            api = GenerationServer(engine, args.model_id, args.max_body_bytes, args.prefill_chunk, prefiller=prefiller)
             # The scheduler is the only thread that touches the device from here on; the
             # traces it replays were captured by the warmup above, which a pipelined
             # caller cannot do mid-flight.
@@ -1968,12 +2397,19 @@ def main(argv: list[str] | None = None) -> int:
                 api.stats,
                 on_quit=lambda: threading.Thread(target=httpd.shutdown).start(),
                 enabled=args.tui,
+                on_toggle_prompt=_toggle_full_prompt,
+                full_prompt=_LOG_FULL_PROMPT[0],
                 debug=args.debug,
             ):
+                prefill_mode = (
+                    f"traced prefill up to {prefiller.max_len} tokens in chunks of {prefiller.chunk_size}"
+                    if prefiller is not None
+                    else "prompts replayed through decode"
+                )
                 logger.info(
                     f"serving {args.model_id!r} on http://{args.host}:{args.port} "
                     f"({len(engine.users)} concurrent sessions, context {engine.max_seq}/user, "
-                    f"prefill chunk {args.prefill_chunk})"
+                    f"{prefill_mode}, decode replay chunk {args.prefill_chunk})"
                 )
                 try:
                     httpd.serve_forever()

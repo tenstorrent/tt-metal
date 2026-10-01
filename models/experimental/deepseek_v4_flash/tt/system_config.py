@@ -208,7 +208,7 @@ class DecodeSettings:
 
     weight_dtype: str = "bfloat4_b"
     num_users: int = 2
-    max_context: int = 131072
+    max_context: int = 1_000_000
     # 0 = one ``max_context`` (the users share a single context's worth).
     total_context: int = 0
     max_new_tokens: int = 2048
