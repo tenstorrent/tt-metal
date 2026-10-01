@@ -38,7 +38,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "mcast_wire.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::bringup::rms_norm_ttnn {
@@ -492,6 +493,12 @@ kh::McastConfig mcast_cfg(bool native_in, uint32_t base_sem_id = 0) {
     return cfg;
 }
 
+// The same config with the old Mcast2D `num_active` (#57547: McastConfig::ack_count_override).
+kh::McastConfig with_ack_count(kh::McastConfig cfg, int64_t ack_count) {
+    cfg.ack_count_override = static_cast<uint32_t>(ack_count);
+    return cfg;
+}
+
 // ---- per-channel form ------------------------------------------------------------------------
 std::pair<bool, int64_t> per_channel_form(const Tensor& operand, int64_t width) {
     const auto shape = shape_of(operand);
@@ -654,21 +661,27 @@ Work work_inactive(CoreCoord core) {
     return w;
 }
 
-// The combine's multicast: a Mcast1D line family or one Mcast2D box.
+// The combine's multicast: a Mcast1D line family or one Mcast2D box, held as its positional wire
+// (mcast_wire.hpp: #57547's attach() read back from a scratch kernel on `cores`, the writer's NoC).
 struct CombineMcast {
-    std::variant<kh::Mcast1D, kh::Mcast2D> m;
+    mcast_wire::McastWire w;
+
+    template <typename Family>
+    CombineMcast(const Family& family, const CoreRangeSet& cores, NOC noc) :
+        w(mcast_wire::extract(family, cores, noc)) {}
 
     std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake) const {
-        return std::visit([&](const auto& x) { return x.compile_time_args(pre_handshake); }, m);
+        return w.compile_time_args(pre_handshake);
     }
-    std::vector<uint32_t> runtime_args(const CoreCoord& core) const {
-        return std::visit([&](const auto& x) { return x.runtime_args(core); }, m);
-    }
-    std::vector<SemaphoreDescriptor> owned_semaphores() const {
-        return std::visit([](const auto& x) { return x.owned_semaphores(); }, m);
-    }
+    const std::vector<uint32_t>& runtime_args(const CoreCoord& core) const { return w.runtime_args(core); }
+    std::vector<SemaphoreDescriptor> owned_semaphores() const { return w.semaphores; }
+    // The first id after the family's own (they are consecutive from its base_sem_id).
     uint32_t next_base_sem_id() const {
-        return std::visit([](const auto& x) { return x.next_base_sem_id(); }, m);
+        uint32_t next = 0;
+        for (const auto& s : w.semaphores) {
+            next = std::max(next, s.id + 1);
+        }
+        return next;
     }
 };
 
@@ -770,7 +783,15 @@ Plan plan_interleaved_width_split(
                 work_tile_axis(core, row_start, rows, w_start, wt_per_core, core.x == 0, core.x, W, R_rm));
         }
         if (gw > 1) {
-            p.mcast = CombineMcast{kh::Mcast1D(device, crs, kh::Mcast1DShape::PerRow, 0, mc_cfg)};
+            p.mcast = CombineMcast(
+                kh::Mcast1D(
+                    device,
+                    crs,
+                    kh::Mcast1DShape::PerRow,
+                    kh::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
+                    mc_cfg),
+                crs,
+                mc_cfg.noc);
         }
         p.group_axis = GroupAxis::Y;
         p.all_cores = crs;
@@ -788,7 +809,14 @@ Plan plan_interleaved_width_split(
             ++i;
         }
         const auto root = p.assignment[0].core;
-        p.mcast = CombineMcast{kh::Mcast2D(device, crs, CoreCoord(root.x, root.y), mc_cfg, gw - 1)};
+        p.mcast = CombineMcast(
+            kh::Mcast2D(
+                device,
+                crs,
+                kh::Mcast2DFixedSenderConfig{.sender = CoreCoord(root.x, root.y)},
+                with_ack_count(mc_cfg, gw - 1)),
+            crs,
+            mc_cfg.noc);
         p.group_axis = GroupAxis::None;
         p.all_cores = crs;
     }
@@ -883,8 +911,14 @@ Plan plan_band(tt::tt_metal::IDevice* device, const Tensor& input, const Tensor&
         p.group_axis = GroupAxis::None;
         p.group_size = group_size;
         if (group_size > 1) {
-            p.mcast = CombineMcast{
-                kh::Mcast2D(device, bbox_crs, CoreCoord(root.x, root.y), mcast_cfg(false), group_size - 1)};
+            p.mcast = CombineMcast(
+                kh::Mcast2D(
+                    device,
+                    bbox_crs,
+                    kh::Mcast2DFixedSenderConfig{.sender = CoreCoord(root.x, root.y)},
+                    with_ack_count(mcast_cfg(false), group_size - 1)),
+                bbox_crs,
+                mcast_cfg(false).noc);
         }
     } else {
         const int64_t nx = bbox.end_coord.x - bbox.start_coord.x + 1;
@@ -912,12 +946,15 @@ Plan plan_band(tt::tt_metal::IDevice* device, const Tensor& input, const Tensor&
         p.group_axis = row_wise ? GroupAxis::Y : GroupAxis::X;
         p.group_size = group_size;
         if (group_size > 1) {
-            p.mcast = CombineMcast{kh::Mcast1D(
-                device,
+            p.mcast = CombineMcast(
+                kh::Mcast1D(
+                    device,
+                    shard_grid,
+                    row_wise ? kh::Mcast1DShape::PerRow : kh::Mcast1DShape::PerColumn,
+                    kh::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
+                    mcast_cfg(false)),
                 shard_grid,
-                row_wise ? kh::Mcast1DShape::PerRow : kh::Mcast1DShape::PerColumn,
-                0,
-                mcast_cfg(false))};
+                mcast_cfg(false).noc);
         }
     }
     int64_t wt_band = 1;
@@ -1022,8 +1059,14 @@ Plan plan_placement(
         p.group_axis = GroupAxis::None;
         p.group_size = group_size;
         if (group_size > 1) {
-            p.mcast =
-                CombineMcast{kh::Mcast2D(device, bbox_crs, CoreCoord(root.x, root.y), mcast_cfg(true), group_size - 1)};
+            p.mcast = CombineMcast(
+                kh::Mcast2D(
+                    device,
+                    bbox_crs,
+                    kh::Mcast2DFixedSenderConfig{.sender = CoreCoord(root.x, root.y)},
+                    with_ack_count(mcast_cfg(true), group_size - 1)),
+                bbox_crs,
+                mcast_cfg(true).noc);
         }
     } else {
         TT_FATAL(
@@ -1052,12 +1095,15 @@ Plan plan_placement(
         p.group_axis = row_wise ? GroupAxis::Y : GroupAxis::X;
         p.group_size = group_size;
         if (group_size > 1) {
-            p.mcast = CombineMcast{kh::Mcast1D(
-                device,
+            p.mcast = CombineMcast(
+                kh::Mcast1D(
+                    device,
+                    shard_grid,
+                    row_wise ? kh::Mcast1DShape::PerRow : kh::Mcast1DShape::PerColumn,
+                    kh::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
+                    mcast_cfg(true)),
                 shard_grid,
-                row_wise ? kh::Mcast1DShape::PerRow : kh::Mcast1DShape::PerColumn,
-                0,
-                mcast_cfg(true))};
+                mcast_cfg(true).noc);
         }
     }
     p.native_in = true;
@@ -1812,7 +1858,7 @@ ProgramDescriptor create_program_descriptor(
     }
 
     // ---- D40: the per-channel broadcast ("row" lines) ------------------------------------------
-    std::optional<kh::Mcast1D> pc_mcast;
+    std::optional<mcast_wire::McastWire> pc_mcast;
     std::map<std::pair<uint32_t, uint32_t>, uint32_t> pc_role;
     if (PC_MCAST_ENABLED && (has_gamma || has_bias) && !per_channel_is_rm && !pc_compact) {
         const auto cores = cores_in(all_cores);
@@ -1871,20 +1917,15 @@ ProgramDescriptor create_program_descriptor(
             kh::McastConfig cfg;
             cfg.noc = reader_noc(plan);
             cfg.handshake = handshake;
-            cfg.data_ready = handshake ? kh::DataReadyMode::Flag : kh::DataReadyMode::Counter;
+            cfg.data_ready =
+                handshake ? dataflow_kernel_lib::DataReadySignal::Flag : dataflow_kernel_lib::DataReadySignal::Counter;
             cfg.base_sem_id = base_sem;
-            cfg.rotating_sender = false;
-            if (PC_MCAST_DIAGONAL) {
-                pc_mcast.emplace(
-                    device,
-                    all_cores,
-                    kh::Mcast1DShape::PerRow,
-                    PC_MCAST_SENDER_INDEX,
-                    cfg,
-                    kh::Mcast1DSenderPlacement::Diagonal);
-            } else {
-                pc_mcast.emplace(device, all_cores, kh::Mcast1DShape::PerRow, PC_MCAST_SENDER_INDEX, cfg);
-            }
+            const kh::Mcast1DFixedSenderConfig sender_cfg{
+                .starting_sender_index = PC_MCAST_SENDER_INDEX,
+                .sender_placement =
+                    PC_MCAST_DIAGONAL ? kh::Mcast1DSenderPlacement::Diagonal : kh::Mcast1DSenderPlacement::Uniform};
+            pc_mcast.emplace(mcast_wire::extract(
+                kh::Mcast1D(device, all_cores, kh::Mcast1DShape::PerRow, sender_cfg, cfg), all_cores, cfg.noc));
             std::set<std::pair<uint32_t, uint32_t>> on;
             for (const auto& g : live) {
                 on.insert(g.begin(), g.end());
@@ -1973,7 +2014,8 @@ ProgramDescriptor create_program_descriptor(
         const auto m = plan.mcast->compile_time_args(mcast_pre_handshake);
         writer_ct.insert(writer_ct.end(), m.begin(), m.end());
     } else {
-        writer_ct.insert(writer_ct.end(), 6, 0u);
+        const auto absent = mcast_wire::absent_compile_time_args();  // #57547: one ABSENT tag word
+        writer_ct.insert(writer_ct.end(), absent.begin(), absent.end());
     }
     {
         const auto a = tt::tt_metal::TensorAccessorArgs(*output.buffer()).get_compile_time_args();
@@ -2166,7 +2208,7 @@ ProgramDescriptor create_program_descriptor(
         }
     }
     if (pc_mcast.has_value()) {
-        for (auto& s : pc_mcast->owned_semaphores()) {
+        for (auto& s : pc_mcast->semaphores) {
             desc.semaphores.push_back(std::move(s));
         }
     }

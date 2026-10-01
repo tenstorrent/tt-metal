@@ -107,7 +107,7 @@
 // still the all-stubbed build.  A define is part of the key.  See
 // `_kernel_defines()` in the program descriptor for the one source of truth.
 #include "perf_instrumentation.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
 namespace {
@@ -129,6 +129,26 @@ constexpr uint32_t cb_gather_l1 = 17;  // the ROOT's level-1 landing ring
 constexpr uint32_t cb_node_out = 18;   // an interior gatherer's RAW folded sum
 constexpr uint32_t cb_mcast_in = 16;
 constexpr uint32_t TILE_DIM = 32;
+
+// #57547: a plan without the combine passes an ABSENT multicast block, whose McastArgs has no pipe faces and no
+// sender coordinates.  The pipes are taken as optionals (empty off-role) and the root's coordinates through these
+// templates, so the combine-only code below still compiles for an absent block (it is never reached there).
+template <typename M>
+FORCE_INLINE uint32_t mcast_sender_x(const M& m) {
+    if constexpr (M::active) {
+        return m.sender_x();
+    } else {
+        return 0;
+    }
+}
+template <typename M>
+FORCE_INLINE uint32_t mcast_sender_y(const M& m) {
+    if constexpr (M::active) {
+        return m.sender_y();
+    } else {
+        return 0;
+    }
+}
 #ifdef RMS_RESIDUAL_OUT
 // `return_residual_sum`: pass A's `t = x + r` at the input's dtype (compute's second pack).
 constexpr uint32_t cb_residual_sum = 26;
@@ -763,13 +783,13 @@ void kernel_main() {
                     const uint32_t wp1 = get_write_ptr(cb_gather_l1);
                     ship_partial(
                         get_read_ptr(cb_node_out),
-                        (is_root != 0) ? get_noc_addr(wp1) : get_noc_addr(mc.sender_x(), mc.sender_y(), wp1),
+                        (is_root != 0) ? get_noc_addr(wp1) : get_noc_addr(mcast_sender_x(mc), mcast_sender_y(mc), wp1),
                         l1_pos);
                     if (is_root != 0) {
                         noc_async_write_barrier();  // LOCAL: my own fold reads it back
                     } else {
                         noc.async_writes_flushed();  // DEPARTED -- see PERF 1 note
-                        gather_sem_l1.up(noc, mc.sender_x(), mc.sender_y(), 1);
+                        gather_sem_l1.up(noc, mcast_sender_x(mc), mcast_sender_y(mc), 1);
                     }
                     cb_pop_front(cb_node_out, 1);
                 }
@@ -802,7 +822,7 @@ void kernel_main() {
         //   signal the gather before its pipe exists.
         if constexpr (TREE) {
             if (is_root != 0) {
-                auto sender = mc.sender(noc);
+                auto sender = mc.optional_sender(noc);
                 for (uint32_t blk = 0; blk < num_blocks; ++blk) {
 #ifdef RMS_RESIDUAL_OUT
                     // t first: compute adds block blk (pushing t) before it can produce the partial
@@ -822,14 +842,14 @@ void kernel_main() {
                         const uint32_t stat_dst = mcast_land_base + mcast_land_page * stat_bytes;
                         mcast_land_page = (mcast_land_page + 1 == mcast_land_pages) ? 0 : (mcast_land_page + 1);
                         if constexpr (mc.active) {
-                            sender.send(stat_dst, stat_dst, mcast_bytes);
+                            sender->send(stat_dst, stat_dst, mcast_bytes);
                         }
                         cb_pop_front(cb_stat_handoff, 1);
                     }
                     write_block(blk);
                 }
             } else {
-                auto receiver = mc.receiver(noc);
+                auto receiver = mc.optional_receiver(noc);
                 for (uint32_t blk = 0; blk < num_blocks; ++blk) {
 #ifdef RMS_RESIDUAL_OUT
                     // t first: compute adds block blk (pushing t) before it can produce the partial
@@ -840,14 +860,14 @@ void kernel_main() {
                     {
                         MaybeDeviceZoneScope("writer_mcast_recv");
                         cb_reserve_back(CB_MCAST_LAND, 1);
-                        receiver.receive();
+                        receiver->receive();
                         cb_push_back(CB_MCAST_LAND, 1);
                     }
                     write_block(blk);
                 }
             }
         } else if (is_root != 0) {
-            auto sender = mc.sender(noc);
+            auto sender = mc.optional_sender(noc);
             for (uint32_t blk = 0; blk < num_blocks; ++blk) {
 #ifdef RMS_RESIDUAL_OUT
                 // t first: compute adds block blk (pushing t) before it can produce the partial
@@ -926,7 +946,7 @@ void kernel_main() {
                     const uint32_t stat_dst = mcast_land_base + mcast_land_page * stat_bytes;
                     mcast_land_page = (mcast_land_page + 1 == mcast_land_pages) ? 0 : (mcast_land_page + 1);
                     if constexpr (mc.active) {
-                        sender.send(stat_dst, stat_dst, mcast_bytes);
+                        sender->send(stat_dst, stat_dst, mcast_bytes);
                     }
                     cb_pop_front(cb_stat_handoff, 1);
                 }
@@ -936,9 +956,9 @@ void kernel_main() {
                 write_block(blk);
             }
         } else {
-            auto receiver = mc.receiver(noc);
-            const uint32_t root_x = mc.sender_x();
-            const uint32_t root_y = mc.sender_y();
+            auto receiver = mc.optional_receiver(noc);
+            const uint32_t root_x = mcast_sender_x(mc);
+            const uint32_t root_y = mcast_sender_y(mc);
             for (uint32_t blk = 0; blk < num_blocks; ++blk) {
 #ifdef RMS_RESIDUAL_OUT
                 // t first: compute adds block blk (pushing t) before it can produce the partial
@@ -970,7 +990,7 @@ void kernel_main() {
                 {
                     MaybeDeviceZoneScope("writer_mcast_recv");
                     cb_reserve_back(CB_MCAST_LAND, 1);
-                    receiver.receive();
+                    receiver->receive();
                     cb_push_back(CB_MCAST_LAND, 1);
                 }
 
