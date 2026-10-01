@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include "impl/allocator/allocator.hpp"
 #include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
@@ -1485,6 +1486,14 @@ bool CloseDevice(IDevice* device) {
 }
 
 Program CreateProgram() { return Program(); }
+
+DeviceAddr GetProgramLocalL1Base(const IDevice& device, const CoreRangeSet& cores) {
+    return device.allocator_impl()->persistent_l1().high_water_mark(cores);
+}
+
+DeviceAddr ReserveProgramLocalL1(Program& program, const IDevice& device, const CoreRangeSet& cores) {
+    return program.impl().reserve_program_local_l1(&device, cores);
+}
 
 KernelHandle CreateDataMovementKernel(
     Program& program,

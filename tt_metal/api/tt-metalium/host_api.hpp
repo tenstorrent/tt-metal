@@ -150,6 +150,22 @@ bool CloseDevice(IDevice* device);
 // clang-format on
 Program CreateProgram();
 
+/**
+ * Returns the first L1 address available to a program on all of `cores` after
+ * accounting for live persistent-L1 allocations.
+ *
+ * This is a snapshot. Call ReserveProgramLocalL1 before placing program-local
+ * L1 objects so the returned boundary cannot move for the lifetime of the
+ * program.
+ */
+DeviceAddr GetProgramLocalL1Base(const IDevice& device, const CoreRangeSet& cores);
+
+/**
+ * Seals `cores` against new persistent-L1 allocations for the lifetime of
+ * `program` and returns the committed first address available to that program.
+ */
+DeviceAddr ReserveProgramLocalL1(Program& program, const IDevice& device, const CoreRangeSet& cores);
+
 // clang-format off
 /**
  * Creates a data movement or compute kernel with the given config and adds it to the program.
