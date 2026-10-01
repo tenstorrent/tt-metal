@@ -647,13 +647,13 @@ def test_s_uniform_kv_rollback_needs_no_ack_and_keeps_its_measured_limit(tmp_pat
     assert "hybrid_kv=0\n" in rollback.stdout
     assert "hybrid_kv_status=operator_rollback_uniform\n" in rollback.stdout
     assert "hybrid_kv_layout=uniform_forty_eight_tensor_pairs\n" in rollback.stdout
-    assert "max_model_len=32768\n" in rollback.stdout
+    assert "max_model_len=131072\n" in rollback.stdout
     assert "experimental_overrides=<none>\n" in rollback.stdout
 
     too_long = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
-                       TT_LAGUNA_HYBRID_KV="0", LAGUNA_MAX_MODEL_LEN="65536")
+                       TT_LAGUNA_HYBRID_KV="0", LAGUNA_MAX_MODEL_LEN="262144")
     assert too_long.returncode == 2
-    assert "exceeds the verified p150x4 limit 32768" in too_long.stderr
+    assert "exceeds the verified p150x4 limit 131072" in too_long.stderr
 
 
 def test_s_hybrid_rejects_context_beyond_its_declared_1048576(tmp_path):

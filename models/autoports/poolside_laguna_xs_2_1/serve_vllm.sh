@@ -71,12 +71,12 @@ case "$HF_MODEL" in
     # Hybrid KV (default for S): the 36 sliding layers share block slots with the 12 full layers, so the
     # pool costs 12 layer-equivalents (6.4 KiB/token/chip) and S's declared 1048576 fits: measured
     # 2026-10-01 on p150x4 with the trace region below, 16.4% DRAM free after the decode trace (floor 10%).
-    # Uniform KV (TT_LAGUNA_HYBRID_KV=0 rollback) costs 25.5 KiB/token/chip; its 32768 cap was measured
-    # with the old 1.5 GB trace region (11.4% free) and is kept until re-measured.
+    # Uniform KV (TT_LAGUNA_HYBRID_KV=0, also the prefix-cache mode) costs 25.5 KiB/token/chip: measured
+    # 2026-10-01 with the trace region below, 131072 leaves 29.95% DRAM free after the decode trace.
     MODEL_HYBRID_DEFAULT=1
     MODEL_HYBRID_PROFILES="p150x4"
     MODEL_HYBRID_MAX_MODEL_LEN=1048576
-    MODEL_MAX_MODEL_LEN_CAP=32768
+    MODEL_MAX_MODEL_LEN_CAP=131072
     # trace_region_size is reserved in EVERY DRAM bank (tt_metal allocator.cpp:39): 1.5e9 x 8 banks held
     # 12 GB per chip for a decode trace that measures 27,238,400 B on S. 300 MB per bank leaves 11x headroom.
     MODEL_TRACE_REGION_SIZE=300000000

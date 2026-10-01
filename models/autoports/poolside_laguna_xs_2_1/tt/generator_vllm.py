@@ -168,11 +168,16 @@ class LagunaForCausalLM:
         "supports_sample_on_device": True,
     }
 
-    @staticmethod
-    def _validate_prefix_cache_topology(device_count, enabled):
-        if bool(enabled) and int(device_count) != 2:
+    # Prefix caching needs the streaming (resumable) prefill path, so it is accepted exactly where that path
+    # runs: D2, and D4 for Laguna-S (which needs four chips). The launcher still marks p150x4 experimental.
+    _PREFIX_CACHE_TOPOLOGIES = _STREAMING_PREFILL_TOPOLOGIES
+
+    @classmethod
+    def _validate_prefix_cache_topology(cls, device_count, enabled):
+        if bool(enabled) and int(device_count) not in cls._PREFIX_CACHE_TOPOLOGIES:
             raise RuntimeError(
-                "Laguna prefix caching is qualified only on the p150x2 two-chip topology; "
+                "Laguna prefix caching runs only on the streaming-prefill topologies "
+                f"D in {cls._PREFIX_CACHE_TOPOLOGIES} for {MODEL_ID}; "
                 f"got D={int(device_count)}. Set TT_LAGUNA_PREFIX_CACHE=0."
             )
 

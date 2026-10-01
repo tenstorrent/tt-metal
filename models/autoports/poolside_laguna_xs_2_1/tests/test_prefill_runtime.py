@@ -168,9 +168,15 @@ def test_runtime_path_is_d2_only_and_preserves_cold_single_shot():
     assert calls == [(2048, 64, 64), (4096, 0, 64)]
 
 
-def test_prefix_cache_requires_d2_and_cannot_disable_program_freeze(monkeypatch, expect_error):
+def test_prefix_cache_requires_a_streaming_topology_and_cannot_disable_program_freeze(monkeypatch, expect_error):
     assert LagunaForCausalLM._validate_prefix_cache_topology(2, True) is None
-    with expect_error(RuntimeError, "only on the p150x2"):
+    # D4 streams (and so can resume a cached prefix) only for Laguna-S, which needs four chips.
+    if 4 in LagunaForCausalLM._STREAMING_PREFILL_TOPOLOGIES:
+        assert LagunaForCausalLM._validate_prefix_cache_topology(4, True) is None
+    else:
+        with expect_error(RuntimeError, "streaming-prefill topologies"):
+            LagunaForCausalLM._validate_prefix_cache_topology(4, True)
+    with expect_error(RuntimeError, "streaming-prefill topologies"):
         LagunaForCausalLM._validate_prefix_cache_topology(1, True)
 
     fake_model = SimpleNamespace(precision_policy=SimpleNamespace(kv_cache=object()))
