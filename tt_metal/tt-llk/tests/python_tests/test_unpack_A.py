@@ -38,6 +38,7 @@ from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
+    DEST_SYNC,
     DISABLE_SRC_ZERO_FLAG,
     INPUT_DIMENSIONS,
     NUM_BLOCKS,
@@ -544,6 +545,7 @@ def test_unpack_comprehensive(
                 partial_face_math=partial_face,
             ),
             DISABLE_SRC_ZERO_FLAG(disable_src_zero),
+            DEST_SYNC(),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(transpose_of_faces),
@@ -703,6 +705,7 @@ def test_unpack_A_targeted_tensor_shape_coverage(
                 partial_face_math=face_r_dim < 16,
             ),
             DISABLE_SRC_ZERO_FLAG(False),
+            DEST_SYNC(),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
