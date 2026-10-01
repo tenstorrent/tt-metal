@@ -418,7 +418,7 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_tile_map=adaln_tile_map,
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             traced=traced,
-            tracer_trace_key=pad_to,
+            tracer_trace_key=(pad_to, adaln_tile_map is not None),
         )
 
         hidden = self.norm_out(

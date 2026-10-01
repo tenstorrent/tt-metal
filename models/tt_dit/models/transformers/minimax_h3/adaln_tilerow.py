@@ -47,4 +47,8 @@ def tilerow_remap(
     for d in range(sp_factor):
         rows = tiles[d][mixed[d]].reshape(-1)
         expanded[d, num_rows * tile : num_rows * tile + rows.numel()] = rows
+    if int(tile_map.max()) >= num_rows + max_mixed_tiles:
+        raise ValueError(
+            f"tile map entry {int(tile_map.max())} exceeds the expanded table's {num_rows + max_mixed_tiles} tile rows"
+        )
     return tile_map.reshape(-1).to(torch.int32), expanded.reshape(-1).to(torch.int32)

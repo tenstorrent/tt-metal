@@ -172,6 +172,10 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             map.physical_volume() == map.padded_shape()[-1],
             "affine_tile_row_map must be a single row [1, 1, 1, T], got {}",
             map.padded_shape());
+        TT_FATAL(
+            map.buffer()->num_pages() == 1u,
+            "affine_tile_row_map must occupy one buffer page (the reader loads a single page), got {}",
+            map.buffer()->num_pages());
         const uint32_t input_tile_rows = input.physical_volume() / padded[3] / TILE_HEIGHT;
         TT_FATAL(
             map.logical_shape()[-1] >= input_tile_rows,

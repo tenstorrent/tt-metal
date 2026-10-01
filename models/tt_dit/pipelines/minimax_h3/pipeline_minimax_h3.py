@@ -2315,8 +2315,8 @@ class MiniMaxH3Pipeline:
         if transformer is None:
             return False
         run_blocks = type(transformer).run_blocks
-        tracer = run_blocks._tracers_keyed.get(transformer, {}).get(rung)
-        return tracer is not None and tracer.trace_captured
+        tracers = run_blocks._tracers_keyed.get(transformer, {})
+        return any(key[0] == rung and tracer.trace_captured for key, tracer in tracers.items())
 
     def release_traces(self) -> None:
         decoder = self._audio_decoder
