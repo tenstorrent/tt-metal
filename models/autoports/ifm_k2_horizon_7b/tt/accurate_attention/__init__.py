@@ -101,3 +101,17 @@ def accurate_attention(
         packed_gqa,
         str(Path(kernel).with_name("writer_packed_gqa.cpp")) if packed_gqa else "",
     )
+
+
+def accurate_flash_decode(q, k, v, page_table, cur_pos, *, max_cores_per_head=16, k_chunk_size=128):
+    """Paged causal decode with the stock split-K contract and FP32 recurrence.
+
+    Same tensors as ``paged_scaled_dot_product_attention_decode``. Stock work split and
+    tree reduction; accurate exponentials, FP32 scores and FP32 SFPU recurrence at
+    every per-chunk and tree merge. HiFi4, as the accurate fallback.
+    """
+    module, kernel = _load()
+    decode = Path(kernel).with_name("sdpa_flash_decode.cpp")
+    return module.flash_decode(
+        q, k, v, page_table, cur_pos, max_cores_per_head, k_chunk_size, str(decode), str(decode.parent)
+    )

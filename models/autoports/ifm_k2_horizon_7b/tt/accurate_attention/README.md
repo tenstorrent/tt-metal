@@ -43,3 +43,20 @@ not repeat with context length.
 `fp32_output_accumulator=False` is an isolated diagnostic switch: denominator
 arithmetic stays repaired while numerator storage remains BF16. Production
 callers should use the default `True`.
+
+## Accurate flash decode
+
+`accurate_flash_decode(q, k_cache, v_cache, page_table, cur_pos, max_cores_per_head=..., k_chunk_size=...)`
+keeps the stock `paged_scaled_dot_product_attention_decode` tensor contract, reader, writer, split-K work
+distribution and tree reduction, and removes the stock path's precision losses:
+
+* half-tile (16x32) CBs are promoted to 32x32 tiles, so the kernel runs `VectorMode::RC` and the accurate,
+  clamped exponential (stock half-tile decode takes the approximate branch);
+* scores, outputs, sums, correction factors and tree-exchange buffers are FP32, and recurrence CBs are
+  `UnpackToDestFp32`. Per-chunk and tree merges run on SFPU (`accurate_decode.hpp`);
+* row sums are `P @ col_identity` in FP32 destination registers, because `reduce_tile<SUM>` does not handle FP32
+  score tiles.
+
+The generated kernel `.build/<fingerprint>/sdpa_flash_decode.cpp` comes from the stock
+`sdpa_flash_decode.cpp` with guarded substitutions. It runs at HiFi4, as the chunked fallback does. The
+model uses it beyond the stock decode bound. Evidence: `doc/long_context_perf/FINDINGS.md`.

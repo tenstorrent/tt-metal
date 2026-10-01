@@ -18,6 +18,7 @@ ROOT = HERE.parents[4]
 BUILD = HERE / ".build"
 CORE = ROOT / "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute"
 DATAFLOW = CORE.parent / "dataflow"
+DECODE = ROOT / "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels"
 
 
 def sha256(path):
@@ -83,6 +84,82 @@ def prepare_packed_writer():
     )
 
 
+def prepare_decode_kernel():
+    """Stock split-K flash decode with accurate exp and FP32 SFPU recurrence.
+
+    Reader, writer, work split and tree schedule stay stock. The binding switches
+    the recurrence CBs to FP32/UnpackToDestFp32; this kernel routes every read of
+    them through accurate_decode.hpp. Guarded substitutions fail if upstream changes.
+    """
+    kernel = (DECODE / "compute/sdpa_flash_decode.cpp").read_text()
+    kernel = replace_checked(
+        kernel,
+        '#include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"\n',
+        '#include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"\n'
+        '#include "accurate_decode.hpp"\n',
+        1,
+    )
+    kernel = replace_checked(
+        kernel,
+        "    constexpr bool untilize_output = tilize_q;\n",
+        "    constexpr bool untilize_output = tilize_q;\n"
+        "    // FP32 recurrence CBs are read only through A2D copies (no untilize/sink/mask paths).\n"
+        "    // Full tiles (binding) give VectorMode::RC, hence the accurate clamped exponential;\n"
+        "    // stock half-tile decode selects VectorMode::R and its approximate exponential.\n"
+        "    static_assert(is_causal && !tilize_q && !use_attention_sink && !use_attention_mask && !use_half_tile);\n",
+        1,
+    )
+    start = "                    /* PREV_SUM *= EXP_MAX_DIFF */\n"
+    end = "add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);\n"
+    if kernel.count(start) != 1 or kernel.count(end) != 1:
+        raise RuntimeError("Pinned flash-decode recurrence markers changed")
+    block = kernel[kernel.index(start) : kernel.index(end) + len(end)]
+    for statement in (
+        "mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);",
+        "cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im);",
+        "add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);",
+    ):
+        if block.count(statement) != 1:
+            raise RuntimeError("Pinned flash-decode recurrence block changed: " + statement)
+    kernel = replace_checked(
+        kernel,
+        block,
+        "                    /* CUR_SUM += PREV_SUM * EXP_MAX_DIFF (FP32 SFPU) */\n"
+        "                    k2d_sum_update(cb_cur_sum, cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);\n"
+        "                    /* OUT_ACC = OUT_ACC * EXP_MAX_DIFF + OUT_IM (FP32 SFPU) */\n"
+        "                    k2d_out_update<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_out_im, cb_exp_max_diff);\n",
+        1,
+    )
+    kernel = replace_checked(
+        kernel,
+        "reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(\n"
+        "                    cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);\n",
+        "k2d_row_sum<Sq_chunk_t>(cb_qk_im, tt::CBIndex::c_11, cb_cur_sum, Sk_chunk_t_dynamic);\n",
+        1,
+    )
+    kernel = replace_checked(
+        kernel, "correction_block<scale_fp32, vector_mode>(", "k2d_correction_block<scale_fp32, vector_mode>(", 1
+    )
+    kernel = replace_checked(
+        kernel,
+        "                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);\n"
+        "                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im_2, cb_exp_max_diff_2);\n"
+        "\n"
+        "                    // OUT_ACC = OUT_ACC + OUT_ACC_2\n"
+        "                    add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);\n",
+        "                    k2d_out_merge<Sq_chunk_t, vDHt>(\n"
+        "                        cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im_2, cb_exp_max_diff_2);\n",
+        1,
+    )
+    kernel = replace_checked(
+        kernel,
+        "            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_prev_sum);\n",
+        "            k2d_scale_output<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_prev_sum);\n",
+        1,
+    )
+    return replace_checked(kernel, "move_block<true>(", "k2d_move<true>(", 10)
+
+
 def prepare_kernel():
     common = (CORE / "compute_common.hpp").read_text()
     common = replace_checked(common, "enum SDPAType {", '#include "accurate_stats.hpp"\n\nenum SDPAType {', 1)
@@ -124,8 +201,16 @@ def prepare_kernel():
         kernel, '#include "compute_streaming.hpp"', f'#include "{CORE / "compute_streaming.hpp"}"', 1
     )
     writer = prepare_packed_writer()
+    decode = prepare_decode_kernel()
     fingerprint = hashlib.sha256(
-        (common + kernel + writer + (HERE / "accurate_stats.hpp").read_text()).encode()
+        (
+            common
+            + kernel
+            + writer
+            + (HERE / "accurate_stats.hpp").read_text()
+            + decode
+            + (HERE / "accurate_decode.hpp").read_text()
+        ).encode()
     ).hexdigest()[:16]
     folder = BUILD / fingerprint
     folder.mkdir(parents=True, exist_ok=True)
@@ -133,6 +218,8 @@ def prepare_kernel():
     (folder / "sdpa.cpp").write_text(kernel)
     (folder / "accurate_stats.hpp").write_text((HERE / "accurate_stats.hpp").read_text())
     (folder / "writer_packed_gqa.cpp").write_text(writer)
+    (folder / "sdpa_flash_decode.cpp").write_text(decode)
+    (folder / "accurate_decode.hpp").write_text((HERE / "accurate_decode.hpp").read_text())
     return folder
 
 
@@ -161,6 +248,8 @@ def build():
         CORE / "compute_common.hpp",
         CORE / "sdpa.cpp",
         HERE / "accurate_stats.hpp",
+        HERE / "accurate_decode.hpp",
+        DECODE / "compute/sdpa_flash_decode.cpp",
         HERE / "binding.cpp",
         HERE / "build.py",
         HERE / "__init__.py",
@@ -171,7 +260,15 @@ def build():
     ]
     sources += sorted(CORE.glob("*.hpp")) + sorted(DATAFLOW.glob("*.hpp"))
     generated = [
-        folder / name for name in ("compute_common.hpp", "sdpa.cpp", "accurate_stats.hpp", "writer_packed_gqa.cpp")
+        folder / name
+        for name in (
+            "compute_common.hpp",
+            "sdpa.cpp",
+            "accurate_stats.hpp",
+            "writer_packed_gqa.cpp",
+            "sdpa_flash_decode.cpp",
+            "accurate_decode.hpp",
+        )
     ]
     sources += generated
     provenance = {
