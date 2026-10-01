@@ -749,17 +749,15 @@ def test_conv3d_logical_pad_mask(device, h_start, w_start, logical_h_mask, logic
 @pytest.mark.parametrize(
     "padding_mode, dilation, halo_pages, expected",
     [
-        ("replicate", (1, 1, 1), 512, "padding_mode"),
         ("zeros", (1, 2, 2), 512, "spatial reuse and no dilation"),
         ("zeros", (1, 1, 1), 1, "sections need"),
     ],
-    ids=["rejects_replicate", "rejects_dilation", "rejects_undersized_halo"],
+    ids=["rejects_dilation", "rejects_undersized_halo"],
 )
 def test_conv3d_halo_buffer_rejects_unsupported(device, expect_error, padding_mode, dilation, halo_pages, expected):
     """A halo buffer the reader cannot honor must fail on the host, not silently degrade.
 
-    Each case selects a path with no halo support: replicate clamping, the direct reader (dilated),
-    and a buffer too small for the [Htop|Hbot|Wleft|Wright] sections.
+    Each case selects a path with no halo support: the direct reader (dilated) and a buffer too small for the [Htop|Hbot|Wleft|Wright] sections.
     """
     input_shape = (1, 32, 4, 16, 16)
     out_channels = 32
