@@ -327,10 +327,28 @@ void kernel_main() {
     const uint32_t source_group_size = packed_kv_source_group_size(
         GROUPED_KV_SOURCE_COUNT, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask);
     const bool packed_sources = source_group_size > 1;
-    const PackedKVGroupPlan packed_kv{
-        packed_kv_source_tiles(kv_local_padded_Nt, logical_nt, kv_region_Nt, ring_size), source_group_size, Sk_chunk_t};
+    const PackedKVGroupPlan packed_kv_base{
+        packed_kv_source_tiles(kv_local_padded_Nt, logical_nt, kv_region_Nt, ring_size),
+        source_group_size,
+        Sk_chunk_t,
+        kv_region_Nt};
     const uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
+    // Rows of newest slabs each pass appends, from the route's full arrival order.
+    uint32_t packed_pass_rows[32];
+    if (packed_sources) {
+        auto preview = fused_op_indexer.seq;
+        packed_kv_pass_rows(
+            ring_size,
+            source_group_size,
+            [&](uint32_t) {
+                return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                    preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
+            },
+            packed_pass_rows);
+    }
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+        const PackedKVGroupPlan packed_kv =
+            packed_kv_pass_plan(packed_kv_base, packed_sources ? packed_pass_rows[ring_iter] : 0);
         // Read this iteration's remainder ID and derive its count from the fixed base range.
         // Indexed by ACTIVE ordinal, not absolute ring_iter -- see rotated_active_ordinal. Compute reads
         // the same device-derived mask the reader published through cb_kv_pad_derived, so the ordinal
@@ -607,7 +625,8 @@ void kernel_main() {
                 ksplit_k_range.begin,
                 ksplit_k_range.end,
                 packed_sources ? packed_source_ids : nullptr,
-                packed_sources ? source_group_size : 0);
+                packed_sources ? source_group_size : 0,
+                packed_sources ? packed_pass_rows[ring_iter] : 0);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<
