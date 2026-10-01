@@ -426,7 +426,7 @@ inline void calculate_sdpa_pa_bias() {
 #endif
 #endif
 
-#if defined(SDPA_PA) && defined(SDPA_PA_DETECT)
+#if defined(SDPA_PA) && (defined(SDPA_PA_DETECT) || defined(SDPA_PA_PCHECK))
 // Overflow detection result (perf research: computed, not yet acted on).
 static volatile uint32_t sdpa_pa_overflow = 0;
 #endif
@@ -1966,6 +1966,20 @@ static void sdpa_inner_loop_step(
         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+#if defined(SDPA_PA) && defined(SDPA_PA_PCHECK)
+        // Overflow detection cost probe: rowmax(P) = exp(growth - tau), reduced after the drain barrier
+        // (all P published) into CB 8; UNPACK scans it at the end of the step.
+        if (!is_first_iter) {
+            constexpr uint32_t pa_check_cb = 8;
+            CircularBuffer(pa_check_cb).reserve_back(Sq_chunk_t);
+            for (uint32_t g = 0; g < qktv_q_num_subblocks; ++g) {
+                configure_single_tile_pack(pa_check_cb);
+                reduce_c_row_group<cb_qkt_im, cb_identity_scale_in, KT_stride, scale_fp32, true>(
+                    pa_check_cb, prev.max, g, false, qktv_h, active_Sk, false, false);
+            }
+            CircularBuffer(pa_check_cb).push_back(Sq_chunk_t);
+        }
+#endif
 #if defined(SDPA_PA) && defined(SDPA_PA_DENOM)
 // MATH_FIDELITY exists only in the math-thread build, so this is used inside MATH(...) only.
 #define PA_DENOM_FIDELITY (MATH_FIDELITY == MathFidelity::LoFi ? MathFidelity::HiFi2 : MATH_FIDELITY)
@@ -2387,6 +2401,27 @@ static void sdpa_inner_loop_step(
 
         // All rows pushed individually — no bulk push needed.
 
+#if defined(SDPA_PA) && defined(SDPA_PA_PCHECK)
+        if (!is_first_iter) {
+            constexpr uint32_t pa_check_cb = 8;
+            CircularBuffer(pa_check_cb).wait_front(Sq_chunk_t);
+            UNPACK({
+                uint32_t grew = 0;
+                for (uint32_t t = 0; t < Sq_chunk_t; ++t) {
+                    auto* p_max = reinterpret_cast<volatile uint32_t*>(
+                        get_tile_l1_byte_address(get_operand_id(pa_check_cb), t));
+                    for (uint32_t face = 0; face < 2; ++face) {
+                        for (uint32_t r = 0; r < 16; ++r) {
+                            // P >= 0: BF16 bits order like the values. 0x3380 = 2^-24 (growth > 4 octaves).
+                            grew |= (p_max[face * 256 + r * 8] & 0x7fffu) > 0x3380u;
+                        }
+                    }
+                }
+                sdpa_pa_overflow = sdpa_pa_overflow | grew;
+            })
+            CircularBuffer(pa_check_cb).pop_front(Sq_chunk_t);
+        }
+#endif
         CircularBuffer(cb_v_in).pop_front(KT_stride * vDHt);
         CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
     }
