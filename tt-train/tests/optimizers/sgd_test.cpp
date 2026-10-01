@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <string_view>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -425,6 +426,61 @@ TEST_F(SGDLateMomentumTest, CompositeFirstLateUpdateSeedsRawGradient) {
 
 using SGDValidationTest = SGDLateMomentumTest;
 
+namespace {
+
+constexpr std::string_view kSGDAliasDiagnostic =
+    "SGD optimizer requires Parameter/output and Momentum Buffer to use non-overlapping device storage.";
+
+ttnn::Tensor make_sgd_alias_test_tensor(uint32_t seed) {
+    constexpr std::array<std::size_t, 4> shape = {1, 1, 32, 32};
+    return to_tt(ttml::test_utils::make_uniform_xarray<float>(shape, 0.25F, 1.0F, seed));
+}
+
+ttnn::Tensor run_alias_test_sgd(
+    const ttnn::Tensor& param, const ttnn::Tensor& grad, const std::optional<ttnn::Tensor>& momentum_buffer) {
+    return ttml::metal::sgd(
+        param,
+        grad,
+        /* lr */ 0.25F,
+        /* momentum */ 0.5F,
+        /* dampening */ 0.0F,
+        /* weight_decay */ 0.0F,
+        /* nesterov */ false,
+        momentum_buffer);
+}
+
+void expect_param_momentum_alias_rejected(
+    const ttnn::Tensor& param, const ttnn::Tensor& grad, const ttnn::Tensor& momentum_buffer) {
+    bool caught = false;
+    try {
+        (void)run_alias_test_sgd(param, grad, momentum_buffer);
+    } catch (const std::exception& error) {
+        caught = true;
+        EXPECT_NE(std::string_view(error.what()).find(kSGDAliasDiagnostic), std::string_view::npos)
+            << "unexpected SGD validation diagnostic: " << error.what();
+    } catch (...) {
+        caught = true;
+        ADD_FAILURE() << "SGD alias validation threw a non-standard exception";
+    }
+    EXPECT_TRUE(caught) << "SGD accepted overlapping Parameter/output and Momentum Buffer storage";
+}
+
+class CacheMissDisabler {
+public:
+    explicit CacheMissDisabler(tt::tt_metal::distributed::MeshDevice& device) : m_device(device) {
+        m_device.set_program_cache_misses_allowed(false);
+    }
+
+    ~CacheMissDisabler() {
+        m_device.set_program_cache_misses_allowed(true);
+    }
+
+private:
+    tt::tt_metal::distributed::MeshDevice& m_device;
+};
+
+}  // namespace
+
 TEST_F(SGDValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
     using namespace ttml;
 
@@ -444,4 +500,77 @@ TEST_F(SGDValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
         /* weight_decay */ 0.0f,
         /* nesterov */ false,
         /* momentum_buffer */ std::nullopt));
+}
+
+TEST_F(SGDValidationTest, RejectsParamMomentumAliasOnColdPath) {
+    auto& device = ttml::autograd::ctx().get_device();
+    device.enable_program_cache();
+    device.clear_program_cache();
+
+    auto param = make_sgd_alias_test_tensor(201U);
+    auto grad = make_sgd_alias_test_tensor(202U);
+    const auto entries_before = device.num_program_cache_entries();
+
+    expect_param_momentum_alias_rejected(param, grad, param);
+
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before)
+        << "cold alias validation must reject before inserting an SGD program";
+}
+
+TEST_F(SGDValidationTest, RejectsParamMomentumViewAliasOnCacheHit) {
+    auto& device = ttml::autograd::ctx().get_device();
+    device.enable_program_cache();
+    device.clear_program_cache();
+
+    auto prime_param = make_sgd_alias_test_tensor(203U);
+    auto prime_grad = make_sgd_alias_test_tensor(204U);
+    auto prime_momentum = make_sgd_alias_test_tensor(205U);
+    auto prime_output = run_alias_test_sgd(prime_param, prime_grad, prime_momentum);
+    (void)ttml::core::to_xtensor(prime_output);
+    const auto entries_after_prime = device.num_program_cache_entries();
+    ASSERT_GT(entries_after_prime, 0U) << "priming SGD call did not populate the program cache";
+
+    auto param = make_sgd_alias_test_tensor(206U);
+    auto grad = make_sgd_alias_test_tensor(207U);
+    auto momentum_view = param.reshape(param.logical_shape(), param.padded_shape());
+
+    {
+        CacheMissDisabler disallow_cache_misses(device);
+        expect_param_momentum_alias_rejected(param, grad, momentum_view);
+    }
+    EXPECT_EQ(device.num_program_cache_entries(), entries_after_prime)
+        << "view-alias rejection unexpectedly compiled a new SGD program";
+}
+
+TEST_F(SGDValidationTest, AllowsSafeGradientAliasesOnCacheHit) {
+    auto& device = ttml::autograd::ctx().get_device();
+    device.enable_program_cache();
+    device.clear_program_cache();
+
+    auto prime_param = make_sgd_alias_test_tensor(208U);
+    auto prime_grad = make_sgd_alias_test_tensor(209U);
+    auto prime_momentum = make_sgd_alias_test_tensor(210U);
+    auto prime_output = run_alias_test_sgd(prime_param, prime_grad, prime_momentum);
+    (void)ttml::core::to_xtensor(prime_output);
+    const auto entries_after_prime = device.num_program_cache_entries();
+    ASSERT_GT(entries_after_prime, 0U) << "priming SGD call did not populate the program cache";
+
+    CacheMissDisabler disallow_cache_misses(device);
+
+    auto param_and_grad = make_sgd_alias_test_tensor(211U);
+    auto distinct_momentum = make_sgd_alias_test_tensor(212U);
+    EXPECT_NO_THROW({
+        auto output = run_alias_test_sgd(param_and_grad, param_and_grad, distinct_momentum);
+        (void)ttml::core::to_xtensor(output);
+    }) << "exact Parameter/Gradient alias is block-local read-before-write safe";
+
+    auto distinct_param = make_sgd_alias_test_tensor(213U);
+    auto grad_and_momentum = make_sgd_alias_test_tensor(214U);
+    EXPECT_NO_THROW({
+        auto output = run_alias_test_sgd(distinct_param, grad_and_momentum, grad_and_momentum);
+        (void)ttml::core::to_xtensor(output);
+    }) << "exact Gradient/Momentum Buffer alias is block-local read-before-write safe";
+
+    EXPECT_EQ(device.num_program_cache_entries(), entries_after_prime)
+        << "safe gradient aliases unexpectedly compiled a new SGD program";
 }

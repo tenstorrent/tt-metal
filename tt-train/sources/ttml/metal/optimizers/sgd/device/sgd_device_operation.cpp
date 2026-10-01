@@ -4,12 +4,34 @@
 
 #include "sgd_device_operation.hpp"
 
+#include <algorithm>
 #include <enchantum/enchantum.hpp>
 
 #include "sgd_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::optimizers::sgd::device {
+
+namespace {
+
+bool tensors_may_physically_overlap(const ttnn::Tensor& lhs, const ttnn::Tensor& rhs) {
+    const auto& lhs_storage = lhs.device_storage();
+    const auto& rhs_storage = rhs.device_storage();
+    const auto& lhs_root = lhs_storage.get_root_mesh_buffer();
+    const auto& rhs_root = rhs_storage.get_root_mesh_buffer();
+
+    if (lhs.device() != rhs.device()) {
+        return false;
+    }
+
+    const auto rhs_coords = rhs_storage.get_coords();
+    const bool coordinates_overlap = std::ranges::any_of(
+        lhs_storage.get_coords(),
+        [&rhs_coords](const auto& lhs_coord) { return std::ranges::find(rhs_coords, lhs_coord) != rhs_coords.end(); });
+    return coordinates_overlap && (&lhs_root == &rhs_root || lhs_root.address() == rhs_root.address());
+}
+
+}  // namespace
 
 void SGDDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -79,6 +101,9 @@ void SGDDeviceOperation::validate_on_program_cache_miss(
     if (momentum_buffer.has_value()) {
         check_tensor(
             momentum_buffer.value(), "Momentum Buffer", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+        TT_FATAL(
+            !tensors_may_physically_overlap(param, momentum_buffer.value()),
+            "SGD optimizer requires Parameter/output and Momentum Buffer to use non-overlapping device storage.");
     }
 
     const auto momentum = args.momentum;
