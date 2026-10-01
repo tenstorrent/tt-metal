@@ -20,13 +20,13 @@ void bind_experimental_fabric_all_gather_operation(nb::module_& mod) {
             (a drop-in replacement): a row-major or tile-layout DRAM tensor is gathered over one
             device-mesh axis, or over the whole 2D mesh, into a preallocated DRAM output.
 
-            Per chip, per ring direction and per link one link worker core reads (its own shard from
-            the input, relayed shards from the output) and sends each chunk one fabric hop into the same
-            pages of the neighbour's output; copy cores write the chip's own shard (and convert an
-            ND-sharded input). Link workers sit as close as the core grid allows to their link's Ethernet
-            core. Chunks are runs of pages consecutive in one DRAM bank, one packet each; the last packet
-            of every shard a link worker sends increments the neighbour's arrival counter, and the
-            neighbour relays that shard once it has arrived. Calls are fenced (no chip writes into a
+            Per chip, per ring direction and per link one fabric link worker core reads (its own shard
+            from the input, forwarded shards from the output) and sends each fabric chunk one fabric hop
+            into the same pages of the neighbour's output; local copy cores write the chip's own shard
+            (and convert an ND-sharded input). Link workers sit as close as the core grid allows to their
+            link's Ethernet core. A fabric chunk is pages that are physically contiguous in one DRAM bank,
+            one packet each; the last packet of every shard a link worker sends increments the
+            neighbour's shards-arrived counter, and the neighbour forwards that shard once it has arrived. Calls are fenced (no chip writes into a
             neighbour's output before the neighbour has started the same call). Even rings are balanced
             (the opposite shard travels half each way). With ``cluster_axis=None`` on a torus whose
             sides are both at least 3, the mesh is covered by two edge-disjoint Hamiltonian cycles, so
@@ -54,11 +54,11 @@ void bind_experimental_fabric_all_gather_operation(nb::module_& mod) {
                 input_batch_index: Optional batch slot selected from a persistent input cache.
                     When set, input has shape [B, 1, ...], output has batch 1, and only that
                     slot is transported.
-                gathered_dim_size: Optional active global gathered extent along ``dim``. The
+                gathered_dim_size: Optional valid global gathered length along ``dim``. The
                     output tensor must still be allocated at its worst-case full gathered size.
                     Each rank writes its active local prefix into that rank's fixed worst-case
                     slot; bytes outside those prefixes are left unchanged. ``gathered_dim_size``
-                    is the total valid extent, not a contiguous output prefix: consumers must
+                    is the total valid length, not a contiguous output prefix: consumers must
                     preserve the fixed per-rank stride when locating every rank's valid data.
                 input_batch_index_tensor: TRACE-SAFE form of ``input_batch_index``. A 1-element
                     uint32 ROW_MAJOR DRAM tensor holding the USER id; the reader reads it on-device
@@ -76,8 +76,8 @@ void bind_experimental_fabric_all_gather_operation(nb::module_& mod) {
                     ``input_batch_index_tensor`` path.
                 gathered_prefix_tensor: TRACE-SAFE form of ``gathered_dim_size``. A 1-element uint32
                     ROW_MAJOR DRAM tensor holding this chunk's START position in the gathered dim; the
-                    reader derives the active extent on-device as
-                    ``min(round_up(start + gathered_slab_global, gathered_slab_global), full_extent)``
+                    reader derives the valid length on-device as
+                    ``min(round_up(start + gathered_slab_global, gathered_slab_global), full_length)``
                     and recomputes its own page partition from it. Use this instead of
                     ``gathered_dim_size`` whenever the call is captured into a ttnn trace: the scalar
                     grows every chunk, and a replay would re-gather only the captured chunk's prefix.
