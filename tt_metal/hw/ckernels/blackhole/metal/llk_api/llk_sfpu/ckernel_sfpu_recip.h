@@ -86,13 +86,8 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations) {
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
     }
 #else
-    // Two vectors in flight, a in LREG0 (y) and LREG1 (x), b in LREG2 (y) and LREG3 (x). Macro 0 loads y and
-    // schedules y = arecip(y) and a copy of the loaded value into L[LREG7] for the next SFPU issue; that copy is
-    // parked in LREG6 and x is read from DEST again by a plain SFPLOAD in that issue slot, so both vectors use the
-    // one macro and the one LREG7 setting. The correction is the same five instructions per vector as the
-    // single-vector form (patch y[15:0], e = x * y - 1, e >> 16, y += e, store), interleaved a, b so that no
-    // instruction reads the result of the one issued just before it: 14 issues per pair without an SFPNOP or a
-    // scoreboard hold, against 7 issues, one SFPNOP and one hold per vector.
+    // Two vectors in flight, a in LREG0 and LREG1, b in LREG2 and LREG3, interleaved so that no instruction reads
+    // the result of the one issued just before it.
     constexpr int ya = p_sfpu::LREG0;
     constexpr int xa = p_sfpu::LREG1;
     constexpr int yb = p_sfpu::LREG2;

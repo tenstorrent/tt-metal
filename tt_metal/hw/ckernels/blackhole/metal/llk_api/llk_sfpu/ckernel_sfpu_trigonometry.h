@@ -716,8 +716,7 @@ sfpi_inline void _calculate_cosh_row_() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
     if constexpr (is_fp32_dest_acc_en) {
-        // The 32-bit DEST row (the longer exp polynomial and reciprocal refinement) does not fit the replay buffer;
-        // unrolled, the compiler emits the overflow straight-line and the tile runs 2.9 cycles slower than rolled.
+        // The 32-bit DEST row does not fit the replay buffer, so its loop stays rolled.
         for (int d = 0; d < ITERATIONS; d++) {
             _calculate_cosh_row_<is_fp32_dest_acc_en>();
         }

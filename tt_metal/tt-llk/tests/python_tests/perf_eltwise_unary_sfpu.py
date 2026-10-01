@@ -395,9 +395,7 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
     ).run(perf_report)
 
 
-# The approximate exp with its input clamping on: the compute API default (InputClamping::ClampToNegative), which
-# the main sweep does not measure (CLAMP_NEGATIVE(False) there); one 32-vector call per tile, as exp_tile issues it
-# for a full tile.
+# The approximate exp with its input clamping on, the compute API default, which the main sweep does not measure.
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b], same=True),

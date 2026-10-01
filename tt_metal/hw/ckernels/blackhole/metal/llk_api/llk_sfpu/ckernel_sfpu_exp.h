@@ -488,16 +488,12 @@ sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in) {
     return out;
 }
 
-// The clamped approximate exponential's two LOADMACRO passes over N vectors, N = 8 (one face, the form the compute
-// API's VectorMode::RC issues) or 32 (a whole 32x32 tile in one call). The macro programming is exp_init's and the
-// per-vector sequence is the one of the hand-unrolled 8-vector code in calculate_exponential: every LOADMACRO carries
-// its DEST row offset as an immediate (ADDR_MOD_7 does not increment) and rotates the loaded value through LREG0 to
-// LREG3, so N vectors are the same instructions as N / 8 faces without the address increments between the faces.
+// The clamped approximate exponential over N vectors (8 or 32): every LOADMACRO carries its DEST row offset as an
+// immediate (ADDR_MOD_7 does not increment) and rotates the loaded value through LREG0 to LREG3.
 template <int VEC, int N>
 sfpi_inline void _exp_approx_clamped_sanitise_vector_() {
-    // Macro sequence register 1: load, SFPSWAP against LREG14 (-88.5), store back. The SWAP takes two cycles and
-    // is not pipelined, so an SFPNOP follows every LOADMACRO but the last: the exponential macro that comes next
-    // does not use the SIMPLE unit at once.
+    // Macro sequence 1: load, SFPSWAP against LREG14 (-88.5), store back. The SWAP takes two cycles, so an SFPNOP
+    // follows every LOADMACRO but the last.
     TTI_SFPLOADMACRO(4 | (VEC & 3), 0, ADDR_MOD_7, 2 * VEC);
     if constexpr (VEC + 1 < N) {
         TTI_SFPNOP;
@@ -515,11 +511,6 @@ sfpi_inline void _exp_approx_clamped_exp_pass_(std::integer_sequence<int, VEC...
     (TTI_SFPLOADMACRO(VEC & 3, 0, ADDR_MOD_7, 2 * VEC), ...);
 }
 
-// The exponential programs that process a whole 32x32 tile in one call of 32 iterations. The compute API issues
-// those once per tile instead of once per face (VectorMode::RC, 8 iterations, four calls with two DEST address
-// increments between them): the same instructions per vector, without the frame and the set-up of every call, which
-// cost the approximate exponential 35 to 38 cycles per tile and the accurate bf16 one 21. The fp32 accurate body is
-// an sfpi row loop and keeps the per-face walk.
 template <bool SCALE_EN, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std::uint32_t exp_base_scale_factor) {
     if constexpr (SCALE_EN) {
@@ -568,8 +559,6 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             ITERATIONS == 8 || ITERATIONS == 32,
             "The clamped approximate exponential processes 8 vectors (one face) or 32 (a whole tile) per call.");
         if constexpr (ITERATIONS == 32) {
-            // A whole 32x32 tile in one call: the sanitising pass over the 32 vectors, then the exponential pass,
-            // the same macros and per-vector instructions as the 8-vector code below.
             _exp_approx_clamped_sanitise_pass_(std::make_integer_sequence<int, 32>{});
             _exp_approx_clamped_exp_pass_(std::make_integer_sequence<int, 32>{});
             // Let the final exponential macro complete before the caller's next SFPU instruction.
