@@ -48,7 +48,10 @@ def get_tile_counts(formats, mathop, reduce_pool):
     """One tile always; four tiles where the kernel reduces a block per call."""
     if mathop == MathOperation.ReduceRow:
         return [1, 4]
-    if reduce_pool in (ReducePool.Max, ReducePool.Min) and not formats.input_format.is_integer():
+    if (
+        reduce_pool in (ReducePool.Max, ReducePool.Min)
+        and not formats.input_format.is_integer()
+    ):
         return [1, 4]
     return [1]
 

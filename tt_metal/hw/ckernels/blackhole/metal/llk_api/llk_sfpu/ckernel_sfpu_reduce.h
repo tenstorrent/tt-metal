@@ -364,7 +364,7 @@ inline void perform_reduce_col_sum_avg() {
 // windows below survive a row reduce under one shared init (sfpu_reduce_multidim_test.cpp REDUCE_ORDER).
 //
 // Replay slots (REPLAY_BUF_SIZE = 32 per thread; the FPU ops' windows start at ckernel::math::replay_buf_offset = 16):
-//   init_reduce_sum_avg:                [0, 9)   column tree-add windows; row SUM/AVG replays [0, 6)
+//   init_reduce_sum_avg:                [0, 6)   tree-add window (column and row SUM/AVG; the column half tree is inline)
 //   init_reduce_max_min:                [0, 11)  LOADMACRO column window (float, UInt32)
 //   init_reduce_max_min_int32:          [0, 3)   manual 3-swap window (UInt16 in 32-bit Dest)
 //   init_reduce_max_min_int32_signed:   [0, 15)  signed Int32 column window
