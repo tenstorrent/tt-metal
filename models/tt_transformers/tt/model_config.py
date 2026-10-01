@@ -910,6 +910,12 @@ class ModelArgs:
                 if self.is_galaxy
                 else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
             )
+            # Sweep on P150 (FF1/FF3 32x3840x15360): 6x5 grid with in0_block_w=2 ran 71.2 us vs 75.3 us on 8x5.
+            self.mlp_ff1_3_p150_6x5 = (
+                self.device_name == "P150" and not self.is_galaxy and self.mlp_core_grid.num_cores == 40
+            )
+            if self.mlp_ff1_3_p150_6x5:
+                self.mlp_core_grid = ttnn.CoreGrid(y=5, x=6)
 
             self.mlp2_core_grid = (
                 ttnn.CoreGrid(y=1, x=8)
@@ -1438,6 +1444,16 @@ class ModelArgs:
                         self.hidden_dim // self.cluster_shape[1],  # Use padded N
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
+                    )
+                elif getattr(self, "mlp_ff1_3_p150_6x5", False):
+                    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                        in0_block_w=2,
+                        per_core_M=math.ceil(self.tile_padded_batch_rows / ttnn.TILE_SIZE),
+                        per_core_N=math.ceil(
+                            (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.mlp_core_grid.num_cores)
+                        ),
+                        fused_activation=None,
+                        num_workers_per_dram_bank=3,
                     )
                 else:
                     return self.dram_matmul_config(
