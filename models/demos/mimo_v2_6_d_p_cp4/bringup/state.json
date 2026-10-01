@@ -742,6 +742,79 @@
   "started": "2026-10-01T02:10:31",
   "status": "PASS"
  },
+ "C.full_moe.attn_residual": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "00fbcb4e-6e92-4f1a-9546-def9b8291538"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/briefs/C.full_moe.attn_residual.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/agents/C.full_moe.attn_residual.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 145.6,
+    "session_id": "00fbcb4e-6e92-4f1a-9546-def9b8291538",
+    "t": "2026-10-01T02:21:09"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 26.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T02:22:17"
+   }
+  ],
+  "last_run": "2026-10-01T02:22:17",
+  "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/logs/C.full_moe.attn_residual.log",
+  "metrics": {
+   "attn_coef_attn_residual_L05": 1.0006550550460815,
+   "attn_rel_l2_attn_residual_L05": 0.002815108047798276,
+   "attn_rel_l2_slice_max_attn_residual_L05": 0.002823424991220236,
+   "pcc_attn_residual_L05": 0.9999958250802833,
+   "rel_l2_attn_residual_L05": 0.0029858879279345274,
+   "rel_l2_slice_max_attn_residual_L05": 0.0030059104319661856,
+   "row_norm_ratio_max_attn_residual_L05": 1.0018291473388672,
+   "row_norm_ratio_min_attn_residual_L05": 0.9997998476028442
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-01T02:21:51",
+  "status": "PASS"
+ },
  "C.sliding_moe.attention": {
   "agent": {
    "defs": {

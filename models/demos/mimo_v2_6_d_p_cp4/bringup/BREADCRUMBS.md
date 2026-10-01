@@ -315,3 +315,26 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   - Device gate: PASS with the existing attention registration. pcc 0.999996, rel 0.0030, first 128 rows 0.0031, ratio [0.9998, 1.0031], worst row 0.0044, slices 0.0030-0.0031.
 - The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_attention.py`
+
+## C.full_moe.attn_residual.test.1 (test review)
+- Replaced the rendered one-liner with the cp4 `test_c_sliding_moe_attn_residual.py`, set to layer 5. Those checks are run on the whole chunk and on each CP slice. The attention-term limits come from the prior's frozen full_moe test:
+  - coef in [0.98, 1.02].
+  - attn rel <= 0.05.
+  - These are tighter than layer 1's [0.95, 1.05] / 0.3. Layer 5 has full attention and no sink, so ||attn_out|| is 78.9 against ||in|| 121.4.
+- Other limits are unchanged:
+  - PCC >= 0.99 (gated).
+  - rel L2 <= 0.01.
+  - Per-token norm ratio in [0.99, 1.01].
+  - Finite output and output size.
+- CPU measurements (script /tmp/cp4far/m.py, not kept; numbers are in the test docstring). Values are per-slice rel L2 / coef / attn rel:
+  - bf16 add: 0.0030 / 1.0 / 0.0028.
+  - Attn_out slices 1 and 2 swapped: 0.163 / 0.96-0.97 / 0.26.
+  - Slice 3's attn_out dropped: 0.626 / 0 / 1.0.
+  - attn_out shifted one row: 0.165 on every slice.
+  - Unlike layer 1, the whole-chunk rel L2 already catches slice misplacement here (0.08-0.31).
+- Results:
+  - Reference: PASS (pcc 0.999997, rel 0.0025).
+  - Stub: FAIL (pcc 0).
+  - Device gate (existing attn_residual registration): PASS. pcc 0.999996, rel 0.0030, ratio [0.9998, 1.0018], slices 0.0030, coef 1.0007, attn rel 0.0028.
+- The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_attn_residual.py`
