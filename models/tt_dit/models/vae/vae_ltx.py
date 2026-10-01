@@ -853,10 +853,11 @@ class LTXVideoDecoder(Module):
         b, t, h, w, channels = tuple(sample_tt.shape)
         q = r = self.patch_size
         assert b == 1 and channels == 3 * q * r
-        # Existing unpatch is (c,p,r,q)->B,C,T,p,H,q,W,r with p=1;
-        # composing its following BCTHW->BCHWT gives B,C,H,q,W,r,T,p.
-        expanded = ttnn.reshape(sample_tt, (b, t, h, w, 3, 1, r, q))
-        chwt = ttnn.permute(expanded, (0, 4, 2, 7, 3, 6, 1, 5))
+        # Channels are (c,p,r,q) with p=1; the output order is C,H,q,W,r,T. The p axis is left out so T
+        # is the permute's innermost dim: a trailing size-1 axis makes the RM permute move 1-element
+        # rows and turns the final reshape into a copy instead of a view.
+        expanded = ttnn.reshape(sample_tt, (b, t, h, w, 3, r, q))
+        chwt = ttnn.permute(expanded, (0, 4, 2, 6, 3, 5, 1))
         chwt = ttnn.reshape(chwt, (3, h * q, w * r, t))
         return rgb_chwt_to_yuv_device(chwt)
 
