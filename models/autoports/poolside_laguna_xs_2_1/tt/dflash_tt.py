@@ -1,17 +1,30 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Experimental TT core for the published Laguna-XS-2.1 DFlash checkpoint.
+"""Experimental TT core for the published Laguna DFlash draft checkpoints.
+
+The draft is the one published for the selected target (``TT_LAGUNA_MODEL``,
+``tt/model_spec.py`` ``DFLASH_MODELS``): ``poolside/Laguna-XS-2.1-DFlash`` (five layers,
+hidden 2048, served on p150x2) or ``poolside/Laguna-S-2.1-DFlash`` (six layers, hidden
+3072, served on p150x4).  Every size below comes from the checkpoint config.
 
 This module owns the isolated model core and request-scoped draft state.  The separate
 ``dflash_serving`` controller schedules verification/acceptance, and the vLLM bridge
 registers that controller only when ``TT_LAGUNA_DFLASH=1``.  Core construction and
 execution remain explicitly disabled unless ``enable_experimental=True`` is supplied.
 
-The five draft layers reuse :class:`MultichipDecoder` after strict checkpoint mapping:
+The draft layers reuse :class:`MultichipDecoder` after strict checkpoint mapping:
 the published fused QKV rows are split into Q/K/V projections and a corrected HF-like
-configuration describes five dense causal sliding-attention layers.  In particular,
+configuration describes dense causal sliding-attention layers.  In particular,
 the draft uses full 128-channel NeoX RoPE with theta 500,000; it must never inherit the
 target Laguna sliding-layer theta of 10,000.
+
+Mesh placement on a 1×D mesh (D=2 for XS, D=4 for S) is the target's own layout:
+each draft layer is tensor-parallel exactly like a dense target layer (query/KV heads,
+gate and dense FFN split D ways, two all-reduces per layer, replicated BF16 residual);
+the auxiliary norms, fusion ``fc``, ``hidden_norm`` and final ``norm`` are replicated;
+the target's auxiliary capture is a replicated ``[1, rows, num_aux * hidden]`` tensor
+(the target residual is replicated); and the sampled rows are projected by the target's
+vocab-sharded LM head, so logits come back as D vocab shards.
 """
 
 from __future__ import annotations
@@ -34,6 +47,7 @@ from .dflash_reference import (
     build_proposal_block,
     expected_checkpoint_shapes,
 )
+from .model_spec import MODEL_ENV, MODEL_ID, dflash_spec
 from .multichip_decoder import MultichipDecoder, _cache_layer_identity
 from .optimized_decoder import PrecisionPolicy, _cached_device_tensor, weight_cache_key
 
@@ -114,7 +128,7 @@ def build_dflash_decoder_config(config: LagunaDFlashConfig) -> DFlashDecoderConf
         num_attention_heads_per_layer=None,
         hidden_act=config.hidden_act,
         attention_bias=config.attention_bias,
-        _name_or_path="poolside/Laguna-XS-2.1-DFlash",
+        _name_or_path=dflash_spec(config.target_model_id).repo_id,
     )
 
 
@@ -152,7 +166,7 @@ def dflash_layer_checkpoint_names(config: LagunaDFlashConfig, layer_idx: int) ->
 
 
 def dflash_shared_checkpoint_names(config: LagunaDFlashConfig) -> tuple[str, ...]:
-    """Exact draft-owned weights outside the five decoder layers."""
+    """Exact draft-owned weights outside the draft decoder layers."""
 
     expected = expected_checkpoint_shapes(config)
     return tuple(name for name in expected if not name.startswith("layers."))
@@ -281,7 +295,7 @@ def dflash_bf16_policy() -> PrecisionPolicy:
         ccl=ttnn.bfloat16,
         activation=ttnn.bfloat16,
         logits=ttnn.bfloat16,
-        # Five serial draft layers amplify projection error enough to change
+        # Five (XS) or six (S) serial draft layers amplify projection error enough to change
         # proposal top-1 under HiFi2.  These matrices are BF16 and the proposal
         # block is only 16 rows, so use the accurate fp32-destination kernels.
         fid_attn_qkv="HiFi4",
@@ -325,7 +339,7 @@ class DFlashTTProposalCache:
     """Bounded request-scoped draft KV and rolling target auxiliary window.
 
     The draft never needs target history older than 511 rows.  This object owns
-    five tiny local KV pairs and any rolling concat/slice tensor it creates, but
+    one tiny local KV pair per draft layer and any rolling concat/slice tensor it creates, but
     never deallocates capture tensors supplied by the target model.  A request
     must be explicitly begun and ended; use-after-end and use-after-close fail
     before launching a device operation.
@@ -334,8 +348,8 @@ class DFlashTTProposalCache:
     def __init__(self, core: "DFlashTTCore", *, block_size: int = 32):
         if tuple(core.layers) != tuple(range(core.config.num_hidden_layers)):
             raise RuntimeError(
-                "a DFlash proposal cache requires all five draft layers in checkpoint order; "
-                f"got {tuple(core.layers)}"
+                f"a DFlash proposal cache requires all {core.config.num_hidden_layers} draft layers in "
+                f"checkpoint order; got {tuple(core.layers)}"
             )
         block_size = int(block_size)
         if block_size != 32:
@@ -555,7 +569,7 @@ class DFlashTTCore:
     """Default-off TT-owned DFlash weights and one-round proposal driver.
 
     The target continues to own token embeddings and the column-sharded LM head.
-    This core owns only the published five-layer draft checkpoint and accepts the
+    This core owns only the published draft checkpoint and accepts the
     target's explicit auxiliary capture.  Acceptance/verification and scheduler
     integration remain outside this isolated one-round primitive.
     """
@@ -604,6 +618,13 @@ class DFlashTTCore:
         checkpoint = LagunaDFlashCheckpoint(snapshot)
         checkpoint.validate_layout()
         config = checkpoint.config
+        # The draft reads the target's hidden states, embedding and LM head, so it must be the
+        # draft published for the selected target. Fail before any device allocation.
+        if config.target_model_id != MODEL_ID:
+            raise ValueError(
+                f"DFlash snapshot {snapshot} is the draft for {config.target_model_id}, but "
+                f"{MODEL_ENV} selects {MODEL_ID}"
+            )
         max_seq_len = int(max_seq_len)
         # Build on CPU first so invalid bounds fail before any device allocation.
         cos, sin = build_dflash_rope_tables(config, max_seq_len, dtype=torch.bfloat16)
@@ -669,11 +690,11 @@ class DFlashTTCore:
         )
 
     def combine_aux_hidden_states(self, hidden_states):
-        """Normalize five flattened target slices, concatenate, project, and norm.
+        """Normalize the flattened target slices, concatenate, project, and norm.
 
         ``hidden_states`` must be replicated TILE ``[1, tokens, 5*hidden]``.  A
         flattened contract keeps every slice boundary tile-aligned and avoids reshaping
-        through a physically padded five-wide dimension.
+        through a physically padded num_aux-wide dimension.
         """
 
         expected_width = self.config.num_aux_hidden_states * self.config.hidden_size
@@ -686,7 +707,7 @@ class DFlashTTCore:
         flat = ttnn.reshape(hidden_states, (1, 1, tokens, expected_width))
         h = self.config.hidden_size
         # Auxiliary fusion feeds every draft layer, so a small error here is
-        # amplified five times.  Reuse the draft layer's qualified HiFi4,
+        # amplified once per draft layer.  Reuse the draft layer's qualified HiFi4,
         # fp32-destination kernel explicitly instead of relying on TTNN's
         # operation default, whose destination-accumulation policy is not part
         # of this module's accuracy contract.
@@ -732,7 +753,7 @@ class DFlashTTCore:
         block_size: int = 32,
         enable_experimental: bool = False,
     ) -> DFlashTTProposalCache:
-        """Allocate bounded five-layer request state after an explicit opt-in."""
+        """Allocate bounded per-draft-layer request state after an explicit opt-in."""
 
         if not bool(enable_experimental):
             raise RuntimeError(
@@ -793,7 +814,7 @@ class DFlashTTCore:
         num_speculative_tokens: int = 15,
         enable_experimental: bool = False,
     ) -> DFlashTTProposalRound:
-        """Run one exact five-layer anchor+mask proposal on the TT mesh.
+        """Run one exact all-draft-layer anchor+mask proposal on the TT mesh.
 
         Each layer receives the *same* fused target context prefix while only
         the query suffix is carried from the preceding draft layer.  Consequently
@@ -814,7 +835,8 @@ class DFlashTTCore:
             raise RuntimeError("begin_request must be called before a DFlash proposal")
         if tuple(self.layers) != tuple(range(self.config.num_hidden_layers)):
             raise RuntimeError(
-                "DFlash proposal execution requires all five draft layers in order; " f"got {tuple(self.layers)}"
+                f"DFlash proposal execution requires all {self.config.num_hidden_layers} draft layers in order; "
+                f"got {tuple(self.layers)}"
             )
         self._validate_target_owner(target_model)
         capture = cache.target_capture()
@@ -865,7 +887,7 @@ class DFlashTTCore:
         query_hidden = target_model.embed_prefill(token_ids_tt)
         context_hidden = self.combine_aux_hidden_states(capture.hidden_states)
 
-        # All five layers share the published theta/dimension and the same
+        # All draft layers share the published theta/dimension and the same
         # absolute interval, so a single pair of RoPE tensors is exact.
         first_layer = self.layers[0]
         rope_mats = (
@@ -874,7 +896,7 @@ class DFlashTTCore:
         )
         for layer_idx in range(self.config.num_hidden_layers):
             # Reset context to the fused target representation at every layer;
-            # carry only query hidden state through the five-layer draft stack.
+            # carry only query hidden state through the draft stack.
             layer_input = ttnn.concat((context_hidden, query_hidden), dim=1)
             layer_output = self.layers[layer_idx].prefill_forward(
                 layer_input,

@@ -12,46 +12,28 @@ import pytest
 import torch
 
 import ttnn
-from models.autoports.poolside_laguna_xs_2_1.tt.dflash_reference import DFlashTargetAuxCapture, LagunaDFlashConfig
+from models.autoports.poolside_laguna_xs_2_1.tt.dflash_reference import (
+    DFlashTargetAuxCapture,
+    LagunaDFlashConfig,
+    published_dflash_config,
+)
 from models.autoports.poolside_laguna_xs_2_1.tt.dflash_serving import DFlashServedController, DFlashServingEnvelope
 from models.autoports.poolside_laguna_xs_2_1.tt.generator_vllm import LagunaForCausalLM
 from models.autoports.poolside_laguna_xs_2_1.tt.model import LagunaModel
+from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import DFLASH_SPEC, MODEL_ID
 
 
 def _published_config() -> LagunaDFlashConfig:
-    config = LagunaDFlashConfig(
-        hidden_size=2048,
-        intermediate_size=8192,
-        num_hidden_layers=5,
-        num_attention_heads=64,
-        num_key_value_heads=8,
-        head_dim=128,
-        vocab_size=100352,
-        draft_vocab_size=100352,
-        max_position_embeddings=262144,
-        rms_norm_eps=1e-6,
-        rope_theta=500_000.0,
-        sliding_window=512,
-        hidden_act="silu",
-        attention_bias=False,
-        gating="per-head",
-        num_experts=0,
-        architectures=("DFlashLagunaForCausalLM",),
-        torch_dtype="bfloat16",
-        layer_types=("sliding_attention",) * 5,
-        aux_hidden_state_layer_ids=(2, 14, 26, 34, 40),
-        target_layer_ids=(1, 13, 25, 33, 39),
-        block_size=16,
-        mask_token_id=12,
-        causal=True,
-    )
-    config.validate()
+    """The selected checkpoint's published draft (``TT_LAGUNA_MODEL``; XS 5x2048, S 6x3072)."""
+
+    config = published_dflash_config()
+    assert config.target_model_id == MODEL_ID
     return config
 
 
 @dataclass(frozen=True)
 class _FakeHidden:
-    """Shape-correct auxiliary tensor metadata without a 10,240-wide allocation."""
+    """Shape-correct auxiliary tensor metadata without a num_aux * hidden-wide allocation."""
 
     shape: tuple[int, int, int]
     positions: tuple[int, ...]
@@ -342,10 +324,14 @@ def test_prefill_tail_lifecycle_discontinuity_and_close(expect_error):
         controller.begin_request("request-e", _capture(core.config, 0, 1))
 
 
+# XS serves DFlash on p150x2 (D=2) and S on p150x4 (D=4); every other mesh fails closed.
+_OTHER_DEVICE_COUNTS = tuple(d for d in (1, 2, 4) if d != DFLASH_SPEC.serving_device_count)
+
+
 @pytest.mark.parametrize(
     ("override", "match"),
     [
-        ({"device_count": 1}, "p150x2"),
+        *(({"device_count": d}, DFLASH_SPEC.serving_profile) for d in _OTHER_DEVICE_COUNTS),
         ({"max_batch_size": 2}, "max-num-seqs 1"),
         ({"prefix_enabled": True}, "PREFIX_CACHE=0"),
         ({"hybrid_enabled": True}, "HYBRID_KV=0"),
@@ -355,7 +341,7 @@ def test_prefill_tail_lifecycle_discontinuity_and_close(expect_error):
 def test_vllm_dflash_envelope_rejects_unqualified_modes(override, match, expect_error):
     envelope = {
         "enabled": True,
-        "device_count": 2,
+        "device_count": DFLASH_SPEC.serving_device_count,
         "max_batch_size": 1,
         "prefix_enabled": False,
         "hybrid_enabled": False,
@@ -365,6 +351,34 @@ def test_vllm_dflash_envelope_rejects_unqualified_modes(override, match, expect_
     with expect_error(RuntimeError, match):
         LagunaForCausalLM._validate_dflash_serving_envelope(**envelope)
     LagunaForCausalLM._validate_dflash_serving_envelope(**{**envelope, "enabled": False})
+
+
+def test_vllm_dflash_envelope_accepts_the_selected_checkpoint_topology():
+    LagunaForCausalLM._validate_dflash_serving_envelope(
+        enabled=True,
+        device_count=DFLASH_SPEC.serving_device_count,
+        max_batch_size=1,
+        prefix_enabled=False,
+        hybrid_enabled=False,
+        spec_mode="",
+    )
+    assert LagunaForCausalLM._DFLASH_DEVICE_COUNT == {"poolside/Laguna-XS-2.1": 2, "poolside/Laguna-S-2.1": 4}[MODEL_ID]
+
+
+def test_vllm_dflash_initialization_requires_the_selected_full_target(monkeypatch, expect_error):
+    """The adapter rejects a partial target stack before touching the draft checkpoint."""
+
+    bridge = object.__new__(LagunaForCausalLM)
+    bridge.model = SimpleNamespace(layers=[object()] * (DFLASH_SPEC.num_target_layers - 1))
+    bridge.max_model_len = 1024
+    with expect_error(RuntimeError, f"exact full {DFLASH_SPEC.num_target_layers}-layer target"):
+        bridge._initialize_dflash_serving()
+
+    # The draft RoPE horizon is the checkpoint's own (XS 262144, S 1048576).
+    bridge.model = SimpleNamespace(layers=[object()] * DFLASH_SPEC.num_target_layers)
+    bridge.max_model_len = DFLASH_SPEC.max_position_embeddings - 63
+    with expect_error(RuntimeError, f"max_model_len \\+ 64 <= {DFLASH_SPEC.max_position_embeddings}"):
+        bridge._initialize_dflash_serving()
 
 
 def test_vllm_dflash_verify_is_contiguous_uniform_and_returns_aux_capture(expect_error):

@@ -37,7 +37,7 @@ from .dflash_reference import DFLASH_TARGET_LAYER_IDS, DFlashTargetAuxCapture
 from .multichip_decoder import MultichipDecoder
 from .optimized_decoder import PrecisionPolicy, _cached_device_tensor, weight_cache_key
 
-from .model_spec import MODEL_ID  # noqa: E402  (TT_LAGUNA_MODEL; default Laguna-S-2.1)
+from .model_spec import DFLASH_SPEC, MODEL_ID  # noqa: E402  (TT_LAGUNA_MODEL; default Laguna-S-2.1)
 
 # Canonical datatype-sweep-selected precision policy. When present, this is the required
 # config artifact that the default construction path (``from_pretrained`` -> generator ->
@@ -413,14 +413,17 @@ class LagunaModel:
                 "DFlash target auxiliary capture is experimental and default-off; "
                 "pass enable_experimental=True only from the qualified DFlash path"
             )
+        # The selected checkpoint's published draft fixes both the stack and the capture layers
+        # (XS: 40 layers, ids 1/13/25/33/39; S: 48 layers, ids 1/10/19/29/38/47).
+        num_target_layers = int(DFLASH_SPEC.num_target_layers)
         layer_indices = tuple(int(getattr(layer, "layer_idx", index)) for index, layer in enumerate(self.layers))
-        expected_stack = tuple(range(40))
+        expected_stack = tuple(range(num_target_layers))
         if layer_indices != expected_stack:
             raise RuntimeError(
-                "DFlash target auxiliary capture requires the exact full 40-layer target stack; "
+                f"DFlash target auxiliary capture requires the exact full {num_target_layers}-layer target stack; "
                 f"got layer indices {layer_indices}"
             )
-        if tuple(DFLASH_TARGET_LAYER_IDS) != (1, 13, 25, 33, 39):
+        if tuple(DFLASH_TARGET_LAYER_IDS) != tuple(DFLASH_SPEC.target_layer_ids):
             raise RuntimeError(f"unexpected DFlash target auxiliary layer contract: {DFLASH_TARGET_LAYER_IDS}")
         return set(DFLASH_TARGET_LAYER_IDS)
 
@@ -438,8 +441,9 @@ class LagunaModel:
         valid_seq_len=None,
         enable_experimental=False,
     ):
-        """Run the target prefill and separately capture five post-layer states.
+        """Run the target prefill and separately capture the DFlash post-layer states.
 
+        One state per published target layer (XS: 5, S: 6), flattened in that order.
         This is deliberately a distinct entry point: the established target
         ``prefill_layers`` loop has no DFlash condition, append, or extra tensor
         lifetime.  Only the last 511 valid rows are retained because older rows
@@ -468,7 +472,7 @@ class LagunaModel:
                 f"DFlash target prefill interval [{start_pos}, {int(start_pos) + valid_seq_len}) "
                 f"is outside [0, {self.cfg.max_position_embeddings})"
             )
-        keep = min(valid_seq_len, 511)
+        keep = min(valid_seq_len, int(DFLASH_SPEC.sliding_window) - 1)
         capture_begin = valid_seq_len - keep
 
         _no_hoist = os.environ.get("TT_LAGUNA_NO_ROPE_HOIST") == "1"
@@ -512,6 +516,7 @@ class LagunaModel:
             hidden_states=flattened,
             start_position=int(start_pos) + capture_begin,
             row_count=keep,
+            layer_ids=tuple(DFLASH_TARGET_LAYER_IDS),
         )
         return h, capture
 
@@ -601,6 +606,7 @@ class LagunaModel:
             hidden_states=flattened,
             start_position=position,
             row_count=B,
+            layer_ids=tuple(DFLASH_TARGET_LAYER_IDS),
         )
 
     # ---- terminal: final norm + LM head ------------------------------------ #
@@ -634,7 +640,7 @@ class LagunaModel:
             raise ValueError(
                 f"DFlash hidden width {draft_hidden.shape[-1]} does not match target width {self.cfg.hidden}"
             )
-        # Proposal top-1 is sensitive to accumulated five-layer draft error.
+        # Proposal top-1 is sensitive to accumulated multi-layer draft error.
         # Only 15 rows are projected, so use the existing precise/fp32-dest
         # kernel instead of the target's throughput-tuned normal LM-head kernel.
         return ttnn.linear(draft_hidden, self.lm_head_w, compute_kernel_config=self._norm_ck)

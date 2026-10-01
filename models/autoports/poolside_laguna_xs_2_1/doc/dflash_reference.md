@@ -1,13 +1,85 @@
 <!-- SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Laguna-XS-2.1 DFlash reference contract
+# Laguna DFlash reference contract (XS-2.1 and S-2.1)
 
 Status: CPU reference, hardware-qualified TT one-round primitive, and a
 fail-closed, default-off vLLM served controller. The controller has device-free
 contracts and a bounded P150x2 correctness exercise, but it is **not performance
 qualified**: the first real-context gate regressed the qualified baseline TPOT.
 It must not be promoted or enabled by default.
+
+Most of this document records the Laguna-XS-2.1 bring-up. The same code now
+serves the Laguna-S-2.1 draft; the next section lists what differs for S and
+what has been run for it.
+
+## Laguna-S-2.1 DFlash
+
+`TT_LAGUNA_MODEL` selects the target (default Laguna-S-2.1), and the target
+selects its published draft. `tt/model_spec.py` `DFLASH_MODELS` holds one entry
+per target: repo, revision, geometry, target-layer IDs, and the one serving
+topology. Every DFlash module reads its sizes from that entry or from the
+downloaded `config.json`; no XS number remains in the code paths.
+
+| Field | Laguna-XS-2.1-DFlash | Laguna-S-2.1-DFlash |
+|---|---:|---:|
+| Revision | `5c36361a…` | `13349818…` (`1334981872c58f5023614307b4536f8b23c262e5`) |
+| Draft layers | 5 | 6 |
+| Hidden / dense intermediate | 2,048 / 8,192 | 3,072 / 12,288 |
+| Query heads / KV heads / head dim | 64 / 8 / 128 | 72 / 8 / 128 |
+| Fused QKV rows | 8,192 + 1,024 + 1,024 | 9,216 + 1,024 + 1,024 |
+| Target layers (0-based post-layer outputs) | 1, 13, 25, 33, 39 of 40 | 1, 10, 19, 29, 38, 47 of 48 |
+| Auxiliary width (`fc` input) | 5 × 2,048 = 10,240 | 6 × 3,072 = 18,432 |
+| RoPE horizon (`max_position_embeddings`) | 262,144 | 1,048,576 |
+| Window / block / mask token / vocabulary | 512 / 16 / 12 / 100,352 | 512 / 16 / 12 / 100,352 |
+| Serving topology | p150x2 (D=2) | p150x4 (D=4) |
+
+Layer 47 is the last S decoder layer, so the S draft reads the final residual
+before the target's final norm.
+
+On the four-chip mesh the draft is laid out like a dense S target layer: each
+chip holds 18 query heads, 2 KV heads, and a quarter of the dense FFN, and the two
+per-layer all-reduces leave a replicated BF16 residual. The six auxiliary norms,
+`fc`, `hidden_norm`, and the final `norm` are replicated on every chip. The target's capture is the
+replicated target residual sliced at the six layers, so no extra collective is
+needed. The sampled rows are projected by the target's LM head, which is
+vocabulary-sharded four ways, and the host concatenates the four shards before
+`argmax`. The S target's 72-head sliding layers already run this head split on
+p150x4, so no new decoder geometry is introduced.
+
+CPU qualification of the S draft (no device):
+
+- `tests/test_dflash_reference.py` runs every checkpoint-backed contract once per
+  cached draft: strict config/layout, proposal geometry, 511-row retention, a
+  layer-0 BF16 fingerprint, and the full six-layer anchor+15 round. The S
+  fingerprint was locked from this reference; it guards against drift but is not
+  independent evidence.
+- The independent evidence is real target state. `tests/gen_dflash_target_capture.py`
+  streams the S target one layer at a time over the 335-token readiness AIME24
+  sequence (235 prompt + 100 continuation tokens; peak host memory is one layer)
+  and saves every layer's output plus the target's teacher-forced greedy token.
+  Its greedy tokens equal the stored fp32 readiness top-1 at all 100 continuation
+  positions. `test_draft_proposals_track_real_target_greedy` then runs one
+  served-style round per continuation position (99 anchors):
+
+  | Draft input | First proposal = target greedy | Mean accepted (lower bound) |
+  |---|---:|---:|
+  | Published layers 1, 10, 19, 29, 38, 47 | 0.869 | 2.64 |
+  | Layer inputs 0, 9, 18, 28, 37, 46 | 0.828 | 2.55 |
+  | Published layers, reversed slice order | 0.061 | 0.07 |
+  | Layer 47 in all six slices | 0.051 | 0.05 |
+
+  "Mean accepted" counts proposals equal to the target's greedy token and stops
+  at the first proposal that differs from the forced continuation, because the
+  capture has target predictions only for that continuation; served acceptance
+  can only be higher.
+
+The S launcher envelope is `LAGUNA_PROFILE=p150x4`, `LAGUNA_MAX_NUM_SEQS=1`,
+`TT_LAGUNA_HYBRID_KV=0` (the uniform-KV rollback, which caps `max_model_len` at
+32,768), prefix cache off, streaming prefill on, and
+`LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1`. The opt-in hardware gates in
+`tests/test_dflash_tt.py` have S variants pinned to `TT_VISIBLE_DEVICES=0,1,2,3`
+(`..._chips_0_3`). None of the S device paths has run on hardware yet.
 
 ## Published geometry
 

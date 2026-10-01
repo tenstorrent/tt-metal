@@ -83,6 +83,10 @@ case "$HF_MODEL" in
     # S's chat template thinks by default (prompt ends in <think>); vLLM's poolside_v1 reasoning parser
     # only splits reasoning when enable_thinking is passed. Make the server default match the template.
     MODEL_CHAT_TEMPLATE_KWARGS='{"enable_thinking": true}'
+    # Experimental DFlash (poolside/Laguna-S-2.1-DFlash, tt/model_spec.py DFLASH_MODELS): the S target's
+    # only profile, uniform KV (TT_LAGUNA_HYBRID_KV=0), and the draft's RoPE horizon (= the target's).
+    MODEL_DFLASH_PROFILE=p150x4
+    MODEL_DFLASH_MAX_HORIZON=1048576
     ;;
   poolside/Laguna-XS-2.1)
     # The qualified XS production default is two P150 ASICs. D4 is an explicit regression profile.
@@ -95,6 +99,8 @@ case "$HF_MODEL" in
     MODEL_MAX_MODEL_LEN_CAP=
     MODEL_TRACE_REGION_SIZE=1500000000
     MODEL_CHAT_TEMPLATE_KWARGS=
+    MODEL_DFLASH_PROFILE=p150x2
+    MODEL_DFLASH_MAX_HORIZON=262144
     ;;
   *)
     die "HF_MODEL must be poolside/Laguna-S-2.1 or poolside/Laguna-XS-2.1; the adapter and cached weights are model-specific"
@@ -634,8 +640,8 @@ else
   esac
 fi
 if [ "$TT_LAGUNA_DFLASH" -eq 1 ]; then
-  [ "$LAGUNA_PROFILE" = p150x2 ] ||
-    die "Laguna DFlash serving is restricted to LAGUNA_PROFILE=p150x2"
+  [ "$LAGUNA_PROFILE" = "$MODEL_DFLASH_PROFILE" ] ||
+    die "Laguna DFlash serving for $HF_MODEL is restricted to LAGUNA_PROFILE=$MODEL_DFLASH_PROFILE"
   [ "$MAX_NUM_SEQS" -eq 1 ] ||
     die "Laguna DFlash serving requires LAGUNA_MAX_NUM_SEQS=1"
   [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
@@ -650,10 +656,10 @@ if [ "$TT_LAGUNA_DFLASH" -eq 1 ]; then
     die "Laguna DFlash serving requires TT_LAGUNA_STREAMING_PREFILL=1"
   [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
     die "Laguna DFlash serving does not support sparse-MoE experimental paths"
-  ((10#$MAX_MODEL_LEN + 64 <= 262144)) ||
-    die "Laguna DFlash serving requires LAGUNA_MAX_MODEL_LEN+64<=262144"
+  ((10#$MAX_MODEL_LEN + 64 <= MODEL_DFLASH_MAX_HORIZON)) ||
+    die "Laguna DFlash serving requires LAGUNA_MAX_MODEL_LEN+64<=$MODEL_DFLASH_MAX_HORIZON"
   DFLASH_STATUS=experimental_cache_off_serving
-  DFLASH_ENVELOPE=p150x2_batch1_greedy_uniform_cache_off
+  DFLASH_ENVELOPE=${MODEL_DFLASH_PROFILE}_batch1_greedy_uniform_cache_off
   CHUNKED_PREFILL_CLI_ARG=--no-enable-chunked-prefill
   CHUNKED_PREFILL_CLI_ARGS=("$CHUNKED_PREFILL_CLI_ARG")
 else

@@ -173,7 +173,8 @@
       "experimental_env": "TT_LAGUNA_DFLASH=1",
       "status": "production_disabled_correctness_scoped_latency_rejected",
       "reason": "Target verification and committed tokens were exact, but target verification alone cost at least 94.440 ms per committed token before draft cost versus about 50.5 ms for the qualified baseline.",
-      "exact_launcher_envelope": "p150x2, max_num_seqs=1, streaming prefill on, prefix cache off, uniform KV, speculative/context/multi-sequence/sparse-MoE paths off, and LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1"
+      "exact_launcher_envelope": "p150x2, max_num_seqs=1, streaming prefill on, prefix cache off, uniform KV, speculative/context/multi-sequence/sparse-MoE paths off, and LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1",
+      "laguna_s_launcher_envelope": "Laguna-S-2.1 with poolside/Laguna-S-2.1-DFlash: p150x4, LAGUNA_MAX_NUM_SEQS=1, TT_LAGUNA_HYBRID_KV=0 (uniform KV, max_model_len <= 32768), streaming prefill on, prefix cache off, speculative/context/multi-sequence/sparse-MoE paths off, and LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1. Launcher and device-free contracts only; not yet run on hardware."
     },
     "experimental_feature_stacking": {
       "status": "rejected_fail_closed",

@@ -715,3 +715,74 @@ def test_chat_template_kwargs_override(tmp_path):
                    LAGUNA_CHAT_TEMPLATE_KWARGS="")
     assert none.returncode == 0, none.stderr
     assert "chat_template_kwargs=<none>\n" in none.stdout
+
+
+def _s_dflash(tmp_path, **overrides):
+    env = {
+        "HF_MODEL": S,
+        "LAGUNA_PROFILE": "p150x4",
+        "TT_VISIBLE_DEVICES": "0,1,2,3",
+        "TT_LAGUNA_DFLASH": "1",
+        "TT_LAGUNA_HYBRID_KV": "0",
+        "LAGUNA_MAX_NUM_SEQS": "1",
+        "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1",
+        **overrides,
+    }
+    return _config(tmp_path, **env)
+
+
+def test_s_dflash_is_explicit_p150x4_batch_one_uniform_cache_off_experimental_only(tmp_path):
+    rejected = _s_dflash(tmp_path, LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=None)
+    assert rejected.returncode == 2
+    assert "unqualified inherited/debug override" in rejected.stderr
+    assert "TT_LAGUNA_DFLASH=1 (qualified=0)" in rejected.stderr
+
+    accepted = _s_dflash(tmp_path)
+    assert accepted.returncode == 0, accepted.stderr
+    assert f"hf_model={S}\n" in accepted.stdout
+    assert "dflash=1\n" in accepted.stdout
+    assert "dflash_status=experimental_cache_off_serving\n" in accepted.stdout
+    assert "dflash_envelope=p150x4_batch1_greedy_uniform_cache_off\n" in accepted.stdout
+    assert "device_count=4\n" in accepted.stdout
+    assert "prefix_cache=0\n" in accepted.stdout
+    assert "hybrid_kv=0\n" in accepted.stdout
+    assert "hybrid_kv_status=operator_rollback_uniform\n" in accepted.stdout
+    assert "max_num_seqs=1\n" in accepted.stdout
+    # S's uniform-KV context cap; +64 proposal padding stays far below the S draft's 1048576 horizon.
+    assert "max_model_len=32768\n" in accepted.stdout
+    assert "streaming_prefill_status=production_qualified\n" in accepted.stdout
+    assert "chunked_prefill_cli_args=--no-enable-chunked-prefill\n" in accepted.stdout
+    assert "TT_LAGUNA_DFLASH=1 (qualified=0)" in accepted.stdout
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        # The S profile default is hybrid KV; DFlash needs the uniform rollback.
+        ({"TT_LAGUNA_HYBRID_KV": None}, "requires TT_LAGUNA_HYBRID_KV=0"),
+        ({"TT_LAGUNA_HYBRID_KV": "1"}, "requires TT_LAGUNA_HYBRID_KV=0"),
+        # p150x4's uniform-KV profile default is eight sequences.
+        ({"LAGUNA_MAX_NUM_SEQS": None}, "requires LAGUNA_MAX_NUM_SEQS=1"),
+        ({"TT_LAGUNA_PREFIX_CACHE": "1"}, "requires TT_LAGUNA_PREFIX_CACHE=0"),
+        ({"TT_LAGUNA_SPEC_DECODE": "1"}, "does not support TT_LAGUNA_SPEC_DECODE"),
+        ({"TT_LAGUNA_STREAMING_PREFILL": "0"}, "requires TT_LAGUNA_STREAMING_PREFILL=1"),
+    ],
+)
+def test_s_dflash_launcher_rejects_unqualified_feature_overlap(tmp_path, overrides, message):
+    result = _s_dflash(tmp_path, **overrides)
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
+def test_xs_dflash_stays_restricted_to_p150x2(tmp_path):
+    result = _config(
+        tmp_path,
+        LAGUNA_PROFILE="p150x4",
+        TT_VISIBLE_DEVICES="0,1,2,3",
+        TT_LAGUNA_DFLASH="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+        LAGUNA_MAX_NUM_SEQS="1",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert result.returncode == 2
+    assert f"Laguna DFlash serving for {XS} is restricted to LAGUNA_PROFILE=p150x2" in result.stderr

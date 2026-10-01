@@ -47,7 +47,7 @@ import ttnn
 try:
     from .generator import LagunaGenerator, _replicate
     from .host_sampling import penalties_active, sample_penalized
-    from .model_spec import MODEL_ID, MODEL_MAX_CONTEXT, check_hf_config
+    from .model_spec import DFLASH_SPEC, MODEL_ID, MODEL_MAX_CONTEXT, check_hf_config
     from .kv_grouping import HybridKVLayout, build_laguna_hybrid_kv_layout, validate_per_layer_tensor_aliases
     from .prefill_runtime import (
         PrefillRuntimeOffsets,
@@ -59,7 +59,12 @@ try:
 except ImportError:  # loaded as a standalone module by some tooling
     from models.autoports.poolside_laguna_xs_2_1.tt.generator import LagunaGenerator, _replicate
     from models.autoports.poolside_laguna_xs_2_1.tt.host_sampling import penalties_active, sample_penalized
-    from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MODEL_ID, MODEL_MAX_CONTEXT, check_hf_config
+    from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import (
+        DFLASH_SPEC,
+        MODEL_ID,
+        MODEL_MAX_CONTEXT,
+        check_hf_config,
+    )
     from models.autoports.poolside_laguna_xs_2_1.tt.kv_grouping import (
         HybridKVLayout,
         build_laguna_hybrid_kv_layout,
@@ -151,10 +156,13 @@ class LagunaForCausalLM:
     # equal slots onto ten physical K/V tensor pairs.  The feature remains
     # opt-in until its cache-off hardware gate completes.
     _HYBRID_KV_CACHE_GROUPS_ENABLED = os.environ.get("TT_LAGUNA_HYBRID_KV", "0") == "1"
-    # Published five-layer DFlash serving is a separate, default-off batch-one
-    # cache-off mode.  It owns an eager verify/accept loop and therefore cannot
-    # coexist with prefix, hybrid KV, or the ngram speculative controller.
+    # Published DFlash serving (the selected checkpoint's draft, tt/model_spec.py DFLASH_MODELS) is a
+    # separate, default-off batch-one cache-off mode.  It owns an eager verify/accept loop and therefore
+    # cannot coexist with prefix, hybrid KV, or the ngram speculative controller.  It is scoped to one
+    # streaming topology per checkpoint: XS on p150x2 (D=2), S on p150x4 (D=4).
     _DFLASH_SERVING_ENABLED = os.environ.get("TT_LAGUNA_DFLASH", "0") == "1"
+    _DFLASH_DEVICE_COUNT = int(DFLASH_SPEC.serving_device_count)
+    _DFLASH_PROFILE = DFLASH_SPEC.serving_profile
     model_capabilities = {
         # Prefix + aliased hybrid KV is a separate ownership qualification.  Do
         # not advertise it while a cache-off hybrid or DFlash tranche is selected.
@@ -190,8 +198,9 @@ class LagunaForCausalLM:
                 "TT_LAGUNA_PREFIX_CACHE=0."
             )
 
-    @staticmethod
+    @classmethod
     def _validate_dflash_serving_envelope(
+        cls,
         *,
         enabled,
         device_count,
@@ -202,10 +211,10 @@ class LagunaForCausalLM:
     ):
         if not bool(enabled):
             return
-        if int(device_count) != 2:
+        if int(device_count) != int(cls._DFLASH_DEVICE_COUNT):
             raise RuntimeError(
-                "experimental Laguna DFlash serving is hardware-scoped only to p150x2, "
-                f"got D={int(device_count)}; set TT_LAGUNA_DFLASH=0"
+                f"experimental Laguna DFlash serving for {MODEL_ID} is hardware-scoped only to "
+                f"{cls._DFLASH_PROFILE}, got D={int(device_count)}; set TT_LAGUNA_DFLASH=0"
             )
         if int(max_batch_size) != 1:
             raise RuntimeError("Laguna DFlash serving requires --max-num-seqs 1, " f"got {int(max_batch_size)}")
@@ -323,18 +332,21 @@ class LagunaForCausalLM:
         from .dflash_serving import DFlashServedController, DFlashServingEnvelope
         from .dflash_tt import DFlashTTCore
 
-        if len(self.model.layers) != 40:
+        num_target_layers = int(DFLASH_SPEC.num_target_layers)
+        if len(self.model.layers) != num_target_layers:
             raise RuntimeError(
-                "Laguna DFlash serving requires the exact full 40-layer target; " f"got {len(self.model.layers)} layers"
+                f"Laguna DFlash serving requires the exact full {num_target_layers}-layer target; "
+                f"got {len(self.model.layers)} layers"
             )
         # Proposal padding extends at most 64 rows beyond the admitted semantic
         # context.  Reject an unrepresentable horizon before loading any draft
-        # tensor instead of truncating RoPE near the checkpoint limit.
+        # tensor instead of truncating RoPE near the checkpoint limit.  The draft's
+        # RoPE horizon equals the target's for both checkpoints (XS 262144, S 1048576).
+        draft_limit = min(int(HF_CONFIG_MAX_CONTEXT), int(DFLASH_SPEC.max_position_embeddings))
         draft_horizon = int(self.max_model_len) + 64
-        if draft_horizon > HF_CONFIG_MAX_CONTEXT:
+        if draft_horizon > draft_limit:
             raise RuntimeError(
-                "Laguna DFlash serving requires max_model_len + 64 <= "
-                f"{HF_CONFIG_MAX_CONTEXT}, got {self.max_model_len}"
+                "Laguna DFlash serving requires max_model_len + 64 <= " f"{draft_limit}, got {self.max_model_len}"
             )
         core = DFlashTTCore.from_checkpoint(
             self.mesh_device,
@@ -3073,7 +3085,7 @@ class LagunaForCausalLM:
             # proposal allocations unsafe, so no trace is captured in this mode.
             print(
                 "[laguna dflash] warmup: normal decode trace OMITTED; "
-                "batch-1 eager five-layer proposal + target verify selected",
+                f"batch-1 eager {DFLASH_SPEC.num_draft_layers}-layer proposal + target verify selected",
                 flush=True,
             )
             self._report_dram("dflash_ready", enforce=True)

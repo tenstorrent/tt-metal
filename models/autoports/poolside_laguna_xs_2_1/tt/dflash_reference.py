@@ -1,6 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Small, dependency-light PyTorch reference for Laguna-XS-2.1 DFlash.
+"""Small, dependency-light PyTorch reference for the published Laguna DFlash drafts.
+
+Poolside publishes one DFlash draft per target: ``poolside/Laguna-XS-2.1-DFlash``
+(five draft layers, hidden 2048) and ``poolside/Laguna-S-2.1-DFlash`` (six draft
+layers, hidden 3072).  Both share one architecture; ``tt/model_spec.py``
+(``DFLASH_MODELS``) records each one's repo, revision, geometry, and target-layer
+IDs, and the selected checkpoint (``TT_LAGUNA_MODEL``) picks the default draft here.
 
 This is deliberately not a serving integration.  It is an executable contract for
 the operations that a TT DFlash implementation must reproduce.  The draft
@@ -8,7 +14,7 @@ checkpoint does not own token embeddings or an LM head; callers pass the target
 model's weights to :meth:`embed_input_ids` and :meth:`compute_logits`.
 
 The implementation is single-request and inference-only.  It can load just a
-subset of the five draft layers, which keeps CPU qualification fast while using
+subset of the draft layers, which keeps CPU qualification fast while using
 the real checkpoint tensors.  Loading all layers gives the complete reference
 forward.
 """
@@ -25,10 +31,33 @@ from typing import Iterable, Mapping, Sequence
 import torch
 import torch.nn.functional as F
 
-_DFLASH_REVISION = "5c36361aab23c8ed3afbd079c10c426b677bc607"
-DFLASH_TARGET_LAYER_IDS = (1, 13, 25, 33, 39)
+from .model_spec import DFLASH_MODELS, DFLASH_SPEC, MODEL_ID, DFlashSpec, dflash_spec
+
+# The selected checkpoint's draft (``TT_LAGUNA_MODEL``).  XS keeps its historical values:
+# revision 5c36361a..., target layers (1, 13, 25, 33, 39).
+_DFLASH_REVISION = DFLASH_SPEC.revision
+DFLASH_TARGET_LAYER_IDS = DFLASH_SPEC.target_layer_ids
 _HF_HOME = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
-DEFAULT_DFLASH_SNAPSHOT = _HF_HOME / "hub" / "models--poolside--Laguna-XS-2.1-DFlash" / "snapshots" / _DFLASH_REVISION
+
+
+def dflash_snapshot_path(model_id: str | None = None) -> Path:
+    """Standard Hugging Face cache path of the published draft for ``model_id``."""
+
+    spec = dflash_spec(model_id)
+    repo_dir = "models--" + spec.repo_id.replace("/", "--")
+    return _HF_HOME / "hub" / repo_dir / "snapshots" / spec.revision
+
+
+DEFAULT_DFLASH_SNAPSHOT = dflash_snapshot_path(MODEL_ID)
+
+
+def published_dflash_spec_for(geometry: tuple[int, ...]) -> tuple[str, DFlashSpec] | None:
+    """Return ``(target model id, spec)`` whose published draft geometry equals ``geometry``."""
+
+    for model_id, spec in DFLASH_MODELS.items():
+        if spec.geometry == tuple(geometry):
+            return model_id, spec
+    return None
 
 
 @dataclass(frozen=True)
@@ -116,8 +145,11 @@ class LagunaDFlashConfig:
         # One query slot is the already-known bonus/anchor token.
         return self.block_size - 1
 
-    def validate(self) -> None:
-        geometry = (
+    @property
+    def geometry(self) -> tuple[int, ...]:
+        """The fields that identify a published draft (``DFlashSpec.geometry`` order)."""
+
+        return (
             self.hidden_size,
             self.intermediate_size,
             self.num_hidden_layers,
@@ -130,18 +162,32 @@ class LagunaDFlashConfig:
             self.block_size,
             self.mask_token_id,
         )
-        published_geometry = (2048, 8192, 5, 64, 8, 128, 100352, 262144, 512, 16, 12)
-        if geometry != published_geometry:
+
+    @property
+    def target_model_id(self) -> str:
+        """The target checkpoint whose published draft has this geometry."""
+
+        published = published_dflash_spec_for(self.geometry)
+        if published is None:
+            raise ValueError(f"config does not match any published Laguna DFlash geometry: {self.geometry}")
+        return published[0]
+
+    def validate(self) -> None:
+        geometry = self.geometry
+        published = published_dflash_spec_for(geometry)
+        if published is None:
+            expected = {model_id: spec.geometry for model_id, spec in DFLASH_MODELS.items()}
             raise ValueError(
-                "config does not match the published Laguna-XS-2.1 DFlash geometry: "
-                f"got {geometry}, expected {published_geometry}"
+                "config does not match any published Laguna DFlash geometry: "
+                f"got {geometry}, expected one of {expected}"
             )
+        target_model_id, spec = published
         if self.num_attention_heads % self.num_key_value_heads:
             raise ValueError("DFlash query heads must be divisible by KV heads")
         if len(self.layer_types) != self.num_hidden_layers:
             raise ValueError("layer_types must contain one entry per draft layer")
         if set(self.layer_types) != {"sliding_attention"}:
-            raise ValueError("Laguna DFlash requires five uniform sliding-attention layers")
+            raise ValueError(f"Laguna DFlash requires {self.num_hidden_layers} uniform sliding-attention layers")
         if self.gating != "per-head":
             raise ValueError("Laguna DFlash requires softplus per-head attention gating")
         if self.hidden_act != "silu" or self.attention_bias or self.num_experts != 0:
@@ -156,12 +202,57 @@ class LagunaDFlashConfig:
             raise ValueError("aux-hidden and target-layer ID counts must match")
         if tuple(i + 1 for i in self.target_layer_ids) != self.aux_hidden_state_layer_ids:
             raise ValueError("DFlash target layer IDs must map to post-layer hidden-state IDs with +1 indexing")
-        if self.target_layer_ids != (1, 13, 25, 33, 39):
-            raise ValueError(f"unexpected Laguna DFlash target layer IDs: {self.target_layer_ids}")
+        if self.target_layer_ids != spec.target_layer_ids:
+            raise ValueError(
+                f"unexpected Laguna DFlash target layer IDs for {target_model_id}: {self.target_layer_ids}, "
+                f"expected {spec.target_layer_ids}"
+            )
+        if max(self.target_layer_ids) >= spec.num_target_layers:
+            raise ValueError(
+                f"DFlash target layer IDs {self.target_layer_ids} exceed the {spec.num_target_layers}-layer target"
+            )
         if not math.isclose(self.rope_theta, 500_000.0) or not math.isclose(self.rms_norm_eps, 1e-6):
             raise ValueError("unexpected Laguna DFlash RoPE theta or RMSNorm epsilon")
         if self.draft_vocab_size != self.vocab_size:
             raise ValueError("Laguna DFlash must share the target vocabulary and LM head")
+
+
+def published_dflash_config(model_id: str | None = None) -> LagunaDFlashConfig:
+    """The published draft config for ``model_id`` (default: selected), built without the download.
+
+    Identical to ``LagunaDFlashConfig.from_json`` on the published ``config.json``;
+    ``tests/test_dflash_reference.py`` checks that equality when the snapshot is cached.
+    """
+
+    spec = dflash_spec(model_id)
+    config = LagunaDFlashConfig(
+        hidden_size=spec.hidden_size,
+        intermediate_size=spec.intermediate_size,
+        num_hidden_layers=spec.num_draft_layers,
+        num_attention_heads=spec.num_attention_heads,
+        num_key_value_heads=spec.num_key_value_heads,
+        head_dim=spec.head_dim,
+        vocab_size=spec.vocab_size,
+        draft_vocab_size=spec.vocab_size,
+        max_position_embeddings=spec.max_position_embeddings,
+        rms_norm_eps=1e-6,
+        rope_theta=500_000.0,
+        sliding_window=spec.sliding_window,
+        hidden_act="silu",
+        attention_bias=False,
+        gating="per-head",
+        num_experts=0,
+        architectures=("DFlashLagunaForCausalLM",),
+        torch_dtype="bfloat16",
+        layer_types=("sliding_attention",) * spec.num_draft_layers,
+        aux_hidden_state_layer_ids=spec.aux_hidden_state_layer_ids,
+        target_layer_ids=spec.target_layer_ids,
+        block_size=spec.block_size,
+        mask_token_id=spec.mask_token_id,
+        causal=True,
+    )
+    config.validate()
+    return config
 
 
 def expected_checkpoint_shapes(config: LagunaDFlashConfig) -> dict[str, tuple[int, ...]]:
@@ -390,11 +481,13 @@ def evaluate_dflash_draft_argmax_accuracy(
 
 @dataclass(frozen=True)
 class DFlashTargetAuxCapture:
-    """Five post-target-layer states for a contiguous logical token interval.
+    """Post-target-layer states (one per DFlash target layer) for a contiguous token interval.
 
     ``hidden_states`` is intentionally an opaque tensor-like object.  The CPU
     reference uses a torch tensor while the serving implementation uses a TT
-    tensor with the identical ``[1, rows, 5 * hidden]`` flattened contract.
+    tensor with the identical ``[1, rows, num_aux * hidden]`` flattened contract
+    (XS: 5 x 2048, S: 6 x 3072).  ``layer_ids`` defaults to the selected
+    checkpoint's target layers.
     Keeping positions as scalar metadata avoids a device-to-host readback in the
     target forward path.
     """
@@ -634,10 +727,10 @@ class LagunaDFlashReference:
             raise KeyError(f"reference weight was not loaded: {name}") from error
 
     def combine_aux_hidden_states(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        """Normalize five target hidden slices, concatenate, project, then norm.
+        """Normalize the target hidden slices, concatenate, project, then norm.
 
-        Accepted shapes are ``[tokens, 5, 2048]`` and ``[tokens, 10240]``.
-        The slice order is exactly ``target_layer_ids=(1, 13, 25, 33, 39)``.
+        Accepted shapes are ``[tokens, num_aux, hidden]`` and ``[tokens, num_aux * hidden]``
+        (XS: 5 x 2048, S: 6 x 3072).  The slice order is exactly ``config.target_layer_ids``.
         """
 
         h = self.config.hidden_size
@@ -829,7 +922,7 @@ class LagunaDFlashReference:
         query_positions: torch.Tensor,
         context_kv: Mapping[int, LayerContextKV],
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, ...]]:
-        """Return the final hidden state and five device-comparison stages.
+        """Return the final hidden state and one device-comparison stage per draft layer.
 
         This default-off diagnostic API does not alter the official forward
         path.  Each retained stage is the BF16-rounded ``MLP + residual``
@@ -878,11 +971,14 @@ __all__ = [
     "LagunaDFlashReference",
     "LayerContextKV",
     "apply_neox_rope",
+    "dflash_snapshot_path",
     "build_proposal_block",
     "causal_sliding_attention",
     "evaluate_dflash_draft_argmax_accuracy",
     "expected_checkpoint_shapes",
     "fused_add_rms_norm",
+    "published_dflash_config",
+    "published_dflash_spec_for",
     "retain_dflash_context_window",
     "rms_norm",
     "split_fused_qkv",

@@ -1,6 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Device-free contracts and an explicit P150x2 gate for the TT DFlash core."""
+"""Device-free contracts and explicit hardware gates for the TT DFlash core.
+
+Device-free tests use the selected checkpoint's published draft (``TT_LAGUNA_MODEL``):
+Laguna-XS-2.1-DFlash (5 layers, hidden 2048) or Laguna-S-2.1-DFlash (6 layers, hidden 3072).
+Hardware gates are opt-in and pinned per checkpoint: XS on P150x2 chips 2,3; S on P150x4
+chips 0,1,2,3.
+"""
 
 from __future__ import annotations
 
@@ -29,6 +35,7 @@ from models.autoports.poolside_laguna_xs_2_1.tt.dflash_reference import (
     build_proposal_block,
     evaluate_dflash_draft_argmax_accuracy,
     expected_checkpoint_shapes,
+    published_dflash_config,
 )
 from models.autoports.poolside_laguna_xs_2_1.tt.dflash_serving import DFlashServedController, DFlashServingEnvelope
 from models.autoports.poolside_laguna_xs_2_1.tt.dflash_tt import (
@@ -43,39 +50,23 @@ from models.autoports.poolside_laguna_xs_2_1.tt.dflash_tt import (
     map_dflash_shared_state_dict,
 )
 from models.autoports.poolside_laguna_xs_2_1.tt.model import LagunaModel, load_top_level_tensors
+from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import DFLASH_SPEC, MODEL_ID, MODEL_MAX_CONTEXT
 from models.autoports.poolside_laguna_xs_2_1.tt.multichip_decoder import _cache_layer_identity
 from models.autoports.poolside_laguna_xs_2_1.tt.optimized_decoder import LayerConfig
 
 
 def _published_config() -> LagunaDFlashConfig:
-    config = LagunaDFlashConfig(
-        hidden_size=2048,
-        intermediate_size=8192,
-        num_hidden_layers=5,
-        num_attention_heads=64,
-        num_key_value_heads=8,
-        head_dim=128,
-        vocab_size=100352,
-        draft_vocab_size=100352,
-        max_position_embeddings=262144,
-        rms_norm_eps=1e-6,
-        rope_theta=500_000.0,
-        sliding_window=512,
-        hidden_act="silu",
-        attention_bias=False,
-        gating="per-head",
-        num_experts=0,
-        architectures=("DFlashLagunaForCausalLM",),
-        torch_dtype="bfloat16",
-        layer_types=("sliding_attention",) * 5,
-        aux_hidden_state_layer_ids=(2, 14, 26, 34, 40),
-        target_layer_ids=(1, 13, 25, 33, 39),
-        block_size=16,
-        mask_token_id=12,
-        causal=True,
-    )
-    config.validate()
+    """The selected checkpoint's published draft config (XS: 5x2048, S: 6x3072)."""
+
+    config = published_dflash_config()
+    assert config.target_model_id == MODEL_ID
     return config
+
+
+# Selected-checkpoint geometry used by the device-free contracts below.
+_LAYERS = DFLASH_SPEC.num_draft_layers
+_NUM_AUX = len(DFLASH_SPEC.target_layer_ids)
+_TARGET_LAYERS = DFLASH_SPEC.num_target_layers
 
 
 def _meta_checkpoint(config: LagunaDFlashConfig) -> dict[str, torch.Tensor]:
@@ -89,20 +80,30 @@ def test_corrected_decoder_config_is_dense_full_rotary_swa():
     source = _published_config()
     config = build_dflash_decoder_config(source)
 
-    assert config.layer_types == ("sliding_attention",) * 5
-    assert config.mlp_only_layers == tuple(range(5))
+    assert config.layer_types == ("sliding_attention",) * _LAYERS
+    assert config.mlp_only_layers == tuple(range(_LAYERS))
     assert config.num_experts == 0
     assert config.rope_theta == 500_000.0
+    assert config._name_or_path == DFLASH_SPEC.repo_id
     for branch in ("full_attention", "sliding_attention"):
         assert config.rope_parameters[branch]["rope_theta"] == 500_000.0
         assert config.rope_parameters[branch]["partial_rotary_factor"] == 1.0
 
-    for layer_idx in range(5):
+    for layer_idx in range(_LAYERS):
         layer = LayerConfig.from_hf(config, layer_idx)
         assert layer.is_sliding and layer.sliding_window == 512
-        assert not layer.is_moe and layer.intermediate == 8192
-        assert (layer.num_heads, layer.num_kv_heads, layer.head_dim) == (64, 8, 128)
+        assert not layer.is_moe and layer.intermediate == DFLASH_SPEC.intermediate_size
+        assert (layer.num_heads, layer.num_kv_heads, layer.head_dim) == (
+            DFLASH_SPEC.num_attention_heads,
+            DFLASH_SPEC.num_key_value_heads,
+            128,
+        )
         assert layer.rotary_dim == layer.head_dim == 128
+        # The draft is tensor-parallel exactly like a target layer on its serving mesh: query and
+        # KV heads must split evenly (XS D2: 32/4 per chip; S D4: 18/2 per chip).
+        devices = DFLASH_SPEC.serving_device_count
+        assert layer.num_heads % devices == 0 and layer.num_kv_heads % devices == 0
+        assert layer.intermediate % (32 * devices) == 0
 
 
 def test_full_rope_tables_match_reference_neox_rotation(expect_error):
@@ -151,9 +152,10 @@ def test_strict_layer_mapping_splits_fused_qkv_rows():
         "mlp.up_proj.weight",
         "mlp.down_proj.weight",
     }
-    assert mapped["self_attn.q_proj.weight"].shape == (8192, 2048)
-    assert mapped["self_attn.k_proj.weight"].shape == (1024, 2048)
-    assert mapped["self_attn.v_proj.weight"].shape == (1024, 2048)
+    h = config.hidden_size
+    assert mapped["self_attn.q_proj.weight"].shape == (config.q_size, h)
+    assert mapped["self_attn.k_proj.weight"].shape == (1024, h)
+    assert mapped["self_attn.v_proj.weight"].shape == (1024, h)
     assert mapped["self_attn.q_proj.weight"][0, 0].item() == 1
     assert mapped["self_attn.k_proj.weight"][0, 0].item() == 2
     assert mapped["self_attn.v_proj.weight"][0, 0].item() == 3
@@ -184,18 +186,15 @@ def test_strict_shared_mapping_loads_only_draft_owned_weights(expect_error):
     shared = map_dflash_shared_state_dict(state, config)
     assert tuple(shared) == dflash_shared_checkpoint_names(config)
     assert tuple(shared) == (
-        "aux_hidden_norms.0.weight",
-        "aux_hidden_norms.1.weight",
-        "aux_hidden_norms.2.weight",
-        "aux_hidden_norms.3.weight",
-        "aux_hidden_norms.4.weight",
+        *(f"aux_hidden_norms.{index}.weight" for index in range(_NUM_AUX)),
         "fc.weight",
         "hidden_norm.weight",
         "norm.weight",
     )
-    assert shared["fc.weight"].shape == (2048, 10240)
+    h = config.hidden_size
+    assert shared["fc.weight"].shape == (h, _NUM_AUX * h)
 
-    state["lm_head.weight"] = torch.empty((100352, 2048), dtype=torch.bfloat16, device="meta")
+    state["lm_head.weight"] = torch.empty((100352, h), dtype=torch.bfloat16, device="meta")
     with expect_error(ValueError, "unexpected"):
         map_dflash_shared_state_dict(state, config)
 
@@ -253,9 +252,11 @@ def test_target_capture_paths_are_explicit_separate_and_default_off(monkeypatch,
         def decode_forward(self, hidden, *args, **kwargs):
             return hidden + (self.layer_idx + 1)
 
+    h = DFLASH_SPEC.hidden_size
+    n = _TARGET_LAYERS
     model = object.__new__(LagunaModel)
-    model.layers = [FakeLayer(index) for index in range(40)]
-    model.cfg = SimpleNamespace(hidden=2048, max_position_embeddings=262144)
+    model.layers = [FakeLayer(index) for index in range(n)]
+    model.cfg = SimpleNamespace(hidden=h, max_position_embeddings=MODEL_MAX_CONTEXT)
     model._build_prefill_rope = lambda *args, **kwargs: {"sliding_attention": (object(), object())}
     model._build_decode_rope = lambda *args, **kwargs: {"sliding_attention": (object(), object())}
     monkeypatch.setattr(
@@ -265,49 +266,57 @@ def test_target_capture_paths_are_explicit_separate_and_default_off(monkeypatch,
     )
     monkeypatch.setattr(ttnn, "concat", lambda values, dim: torch.cat(tuple(values), dim=dim))
     monkeypatch.setattr(ttnn, "reshape", lambda value, shape: value.reshape(shape))
-    hidden = torch.zeros((1, 4, 2048))
+    hidden = torch.zeros((1, 4, h))
 
     with expect_error(RuntimeError, "default-off"):
-        model.prefill_layers_with_dflash_aux(hidden, [None] * 40, object())
+        model.prefill_layers_with_dflash_aux(hidden, [None] * n, object())
     final, capture = model.prefill_layers_with_dflash_aux(
         hidden,
-        [None] * 40,
+        [None] * n,
         object(),
         start_pos=100,
         valid_seq_len=3,
         enable_experimental=True,
     )
-    assert final[0, 0, 0].item() == sum(range(1, 41))
+    assert final[0, 0, 0].item() == sum(range(1, n + 1))
     assert (capture.start_position, capture.row_count, capture.end_position) == (100, 3, 102)
+    assert capture.layer_ids == DFLASH_SPEC.target_layer_ids
     capture.validate(_published_config())
-    slices = capture.hidden_states.reshape(1, 3, 5, 2048)
-    cumulative = [sum(range(1, layer + 2)) for layer in (1, 13, 25, 33, 39)]
+    slices = capture.hidden_states.reshape(1, 3, _NUM_AUX, h)
+    cumulative = [sum(range(1, layer + 2)) for layer in DFLASH_SPEC.target_layer_ids]
     assert slices[0, 0, :, 0].tolist() == cumulative
+
+    # A partial stack (or the other checkpoint's stack) never captures.
+    short = object.__new__(LagunaModel)
+    short.layers = model.layers[:-1]
+    short.cfg = model.cfg
+    with expect_error(RuntimeError, f"exact full {n}-layer target stack"):
+        short.prefill_layers_with_dflash_aux(hidden, [None] * (n - 1), object(), enable_experimental=True)
 
     with expect_error(RuntimeError, "default-off"):
         model.decode_layers_with_dflash_aux(
-            torch.zeros((1, 1, 1, 2048)), object(), object(), object(), [None] * 40, absolute_position=103
+            torch.zeros((1, 1, 1, h)), object(), object(), object(), [None] * n, absolute_position=103
         )
     _, decode_capture = model.decode_layers_with_dflash_aux(
-        torch.zeros((1, 1, 1, 2048)),
+        torch.zeros((1, 1, 1, h)),
         object(),
         object(),
         object(),
-        [None] * 40,
+        [None] * n,
         absolute_position=103,
         enable_experimental=True,
     )
     decode_capture.validate(_published_config())
     assert (decode_capture.start_position, decode_capture.row_count) == (103, 1)
 
-    verify_hidden = torch.zeros((1, 1, 3, 2048))
+    verify_hidden = torch.zeros((1, 1, 3, h))
     with expect_error(ValueError, "sequential_kv_write=True"):
         model.decode_layers_with_dflash_aux(
             verify_hidden,
             object(),
             object(),
             object(),
-            [None] * 40,
+            [None] * n,
             absolute_position=104,
             enable_experimental=True,
         )
@@ -316,14 +325,14 @@ def test_target_capture_paths_are_explicit_separate_and_default_off(monkeypatch,
         object(),
         object(),
         object(),
-        [None] * 40,
+        [None] * n,
         absolute_position=104,
         sequential_kv_write=True,
         enable_experimental=True,
     )
     verify_capture.validate(_published_config())
     assert (verify_capture.start_position, verify_capture.row_count, verify_capture.end_position) == (104, 3, 106)
-    assert verify_capture.hidden_states.shape == (1, 3, 5 * 2048)
+    assert verify_capture.hidden_states.shape == (1, 3, _NUM_AUX * h)
 
 
 def test_one_round_driver_resets_context_and_carries_only_query(monkeypatch, expect_error):
@@ -331,7 +340,7 @@ def test_one_round_driver_resets_context_and_carries_only_query(monkeypatch, exp
     mesh = object()
     context_rows = 3
     h = config.hidden_size
-    flattened = torch.arange(context_rows * 5 * h, dtype=torch.float32).reshape(1, context_rows, 5 * h)
+    flattened = torch.arange(context_rows * _NUM_AUX * h, dtype=torch.float32).reshape(1, context_rows, _NUM_AUX * h)
     capture = DFlashTargetAuxCapture(flattened, start_position=100, row_count=context_rows)
 
     class FakeLayer:
@@ -352,10 +361,10 @@ def test_one_round_driver_resets_context_and_carries_only_query(monkeypatch, exp
 
     core = object.__new__(DFlashTTCore)
     core.config = config
-    core.layers = {index: FakeLayer(index) for index in range(5)}
+    core.layers = {index: FakeLayer(index) for index in range(_LAYERS)}
     core.mesh_device = mesh
     core.max_seq_len = 1024
-    fused_context = flattened.reshape(1, context_rows, 5, h).mean(dim=2)
+    fused_context = flattened.reshape(1, context_rows, _NUM_AUX, h).mean(dim=2)
     core.combine_aux_hidden_states = lambda value: fused_context.clone()
     core.apply_final_norm = lambda value: value * 2
 
@@ -363,8 +372,8 @@ def test_one_round_driver_resets_context_and_carries_only_query(monkeypatch, exp
     cache.core = core
     cache.block_size = 32
     cache.capacity = 544
-    cache.kv_cache = {index: object() for index in range(5)}
-    cache.page_tables = {index: object() for index in range(5)}
+    cache.kv_cache = {index: object() for index in range(_LAYERS)}
+    cache.page_tables = {index: object() for index in range(_LAYERS)}
     cache._request_id = "request-1"
     cache._closed = False
     cache._context = capture.hidden_states
@@ -410,8 +419,9 @@ def test_one_round_driver_resets_context_and_carries_only_query(monkeypatch, exp
     assert target.raw_projection_calls == 1
     for layer in core.layers.values():
         torch.testing.assert_close(layer.context_seen[0], fused_context)
-    # The semantic query accumulates +1,+2,+3,+4,+5, then the draft norm doubles it.
-    expected = (result.block.input_ids[1:16].to(torch.float32).unsqueeze(-1).expand(-1, h) / 100 + 15) * 2
+    # The semantic query accumulates +1, +2, ..., +layers, then the draft norm doubles it.
+    accumulated = sum(range(1, _LAYERS + 1))
+    expected = (result.block.input_ids[1:16].to(torch.float32).unsqueeze(-1).expand(-1, h) / 100 + accumulated) * 2
     torch.testing.assert_close(result.sampled_hidden_states[0], expected)
 
 
@@ -435,7 +445,7 @@ def test_proposal_cache_lifetime_and_contiguous_511_row_retention(monkeypatch, e
         lambda value, starts, ends: value[starts[0] : ends[0], starts[1] : ends[1], starts[2] : ends[2]],
     )
 
-    width = 5 * config.hidden_size
+    width = _NUM_AUX * config.hidden_size
     prefill = DFlashTargetAuxCapture(torch.zeros((1, 511, width)), start_position=10, row_count=511)
     decode = DFlashTargetAuxCapture(torch.ones((1, 1, width)), start_position=521, row_count=1)
     with expect_error(RuntimeError, "begin_request"):
@@ -463,16 +473,51 @@ _RUN_HW = os.environ.get("TT_LAGUNA_RUN_DFLASH_TT_HW", "0").strip().lower() in {
 _SNAPSHOT = Path(os.environ.get("LAGUNA_DFLASH_SNAPSHOT", DEFAULT_DFLASH_SNAPSHOT))
 _HAS_CHECKPOINT = (_SNAPSHOT / "config.json").is_file() and (_SNAPSHOT / "model.safetensors").is_file()
 
+# Hardware gates are pinned per checkpoint to its DFlash serving topology (tt/model_spec.py
+# DFLASH_MODELS): XS on P150x2 physical chips 2,3; S on all four P150x4 chips.
+_HW_PINS = {
+    "poolside/Laguna-XS-2.1": ("p150x2", "2,3"),
+    "poolside/Laguna-S-2.1": ("p150x4", "0,1,2,3"),
+}
+_HW_PROFILE, _HW_DEVICES = _HW_PINS[MODEL_ID]
+_HW_D = DFLASH_SPEC.serving_device_count
+_IS_XS = MODEL_ID == "poolside/Laguna-XS-2.1"
+_only_xs = pytest.mark.skipif(not _IS_XS, reason="XS gate: set TT_LAGUNA_MODEL=poolside/Laguna-XS-2.1")
+_only_s = pytest.mark.skipif(_IS_XS, reason="S gate: set TT_LAGUNA_MODEL=poolside/Laguna-S-2.1 (the default)")
+_requires_tt_hw = pytest.mark.skipif(
+    not _RUN_HW, reason=f"set TT_LAGUNA_RUN_DFLASH_TT_HW=1 for the isolated {_HW_PROFILE} gate"
+)
+_requires_checkpoint = pytest.mark.skipif(
+    not _HAS_CHECKPOINT, reason="published Laguna DFlash checkpoint is unavailable"
+)
 
-@pytest.mark.skipif(not _RUN_HW, reason="set TT_LAGUNA_RUN_DFLASH_TT_HW=1 for the isolated P150x2 gate")
-@pytest.mark.skipif(not _HAS_CHECKPOINT, reason="published Laguna DFlash checkpoint is unavailable")
+
+def _require_pinned_devices(what: str) -> None:
+    if os.environ.get("TT_VISIBLE_DEVICES") != _HW_DEVICES:
+        pytest.fail(f"DFlash {what} for {MODEL_ID} is pinned to TT_VISIBLE_DEVICES={_HW_DEVICES}")
+
+
+@_only_xs
+@_requires_tt_hw
+@_requires_checkpoint
 @torch.inference_mode()
 def test_one_layer_d2_bf16_prefill_pcc_chips_2_3():
+    _one_layer_bf16_prefill_pcc_gate()
+
+
+@_only_s
+@_requires_tt_hw
+@_requires_checkpoint
+@torch.inference_mode()
+def test_one_layer_d4_bf16_prefill_pcc_chips_0_3():
+    _one_layer_bf16_prefill_pcc_gate()
+
+
+def _one_layer_bf16_prefill_pcc_gate():
     """Qualify shared aux fusion plus draft layer 0 against the CPU reference."""
 
-    if os.environ.get("TT_VISIBLE_DEVICES") != "2,3":
-        pytest.fail("DFlash hardware proof is pinned to TT_VISIBLE_DEVICES=2,3")
-    profile = resolve_profile("p150x2", trace_region_size=200_000_000)
+    _require_pinned_devices("hardware proof")
+    profile = resolve_profile(_HW_PROFILE, trace_region_size=200_000_000)
     mesh = open_mesh(ttnn, profile)
     try:
         core = DFlashTTCore.from_checkpoint(
@@ -484,14 +529,20 @@ def test_one_layer_d2_bf16_prefill_pcc_chips_2_3():
             enable_experimental=True,
         )
         layer = core.layers[0]
-        assert layer.D == 2
-        assert (layer.cfg.num_heads, layer.cfg.num_kv_heads) == (32, 4)
+        assert layer.D == _HW_D
+        # Tensor-parallel heads per chip: XS D2 32/4, S D4 18/2.
+        assert (layer.cfg.num_heads, layer.cfg.num_kv_heads) == (
+            DFLASH_SPEC.num_attention_heads // _HW_D,
+            DFLASH_SPEC.num_key_value_heads // _HW_D,
+        )
         assert layer.cfg.is_sliding and layer.cfg.rotary_dim == 128
 
         reference = LagunaDFlashCheckpoint(_SNAPSHOT).load_reference(layer_indices=(0,))
         h = core.config.hidden_size
         context_tokens = query_tokens = 16
-        aux = (((torch.arange(context_tokens * 5 * h) % 97) - 48).float() / 2400).reshape(context_tokens, 5, h)
+        aux = (((torch.arange(context_tokens * _NUM_AUX * h) % 97) - 48).float() / 2400).reshape(
+            context_tokens, _NUM_AUX, h
+        )
         query = (((torch.arange(query_tokens * h) % 83) - 41).float() / 2100).reshape(query_tokens, h)
         aux = aux.to(torch.bfloat16)
         query = query.to(torch.bfloat16)
@@ -504,7 +555,7 @@ def test_one_layer_d2_bf16_prefill_pcc_chips_2_3():
 
         replicate = ttnn.ReplicateTensorToMesh(mesh)
         aux_tt = ttnn.from_torch(
-            aux.reshape(1, context_tokens, 5 * h),
+            aux.reshape(1, context_tokens, _NUM_AUX * h),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
@@ -539,15 +590,27 @@ def test_one_layer_d2_bf16_prefill_pcc_chips_2_3():
         close_mesh(ttnn, mesh)
 
 
-@pytest.mark.skipif(not _RUN_HW, reason="set TT_LAGUNA_RUN_DFLASH_TT_HW=1 for the isolated P150x2 gate")
-@pytest.mark.skipif(not _HAS_CHECKPOINT, reason="published Laguna DFlash checkpoint is unavailable")
+@_only_xs
+@_requires_tt_hw
+@_requires_checkpoint
 @torch.inference_mode()
 def test_full_five_layer_one_round_pcc_and_warm_latency_chips_2_3():
-    """Qualify the exact five-layer driver and raw target-owned projection."""
+    _full_draft_one_round_gate()
 
-    if os.environ.get("TT_VISIBLE_DEVICES") != "2,3":
-        pytest.fail("DFlash hardware proof is pinned to TT_VISIBLE_DEVICES=2,3")
-    profile = resolve_profile("p150x2", trace_region_size=200_000_000)
+
+@_only_s
+@_requires_tt_hw
+@_requires_checkpoint
+@torch.inference_mode()
+def test_full_six_layer_one_round_pcc_and_warm_latency_chips_0_3():
+    _full_draft_one_round_gate()
+
+
+def _full_draft_one_round_gate():
+    """Qualify the exact all-draft-layer driver and raw target-owned projection."""
+
+    _require_pinned_devices("hardware proof")
+    profile = resolve_profile(_HW_PROFILE, trace_region_size=200_000_000)
     mesh = open_mesh(ttnn, profile)
     proposal_cache = None
     try:
@@ -558,14 +621,14 @@ def test_full_five_layer_one_round_pcc_and_warm_latency_chips_2_3():
             policy=dflash_bf16_policy(),
             enable_experimental=True,
         )
-        assert tuple(core.layers) == (0, 1, 2, 3, 4)
+        assert tuple(core.layers) == tuple(range(_LAYERS))
         reference = LagunaDFlashCheckpoint(_SNAPSHOT).load_reference()
         config = core.config
         h = config.hidden_size
         context_rows = 16
         aux = (
-            (((torch.arange(context_rows * 5 * h) % 97) - 48).float() / 2400)
-            .reshape(context_rows, 5, h)
+            (((torch.arange(context_rows * _NUM_AUX * h) % 97) - 48).float() / 2400)
+            .reshape(context_rows, _NUM_AUX, h)
             .to(torch.bfloat16)
         )
         context_positions = torch.arange(context_rows)
@@ -616,7 +679,7 @@ def test_full_five_layer_one_round_pcc_and_warm_latency_chips_2_3():
                 return ttnn.linear(hidden, lm_head_w, compute_kernel_config=core.layers[0]._ck_hifi4)
 
         aux_tt = ttnn.from_torch(
-            aux.reshape(1, context_rows, 5 * h),
+            aux.reshape(1, context_rows, _NUM_AUX * h),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
@@ -627,7 +690,7 @@ def test_full_five_layer_one_round_pcc_and_warm_latency_chips_2_3():
         proposal_cache.begin_request("hardware-gate")
         proposal_cache.update_target_capture(DFlashTargetAuxCapture(aux_tt, start_position=0, row_count=context_rows))
         target = TargetOwner()
-        aux_roundtrip = compose_replicated(ttnn, aux_tt, mesh, profile).reshape(context_rows, 5, h)
+        aux_roundtrip = compose_replicated(ttnn, aux_tt, mesh, profile).reshape(context_rows, _NUM_AUX, h)
         context_tt = core.combine_aux_hidden_states(aux_tt)
         context_got = compose_replicated(ttnn, context_tt, mesh, profile).reshape(context_rows, h)
         memory = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
@@ -682,7 +745,7 @@ def test_full_five_layer_one_round_pcc_and_warm_latency_chips_2_3():
         expected_top1 = expected_logits.argmax(dim=-1)
         median = sorted(warm_seconds)[1]
         print(
-            "DFLASH_TT_FULL5 "
+            f"DFLASH_TT_FULL{_LAYERS} "
             f"aux_pcc={aux_pcc:.8f} context_pcc={context_pcc:.8f} "
             f"hidden_pcc={hidden_pcc:.8f} logits_pcc={logits_pcc:.8f} "
             f"top1={top1_matches}/15 warm_s={warm_seconds} median_s={median:.6f} "
@@ -693,11 +756,11 @@ def test_full_five_layer_one_round_pcc_and_warm_latency_chips_2_3():
         )
         assert aux_pcc == 1.0, f"DFlash auxiliary transfer PCC {aux_pcc:.6f} != 1"
         assert context_pcc >= 0.999, f"DFlash fused context PCC {context_pcc:.6f} < 0.999"
-        assert hidden_pcc >= 0.995, f"full-five DFlash hidden PCC {hidden_pcc:.6f} < 0.995"
-        assert logits_pcc >= 0.995, f"full-five DFlash logit PCC {logits_pcc:.6f} < 0.995"
+        assert hidden_pcc >= 0.995, f"full-draft DFlash hidden PCC {hidden_pcc:.6f} < 0.995"
+        assert logits_pcc >= 0.995, f"full-draft DFlash logit PCC {logits_pcc:.6f} < 0.995"
         assert not draft_accuracy.tied_rows, "deterministic exact gate unexpectedly contains a reference tie"
         assert draft_accuracy.literal_exact and draft_accuracy.passed
-        assert top1_matches == 15, f"full-five DFlash target top-1 matches {top1_matches}/15"
+        assert top1_matches == 15, f"full-draft DFlash target top-1 matches {top1_matches}/15"
     finally:
         if proposal_cache is not None:
             proposal_cache.close()
@@ -711,22 +774,37 @@ _RUN_SERVING_HW = os.environ.get("TT_LAGUNA_RUN_DFLASH_SERVING_HW", "0").strip()
 }
 
 
-@pytest.mark.skipif(
+_requires_serving_hw = pytest.mark.skipif(
     not _RUN_SERVING_HW,
-    reason="set TT_LAGUNA_RUN_DFLASH_SERVING_HW=1 for the bounded P150x2 served-controller gate",
+    reason=f"set TT_LAGUNA_RUN_DFLASH_SERVING_HW=1 for the bounded {_HW_PROFILE} served-controller gate",
 )
-@pytest.mark.skipif(not _HAS_CHECKPOINT, reason="published Laguna DFlash checkpoint is unavailable")
+
+
+@_only_xs
+@_requires_serving_hw
+@_requires_checkpoint
 @torch.inference_mode()
 def test_served_controller_full_target_accuracy_and_warm_latency_chips_2_3():
+    _served_controller_gate()
+
+
+@_only_s
+@_requires_serving_hw
+@_requires_checkpoint
+@torch.inference_mode()
+def test_served_controller_full_target_accuracy_and_warm_latency_chips_0_3():
+    _served_controller_gate()
+
+
+def _served_controller_gate():
     """Gate full target capture/verify, draft tie contract, and fallback.
 
     This is a correctness/diagnostic gate, not a performance qualification:
     the first measured real-context round failed the baseline TPOT comparison.
     """
 
-    if os.environ.get("TT_VISIBLE_DEVICES") != "2,3":
-        pytest.fail("DFlash served-controller proof is pinned to TT_VISIBLE_DEVICES=2,3")
-    profile = resolve_profile("p150x2", trace_region_size=400_000_000)
+    _require_pinned_devices("served-controller proof")
+    profile = resolve_profile(_HW_PROFILE, trace_region_size=400_000_000)
     mesh = open_mesh(ttnn, profile)
     proposal_cache = None
     controller = None
@@ -738,7 +816,7 @@ def test_served_controller_full_target_accuracy_and_warm_latency_chips_2_3():
             max_seq_len=128,
             lm_head_dtype=ttnn.bfloat16,
         )
-        assert len(target.layers) == 40 and target.D == 2
+        assert len(target.layers) == _TARGET_LAYERS and target.D == _HW_D
         core = DFlashTTCore.from_checkpoint(
             mesh,
             snapshot=_SNAPSHOT,
@@ -765,7 +843,9 @@ def test_served_controller_full_target_accuracy_and_warm_latency_chips_2_3():
             return float(torch.corrcoef(torch.stack((actual.float().flatten(), expected.float().flatten())))[0, 1])
 
         def host_aux(capture):
-            return compose_replicated(ttnn, capture.hidden_states, mesh, profile).reshape(capture.row_count, 5, h)
+            return compose_replicated(ttnn, capture.hidden_states, mesh, profile).reshape(
+                capture.row_count, _NUM_AUX, h
+            )
 
         def page_table(rows, blocks_per_user):
             host = torch.arange(blocks_per_user, dtype=torch.int32).reshape(1, -1).repeat(rows, 1)
@@ -803,7 +883,7 @@ def test_served_controller_full_target_accuracy_and_warm_latency_chips_2_3():
         known_bonus = int(torch.argmax(prompt_logits_a))
 
         # First qualify the target-generated auxiliary state through the exact
-        # published five-layer CPU reference and target-owned raw LM head.
+        # published all-layer CPU reference and target-owned raw LM head.
         initial_aux = host_aux(initial_capture).to(torch.bfloat16)
         positions = torch.arange(prompt_rows)
         target_top = load_top_level_tensors(["model.embed_tokens.weight", "lm_head.weight"])
@@ -829,7 +909,7 @@ def test_served_controller_full_target_accuracy_and_warm_latency_chips_2_3():
         proposal_cache = core.allocate_proposal_cache(enable_experimental=True)
         proposal_cache.begin_request("cpu-contract")
         proposal_cache.update_target_capture(initial_capture)
-        # Capture the five materialized draft-layer outputs only for this
+        # Capture every materialized draft-layer output only for this
         # diagnostic gate.  Production proposal calls retain the original
         # methods and allocate no trace state.
         stage_tensors = {}
