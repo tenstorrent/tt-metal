@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <random>
 
@@ -12,6 +13,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
 
 class SelectTargetLogitTest : public ::testing::Test {
 public:
@@ -165,6 +167,142 @@ TEST_F(SelectTargetLogitTest, BatchedPartialVocabShard) {
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
     EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+}
+
+TEST_F(SelectTargetLogitTest, ValidatesStorageGeometryAndShardWindowOnColdAndWarmRuns) {
+    using namespace ttml;
+    using OperationType = metal::ops::select_target_logit::device::SelectTargetLogitDeviceOperation;
+
+    constexpr uint32_t N = 2U;
+    constexpr uint32_t S = 3U;
+    constexpr uint32_t V = 33U;
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    xt::xarray<float> logit_t = xt::empty<float>({N, 1U, S, V});
+    float value = 0.F;
+    for (auto& element : logit_t) {
+        element = value++;
+    }
+    xt::xarray<uint32_t> target_t = {{0U, 16U, 32U}, {32U, 1U, 17U}};
+
+    auto logit_dev = core::from_xtensor(logit_t, device);
+    auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(target_t, device, ttnn::Layout::ROW_MAJOR);
+
+    const auto output_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({N, 1U, S, 1U}),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, logit_dev.memory_config()));
+    auto preallocated = ttnn::create_device_tensor(output_spec, logit_dev.device());
+
+    const auto l1_logit_spec = tt::tt_metal::TensorSpec(
+        logit_dev.logical_shape(),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, ttnn::L1_MEMORY_CONFIG));
+    const auto overpadded_logit_spec = tt::tt_metal::TensorSpec(
+        logit_dev.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::Layout::TILE,
+            ttnn::DRAM_MEMORY_CONFIG,
+            tt::tt_metal::Alignment({64U, 64U})));
+    const auto l1_target_spec = tt::tt_metal::TensorSpec(
+        target_dev.logical_shape(),
+        tt::tt_metal::TensorLayout(ttnn::DataType::UINT32, ttnn::Layout::ROW_MAJOR, ttnn::L1_MEMORY_CONFIG));
+    const auto wide_page_target_spec = tt::tt_metal::TensorSpec(
+        target_dev.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::UINT32,
+            ttnn::Layout::ROW_MAJOR,
+            ttnn::DRAM_MEMORY_CONFIG,
+            tt::tt_metal::Alignment({1U, 64U})));
+    const auto l1_output_spec = tt::tt_metal::TensorSpec(
+        output_spec.logical_shape(),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, ttnn::L1_MEMORY_CONFIG));
+
+    auto l1_logit = ttnn::create_device_tensor(l1_logit_spec, logit_dev.device());
+    auto overpadded_logit = ttnn::create_device_tensor(overpadded_logit_spec, logit_dev.device());
+    auto l1_target = ttnn::create_device_tensor(l1_target_spec, target_dev.device());
+    auto wide_page_target = ttnn::create_device_tensor(wide_page_target_spec, target_dev.device());
+    auto l1_output = ttnn::create_device_tensor(l1_output_spec, logit_dev.device());
+
+    const OperationType::operation_attributes_t attributes{.first_v = 0U, .local_V = V, .cluster_axis = std::nullopt};
+    const auto canonical_hash = OperationType::compute_program_hash(
+        attributes,
+        OperationType::tensor_args_t{.logit = logit_dev, .target = target_dev, .preallocated_output = preallocated});
+    EXPECT_NE(
+        OperationType::compute_program_hash(
+            attributes,
+            OperationType::tensor_args_t{.logit = l1_logit, .target = target_dev, .preallocated_output = preallocated}),
+        canonical_hash);
+    EXPECT_NE(
+        OperationType::compute_program_hash(
+            attributes,
+            OperationType::tensor_args_t{
+                .logit = overpadded_logit, .target = target_dev, .preallocated_output = preallocated}),
+        canonical_hash);
+    EXPECT_NE(
+        OperationType::compute_program_hash(
+            attributes,
+            OperationType::tensor_args_t{.logit = logit_dev, .target = l1_target, .preallocated_output = preallocated}),
+        canonical_hash);
+    EXPECT_NE(
+        OperationType::compute_program_hash(
+            attributes,
+            OperationType::tensor_args_t{
+                .logit = logit_dev, .target = wide_page_target, .preallocated_output = preallocated}),
+        canonical_hash);
+    EXPECT_NE(
+        OperationType::compute_program_hash(
+            attributes,
+            OperationType::tensor_args_t{.logit = logit_dev, .target = target_dev, .preallocated_output = l1_output}),
+        canonical_hash);
+
+    const auto expect_rejected_without_cache_entry = [&](const auto& call) {
+        const auto entries_before = device->num_program_cache_entries();
+        EXPECT_ANY_THROW(call());
+        EXPECT_EQ(device->num_program_cache_entries(), entries_before);
+    };
+    const auto entries_before_canonical = device->num_program_cache_entries();
+
+    // Exercise miss validation before a canonical program exists.
+    expect_rejected_without_cache_entry([&]() { ttnn::prim::ttml_select_target_logit(l1_logit, target_dev, V); });
+    expect_rejected_without_cache_entry([&]() { ttnn::prim::ttml_select_target_logit(logit_dev, l1_target, V); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_select_target_logit(overpadded_logit, target_dev, V); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_select_target_logit(logit_dev, wide_page_target, V); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_select_target_logit(logit_dev, target_dev, V, std::nullopt, 0U, l1_output); });
+
+    ASSERT_EQ(device->num_program_cache_entries(), entries_before_canonical);
+    auto result = ttnn::prim::ttml_select_target_logit(logit_dev, target_dev, V, std::nullopt, 0U, preallocated);
+    EXPECT_EQ(result.buffer()->address(), preallocated.buffer()->address());
+    ASSERT_GT(device->num_program_cache_entries(), entries_before_canonical);
+
+    // Repeat every invalid contract after the canonical program is warm. Validation must run
+    // before dispatch and the incompatible TensorSpecs must never alias its cache entry.
+    expect_rejected_without_cache_entry([&]() { ttnn::prim::ttml_select_target_logit(l1_logit, target_dev, V); });
+    expect_rejected_without_cache_entry([&]() { ttnn::prim::ttml_select_target_logit(logit_dev, l1_target, V); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_select_target_logit(overpadded_logit, target_dev, V); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_select_target_logit(logit_dev, wide_page_target, V); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_select_target_logit(logit_dev, target_dev, V, std::nullopt, 0U, l1_output); });
+
+    // Runtime-only attributes and an incompatible output must also be rejected on a warm cache.
+    const auto undersized_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1U, 1U, S, 1U}),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, logit_dev.memory_config()));
+    auto undersized = ttnn::create_device_tensor(undersized_spec, logit_dev.device());
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_select_target_logit(logit_dev, target_dev, V, std::nullopt, 0U, undersized); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_select_target_logit(logit_dev, target_dev, V - 1U, std::nullopt, 0U); });
+    expect_rejected_without_cache_entry([&]() {
+        ttnn::prim::ttml_select_target_logit(
+            logit_dev, target_dev, V, std::nullopt, std::numeric_limits<uint32_t>::max() - V + 1U);
+    });
 }
 
 TEST_F(SelectTargetLogitTest, LargeVocab) {
