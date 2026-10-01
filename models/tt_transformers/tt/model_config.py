@@ -1509,7 +1509,12 @@ class ModelArgs:
                         k=self.hidden_dim // self.cluster_shape[1],
                         n=self.dim,
                         num_cores=self.mlp2_core_grid.num_cores,
-                        num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.FF2, self.dim),
+                        num_workers_per_dram_bank=(
+                            3
+                            if self.device_name == "P150"
+                            and math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_grid_size.x)) % 3 == 0
+                            else self.get_dram_sharded_matmul_num_workers(TensorGroup.FF2, self.dim)
+                        ),
                     )
         elif mode == Mode.PREFILL:
             if self.use_minimal_prefill_matmul(seq_len):
