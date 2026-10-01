@@ -116,7 +116,7 @@ def main(argv=None):
         print(f"smoke: {sm['prompt']!r} -> {answer!r} (expect {sm['expect']!r}): {'ok' if ok else 'FAIL'}")
         metrics.record("smoke_ok", int(ok))
     rec = prompt.load(spec)
-    n = min(int(spec.get("intake.accuracy_tokens", 2048)), rec["n"] if rec else prompt.default_length(spec))
+    n = min(int(spec.get("intake.accuracy_tokens")), rec["n"] if rec else prompt.default_length(spec))
     acc = next_token_acc(model, prompt.tokens(spec, n, tok))
     print(f"HF top-1 next-token accuracy on the first {n} prompt tokens: {acc:.3f}")
     metrics.record("text_top1_acc", acc)
