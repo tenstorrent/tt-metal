@@ -13,6 +13,10 @@ replaces), and the names to swap while they run:
       - {path: tests/ttnn/unit_tests/operations/fused/test_rms_norm.py}
       - {path: tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm.py, k: "RMSN", why: "RMS cases only"}
       - {path: ..., unskip: "unfeasible on the given hardware"}   # drop collection-time skips with this reason
+      - {path: ..., mesh: [2, 2]}            # the mesh the entry opens (else the first RxC in k, else 1x1)
+
+Each entry runs with only the cards that form its mesh on this box visible (``cards.py``: probed once per box and
+shape, cached), so a selection recorded on one box runs on a bigger one. A TT_VISIBLE_DEVICES set by the caller wins.
 
     python -m models.demos.common.bringup.testing.fork_source --fork rms_norm_ttnn --record   # baseline
     python -m models.demos.common.bringup.testing.fork_source --fork rms_norm_ttnn            # check vs baseline
@@ -41,6 +45,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -161,6 +166,30 @@ def _outcomes(xml: Path) -> dict[str, str]:
     return out
 
 
+def entry_mesh(t: dict) -> tuple[int, int]:
+    """The mesh an entry's tests open: its ``mesh: [rows, cols]``, else the first ``RxC`` in its -k filter, else 1x1."""
+    if t.get("mesh"):
+        return tuple(int(x) for x in t["mesh"])
+    found = re.search(r"\b(\d+)x(\d+)\b", t.get("k", ""))
+    return (int(found.group(1)), int(found.group(2))) if found else (1, 1)
+
+
+def _show_cards(env: dict, mesh: tuple[int, int]) -> None:
+    """Show the entry only the cards that form its mesh on this box (cards.py); a caller's TT_VISIBLE_DEVICES wins."""
+    if _USER_CARDS is not None:
+        return
+    from models.demos.common.bringup.testing.cards import visible_devices
+
+    cards = visible_devices(mesh)
+    if cards is None:
+        env.pop("TT_VISIBLE_DEVICES", None)
+    else:
+        env["TT_VISIBLE_DEVICES"] = cards
+
+
+_USER_CARDS = os.environ.get("TT_VISIBLE_DEVICES")
+
+
 def run(m: dict, swap: bool, tag: str, scratch: Path, only: list[int] | None = None) -> dict[str, str]:
     """Every manifest entry (or the ones in ``only``) through run_safe_pytest, one session per entry, so a -k filter
     applies to its file."""
@@ -178,6 +207,7 @@ def run(m: dict, swap: bool, tag: str, scratch: Path, only: list[int] | None = N
         # the plugin swaps only when ENV is set; it is loaded in both runs so an entry's unskip applies to both
         cmd += ["-p", "models.demos.common.bringup.testing.fork_source"]
         env.pop(UNSKIP_ENV, None)
+        _show_cards(env, entry_mesh(t))
         if t.get("unskip"):
             env[UNSKIP_ENV] = t["unskip"]
         if t.get("k"):
