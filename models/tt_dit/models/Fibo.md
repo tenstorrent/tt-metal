@@ -12,10 +12,16 @@ The VLM can also start from an image. Given an image alone, it describes the ima
 prompt. Given an image with a prompt, it treats the prompt as instructions for how to change the
 image.
 
+[FIBO Edit](https://huggingface.co/briaai/fibo-edit) is FIBO's image editing variant. It edits an
+image according to a structured prompt with an `edit_instruction` field, which
+[FIBO-edit-vlm](https://huggingface.co/briaai/FIBO-edit-vlm) writes from the image and editing
+instructions. The image is encoded by the VAE, and its tokens are appended to the transformer's
+sequence, which doubles its length.
+
 ## Details
 
 - Transformer: `models/tt_dit/models/transformers/transformer_fibo.py`
-- VAE decoder: `models/tt_dit/models/vae/vae_wan_2d.py` (the Wan 2.2 VAE on a single frame)
+- VAE decoder and encoder: `models/tt_dit/models/vae/vae_wan_2d.py` (the Wan 2.2 VAE on a single frame)
 - Prompt expansion: `models/tt_dit/pipelines/fibo/vlm.py`
 - Pipeline: `models/tt_dit/pipelines/fibo/pipeline_fibo.py`
 
@@ -56,4 +62,7 @@ pytest models/tt_dit/tests/models/fibo/test_pipeline_fibo.py::test_fibo_pipeline
 
 # Generate images from an image, alone or with editing instructions, turned into JSON by the VLM
 pytest models/tt_dit/tests/models/fibo/test_pipeline_fibo.py::test_fibo_pipeline_vlm_image
+
+# Edit an image with FIBO Edit, from editing instructions turned into JSON by the edit VLM
+pytest models/tt_dit/tests/models/fibo/test_pipeline_fibo.py::test_fibo_edit_pipeline_vlm
 ```

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -165,7 +166,7 @@ class FiboPipelineConfig:
         sequence_lengths: Sequence[int] | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
         vlm_checkpoint_name: str | None = _DEFAULT_VLM_CHECKPOINT,
-        edit: bool = False,
+        edit: bool,
     ) -> FiboPipelineConfig:
         """Build a fully populated config, picking parallelism defaults from ``mesh_shape``."""
         preset_dict = _PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH
@@ -308,6 +309,7 @@ class FiboPipeline(PipelineAPIMixin):
                     parallel_config=config.vlm_parallel_config,
                     prompt_length=_VLM_PROMPT_LENGTH,
                     cache_length=_VLM_CACHE_LENGTH,
+                    edit=config.edit,
                 )
 
         self._synchronize_devices()
@@ -328,14 +330,18 @@ class FiboPipeline(PipelineAPIMixin):
             self._vlm.warm_up(traced=traced)
 
     def _generate_each_length(self, *, traced: bool) -> None:
-        reference_images = [Image.new("RGB", (self._width, self._height))] if self._vae_encoder is not None else None
+        images = [Image.new("RGB", (self._width, self._height))] if self._vae_encoder is not None else None
 
         for length in sorted(self._sequence_lengths, reverse=True):
             prompt = "a " * (length - 8)  # "a " is a single token
+            if self._vae_encoder is not None:
+                # Edit prompts must carry an edit instruction, and the JSON around it takes a few
+                # tokens.
+                prompt = json.dumps({"edit_instruction": "a " * (length - 16)})
             self(
                 prompts=[prompt],
                 negative_prompts=[prompt],
-                reference_images=reference_images,
+                images=images,
                 num_inference_steps=2,
                 use_vlm=False,
                 traced=traced,
@@ -354,7 +360,6 @@ class FiboPipeline(PipelineAPIMixin):
         prompts: Sequence[str],
         images: Sequence[Image.Image | None] | None = None,
         negative_prompts: Sequence[str] | None = None,
-        reference_images: Sequence[Image.Image] | None = None,
         num_inference_steps: int,
         seed: int = 0,
         num_images_per_prompt: int = 1,
@@ -369,33 +374,16 @@ class FiboPipeline(PipelineAPIMixin):
         """Generates one image per prompt.
 
         ``prompts`` are natural-language prompts the VLM writes FIBO's structured JSON prompts from,
-        or without ``use_vlm`` the structured prompts themselves.
+        or without ``use_vlm`` the structured prompts themselves. ``images`` are optional images the
+        VLM writes the prompts from as well.
+
+        With ``edit``, ``prompts`` are editing instructions, which the VLM turns into FIBO Edit's
+        prompts, or without ``use_vlm`` FIBO Edit's prompts themselves. ``images`` are then required:
+        they are the images to edit, which both the VLM and the transformer take.
         """
         prompt_count = len(prompts)
-
-        if cfg_scale > 1 and not self._cfg_enabled:
-            msg = "cfg_scale > 1 requires CFG to be enabled"
-            raise ValueError(msg)
-
-        if (reference_images is not None) != (self._vae_encoder is not None):
-            msg = "reference_images are required with edit and not supported otherwise"
-            raise ValueError(msg)
-
-        if reference_images is not None and len(reference_images) != prompt_count:
-            msg = "reference_images must have one image per prompt"
-            raise ValueError(msg)
-
-        if use_vlm and self._vlm is None:
-            msg = "use_vlm requires the pipeline to be created with a VLM checkpoint"
-            raise ValueError(msg)
-
-        if images is not None and not use_vlm:
-            msg = "images require use_vlm"
-            raise ValueError(msg)
-
-        if images is not None and len(images) != prompt_count:
-            msg = f"got {len(images)} images for {prompt_count} prompts"
-            raise ValueError(msg)
+        edit = self._vae_encoder is not None
+        self._check_inputs(prompt_count=prompt_count, images=images, cfg_scale=cfg_scale, use_vlm=use_vlm)
 
         vae_traced = vae_traced if vae_traced is not None else traced
         encoder_traced = encoder_traced if encoder_traced is not None else traced
@@ -423,6 +411,10 @@ class FiboPipeline(PipelineAPIMixin):
             self._synchronize_devices()  # for time profiling
             on_event(SectionEnd("vlm"))
 
+        if edit and not all(_has_edit_instruction(prompt) for prompt in prompts):
+            msg = "with edit, prompts must be JSON objects with an edit_instruction"
+            raise ValueError(msg)
+
         logger.info("encoding prompts...")
         on_event(SectionStart("encoder"))
         with self._reshape_encoder():
@@ -441,10 +433,10 @@ class FiboPipeline(PipelineAPIMixin):
         on_event(SectionEnd("encoder"))
 
         reference_image_inputs: list[ttnn.Tensor | None] = [None] * len(self._devices)
-        if reference_images is not None:
+        if edit:
             logger.info("encoding reference images...")
             on_event(SectionStart("vae_encoder"))
-            reference_image_inputs = self._encode_reference_images(reference_images, traced=vae_traced, on_host=traced)
+            reference_image_inputs = self._encode_reference_images(images, traced=vae_traced, on_host=traced)
             self._synchronize_devices()  # for time profiling
             on_event(SectionEnd("vae_encoder"))
 
@@ -468,7 +460,7 @@ class FiboPipeline(PipelineAPIMixin):
                 torch_layers,
                 latents_height=latents_height,
                 latents_width=latents_width,
-                with_reference=reference_images is not None,
+                with_reference=edit,
                 device=device,
                 on_host=traced,
             )
@@ -541,6 +533,36 @@ class FiboPipeline(PipelineAPIMixin):
 
         on_event(SectionEnd("total"))
         return images
+
+    def _check_inputs(
+        self,
+        *,
+        prompt_count: int,
+        images: Sequence[Image.Image | None] | None,
+        cfg_scale: float,
+        use_vlm: bool,
+    ) -> None:
+        edit = self._vae_encoder is not None
+
+        if cfg_scale > 1 and not self._cfg_enabled:
+            msg = "cfg_scale > 1 requires CFG to be enabled"
+            raise ValueError(msg)
+
+        if use_vlm and self._vlm is None:
+            msg = "use_vlm requires the pipeline to be created with a VLM checkpoint"
+            raise ValueError(msg)
+
+        if edit and (images is None or any(image is None for image in images)):
+            msg = "edit requires an image for every prompt"
+            raise ValueError(msg)
+
+        if images is not None and not edit and not use_vlm:
+            msg = "images require use_vlm"
+            raise ValueError(msg)
+
+        if images is not None and len(images) != prompt_count:
+            msg = f"got {len(images)} images for {prompt_count} prompts"
+            raise ValueError(msg)
 
     def _traced_step(
         self, *, submesh_idx: int, latents: ttnn.Tensor, reference: ttnn.Tensor | None, **kwargs: Any
@@ -645,6 +667,14 @@ def _reshape_for_tp(device: ttnn.MeshDevice, tp: ParallelFactor) -> AbstractCont
     shape[1 - tp.mesh_axis] = device.shape.mesh_size() // tp.factor
 
     return reshape_device(device, ttnn.MeshShape(*shape))
+
+
+def _has_edit_instruction(prompt: str) -> bool:
+    try:
+        record = json.loads(prompt)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(record, dict) and "edit_instruction" in record
 
 
 def _calculate_shift(image_seq_len: int, scheduler: FlowMatchEulerDiscreteScheduler) -> float:

@@ -27,9 +27,13 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor
 
 # Sampling settings and image size bounds of the upstream ``briaai/FIBO-VLM-prompt-to-JSON``
-# pipeline. The bounds make an image 196 to 784 tokens.
+# pipeline. The bounds make an image 196 to 784 tokens. Edit mode applies them too, though the
+# upstream ``briaai/FIBO-edit-prompt-to-JSON`` pipeline sets none, so that every image fits the
+# vision tower's padding; they do not affect the image the DiT gets.
 _TOP_P = 0.9
 _TEMPERATURE = 0.2
+_EDIT_TEMPERATURE = 0.4  # from the upstream ``briaai/FIBO-edit-prompt-to-JSON`` pipeline
+_TEXTURE_END = " End of texture answer."
 _MIN_PIXELS = 256 * 28 * 28
 _MAX_PIXELS = 1024 * 28 * 28
 
@@ -55,6 +59,7 @@ _FIELDS = (
     "text_render",
     "context",
     "artistic_style",
+    "edit_instruction",  # Written only by FIBO-edit-vlm
 )
 _SCORES = (
     ("pickascore", "preference_score", (0.78, 0.82, 0.87, 0.91)),
@@ -89,6 +94,8 @@ class Vlm:
     inputs: a prompt alone goes in as a ``<generate>`` message, an image alone as ``<inspire>``, and
     an image with a prompt as ``<refine>``, the prompt being the editing instructions. The sampled
     JSON is reduced to FIBO's fields with empty values dropped.
+
+    With ``edit``, the checkpoint must be FIBO-edit-vlm.
     """
 
     def __init__(
@@ -100,6 +107,7 @@ class Vlm:
         parallel_config: EncoderParallelConfig,
         prompt_length: int,
         cache_length: int,
+        edit: bool,
     ) -> None:
         """Loads the processor, the generation config, the encoder and the vision tower.
 
@@ -108,6 +116,7 @@ class Vlm:
         cache, bounding prompt and generated tokens together.
         """
         self._device = device
+        self._edit = edit
         self._prompt_length = prompt_length
         self._cache_length = cache_length
         self._processor = transformers.AutoProcessor.from_pretrained(
@@ -148,8 +157,17 @@ class Vlm:
         the default. Output that is not the expected JSON, as when it is cut off at ``max_length``,
         is returned as it is. The text is reduced, so the token counts of the model's output are
         those of `generate_raw`.
+
+        With ``edit``, both an image and instructions are required.
         """
+        if self._edit and (image is None or prompt is None or not prompt.strip()):
+            msg = "editing requires an image and instructions"
+            raise ValueError(msg)
+
         text = self.generate_raw(prompt, image=image, seed=seed, traced=traced, max_length=max_length).text
+        if self._edit:
+            # FIBO-edit-vlm ends texture descriptions with this.
+            text = text.replace(_TEXTURE_END, "")
         caption = clean(text)
         return json.dumps(caption, separators=(",", ":")) if caption is not None else text.strip()
 
@@ -218,6 +236,8 @@ class Vlm:
             content = f"<generate>\n{prompt}"
         elif not prompt:
             content = [{"type": "image"}, {"type": "text", "text": "<inspire>"}]
+        elif self._edit:
+            content = [{"type": "image"}, {"type": "text", "text": f"<edit>\nEditing instructions:\n{prompt}"}]
         else:
             content = [{"type": "image"}, {"type": "text", "text": f"<refine>\nEditing instructions:\n{prompt}"}]
 
@@ -246,7 +266,7 @@ class Vlm:
             eos_tokens=self._eos_tokens,
             top_k=self._top_k,
             top_p=_TOP_P,
-            temperature=_TEMPERATURE,
+            temperature=_EDIT_TEMPERATURE if self._edit else _TEMPERATURE,
             traced=traced,
             **self._vision_args(inputs),
         )

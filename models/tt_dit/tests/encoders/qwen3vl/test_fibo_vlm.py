@@ -65,6 +65,7 @@ def test_generation(
         parallel_config=parallel_config,
         prompt_length=1024,
         cache_length=2048,
+        edit=False,
     )
 
     image = Image.open(IMAGE_PATH).convert("RGB").crop(crop) if crop is not None else None
