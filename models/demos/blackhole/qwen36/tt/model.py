@@ -4174,17 +4174,19 @@ class Qwen36Model:
             else None
         )
         _cap = getattr(self, "_capture_layer", None)
-        # QWEN36_EAGER_FULL_CHUNK_UNMASKED (unset = on at TP=2 only; "1" forces on at any TP, "0" off): a FULL eager
+        # QWEN36_EAGER_FULL_CHUNK_UNMASKED (unset = on at TP=2 and TP=4; "1" forces on at any TP, "0" off): a FULL eager
         # long-prompt chunk (valid_len == bucket and bucket >= 2048, i.e. the 2048-token chunks of the tp2-dflash2 eager
         # prompt prefill _prefill_for_spec_b1 and of _prefill_chunked_eager_tp) runs its GDN layers unmasked
         # (valid_len=None), i.e. exactly the traced chunk's ops: fused KDA conv instead of the masked FIR conv + host-built
         # one-hot carry select (an all-ones scan mask is bit-identical to no mask; the carry is the same last K-1 rows).
         # The eager prompt prefill thereby computes the same numerics as the plain tp2 traced chunk, and drops the FIR
-        # chain (~65 ms per 2048-token chunk at TP=2, lane Q). Exact short buckets (128..1024) are never affected, and
-        # TP=4 / TP=1 keep the masked FIR (their identity corpora were not re-validated). =0 restores the masked FIR.
+        # chain (~65 ms per 2048-token chunk at TP=2, lane Q). Exact short buckets (128..1024) are never affected.
+        # TP=4 (lane L, opt round 5): the DFlash2 prompt prefill (batch8-dflash2 / single-user-dflash2) becomes bit-identical
+        # to the plain TP=4 traced chunk (64-layer logits torch.equal at 2k/8k/32k) and 13% faster at 8k-32k. TP=1 keeps the
+        # masked FIR (not re-validated). =0 restores the masked FIR.
         _gdn_valid_len = valid_len
         _efcu = os.environ.get("QWEN36_EAGER_FULL_CHUNK_UNMASKED")
-        _efcu_on = (self.num_devices == 2) if _efcu is None else (_efcu == "1")
+        _efcu_on = (self.num_devices in (2, 4)) if _efcu is None else (_efcu == "1")
         if _efcu_on and valid_len == bucket and bucket >= 2048 and not gdn_recurrent:
             _gdn_valid_len = None
         if self._dflash_tap:
