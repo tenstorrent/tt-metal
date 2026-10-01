@@ -976,10 +976,8 @@ TEST_F(NormalizationSmoke, GroupNormNoMcastInterleaved) {
 TEST_F(NormalizationSmoke, GroupNormMcastInterleaved) {
     // GroupNormMcastProgramFactory: grid {1,2} -> num_virtual_rows=2 > batch=1
     // (groupnorm_device_operation.cpp), so two cores split one batch's 64 rows and multicast
-    // partial mean/variance. C is kept at ONE tile (32 channels, one group) deliberately:
-    // interleaved TILE groupnorm returns wrong values in the second channel tile whenever
-    // H*W spans more than one row tile -- bug #53846, repro in
-    // DISABLED_GroupNormMultiRowTileWideC below.
+    // partial mean/variance. C is ONE tile (32 channels, one group); the multi-row-tile,
+    // two-channel-tile case is GroupNormMultiRowTileWideC below (regression for #53846).
     // Data alternates 1/3 by channel -> mean 2, biased var 1 -> out = -/+ 1/sqrt(1+eps).
     auto& device = *device_;
     constexpr size_t kRows = 64, kC = 32;
@@ -1006,20 +1004,16 @@ TEST_F(NormalizationSmoke, GroupNormMcastInterleaved) {
     detail::expect_close(detail::to_float_vector(out), expected, 0.0f, 0.03f);
 }
 
-TEST_F(NormalizationSmoke, DISABLED_GroupNormMultiRowTileWideC) {
-    // KNOWN BUG #53846 (disabled; run with --gtest_also_run_disabled_tests): the legacy
-    // two-pass statistics path computes an inexact group mean once a group spans more than one
-    // tile, so a group whose variance is at or below eps normalizes to about +-1 instead of 0
-    // (the division amplifies the mean error by 1/sqrt(eps)).
-    // Repro confirmed against a torch reference via python ttnn on BH p100a (2026-08-19):
-    // with [1,1,64,64], num_groups=2, channels 32..63 constant 7 (their group golden is exactly
-    // 0), the device returns a constant -0.992 for every element of channels 32..63 on every
-    // row, on NoMcast grid {1,1} and Mcast grid {1,2} alike.
-    // The identical 32-row input (single row tile) passes -- see GroupNormNoMcastInterleaved --
-    // and #53846 records that use_welford=true is bit-exact at every tile count tested, which is
-    // why GroupNormWelfordInterleaved below stays green. Nightly's interleaved groupnorm coverage
-    // is ROW_MAJOR-input only, so no python test reaches this path.
-    // Enable this cell when #53846 is fixed.
+TEST_F(NormalizationSmoke, GroupNormMultiRowTileWideC) {
+    // Regression for #53846: the legacy two-pass statistics path used to compute an inexact group
+    // mean once a group spanned more than one tile. Its reduce scaler was bf16(1/sqrt(N)) applied
+    // twice by REDUCE_SCALAR, exact only when sqrt(N) is a power of two, so a group whose variance
+    // is at or below eps normalized to about +-1 instead of 0 (the division amplifies the mean
+    // error by 1/sqrt(eps)). With [1,1,64,64], num_groups=2, channels 32..63 constant 7 (their
+    // group golden is exactly 0), the device returned a constant -0.992 for every element of
+    // channels 32..63. The identical 32-row input (N=1024, exact) is GroupNormNoMcastInterleaved.
+    // Nightly's interleaved groupnorm coverage is ROW_MAJOR-input only, so no python test
+    // reaches this path.
     auto& device = *device_;
     auto input = detail::make_device_tensor(
         device, ttnn::Shape({1, 1, 64, 64}), detail::gn_golden_input(64, false), DataType::BFLOAT16, Layout::TILE);
@@ -1127,21 +1121,14 @@ TEST_F(NormalizationSmoke, GroupNormWelfordInterleaved) {
     detail::expect_close(detail::to_float_vector(out), detail::gn_golden_expected(32, 1.0f, 0.0f), 0.0f, 0.03f);
 }
 
-TEST_F(NormalizationSmoke, DISABLED_GroupNormInputMask) {
-    // KNOWN BUG #53803 (disabled; run with --gtest_also_run_disabled_tests): the legacy two-pass
-    // statistics path corrupts sub-tile group widths, i.e. whenever groups are narrower than
-    // TILE_WIDTH so input_mask performs column selection inside a tile -- escape class #43826 /
-    // #51231-7, now confirmed on silicon. GroupNormNoMcastProgramFactory with num_groups=4 on
-    // C=64: 16 channels/group. On BH p100a (2026-08-19) the constant groups g2/g3 (goldens
-    // exactly 0) come back at -0.984/-0.992 and the varying groups' means are visibly biased
-    // (-1.008/0.977, -1.023/0.961 instead of -/+1). Confirmed independently via python ttnn with
-    // the wrapper's auto-generated mask -- the hand-built mask below is element-identical to
-    // create_group_norm_input_mask(64, 4, 1), so the bug is in the kernel's masked-stats path,
-    // not the mask; #53803 confirms use_welford=true computes the same cases exactly, which
-    // localizes it to the two-pass reduction rather than to addressing or masking. #53803 also
-    // measures the error growing with group count, up to 1.73 absolute on a normalized output of
-    // true magnitude 1.0 at an SD-UNet-like [1,1,1024,320] / 32-group shape.
-    // Enable this cell when #53803 is fixed.
+TEST_F(NormalizationSmoke, GroupNormInputMask) {
+    // Regression for #53803: sub-tile group widths, i.e. groups narrower than TILE_WIDTH so
+    // input_mask performs column selection inside a tile. GroupNormNoMcastProgramFactory with
+    // num_groups=4 on C=64: 16 channels/group, so N=512 elements per group, whose square root is
+    // not a power of two. The legacy two-pass path's doubly-applied bf16(1/sqrt(N)) reduce scaler
+    // made the group mean inexact there: the constant groups g2/g3 (goldens exactly 0) came back
+    // at -0.984/-0.992 and the varying groups' means were visibly biased. The hand-built mask
+    // below is element-identical to create_group_norm_input_mask(64, 4, 1).
     // Groups get distinct stats (means 2/6/7/9) so a wrong group boundary shifts a mean and
     // fails the closed-form golden.
     auto& device = *device_;
