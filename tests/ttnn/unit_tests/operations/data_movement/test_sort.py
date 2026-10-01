@@ -1522,8 +1522,9 @@ def test_sort_unstable_nonpow2_index_range(width, descending, device):
 @pytest.mark.parametrize("descending", [False, True])
 @pytest.mark.parametrize(
     "width, layout",
-    [(4096, ttnn.Layout.TILE), (8192, ttnn.Layout.TILE), (4096, ttnn.Layout.ROW_MAJOR)],
-    ids=["w4096_tile", "w8192_tile", "w4096_rm"],
+    # w300000 pads to W=524288, past CrossCore capacity on any grid: pins the MultiCore DRAM path.
+    [(4096, ttnn.Layout.TILE), (8192, ttnn.Layout.TILE), (4096, ttnn.Layout.ROW_MAJOR), (300000, ttnn.Layout.TILE)],
+    ids=["w4096_tile", "w8192_tile", "w4096_rm", "w300000_tile"],
 )
 def test_sort_unstable_fp32_ties(width, layout, descending, device):
     """fp32 tie groups (including the +/-0.0 tie class and +/-inf) on the
