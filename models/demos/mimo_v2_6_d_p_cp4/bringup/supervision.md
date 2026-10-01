@@ -26,3 +26,11 @@
   /home/sjovic/bringup/mimo_v2_6_d_p_cp4/generated_cache (root disk, 3 TB free) with a symlink back, restored
   state.json from git (last gate S.full_moe.07). NFS back to 26 GB free. Finding: tt/experts.py hard-codes
   CACHE_ROOT under generated/ instead of the spec's tt_cache dir. Resumed.
+- 2026-10-01 05:40, X.2. Owner decisions: keep the F49 per-row swap checks (no threshold change). Sliding preset "S" rule
+  superseded: sliding attention may use fp32 dest and the extra input precision; the perf step may lower data formats
+  and fp32 dest accumulation if every test passes. Math fidelity stays HiFi4, KV caches stay bf16, expert weights stay
+  bfp8. Picks 1 (attention) and 2 (experts) added as P.1, P.2; their gates re-run the frozen component tests, the
+  full-block swap tests (per-row checks) and all four ladder rungs, plus the warm profile (attention < 270 ms,
+  experts < 150 ms). X.3 now depends on P.2. Perf approved on the owner's word.
+  Context: the 1x4 run's sliding layers passed before F49 existed (54134a87d07, 09-29) and its full attention ended at
+  preset A (HiFi2, approx exp); its experts at HiFi4 after HiFi2 failed the ratio check.

@@ -13,3 +13,9 @@ plan:
     models/demos/mimo_v2_6_d_p_cp4/bringup/components.yaml: da38762311f3a231135c2a99f2806e78539df4fa0e537592b0ffcc37f8e16b5e
   note: ''
   ledger: bc01c5e6bf73e964afe064f17d9c50568b2b358f84408a6abb52215a208d04e1
+perf:
+  by: sjovic
+  at: '2026-10-01T05:39:42'
+  files:
+    models/demos/mimo_v2_6_d_p_cp4/bringup/opportunities.md: f1b27bfe8d3b89e9d52a996b704d9bd3c3ca432e0144b1f155cce5fab4355579
+  note: ''
