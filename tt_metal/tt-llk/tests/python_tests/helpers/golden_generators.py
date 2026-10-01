@@ -4294,7 +4294,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # Widen to int64 for the multiply so the intermediate can't overflow.
         return (t1.to(torch.int64) * t2.to(torch.int64)).to(torch.int32)
 
-    # torch.isclose defaults; the same two values the ISCLOSE / ISCLOSE_EQUAL_NAN dispatch in
+    # torch.isclose defaults; the same two values the ISCLOSE / ISCLOSE_EQNAN dispatch in
     # sfpu_operations.h hard-codes as fp32 bit patterns (ISCLOSE_RTOL_BITS / ISCLOSE_ATOL_BITS).
     _ISCLOSE_RTOL = 1e-5
     _ISCLOSE_ATOL = 1e-8

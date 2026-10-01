@@ -1710,7 +1710,7 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(add1, div_floor_init, (APPROXIMATION_MODE));
     }
-    else if constexpr (BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::ISCLOSE_EQUAL_NAN)
+    else if constexpr (BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::ISCLOSE_EQNAN)
     {
         // isclose_init programs vConstIntPrgm0 = 0x7FFFFFFF, the sign-clear mask the kernel reads
         // for both the Inf/NaN classification and |b| in the tolerance. Mirrors
@@ -1823,7 +1823,7 @@ constexpr SfpuType get_binary_comp_sfpu_type()
     }
 }
 
-// torch.isclose defaults, as the fp32 bit patterns the ISCLOSE / ISCLOSE_EQUAL_NAN dispatch below
+// torch.isclose defaults, as the fp32 bit patterns the ISCLOSE / ISCLOSE_EQNAN dispatch below
 // forwards as runtime args (the goldens use the same two values).
 constexpr std::uint32_t ISCLOSE_RTOL_BITS = 0x3727c5acu; // 1e-5f
 constexpr std::uint32_t ISCLOSE_ATOL_BITS = 0x322bcc77u; // 1e-8f
@@ -2192,7 +2192,7 @@ void call_binary_sfpu_operation(
         SFPU_BINARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROXIMATION_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
-    else if constexpr (BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::ISCLOSE_EQUAL_NAN)
+    else if constexpr (BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::ISCLOSE_EQNAN)
     {
         // isclose: out = (|a - b| <= atol + rtol * |b|) ? 1 : 0, with a=in0, b=in1.
         // rtol/atol are passed as fp32 bit patterns via the params wrapper's runtime-arg
@@ -2200,7 +2200,7 @@ void call_binary_sfpu_operation(
         // equal_nan=True): a NaN in both operands yields 1; without it any NaN operand yields
         // 0. The finite-ramp test uses large-margin stimuli so the exact tolerance (and
         // fp32-vs-bf16 rounding of the tol term) never flips the pass/fail decision.
-        constexpr bool EQUAL_NAN = (BINOP == BinaryOp::ISCLOSE_EQUAL_NAN);
+        constexpr bool EQUAL_NAN = (BINOP == BinaryOp::ISCLOSE_EQNAN);
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
