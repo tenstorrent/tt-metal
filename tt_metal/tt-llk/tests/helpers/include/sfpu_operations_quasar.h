@@ -115,30 +115,6 @@
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
 #include "sfpu/ckernel_sfpu_mul_int32.h"   // _mul_int32_ (int mul)
 
-// Test-only adapters (the Quasar counterpart of sfpu_test_helpers.h): the mask kernels hard-code
-// their operands (data at dst_reg[0], mask at dst_reg[32], result in place), so they fit the binary
-// harness only with in0 = 0, in1 = 1, out = 0, and the indices are unused.
-namespace ckernel::sfpu
-{
-template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
-inline void calculate_mask_binary(const std::uint32_t, const std::uint32_t, const std::uint32_t)
-{
-    calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
-inline void calculate_mask_posinf_binary(const std::uint32_t, const std::uint32_t, const std::uint32_t)
-{
-    calculate_mask_posinf<APPROXIMATION_MODE, ITERATIONS>();
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
-inline void calculate_int_mask_binary(const std::uint32_t, const std::uint32_t, const std::uint32_t)
-{
-    calculate_int_mask<APPROXIMATION_MODE, ITERATIONS>();
-}
-} // namespace ckernel::sfpu
-
 namespace test_utils
 {
 using namespace ckernel;
@@ -1571,18 +1547,24 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     }
     else if constexpr (OP == BinaryOp::MASK)
     {
-        SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_mask_binary, (APPROXIMATION_MODE, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+        // The mask kernels read data from the tile they are pointed at and the mask from the one
+        // after it (dst_reg[32]), and write in place, so position Dest at src0_tile.
+        LLK_ASSERT(dst_tile == src0_tile && src1_tile == src0_tile + 1, "Mask requires adjacent inputs and an in-place output");
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_mask, (APPROXIMATION_MODE, ITERATIONS), src0_tile, VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::MASK_POSINF)
     {
-        SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_mask_posinf_binary, (APPROXIMATION_MODE, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+        // The mask kernels read data from the tile they are pointed at and the mask from the one
+        // after it (dst_reg[32]), and write in place, so position Dest at src0_tile.
+        LLK_ASSERT(dst_tile == src0_tile && src1_tile == src0_tile + 1, "Mask requires adjacent inputs and an in-place output");
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_mask_posinf, (APPROXIMATION_MODE, ITERATIONS), src0_tile, VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::INT_MASK)
     {
-        SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_int_mask_binary, (APPROXIMATION_MODE, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+        // The mask kernels read data from the tile they are pointed at and the mask from the one
+        // after it (dst_reg[32]), and write in place, so position Dest at src0_tile.
+        LLK_ASSERT(dst_tile == src0_tile && src1_tile == src0_tile + 1, "Mask requires adjacent inputs and an in-place output");
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_int_mask, (APPROXIMATION_MODE, ITERATIONS), src0_tile, VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::LOGSIGMOID)
     {
