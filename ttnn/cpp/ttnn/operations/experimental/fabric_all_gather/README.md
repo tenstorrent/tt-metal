@@ -2,7 +2,8 @@
 
 `ttnn.experimental.fabric_all_gather` is a drop-in replacement for `ttnn.experimental.high_bw_all_gather`: the same
 Python signature, the same validation and program-cache rules, the same output (including the bytes a partial gather
-leaves untouched). Only the implementation differs.
+leaves untouched). Only the program differs: the device operation (`device/fabric_all_gather_device_operation.hpp`)
+derives from high_bw_all_gather's, so parameters, validation, program hash and output spec are shared code.
 
 ## Contract (identical to high_bw_all_gather)
 - Input: DRAM (interleaved or ND-sharded), TILE or ROW_MAJOR, any dtype. Output: preallocated interleaved DRAM, the
@@ -14,20 +15,24 @@ leaves untouched). Only the implementation differs.
   `gathered_prefix_tensor` (+ `gathered_slab_global`), read on device.
 - `subdevice_id` + `sub_core_grids` confine the op's cores; `ready_semaphore` + `data_valid_semaphore` (caller-owned,
   zero-initialised, left at zero after every call) make it allocation- and sync-free for sub-device overlap.
-- Not supported: a ROW_MAJOR gather along the innermost dim (partial pages).
+- Not supported: a ROW_MAJOR gather along the innermost dim (partial pages). Partial extents of a TILE gather dim must
+  be tile aligned.
 
 ## Algorithm
 Terms and the shard / page model: `device/kernels/fabric_all_gather_chunk_walk.hpp`.
 
 Per chip, per ring, per ring direction and per link, one **link worker** core: a reader (NCRISC, NoC0) reads this
 chip's own shard from the input, then the shards it relays from its own output; a sender (BRISC, NoC1) sends each
-chunk one fabric hop into the same pages of the neighbour's output. One **copy core** per link writes the chip's own
-shard. Link workers sit next to the Ethernet core of their link (`tt_fabric::get_forwarding_eth_core`).
+chunk one fabric hop into the same pages of the neighbour's output. **Copy cores** write the chip's own shard: one per
+link, or two per link for a non-interleaved input (the ND-sharded KV cache), which they convert block by block into the
+output for the link workers to read from there. Link workers sit next to the Ethernet core of their link
+(`tt_fabric::get_forwarding_eth_core`).
 
-- **Chunks**: runs of up to `payload / page` pages that sit consecutively in one DRAM bank, one packet each. Link
-  workers split the banks between them.
-- **Relay**: relay entry k is what upstream sent as its entry k - 1. Upstream's last packet of every entry increments
-  this worker's arrival counter, so the reader relays entry k once the counter reaches k.
+- **Chunks**: runs of up to `payload / page` pages that sit consecutively in one DRAM bank, one packet each (a page
+  larger than the payload is split over several packets). Link workers split the banks between them.
+- **Relay**: relay entry k is what upstream sent as its entry k - 1. Upstream's last packet of every entry (or a bare
+  increment, if the entry has no chunk on that worker's banks) increments this worker's arrival counter, so the reader
+  relays entry k once the counter reaches k.
 - **Fence**: before sending, each sender waits until its downstream has signalled that it started this call, so a
   reused output is never overwritten early.
 - **Rings**: axis line / ring; for `cluster_axis=None` a snake, or on a torus with both sides >= 3 two edge-disjoint
@@ -35,7 +40,10 @@ shard. Link workers sit next to the Ethernet core of their link (`tt_fabric::get
   way.
 
 ## Tests
-`tests/ttnn/unit_tests/operations/ccl/test_fabric_all_gather_op.py`: every GLM prefill call pattern, bit-exact against
-a torch reference and against `high_bw_all_gather` (hardware); trace-safe metadata under a captured trace; a sub-device
-strip with external semaphores; host dispatch cost. Runs under tt-emule (32-chip Galaxy) for correctness, except trace
-and sub-devices (fast dispatch only).
+- `tests/ttnn/unit_tests/operations/ccl/test_fabric_all_gather_op.py`: every GLM prefill call pattern, bit-exact against
+  a torch reference and against `high_bw_all_gather` (hardware); trace-safe metadata replayed with changing slots and
+  extents; a sub-device strip with external semaphores; pages larger than the fabric payload; host dispatch cost. Runs
+  under tt-emule (32-chip Galaxy) for correctness, except trace and sub-devices (fast dispatch only).
+- `tests/ttnn/unit_tests/operations/ccl/test_fabric_all_gather_device_time.py`: device time against
+  `high_bw_all_gather`, reported as GB/s received per chip and busiest-link utilisation (GLM KV-cache gather, the
+  sparse-MLA overlap window, 18 MiB tile gather). The Galaxy set runs in the `high_bw_all_gather` CI job.
