@@ -1475,7 +1475,7 @@
 
 # Traced-vs-eager KV equivalence for the #55126 per-offset query-scale fix. This is the ONLY gate on
 # that path: an unrefreshed scale buffer applies temperature 1.0, which moves the chunked PCC rows by
-# ~0.002 against a 0.98 threshold, so they cannot see it. The test asserts its own sensitivity control
+# 0.989719 to 0.981986 against a 0.96 bar, so they cannot see it. The test asserts its own sensitivity
 # FIRST -- suppressing the temperature must drive the deep layers BELOW the agreement bar -- so it
 # cannot pass vacuously.
 #
