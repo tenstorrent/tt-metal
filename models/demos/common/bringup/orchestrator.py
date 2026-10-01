@@ -107,8 +107,10 @@ DEBUGGER_DEF = CODE_ROOT / ".claude" / "agents" / f"{DEBUGGER}.md"
 # numerics), so only roles whose code is TTNN device code escalate to it: implement, and fix after a device gate.
 # Everything else (reference, plan, contract, test, fix after a CPU gate) stops for a person with the logs.
 # The spec overrides per role: agents.policy.<role>: {attempts, escalate: debugger | stop, debugger_attempts}.
-# F56: "all" keeps the test-role review of component tests until the owner switches the default to "none"
-COMPONENT_REVIEW_DEFAULT = "all"
+# F56: component review default; a spec sets agents.component_review: all to review every component test
+COMPONENT_REVIEW_DEFAULT = (
+    "none"  # owner 2026-10-01: component tests freeze without review when their mistake sweep passes
+)
 DEFAULT_POLICY = {
     # defer_after_debugger: once the debugger is out of attempts, one last implement attempt may defer a component
     # step to op-gen (F46) instead of stopping.
@@ -708,7 +710,7 @@ class Orchestrator:
         return v in ("all", True) or block_type in (v if isinstance(v, list) else [v])
 
     def component_review(self, block_type: str) -> bool:
-        """Spec ``agents.component_review``: all | none | [block types] (default all, COMPONENT_REVIEW_DEFAULT). F56: a
+        """Spec ``agents.component_review``: all | none | [block types] (default none, COMPONENT_REVIEW_DEFAULT). F56: a
         component test with the built-in checks is frozen without a test-role review when this leaves its block type
         out, provided its mistake sweep (BRINGUP_IMPL=mutations) passes."""
         v = self.spec.get("agents.component_review", COMPONENT_REVIEW_DEFAULT)

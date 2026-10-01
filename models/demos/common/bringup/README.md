@@ -117,7 +117,7 @@ Everything outside git lives under `/localdev/$USER/bringup/<model>/`: `hf/`, `g
   (testing/mutate.py) proves on the CPU that a test catches a wrong module.
 - A component test runs built-in checks chosen by its output kind, on the golden and on second inputs
   (`checks="auto"`, F56, testing/component_checks.py). It is frozen without a test-role review only when
-  `agents.component_review` leaves its block type out (default `all`: reviewed) and its CPU mistake sweep
+  `agents.component_review` leaves its block type out (default `none` since 2026-10-01: not reviewed when the sweep passes) and its CPU mistake sweep
   (`BRINGUP_IMPL=mutations`) catches every standard mistake; otherwise the review starts with the sweep's log.
 - An agent step fails if the tree changed outside the brief's paths, if any command reached the device without a safe
   runner, or if the known-issues file lost its format.
