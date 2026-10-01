@@ -54,7 +54,9 @@ build, the server rule behind it (one line, file:line), the example numbers for 
 the test that checks it.
 
 - **Input**: the header, the token buffer, padding, how tokens are spread over the SP chips for any start.
-- **KV cache**: layout per chip, dtype and storage, one region per slot, slot count and memory.
+- **KV cache**: layout per chip, dtype and storage, one region per slot, slot count and memory. The model keeps one
+  cache format: the accuracy ladder runs with the same dtype and storage the server is given, so the accuracy gates
+  measure what is served. Say so in the section.
 - **Attention and cache writes**: any start the server sends, chunks that cross a cache block, pad positions,
   rewriting a filled position with the same bytes.
 - **Acks**: which mode, how many per chunk, what must be in DRAM before each.
