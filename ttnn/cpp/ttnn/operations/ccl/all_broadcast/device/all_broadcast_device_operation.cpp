@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 namespace ttnn::prim {
 void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
@@ -67,33 +68,17 @@ std::vector<Tensor> AllBroadcastDeviceOperation::create_output_tensors(
 
 std::vector<tt::tt_metal::TensorTopology> AllBroadcastDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const Tensor& input) {
-    // all_broadcast produces `ring_size` tensors, each carrying the full data of one source
-    // device on `cluster_axis` and replicated across the remaining devices on that axis.
-    // So every output's placement on `cluster_axis` is Replicate; placements on the other
-    // mesh axes are inherited from the input.
-    const auto& input_topology = input.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    if (operation_attributes.cluster_axis.has_value()) {
-        const auto axis = operation_attributes.cluster_axis.value();
-        if (axis < output_placements.size()) {
-            output_placements[axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-    } else {
-        for (auto& placement : output_placements) {
-            placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
+    // all_broadcast produces `ring_size` tensors, each carrying the full data of one source device on
+    // `cluster_axis` and replicated across the remaining devices on that axis. Every output is therefore
+    // Replicate on `cluster_axis` with the other mesh axes inherited from the input. Nothing is concatenated, so
+    // the helper's contiguity requirement does not apply (it is the all_reduce / all_broadcast label). No honest
+    // label (nullopt, already warned about): {} keeps the union default.
+    const auto output_topology =
+        ttnn::operations::ccl::common::all_broadcast_output_topology(input, operation_attributes.cluster_axis);
+    if (!output_topology.has_value()) {
+        return {};
     }
-
-    tt::tt_metal::TensorTopology output_topology(
-        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords());
-
-    std::vector<tt::tt_metal::TensorTopology> topologies;
-    topologies.reserve(operation_attributes.ring_size);
-    for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        topologies.push_back(output_topology);
-    }
-    return topologies;
+    return std::vector<tt::tt_metal::TensorTopology>(operation_attributes.ring_size, *output_topology);
 }
 
 std::vector<ttnn::Tensor> all_broadcast(

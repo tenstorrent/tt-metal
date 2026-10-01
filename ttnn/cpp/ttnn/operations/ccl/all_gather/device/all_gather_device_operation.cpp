@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -97,30 +98,19 @@ AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_
 
 AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::compute_output_topologies(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_topology = input_tensor.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    // For each distribution dimension, if sharded on the gather dim, make it replicated
-    const auto& logical_shape = input_tensor.logical_shape();
-    const uint32_t gather_dim = logical_shape.get_normalized_index(args.dim_from_end);
-    const int32_t rank = static_cast<int32_t>(logical_shape.rank());
-    for (auto& output_placement : output_placements) {
-        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placement)) {
-            // Temp workaround for #52331:
-            // Rank-changing ops don't renumber Shard::dim, so skip over invalid shard dims
-            if (shard->dim >= rank || shard->dim < -rank) {
-                continue;
-            }
-            // Shard::dim is always unnormalized by construction, so normalize here
-            if (logical_shape.get_normalized_index(shard->dim) == gather_dim) {
-                output_placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-            }
-        }
+    // The gathered mesh axis becomes Replicate; the other axes keep their placements even when they shard the
+    // gathered tensor dim (their pieces are still distinct after the gather). Without a cluster_axis the gather
+    // spans the whole mesh and every placement becomes Replicate. The helper expands a collapsed 1-D label to one
+    // placement per mesh axis first and compares Shard dims normalised, treating an out-of-range dim left behind by
+    // a rank-changing op (#52331) as matching nothing, so the old skip-over-invalid-dims workaround is gone.
+    // `dim_from_end` is negative by construction; the helper normalises it. No honest label (nullopt, already warned
+    // about): {} keeps the union default.
+    const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
+        tensor_args.input_tensor, args.cluster_axis, args.dim_from_end);
+    if (!output_topology.has_value()) {
+        return {};
     }
-
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), output_placements, input_topology.mesh_coords())};
+    return {*output_topology};
 }
 
 AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create_output_tensors(

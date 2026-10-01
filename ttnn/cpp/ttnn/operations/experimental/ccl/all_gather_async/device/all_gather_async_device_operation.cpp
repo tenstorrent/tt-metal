@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
@@ -226,26 +227,18 @@ AllGatherAsyncDeviceOperation::tensor_return_value_t AllGatherAsyncDeviceOperati
 
 AllGatherAsyncDeviceOperation::topology_return_value_t AllGatherAsyncDeviceOperation::compute_output_topologies(
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
-    // After all_gather, the gathered axis is fully replicated across all devices on that axis.
-    // Replace the placement on `cluster_axis` with Replicate, leaving other mesh axes untouched.
-    // When cluster_axis is not provided, the op acts across the entire (1D) mesh, so all
-    // placements are set to Replicate.
-    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    if (args.cluster_axis.has_value()) {
-        const auto axis = args.cluster_axis.value();
-        if (axis < output_placements.size()) {
-            output_placements[axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-    } else {
-        for (auto& placement : output_placements) {
-            placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
+    // After all_gather the gathered axis is Replicate and the other mesh axes keep their placements; without a
+    // cluster_axis the op spans the whole mesh and every placement becomes Replicate. The helper expands a
+    // collapsed 1-D label to one placement per mesh axis first (the per-axis edit used to land on index 0 for any
+    // cluster_axis) and refuses a gather that would interleave the shards of a 1-D-mapped tensor. `args.dim` is
+    // already normalised (all_gather_async_build_operation_args). No honest label (nullopt, already warned about):
+    // {} keeps the union default.
+    const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
+        tensor_args.input_tensor, args.cluster_axis, args.dim);
+    if (!output_topology.has_value()) {
+        return {};
     }
-
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
+    return {*output_topology};
 }
 
 std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_operation_args(

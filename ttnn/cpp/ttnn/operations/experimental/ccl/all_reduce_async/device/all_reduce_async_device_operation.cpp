@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 
 #include <tt-metalium/host_api.hpp>
@@ -90,16 +91,16 @@ AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperati
 
 AllReduceAsyncDeviceOperation::topology_return_value_t AllReduceAsyncDeviceOperation::compute_output_topologies(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // after all_reduce, the output is fully replicated across all devices on `cluster_axis`.
-    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    if (args.cluster_axis < output_placements.size()) {
-        output_placements[args.cluster_axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+    // After all_reduce every device on `cluster_axis` holds the same bytes: Replicate on that axis, the other mesh
+    // axes inherited from the input. The helper expands a collapsed 1-D label to one placement per mesh axis first,
+    // so the edit lands on `cluster_axis` rather than index 0. No honest label (nullopt, already warned about): {}
+    // keeps the union default.
+    const auto output_topology = ttnn::operations::ccl::common::all_reduce_output_topology(
+        tensor_args.input_tensor, std::optional<uint32_t>(args.cluster_axis));
+    if (!output_topology.has_value()) {
+        return {};
     }
-
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
+    return {*output_topology};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllReduceAsyncDeviceOperation::tensor_return_value_t>
