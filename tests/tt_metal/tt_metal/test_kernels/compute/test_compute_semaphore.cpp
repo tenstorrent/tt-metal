@@ -29,6 +29,7 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
+// TODO @RT: drop the Quasar includes and use the 2.0 ones after the Quasar compute API has been ported to Metal 2.0.
 #ifdef ARCH_QUASAR
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
@@ -205,6 +206,8 @@ void kernel_main() {
         UNPACK(store_u32(report_addr + 8u, sem.value());)
     }
 #elif defined(PATTERN_D_DFB)
+    // TODO @RT: delete this branch and run the LLKOperand path above on Quasar after the Quasar compute API has
+    // been ported to Metal 2.0.
     // Quasar: LLKOperand is Blackhole-only, so `in`, `mid` and `out` are dataflow buffers and the Quasar
     // Compute API addresses them by id.
     //  - Seed: the id-based compute_kernel_hw_startup does not seed the semaphore; PACK set(0)s it.
