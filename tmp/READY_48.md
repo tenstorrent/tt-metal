@@ -100,3 +100,25 @@ Expect PSNR >= 40 dB and PCC >= 0.99. Look at the stills in /tmp/q48 and show th
 
 Copy the mp4s and run.log to `tt-project/baselines/t48/` on g15blx02, then on blx03:
 `rm -rf ~/fasth3/out/t48 && git -C ~/fasth3/tt-metal worktree remove ~/fasth3/t48`.
+
+## Known latency: first request pays the encode-trace capture
+
+The Gemma encode trace is captured once, at the end of the first request (gen #0), after its mp4 is written
+(`pipeline_ltx_distilled.py`, `open_trace_gate()` + `capture_trace()`). That adds ~1.6 s (4x8) to gen #0's
+call, not to its output time. Every later request replays the trace. Time gen #1+ for the steady-state number.
+
+## Export preset
+
+Default x264 export is `ultrafast` / crf 20. `LTX_EXPORT_PRESET=veryfast` restores the old veryfast / crf 23;
+`LTX_EXPORT_CRF` overrides the crf of either preset.
+
+## Before a PR: remove these force-tracked files
+
+Keep `tmp/READY_48.md` and `tmp/blx03/{READY_blx03.md,env.yaml,run48.sh,submit.sh,NOTES.md}` until the t48 e2e run
+is done, then remove them too. Remove now-unneeded files before any PR:
+
+- `NOTES.md` (root)
+- `tmp/READY_22.md`, `tmp/READY_26.md`
+- `tmp/block_env.yaml`, `tmp/blx03/run25.sh`
+- `tmp/chunk_ab.sh`, `tmp/cmp.sh`, `tmp/cmp_blk.py`, `tmp/done.sh`, `tmp/drive6.sh`, `tmp/e2e.sh`
+- `tmp/na_kernel_cmds.txt`, `tmp/na_kernel_compile.sh`

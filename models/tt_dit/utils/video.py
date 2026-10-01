@@ -156,13 +156,12 @@ def _x264_options() -> dict[str, str]:
 
     The export is on the request's critical path. On a 1080p 145-frame clip, ultrafast at crf 20 encodes in about
     0.15 s against 0.65 s for veryfast at crf 23, and lands closer to the source frames (Y PSNR 47.9 dB vs 45.6 dB);
-    the cost is a ~3.5x larger file. ``LTX_EXPORT_PRESET`` / ``LTX_EXPORT_CRF`` trade that back."""
+    the cost is a ~3.5x larger file. ``LTX_EXPORT_PRESET=veryfast`` restores the old veryfast/crf 23 export;
+    ``LTX_EXPORT_CRF`` overrides the crf of either preset."""
     if os.environ.get("LTX_EXPORT_LOSSLESS", "0") != "0":
         return {"preset": "veryfast", "qp": "0"}
-    return {
-        "preset": os.environ.get("LTX_EXPORT_PRESET", "ultrafast"),
-        "crf": os.environ.get("LTX_EXPORT_CRF", "20"),
-    }
+    preset = os.environ.get("LTX_EXPORT_PRESET", "ultrafast")
+    return {"preset": preset, "crf": os.environ.get("LTX_EXPORT_CRF", "23" if preset == "veryfast" else "20")}
 
 
 def _dump_audio_sidecar(output_path: str, audio: "Audio | None") -> None:

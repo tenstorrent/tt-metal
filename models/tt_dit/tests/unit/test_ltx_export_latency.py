@@ -2,8 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks for the two request-latency costs outside the device: the mp4 export and the deferred
-Gemma encode-trace capture. No device needed."""
+"""Host-only checks for the mp4 export, a request-latency cost outside the device. No device needed."""
 
 import threading
 
@@ -12,7 +11,6 @@ import numpy as np
 import pytest
 import torch
 
-from models.tt_dit.encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
 from models.tt_dit.utils import video
 
 
@@ -42,8 +40,9 @@ def test_default_x264_options_favour_latency(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     assert video._x264_options() == {"preset": "ultrafast", "crf": "20"}
     monkeypatch.setenv("LTX_EXPORT_PRESET", "veryfast")
-    monkeypatch.setenv("LTX_EXPORT_CRF", "23")
     assert video._x264_options() == {"preset": "veryfast", "crf": "23"}
+    monkeypatch.setenv("LTX_EXPORT_CRF", "18")
+    assert video._x264_options() == {"preset": "veryfast", "crf": "18"}
     monkeypatch.setenv("LTX_EXPORT_LOSSLESS", "1")
     assert video._x264_options() == {"preset": "veryfast", "qp": "0"}
 
@@ -68,36 +67,6 @@ def test_yuv_export_round_trip(tmp_path, monkeypatch, layout):
     assert _psnr(decoded, clip) > 40.0
     with av.open(out) as c:
         assert len(c.streams.audio) == 1
-
-
-def _gate_pair(encoder_trace=True):
-    pair = GemmaTokenizerEncoderPair.__new__(GemmaTokenizerEncoderPair)
-    pair._encoder_trace = encoder_trace
-    pair._trace_gate_open = True
-    pair.captured = []
-    pair._encode_prompt_device = lambda prompt: pair.captured.append(prompt)
-    return pair
-
-
-def test_opening_a_closed_gate_captures_the_encode_trace_now():
-    pair = _gate_pair()
-    pair.defer_trace_capture()
-    pair.open_trace_gate(capture_prompt="a cat")
-    assert pair._trace_gate_open and pair.captured == ["a cat"]
-    pair.open_trace_gate(capture_prompt="a dog")  # already open: the trace exists, nothing to pay
-    assert pair.captured == ["a cat"]
-
-
-def test_gate_without_prompt_or_trace_does_not_encode():
-    pair = _gate_pair()
-    pair.defer_trace_capture()
-    pair.open_trace_gate()
-    assert pair._trace_gate_open and pair.captured == []
-
-    untraced = _gate_pair(encoder_trace=False)
-    untraced.defer_trace_capture()
-    untraced.open_trace_gate(capture_prompt="a cat")
-    assert untraced.captured == []
 
 
 def test_yuv_export_encodes_audio_alongside_video(tmp_path, monkeypatch):

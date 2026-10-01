@@ -6,7 +6,7 @@ t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff a
 
 Conflicts:
 - pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) stays as API.
+  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
 - utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
   the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
   test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
