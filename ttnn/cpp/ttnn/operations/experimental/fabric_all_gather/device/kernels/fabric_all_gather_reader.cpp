@@ -2,160 +2,184 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader of a link worker or copy core (terms: fabric_all_gather_chunk_walk.hpp). Reads its send list into the chunk
-// CB: entry 0 is this chip's own shard, relay entry k is read from this chip's output once the arrival counter
-// reaches k.
+// Reader of a fabric link worker or a local copy core (terms: fabric_all_gather_chunk_walk.hpp). Reads its outgoing
+// shards into the chunk CB, one fabric chunk per chunk slot, a CB batch at a time: outgoing shard 0 is this chip's own
+// shard; forwarded shard k is read from this chip's output once the shards-arrived counter reaches k.
 //
-// Own shard, interleaved input: read chunk by chunk from the input. Non-interleaved input: the copy cores first write
-// it into this chip's output slot (in input order, see for_each_input_run), and the link workers read it from there
-// like a relay once every copy core has signalled.
+// Own shard, interleaved input: read chunk by chunk from the input. Non-interleaved input: the local copy cores first
+// convert it into this chip's output (for_each_contiguous_input_run), and the link workers read it from there like a
+// forwarded shard, once the conversion blocks a chunk touches are done.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "fabric_all_gather_common.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb = get_compile_time_arg_val(0);
+    constexpr uint32_t chunk_cb = get_compile_time_arg_val(0);
     constexpr uint32_t metadata_cb = get_compile_time_arg_val(1);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t pages_per_chunk = get_compile_time_arg_val(3);
-    constexpr uint32_t num_banks = get_compile_time_arg_val(4);
-    constexpr uint32_t batch_chunks = get_compile_time_arg_val(5);  // the CB holds 2 batches
-    constexpr bool kBatchFromMetadata = get_compile_time_arg_val(6) != 0;
-    constexpr bool kPrefixFromMetadata = get_compile_time_arg_val(7) != 0;
+    constexpr uint32_t pages_per_fabric_chunk = get_compile_time_arg_val(3);
+    constexpr uint32_t num_dram_banks = get_compile_time_arg_val(4);
+    constexpr uint32_t chunks_per_cb_batch = get_compile_time_arg_val(5);  // the chunk CB holds 2 CB batches
+    constexpr bool kCacheSlotFromMetadata = get_compile_time_arg_val(6) != 0;
+    constexpr bool kValidPrefixFromMetadata = get_compile_time_arg_val(7) != 0;
     constexpr bool kInputInterleaved = get_compile_time_arg_val(8) != 0;
-    constexpr bool kCopyCore = get_compile_time_arg_val(9) != 0;
-    // link workers: program semaphores staged_semaphore_id + c = blocks of the own shard copy core c has converted
-    constexpr uint32_t staged_semaphore_id = get_compile_time_arg_val(10);
-    constexpr uint32_t num_copy_cores = get_compile_time_arg_val(11);
-    constexpr uint32_t run_cb = get_compile_time_arg_val(12);  // copy cores: each run's (flat start, pages | last)
+    constexpr bool kLocalCopyCore = get_compile_time_arg_val(9) != 0;
+    // link workers: program semaphore blocks_converted_semaphore_id + c = conversion blocks local copy core c has done
+    constexpr uint32_t blocks_converted_semaphore_id = get_compile_time_arg_val(10);
+    constexpr uint32_t num_local_copy_cores = get_compile_time_arg_val(11);
+    constexpr uint32_t input_run_cb =
+        get_compile_time_arg_val(12);  // copy cores: (flat_page, num_pages | last) per run
     constexpr auto input_args = TensorAccessorArgs<13>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto batch_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    constexpr auto prefix_args = TensorAccessorArgs<batch_args.next_compile_time_args_offset()>();
-    constexpr uint32_t chunk_bytes = pages_per_chunk * page_bytes;
-    constexpr uint32_t cb_chunks = 2 * batch_chunks;
-    constexpr uint32_t block_pages = pages_per_chunk * batch_chunks * kCopyBlockBatches;  // copy-core block
+    constexpr auto cache_slot_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr auto valid_prefix_args = TensorAccessorArgs<cache_slot_args.next_compile_time_args_offset()>();
+    constexpr uint32_t fabric_chunk_bytes = pages_per_fabric_chunk * page_bytes;
+    constexpr uint32_t chunk_slots_in_cb = 2 * chunks_per_cb_batch;
+    constexpr uint32_t conversion_block_pages =
+        pages_per_fabric_chunk * chunks_per_cb_batch * kCbBatchesPerConversionBlock;
 
-    // Common args: [0] input [1] output [2] arrival counter [3] batch index tensor [4] slot layers [5] slot layer
-    // [6] slot base page (host) [7] pages per slot, then the shard geometry (fabric_all_gather_common.hpp).
+    // Common args: [0] input [1] output [2] shards-arrived counter [3] cache slot tensor [4] layers per user [5] layer
+    // [6] cache slot first page (host) [7] pages per cache slot, then the chip shard geometry (common.hpp).
     const uint32_t landing_l1 = get_write_ptr(metadata_cb);
-    const ShardGeometry shard = read_shard_geometry<kPrefixFromMetadata>(landing_l1, prefix_args);
-    const uint32_t slot_base = read_slot_base<kBatchFromMetadata>(landing_l1, batch_args);
+    const ChipShardGeometry geometry =
+        read_chip_shard_geometry<kValidPrefixFromMetadata>(landing_l1, valid_prefix_args);
+    const uint32_t cache_slot_first_page =
+        read_cache_slot_first_page<kCacheSlotFromMetadata>(landing_l1, cache_slot_args);
     const auto input = TensorAccessor(input_args, get_common_arg_val<uint32_t>(0), page_bytes);
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(1), page_bytes);
-    auto* arrivals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_common_arg_val<uint32_t>(2));
+    auto* shards_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_common_arg_val<uint32_t>(2));
 
-    // Per-core args: [0] first bank [1] bank stride [2] entries, then the send list. A copy core has one entry (its
-    // own shard); with a non-interleaved input, [0] / [1] are its index / the number of copy cores.
-    const uint32_t first_bank = get_arg_val<uint32_t>(0);
-    const uint32_t bank_stride = get_arg_val<uint32_t>(1);
-    const uint32_t num_entries = get_arg_val<uint32_t>(2);
+    // Per-core args: [0] first owned bank [1] owned bank stride [2] number of outgoing shards, then the outgoing
+    // shards. A local copy core has one (its own shard); with a non-interleaved input, [0] / [1] are its index / the
+    // number of local copy cores instead.
+    const uint32_t first_owned_bank = get_arg_val<uint32_t>(0);
+    const uint32_t owned_bank_stride = get_arg_val<uint32_t>(1);
+    const uint32_t num_outgoing_shards = get_arg_val<uint32_t>(2);
+    constexpr uint32_t kOutgoingShardsArg = 3;
 
-    // A batch is pushed when it is full, when it reaches the end of the CB (so it stays contiguous) and at the end of
-    // every entry (so nothing is held while waiting for the next relay).
-    uint32_t cb_offset = 0, batch = 0, batch_cap = 0, write_ptr = 0;
-    auto push = [&]() {
+    // A CB batch is pushed when it is full, when it reaches the end of the CB (so it stays contiguous in L1) and at the
+    // end of every outgoing shard (so nothing is held while waiting for the next forwarded shard).
+    uint32_t cb_chunk_offset = 0, chunks_in_batch = 0, batch_capacity = 0, write_ptr = 0;
+    auto push_batch = [&]() {
         noc_async_read_barrier();
-        cb_push_back(cb, pages_per_chunk * batch);
-        cb_offset = (cb_offset + batch) % cb_chunks;
-        batch = 0;
+        cb_push_back(chunk_cb, pages_per_fabric_chunk * chunks_in_batch);
+        cb_chunk_offset = (cb_chunk_offset + chunks_in_batch) % chunk_slots_in_cb;
+        chunks_in_batch = 0;
     };
-    auto next_slot = [&]() {  // L1 address of the next chunk slot, reserving a batch when one starts
-        if (batch == 0) {
-            batch_cap = batch_chunks < cb_chunks - cb_offset ? batch_chunks : cb_chunks - cb_offset;
-            cb_reserve_back(cb, pages_per_chunk * batch_cap);
-            write_ptr = get_write_ptr(cb);
+    auto next_chunk_slot = [&]() {  // L1 address of the next chunk slot, reserving a CB batch when one starts
+        if (chunks_in_batch == 0) {
+            batch_capacity = chunks_per_cb_batch < chunk_slots_in_cb - cb_chunk_offset
+                                 ? chunks_per_cb_batch
+                                 : chunk_slots_in_cb - cb_chunk_offset;
+            cb_reserve_back(chunk_cb, pages_per_fabric_chunk * batch_capacity);
+            write_ptr = get_write_ptr(chunk_cb);
         }
-        return write_ptr + batch * chunk_bytes;
+        return write_ptr + chunks_in_batch * fabric_chunk_bytes;
     };
-    auto slot_done = [&]() {
-        if (++batch == batch_cap) {
-            push();
+    auto chunk_slot_filled = [&]() {
+        if (++chunks_in_batch == batch_capacity) {
+            push_batch();
         }
     };
 
-    if constexpr (kCopyCore && !kInputInterleaved) {
-        for_each_input_run(
-            shard,
+    if constexpr (kLocalCopyCore && !kInputInterleaved) {
+        const uint32_t local_copy_core_index = first_owned_bank;
+        const uint32_t num_converting_cores = owned_bank_stride;
+        for_each_contiguous_input_run(
+            geometry,
             input,
-            slot_base,
+            cache_slot_first_page,
             page_bytes,
-            pages_per_chunk,
-            block_pages,
-            first_bank,
-            bank_stride,
-            [&](uint32_t stripe, uint32_t page, uint32_t num_pages, bool last_of_block) {
+            pages_per_fabric_chunk,
+            conversion_block_pages,
+            local_copy_core_index,
+            num_converting_cores,
+            [&](uint32_t outer_slice, uint32_t page_in_slice, uint32_t num_pages, bool last_run_of_block) {
                 noc_async_read(
-                    input.get_noc_addr(slot_base + stripe * shard.stripe_pages + page),
-                    next_slot(),
+                    input.get_noc_addr(
+                        cache_slot_first_page + outer_slice * geometry.pages_per_outer_slice + page_in_slice),
+                    next_chunk_slot(),
                     num_pages * page_bytes);
-                cb_reserve_back(run_cb, 1);
-                auto* run = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(run_cb));
-                run[0] = stripe * shard.active_stripe_pages + page;
-                run[1] = num_pages | (last_of_block ? 0x80000000u : 0u);
-                cb_push_back(run_cb, 1);
-                ++batch;
-                if (batch == batch_cap || last_of_block) {  // the writer signals whole blocks
-                    push();
+                cb_reserve_back(input_run_cb, 1);
+                auto* input_run = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(input_run_cb));
+                input_run[0] = outer_slice * geometry.valid_pages_per_outer_slice + page_in_slice;  // flat_page
+                input_run[1] = num_pages | (last_run_of_block ? 0x80000000u : 0u);
+                cb_push_back(input_run_cb, 1);
+                ++chunks_in_batch;
+                if (chunks_in_batch == batch_capacity ||
+                    last_run_of_block) {  // the writer signals whole conversion blocks
+                    push_batch();
                 }
             });
         return;
     }
 
-    // Own shard of a non-interleaved input: wait until the copy cores have converted every block the chunk touches.
-    auto wait_staged = [&](uint32_t stripe, uint32_t page, uint32_t num_pages) {
-        const uint32_t last_flat = stripe * shard.active_stripe_pages + page + (num_pages - 1) * num_banks;
-        for (uint32_t c = 0; c < num_copy_cores; ++c) {
-            auto* staged = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(staged_semaphore_id + c));
-            const uint32_t need = blocks_needed(last_flat, block_pages, c, num_copy_cores);
-            if (*staged < need) {
-                if (batch > 0) {
-                    push();  // never block while holding read chunks
+    // Own shard of a non-interleaved input: wait until the local copy cores have converted every conversion block the
+    // chunk touches (its pages are page_in_slice, + num_dram_banks, ...: the last one is the furthest).
+    auto wait_until_converted = [&](uint32_t outer_slice, uint32_t page_in_slice, uint32_t num_pages) {
+        const uint32_t last_flat_page =
+            outer_slice * geometry.valid_pages_per_outer_slice + page_in_slice + (num_pages - 1) * num_dram_banks;
+        for (uint32_t copy_core = 0; copy_core < num_local_copy_cores; ++copy_core) {
+            auto* blocks_converted = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(blocks_converted_semaphore_id + copy_core));
+            const uint32_t needed_blocks =
+                conversion_blocks_needed(last_flat_page, conversion_block_pages, copy_core, num_local_copy_cores);
+            if (*blocks_converted < needed_blocks) {
+                if (chunks_in_batch > 0) {
+                    push_batch();  // never block while holding chunks that were already read
                 }
-                noc_semaphore_wait_min(staged, need);
+                noc_semaphore_wait_min(blocks_converted, needed_blocks);
             }
         }
     };
 
-    for (uint32_t k = 0; k < num_entries; ++k) {
-        const uint32_t entry = get_arg_val<uint32_t>(3 + k);
-        if (count_chunks(shard, num_banks, pages_per_chunk, first_bank, bank_stride, entry_half(entry)) == 0) {
-            continue;  // nothing on our banks (its sender may already have reset the counter: don't wait)
+    for (uint32_t outgoing_index = 0; outgoing_index < num_outgoing_shards; ++outgoing_index) {
+        const uint32_t outgoing_shard = get_arg_val<uint32_t>(kOutgoingShardsArg + outgoing_index);
+        if (count_fabric_chunks(
+                geometry,
+                num_dram_banks,
+                pages_per_fabric_chunk,
+                first_owned_bank,
+                owned_bank_stride,
+                outgoing_shard_bank_half(outgoing_shard)) == 0) {
+            continue;  // nothing on our banks: don't wait (the sender may already have reset the counter)
         }
-        const bool from_output = k > 0 || !kInputInterleaved;
-        if (k > 0) {
-            noc_semaphore_wait_min(arrivals, k);  // upstream's entry k - 1 has landed in our output
+        const bool read_from_output = outgoing_index > 0 || !kInputInterleaved;
+        if (outgoing_index > 0) {
+            noc_semaphore_wait_min(shards_arrived, outgoing_index);  // upstream's outgoing shard k - 1 is in our output
         }
-        for_each_chunk(
-            shard,
-            num_banks,
-            pages_per_chunk,
-            first_bank,
-            bank_stride,
-            entry_half(entry),
-            [&](uint32_t stripe, uint32_t page, uint32_t num_pages) {
+        for_each_fabric_chunk(
+            geometry,
+            num_dram_banks,
+            pages_per_fabric_chunk,
+            first_owned_bank,
+            owned_bank_stride,
+            outgoing_shard_bank_half(outgoing_shard),
+            [&](uint32_t outer_slice, uint32_t page_in_slice, uint32_t num_pages) {
                 if constexpr (!kInputInterleaved) {
-                    if (k == 0) {
-                        wait_staged(stripe, page, num_pages);
+                    if (outgoing_index == 0) {
+                        wait_until_converted(outer_slice, page_in_slice, num_pages);
                     }
                 }
-                const uint32_t dst = next_slot();
-                if (from_output) {
+                const uint32_t chunk_slot = next_chunk_slot();
+                if (read_from_output) {
                     noc_async_read(
-                        output.get_noc_addr(output_page(shard, entry_rank(entry), stripe, page)),
-                        dst,
+                        output.get_noc_addr(output_page_index(
+                            geometry, outgoing_shard_rank(outgoing_shard), outer_slice, page_in_slice)),
+                        chunk_slot,
                         num_pages * page_bytes);
                 } else {
                     noc_async_read(
-                        input.get_noc_addr(slot_base + stripe * shard.stripe_pages + page),
-                        dst,
+                        input.get_noc_addr(
+                            cache_slot_first_page + outer_slice * geometry.pages_per_outer_slice + page_in_slice),
+                        chunk_slot,
                         num_pages * page_bytes);
                 }
-                slot_done();
+                chunk_slot_filled();
             });
-        if (batch > 0) {
-            push();
+        if (chunks_in_batch > 0) {
+            push_batch();
         }
     }
 }
