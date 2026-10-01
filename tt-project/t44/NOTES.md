@@ -37,3 +37,15 @@ AICLK cap 1150, 1 warmup + 3 timed decodes. One arm per job.
 Pass: identical=True; saving = min decode_s fold0 - fold1 (AB44 lines). Cleanup: blx03 ~/fasth3/t44, /var/tmp/fasth3/t44.
 To rebuild the overlay: git show origin/ttp/t36-blx03-ltx25:models/tt_dit/models/vae/vae_ltx.py > f;
   git diff b9f8587ce6c 1968790b040 -- models/tt_dit/models/vae/vae_ltx.py | patch f
+
+## #46 run log
+- 2026-10-01 07:21: files copied to blx03 ~/fasth3/t44; arm 0 submitted as blx03 job 000 (broker ids restarted).
+  Next: when job 000 ends, check its log (/var/log/tt-device-broker/2026-10-01_072150_000.log) for chip drop/fabric
+  failure; if clean, submit arm 1, then compare44.py.
+- 2026-10-01 (attempt 2): blx03 unreachable (ping 100% loss, ssh "No route to host") after job 000 (arm 0) was
+  submitted. Likely box down/reboot during or after our job. Per 07:21 rule: ALL device work stopped, arm 1 NOT
+  submitted. Job 000 log not yet read. Next (only after user OK): read job 000 log + dmesg/uptime on blx03.
+- 2026-10-01 07:38 (attempt 2): blx03 back (up since ~07:26). Job 000 (arm 0) was re-queued by the broker and ran
+  07:29:16, completed exit 0: decode_s 2.3360 2.3367 2.3310, min 2.3310; yuv_fold0.pt saved. No drop.
+  Arm 1 submitted as blx03 job 008 (log /var/log/tt-device-broker/2026-10-01_073830_008.log).
+  Next: check job 008 status + `grep AB44 ~/fasth3/t44/run44_fold1.log`; check for drop; run compare44.py; cleanup.
