@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--no-async-scheduling", action="store_true", help="Explicit scheduler comparison experiment")
+    parser.add_argument("--tool-calls", action="store_true", help="Enable the CI Gemma tool parser for agent probes")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     plan = profile_plan(32)
@@ -23,6 +24,8 @@ def main():
         plan["command"] = [
             "--no-async-scheduling" if value == "--async-scheduling" else value for value in plan["command"]
         ]
+    if args.tool_calls:
+        plan["command"].extend(["--enable-auto-tool-choice", "--tool-call-parser", "gemma4"])
     plan["status"] = "launch_intent_execve_pending_not_running_identity"
     plan["required_before_launch"] = [
         "Verify exclusive device ownership before invoking this launcher.",

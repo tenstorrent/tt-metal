@@ -1,0 +1,182 @@
+[
+  {
+    "task": "django",
+    "message_index": 7,
+    "recorded_prompt_tokens": 1989,
+    "rendered_prompt_tokens": 1989,
+    "repeat": 0,
+    "elapsed_s": 5.4459088472649455,
+    "ttft_s": 2.0205566976219416,
+    "decode_s": 3.425281696021557,
+    "usage": {
+      "prompt_tokens": 1989,
+      "total_tokens": 2117,
+      "completion_tokens": 128
+    },
+    "output_sha256": "f21a579be4ca45e7dd84582e32e4d6c866e445e53787e32651999b814e776350",
+    "output_preview": "thought\ncall:bash{command:grep -r \"class CheckConstraint\" django | head -n 20}s\nthought\ncall:bash{command:grep -r \"class CheckConstraint\" django | head -n 20}thought\ncall:bash{command:grep -r \"class CheckConstraint\" django | head -n 20}thou",
+    "protocol": "C1 real context; diagnostic output fixed128 ignore_eos; not an accuracy eval"
+  },
+  {
+    "task": "django",
+    "message_index": 7,
+    "recorded_prompt_tokens": 1989,
+    "rendered_prompt_tokens": 1989,
+    "repeat": 1,
+    "elapsed_s": 4.08953267429024,
+    "ttft_s": 1.1527296137064695,
+    "decode_s": 2.936752574518323,
+    "usage": {
+      "prompt_tokens": 1989,
+      "total_tokens": 2117,
+      "completion_tokens": 128
+    },
+    "output_sha256": "f21a579be4ca45e7dd84582e32e4d6c866e445e53787e32651999b814e776350",
+    "output_preview": "thought\ncall:bash{command:grep -r \"class CheckConstraint\" django | head -n 20}s\nthought\ncall:bash{command:grep -r \"class CheckConstraint\" django | head -n 20}thought\ncall:bash{command:grep -r \"class CheckConstraint\" django | head -n 20}thou",
+    "protocol": "C1 real context; diagnostic output fixed128 ignore_eos; not an accuracy eval"
+  },
+  {
+    "task": "django",
+    "message_index": 322,
+    "recorded_prompt_tokens": 12028,
+    "rendered_prompt_tokens": 12028,
+    "repeat": 0,
+    "elapsed_s": 9.898317973129451,
+    "ttft_s": 7.256696338765323,
+    "decode_s": 2.6415696050971746,
+    "usage": {
+      "prompt_tokens": 12028,
+      "total_tokens": 12156,
+      "completion_tokens": 128
+    },
+    "output_sha256": "fef6d8015e54abbffc8c4ec6a86fa3e5b708fdee425ce05ed4c027a32e35718b",
+    "output_preview": "call:bash{command:grep -rn \"CheckConstraint\" django/db/models/sql/compiler.py}response:bash{value:{\n  \"returncode\": 1,\n  \"output\": \"\"\n}}call:bash{command:grep -rn \"CheckConstraint\" django/db/models/sql/compiler.py}response:bash{value:{\n  \"r",
+    "protocol": "C1 real context; diagnostic output fixed128 ignore_eos; not an accuracy eval"
+  },
+  {
+    "task": "django",
+    "message_index": 322,
+    "recorded_prompt_tokens": 12028,
+    "rendered_prompt_tokens": 12028,
+    "repeat": 1,
+    "elapsed_s": 9.733600033447146,
+    "ttft_s": 7.075913810171187,
+    "decode_s": 2.6576359178870916,
+    "usage": {
+      "prompt_tokens": 12028,
+      "total_tokens": 12156,
+      "completion_tokens": 128
+    },
+    "output_sha256": "fef6d8015e54abbffc8c4ec6a86fa3e5b708fdee425ce05ed4c027a32e35718b",
+    "output_preview": "call:bash{command:grep -rn \"CheckConstraint\" django/db/models/sql/compiler.py}response:bash{value:{\n  \"returncode\": 1,\n  \"output\": \"\"\n}}call:bash{command:grep -rn \"CheckConstraint\" django/db/models/sql/compiler.py}response:bash{value:{\n  \"r",
+    "protocol": "C1 real context; diagnostic output fixed128 ignore_eos; not an accuracy eval"
+  },
+  {
+    "task": "django",
+    "message_index": 632,
+    "recorded_prompt_tokens": 21018,
+    "rendered_prompt_tokens": 21018,
+    "repeat": 0,
+    "elapsed_s": 14.981265312992036,
+    "ttft_s": 12.30012241192162,
+    "decode_s": 2.6810730984434485,
+    "usage": {
+      "prompt_tokens": 21018,
+      "total_tokens": 21146,
+      "completion_tokens": 128
+    },
+    "output_sha256": "c121f5bf9257219268f2c6e9e421242a158c19dcbd8504185abb41276ef922be",
+    "output_preview": "call:bash{command:grep -rn \"CheckConstraint\" django/db/models/sql/compiler.py}response:bash{value:{\n  \"returncode\": 1,\n  \"output\": \"\"\n}}thought\nI will start by creating a reproduction script to confirm the issue. The issue is that `CheckCon",
+    "protocol": "C1 real context; diagnostic output fixed128 ignore_eos; not an accuracy eval"
+  },
+  {
+    "task": "django",
+    "message_index": 632,
+    "recorded_prompt_tokens": 21018,
+    "rendered_prompt_tokens": 21018,
+    "repeat": 1,
+    "elapsed_s": 14.859175395220518,
+    "ttft_s": 12.208642180077732,
+    "decode_s": 2.650482539087534,
+    "usage": {
+      "prompt_tokens": 21018,
+      "total_tokens": 21146,
+      "completion_tokens": 128
+    },
+    "output_sha256": "c121f5bf9257219268f2c6e9e421242a158c19dcbd8504185abb41276ef922be",
+    "output_preview": "call:bash{command:grep -rn \"CheckConstraint\" django/db/models/sql/compiler.py}response:bash{value:{\n  \"returncode\": 1,\n  \"output\": \"\"\n}}thought\nI will start by creating a reproduction script to confirm the issue. The issue is that `CheckCon",
+    "protocol": "C1 real context; diagnostic output fixed128 ignore_eos; not an accuracy eval"
+  },
+  {
+    "task": "astropy",
+    "message_index": 83,
+    "recorded_prompt_tokens": 32155,
+    "rendered_prompt_tokens": 32155,
+    "repeat": 0,
+    "elapsed_s": 21.48442977294326,
+    "ttft_s": 18.80579668469727,
+    "decode_s": 2.678574868477881,
+    "usage": {
+      "prompt_tokens": 32155,
+      "total_tokens": 32283,
+      "completion_tokens": 128
+    },
+    "output_sha256": "5b2d6646d30e838288607066e6237ab2e64ce144faaa61bcb69a2a5fac31806b",
+    "output_preview": "call:bash{command:cat <<'EOF' > reproduce_issue.py\nclass A:\n    @property\n    def prop(self):\n        return self.random_attr\n\nclass B(A):\n    pass\n\nb = B()\ntry:\n    print(b.prop)\nexcept AttributeError as e:\n    print(f\"Caught: {e}\")\nexcept",
+    "protocol": "C1 real context; diagnostic output fixed128 ignore_eos; not an accuracy eval"
+  },
+  {
+    "task": "astropy",
+    "message_index": 83,
+    "recorded_prompt_tokens": 32155,
+    "rendered_prompt_tokens": 32155,
+    "repeat": 1,
+    "elapsed_s": 21.26466255541891,
+    "ttft_s": 18.58402337040752,
+    "decode_s": 2.6805760646238923,
+    "usage": {
+      "prompt_tokens": 32155,
+      "total_tokens": 32283,
+      "completion_tokens": 128
+    },
+    "output_sha256": "5b2d6646d30e838288607066e6237ab2e64ce144faaa61bcb69a2a5fac31806b",
+    "output_preview": "call:bash{command:cat <<'EOF' > reproduce_issue.py\nclass A:\n    @property\n    def prop(self):\n        return self.random_attr\n\nclass B(A):\n    pass\n\nb = B()\ntry:\n    print(b.prop)\nexcept AttributeError as e:\n    print(f\"Caught: {e}\")\nexcept",
+    "protocol": "C1 real context; diagnostic output fixed128 ignore_eos; not an accuracy eval"
+  },
+  {
+    "task": "scikit-learn",
+    "message_index": 110,
+    "recorded_prompt_tokens": 48600,
+    "rendered_prompt_tokens": 48600,
+    "repeat": 0,
+    "elapsed_s": 31.436210306361318,
+    "ttft_s": 28.71851576305926,
+    "decode_s": 2.7176513019949198,
+    "usage": {
+      "prompt_tokens": 48600,
+      "total_tokens": 48728,
+      "completion_tokens": 128
+    },
+    "output_sha256": "2863cbffbdec09336f405dff6bce7adddb7e8142a2cfeb554e59c551ade6e12c",
+    "output_preview": "call:bash{command:# I'll find the lines and replace them.\ncat <<'EOF' > patch_script.py\nimport sys\n\nfile_path = 'sklearn/model_selection/_validation.py'\nwith open(file_path, 'r') as f:\n    lines = f.readlines()\n\n# The replacement content\nre",
+    "protocol": "C1 real context; diagnostic output fixed128 ignore_eos; not an accuracy eval"
+  },
+  {
+    "task": "scikit-learn",
+    "message_index": 110,
+    "recorded_prompt_tokens": 48600,
+    "rendered_prompt_tokens": 48600,
+    "repeat": 1,
+    "elapsed_s": 31.350431371480227,
+    "ttft_s": 28.643761856481433,
+    "decode_s": 2.706564656458795,
+    "usage": {
+      "prompt_tokens": 48600,
+      "total_tokens": 48728,
+      "completion_tokens": 128
+    },
+    "output_sha256": "2863cbffbdec09336f405dff6bce7adddb7e8142a2cfeb554e59c551ade6e12c",
+    "output_preview": "call:bash{command:# I'll find the lines and replace them.\ncat <<'EOF' > patch_script.py\nimport sys\n\nfile_path = 'sklearn/model_selection/_validation.py'\nwith open(file_path, 'r') as f:\n    lines = f.readlines()\n\n# The replacement content\nre",
+    "protocol": "C1 real context; diagnostic output fixed128 ignore_eos; not an accuracy eval"
+  }
+]
