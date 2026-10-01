@@ -74,6 +74,13 @@ bool supported_by_codegen(
 bool supported_by_codegen(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config);
 
+// Routing-only, like is_demoted: whether each row-major leg's CB still gets at least one slot from
+// the L1 free now, net of the buffers the call has yet to allocate. supported_by_codegen budgets the
+// static window so that it agrees with itself across a cache miss; this keeps a call dispatched under
+// L1 pressure off a codegen leg whose CB would not place, and on native, which stages a narrower stick.
+bool row_major_cbs_fit_free_l1(
+    const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config);
+
 // Perf-demotion gate: correct but not worth the codegen path. Routing-only --
 // consulted by ttnn::repeat only, never by validate and never by
 // repeat_force_codegen. `output_mem_config` is the placement the call resolves to.

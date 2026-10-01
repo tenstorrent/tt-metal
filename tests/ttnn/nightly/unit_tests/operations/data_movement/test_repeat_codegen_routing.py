@@ -379,26 +379,14 @@ def test_forced_codegen_refuses_a_wide_rm_case_that_exceeds_l1(device, expect_er
         _force_codegen(xt, ttnn.Shape([1, 1, 1, 3]))
 
 
-def test_repeat_codegen_rm_cb_plan_follows_live_l1(device):
-    # Routing budgets two slots against the static L1 window, but the CB depth comes from the L1 free
-    # at dispatch. A case warmed on a clear device and repeated with the free window pinned between one
-    # and two slots must compile a single-slot program rather than replay the cached double-buffered one,
-    # whose CBs would overlap the pinned buffer.
+def _pin_l1_headroom(device, headroom_bytes):
+    """Lowers the live L1 frontier to about `headroom_bytes` above the CB base on every bank.
+
+    Interleaved L1 spreads pages round-robin over the banks, so N tiles per bank lower the lowest
+    occupied address by the same amount on all of them; only the occupancy matters.
+    """
     info = ttnn._ttnn.reports.get_device_info(device)
-    # A last-dim x2 repeat makes the output stick the slot, sized to a quarter of the clear window.
-    width = (info.cb_limit // 16) // 32 * 32
-    slot_bytes = 4 * width
-    x = _make_input([1, 1, 4, width], ttnn.bfloat16)
-    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    repeat_dims = ttnn.Shape([1, 1, 1, 2])
-    expected = x.repeat(1, 1, 1, 2)
-
-    out, grew = _auto_route_grows_cache(device, xt, repeat_dims)
-    assert_equal(expected, ttnn.to_torch(out))
-    assert grew, "auto served the warm-up on native; expected codegen"
-    entries_after_warmup = device.num_program_cache_entries()
-
-    tiles_per_bank = (info.cb_limit - 3 * slot_bytes // 2) // (32 * 32 * 2)
+    tiles_per_bank = (info.cb_limit - headroom_bytes) // (32 * 32 * 2)
     resident = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
         ttnn.bfloat16,
@@ -406,12 +394,48 @@ def test_repeat_codegen_rm_cb_plan_follows_live_l1(device):
         device,
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     )
+    return resident, resident.buffer_address() - info.address_at_first_l1_cb_buffer
+
+
+def _wide_last_dim_case(device, num_repeats):
+    """A row-major last-dim repeat whose codegen CB slot, the output stick, is a quarter of clear L1."""
+    info = ttnn._ttnn.reports.get_device_info(device)
+    width = (info.cb_limit // (8 * num_repeats)) // 32 * 32
+    x = _make_input([1, 1, 4, width], ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return xt, ttnn.Shape([1, 1, 1, num_repeats]), x.repeat(1, 1, 1, num_repeats), 2 * width * num_repeats
+
+
+def test_repeat_codegen_rm_cb_plan_follows_live_l1(device):
+    # Routing budgets two slots against the static L1 window, but the CB depth comes from the L1 free
+    # at dispatch. A case warmed on a clear device and repeated with the free window pinned between one
+    # and two slots must compile a single-slot program rather than replay the cached double-buffered one,
+    # whose CBs would overlap the pinned buffer.
+    xt, repeat_dims, expected, slot_bytes = _wide_last_dim_case(device, 2)
+    out, grew = _auto_route_grows_cache(device, xt, repeat_dims)
+    assert_equal(expected, ttnn.to_torch(out))
+    assert grew, "auto served the warm-up on native; expected codegen"
+    entries_after_warmup = device.num_program_cache_entries()
+
+    resident, headroom = _pin_l1_headroom(device, 3 * slot_bytes // 2)
     try:
-        headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
         assert slot_bytes <= headroom < 2 * slot_bytes, f"pinned headroom {headroom} B is not 1-2 slots"
         assert_equal(expected, ttnn.to_torch(ttnn.repeat(xt, repeat_dims)))
         msg = "the pressured call hit the double-buffered program; the CB plan is not in the cache key"
         assert device.num_program_cache_entries() > entries_after_warmup, msg
+    finally:
+        ttnn.deallocate(resident)
+
+
+def test_repeat_codegen_falls_back_when_free_l1_holds_no_slot(device):
+    # With less than one output stick of L1 free, codegen has no CB plan at all. Native's last-dim CBs
+    # stage the input stick, a quarter of it at x4, so the call must route there instead of failing.
+    xt, repeat_dims, expected, slot_bytes = _wide_last_dim_case(device, 4)
+    device.clear_program_cache()
+    resident, headroom = _pin_l1_headroom(device, 3 * slot_bytes // 4)
+    try:
+        assert slot_bytes // 2 <= headroom < slot_bytes, f"pinned headroom {headroom} B is not 1/2-1 slot"
+        assert_equal(expected, ttnn.to_torch(ttnn.repeat(xt, repeat_dims)))
     finally:
         ttnn.deallocate(resident)
 

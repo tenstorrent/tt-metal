@@ -349,6 +349,48 @@ bool supported_by_codegen(
     return true;
 }
 
+namespace {
+
+// Walks the row-major legs in the order the router executes them, handing `fits` each leg's input and
+// output specs and the per-bank L1 of `committed` plus the round trip's untilized copy and every leg
+// output so far. All of those count as live for the whole call, which never undercounts whatever the
+// allocator frees in between.
+template <typename LegFits>
+bool row_major_legs_fit(
+    const Tensor& input,
+    const ttsl::SmallVector<uint32_t>& repeat_dims,
+    const MemoryConfig& output_mem_config,
+    uint64_t committed,
+    LegFits&& fits) {
+    const auto& shape = input.logical_shape();
+    const CodegenLegPlan plan = plan_codegen_legs(input, repeat_dims, output_mem_config);
+    // What the first leg reads: the input where it lies, its interleaved DRAM copy, or the round trip's
+    // untilized copy.
+    tt::tt_metal::TensorSpec leg_in = input.tensor_spec();
+    if (plan.unshard_input) {
+        leg_in = spec_like(input, shape, input.layout(), interleaved_in(BufferType::DRAM));
+    }
+    if (plan.round_trip) {
+        leg_in = spec_like(input, shape, Layout::ROW_MAJOR, plan.intermediate_mc);
+        committed += l1_bytes_per_bank(input, leg_in);
+    }
+    for (size_t i = 0; i < plan.row_major_legs; ++i) {
+        const uint32_t d = plan.rep_dims[i];
+        auto out_shape = leg_in.logical_shape();
+        out_shape[d] *= plan.leg_repeats[d];
+        const MemoryConfig& leg_mc = i + 1 == plan.rep_dims.size() ? plan.final_mc : plan.intermediate_mc;
+        const auto leg_out = spec_like(input, out_shape, Layout::ROW_MAJOR, leg_mc);
+        committed += l1_bytes_per_bank(input, leg_out);
+        if (!fits(leg_in, leg_out, committed)) {
+            return false;
+        }
+        leg_in = leg_out;
+    }
+    return true;
+}
+
+}  // namespace
+
 bool supported_by_codegen(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
     if (!tile_geometry_ok(input)) {
@@ -402,34 +444,33 @@ bool supported_by_codegen(
             widest_stick, static_cast<uint64_t>(input.device()->allocator()->get_alignment(BufferType::DRAM)));
         return ttnn::prim::rm_slot_routable(slot, ttnn::operations::data_movement::get_static_l1_space(input));
     }
-    // The row-major legs, in the order the router executes them. Each one's CB shares L1 with the
-    // input, the round trip's untilized copy and every leg output so far; all of them are counted as
-    // live for the whole call, which never undercounts whatever the allocator frees in between.
-    const CodegenLegPlan plan = plan_codegen_legs(input, repeat_dims, output_mem_config);
-    uint64_t committed = l1_bytes_per_bank(input, input.tensor_spec());
-    // What the first leg reads: the input where it lies, its interleaved DRAM copy, or the round trip's
-    // untilized copy.
-    tt::tt_metal::TensorSpec leg_in = input.tensor_spec();
-    if (plan.unshard_input) {
-        leg_in = spec_like(input, shape, input.layout(), interleaved_in(BufferType::DRAM));
+    // Each row-major leg's CB shares L1 with the input as well as the buffers the walk counts.
+    return row_major_legs_fit(
+        input,
+        repeat_dims,
+        output_mem_config,
+        l1_bytes_per_bank(input, input.tensor_spec()),
+        [&](const auto& leg_in, const auto& leg_out, uint64_t committed) {
+            return rm_leg_fits_in_l1(input, leg_in, leg_out, committed);
+        });
+}
+
+bool row_major_cbs_fit_free_l1(
+    const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
+    if (input.storage_type() != ttnn::StorageType::DEVICE ||
+        (input.layout() == ttnn::TILE_LAYOUT && !needs_row_major_round_trip(input, repeat_dims))) {
+        return true;
     }
-    if (plan.round_trip) {
-        leg_in = spec_like(input, shape, Layout::ROW_MAJOR, plan.intermediate_mc);
-        committed += l1_bytes_per_bank(input, leg_in);
-    }
-    for (size_t i = 0; i < plan.row_major_legs; ++i) {
-        const uint32_t d = plan.rep_dims[i];
-        auto out_shape = leg_in.logical_shape();
-        out_shape[d] *= plan.leg_repeats[d];
-        const MemoryConfig& leg_mc = i + 1 == plan.rep_dims.size() ? plan.final_mc : plan.intermediate_mc;
-        const auto leg_out = spec_like(input, out_shape, Layout::ROW_MAJOR, leg_mc);
-        committed += l1_bytes_per_bank(input, leg_out);
-        if (!rm_leg_fits_in_l1(input, leg_in, leg_out, committed)) {
-            return false;
-        }
-        leg_in = leg_out;
-    }
-    return true;
+    // The input is already allocated, so the free window has paid for it; only the buffers the call
+    // has yet to allocate are charged against it.
+    const uint64_t free_l1 = ttnn::operations::data_movement::get_max_l1_space(input);
+    return row_major_legs_fit(
+        input, repeat_dims, output_mem_config, 0, [&](const auto& leg_in, const auto& leg_out, uint64_t pending) {
+            const uint32_t slot = ttnn::prim::rm_slot_bytes(
+                ttnn::prim::spec_aligned_page_bytes(input, leg_in),
+                ttnn::prim::spec_aligned_page_bytes(input, leg_out));
+            return pending < free_l1 && ttnn::prim::plan_rm_cb(slot, free_l1 - pending).has_value();
+        });
 }
 
 namespace {
