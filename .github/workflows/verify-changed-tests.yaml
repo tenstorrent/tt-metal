@@ -120,6 +120,25 @@ env:
   WATCHER_YAMLS: >-
     models_unit_tests.yaml
 
+  # Yamls whose cmds run from tt_metal/tt-llk instead of the checkout root. Their
+  # pipelines -- llk-smoke-impl, llk-e2e-impl, llk-perf-impl, llk-bit-exact-impl --
+  # all set `working-directory: ${{ env.LLK_PATH }}` with LLK_PATH=tt_metal/tt-llk,
+  # so every entry in them opens with `cd tests/python_tests` relative to the LLK
+  # tree. The gate runs from /work, where that same cd silently lands in tt-metal's
+  # own tests/ directory, so these legs need the working directory restored.
+  #
+  # Like TRACY_BUILD_YAMLS this has to be told, not derived: `cd tests/python_tests`
+  # is an ordinary first line and says nothing about which tree it is relative to.
+  #
+  # llk_unit_tests.yaml and llk_merge_gate_tests.yaml are deliberately absent -- they
+  # run gtest binaries out of build/test via llk-unit-tests-impl, whose
+  # working-directory is /work like every other pipeline.
+  LLK_WORKDIR_YAMLS: >-
+    llk_pr_gate_tests.yaml
+    llk_e2e_tests.yaml
+    llk_perf_tests.yaml
+    llk_bit_exact_tests.yaml
+
 jobs:
   scope:
     name: Scope changed tests
@@ -423,6 +442,12 @@ jobs:
             if [[ '${{ matrix.leg.dispatch_mode }}' == 'sd' ]]; then
               export TT_METAL_SLOW_DISPATCH_MODE=1
             fi
+            # gate_workdir mirrors the owning pipeline's working-directory. Empty for
+            # everything that runs from /work; the LLK pipelines set it so their
+            # `cd tests/python_tests` resolves against the LLK tree, not tt-metal's.
+            if [[ -n '${{ matrix.leg.gate_workdir }}' ]]; then
+              cd '${{ matrix.leg.gate_workdir }}'
+            fi
             eval "$CMD"
 
       - name: ${{ matrix.leg.name }} (simulator)
@@ -444,6 +469,9 @@ jobs:
             ${{ matrix.leg.cmd }}
             GATE_CMD_EOF
             )
+            if [[ -n '${{ matrix.leg.gate_workdir }}' ]]; then
+              cd '${{ matrix.leg.gate_workdir }}'
+            fi
             eval "$CMD"
 
       - uses: ./docker-job/.github/actions/upload-artifact-with-job-uuid

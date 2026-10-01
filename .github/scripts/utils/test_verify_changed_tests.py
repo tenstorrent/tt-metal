@@ -86,6 +86,8 @@ class Repo:
         review_skus: str = DEFAULT_REVIEW_SKUS,
         files: list[str] | None = None,
         non_matrix_files: str = DEFAULT_NON_MATRIX,
+        llk_workdir_files: str = "",
+        no_source_scope: bool = False,
     ):
         """
         Run the scope-only path.
@@ -106,9 +108,13 @@ class Repo:
             review_skus,
             "--non-matrix-files",
             non_matrix_files,
+            "--llk-workdir-files",
+            llk_workdir_files,
             "--output",
             "result.json",
         ]
+        if no_source_scope:
+            argv.append("--no-source-scope")
         if files is not None:
             argv += ["--files", *files]
         result = subprocess.run(argv, cwd=self.root, capture_output=True, text=True)
@@ -162,16 +168,19 @@ def test_team_change_needs_no_hardware(repo: Repo):
     assert len(payload["metadata_only"]) == 1
 
 
-def test_timeout_change_needs_no_hardware(repo: Repo):
-    """The ceiling is already enforced statically by verify_time_budget.py."""
+def test_timeout_change_needs_hardware(repo: Repo):
+    """A timeout is behavioural: verify_time_budget.py proves the new ceiling fits the
+    team's budget, not that the test still finishes inside it. Only hardware shows that."""
     repo.write(
         "tests/pipeline_reorg/sample_unit_tests.yaml",
         BASE_TESTS_YAML.replace("      timeout: 10\n    wh_n300_civ2", "      timeout: 12\n    wh_n300_civ2"),
     )
     code, payload, _ = repo.scope()
     assert code == 0
-    assert payload["status"] == "no_op"
-    assert len(payload["metadata_only"]) == 1
+    assert payload["status"] == "run"
+    assert payload["metadata_only"] == []
+    # A touched entry runs every SKU it declares, not just the one whose timeout moved.
+    assert sorted(leg["sku"] for leg in payload["run_legs"]) == ["wh_n150_civ2", "wh_n300_civ2"]
 
 
 def test_removed_entry_needs_no_hardware(repo: Repo):
@@ -237,8 +246,7 @@ def test_cmd_change_runs_every_sku_leg_of_that_entry(repo: Repo):
 
 
 def test_added_entry_runs(repo: Repo):
-    added = BASE_TESTS_YAML + textwrap.dedent(
-        """
+    added = BASE_TESTS_YAML + textwrap.dedent("""
         - name: unit gamma
           cmd: ./build/test/gamma
           skus:
@@ -247,8 +255,7 @@ def test_added_entry_runs(repo: Repo):
           team: llk
           owner_id: U004
           arch: blackhole
-        """
-    )
+        """)
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", added)
     code, payload, _ = repo.scope()
     assert code == 0
@@ -407,8 +414,7 @@ def test_duplicate_composite_key_fails_closed(repo: Repo):
 def test_same_name_on_different_skus_fails_closed(repo: Repo):
     """Identity is (name, gtest_shard_index), so a distinct `id` no longer rescues
     two entries that share a name."""
-    same_name = textwrap.dedent(
-        """\
+    same_name = textwrap.dedent("""\
         - id: unit-shared-wh
           name: shared name
           cmd: ./build/test/shared-wh
@@ -426,8 +432,7 @@ def test_same_name_on_different_skus_fails_closed(repo: Repo):
               timeout: 5
           team: llk
           owner_id: U006
-        """
-    )
+        """)
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", same_name)
     code, _, stderr = repo.scope()
     assert code == 1
@@ -450,8 +455,7 @@ def test_duplicates_already_on_the_base_do_not_fail_the_pr_that_fixes_them(repo:
     duplicates is itself diffed against a base that still has them. Both renamed
     entries read as added, so their legs run.
     """
-    entry = textwrap.dedent(
-        """\
+    entry = textwrap.dedent("""\
         - name: shared name
           cmd: ./build/test/shared
           skus:
@@ -459,8 +463,7 @@ def test_duplicates_already_on_the_base_do_not_fail_the_pr_that_fixes_them(repo:
               timeout: 5
           team: llk
           owner_id: U006
-        """
-    )
+        """)
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", entry + entry)
     repo.commit_base()
     repo.write(
@@ -474,14 +477,12 @@ def test_duplicates_already_on_the_base_do_not_fail_the_pr_that_fixes_them(repo:
 
 
 def test_entry_without_skus_fails_closed(repo: Repo):
-    no_skus = BASE_TESTS_YAML + textwrap.dedent(
-        """
+    no_skus = BASE_TESTS_YAML + textwrap.dedent("""
         - name: unit orphan
           cmd: ./build/test/orphan
           team: llk
           owner_id: U005
-        """
-    )
+        """)
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", no_skus)
     code, _, stderr = repo.scope()
     assert code == 1
@@ -496,8 +497,7 @@ def test_unknown_review_sku_name_fails_closed(repo: Repo):
 
 def test_shard_and_arch_disambiguate_same_name(repo: Repo):
     """Two entries sharing a name are distinct legs, and only the edited one runs."""
-    sharded = textwrap.dedent(
-        """\
+    sharded = textwrap.dedent("""\
         - name: shared name
           cmd: ./build/test/s --shard=0
           skus:
@@ -517,8 +517,7 @@ def test_shard_and_arch_disambiguate_same_name(repo: Repo):
           owner_id: U006
           arch: blackhole
           gtest_shard_index: 1
-        """
-    )
+        """)
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", sharded)
     repo.commit_base()
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", sharded.replace("--shard=1", "--shard=1 --extra"))
@@ -531,7 +530,9 @@ def test_shard_and_arch_disambiguate_same_name(repo: Repo):
 # --- filter ------------------------------------------------------------------
 
 
-def run_with_matrices(repo: Repo, matrices: dict[str, list], review_skus: str = DEFAULT_REVIEW_SKUS):
+def run_with_matrices(
+    repo: Repo, matrices: dict[str, list], review_skus: str = DEFAULT_REVIEW_SKUS, llk_workdir_files: str = ""
+):
     """Invoke the gate with prepare_test_matrix output stubbed out."""
     matrix_dir = repo.root / "matrices"
     matrix_dir.mkdir(exist_ok=True)
@@ -549,6 +550,8 @@ def run_with_matrices(repo: Repo, matrices: dict[str, list], review_skus: str = 
             review_skus,
             "--matrix-dir",
             str(matrix_dir),
+            "--llk-workdir-files",
+            llk_workdir_files,
             "--output",
             "result.json",
         ],
@@ -582,8 +585,7 @@ def test_filter_keeps_only_the_touched_legs(repo: Repo):
 def test_same_name_same_sku_fails_closed(repo: Repo):
     """Nothing downstream could tell the legs apart, so the gate refuses the yaml
     rather than resolving one arbitrarily."""
-    same_sku = textwrap.dedent(
-        """\
+    same_sku = textwrap.dedent("""\
         - name: shared name
           id: shared-one
           cmd: ./build/test/s --one
@@ -601,8 +603,7 @@ def test_same_name_same_sku_fails_closed(repo: Repo):
               timeout: 5
           team: llk
           owner_id: U008
-        """
-    )
+        """)
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", same_sku)
     rows = [
         matrix_row("shared name [bh_p150]", "bh_p150", id="shared-one"),
@@ -737,6 +738,155 @@ def test_packages_flag_reaches_the_dispatched_row(repo: Repo):
     code, payload, stderr = run_with_matrices(repo, {"sample_unit_tests": rows})
     assert code == 0, stderr
     assert all(row["gate_packages"] for row in payload["legs"])
+
+
+# --- source references -------------------------------------------------------
+
+SOURCE_YAML = """\
+- name: src alpha
+  cmd: pytest tests/ttnn/unit_tests/test_alpha.py
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: ttnn
+  owner_id: U010
+
+- name: src beta
+  cmd: pytest tests/ttnn/unit_tests/
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: ttnn
+  owner_id: U011
+
+- name: src gamma
+  cmd: ./build/test/tt_metal/gamma --gtest_filter=Foo*
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: ttnn
+  owner_id: U012
+"""
+
+
+@pytest.fixture
+def src_repo(tmp_path: Path) -> Repo:
+    r = Repo(tmp_path)
+    r.git("init", "-q")
+    r.git("config", "user.email", "gate@test")
+    r.git("config", "user.name", "gate")
+    r.write(".github/sku_config.yaml", SKU_CONFIG)
+    r.write("tests/pipeline_reorg/sample_src_tests.yaml", SOURCE_YAML)
+    r.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): pass\n")
+    r.write("tests/ttnn/unit_tests/test_other.py", "def test_other(): pass\n")
+    r.write("some/unrelated/file.cpp", "int main() { return 0; }\n")
+    r.commit_base()
+    return r
+
+
+def test_editing_a_named_test_file_scopes_its_entry(src_repo: Repo):
+    """The yaml is untouched; only the file its cmd names moved."""
+    src_repo.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): assert True\n")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert payload["status"] == "run"
+    names = sorted(leg["name"] for leg in payload["run_legs"])
+    # alpha names the file outright; beta points pytest at the directory above it.
+    assert names == ["src alpha", "src beta"]
+    assert all(leg["reason"].startswith("source:") for leg in payload["run_legs"])
+
+
+def test_directory_reference_catches_a_sibling_file(src_repo: Repo):
+    """`pytest tests/ttnn/unit_tests/` covers everything under it."""
+    src_repo.write("tests/ttnn/unit_tests/test_other.py", "def test_other(): assert True\n")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert sorted(leg["name"] for leg in payload["run_legs"]) == ["src beta"]
+
+
+def test_unrelated_source_edit_scopes_nothing(src_repo: Repo):
+    src_repo.write("some/unrelated/file.cpp", "int main() { return 1; }\n")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert payload["status"] == "no_op"
+    assert payload["run_legs"] == []
+
+
+def test_build_output_is_not_a_source_reference(src_repo: Repo):
+    """./build/test/... is a build artifact, not a tracked file, so it never matches."""
+    src_repo.write("build/test/tt_metal/gamma", "binary\n")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert not any(leg["name"] == "src gamma" for leg in payload["run_legs"])
+
+
+def test_yaml_edit_and_source_edit_do_not_double_count(src_repo: Repo):
+    """An entry changed in the yaml AND naming an edited file is still one set of legs."""
+    src_repo.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): assert True\n")
+    src_repo.write(
+        "tests/pipeline_reorg/sample_src_tests.yaml",
+        SOURCE_YAML.replace(
+            "pytest tests/ttnn/unit_tests/test_alpha.py", "pytest -v tests/ttnn/unit_tests/test_alpha.py"
+        ),
+    )
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    alpha = [leg for leg in payload["run_legs"] if leg["name"] == "src alpha"]
+    assert len(alpha) == 1
+    # The yaml diff wins the reason; a changed entry is a changed entry.
+    assert alpha[0]["reason"] == "changed"
+
+
+def test_unedited_malformed_yaml_does_not_fail_someone_elses_pr(src_repo: Repo):
+    """The source pass sweeps every yaml. A broken one the PR never opened is not
+    this PR's problem -- but editing it still fails closed (see the tests above)."""
+    src_repo.write("tests/pipeline_reorg/broken_tests.yaml", "not:\n  - a list of entries\n")
+    src_repo.commit_base()
+    src_repo.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): assert True\n")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert sorted(leg["name"] for leg in payload["run_legs"]) == ["src alpha", "src beta"]
+
+
+def test_no_source_scope_restores_yaml_only_behaviour(src_repo: Repo):
+    src_repo.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): assert True\n")
+    code, payload, stderr = src_repo.scope(no_source_scope=True)
+    assert code == 0, stderr
+    assert payload["status"] == "no_op"
+
+
+# --- llk working directory ---------------------------------------------------
+
+
+def test_llk_yaml_legs_carry_the_llk_working_directory(repo: Repo):
+    """Their pipelines run from tt_metal/tt-llk, so `cd tests/python_tests` in a
+    cmd is relative to the LLK tree, not tt-metal's."""
+    repo.write("tests/pipeline_reorg/llk_perf_tests.yaml", BASE_TESTS_YAML)
+    code, payload, _ = repo.scope(llk_workdir_files="llk_perf_tests.yaml")
+    assert code == 0
+    legs = [leg for leg in payload["run_legs"] if leg["file"].endswith("llk_perf_tests.yaml")]
+    assert legs and all(leg["workdir"] == "tt_metal/tt-llk" for leg in legs)
+
+
+def test_unlisted_yaml_gets_no_working_directory(repo: Repo):
+    """llk_unit_tests.yaml runs gtest binaries from /work like every other pipeline."""
+    repo.write("tests/pipeline_reorg/llk_unit_tests.yaml", BASE_TESTS_YAML)
+    code, payload, _ = repo.scope(llk_workdir_files="llk_perf_tests.yaml")
+    assert code == 0
+    legs = [leg for leg in payload["run_legs"] if leg["file"].endswith("llk_unit_tests.yaml")]
+    assert legs and all(leg["workdir"] == "" for leg in legs)
+
+
+def test_workdir_reaches_the_dispatched_row(repo: Repo):
+    repo.write("tests/pipeline_reorg/llk_perf_tests.yaml", BASE_TESTS_YAML)
+    rows = [
+        matrix_row("unit alpha [wh_n150_civ2]", "wh_n150_civ2", arch="wormhole_b0"),
+        matrix_row("unit alpha [wh_n300_civ2]", "wh_n300_civ2", arch="wormhole_b0"),
+        matrix_row("unit beta [bh_p150]", "bh_p150", arch="blackhole"),
+    ]
+    code, payload, stderr = run_with_matrices(repo, {"llk_perf_tests": rows}, llk_workdir_files="llk_perf_tests.yaml")
+    assert code == 0, stderr
+    assert payload["legs"] and all(row["gate_workdir"] == "tt_metal/tt-llk" for row in payload["legs"])
 
 
 # --- mirrored definitions ----------------------------------------------------
