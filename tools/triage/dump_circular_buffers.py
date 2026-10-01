@@ -5,7 +5,10 @@
 
 """
 Usage:
-    dump_circular_buffers
+    dump_circular_buffers [--dump-cb-content]
+
+Options:
+    --dump-cb-content   Read each CB's whole FIFO into the Content column, as hex.
 
 Description:
     Circular buffer state of every running Tensix core, one row per CB of the current program.
@@ -19,6 +22,14 @@ Description:
     difference. Local counters are stream registers, reset for every program and compared modulo 2^16
     like the kernels do. Global counters live in L1 for the buffer's lifetime, and a global sender
     shows its slowest receiver.
+
+    Content shows only at -vv, but --sqlite-output-path always records it. Global senders get none:
+    they push from their local CB straight into the receivers.
+
+    Read/write positions aren't read: they live in RISC private memory, and reading it halts the
+    core. For a local CB they follow from the counters: rd = Address + (Popped * Page Size) % Size,
+    and wr likewise from Pushed. That breaks for a local CB aliased onto a global one, for kernels
+    that move CB pointers by hand, and after the 16-bit counter wraps.
 
 Owner:
     onenezicTT
@@ -58,13 +69,20 @@ class CircularBufferRow:
     pushed: int = triage_field("Pushed")
     popped: int = triage_field("Popped")
     occupancy: int = triage_field("Occupancy")
+    content: str | None = triage_field("Content", verbose=2)
 
 
 def read_words(location: OnChipCoordinate, address: int, count: int) -> tuple[int, ...]:
     return struct.unpack(f"<{count}I", read_from_device(location, address, num_bytes=4 * count))
 
 
-def local_rows(location: OnChipCoordinate, kernel_config, config_base: int, arch: Arch) -> list[CircularBufferRow]:
+def read_content(location: OnChipCoordinate, address: int, size: int) -> str:
+    return read_from_device(location, address, num_bytes=size).hex()
+
+
+def local_rows(
+    location: OnChipCoordinate, kernel_config, config_base: int, arch: Arch, dump_content: bool
+) -> list[CircularBufferRow]:
     num_cbs, received_reg, acked_reg = arch
     mask = int(kernel_config.local_cb_mask)
     base = config_base + int(kernel_config.local_cb_offset)
@@ -77,7 +95,8 @@ def local_rows(location: OnChipCoordinate, kernel_config, config_base: int, arch
         pushed = read_word_from_device(location, stream + 4 * received_reg)
         popped = read_word_from_device(location, stream + 4 * acked_reg)
         occupancy = (pushed - popped) & 0xFFFF
-        rows.append(CircularBufferRow(cb, "local", address, size, page_size, pages, pushed, popped, occupancy))
+        content = read_content(location, address, size) if dump_content else None
+        rows.append(CircularBufferRow(cb, "local", address, size, page_size, pages, pushed, popped, occupancy, content))
     return rows
 
 
@@ -86,7 +105,9 @@ def read_counters(location: OnChipCoordinate, address: int) -> tuple[int, int]:
     return read_word_from_device(location, address), read_word_from_device(location, address + L1_ALIGNMENT)
 
 
-def remote_rows(location: OnChipCoordinate, kernel_config, config_base: int, arch: Arch) -> list[CircularBufferRow]:
+def remote_rows(
+    location: OnChipCoordinate, kernel_config, config_base: int, arch: Arch, dump_content: bool
+) -> list[CircularBufferRow]:
     num_cbs = arch[0]
     base = config_base + int(kernel_config.remote_cb_offset)
     rows = []
@@ -105,11 +126,14 @@ def remote_rows(location: OnChipCoordinate, kernel_config, config_base: int, arc
         occupancy = ((sent - acked) & 0xFFFFFFFF) // units
         kind = "global sender" if is_sender else "global receiver"
         pages = size // page_size
-        rows.append(CircularBufferRow(cb, kind, address, size, page_size, pages, pushed, popped, occupancy))
+        content = read_content(location, address, size) if dump_content and not is_sender else None
+        rows.append(CircularBufferRow(cb, kind, address, size, page_size, pages, pushed, popped, occupancy, content))
     return rows
 
 
-def read_core(location: OnChipCoordinate, dispatcher_data: DispatcherData) -> list[CircularBufferRow] | None:
+def read_core(
+    location: OnChipCoordinate, dispatcher_data: DispatcherData, dump_content: bool
+) -> list[CircularBufferRow] | None:
     arch = WORMHOLE if location.device.is_wormhole() else BLACKHOLE if location.device.is_blackhole() else None
     core = dispatcher_data.get_cached_core_data(location, "brisc")
     if arch is None or core.go_message == "DONE" or core.mailboxes is None:
@@ -117,15 +141,18 @@ def read_core(location: OnChipCoordinate, dispatcher_data: DispatcherData) -> li
     kernel_config = core.mailboxes.launch[core.launch_msg_rd_ptr].kernel_config
     if int(kernel_config.enables) == 0:
         return None
-    rows = local_rows(location, kernel_config, core.kernel_config_base, arch)
-    rows += remote_rows(location, kernel_config, core.kernel_config_base, arch)
+    rows = local_rows(location, kernel_config, core.kernel_config_base, arch, dump_content)
+    rows += remote_rows(location, kernel_config, core.kernel_config_base, arch, dump_content)
     return rows or None
 
 
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
-    return run_checks.run_per_block_check(lambda location: read_core(location, dispatcher_data), block_filter="tensix")
+    dump_content = bool(args["--dump-cb-content"])
+    return run_checks.run_per_block_check(
+        lambda location: read_core(location, dispatcher_data, dump_content), block_filter="tensix"
+    )
 
 
 if __name__ == "__main__":
