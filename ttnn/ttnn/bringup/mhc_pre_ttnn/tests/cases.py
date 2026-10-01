@@ -246,3 +246,18 @@ CASES = [
         "max_rel": {"y": 0.004, "post": 0.0002, "comb": 0.0005},
     },
 ]
+
+
+# The Xing4.0 entries of the fork (ttnn.bringup.mhc_pre_xing / mhc_pre_xing_pack) keep their own case list and test
+# (xing_cases.py, test_mhc_pre_xing.py: "op" below); they are listed here too so the fork-call checker
+# (models/demos/common/bringup/testing/fork_cases.py reads only cases.py) sees their sigs. test_mhc_pre_ttnn.py runs
+# only the mhc_pre cases (no "op" key).
+def _xing_cases():
+    import runpy
+    from pathlib import Path
+
+    xs = runpy.run_path(str(Path(__file__).resolve().parent / "xing_cases.py"))["CASES"]
+    return [{**c, "op": "mhc_pre_xing_pack" if c["mode"] == "pack" else "mhc_pre_xing"} for c in xs if "sig" in c]
+
+
+CASES += _xing_cases()
