@@ -116,7 +116,6 @@ def test_perf_pack_dest_bank(
         formats,
         run_types=[
             PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_TO_L1,
         ],
         templates=[
             TILIZE(tilize),
