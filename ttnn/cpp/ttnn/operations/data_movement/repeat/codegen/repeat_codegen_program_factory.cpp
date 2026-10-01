@@ -62,12 +62,12 @@ struct CoreSplit {
     std::vector<uint32_t> work;
 };
 
-std::optional<uint32_t> tuned_core_cap(const Tensor& input, const Tensor& output, const RepeatCodegenParams& params) {
+std::optional<uint32_t> tuned_core_cap(const Tensor& input, const RepeatCodegenParams& params) {
     if (input.device()->arch() != tt::ARCH::BLACKHOLE || input.layout() != ttnn::TILE_LAYOUT ||
         params.rep_dim >= kFirstTileAxis || params.num_repeats < kCoreCapMinRepeats) {
         return std::nullopt;
     }
-    const auto out_layout = output.memory_config().memory_layout();
+    const auto out_layout = params.output_mem_config.memory_layout();
     if (out_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         return kBlockShardedOuterRepeatCores;
     }
@@ -108,6 +108,26 @@ CoreSplit split_work(const Tensor& input, uint32_t total_work, std::optional<uin
 }
 
 }  // namespace
+
+TileLegSplit plan_tile_leg_split(const Tensor& input, const RepeatCodegenParams& params) {
+    // An outer-axis TILE repeat into L1 reads each source tile once and writes all of its copies,
+    // instead of re-reading the source once per output page. The writes go through a TensorAccessor
+    // by global page id, which validation guarantees is the interleaved page grid for a sharded output.
+    // BLOCK_SHARDED stays on the sequenced pair, whose writer's core cap was tuned for that placement.
+    const auto& out_mc = params.output_mem_config;
+    const auto out_layout = out_mc.memory_layout();
+    const bool direct_outer_tile =
+        params.rep_dim < kFirstTileAxis && out_mc.buffer_type() == BufferType::L1 &&
+        (out_layout == TensorMemoryLayout::INTERLEAVED || out_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+         out_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    const uint32_t pages = direct_outer_tile ? params.total_out_pages / params.num_repeats : params.total_out_pages;
+    CoreSplit split = split_work(input, pages, tuned_core_cap(input, params));
+    return TileLegSplit{
+        .direct_outer_tile = direct_outer_tile,
+        .all_cores = std::move(split.all_cores),
+        .cores_in_order = std::move(split.cores_in_order),
+        .work = std::move(split.work)};
+}
 
 uint32_t spec_aligned_page_bytes(const Tensor& device_tensor, const TensorSpec& spec) {
     const uint32_t alignment = device_tensor.device()->allocator()->get_alignment(spec.memory_config().buffer_type());
@@ -172,62 +192,52 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
 
     ProgramDescriptor desc;
 
-    // An outer-axis TILE repeat into L1 reads each source tile once and writes all of its copies,
-    // instead of re-reading the source once per output page. The writes go through a TensorAccessor
-    // by global page id, which validation guarantees is the interleaved page grid for a sharded output.
-    // BLOCK_SHARDED stays on the sequenced pair, whose writer's core cap was tuned for that placement.
-    const auto out_layout = output.memory_config().memory_layout();
-    const bool direct_outer_tile =
-        !is_row_major && operation_attributes.rep_dim < kFirstTileAxis && dst_buffer->buffer_type() == BufferType::L1 &&
-        (out_layout == TensorMemoryLayout::INTERLEAVED || out_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-         out_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-    if (direct_outer_tile) {
-        const uint32_t tile_bytes = tt::tile_size(cb_data_format);
-        const uint32_t total_in_pages = operation_attributes.total_out_pages / operation_attributes.num_repeats;
-        const CoreSplit split = split_work(input, total_in_pages, tuned_core_cap(input, output, operation_attributes));
+    if (!is_row_major) {
+        // The split is planned from the attributes alone so that the routing gate can replay it.
+        TT_FATAL(
+            output.memory_config().memory_layout() == operation_attributes.output_mem_config.memory_layout() &&
+                dst_buffer->buffer_type() == operation_attributes.output_mem_config.buffer_type(),
+            "RepeatCodegen output placement does not match output_mem_config");
+        const TileLegSplit split = plan_tile_leg_split(input, operation_attributes);
+        if (split.direct_outer_tile) {
+            const uint32_t tile_bytes = tt::tile_size(cb_data_format);
 
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = kDirectCbDepth * tile_bytes,
-            .core_ranges = split.all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = 0,
-                .data_format = cb_data_format,
-                .page_size = tile_bytes,
-            }}},
-        });
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = kDirectCbDepth * tile_bytes,
+                .core_ranges = split.all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = 0,
+                    .data_format = cb_data_format,
+                    .page_size = tile_bytes,
+                }}},
+            });
 
-        std::vector<uint32_t> reader_ct_args = {
-            0, tile_bytes, operation_attributes.lower_pages, operation_attributes.rep_dim_pages};
-        TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-        TensorAccessorArgs(*dst_buffer).append_to(reader_ct_args);
+            std::vector<uint32_t> reader_ct_args = {
+                0, tile_bytes, operation_attributes.lower_pages, operation_attributes.rep_dim_pages};
+            TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
+            TensorAccessorArgs(*dst_buffer).append_to(reader_ct_args);
 
-        KernelDescriptor reader_desc;
-        reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/repeat_outer_tile_direct.cpp";
-        reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        reader_desc.core_ranges = split.all_cores;
-        reader_desc.compile_time_args = std::move(reader_ct_args);
-        reader_desc.config = ReaderConfigDescriptor{};
+            KernelDescriptor reader_desc;
+            reader_desc.kernel_source =
+                "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/repeat_outer_tile_direct.cpp";
+            reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            reader_desc.core_ranges = split.all_cores;
+            reader_desc.compile_time_args = std::move(reader_ct_args);
+            reader_desc.config = ReaderConfigDescriptor{};
 
-        uint32_t start = 0;
-        for (size_t i = 0; i < split.cores_in_order.size(); ++i) {
-            const uint32_t n = split.work[i];
-            reader_desc.emplace_runtime_args(
-                split.cores_in_order[i], {src_buffer, dst_buffer, start, n, operation_attributes.num_repeats});
-            start += n;
+            uint32_t start = 0;
+            for (size_t i = 0; i < split.cores_in_order.size(); ++i) {
+                const uint32_t n = split.work[i];
+                reader_desc.emplace_runtime_args(
+                    split.cores_in_order[i], {src_buffer, dst_buffer, start, n, operation_attributes.num_repeats});
+                start += n;
+            }
+
+            desc.kernels.push_back(std::move(reader_desc));
+            return desc;
         }
 
-        desc.kernels.push_back(std::move(reader_desc));
-        return desc;
-    }
-
-    const CoreSplit split = split_work(
-        input,
-        operation_attributes.total_out_pages,
-        is_row_major ? std::nullopt : tuned_core_cap(input, output, operation_attributes));
-
-    if (!is_row_major) {
-        // TILE path: the shared sequencer reader walks SEQ_REPEAT's page map into the shared writer.
+        // The sequenced pair: the shared sequencer reader walks SEQ_REPEAT's page map into the shared writer.
         const uint32_t page_size = static_cast<uint32_t>(dst_buffer->aligned_page_size());
 
         desc.cbs.push_back(CBDescriptor{
@@ -288,6 +298,8 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         desc.kernels.push_back(std::move(writer_desc));
         return desc;
     }
+
+    const CoreSplit split = split_work(input, operation_attributes.total_out_pages);
 
     // ROW_MAJOR paths. Each side moves its own buffer type's aligned page, and DRAM and L1 align
     // differently, so a slot holds whichever is larger. On the higher-dim path input and output share

@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -87,6 +89,20 @@ struct RepeatPageMap {
 };
 
 RepeatPageMap derive_page_map(const Tensor& input, uint32_t rep_dim, uint32_t num_repeats);
+
+// How a TILE leg spreads its pages over workers: `cores_in_order[i]` takes the next `work[i]` pages,
+// input pages on the direct outer-axis kernel and output pages on the sequenced pair. The routing gate
+// replays it to see which shard cores each worker reads, so the gate and the factory both take it
+// from here.
+struct TileLegSplit {
+    bool direct_outer_tile = false;
+    tt::tt_metal::CoreRangeSet all_cores;
+    std::vector<tt::tt_metal::CoreCoord> cores_in_order;
+    std::vector<uint32_t> work;
+};
+
+// `params.output_mem_config` must be the placement the leg's output is allocated with.
+TileLegSplit plan_tile_leg_split(const Tensor& input, const RepeatCodegenParams& params);
 
 struct RepeatCodegenInputs {
     Tensor input;

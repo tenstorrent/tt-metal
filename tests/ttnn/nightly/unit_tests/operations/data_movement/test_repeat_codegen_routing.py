@@ -667,6 +667,50 @@ def test_repeat_codegen_demotion(device, shape, kwargs, dtype, layout, placement
     assert_equal(expected, ttnn.to_torch(_force_codegen(xt, **kwargs)))
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+@pytest.mark.parametrize(
+    "shape,shard_grid,out_mc,native_grid_rows",
+    [
+        ([1, 2, 256, 128], ttnn.CoreGrid(y=8, x=1), ttnn.L1_MEMORY_CONFIG, ()),
+        ([1, 2, 256, 128], ttnn.CoreGrid(y=1, x=8), ttnn.L1_MEMORY_CONFIG, (10,)),
+        ([1, 5, 256, 128], ttnn.CoreGrid(y=1, x=8), ttnn.L1_MEMORY_CONFIG, (8,)),
+        ([1, 1, 256, 128], ttnn.CoreGrid(y=1, x=4), ttnn.L1_MEMORY_CONFIG, ()),
+        ([1, 2, 256, 128], ttnn.CoreGrid(y=1, x=8), ttnn.DRAM_MEMORY_CONFIG, (10,)),
+        ([1, 2, 256, 128], ttnn.CoreGrid(y=1, x=4), ttnn.DRAM_MEMORY_CONFIG, ()),
+    ],
+    ids=[
+        "[1,2]-CoreGrid(y=8,x=1)-l1",
+        "[1,2]-CoreGrid(y=1,x=8)-l1",
+        "[1,5]-CoreGrid(y=1,x=8)-l1",
+        "[1,1]-CoreGrid(y=1,x=4)-l1",
+        "[1,2]-CoreGrid(y=1,x=8)-dram",
+        "[1,2]-CoreGrid(y=1,x=4)-dram",
+    ],
+)
+def test_repeat_codegen_shard_row_read_hotspot(device, shape, shard_grid, out_mc, native_grid_rows, dtype):
+    repeat_dims = ttnn.Shape([2, 1, 1, 1])
+    grid = device.compute_with_storage_grid_size()
+    if (grid.x, grid.y) != (8, 8) and not (grid.y == 10 and grid.x >= 11):
+        pytest.skip(f"expectation derived for 8x8 and 10-row (11+ wide) worker grids, got {grid.x}x{grid.y}")
+    # Share of reads that wrap the shard row's ring, 8 rows / 10 rows. L1 output (direct kernel, cut 0.33 / 0.53):
+    # [1,2] 1x8 0 / 0.69, [1,5] 1x8 0.40 / 0, [1,1] 1x4 0 / 0.375. DRAM output (sequenced pair, never / cut 0.27):
+    # [1,2] 1x8 0.44 / 0.44, [1,2] 1x4 0 / 0.08. A shard column wraps none.
+    expect_codegen = grid.y not in native_grid_rows
+    x = _make_input(shape, dtype)
+    placement = ttnn.create_sharded_memory_config(
+        shape=tuple(shape),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=False,
+    )
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=placement)
+    out, grew = _auto_route_grows_cache(device, xt, repeat_dims, memory_config=out_mc)
+    out = ttnn.to_torch(out)
+    assert_equal(x.repeat(*repeat_dims).to(out.dtype), out)
+    assert grew == expect_codegen, f"expected {'codegen' if expect_codegen else 'native'}, cache grew={grew}"
+
+
 _CACHE_HIT = [
     ([1, 1, 1, 1], {"repeat_dims": ttnn.Shape([1, 2, 1, 1])}, ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
     (
