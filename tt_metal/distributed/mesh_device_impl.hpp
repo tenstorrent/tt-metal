@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <tt_stl/move_only_function.hpp>
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -503,7 +503,7 @@ public:
     MeshCommandQueueBase& mesh_command_queue_base(std::optional<uint8_t> cq_id = std::nullopt) const;
 
     // Currently expose users to the dispatch thread pool through the MeshDevice
-    void enqueue_to_thread_pool(std::function<void()>&& f);
+    void enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f);
     void wait_for_thread_pool();
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
