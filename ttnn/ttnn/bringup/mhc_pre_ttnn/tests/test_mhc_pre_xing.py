@@ -76,6 +76,8 @@ def _inputs(case, n_dev):
     row[..., :NG] = full @ fn.T
     row[..., NG] = full.square().sum(-1)
     base = (torch.randn(NG, generator=g) * 0.5).tolist()
+    if "base" in case:  # O.1 cases: the captured call's base scalars
+        base = list(case["base"])
     return x, row, base
 
 
