@@ -16,3 +16,10 @@ Prior numbers: #65 t1w0 2.2915 s, t1w1 2.2224 s (jobs 033/034, pre-#58); #58 out
 Next: grep `AB arm=\|T75_` in the log, check broker log for drops, copy log here, then
 `rm -rf ~/fasth3/t75 /var/tmp/fasth3/t75` on blx03.
 If a chip drop/reboot/fabric failure hit during job 038: stop all device work, kill our queued jobs, report.
+
+## Result (2026-10-01 11:20)
+Job 038 completed, exit 0, runtime 138.5 s. Post-job broker health gate: healthy, no drops/reboot (uptime 3:10).
+- def (all folds + #58): decode 2.0525 / 2.0558 / 2.0554 s, min 2.0525 s
+- ref (all off, pre-#58): 2.3374 / 2.3401 / 2.3302 s, min 2.3302 s
+- YUV output bit-identical (max_abs_diff=0, shape 145x816x960 uint8)
+Saves 278 ms/decode (-11.9%). Log: run75_job038.log. blx03 t75 dirs removed.

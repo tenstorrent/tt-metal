@@ -1,0 +1,441 @@
+[t75] tree=a613d669ee clock: hostfmax chip 31: exit=0 arb_max=1350 MHz (arbiter 7) aiclk=800
+[t75] arm=def
+2026-10-01 11:13:48.920 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/smarton/.cache/ttnn,model_cache_path=/home/smarton/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-01 11:13:49.827 | INFO     | models.tt_dit.tests.conftest:<module>:192 - Setting torch num_threads to 64
+2026-10-01 11:13:49.839 | INFO     | models.tt_dit.utils.host_affinity:reexec_pinned_before_torch:106 - host affinity: LTX tests (pytest_cmdline_main): re-exec pinned to 32 cores [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31] (was 64 CPUs); torch/ttnn will inherit this mask (LTX_PIN_CORES=0 disables)
+2026-10-01 11:13:52.360 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/smarton/.cache/ttnn,model_cache_path=/home/smarton/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-01 11:13:53.196 | INFO     | models.tt_dit.tests.conftest:<module>:192 - Setting torch num_threads to 64
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /home/smarton/fasth3/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/smarton/fasth3/t48
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, benchmark-5.2.3, timeout-2.4.0, anyio-4.15.1, dash-2.15.0
+timeout: 560.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0] 2026-10-01 11:13:53.422 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-10-01 11:13:53.422 | info     |             UMD | Cluster constructor started. (cluster.cpp:405)
+2026-10-01 11:13:53.436 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-01 11:13:53.437 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-01 11:13:53.574 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:654)
+2026-10-01 11:13:53.578 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-01 11:13:53.635 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:172)
+2026-10-01 11:13:53.635 | info     |             UMD | IOMMU: disabled (cluster.cpp:146)
+2026-10-01 11:13:53.635 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:149)
+2026-10-01 11:13:53.635 | info     |             UMD | Cluster constructor completed. (cluster.cpp:719)
+2026-10-01 11:13:53.654 | info     |             UMD | Starting devices in cluster (cluster.cpp:1305)
+2026-10-01 11:13:53.882 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 40.792633056640625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:54.082 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 40.792633056640625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:54.282 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 40.920806884765625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:54.482 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 40.279937744140625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:54.683 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 40.856719970703125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:54.883 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.266632080078125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:55.083 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 40.920806884765625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:55.283 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.074371337890625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:55.483 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 41.177154541015625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:55.684 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.522979736328125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:55.884 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 41.241241455078125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:56.084 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.138458251953125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:56.284 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 41.561676025390625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:56.484 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.202545166015625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:56.685 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 41.497589111328125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:56.885 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 41.561676025390625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:57.085 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.138458251953125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:57.285 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.330718994140625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:57.485 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.202545166015625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:57.685 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.010284423828125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:57.885 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 41.369415283203125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:58.086 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.907501220703125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:58.286 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 41.305328369140625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:58.486 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.394805908203125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:58.686 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 43.035675048828125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:58.887 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.202545166015625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:59.087 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.394805908203125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:59.287 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.971588134765625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:59.487 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.394805908203125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:59.687 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 44.189239501953125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:13:59.887 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 42.458892822265625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:14:00.088 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 41.625762939453125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:14:00.088 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1314)
+2026-10-01 11:14:00.162 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:439)
+2026-10-01 11:14:00.162 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:501)
+2026-10-01 11:14:00.182 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3190)
+2026-10-01 11:14:00.182 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3198)
+2026-10-01 11:14:00.184 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-10-01 11:14:00.184 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:335)
+2026-10-01 11:14:00.184 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:439)
+2026-10-01 11:14:00.184 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:501)
+2026-10-01 11:14:00.198 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3190)
+2026-10-01 11:14:00.198 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3198)
+2026-10-01 11:14:00.797 | warning  |           Metal | Failed to create shared memory /tt_device_6898423274646070636_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.797 | warning  |           Metal | Failed to create shared memory /tt_device_4948279223759195036_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.797 | warning  |           Metal | Failed to create shared memory /tt_device_718521759540170522_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.797 | warning  |           Metal | Failed to create shared memory /tt_device_7263315574096971837_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.798 | warning  |           Metal | Failed to create shared memory /tt_device_2815251777217867177_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.798 | warning  |           Metal | Failed to create shared memory /tt_device_4384976856915881079_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.798 | warning  |           Metal | Failed to create shared memory /tt_device_15413520364740198816_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.798 | warning  |           Metal | Failed to create shared memory /tt_device_616135877008316595_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.798 | warning  |           Metal | Failed to create shared memory /tt_device_7598109457067298398_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.799 | warning  |           Metal | Failed to create shared memory /tt_device_7042223796481434835_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.799 | warning  |           Metal | Failed to create shared memory /tt_device_2460078428677784725_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.799 | warning  |           Metal | Failed to create shared memory /tt_device_4542664979921105054_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.799 | warning  |           Metal | Failed to create shared memory /tt_device_17833187522280872786_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.799 | warning  |           Metal | Failed to create shared memory /tt_device_14761127530954652022_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.800 | warning  |           Metal | Failed to create shared memory /tt_device_163459103931854025_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.800 | warning  |           Metal | Failed to create shared memory /tt_device_15153254912429356010_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.800 | warning  |           Metal | Failed to create shared memory /tt_device_3155080127720316465_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.800 | warning  |           Metal | Failed to create shared memory /tt_device_4245648133233881126_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.800 | warning  |           Metal | Failed to create shared memory /tt_device_1556309432690904338_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.801 | warning  |           Metal | Failed to create shared memory /tt_device_8970911958828007852_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.801 | warning  |           Metal | Failed to create shared memory /tt_device_11692727933911004819_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.801 | warning  |           Metal | Failed to create shared memory /tt_device_5947959828024447211_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.802 | warning  |           Metal | Failed to create shared memory /tt_device_16372337465892325073_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.802 | warning  |           Metal | Failed to create shared memory /tt_device_5165525547194267655_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.802 | warning  |           Metal | Failed to create shared memory /tt_device_10824766524365793840_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.803 | warning  |           Metal | Failed to create shared memory /tt_device_3905637836772609181_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.803 | warning  |           Metal | Failed to create shared memory /tt_device_16911889084360629996_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.804 | warning  |           Metal | Failed to create shared memory /tt_device_3748449504587914508_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.804 | warning  |           Metal | Failed to create shared memory /tt_device_3745857022126494719_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.804 | warning  |           Metal | Failed to create shared memory /tt_device_980781543545773439_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.805 | warning  |           Metal | Failed to create shared memory /tt_device_4772547318268112299_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.805 | warning  |           Metal | Failed to create shared memory /tt_device_12093205412074732381_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:14:00.890 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:320)
+2026-10-01 11:14:08.671 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:467)
+2026-10-01 11:14:08.671 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:337)
+2026-10-01 11:14:11.063 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-10-01 11:14:14.222 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 1024, 4096, (3, 3, 3), 21, 9, 8) -> channel_key=(1024, 4096, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:14:14.222 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:14:14.222 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:14:14.222 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:14:14.223 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:14:14.223 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 4096, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 4096, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:14:14.223 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:14:14.223 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:14:14.223 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:14:14.223 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:14:14.223 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:14:14.223 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:14:14.223 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:14:14.224 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:14:14.224 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:14:14.224 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.224 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.224 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.224 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.224 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.224 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.225 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.225 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.225 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.225 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.225 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.225 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:14:14.225 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 512, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=4 W=4
+2026-10-01 11:14:14.225 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:14:14.225 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:14:14.226 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:14:14.226 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:14:14.226 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:14:14.226 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:14:14.226 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:14:14.226 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:14:14.226 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 48, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 48, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:14:19.317 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 7/86 tensors (8%), 5s
+2026-10-01 11:14:24.383 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 12/86 tensors (14%), 10s
+2026-10-01 11:14:29.519 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 29/86 tensors (34%), 15s
+2026-10-01 11:14:34.227 | INFO     | models.tt_dit.utils.progress:_run:51 - convert LTXVideoDecoder: still working, 20s elapsed
+2026-10-01 11:14:34.631 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 67/86 tensors (78%), 20s
+2026-10-01 11:14:36.606 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 86/86 tensors (100%), 22s
+2026-10-01 11:14:36.606 | INFO     | models.tt_dit.utils.progress:__exit__:62 - convert LTXVideoDecoder: done in 22s
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[2mtest_vae_ltx_fold_time_pad_ab.py[0m  [1mtest_vae_ltx_fold_time_pad_ab[0m  [2m(blackhole, mesh_device0, device_params0)[0m
+
+AB arm=t1w1 folded_convs=42 w_mask_convs=42
+AB arm=t1w1 convs_with_w_mask_mul=0
+AB arm=t1w1 decode_s=2.0525 2.0558 2.0554 min=2.0525
+PASSED
+==========================================================================
+WALL-TIME LEDGER · models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+--------------------------------------------------------------------------
+category             seconds   %wall   count   notes
+untracked               58.8  100.0%
+--------------------------------------------------------------------------
+TOTAL (tracked)          0.0    0.0%
+TOTAL (wall)            58.8  100.0%
+
+ANOMALIES: none
+==========================================================================
+
+
+=============================== warnings summary ===============================
+models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/smarton/fasth3/t48/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+58.84s call     models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+17.80s setup    models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+0.03s teardown models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+=================== 1 passed, 2 warnings in 76.71s (0:01:16) ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-01 11:15:11.807 | info     |    BuildKernels | JIT cache stats: 0/415 hits (0.0%) [0 cached, 749 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-01 11:15:11.807 | info     |    BuildKernels | JIT telemetry: 39 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-01 11:15:12.040 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-10-01 11:15:12.040 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-10-01 11:15:13.915 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-01 11:15:13.915 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-01 11:15:13.915 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+T75_EXIT[def]=0
+[t75] arm=ref
+2026-10-01 11:15:16.695 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/smarton/.cache/ttnn,model_cache_path=/home/smarton/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-01 11:15:17.529 | INFO     | models.tt_dit.tests.conftest:<module>:192 - Setting torch num_threads to 64
+2026-10-01 11:15:17.538 | INFO     | models.tt_dit.utils.host_affinity:reexec_pinned_before_torch:106 - host affinity: LTX tests (pytest_cmdline_main): re-exec pinned to 32 cores [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31] (was 64 CPUs); torch/ttnn will inherit this mask (LTX_PIN_CORES=0 disables)
+2026-10-01 11:15:20.082 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/smarton/.cache/ttnn,model_cache_path=/home/smarton/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-01 11:15:20.918 | INFO     | models.tt_dit.tests.conftest:<module>:192 - Setting torch num_threads to 64
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /home/smarton/fasth3/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/smarton/fasth3/t48
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, benchmark-5.2.3, timeout-2.4.0, anyio-4.15.1, dash-2.15.0
+timeout: 560.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0] 2026-10-01 11:15:21.136 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-10-01 11:15:21.136 | info     |             UMD | Cluster constructor started. (cluster.cpp:405)
+2026-10-01 11:15:21.150 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-01 11:15:21.150 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-01 11:15:21.287 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:654)
+2026-10-01 11:15:21.291 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-01 11:15:21.347 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:172)
+2026-10-01 11:15:21.347 | info     |             UMD | IOMMU: disabled (cluster.cpp:146)
+2026-10-01 11:15:21.347 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:149)
+2026-10-01 11:15:21.347 | info     |             UMD | Cluster constructor completed. (cluster.cpp:719)
+2026-10-01 11:15:21.367 | info     |             UMD | Starting devices in cluster (cluster.cpp:1305)
+2026-10-01 11:15:21.594 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.047760009765625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:21.795 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 44.766021728515625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:21.995 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 45.278717041015625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:22.195 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 44.253326416015625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:22.395 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 44.701934814453125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:22.595 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 47.393585205078125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:22.795 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 44.894195556640625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:22.995 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.304107666015625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:23.196 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.047760009765625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:23.396 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.368194580078125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:23.596 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.111846923828125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:23.796 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.240020751953125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:23.996 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.175933837890625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:24.196 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 45.791412353515625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:24.396 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 45.470977783203125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:24.597 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 45.150543212890625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:24.797 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 47.137237548828125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:24.997 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.047760009765625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:25.197 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.688629150390625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:25.397 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 45.599151611328125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:25.597 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 45.214630126953125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:25.797 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.496368408203125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:25.998 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 44.894195556640625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:26.198 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 47.521759033203125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:26.398 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.240020751953125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:26.598 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 45.278717041015625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:26.798 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 45.855499267578125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:26.998 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 47.585845947265625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:27.198 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 45.727325439453125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:27.398 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 47.778106689453125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:27.599 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 46.047760009765625, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:27.799 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 1150. ASIC temperature: 44.830108642578125, AICLK clamped by max-arbiter index 10 at 1150 MHz (blackhole_device_firmware.cpp:205)
+2026-10-01 11:15:27.799 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1314)
+2026-10-01 11:15:27.879 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:439)
+2026-10-01 11:15:27.879 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:501)
+2026-10-01 11:15:27.898 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3190)
+2026-10-01 11:15:27.898 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3198)
+2026-10-01 11:15:27.901 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-10-01 11:15:27.901 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:335)
+2026-10-01 11:15:27.901 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:439)
+2026-10-01 11:15:27.901 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:501)
+2026-10-01 11:15:27.915 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3190)
+2026-10-01 11:15:27.915 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3198)
+2026-10-01 11:15:28.510 | warning  |           Metal | Failed to create shared memory /tt_device_6898423274646070636_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.510 | warning  |           Metal | Failed to create shared memory /tt_device_4948279223759195036_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.510 | warning  |           Metal | Failed to create shared memory /tt_device_718521759540170522_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.510 | warning  |           Metal | Failed to create shared memory /tt_device_7263315574096971837_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.510 | warning  |           Metal | Failed to create shared memory /tt_device_2815251777217867177_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.511 | warning  |           Metal | Failed to create shared memory /tt_device_4384976856915881079_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.511 | warning  |           Metal | Failed to create shared memory /tt_device_15413520364740198816_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.511 | warning  |           Metal | Failed to create shared memory /tt_device_616135877008316595_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.511 | warning  |           Metal | Failed to create shared memory /tt_device_7598109457067298398_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.511 | warning  |           Metal | Failed to create shared memory /tt_device_7042223796481434835_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.512 | warning  |           Metal | Failed to create shared memory /tt_device_2460078428677784725_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.512 | warning  |           Metal | Failed to create shared memory /tt_device_4542664979921105054_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.512 | warning  |           Metal | Failed to create shared memory /tt_device_17833187522280872786_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.512 | warning  |           Metal | Failed to create shared memory /tt_device_14761127530954652022_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.512 | warning  |           Metal | Failed to create shared memory /tt_device_163459103931854025_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.513 | warning  |           Metal | Failed to create shared memory /tt_device_15153254912429356010_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.513 | warning  |           Metal | Failed to create shared memory /tt_device_3155080127720316465_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.513 | warning  |           Metal | Failed to create shared memory /tt_device_4245648133233881126_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.513 | warning  |           Metal | Failed to create shared memory /tt_device_1556309432690904338_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.513 | warning  |           Metal | Failed to create shared memory /tt_device_8970911958828007852_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.514 | warning  |           Metal | Failed to create shared memory /tt_device_11692727933911004819_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.514 | warning  |           Metal | Failed to create shared memory /tt_device_5947959828024447211_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.514 | warning  |           Metal | Failed to create shared memory /tt_device_16372337465892325073_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.515 | warning  |           Metal | Failed to create shared memory /tt_device_5165525547194267655_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.515 | warning  |           Metal | Failed to create shared memory /tt_device_10824766524365793840_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.516 | warning  |           Metal | Failed to create shared memory /tt_device_3905637836772609181_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.516 | warning  |           Metal | Failed to create shared memory /tt_device_16911889084360629996_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.516 | warning  |           Metal | Failed to create shared memory /tt_device_3748449504587914508_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.517 | warning  |           Metal | Failed to create shared memory /tt_device_3745857022126494719_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.517 | warning  |           Metal | Failed to create shared memory /tt_device_980781543545773439_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.518 | warning  |           Metal | Failed to create shared memory /tt_device_4772547318268112299_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.518 | warning  |           Metal | Failed to create shared memory /tt_device_12093205412074732381_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 11:15:28.604 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:320)
+2026-10-01 11:15:28.823 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:467)
+2026-10-01 11:15:28.823 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:337)
+2026-10-01 11:15:29.001 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-10-01 11:15:32.110 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 1024, 4096, (3, 3, 3), 21, 9, 8) -> channel_key=(1024, 4096, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:15:32.111 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:15:32.111 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:15:32.111 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:15:32.111 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:15:32.111 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 4096, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 4096, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 11:15:32.111 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:15:32.111 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:15:32.111 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:15:32.112 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:15:32.112 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:15:32.112 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:15:32.112 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:15:32.112 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:15:32.112 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 11:15:32.112 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.112 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.113 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.113 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.113 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.113 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.113 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.113 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.113 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.113 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.113 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.114 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 11:15:32.114 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 512, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=4 W=4
+2026-10-01 11:15:32.114 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:15:32.114 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:15:32.114 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:15:32.114 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:15:32.114 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:15:32.114 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:15:32.114 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:15:32.115 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:15:32.115 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 48, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 48, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 11:15:37.256 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 13/86 tensors (15%), 5s
+2026-10-01 11:15:41.235 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 86/86 tensors (100%), 9s
+2026-10-01 11:15:41.235 | INFO     | models.tt_dit.utils.progress:__exit__:62 - convert LTXVideoDecoder: done in 9s
+2026-10-01 11:15:41.668 | info     |    BuildKernels | compiled slice_writer_unary_stick_layout_interleaved_start_id/17411699904312091098/ in 337 ms (build.cpp:1113)
+2026-10-01 11:15:41.724 | info     |    BuildKernels | compiled slice_reader_unary_unpad_dims_rm_interleaved_start_id/16269009079357889432/ in 393 ms (build.cpp:1113)
+2026-10-01 11:15:41.993 | info     |    BuildKernels | compiled writer_unary_stick_layout_interleaved_start_id_metal2/10818367746060267649/ in 265 ms (build.cpp:1113)
+2026-10-01 11:15:42.049 | info     |    BuildKernels | compiled reader_concat_stick_layout_interleaved_start_id/15539844594639127995/ in 320 ms (build.cpp:1113)
+2026-10-01 11:15:42.423 | info     |    BuildKernels | compiled reader_unary_pad_dims_split_rows_multicore/12056804761746712645/ in 369 ms (build.cpp:1113)
+2026-10-01 11:15:42.429 | info     |    BuildKernels | compiled tilize_metal2/14335775367597339778/ in 375 ms (build.cpp:1113)
+2026-10-01 11:15:42.438 | info     |    BuildKernels | compiled tilize_metal2/14335775367597339778/ in 383 ms (build.cpp:1113)
+2026-10-01 11:15:42.441 | info     |    BuildKernels | compiled tilize_metal2/14335775367597339778/ in 386 ms (build.cpp:1113)
+2026-10-01 11:15:42.801 | info     |    BuildKernels | compiled untilize_metal2/16419898175028603609/ in 355 ms (build.cpp:1113)
+2026-10-01 11:15:42.805 | info     |    BuildKernels | compiled writer_unary_stick_layout_split_rows_multicore/5685401376404667482/ in 360 ms (build.cpp:1113)
+2026-10-01 11:15:42.822 | info     |    BuildKernels | compiled untilize_metal2/16419898175028603609/ in 376 ms (build.cpp:1113)
+2026-10-01 11:15:42.847 | info     |    BuildKernels | compiled untilize_metal2/16419898175028603609/ in 401 ms (build.cpp:1113)
+2026-10-01 11:15:43.154 | info     |    BuildKernels | compiled writer_interleaved_rm_no_bcast/12325891614635760364/ in 304 ms (build.cpp:1113)
+2026-10-01 11:15:43.176 | info     |    BuildKernels | compiled eltwise_binary_sfpu/1913545470606105499/ in 326 ms (build.cpp:1113)
+2026-10-01 11:15:43.199 | info     |    BuildKernels | compiled reader_interleaved_rm_col_bcast/11144177257875018644/ in 349 ms (build.cpp:1113)
+2026-10-01 11:15:43.217 | info     |    BuildKernels | compiled eltwise_binary_sfpu/1913545470606105499/ in 367 ms (build.cpp:1113)
+2026-10-01 11:15:43.383 | info     |    BuildKernels | compiled eltwise_binary_sfpu/1913545470606105499/ in 532 ms (build.cpp:1113)
+2026-10-01 11:15:43.884 | info     |    BuildKernels | compiled reader_vol2col/1860527550259352715/ in 465 ms (build.cpp:1113)
+2026-10-01 11:15:44.238 | info     |    BuildKernels | compiled slice_writer_unary_stick_layout_interleaved_start_id/13146093730918151193/ in 340 ms (build.cpp:1113)
+2026-10-01 11:15:44.298 | info     |    BuildKernels | compiled slice_reader_unary_unpad_dims_rm_interleaved_start_id/16893888208697847449/ in 400 ms (build.cpp:1113)
+2026-10-01 11:15:44.575 | info     |    BuildKernels | compiled writer_unary_stick_layout_interleaved_start_id_metal2/11202291976221622581/ in 271 ms (build.cpp:1113)
+2026-10-01 11:15:44.625 | info     |    BuildKernels | compiled reader_concat_stick_layout_interleaved_start_id/17443636668100436120/ in 320 ms (build.cpp:1113)
+2026-10-01 11:15:45.124 | info     |    BuildKernels | compiled reader_vol2col/5134755718615495987/ in 468 ms (build.cpp:1113)
+2026-10-01 11:15:45.610 | info     |    BuildKernels | compiled reader_vol2col/10264775876614475957/ in 473 ms (build.cpp:1113)
+2026-10-01 11:15:45.939 | info     |    BuildKernels | compiled writer_unary_stick_layout_interleaved_start_id_metal2/11002021491444194280/ in 277 ms (build.cpp:1113)
+2026-10-01 11:15:45.990 | info     |    BuildKernels | compiled reader_concat_stick_layout_interleaved_start_id/12141499973164284769/ in 327 ms (build.cpp:1113)
+2026-10-01 11:15:46.506 | info     |    BuildKernels | compiled reader_vol2col/118883876342137529/ in 480 ms (build.cpp:1113)
+2026-10-01 11:15:46.989 | info     |    BuildKernels | compiled reader_vol2col/11365462022974447111/ in 467 ms (build.cpp:1113)
+2026-10-01 11:15:47.930 | info     |    BuildKernels | compiled reader_vol2col/17106400529126368625/ in 465 ms (build.cpp:1113)
+2026-10-01 11:15:48.240 | info     |    BuildKernels | compiled writer_unary_stick_layout_interleaved_start_id_metal2/17938082139276102310/ in 269 ms (build.cpp:1113)
+2026-10-01 11:15:48.297 | info     |    BuildKernels | compiled reader_concat_stick_layout_interleaved_start_id/8653360710146194773/ in 325 ms (build.cpp:1113)
+2026-10-01 11:15:48.799 | info     |    BuildKernels | compiled reader_vol2col/2545970858218324528/ in 475 ms (build.cpp:1113)
+2026-10-01 11:15:49.330 | info     |    BuildKernels | compiled reader_vol2col/4884178616869237762/ in 517 ms (build.cpp:1113)
+2026-10-01 11:15:50.028 | info     |    BuildKernels | compiled reader_vol2col/7703386331637609104/ in 503 ms (build.cpp:1113)
+2026-10-01 11:15:50.540 | info     |    BuildKernels | compiled reader_vol2col/16807959989717779889/ in 499 ms (build.cpp:1113)
+2026-10-01 11:15:50.880 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/12213680385045153068/ in 328 ms (build.cpp:1113)
+2026-10-01 11:15:50.895 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/2139004792166141879/ in 344 ms (build.cpp:1113)
+2026-10-01 11:15:51.307 | info     |    BuildKernels | compiled rm_reshape_interleaved/13721195141814635607/ in 407 ms (build.cpp:1113)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[2mtest_vae_ltx_fold_time_pad_ab.py[0m  [1mtest_vae_ltx_fold_time_pad_ab[0m  [2m(blackhole, mesh_device0, device_params0)[0m
+
+AB arm=t0w0 folded_convs=0 w_mask_convs=0
+AB arm=t0w0 convs_with_w_mask_mul=42
+AB arm=t0w0 decode_s=2.3374 2.3401 2.3302 min=2.3302
+PASSED
+==========================================================================
+WALL-TIME LEDGER · models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+--------------------------------------------------------------------------
+category             seconds   %wall   count   notes
+untracked               29.7  100.0%
+--------------------------------------------------------------------------
+TOTAL (tracked)          0.0    0.0%
+TOTAL (wall)            29.7  100.0%
+
+ANOMALIES: none
+==========================================================================
+
+
+=============================== warnings summary ===============================
+models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/smarton/fasth3/t48/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+29.72s call     models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+8.02s setup    models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+0.03s teardown models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py::test_vae_ltx_fold_time_pad_ab[blackhole-mesh_device0-device_params0]
+======================== 1 passed, 2 warnings in 37.80s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-01 11:16:00.611 | info     |    BuildKernels | JIT cache stats: 403/441 hits (91.4%) [403 cached, 805 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-01 11:16:00.611 | info     |    BuildKernels | JIT telemetry: 36 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-01 11:16:00.844 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-10-01 11:16:00.844 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-10-01 11:16:02.718 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-01 11:16:02.719 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-01 11:16:02.719 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+T75_EXIT[ref]=0
+T75_CMP def_vs_ref identical=True max_abs_diff=0 shape=(145, 816, 960) dtype=torch.uint8
+T75_EXIT=0
