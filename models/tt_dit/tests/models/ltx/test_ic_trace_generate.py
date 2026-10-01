@@ -165,6 +165,14 @@ def _make_warmup_pipe():
     return obj
 
 
+def _track_order(obj, *names):
+    """A parent mock that records calls to the named collaborator mocks in call order."""
+    parent = mock.Mock()
+    for name in names:
+        parent.attach_mock(getattr(obj, name), name)
+    return parent
+
+
 def _denoise_calls_by_key(obj):
     return {c.kwargs.get("trace_key"): c for c in obj._denoise_no_guidance.call_args_list}
 
@@ -174,6 +182,7 @@ def test_warmup_accepts_ref_num_frames_and_ref_stages(monkeypatch):
     monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
     monkeypatch.setenv("LTX_WARMUP_ENCODERS", "1")
     obj = _make_warmup_pipe()
+    calls_in_order = _track_order(obj, "_warmup_ref_encode", "_denoise_no_guidance")
     # A dedicated -ref worker: warm ONLY the reference family.
     obj.warmup_buffers(
         num_frames=17, height=64, width=64, stages=("s1_ref", "s2_ref"), ref_num_frames=17, capture_traced=True
@@ -196,8 +205,36 @@ def test_warmup_accepts_ref_num_frames_and_ref_stages(monkeypatch):
         assert calls[key].kwargs["ref_latent"] is not None, f"{key} must feed a (dummy) ref_latent"
     assert "s1" not in calls and "s2" not in calls, "ref-only worker must not run base denoise"
 
-    # The ref encoders are warmed last (post-DiT ordering).
+    # Static traced mesh: the ref encoders warm once, before any trace capture, so their weights
+    # never land in a captured trace's activation region.
     obj._warmup_ref_encode.assert_called_once_with(17, 64, 64)
+    order = [c[0] for c in calls_in_order.mock_calls]
+    assert order[0] == "_warmup_ref_encode", "ref encoders must warm before the first denoise capture"
+
+
+@pytest.mark.parametrize("traced, dynamic_load", [(True, True), (False, False)])
+def test_warmup_ref_encoders_late_path_warms_once(monkeypatch, traced, dynamic_load):
+    monkeypatch.delenv("LTX_ITER_FAST", raising=False)
+    monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
+    monkeypatch.setenv("LTX_WARMUP_ENCODERS", "1")
+    obj = _make_warmup_pipe()
+    obj._traced = traced
+    obj.dynamic_load = dynamic_load
+    calls_in_order = _track_order(obj, "_warmup_ref_encode", "_denoise_no_guidance")
+    obj.warmup_buffers(num_frames=17, height=64, width=64, stages=("s1_ref", "s2_ref"), ref_num_frames=17)
+
+    obj._warmup_ref_encode.assert_called_once_with(17, 64, 64)
+    order = [c[0] for c in calls_in_order.mock_calls]
+    assert order[-1] == "_warmup_ref_encode", "without the early warm, ref encoders warm after the DiT"
+
+
+def test_warmup_encoders_off_skips_ref_encoders(monkeypatch):
+    monkeypatch.delenv("LTX_ITER_FAST", raising=False)
+    monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
+    monkeypatch.setenv("LTX_WARMUP_ENCODERS", "0")
+    obj = _make_warmup_pipe()
+    obj.warmup_buffers(num_frames=17, height=64, width=64, stages=("s1_ref", "s2_ref"), ref_num_frames=17)
+    obj._warmup_ref_encode.assert_not_called()
 
 
 def test_warmup_ref_denoise_uses_grid_initial_latent(monkeypatch):

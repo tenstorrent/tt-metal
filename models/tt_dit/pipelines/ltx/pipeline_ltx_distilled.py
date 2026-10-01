@@ -536,6 +536,14 @@ class LTXDistilledPipeline(LTXPipeline):
                 logger.info(f"warmup image encoder (before capture): {height // 2}x{width // 2} + {height}x{width}")
                 self._warmup_encode(height // 2, width // 2)
                 self._warmup_encode(height, width)
+                # The IC-LoRA reference encoders are also built once and never reloaded here, so the
+                # same before-capture rule applies; the late warmup below skips them on this path.
+                if ref_num_frames is not None:
+                    logger.info(
+                        f"warmup reference encoder (before capture): {ref_num_frames}f @ "
+                        f"{height // 2}x{width // 2} + {height}x{width}"
+                    )
+                    self._warmup_ref_encode(ref_num_frames, height, width)
                 image_encoder_warmed_early = True
 
         # Real distilled sigmas so warmup hits the same branches (incl. sigma_next == 0 final step).
