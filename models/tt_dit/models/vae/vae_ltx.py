@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 from typing import TYPE_CHECKING, Sequence
 
 import torch
@@ -680,6 +681,10 @@ class LTXVideoDecoder(Module):
         self._yuv_output_tracer = None
         self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "0") == "1"
         self.trace_yuv_output = os.environ.get("LTX_TRACE_YUV_OUTPUT", "0") == "1"
+        # LTX_VIDEO_VAE_TRACE=1 traces decode_device once the pipeline marks the decoder warm
+        # (_vae_traced, set after warmup compiled its kernels); off, the decode runs eagerly.
+        self.trace_decode = os.environ.get("LTX_VIDEO_VAE_TRACE", "0") == "1"
+        self._vae_traced = False
         self._decode_logical_hw = (0, 0)
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
@@ -876,7 +881,41 @@ class LTXVideoDecoder(Module):
         traced: capture the device decode once and replay it from a resident ttnn trace, dropping per-op
             host dispatch. A single decode does not amortize the capture, so this pays off only when the
             decoder is reused across generations; the mesh must be opened with a trace_region_size.
+            LTX_VIDEO_VAE_TRACE=1 turns it on for a decoder the pipeline has marked warm.
+        LTX_TIME_STAGES=1 logs a VAE_DECODE_SPLIT line with the upload, decode and output wall times.
         """
+        timed = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
+        traced = traced or (self.trace_decode and self._vae_traced)
+        t_start = self._stage_clock(timed)
+        sample_tt, logical_h, logical_w = self._upload(sample_BCTHW)
+        t_upload = self._stage_clock(timed)
+        if traced:
+            if self._decode_tracer is None:
+                self._decode_tracer = Tracer(
+                    self.decode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True
+                )
+            sample_tt = self._decode_tracer(sample_tt, logical_h, logical_w)
+        else:
+            sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
+        t_decode = self._stage_clock(timed)
+        result = self._to_host(sample_tt, output_type)
+        if timed:
+            t_end = self._stage_clock(timed)
+            # Host wall with a device sync at each boundary: decode is the device decode alone (the
+            # replay when traced), output is unpatch plus readback.
+            logger.info(
+                f"VAE_DECODE_SPLIT traced={int(traced)} upload={(t_upload - t_start) * 1000:.1f}ms"
+                f" decode={(t_decode - t_upload) * 1000:.1f}ms output={(t_end - t_decode) * 1000:.1f}ms"
+                f" total={(t_end - t_start) * 1000:.1f}ms"
+            )
+        return result
+
+    def _stage_clock(self, timed: bool) -> float:
+        if timed:
+            ttnn.synchronize_device(self.mesh_device)
+        return time.perf_counter()
+
+    def _upload(self, sample_BCTHW: torch.Tensor):
         # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
         sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
         sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
@@ -892,15 +931,9 @@ class LTXVideoDecoder(Module):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
         )
+        return sample_tt, logical_h, logical_w
 
-        if traced:
-            if self._decode_tracer is None:
-                self._decode_tracer = Tracer(
-                    self.decode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True
-                )
-            sample_tt = self._decode_tracer(sample_tt, logical_h, logical_w)
-        else:
-            sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
+    def _to_host(self, sample_tt: ttnn.Tensor, output_type: str):
         # decode_device threads logical_h/logical_w through the upsamples; read back the final dims.
         logical_h, logical_w = self._decode_logical_hw
 
