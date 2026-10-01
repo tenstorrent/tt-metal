@@ -69,7 +69,10 @@ def test_server_repeated_lifespan_stops_workers_and_releases_device(monkeypatch)
                 assert "zero dimension" in bad_shape.json()["detail"]
                 assert events == before, "rejected image reached the device queue"
             assert client.post("/predict", json={"prompt": "x", "images": ["bad image"]}).status_code == 400
-            assert client.post("/predict", json={"prompt": "x", "num_steps": 0}).status_code == 422
+            for steps in (0, 1):
+                before = list(events)
+                assert client.post("/predict", json={"prompt": "x", "num_steps": steps}).status_code == 422
+                assert events == before, "rejected step count reached the device queue"
         assert not any(thread.name == "predict-queue" for thread in threading.enumerate())
         assert events[-2:] == ["release", ("close", "device")]
         assert server.STATE["ready"] is False

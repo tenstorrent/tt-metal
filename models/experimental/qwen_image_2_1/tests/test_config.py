@@ -38,6 +38,7 @@ def test_explicit_snapshot_must_exist(tmp_path, monkeypatch):
         ("QWEN_IMAGE_EDITING", "yes"),
         ("QWEN_IMAGE_ETH_DISPATCH", "1"),
         ("QWEN_IMAGE_STEPS", "0"),
+        ("QWEN_IMAGE_STEPS", "1"),
         ("QWEN_IMAGE_STEPS", "101"),
         ("QWEN_IMAGE_SIZE", "0"),
         ("TT_WEIGHTS_REVISION", "unrelated-revision"),

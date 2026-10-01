@@ -37,8 +37,8 @@ def main(argv=None):
         "--eth-dispatch", action="store_true", help="experimental ETH dispatch; requires additional runtime changes"
     )
     args = ap.parse_args(argv)
-    if not 1 <= args.steps <= 100 or args.repeat < 1:
-        ap.error("steps must be in 1..100 and repeat must be positive")
+    if not 2 <= args.steps <= 100 or args.repeat < 1:
+        ap.error("steps must be in 2..100 and repeat must be positive")
     if args.image and args.no_editing:
         ap.error("--image requires editing encoders")
     if args.eth_dispatch and not args.no_editing:

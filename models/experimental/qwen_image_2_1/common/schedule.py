@@ -23,6 +23,8 @@ def make_sigmas(num_steps: int, image_seq_len: int, cfg: SchedulerConfig = SCHED
     """Replicates FlowMatchEulerDiscreteScheduler.set_timesteps(sigmas=linspace(1, 1/N, N), mu=...)
     with use_dynamic_shifting=True, time_shift_type='exponential', shift_terminal=0.02.
     Returns the N+1 sigmas (last is 0)."""
+    if num_steps < 2:
+        raise ValueError("the terminal-shift scheduler requires at least two steps")
     sigmas = np.linspace(1.0, 1.0 / num_steps, num_steps).astype(np.float64)
     mu = calculate_mu(image_seq_len, cfg)
     # exponential time shift: exp(mu) / (exp(mu) + (1/t - 1))

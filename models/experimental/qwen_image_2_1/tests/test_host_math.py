@@ -20,6 +20,22 @@ def _pcc(a, b):
     return float(torch.corrcoef(torch.stack([a, b]))[0, 1])
 
 
+@pytest.mark.parametrize("num_steps", [-1, 0, 1])
+def test_schedule_rejects_fewer_than_two_steps(num_steps):
+    with pytest.raises(ValueError, match="at least two steps"):  # allow-pytest.raises: host-only scheduler test.
+        schedule.make_sigmas(num_steps, 4096)
+
+
+@pytest.mark.parametrize("num_steps", [2, 40, 100])
+def test_schedule_is_finite_and_decreasing(num_steps):
+    sigmas = schedule.make_sigmas(num_steps, 4096)
+    assert len(sigmas) == num_steps + 1
+    assert np.isfinite(sigmas).all()
+    assert np.isfinite(schedule.sigmas_to_timesteps(sigmas)).all()
+    assert np.all(np.diff(sigmas) < 0)
+    np.testing.assert_allclose(sigmas[[0, -2, -1]], [1.0, 0.02, 0.0])
+
+
 @requires_goldens
 def test_schedule_matches_reference():
     d = torch.load(os.path.join(GOLDENS_DIR, "denoise.pt"), weights_only=False)

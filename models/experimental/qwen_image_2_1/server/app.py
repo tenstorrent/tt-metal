@@ -108,8 +108,8 @@ def load_config():
     for key in ("dit_weight_dtype", "te_weight_dtype"):
         if cfg[key] not in ("bf16", "bfp8"):
             raise ValueError(f"{key} must be bf16 or bfp8; got {cfg[key]!r}")
-    if not 1 <= cfg["default_steps"] <= 100:
-        raise ValueError("QWEN_IMAGE_STEPS must be between 1 and 100")
+    if not 2 <= cfg["default_steps"] <= 100:
+        raise ValueError("QWEN_IMAGE_STEPS must be between 2 and 100")
     if cfg["eth_dispatch"] and cfg["editing"]:
         raise ValueError("Image editing requires Tensix dispatch; set QWEN_IMAGE_ETH_DISPATCH=0")
     if cfg["size"] != 1024:
@@ -206,7 +206,7 @@ app = FastAPI(title="qwen-image-2.1-p150", lifespan=lifespan)
 class PredictRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=2000)
     seed: int = 42
-    num_steps: int | None = Field(None, ge=1, le=100)
+    num_steps: int | None = Field(None, ge=2, le=100)
     return_rgba: bool = False
     images: list[str] | None = Field(
         None, description="optional condition images (base64 PNG/JPEG) for editing", max_length=4
