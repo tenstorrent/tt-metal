@@ -23,8 +23,8 @@ import ttnn
 
 from . import gdn_post_rows, gdn_pre_rows
 from . import program as fp
-from .gdn_source_chunk import chunk_source
 from .gdn_rows_reference import A_COLUMN, HEAD_DIM, HEADS, PROJECTION_WIDTH, QKV_WIDTH, TILE, VALUE_WIDTH
+from .gdn_source_chunk import chunk_source
 from .registry import BITWISE, FusedKernel, register
 
 NAME = "gdn_prefill_rows"
