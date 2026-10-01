@@ -76,9 +76,9 @@ std::vector<size_t> validate_targets(
           "data_ready",
           "consumer_ready",
           "signal_source",
-          "data_ready_type",
-          "consumer_ready_type",
-          "signal_source_type"}) {
+          "data_ready_token",
+          "consumer_ready_token",
+          "signal_source_token"}) {
         reserved.push_back(spec_name(prefix, field));
     }
     for (const auto& name : reserved) {
@@ -260,8 +260,7 @@ void McastFamily::attach(
             if (role < count) {
                 kernel.semaphore_bindings.push_back({.semaphore_spec_name = names[role], .accessor_name = accessor});
             }
-            kernel.compiler_options.defines.emplace(
-                accessor + "_type", role < count ? "sem::" + accessor + "_t" : "std::nullptr_t");
+            kernel.compiler_options.defines.emplace(accessor + "_token", role < count ? "sem::" + accessor : "nullptr");
         }
     }
     spec = std::move(staged);
@@ -276,7 +275,7 @@ void attach_absent(m2::ProgramSpec& spec, std::string_view prefix, std::span<con
         placement(staged, kernel.unique_id);
         add_metadata(kernel, prefix, {}, false, 0);
         for (const auto role : resource_roles) {
-            kernel.compiler_options.defines.emplace(spec_name(prefix, role) + "_type", "std::nullptr_t");
+            kernel.compiler_options.defines.emplace(spec_name(prefix, role) + "_token", "nullptr");
         }
     }
     spec = std::move(staged);
