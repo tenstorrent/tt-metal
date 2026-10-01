@@ -70,7 +70,8 @@ void kernel_main() {
     constexpr uint32_t cb_values = get_compile_time_arg_val(4);
     constexpr uint32_t cb_indices = get_compile_time_arg_val(5);
     constexpr bool index_is_u32 = get_compile_time_arg_val(6) == 1;
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    constexpr uint32_t units_per_tile = get_compile_time_arg_val(7);
+    constexpr auto src_args = TensorAccessorArgs<8>();
     constexpr auto idx_args = TensorAccessorArgs<decltype(src_args)::next_compile_time_args_offset()>();
 
     // Page sizes are baked compile-time by the host's TensorAccessorArgs (2048 B tiles /
@@ -94,10 +95,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* const stick_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stick_base);
 
     for (uint32_t u = start_unit; u < start_unit + num_units; ++u) {
-        const uint32_t row_tile = u / (k_tiles * 2);  // global (all batches)
-        const uint32_t rem = u % (k_tiles * 2);
-        const uint32_t kt = rem >> 1;
-        const uint32_t half = rem & 1;
+        const auto [row_tile, kt, half, col0, ncols] = decode_unit(u, k_tiles, units_per_tile);
 
         const uint32_t batch = row_tile / row_tiles_per_batch;
         const uint32_t row_in_batch0 = (row_tile % row_tiles_per_batch) * 32 + half * half_rows;
@@ -107,11 +105,10 @@ void kernel_main() {
         // owns rows [0, 8) of the unit.
         const uint32_t rows_left = row_in_batch0 < logical_rows ? logical_rows - row_in_batch0 : 0;
         const uint32_t valid_rows = rows_left < half_rows ? rows_left : half_rows;
-        const uint32_t my_rows = valid_rows < rows_per_risc ? valid_rows : rows_per_risc;
-        // Column clamp: when k_rounded % 32 == 16, the last output tile's right face pair
-        // is k-padding (stays zero).
-        const uint32_t cols_left = k_rounded - kt * tile_width;
-        const uint32_t valid_cols = cols_left < tile_width ? cols_left : tile_width;
+        const uint32_t col_base = kt * tile_width + col0;
+        const uint32_t cols_left = col_base < k_rounded ? k_rounded - col_base : 0;
+        const uint32_t valid_cols = cols_left < ncols ? cols_left : ncols;
+        const uint32_t my_rows = valid_cols == 0 ? 0 : (valid_rows < rows_per_risc ? valid_rows : rows_per_risc);
 
         dfb_values.reserve_back(1);
         dfb_indices.reserve_back(1);
@@ -126,18 +123,19 @@ void kernel_main() {
                 idx,
                 stick_dst,
                 valid_cols * 4,
-                {.page_id = batch * logical_rows + row_in_batch0 + lr, .offset_bytes = kt * stick_seg_bytes},
-                {.offset_bytes = lr * stick_seg_bytes});
+                {.page_id = batch * logical_rows + row_in_batch0 + lr, .offset_bytes = kt * stick_seg_bytes + col0 * 4},
+                {.offset_bytes = lr * stick_seg_bytes + col0 * 4});
         }
 
-        // Zero this RISC's row ranges of both staging halves. Covers all padding cases at
-        // once (row padding, k-padding, R==0 units, garbage-guarding fresh CB pages); the
-        // writer zeroes rows [8, 16) — every staging byte is zeroed by exactly one RISC.
-        zero_half_rows<2>(val_base, 0, rows_per_risc);
+        // Zero this RISC's row ranges of the staging faces this unit covers (the writer zeroes rows
+        // [8, 16)), so every staging byte the unit writes out is zeroed by exactly one RISC.
+        const uint32_t face0 = col0 / 16;
+        const uint32_t face1 = face0 + ncols / 16;
+        zero_half_rows<2>(val_base, 0, rows_per_risc, face0, face1);
         if constexpr (index_is_u32) {
-            zero_half_rows<4>(idx_out_base, 0, rows_per_risc);
+            zero_half_rows<4>(idx_out_base, 0, rows_per_risc, face0, face1);
         } else {
-            zero_half_rows<2>(idx_out_base, 0, rows_per_risc);
+            zero_half_rows<2>(idx_out_base, 0, rows_per_risc, face0, face1);
         }
 
         if (my_rows > 0) {
@@ -157,7 +155,8 @@ void kernel_main() {
                 half,
                 0,  // lr_begin: reader owns rows [0, 8)
                 my_rows,
-                valid_cols);
+                col0,
+                col0 + valid_cols);
         }
 
         dfb_values.push_back(1);

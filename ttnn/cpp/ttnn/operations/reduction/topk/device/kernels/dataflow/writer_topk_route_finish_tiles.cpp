@@ -67,7 +67,8 @@ void kernel_main() {
     constexpr uint32_t value_half_bytes = get_compile_time_arg_val(6);  // 1024
     constexpr uint32_t index_half_bytes = get_compile_time_arg_val(7);  // 1024 (u16) / 2048 (u32)
     constexpr bool index_is_u32 = get_compile_time_arg_val(8) == 1;
-    constexpr auto values_args = TensorAccessorArgs<9>();
+    constexpr uint32_t units_per_tile = get_compile_time_arg_val(9);
+    constexpr auto values_args = TensorAccessorArgs<10>();
     constexpr auto indices_args = TensorAccessorArgs<decltype(values_args)::next_compile_time_args_offset()>();
     constexpr auto src_args = TensorAccessorArgs<decltype(indices_args)::next_compile_time_args_offset()>();
     constexpr auto idx_args = TensorAccessorArgs<decltype(src_args)::next_compile_time_args_offset()>();
@@ -94,10 +95,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* const stick_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stick_base);
 
     for (uint32_t u = start_unit; u < start_unit + num_units; ++u) {
-        const uint32_t row_tile = u / (k_tiles * 2);
-        const uint32_t rem = u % (k_tiles * 2);
-        const uint32_t kt = rem >> 1;
-        const uint32_t half = rem & 1;
+        const auto [row_tile, kt, half, col0, ncols] = decode_unit(u, k_tiles, units_per_tile);
         const uint32_t page = row_tile * k_tiles + kt;
 
         // Same clamps as the reader; this RISC owns rows [8, 16) of the unit.
@@ -105,9 +103,10 @@ void kernel_main() {
         const uint32_t row_in_batch0 = (row_tile % row_tiles_per_batch) * 32 + half * half_rows;
         const uint32_t rows_left = row_in_batch0 < logical_rows ? logical_rows - row_in_batch0 : 0;
         const uint32_t valid_rows = rows_left < half_rows ? rows_left : half_rows;
-        const uint32_t my_rows = valid_rows > rows_per_risc ? valid_rows - rows_per_risc : 0;
-        const uint32_t cols_left = k_rounded - kt * tile_width;
-        const uint32_t valid_cols = cols_left < tile_width ? cols_left : tile_width;
+        const uint32_t col_base = kt * tile_width + col0;
+        const uint32_t cols_left = col_base < k_rounded ? k_rounded - col_base : 0;
+        const uint32_t valid_cols = cols_left < ncols ? cols_left : ncols;
+        const uint32_t my_rows = valid_cols == 0 ? 0 : (valid_rows > rows_per_risc ? valid_rows - rows_per_risc : 0);
 
         // Unit u's staging page addresses, read BEFORE wait_front (see the split-protocol
         // comment at the top for why this is safe).
@@ -122,17 +121,18 @@ void kernel_main() {
                 stick_dst,
                 valid_cols * 4,
                 {.page_id = batch * logical_rows + row_in_batch0 + rows_per_risc + j,
-                 .offset_bytes = kt * stick_seg_bytes},
-                {.offset_bytes = j * stick_seg_bytes});
+                 .offset_bytes = kt * stick_seg_bytes + col0 * 4},
+                {.offset_bytes = j * stick_seg_bytes + col0 * 4});
         }
 
-        // Zero this RISC's row ranges [8, 16) of both staging halves (the reader zeroes
-        // [0, 8) — every staging byte is zeroed by exactly one RISC).
-        zero_half_rows<2>(val_base, rows_per_risc, half_rows);
+        // Zero rows [8, 16) of the staging faces this unit covers (the reader zeroes [0, 8)).
+        const uint32_t face0 = col0 / 16;
+        const uint32_t face1 = face0 + ncols / 16;
+        zero_half_rows<2>(val_base, rows_per_risc, half_rows, face0, face1);
         if constexpr (index_is_u32) {
-            zero_half_rows<4>(idx_out_base, rows_per_risc, half_rows);
+            zero_half_rows<4>(idx_out_base, rows_per_risc, half_rows, face0, face1);
         } else {
-            zero_half_rows<2>(idx_out_base, rows_per_risc, half_rows);
+            zero_half_rows<2>(idx_out_base, rows_per_risc, half_rows, face0, face1);
         }
 
         if (my_rows > 0) {
@@ -153,7 +153,8 @@ void kernel_main() {
                 half,
                 rows_per_risc,  // lr_begin: writer owns rows [8, 16)
                 my_rows,
-                valid_cols);
+                col0,
+                col0 + valid_cols);
         }
 
         // The reader's push guarantees rows [0, 8) and their zero fill are complete; this
@@ -161,18 +162,21 @@ void kernel_main() {
         dfb_values.wait_front(1);
         dfb_indices.wait_front(1);
 
+        // A face unit writes its 16 columns only; the two faces of a half sit back to back in the tile.
+        const uint32_t value_bytes = value_half_bytes * ncols / tile_width;
+        const uint32_t index_bytes = index_half_bytes * ncols / tile_width;
         noc.async_write(
-            CoreLocalMem<uint32_t>(val_base),
+            CoreLocalMem<uint32_t>(val_base + face0 * value_bytes),
             values_out,
-            value_half_bytes,
+            value_bytes,
             {.offset_bytes = 0},
-            {.page_id = page, .offset_bytes = half * value_half_bytes});
+            {.page_id = page, .offset_bytes = half * value_half_bytes + face0 * value_bytes});
         noc.async_write(
-            CoreLocalMem<uint32_t>(idx_out_base),
+            CoreLocalMem<uint32_t>(idx_out_base + face0 * index_bytes),
             indices_out,
-            index_half_bytes,
+            index_bytes,
             {.offset_bytes = 0},
-            {.page_id = page, .offset_bytes = half * index_half_bytes});
+            {.page_id = page, .offset_bytes = half * index_half_bytes + face0 * index_bytes});
 
         // Both staged pages are about to be recycled by the reader; the writes must have
         // fully landed before the credits go back.
