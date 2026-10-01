@@ -448,12 +448,13 @@ template <uint32_t scale_fp32, int group>
 inline void calculate_sdpa_pa_select() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     constexpr float theta = SDPA_PA_THETA / __builtin_bit_cast(float, scale_fp32);
-    for (int i = 0; i < 32; ++i) {
+    // Called with VectorMode::C: only column 0 (the row maxima) is read by any consumer.
+    for (int i = 0; i < 4; ++i) {
         sfpi::vFloat m = sfpi::dst_reg[0];
         sfpi::vFloat r = sfpi::dst_reg[32 * group];
         v_if(m <= r + theta) { sfpi::dst_reg[0] = r; }
         v_endif;
-        sfpi::dst_reg++;
+        sfpi::dst_reg += 2;
     }
 }
 // dest tiles [0, w): state; [w, 2w): this chunk's term; tile 2w: column-broadcast correction c.
@@ -596,7 +597,7 @@ void reduce_c_row_group(
         static_assert(true);
         for (uint32_t i = 0; i < group_size; i++) {
             PACK((SFPU_UNARY_CALL(
-                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_pa_select, (pa_scale_fp32, 2), i, VectorMode::None)));
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_pa_select, (pa_scale_fp32, 2), i, VectorMode::C)));
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
     }
@@ -1883,12 +1884,18 @@ static void sdpa_inner_loop_step(
 #else
         if (!is_first_iter) {
 #endif
-            CircularBuffer(prev.max).wait_front(Sq_chunk_t);
-            CircularBuffer(cur.max).wait_front(Sq_chunk_t);
+            // Groups 0..N-2 were scanned during Phase 1; the last group is scanned in the drain and sent
+            // after it (pa_ident_last below), so nothing waits for the last row's maximum here.
+            if constexpr (q_num_subblocks == 1) {
+                CircularBuffer(prev.max).wait_front(Sq_chunk_t);
+                CircularBuffer(cur.max).wait_front(Sq_chunk_t);
+            }
             UNPACK({
-                sdpa_identity_flags[q_num_subblocks - 1] = sdpa_scan_identity_maxima(
-                    prev.max, cur.max, qk_index(q_num_subblocks - 1), qk_rows(q_num_subblocks - 1));
-                for (uint32_t g = 0; g < q_num_subblocks; ++g) {
+                if constexpr (q_num_subblocks == 1) {
+                    sdpa_identity_flags[0] = sdpa_scan_identity_maxima(prev.max, cur.max, qk_index(0), qk_rows(0));
+                }
+                const uint32_t scanned = q_num_subblocks == 1 ? 1 : q_num_subblocks - 1;
+                for (uint32_t g = 0; g < scanned; ++g) {
                     pa_ident |= (sdpa_identity_flags[g] ? 1u : 0u) << g;
                 }
                 mailbox_write(ckernel::ThreadId::MathThreadId, pa_ident);
@@ -2184,6 +2191,21 @@ static void sdpa_inner_loop_step(
         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
+        if constexpr (q_num_subblocks > 1) {
+#if !(defined(SDPA_PA_SAFE_DBG) && (SDPA_PA_SAFE_DBG & 2))
+            if (!is_first_iter) {
+                UNPACK({
+                    pa_ident |= (sdpa_identity_flags[q_num_subblocks - 1] ? 1u : 0u) << (q_num_subblocks - 1);
+                    mailbox_write(ckernel::ThreadId::MathThreadId, pa_ident);
+                    mailbox_write(ckernel::ThreadId::PackThreadId, pa_ident);
+                })
+                MATH(pa_ident = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                PACK(pa_ident = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+            }
+#endif
+        }
+#endif
 #if defined(SDPA_PA) && defined(SDPA_PA_PCHECK)
         // Overflow detection cost probe: rowmax(P) = exp(growth - tau), reduced after the drain barrier
         // (all P published) into CB 8; UNPACK scans it at the end of the step.
