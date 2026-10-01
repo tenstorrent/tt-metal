@@ -26,6 +26,7 @@ from ttexalens.tt_exalens_lib import (
 from .device_io import read_from_device, write_words_to_device
 from .llk_params import BriscCmd
 from .logger import logger
+from .target_config import TestTargetConfig
 
 
 class _UninitializedMailboxes:
@@ -256,6 +257,24 @@ def commit_tensix_soft_reset(
 
 common_counter = 0
 
+# The test firmware mirrors the completion flags and the BRISC counter into overlay registers (host_signal in boot.h),
+# so waiting on a kernel never reads its L1. Simulator targets keep the L1 path.
+HOST_SIGNAL_BRISC_COUNTER_SLOT = 3
+HOST_SIGNAL_MASK = 0xFFFFFF
+_HOST_SIGNAL_SCRATCH_INDEX = {
+    ChipArchitecture.WORMHOLE: 248,
+    ChipArchitecture.BLACKHOLE: 36,
+}
+
+
+def host_signal_address(slot: int) -> int | None:
+    """Address of host signal slot, or None when this target signals through L1 only."""
+    index = _HOST_SIGNAL_SCRATCH_INDEX.get(get_chip_architecture())
+    target = TestTargetConfig._instance
+    if index is None or (target is not None and target.run_simulator):
+        return None
+    return 0xFFB40000 + slot * 0x1000 + index * 4
+
 
 def commit_brisc_command(
     location="0,0", command: BriscCmd = BriscCmd.IDLE_STATE, timeout=1
@@ -268,10 +287,14 @@ def commit_brisc_command(
         write_words_to_device(location, Mailboxes.BriscCommand0.value, [command.value])
 
     common_counter += 1
+    counter_addr = host_signal_address(HOST_SIGNAL_BRISC_COUNTER_SLOT)
+    mask = HOST_SIGNAL_MASK if counter_addr is not None else 0xFFFFFFFF
+    if counter_addr is None:
+        counter_addr = Mailboxes.BriscCounter.value
     end_time = time.time() + timeout
     while time.time() < end_time:
-        temp_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
-        if temp_value == common_counter:
+        temp_value = read_word_from_device(location, counter_addr, 0)
+        if temp_value == common_counter & mask:
             return
 
     logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
@@ -429,6 +452,12 @@ def reset_mailboxes(location: str = "0,0"):
             addr=MAILBOX_START_BLOCK,
             data=[0xA3, 0xA3, 0xA3],  # All 3 TRISC mailboxes on Wormhole/Blackhole
         )
+        for slot in range(3):
+            addr = host_signal_address(slot)
+            if addr is not None:
+                write_words_to_device(
+                    location=location, addr=addr, data=[0xA3], safe_mode=False
+                )
 
 
 def pull_coverage_stream_from_tensix(

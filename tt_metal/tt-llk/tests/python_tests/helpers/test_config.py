@@ -1219,6 +1219,14 @@ class TestConfig:
             return ""
         return '#include "barrier.h"\n'
 
+    def _kernel_placement_include(self) -> str:
+        """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h) in profiler builds, the only
+        ones that are timed; the alignment would cost the other kernels code space. The fuser writes its own.
+        """
+        if self.skip_build_header or self.profiler_build != ProfilerBuild.Yes:
+            return ""
+        return '#include "kernel_placement.h"\n'
+
     def _kernel_source_include(self) -> str:
         """C++ snippet that pulls in this variant's driver.
 
@@ -1239,6 +1247,7 @@ class TestConfig:
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
+            "warmup_configs",
             "variant_id",
             "runtime_arguments_struct",
             "runtime_format",
@@ -1812,6 +1821,7 @@ class TestConfig:
                     TestConfig.TESTS_WORKING_DIR,
                     (
                         f"{self._barrier_reservation_include()}"
+                        f"{self._kernel_placement_include()}"
                         f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
                     ),
                 )
@@ -2076,16 +2086,40 @@ class TestConfig:
         span = max(mailbox.value for mailbox in mailboxes) + 4 - base
         word_index = {mailbox: (mailbox.value - base) // 4 for mailbox in mailboxes}
 
+        # Wormhole and Blackhole kernels also signal completion in overlay registers, so the wait never reads their L1.
+        signal_addrs = None
+        if self.CHIP_ARCH != ChipArchitecture.QUASAR:
+            # The TRISC at mailbox word n signals in slot n (trisc.cpp: mailbox_offset / 4).
+            addrs = {
+                mailbox: device_module.host_signal_address(word_index[mailbox])
+                for mailbox in mailboxes
+            }
+            if all(addr is not None for addr in addrs.values()):
+                signal_addrs = addrs
+
         completed = set()
         end_time = time.time() + timeout
         while time.time() < end_time:
-            words = np.frombuffer(
-                read_from_device(TestConfig.TENSIX_LOCATION, base, num_bytes=span),
-                dtype=np.uint32,
-            )
-            for mailbox in mailboxes - completed:
-                if words[word_index[mailbox]] == KERNEL_COMPLETE:
-                    completed.add(mailbox)
+            if signal_addrs is not None:
+                for mailbox in mailboxes - completed:
+                    value = np.frombuffer(
+                        read_from_device(
+                            TestConfig.TENSIX_LOCATION,
+                            signal_addrs[mailbox],
+                            num_bytes=4,
+                        ),
+                        dtype=np.uint32,
+                    )[0]
+                    if value & device_module.HOST_SIGNAL_MASK == KERNEL_COMPLETE:
+                        completed.add(mailbox)
+            else:
+                words = np.frombuffer(
+                    read_from_device(TestConfig.TENSIX_LOCATION, base, num_bytes=span),
+                    dtype=np.uint32,
+                )
+                for mailbox in mailboxes - completed:
+                    if words[word_index[mailbox]] == KERNEL_COMPLETE:
+                        completed.add(mailbox)
 
             if poll_callback is not None:
                 poll_callback()
