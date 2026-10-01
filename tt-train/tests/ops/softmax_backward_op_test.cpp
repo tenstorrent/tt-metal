@@ -289,8 +289,9 @@ TEST_F(SoftmaxBackwardOpTest, PersistentL1PressureUsesCommittedProgramBase) {
                      << " bytes";
     }
 
-    xt::xarray<float> y = xt::ones<float>({1, 1, height, width}) * (1.0F / static_cast<float>(width));
-    xt::xarray<float> grad = xt::empty<float>({1, 1, height, width});
+    const std::array<size_t, 4> shape = {1, 1, height, width};
+    xt::xarray<float> y = xt::ones<float>(shape) * (1.0F / static_cast<float>(width));
+    xt::xarray<float> grad = xt::empty<float>(shape);
     for (size_t i = 0; i < grad.size(); ++i) {
         grad.data()[i] = (i % 2U == 0U) ? 1.0F : -1.0F;
     }
