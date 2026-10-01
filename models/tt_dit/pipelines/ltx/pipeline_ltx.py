@@ -1524,18 +1524,6 @@ class LTXPipeline:
         self._prepare_vae_encoder()
         self.vae_encoder(torch.zeros(1, 3, 1, height, width))
 
-    def _warmup_encode(self, height: int, width: int) -> None:
-        """Load the VAE encoder + JIT-compile encode kernels with a zero single-frame image
-        at the target resolution. No-op when no encoder is configured (non-I2V checkpoints).
-
-        Always device-only (bypasses ``encode_image``'s host parity path): a zeros input gives a
-        degenerate PCC, and the meaningful device-vs-host comparison is logged on the real
-        conditioning image during generate()."""
-        if self.vae_encoder is None:
-            return
-        self._prepare_vae_encoder()
-        self.vae_encoder(torch.zeros(1, 3, 1, height, width))
-
     def _warmup_ref_encode(self, ref_pixel_frames: int, height: int, width: int) -> None:
         """Build + JIT-compile the IC-LoRA reference encoders at both stage resolutions with a
         zero looped clip. No-op when no encoder is configured (non-I2V checkpoints)."""
