@@ -29,6 +29,11 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 - **Framework switches**: every one, with its default, is in `models/demos/common/bringup/defaults.yaml` (component and
   swap review, retry policy, thresholds, timeouts, contract and profile options). A model overrides one in its
   spec under the same key; change the default itself only in that file.
+- **Model switches**: every choice of the model (fidelities, chunk sizes, KV dtype, implementation choices, fork
+  options) is a `Setting` in `models/demos/<model>/tt/settings.py` (core/model_settings.py), with its default and the
+  owner decision behind it. Agents add switches only there (the orchestrator lints every agent's changes); the last
+  task, Z.1, runs the `settings-audit` agent (a smaller model) to move any that ended up elsewhere. Perf picks name
+  their A/B switch from that file.
 - **Retry policy**, only if they want to change it: per role, attempts (default 3) and whether it escalates to
   `ttnn-expert-debugger` (only implement and device fixes do; that agent is for TTNN ops, never CPU code).
 
