@@ -7,6 +7,7 @@ import ttnn
 from models.demos.gemma4_d_p.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.ccl import ccl_allgather
+from models.demos.gemma4_d_p.tt.matmul_config import short_m_gather_memcfg
 from models.demos.gemma4_d_p.tt.mlp import MLP
 from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
 from models.demos.gemma4_d_p.utils.substate import substate
@@ -91,6 +92,17 @@ class Gemma4DecoderLayer:
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
         )
 
+    def _gather_rows(self, x):
+        """All-gather x's TP row split. Each block consumes the result. At short M it lands in L1 in the layout the
+        projections read (matmul_config.short_m_gather_memcfg)."""
+        return ccl_allgather(
+            x,
+            self.mesh_config,
+            self.ccl_manager,
+            dim=2,
+            memory_config=short_m_gather_memcfg(x, self.mesh_config.tp_degree),
+        )
+
     def __call__(
         self,
         hidden_states,
@@ -106,7 +118,7 @@ class Gemma4DecoderLayer:
         # closing reduce-scatter returns 1/TP again.
         residual = hidden_states
         normed = self.input_layernorm.forward(hidden_states)
-        normed = ccl_allgather(normed, self.mesh_config, self.ccl_manager, dim=2)
+        normed = self._gather_rows(normed)
         attn_output = self.self_attn(
             normed,
             rope_mats=rope_mats,
@@ -125,9 +137,8 @@ class Gemma4DecoderLayer:
         # 2. Dense MLP block
         residual = hidden_states
         normed = self.pre_feedforward_layernorm.forward(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        normed = ccl_allgather(normed, self.mesh_config, self.ccl_manager, dim=2)
+        normed = self._gather_rows(normed)
         mlp_output = self.mlp(normed)
-        normed.deallocate(True)
 
         hidden_states = mlp_output
 
