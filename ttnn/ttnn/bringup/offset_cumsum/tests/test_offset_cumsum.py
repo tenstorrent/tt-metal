@@ -79,6 +79,7 @@ def test_offset_cumsum(mesh_device, device_params, case):
         experts_per_chip=epc,
         memory_config=_mem(c["memory_config"]),
     )
+    assert len(outs) == 4, len(outs)
     per_dev = [[ttnn.to_torch(t).reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(o)] for o in outs]
     for dev in range(rows * cols):
         r, col = divmod(dev, cols)
@@ -91,3 +92,8 @@ def test_offset_cumsum(mesh_device, device_params, case):
             assert got.shape == want.shape, (name, dev, got.shape)
             bad = got != want
             assert not bad.any(), f"dev {dev} {name}: {int(bad.sum())}/{E} differ"
+        # all_global_dispatch_offsets (#57859): row k is what device k of the group receives in `offsets`.
+        got = per_dev[3][dev]
+        assert got.numel() == offsets.numel(), ("all_offsets", dev, got.shape)
+        bad = got != offsets.reshape(-1)
+        assert not bad.any(), f"dev {dev} all_offsets: {int(bad.sum())}/{offsets.numel()} differ"
