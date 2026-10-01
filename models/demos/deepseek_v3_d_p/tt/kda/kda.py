@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
+    tuned_projection_matmul_configs,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
@@ -156,6 +157,15 @@ class ttKDA:
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+        self.input_projection_minimal_matmul_config, self.output_projection_program_config = (
+            tuned_projection_matmul_configs(
+                mesh_device.compute_with_storage_grid_size(),
+                self.active_seq_len_local,
+                *tuple(self.weights.output_projection.shape)[-2:],
+            )
+            if program_config.tuned_projection_matmuls
+            else (None, None)
         )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
@@ -295,12 +305,21 @@ class ttKDA:
         """Run the fused input projection and split its semantic outputs."""
         config = self.config
         weights = self.weights
-        projected = ttnn.linear(
-            hidden_states,
-            weights.input_projection,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
-        )
+        if self.input_projection_minimal_matmul_config is not None:
+            projected = ttnn.experimental.minimal_matmul(
+                hidden_states,
+                weights.input_projection,
+                config=self.input_projection_minimal_matmul_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+        else:
+            projected = ttnn.linear(
+                hidden_states,
+                weights.input_projection,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
             qkv=_slice_width(projected, 0, auxiliary_start),
@@ -389,6 +408,7 @@ class ttKDA:
             output,
             weights.output_projection,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.output_projection_program_config,
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:

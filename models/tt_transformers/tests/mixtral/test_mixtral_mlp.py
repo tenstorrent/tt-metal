@@ -57,7 +57,7 @@ def test_mixtral_mlp_inference(mesh_device, reset_seeds, mode):
     }
 
     model_args = ModelArgs(mesh_device)
-    model_args.n_layers = 32
+    model_args.n_layers = 1  # only layer 0 is used below
     # Note: The naming conventions in Hugging Face (HF) Mixtral differ from those in `ModelArgs`.
     # In HF, `hidden_size` refers to the attention dimension, whereas in `ModelArgs`, `hidden_dim` specifies the hidden layer size of the FFN.
     mixtral_cofig = MixtralConfig(hidden_size=model_args.dim, intermediate_size=model_args.hidden_dim)

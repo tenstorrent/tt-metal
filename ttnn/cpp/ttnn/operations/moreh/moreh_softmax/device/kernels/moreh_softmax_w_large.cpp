@@ -53,17 +53,17 @@ void kernel_main() {
         }
 
         for (uint32_t w = 0; w < Wt; ++w) {
+            // compute exp(x - max(x))
+            sub_tiles_bcast_cols_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
             if (w == Wt - 1) {
 #ifdef SOFTMAX
-                sub_tiles_bcast_cols_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
-
                 exp_tile_and_mask_tile_to_dfb<dfb::tmp, dfb::mask, dfb::exps>(
                     /*itile=*/0,
                     /*mtile=*/0,
                     /*pop=*/1,
                     /*popm=*/0);
 #else
-                rexp_tile_and_mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::exps>(
+                rexp_tile_and_mask_tile_to_dfb<dfb::tmp, dfb::mask, dfb::exps>(
                     /*itile=*/0,
                     /*mtile=*/0,
                     /*pop=*/1,
@@ -71,12 +71,8 @@ void kernel_main() {
 #endif
             } else {
 #ifdef SOFTMAX
-                sub_tiles_bcast_cols_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
-
                 exp_tile_to_dfb<dfb::tmp, dfb::exps>();
 #else
-                sub_tiles_bcast_cols_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
-
                 rexp_tile_to_dfb<dfb::tmp, dfb::exps>();
 #endif
             }

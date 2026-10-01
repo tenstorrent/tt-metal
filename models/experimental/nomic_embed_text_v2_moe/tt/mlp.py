@@ -9,6 +9,8 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device, transpose_linear_weight
+from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import dense_linear
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 
 
 class TtNomicBertMLP(LightweightModule):
@@ -27,18 +29,18 @@ class TtNomicBertMLP(LightweightModule):
         super().__init__()
         self.tt_config = tt_config
 
-        def weight(name):
+        def weight(name, group):
             return to_device(
                 transpose_linear_weight(state_dict[f"{state_dict_prefix}{name}.weight"]),
                 device,
-                dtype=tt_config.weight_dtype,
+                dtype=tt_config.matmul_weight_dtype(group),
             )
 
         def bias(name):
             return to_device(state_dict[f"{state_dict_prefix}{name}.bias"], device, dtype=tt_config.weight_dtype)
 
-        self.fc1_weight, self.fc1_bias = weight("fc1"), bias("fc1")
-        self.fc2_weight, self.fc2_bias = weight("fc2"), bias("fc2")
+        self.fc1_weight, self.fc1_bias = weight("fc1", OpGroup.FC1), bias("fc1")
+        self.fc2_weight, self.fc2_bias = weight("fc2", OpGroup.FC2), bias("fc2")
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Widen, activate, project back.
@@ -49,20 +51,12 @@ class TtNomicBertMLP(LightweightModule):
         Returns:
             ttnn.Tensor: (B, 1, S, H), via (B, 1, S, F) at the activation.
         """
-        hidden = ttnn.linear(
-            x,
-            self.fc1_weight,
-            bias=self.fc1_bias,
-            compute_kernel_config=self.tt_config.compute_kernel_config,
-        )
+        hidden = dense_linear(x, self.fc1_weight, self.fc1_bias, OpGroup.FC1, self.tt_config)
+        # GELU keeps hidden's memory, L1 when dense_linear put it there. Reading L1 and writing
+        # DRAM measured 360 us against 210 at 8x512; L1 to L1 runs 207, and fc2 then reads L1.
         activated = ttnn.gelu(hidden)
         ttnn.deallocate(hidden)
 
-        out = ttnn.linear(
-            activated,
-            self.fc2_weight,
-            bias=self.fc2_bias,
-            compute_kernel_config=self.tt_config.compute_kernel_config,
-        )
+        out = dense_linear(activated, self.fc2_weight, self.fc2_bias, OpGroup.FC2, self.tt_config)
         ttnn.deallocate(activated)
         return out

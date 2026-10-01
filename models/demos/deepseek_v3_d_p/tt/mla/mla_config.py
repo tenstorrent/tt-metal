@@ -26,8 +26,8 @@ import ttnn
 # Available core grid is 12x10, but due to di/dt and throttling problems, use 11x10 temporarily
 COMPUTE_GRID = (11, 10)
 
-# GLM-5.1/5.2 share the 64-head, q_lora_rank=2048 geometry. These tags keep
-# their 640-token configs separate from Kimi and DeepSeek variants sharing the same slot.
+# GLM-5.2 has the 64-head, q_lora_rank=2048 geometry. These tags keep
+# its 640-token configs separate from Kimi and DeepSeek variants sharing the same slot.
 _GLM_TAGS = {"num_heads": 64, "q_lora_rank": 2048, "chunked_only": True}
 _GLM_INDEXER_TAGS = {"num_heads": 64, "q_lora_rank": 2048}
 
@@ -826,7 +826,7 @@ def get_sdpa_config(seq_len_local: int) -> dict | list | None:
 # is L1-validated for the fused 32-head Ring Indexer; revalidate L1 before reusing it in a classic path.
 DSA_INDEXER_CONFIG: dict[int, dict[str, int]] = {
     64: {"k_chunk_size": 64},  # DeepSeek V3.2
-    32: {"k_chunk_size": 320},  # GLM 5.1 / 5.2
+    32: {"k_chunk_size": 320},  # GLM 5.2
 }
 
 

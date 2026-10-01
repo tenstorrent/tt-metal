@@ -29,6 +29,7 @@ from .llk_params import (
     MathOperation,
     NarrowTile,
     PerfRunType,
+    ReduceOrder,
     ReducePool,
     SdpaFwOp,
     SdpaOp,
@@ -44,6 +45,7 @@ from .llk_params import (
     VectorMode,
 )
 from .matmul_sweep import validate_tile_dimensions
+from .sfpu_dispatch_constants import RELU_MAX_THRESHOLD
 
 # Base parameter classes
 
@@ -326,6 +328,32 @@ class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"#define SFPU_RELU_MIN_INT_THRESHOLD {self.threshold & 0xFFFFFFFF}u"
+
+
+@dataclass
+class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
+    """Float threshold for relu_max, emitted as its fp32 bit pattern.
+
+    Emitted as a macro rather than a constexpr for the same reason as
+    :class:`SFPU_RELU_MIN_INT_THRESHOLD`: sfpu_operations.h selects on ``#ifdef``, the
+    header is shared by every unary test, and only the relu_max threshold sweep sets this.
+    Unset means the kernel's fixed 5.0 (RELU_MAX_THRESHOLD on the golden side).
+
+    Takes a Python float and emits its IEEE-754 single bits, which is the encoding
+    ``relu_max_tile`` takes (relu6 passes ``0x40c00000u``), so 0.0, -0.0 and a negative
+    threshold are all expressible.
+
+    The field is ``relu_max_threshold``, not ``threshold``: parameter field names become
+    perf-CSV headers and must be unique across classes (test_perf_header_gate.py), and
+    :class:`SFPU_RELU_MIN_INT_THRESHOLD` already owns ``threshold``. The default is the
+    golden's RELU_MAX_THRESHOLD, so only the C++ fallback in sfpu_operations.h is a copy.
+    """
+
+    relu_max_threshold: float = RELU_MAX_THRESHOLD
+
+    def convert_to_cpp(self) -> str:
+        bits = struct.unpack("<I", struct.pack("<f", self.relu_max_threshold))[0]
+        return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
 
 
 @dataclass
@@ -774,6 +802,18 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.reduce_pool_type.value};"
+
+
+@dataclass
+class REDUCE_ORDER(TemplateParameter):
+    """Order of the chained SFPU reduce passes in sfpu_reduce_multidim_test.cpp, all under one
+    shared init_reduce (see ReduceOrder; the kernel names the values REDUCE_ORDER_*).
+    """
+
+    reduce_order: ReduceOrder = ReduceOrder.ColRow
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int REDUCE_ORDER = {self.reduce_order.value};"
 
 
 @dataclass
