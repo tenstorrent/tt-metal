@@ -149,6 +149,7 @@ class TtV4Block(LightweightModule):
         # offset back the way TtPrefillBlock takes actual_start: a caller-owned cache does not
         # advance itself, so the position has to come in with the chunk.
         self.attn_state = self.attn.alloc_state(max_seq_len or seq_len, chunk_tokens=seq_len)
+        self._state_shape = (max_seq_len or seq_len, seq_len)
 
         self.ffn = TtPrefillBlock._build_moe(
             mesh_device=mesh_device,
@@ -190,6 +191,11 @@ class TtV4Block(LightweightModule):
         self.ffn_res = TtMHCWrap(
             mesh_device, mhc_cfg, *mhc_weights["ffn"], tp_axis=tp_axis, num_links=num_links, topology=tp_topology
         )
+
+    def reset_state(self) -> None:
+        """Start a new request: the attention state goes back to an empty cache at position 0."""
+        max_seq_len, chunk_tokens = self._state_shape
+        self.attn_state = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens)
 
     def forward(
         self,
