@@ -14,6 +14,7 @@
 #include <csignal>
 #include <dirent.h>
 #include <fstream>
+#include <sstream>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -31,26 +32,6 @@ pid_t extract_pid_from_manifest_name(const std::string& filename) {
     }
     try {
         return static_cast<pid_t>(std::stol(filename.substr(prefix.size())));
-    } catch (...) {
-        return 0;
-    }
-}
-
-pid_t extract_pid_from_shm_name(const std::string& filename) {
-    // Expected format: tt_{prefix}_{pid}_{counter}
-    if (!filename.starts_with("tt_")) {
-        return 0;
-    }
-    auto first = filename.find('_', 3);
-    if (first == std::string::npos) {
-        return 0;
-    }
-    auto second = filename.find('_', first + 1);
-    if (second == std::string::npos) {
-        return 0;
-    }
-    try {
-        return static_cast<pid_t>(std::stol(filename.substr(first + 1, second - first - 1)));
     } catch (...) {
         return 0;
     }
@@ -96,11 +77,73 @@ std::string ShmResourceTracker::manifest_path_for_pid(pid_t pid) {
     return fmt::format("/dev/shm/tt_socket_manifest_{}", pid);
 }
 
+pid_t ShmResourceTracker::pid_from_shm_name(const std::string& shm_name) {
+    // Expected format: [/]tt_{prefix}_{pid}_{random}_{counter} (NamedShm::make_unique_name).
+    const std::string filename = (!shm_name.empty() && shm_name[0] == '/') ? shm_name.substr(1) : shm_name;
+    if (!filename.starts_with("tt_")) {
+        return 0;
+    }
+    auto first = filename.find('_', 3);
+    if (first == std::string::npos) {
+        return 0;
+    }
+    auto second = filename.find('_', first + 1);
+    if (second == std::string::npos) {
+        return 0;
+    }
+    try {
+        return static_cast<pid_t>(std::stol(filename.substr(first + 1, second - first - 1)));
+    } catch (...) {
+        return 0;
+    }
+}
+
 bool ShmResourceTracker::is_pid_alive(pid_t pid) {
     if (pid <= 0) {
         return false;
     }
     return kill(pid, 0) == 0 || errno == EPERM;
+}
+
+uint64_t ShmResourceTracker::process_start_time(pid_t pid) {
+    if (pid <= 0) {
+        return 0;
+    }
+    std::ifstream stat_file(fmt::format("/proc/{}/stat", pid));
+    std::string line;
+    if (!stat_file.is_open() || !std::getline(stat_file, line)) {
+        return 0;
+    }
+    // "pid (comm) state ppid ... starttime ..." — comm may contain spaces, so
+    // tokenize after the last ')'. starttime is field 22, i.e. the 20th token
+    // after the closing parenthesis (state is the first).
+    const auto comm_end = line.rfind(')');
+    if (comm_end == std::string::npos) {
+        return 0;
+    }
+    std::istringstream fields(line.substr(comm_end + 1));
+    std::string token;
+    for (int i = 0; i < 20; ++i) {
+        if (!(fields >> token)) {
+            return 0;
+        }
+    }
+    try {
+        return static_cast<uint64_t>(std::stoull(token));
+    } catch (...) {
+        return 0;
+    }
+}
+
+bool ShmResourceTracker::is_process_alive(pid_t pid, uint64_t start_time) {
+    if (!is_pid_alive(pid)) {
+        return false;
+    }
+    if (start_time == 0) {
+        return true;
+    }
+    const uint64_t current = process_start_time(pid);
+    return current == 0 || current == start_time;
 }
 
 ShmResourceTracker::ShmResourceTracker() : manifest_path_(manifest_path_for_pid(getpid())) {
@@ -246,8 +289,8 @@ void ShmResourceTracker::cleanup_stale_resources() {
         }
 
         // Check for orphaned shm objects from dead processes
-        // Pattern: tt_{h2d|d2h}_{pid}_{counter}
-        pid_t shm_pid = extract_pid_from_shm_name(name);
+        // Pattern: tt_{h2d|d2h}_{pid}_{random}_{counter}
+        pid_t shm_pid = pid_from_shm_name(name);
         if (shm_pid > 0 && shm_pid != my_pid && !is_pid_alive(shm_pid)) {
             stale_shm_names.push_back(name);
         }
