@@ -4,6 +4,7 @@
 """Compare bounded next-action recovery on a recorded repetitive SWE context."""
 
 import argparse
+import copy
 import json
 import time
 from pathlib import Path
@@ -17,12 +18,17 @@ def main():
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--task", default="django")
+    parser.add_argument("--trajectory", type=Path, help="Explicit local trial trajectory instead of an artifact glob")
     parser.add_argument("--message-index", type=int, default=322)
     parser.add_argument("--cases", nargs="+", default=["control", "repetition_feedback", "thinking_enabled"])
     parser.add_argument("--repetition-detection", type=json.loads)
     parser.add_argument("--wall-cap-sec", type=float, default=120)
+    parser.add_argument("--greedy", action="store_true", help="Greedy HF-control comparison, not scored eval policy")
+    parser.add_argument("--max-new-tokens", type=int, default=32768, help="Diagnostic output allowance only")
     args = parser.parse_args()
-    path = next(args.artifact_root.glob(f"**/swe_bench*/{args.task}*/agent/mini-swe-agent.trajectory.json"))
+    path = args.trajectory or next(
+        args.artifact_root.glob(f"**/swe_bench*/{args.task}*/agent/mini-swe-agent.trajectory.json")
+    )
     data = json.loads(path.read_text())
     # Default: the 12028-token Django context from the timing replay.
     messages = [
@@ -41,11 +47,25 @@ def main():
         "role": "user",
         "content": "No tool calls found in the response. Every response MUST include at least one tool call.",
     }
+    execution_policy = copy.deepcopy(messages)
+    policy = (
+        "\nExecution guidance: the task's testbed Python environment and dependencies are already installed "
+        "and activated. Use the existing project and its tests. Keep bash commands focused on executable "
+        "inspection, editing, or testing; do not put extended reasoning or repeated commentary in shell "
+        "comments. Use observations already in the history instead of repeatedly reading unchanged files. "
+        "After a failed attempt, change the hypothesis or command based on the actual error."
+    )
+    if execution_policy and execution_policy[0]["role"] == "system":
+        execution_policy[0]["content"] += policy
+    else:
+        execution_policy.insert(0, {"role": "system", "content": policy.strip()})
     rows = []
     for name, context, thinking in [
         ("control", messages, False),
         ("repetition_feedback", messages + [intervention], False),
         ("thinking_enabled", messages, True),
+        ("thinking_control", messages, True),
+        ("execution_policy", execution_policy, True),
         ("generation_recovery", messages + [generation_recovery], False),
         ("format_error_recovery", messages + [format_error], False),
     ]:
@@ -74,10 +94,10 @@ def main():
             {
                 "model": "google/gemma-4-26B-A4B-it",
                 "prompt": tokens,
-                "max_tokens": 32768,
-                "temperature": 1.0,
-                "top_p": 0.95,
-                "top_k": 20,
+                "max_tokens": args.max_new_tokens,
+                "temperature": 0.0 if args.greedy else 1.0,
+                "top_p": 1.0 if args.greedy else 0.95,
+                "top_k": 1 if args.greedy else 20,
                 "seed": 9472,
                 "stream": True,
                 "stream_options": {"include_usage": True},
@@ -101,6 +121,13 @@ def main():
                     break
         row = {
             "case": name,
+            "sampling": {
+                "temperature": 0.0 if args.greedy else 1.0,
+                "top_p": 1.0 if args.greedy else 0.95,
+                "top_k": 1 if args.greedy else 20,
+                "max_tokens": args.max_new_tokens,
+                "seed": 9472,
+            },
             "prompt_tokens": len(tokens),
             "elapsed_s": time.monotonic() - start,
             "ttft_s": None if first is None else first - start,

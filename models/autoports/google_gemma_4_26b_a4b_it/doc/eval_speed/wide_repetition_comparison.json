@@ -1,0 +1,57 @@
+{
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": 9472,
+    "max_tokens": 32768
+  },
+  "candidate_is_exact_prefix": true,
+  "prompt_sha256": "1585459ea18f529e1f6d3babdfaf74c642665284481434a2c17e05dcab6ee13e",
+  "rows": [
+    {
+      "case": "thinking_control",
+      "prompt_tokens": 14467,
+      "elapsed_s": 180.01170927193016,
+      "ttft_s": 8.621942824684083,
+      "decode_s": 171.38968691509217,
+      "usage": null,
+      "finish_reason": null,
+      "diagnostic_wall_cap_reached": true,
+      "prompt_format": "pinned HF chat template with mini-swe bash schema",
+      "quality_scope": "next-action diagnostic only; no tools executed; no solve/reward claim",
+      "repetition_detection": {
+        "min_pattern_size": 16,
+        "max_pattern_size": 128,
+        "min_count": 8
+      },
+      "output_chars": 29296,
+      "output_sha256": "ca4d70bc8ab5082e0367fac92ebb7e7075e368630a6faab05cef3972a8627419",
+      "artifact": "django_guard128_replay.json"
+    },
+    {
+      "case": "thinking_control",
+      "prompt_tokens": 14467,
+      "elapsed_s": 91.65056063886732,
+      "ttft_s": 8.626467538997531,
+      "decode_s": 83.02403403725475,
+      "usage": {
+        "prompt_tokens": 14467,
+        "total_tokens": 18622,
+        "completion_tokens": 4155
+      },
+      "finish_reason": "repetition",
+      "diagnostic_wall_cap_reached": false,
+      "prompt_format": "pinned HF chat template with mini-swe bash schema",
+      "quality_scope": "next-action diagnostic only; no tools executed; no solve/reward claim",
+      "repetition_detection": {
+        "min_pattern_size": 16,
+        "max_pattern_size": 1024,
+        "min_count": 8
+      },
+      "output_chars": 13972,
+      "output_sha256": "38033dd369acac416dfd7117457d352ba1b7bbc3db79fc425fec71f33d75306d",
+      "artifact": "django_guard1024_replay.json"
+    }
+  ]
+}

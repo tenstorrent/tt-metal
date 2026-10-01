@@ -420,3 +420,83 @@ token's logits is also incorrect. No such unvalidated padding was enabled.
 Similarly, vLLM exposes a thinking-token budget, but the installed TT plugin has
 no matching thinking-budget state integration; its existence in the HTTP schema
 alone is not evidence that the device-sampling path enforces it.
+
+## Measured diagnostic-startup improvement and remaining failures
+
+Thinking-only CI36870715050 completes with reward0 at900.10 seconds. It has
+20 valid tool responses,3341 saved output tokens and2.16 seconds of saved tool
+execution. Its final529.70 seconds have no completed action while server
+generation continues. Thinking alone is therefore rejected as a sufficient fix.
+Artifact11170236882 is retained under
+`/home/mvasiljevic/gemma4-eval-speed-evidence/thinking_probe_36870715050`.
+
+The **diagnostic-startup change is measured in actual CI**. Using the same
+existing image, healthy-to-background-warmup-complete changes from498.978 seconds
+(13:12:10.701–13:20:29.679) to104.470 seconds
+(14:22:58.443–14:24:42.913): **394.508 seconds saved,79.1% less warmup time**.
+The candidate's single4K request itself takes100.091 seconds. Both logs report
+590.5 seconds of model startup, which this change does not improve. The scoped
+warmup makes diagnostic iterations faster; it does not demonstrate faster task
+completion and changes which shapes have been precompiled before the trial.
+
+The independent local Django thinking-plus-guard trial reaches its1200-second
+cap with reward0. It has22 HTTP responses:14 valid tool calls,7 native repetition
+stops, and one32768-token length stop. Saved tool execution totals0.62 seconds.
+The escaped response takes670.393 seconds; payload-free statistics identify
+115164 characters,1722 long lines but only95 unique long lines, with91.6% of
+characters in repeated lines. The128-token/eight-repeat detector does not cover
+every repetitive pattern. Seven other guarded responses total273.73 seconds;
+they recover control but do not yield a correct patch. This configuration is
+not a validated solution to the task timeouts.
+
+A focused next test widens only the native detector's maximum pattern size
+from128 to1024, retaining eight repeats and the32768-token output allowance.
+A CPU-only audit flags the same17 baseline fields at the same first-stop
+positions, adding no observed false positives in that finite saved-response
+sample. Matched bounded replays use the escaped Django context, which tokenizes
+to exactly14467 tokens, matching its actual HTTP usage. No claim about the
+wider guard is made before that experiment and outcome validation.
+
+The matched wider-window replay subsequently stops at4155 tokens in91.651
+seconds, while the128-window control is still generating at its180.012-second
+diagnostic cap. Their TTFTs are8.622 and8.626 seconds, and the candidate text is
+an exact prefix of the control text. This is at least88.36 seconds of avoided
+pathological generation by the observation horizon, not a task solve-time
+speedup. Evidence: `wide_repetition_comparison.json`; full texts remain in the
+untracked readiness artifact directory. The unchanged sampling policy is
+temperature1/top-p0.95/top-k20/seed9472/max32768.
+
+Wider-guard CI
+[36880038816](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36880038816),
+job110429390062, uses TTI `0a2b40446aa7f784b1e0225fbef13459e80fb5d9` and the same
+existing eb1 image. It obtains a second runner,120-qb2-p03t02; this is parallel
+debugging on separate C1 servers, not same-server concurrency or a final
+matched-host release comparison. The128-window trial remains on qb2-120-p01t03.
+
+A bounded HF greedy next-action reference is also attempted in a CPU-only,
+network-disabled container using the existing local image,12GiB memory limit,
+four CPUs and a1200-second external timeout. It uses the exact pinned model and
+prompt token hash1585459ea18f529e1f6d3babdfaf74c642665284481434a2c17e05dcab6ee13e.
+The HF prompt must normalize tool argument strings to JSON objects and message
+contents to OpenAI text parts, matching the server's native template path;
+plain string rendering differs by one token. The hash check gates model loading.
+This is a greedy128-token qualitative control, explicitly not the scored
+sampling policy or a CPU-versus-TT performance comparison. Initial host import
+and template-shape errors were corrected before any model execution; no failed
+reference is treated as evidence against model quality.
+
+A generic execution-policy warning was tested on the same Django history:
+use the already-activated testbed, keep bash commands executable and concise,
+and avoid repeated commentary/unchanged inspections. With the wider guard, it
+still produces no completed action and stops for repetition at1406 tokens.
+This is rejected as a quality recovery, not promoted because its useless
+response happens to finish sooner. The warning is not enabled in CI.
+
+A focused stale-mode check serves the same14467-token greedy prompt, then a
+different14549-token sampled prompt, then the original greedy prompt again.
+The two128-token greedy completions match exactly (SHA256
+708f9608460d66ac4aeff5e4c1ccbd4ef473da9b3fd43548fef469daa4ce3b7c).
+This does not reproduce a stale sampling-mode/request-state failure in that
+bounded case. It does not prove full long-generation correctness or identify
+the cause of the observed repetitive output. The CPU reference co-runs during
+the second request, so their latency difference is not a performance claim.
