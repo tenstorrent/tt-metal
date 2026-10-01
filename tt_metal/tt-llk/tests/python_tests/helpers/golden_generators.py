@@ -8,6 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import ClassVar, Optional
 
+import mpmath
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -2692,6 +2693,20 @@ class UnarySFPUGolden:
         else:  # self.data_format == DataFormat.Float16:
             return math.nan
 
+    def _round_to_dest(self, value) -> float:
+        """Round the mpmath *value* to nearest even, once, onto the Dest format's grid.
+
+        The grid includes the format's subnormals, so the golden's later FTZ sees the value
+        a single rounding produces; a float64 or float32 intermediate would round twice.
+        """
+        info = torch.finfo(format_dict[self.dst_format])
+        significand_bits = 1 - int(math.log2(info.eps))
+        _, exponent = mpmath.frexp(value)
+        exponent = max(exponent, int(math.log2(info.smallest_normal)) + 1)
+        quantum = mpmath.ldexp(1, exponent - significand_bits)
+        rounded = float(mpmath.nint(value / quantum) * quantum)
+        return math.copysign(rounded, value) if rounded == 0.0 else rounded
+
     def _torch_unary(self, x, torch_fn) -> float:
         """Apply torch_fn to scalar x in fp32, then enforce the
         format-aware NaN rule: convert +/-inf to NaN when the dest is
@@ -3046,12 +3061,16 @@ class UnarySFPUGolden:
         return x
 
     def _gelu(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
-        return torch.nn.functional.gelu(input_tensor).item()
+        # 0.5 * x * erfc(-x / sqrt(2)): torch's 1 + erf(x / sqrt(2)) cancels to 0 well
+        # before the result underflows (gelu(-13.125) = -1.55e-38 is a normal bf16). Taken
+        # at 256 bits and rounded once onto Dest's grid: near x = +/-2**-125 the result sits
+        # within a float64 ulp of a bf16 rounding tie.
+        if not math.isfinite(x) or x == 0.0:
+            # torch: NaN at both infinities, and the sign of a zero kept.
+            return torch.nn.functional.gelu(torch.tensor(x)).item()
+        with mpmath.workprec(256):
+            x = mpmath.mpf(x)
+            return self._round_to_dest(x / 2 * mpmath.erfc(-x / mpmath.sqrt(2)))
 
     def _gelu_tanh(self, x):
         # Matches calculate_gelu_tanh: the tanh approximation of GELU,
