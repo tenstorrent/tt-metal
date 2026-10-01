@@ -8,7 +8,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
+#include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_stl/overloaded.hpp"
 #include <tt_stl/reflection.hpp>
 
@@ -228,8 +230,11 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
             !(cb_desc.buffer && cb_desc.tensor),
             "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
         if (cb_desc.tensor) {
-            Buffer* buf = cb_desc.tensor->mesh_buffer().get_reference_buffer();
-            UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *buf, cb_desc.address_offset);
+            // Keep the MeshTensor so a per-core tensor is checked across devices, not only on the reference one.
+            auto circular_buffer = program.impl().get_circular_buffer(program_cbs[ci]->id());
+            TT_FATAL(
+                !circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
+            circular_buffer->set_global_buffer(*cb_desc.tensor, circular_buffer->size(), cb_desc.address_offset);
         } else if (cb_desc.buffer) {
             UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *cb_desc.buffer, cb_desc.address_offset);
         }

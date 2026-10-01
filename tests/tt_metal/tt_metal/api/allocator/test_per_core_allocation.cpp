@@ -26,6 +26,7 @@
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
@@ -288,6 +289,108 @@ TEST_F(PerCoreAllocationTest, CircularBufferAcrossMatchingPerCoreAddresses) {
 
     CircularBufferImpl cb(per_core_cb_descriptor(*buffer, CoreRangeSet(CoreRange(first, second)), 0));
     EXPECT_EQ(cb.address(), per_core::get_per_core_address(*buffer, first));
+}
+
+// A CB backed by a MeshTensor is programmed from the reference device's buffer on every device, so a per-core
+// tensor that sits at different addresses on different devices must be rejected on every path that takes a
+// tensor: creating the CB and re-pointing it (as a cached program is).
+class PerCoreAllocationTwoDeviceTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", "1", /*overwrite=*/1);
+        if (getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+            GTEST_SKIP() << "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set";
+        }
+        if (GetNumAvailableDevices() < 2) {
+            GTEST_SKIP() << "Needs at least two devices";
+        }
+        mesh_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape(1, 2)));
+    }
+
+    void TearDown() override {
+        if (mesh_) {
+            mesh_->close();
+            mesh_.reset();
+        }
+        unsetenv("TT_METAL_ALLOCATOR_MODE_HYBRID");
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_;
+};
+
+namespace {
+
+TensorSpec per_core_tensor_spec(const CoreRangeSet& cores, uint32_t shard_bytes) {
+    MemoryConfig memory_config{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{cores, {1, shard_bytes}, ShardOrientation::ROW_MAJOR}};
+    per_core::set_per_core_allocation(memory_config, true);
+    return TensorSpec(
+        Shape{static_cast<uint32_t>(cores.num_cores()), shard_bytes},
+        TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), memory_config));
+}
+
+}  // namespace
+
+TEST_F(PerCoreAllocationTwoDeviceTest, CircularBufferRejectsPerCoreTensorAtDifferentAddressesAcrossDevices) {
+    const CoreCoord core(0, 0);
+    const CoreRangeSet cores(CoreRange(core, core));
+    const distributed::MeshCoordinate first_device(0, 0), second_device(0, 1);
+    auto address_on = [&](const MeshTensor& tensor, const distributed::MeshCoordinate& device) {
+        return per_core::get_per_core_address(tensor.mesh_buffer(), device, core);
+    };
+
+    // Allocated on both devices from the same state, so both devices agree.
+    auto uniform = MeshTensor::allocate_on_device(*mesh_, per_core_tensor_spec(cores, 2 * PAGE_SIZE));
+    ASSERT_EQ(address_on(uniform, first_device), address_on(uniform, second_device));
+
+    // Reserve L1 on the second device only; the next per-core tensor lands lower there.
+    MemoryConfig skew_config{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{cores, {1, 4 * PAGE_SIZE}, ShardOrientation::ROW_MAJOR}};
+    per_core::set_per_core_allocation(skew_config, true);
+    const auto skew_spec =
+        TensorSpec(Shape{1, 4 * PAGE_SIZE}, TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), skew_config));
+    auto skew = per_core::create_on_single_device(
+        distributed::ReplicatedBufferConfig{.size = skew_spec.compute_packed_buffer_size_bytes()},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = skew_spec.compute_page_size_bytes(),
+            .buffer_type = BufferType::L1,
+            .sharding_args = skew_spec.compute_buffer_sharding_args()},
+        mesh_.get(),
+        second_device);
+    auto skewed = MeshTensor::allocate_on_device(*mesh_, per_core_tensor_spec(cores, 2 * PAGE_SIZE));
+    ASSERT_NE(address_on(skewed, first_device), address_on(skewed, second_device));
+
+    // A CB on the uniform tensor is accepted.
+    Program program = CreateProgram();
+    CircularBufferConfig config(PAGE_SIZE, {{0, tt::DataFormat::Float16_b}});
+    config.set_page_size(0, PAGE_SIZE);
+    config.set_globally_allocated_address(uniform);
+    const CBHandle handle = CreateCircularBuffer(program, core, config);
+    const uint32_t uniform_address = program.impl().get_circular_buffer(handle)->address();
+    EXPECT_EQ(uniform_address, address_on(uniform, first_device));
+
+    // Re-pointing it at the skewed tensor is rejected, and leaves the CB where it was.
+    EXPECT_ANY_THROW(UpdateDynamicCircularBufferAddress(program, handle, skewed));
+    EXPECT_ANY_THROW(UpdateDynamicCircularBufferAddressAndTotalSize(program, handle, skewed, PAGE_SIZE));
+    EXPECT_EQ(program.impl().get_circular_buffer(handle)->address(), uniform_address);
+
+    // So is creating a CB on it, from a config or from a descriptor.
+    CircularBufferConfig skewed_config(PAGE_SIZE, {{0, tt::DataFormat::Float16_b}});
+    skewed_config.set_page_size(0, PAGE_SIZE);
+    skewed_config.set_globally_allocated_address(skewed);
+    Program other = CreateProgram();
+    EXPECT_ANY_THROW(CreateCircularBuffer(other, core, skewed_config));
+    CBDescriptor descriptor;
+    descriptor.total_size = PAGE_SIZE;
+    descriptor.core_ranges = cores;
+    descriptor.format_descriptors.push_back(
+        CBFormatDescriptor{.buffer_index = 0, .data_format = tt::DataFormat::Float16_b, .page_size = PAGE_SIZE});
+    descriptor.tensor = &skewed;
+    EXPECT_ANY_THROW(CircularBufferImpl{descriptor});
 }
 
 // ================== Per-core socket data-buffer allocation (Phase B) ==================

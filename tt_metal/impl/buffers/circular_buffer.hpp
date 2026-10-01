@@ -30,6 +30,7 @@ public:
     void set_total_size(uint32_t total_size);
     void set_page_size(uint8_t buffer_index, uint32_t page_size);
     void set_global_buffer(const Buffer& buffer, uint32_t total_size, uint32_t address_offset);
+    void set_global_buffer(const MeshTensor& tensor, uint32_t total_size, uint32_t address_offset);
 
     const std::unordered_set<uint8_t>& buffer_indices() const { return config_.buffer_indices(); }
     const std::unordered_set<uint8_t>& local_buffer_indices() const { return config_.local_buffer_indices(); }
