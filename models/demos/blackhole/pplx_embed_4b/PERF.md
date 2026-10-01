@@ -1,7 +1,8 @@
 # pplx-embed-v1-4B and Qwen3-Embedding-4B on Blackhole P150: performance, baseline to now
 
 All numbers are **sustained latency at ISL 512**: the median of iterations 15–29 of a 30-iteration run,
-after the board's power manager has settled the clock (≈1.1–1.3 GHz under load), on one P150 of a Galaxy
+after the board's power manager has settled the clock (≈1.15–1.35 GHz under load at the 160 W firmware power cap
+the model applies when the device opens; the board default is 130 W), on one P150 of a Galaxy
 (12×10 = 120 worker cores; a p150a card exposes 13×10). Timed path is the extended trace: forward + pooling
 + I/O in one replay. Branch `arg/embed-4b-pplx-qwen3`.
 
@@ -9,16 +10,16 @@ after the board's power manager has settled the clock (≈1.1–1.3 GHz under lo
 
 | batch | baseline | pplx-embed-4B now | Qwen3-Embedding-4B now | speedup | H200 | × H200 (pplx) | tok/s (pplx) |
 |---|---|---|---|---|---|---|---|
-| 1 | 45.773 ± 0.160 ms | **16.5 ms** | 17.4 ms | 2.77× | 5.44 ms | 3.03× | 31.0k |
-| 8 | 190.065 ± 4.527 | **96.9** | 96.8 | 1.96× | 33.08 | 2.93× | 42.3k |
-| 16 | 375.817 ± 5.810 | **180.7** | 191.1 | 2.08× | 67.23 | 2.69× | 45.3k |
-| 32 | 726.944 ± 2.552 | **397.7** | 397.7 | 1.83× | 139.15 | 2.86× | 41.2k |
+| 1 | 45.773 ± 0.160 ms | **15.7 ms** | 16.8 ms | 2.92× | 5.44 ms | 2.89× | 32.6k |
+| 8 | 190.065 ± 4.527 | **86.2** | 88.5 | 2.20× | 33.08 | 2.61× | 47.5k |
+| 16 | 375.817 ± 5.810 | **162.9** | 168.8 | 2.31× | 67.23 | 2.42× | 50.3k |
+| 32 | 726.944 ± 2.552 | **325.9** | 325.7 | 2.23× | 139.15 | 2.34× | 50.3k |
 
 - **Baseline** is the reference measurement of pplx-embed-4B on Blackhole P150 as provided by the customer
   (mean ± spread, ms). The two models share one code path; Qwen3-Embedding-4B differs only by causal attention
   and last-token pooling, which the stack switches on from `HF_MODEL`.
 - **Accuracy** was re-checked after every landing: STS-B Spearman 0.8161 (pplx, bucketed bs1 path),
-  0.812–0.816 through the batched paths; Qwen3-Embedding-4B 0.807–0.819 (last token + EOS). Every landed
+  0.812–0.817 through the batched paths; Qwen3-Embedding-4B 0.807–0.819 (last token + EOS). Every landed
   change is bit-identical to the stock op or within noise of the stock op's accuracy.
 
 ## What changed, in order
@@ -43,8 +44,11 @@ was adopted later). The last column is e2e latency after the step: bs1 / bs8 / b
 | 13 | bs1: SDPA packs each GQA group's 4 query heads as one head (`pack_gqa_heads`, q192 on 11×8); the fused heads kernel batches every norm/RoPE phase across a unit's heads and keeps its constants resident in L1; both norms keep their block-shard output for the QKV/FF1/FF3 matmuls | K/V stream once per KV head instead of once per query head; 45 phase set-ups per unit → 9; the 72 sharded-to-interleaved ops are gone | **15.9** / 115.3 / 221.0 / 425.5 |
 | 14 | bs8–32: SDPA keeps K/V in a core's buffers across its Q chunks of the same (batch, KV head) (`reuse_kv`, q128); the fused add+RMSNorm's short-lived operands (WO/FF2 outputs, both norm outputs, the post-attention sum at bs8/16) live in L1 | each core reads a KV head's K/V once instead of once per Q chunk (142 MB → 36 MB per call at bs16) and finer chunks fill the grid; the DRAM-bound norm halves its traffic (435 → 255 µs per call at bs32) | 15.9 / **110.5** / **212.9** / **416.2** |
 | 15 | bs8–32: the fused SwiGLU is applied on `minimal_matmul`'s pack thread in each block's last K block (K_block 40), and bs32 runs the fused kernel too; QKV output kept in L1 at bs8/16; at bs32 QKV + heads run in two half-batch chunks with L1 outputs; norm output preallocated at the top of L1 | the SwiGLU SFPU pass overlaps the math thread's next subblock instead of a serialized epilogue (fused FF13 at bs16 2688 → 1691 µs, and bs32's FF1 + FF3 + product 4684 → 3248 µs); the heads op reads its input from L1 (bs16 322 → 210 µs) | 15.9 / **87.7** / **172.8** / **360.4** |
+| 16 | bs8–32: SDPA sums the softmax rows on the math thread instead of the pack thread; the fused-SwiGLU sigmoid is sized for the bfp8 output; `minimal_matmul` output writers never defer to K block 0; the heads op writes K/V to L1 at bs8/16 (pplx-embed; the causal Qwen3 SDPA keeps K/V in DRAM) and bs32 runs QKV in four quarter-batch chunks | the pack thread was SDPA's slower thread (per call bs8/16/32 179/286/600 → 169/266/566 µs); 71% less SFPU work in the SwiGLU epilogue; fused FF13 at bs16/32 1686/3236 → 1650/3139 µs; SDPA reads K/V from L1 (−13–15% per call) | 16.5 / **90.8** / 180.7 / **379.6** |
+| 17 | firmware power cap raised from the board's 130 W to 160 W for this model (`QWEN_TDP_LIMIT_WATTS`, applied by `apply_workload_env` when the device opens; 0 restores the board default) | from bs 8 up the fused kernels are power-limited at 130 W (settled clock ≈1.0–1.1 GHz); at 160 W the clock settles at ≈1.15–1.35 GHz and the chip-to-chip spread narrows | **15.7** / **86.2** / **162.9** / **325.9** |
 
-Sustained after step 15: **16.5 / 96.9 / 180.7 / 397.7 ms**. Configuration lives in
+Sustained after step 17: **15.7 / 86.2 / 162.9 / 325.9 ms**. At the board's 130 W cap, step 16's bs16
+gain is eaten by the lower settled clock (cold best 172.8 → 166.9 ms, sustained unchanged). Configuration lives in
 `demo/_common.py::apply_workload_env` (per-batch defaults, every knob overridable from the shell), the kernels in
 `tt/custom_ops/`, the shared-code changes in `models/tt_transformers/tt/`, the SDPA op and the 2D matmul factory.
 
@@ -56,15 +60,14 @@ throughput gated by the slowest chip (pplx-embed-4B, ISL 512, 32/32 chips active
 
 | per-chip batch | global batch | per-chip median | slowest chip | vs one chip sustained | embeddings/s | tokens/s | scaling vs 32 × one chip |
 |---|---|---|---|---|---|---|---|
-| 1 | 32 | 17.1 ms | 17.5 ms | +4% | 1,833 | 0.94 M | 95% |
-| 4 | 128 | 63.9 | 66.9 | +1% | 1,913 | 0.98 M | 95% |
-| 8 | 256 | 99.2 | 108.0 | +2% | 2,371 | 1.21 M | 90% |
-| 16 | 512 | 189.9 | 209.4 | +5% | 2,445 | 1.25 M | 86% |
-| 32 | 1,024 | 389.0 | 414.4 | −2% | 2,471 | 1.27 M | 96% |
+| 1 | 32 | 15.6 ms | 15.8 ms | −1% | 2,029 | 1.04 M | 99% |
+| 8 | 256 | 87.2 | 90.5 | +1% | 2,829 | 1.45 M | 95% |
+| 16 | 512 | 166.6 | 181.0 | +2% | 2,829 | 1.45 M | 90% |
+| 32 | 1,024 | 326.6 | 343.5 | +0% | 2,981 | 1.53 M | 95% |
 
 The per-chip median stays within a few percent of the single-chip sustained numbers, so the chips do not interfere;
-the 4–14% lost against ideal scaling is chip-to-chip spread (fastest to slowest chip: 16.0–17.7 ms at bs1, 349–416 ms at bs32),
-which gates the synchronous aggregate.
+the 1–10% lost against ideal scaling is chip-to-chip spread (fastest to slowest chip: 15.4–16.1 ms at bs1, 308–344 ms at bs32),
+which gates the synchronous aggregate. At the board's 130 W cap the spread was 4–14%; most of it was power throttling.
 
 ## Where the time goes now
 
@@ -74,9 +77,9 @@ bs 8 to 32 because there the product runs inside the fused SwiGLU matmul.
 | Batch | Matmul | SDPA | Fused heads | Norm + residual | SwiGLU product | Matmul + SDPA | Kernel sum |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 | 66.6% | 6.8% | 6.6% | 7.3% | 12.4% | 73.4% | 15.1 ms |
-| 8 | 77.5% | 9.5% | 5.3% | 7.6% | 0.0% | 87.0% | 77.8 ms |
-| 16 | 80.2% | 7.9% | 5.1% | 6.6% | 0.0% | 88.2% | 147.7 ms |
-| 32 | 81.2% | 7.2% | 5.3% | 6.1% | 0.0% | 88.4% | 287.7 ms |
+| 8 | 78.7% | 7.9% | 5.4% | 7.8% | 0.0% | 86.6% | 76.3 ms |
+| 16 | 81.0% | 6.7% | 5.3% | 6.8% | 0.0% | 87.7% | 142.2 ms |
+| 32 | 80.9% | 6.5% | 6.0% | 6.4% | 0.0% | 87.4% | 278.0 ms |
 
 ## Reproduce
 
@@ -86,6 +89,7 @@ PY=./python_env/bin/python; M=models/demos/blackhole/pplx_embed_4b
 TT_VISIBLE_DEVICES=4 $PY $M/demo/demo_bs1_isl512.py                     # 10 iterations, extended trace
 bash $M/perf_tools/sustained_run.sh 32 6 30 pplx32                      # 30 iterations + tt-smi: cold best and sustained median
 bash $M/perf_tools/sustained_run.sh 32 6 30 q3e32 "HF_MODEL=Qwen/Qwen3-Embedding-4B"
+bash $M/perf_tools/sustained_run.sh 32 6 30 pplx32_130w "QWEN_TDP_LIMIT_WATTS=130"  # at the board's 130 W power cap
 TT_VISIBLE_DEVICES=9 $PY $M/demo/eval_accuracy_tt.py                    # STS-B, pplx
 TT_VISIBLE_DEVICES=9 HF_MODEL=Qwen/Qwen3-Embedding-4B $PY $M/demo/eval_accuracy_batched.py --batch 8 --pool last --eos
 ```

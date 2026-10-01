@@ -128,14 +128,14 @@ the batched-shape ops get no device data.
 ## Performance (P150, sustained)
 
 Sustained latency at ISL 512 (median of iterations 15–29 of a 30-iteration run; the board settles its clock at
-≈1.1–1.3 GHz under load), one Galaxy P150 (12x10 = 120 worker cores):
+≈1.15–1.35 GHz under load at the 160 W firmware power cap the stack applies, board default 130 W), one Galaxy P150 (12x10 = 120 worker cores):
 
 | batch | Qwen3-Embedding-4B | pplx-embed-4B (same stack) | H200 reference | × H200 |
 |---|---|---|---|---|
-| 1 | **17.4 ms** | 16.5 ms | 5.44 ms | 3.2× |
-| 8 | **96.8** | 96.9 | 33.08 | 2.9× |
-| 16 | **191.1** | 180.7 | 67.23 | 2.8× |
-| 32 | **397.7** | 397.7 | 139.15 | 2.9× |
+| 1 | **16.8 ms** | 15.7 ms | 5.44 ms | 3.1× |
+| 8 | **88.5** | 86.2 | 33.08 | 2.7× |
+| 16 | **168.8** | 162.9 | 67.23 | 2.5× |
+| 32 | **325.7** | 325.9 | 139.15 | 2.3× |
 
 The previous demo in this directory measured 32.3 ms at bs=1 and 725 ms at bs=32. STS-B Spearman through the
 batched paths (last token + EOS): 0.819 / 0.810 / 0.808 / 0.807 at bs 1 / 8 / 16 / 32

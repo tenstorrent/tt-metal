@@ -82,20 +82,18 @@ activations in **L1** when the per-user sequence is ≤ 512
 
 | Workload        | Activation | Placement | Matmul kernel / grid | Sustained latency (median of it 15–29 of 30) |
 |-----------------|-----------:|-----------|----------------------|----------------------------------------------|
-| bs=1  ISL=512   |  2.5 MB    | **L1** (single-user) | legacy 2D multicast, 12×8 (96 cores) | **16.5 ms · 31.0k tok/s** |
-| bs=4  ISL=512   | 10.5 MB    | DRAM ᵃ    | `minimal_matmul`, 12×10 (120 cores) | **63.5 ms · 32.3k tok/s** |
-| bs=8  ISL=512   | 20 MB      | DRAM      | `minimal_matmul`, 12×10 | **96.9 ms · 42.3k tok/s** |
-| bs=16 ISL=512   | 40 MB      | DRAM      | `minimal_matmul`, 12×10 | **180.7 ms · 45.3k tok/s** |
-| **bs=32 ISL=512** | **80 MB** | DRAM    | `minimal_matmul`, 12×10 | **397.7 ms · 41.2k tok/s** |
+| bs=1  ISL=512   |  2.5 MB    | **L1** (single-user) | legacy 2D multicast, 12×8 (96 cores) | **15.7 ms · 32.6k tok/s** |
+| bs=8  ISL=512   | 20 MB      | DRAM      | `minimal_matmul`, 12×10 (120 cores) | **86.2 ms · 47.5k tok/s** |
+| bs=16 ISL=512   | 40 MB      | DRAM      | `minimal_matmul`, 12×10 | **162.9 ms · 50.3k tok/s** |
+| **bs=32 ISL=512** | **80 MB** | DRAM    | `minimal_matmul`, 12×10 | **325.9 ms · 50.3k tok/s** |
 | bs=1  ISL=1024 / 2048 | 5 / 10 MB | DRAM | `minimal_matmul`, 12×10 | not re-measured |
 
-ᵃ bs=4 runs on the DRAM path: the batched-L1 placement clashes with the fused ops'
-circular buffers, and DRAM is faster with them anyway (59 ms best of 10 vs the 75 ms the L1 path read before).
 Measured on a Galaxy P150 exposing **12×10 = 120 worker cores** (a p150a card exposes 13×10);
-"sustained" is after the board's power manager has settled the clock at ≈1.1–1.3 GHz under continuous
-load, which is the like-for-like comparison against a steady-state H200 (bs=1 5.44 ms, bs=8 33.08,
-bs=16 67.23, bs=32 139.15): **3.03× / 2.93× / 2.69× / 2.86×**. Qwen3-Embedding-4B through the same
-stack (`HF_MODEL=Qwen/Qwen3-Embedding-4B`): 17.4 / 96.8 / 191.1 / 397.7 ms. Baseline (customer reference
+"sustained" is after the board's power manager has settled the clock under continuous load (≈1.15–1.35 GHz at the
+160 W firmware power cap the model applies when the device opens; the board default is 130 W and
+`QWEN_TDP_LIMIT_WATTS` overrides it, 0 restoring the board default), which is the like-for-like comparison against a steady-state H200 (bs=1 5.44 ms, bs=8 33.08,
+bs=16 67.23, bs=32 139.15): **2.89× / 2.61× / 2.42× / 2.34×**. Qwen3-Embedding-4B through the same
+stack (`HF_MODEL=Qwen/Qwen3-Embedding-4B`): 16.8 / 88.5 / 168.8 / 325.7 ms. Baseline (customer reference
 measurement on Blackhole P150): 45.773 / 190.065 / 375.817 / 726.944 ms — the full path is in [PERF.md](PERF.md).
 
 ### Optimization history
