@@ -228,3 +228,31 @@ def test_report_path_follows_root_report_path_with_a_fixed_report_name(tmp_path)
         after = pathlib.Path(ttnn.CONFIG.report_path)
         assert not after.is_relative_to(tmp_path), f"report_path still under the test's root after restore: {after}"
         assert after.parent == before.parent
+
+
+# Two-part regression for the autouse fixture in tests/ttnn/conftest.py (pre_and_post): its teardown must restore the
+# config IN PLACE. Part one only needs to run (and tear down) before part two; pytest runs a module in definition order.
+_CONFIG_BINDING_PROBE: dict = {}
+
+
+def test_config_binding_probe_runs_first():
+    """Part one: record that a test (and therefore one fixture teardown) precedes part two."""
+    assert ttnn.CONFIG is ttnn._ttnn.CONFIG
+    _CONFIG_BINDING_PROBE["ran"] = True
+
+
+def test_config_binding_survives_fixture_teardown():
+    """Part two. `ttnn.CONFIG` must still be the C++ `ttnn::CONFIG` global after another test's teardown, and a value
+    set through it must be visible to C++ (read back through `ttnn._ttnn.CONFIG`, which is never rebound, and through
+    the repr that C++ formats). Negative control: with the conftest's former `ttnn.CONFIG = original_config` teardown,
+    `ttnn.CONFIG` is a detached Python copy from the second test of a session on, so the identity assertion fails and
+    C++ keeps reading the untouched global."""
+    if not _CONFIG_BINDING_PROBE.get("ran"):
+        pytest.skip("needs test_config_binding_probe_runs_first (and its teardown) to have run first in this module")
+    assert ttnn.CONFIG is ttnn._ttnn.CONFIG, "ttnn.CONFIG was rebound to a copy; C++ no longer sees Python-side changes"
+    previous = ttnn.CONFIG.comparison_mode_pcc
+    probe_value = 0.4375 if previous != 0.4375 else 0.5625
+    with ttnn.manage_config("comparison_mode_pcc", probe_value):
+        assert ttnn._ttnn.CONFIG.comparison_mode_pcc == probe_value
+        assert f"comparison_mode_pcc={probe_value}" in repr(ttnn._ttnn.CONFIG)
+    assert ttnn._ttnn.CONFIG.comparison_mode_pcc == previous
