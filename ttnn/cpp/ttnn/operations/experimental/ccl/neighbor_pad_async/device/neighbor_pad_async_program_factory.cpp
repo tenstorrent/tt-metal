@@ -20,6 +20,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
+#include <cstdlib>
+#include <map>
+#include <string>
 #include <optional>
 #include <ranges>
 #include <sstream>
@@ -615,11 +618,37 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
 
         if (!local_copy_cores.empty()) {
             has_local_copy = true;
-            // CB on all local-copy cores
-            CreateCircularBuffer(program, local_copy_cores, cb_sender_config);
+            // TT_NEIGHBOR_PAD_LOCAL_BATCH=<n> (default off): the local copy moves up to n sticks per CB
+            // transfer with one NOC barrier per batch instead of one per stick. The batch is the largest
+            // divisor of the row length that is <= n and fits kMaxLocalBatchBytes, so batches never wrap
+            // the CB. Same bytes land at the same addresses; only the barrier count changes.
+            uint32_t local_batch = 1;
+            if (const char* env = std::getenv("TT_NEIGHBOR_PAD_LOCAL_BATCH")) {
+                constexpr uint32_t kMaxLocalBatchBytes = 32 * 1024;
+                const uint32_t cap = std::min<uint32_t>(
+                    static_cast<uint32_t>(std::strtoul(env, nullptr, 10)), kMaxLocalBatchBytes / page_size);
+                for (uint32_t b = std::min(cap, num_sticks_per_halo_dim); b > 1; --b) {
+                    if (num_sticks_per_halo_dim % b == 0) {
+                        local_batch = b;
+                        break;
+                    }
+                }
+            }
+            std::map<std::string, std::string> local_defines;
+            if (local_batch > 1) {
+                local_defines["NP_LOCAL_BATCH"] = std::to_string(local_batch);
+                CircularBufferConfig cb_local_config =
+                    CircularBufferConfig(2 * local_batch * page_size, {{sender_cb_index, df}})
+                        .set_page_size(sender_cb_index, page_size);
+                CreateCircularBuffer(program, local_copy_cores, cb_local_config);
+            } else {
+                // CB on all local-copy cores
+                CreateCircularBuffer(program, local_copy_cores, cb_sender_config);
+            }
 
             // Create consolidated local copy reader kernel (uniform compile args)
             auto local_reader_cfg = ReaderDataMovementConfig{};
+            local_reader_cfg.defines = local_defines;
             local_reader_cfg.compile_args = {sender_cb_index, page_size};
             TensorAccessorArgs(*input_buffer).append_to(local_reader_cfg.compile_args);
             local_reader_kernel_id = CreateKernel(
@@ -639,6 +668,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
 
             // Create consolidated local copy writer kernel (uniform compile args)
             auto local_writer_cfg = WriterDataMovementConfig{};
+            local_writer_cfg.defines = local_defines;
             local_writer_cfg.compile_args = {sender_cb_index, page_size};
             TensorAccessorArgs(*output_buffer).append_to(local_writer_cfg.compile_args);
             local_writer_kernel_id = CreateKernel(

@@ -7,6 +7,7 @@ arm is set by LTX_VAE_FOLD_TIME_PAD (conv3d replicate T pad) and LTX_VAE_FOLD_W_
 logical_w). Each run saves its yuv output to $AB_OUT_DIR/yuv_t<0|1>w<0|1>.pt and prints AB timing lines;
 all arms' outputs must be identical.
 AB_VAE_LTX_OVERLAY: optional path to a vae_ltx.py loaded in place of the tree's copy.
+AB_ARM: optional output name, for arms that differ by other env flags.
 """
 
 import importlib.util
@@ -65,7 +66,7 @@ def test_vae_ltx_fold_time_pad_ab(mesh_device, device_params):
 
     fold = os.environ.get("LTX_VAE_FOLD_TIME_PAD", "1")
     wmask = os.environ.get("LTX_VAE_FOLD_W_MASK", "1")
-    arm = f"t{fold}w{wmask}"
+    arm = os.environ.get("AB_ARM", f"t{fold}w{wmask}")
     torch.manual_seed(42)
     tdec = _TorchLTXVideoDecoder(
         decoder_blocks=_LTX_PROD_DECODER_BLOCKS,

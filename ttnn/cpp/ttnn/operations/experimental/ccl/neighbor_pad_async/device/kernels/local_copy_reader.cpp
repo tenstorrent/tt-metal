@@ -14,6 +14,10 @@ using address_t = uint32_t;
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
 constexpr uint32_t stick_size = get_compile_time_arg_val(1);
 
+#ifndef NP_LOCAL_BATCH
+#define NP_LOCAL_BATCH 1
+#endif
+
 void kernel_main() {
     // Common runtime args (multicast once per kernel, not unicast per core)
     const address_t input_tensor_address = get_common_arg_val<address_t>(0);
@@ -42,6 +46,20 @@ void kernel_main() {
         const uint32_t outer_dim_offset = outer_idx * (num_sticks_per_halo_dim * input_halo_dim_size);
 
         uint32_t src_stick_id = t * num_sticks_per_halo_dim + stick_start_id + outer_dim_offset;
+#if NP_LOCAL_BATCH > 1
+        // Host picks NP_LOCAL_BATCH as a divisor of num_sticks_to_read and sizes the CB to 2 batches,
+        // so every batch is contiguous in the CB. One barrier per batch instead of per stick.
+        for (uint32_t iter = 0; iter < num_sticks_to_read; iter += NP_LOCAL_BATCH) {
+            cb_output.reserve_back(NP_LOCAL_BATCH);
+            for (uint32_t j = 0; j < NP_LOCAL_BATCH; ++j) {
+                noc_obj.async_read(
+                    src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {.offset_bytes = j * stick_size});
+                src_stick_id++;
+            }
+            noc_obj.async_read_barrier();
+            cb_output.push_back(NP_LOCAL_BATCH);
+        }
+#else
         for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
             cb_output.reserve_back(1);
             noc_obj.async_read(src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {});
@@ -49,5 +67,6 @@ void kernel_main() {
             noc_obj.async_read_barrier();
             cb_output.push_back(1);
         }
+#endif
     }
 }

@@ -14,6 +14,9 @@ using address_t = uint32_t;
 
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
 constexpr uint32_t stick_size = get_compile_time_arg_val(1);
+#ifndef NP_LOCAL_BATCH
+#define NP_LOCAL_BATCH 1
+#endif
 // TensorAccessorArgs at index 2 (variable length)
 constexpr auto dst_args = TensorAccessorArgs<2>();
 
@@ -63,7 +66,9 @@ void kernel_main() {
     for (uint32_t s = 0; s < zero_fill_count; ++s) {
         uint64_t dst_noc_addr = dst_accessor.get_noc_addr(zero_fill_start + s);
         zeroWrite<stick_size>(dst_noc_addr);
+#if NP_LOCAL_BATCH == 1
         noc_obj.async_write_barrier();
+#endif
     }
 
     // Phase B: copy input sticks (from CB) to output at T-offset t_front_pad_stick_offset.
@@ -76,6 +81,28 @@ void kernel_main() {
 
         uint32_t dst_stick_id =
             (t + padding_left) * num_sticks_per_halo_dim + stick_start_id + outer_dim_offset + t_front_pad_stick_offset;
+#if NP_LOCAL_BATCH > 1
+        // Batch of NP_LOCAL_BATCH sticks per CB transfer (see reader). The CB slots only need the
+        // writes to have left L1 before they are reused; the final barrier below waits for completion.
+        for (uint32_t iter = 0; iter < num_sticks_to_read; iter += NP_LOCAL_BATCH) {
+            cb_output.wait_front(NP_LOCAL_BATCH);
+            for (uint32_t j = 0; j < NP_LOCAL_BATCH; ++j) {
+                if (masked || iter + j >= num_valid_sticks) {
+                    zeroWrite<stick_size>(dst_accessor.get_noc_addr(dst_stick_id));
+                } else {
+                    noc_obj.async_write(
+                        cb_output,
+                        dst_accessor,
+                        stick_size,
+                        {.offset_bytes = j * stick_size},
+                        {.page_id = dst_stick_id});
+                }
+                dst_stick_id++;
+            }
+            noc_obj.async_writes_flushed();
+            cb_output.pop_front(NP_LOCAL_BATCH);
+        }
+#else
         for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
             cb_output.wait_front(1);
             if (masked || iter >= num_valid_sticks) {
@@ -89,6 +116,7 @@ void kernel_main() {
             noc_obj.async_write_barrier();
             cb_output.pop_front(1);
         }
+#endif
     }
     noc_obj.async_write_barrier();
 }
