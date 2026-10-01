@@ -77,9 +77,10 @@ class CaptureTraceContract(unittest.TestCase):
                 pair, calls = _shell(path)
                 pair.capture_trace()
                 pair.capture_trace()
-                self.assertEqual(calls, [True])
-                pair.encode(["a new prompt"])
+                # Capture, then one replay to build the input-copy programs.
                 self.assertEqual(calls, [True, True])
+                pair.encode(["a new prompt"])
+                self.assertEqual(calls, [True, True, True])
 
     def test_no_capture_while_gate_closed(self):
         for path in (GEMMA4, GEMMA3):

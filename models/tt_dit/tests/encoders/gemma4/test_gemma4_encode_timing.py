@@ -198,3 +198,42 @@ def test_gemma4_encode_timing(*, mesh_device):
         f"GEMMA4_PCC bucket256 vs 1024 real-token hidden: min={min(pccs):.6f} "
         f"final={pccs[-1]:.6f} per-layer={[round(p, 5) for p in pccs]}"
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{**ring_params_8k, "trace_region_size": 200_000_000, "l1_small_size": 32768}],
+    indirect=["device_params"],
+)
+def test_gemma4_first_request_after_capture(*, mesh_device):
+    """The pipeline's order: gen #0 encodes eager, ``capture_trace`` runs after its export, then each
+    new prompt goes through ``encode``. Times those requests and checks them against eager."""
+    for path in (TEXT_ENCODER, TRANSFORMER):
+        if not Path(path).exists():
+            pytest.skip(f"missing {path}")
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+
+    pair = Gemma4TokenizerEncoderPair(
+        TEXT_ENCODER,
+        mesh_device=mesh_device,
+        ccl_manager=CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Linear),
+        parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1)),
+        transformer_checkpoint=TRANSFORMER,
+    )
+    pair.ensure_loaded()
+    pair.defer_trace_capture()
+    eager = {p: pair.encode([p])[0] for p in PROMPTS}
+
+    pair.open_trace_gate()
+    t0 = time.perf_counter()
+    pair.capture_trace()
+    _emit("capture_trace", time.perf_counter() - t0)
+
+    for i, p in enumerate(PROMPTS):
+        t0 = time.perf_counter()
+        video, audio = pair.encode([p])[0]
+        _emit(f"request[{i}].encode", time.perf_counter() - t0)
+        pv, pa = _pcc(eager[p][0], video), _pcc(eager[p][1], audio)
+        logger.info(f"GEMMA4_PCC request[{i}] vs eager: video={pv:.6f} audio={pa:.6f}")
+        assert pv > 0.999 and pa > 0.999, f"traced embeddings drift from eager: {pv}, {pa}"
