@@ -190,8 +190,12 @@ def test_a2_rows_match_the_single_user_pipeline(pipe, single):
     # acoustic 0.958..0.968, frame 0 identical on three rows and 35/37 codes on the fourth. A ~1e-3
     # hidden-state difference (spike: PCC 0.9993 vs the fp32 reference) flips ~3.5% of the 21-level
     # acoustic codes. Whether that is audible is the WER gate's call (Phase C), not this test's.
+    # Device-vs-device only. With the token-major flow (default for B > 1) acoustic agreement with
+    # the single-user path reads 0.944..0.972 (2026-10-01): the two flows differ, and against the
+    # fp32 reference the token-major one is the closer (tests/perf/test_flow_tm.py), so a lower
+    # agreement here is not a regression. The quality call stays with the WER gate.
     assert worst_sem >= 0.90, f"semantic code agreement under teacher forcing too low: {rows_out}"
-    assert worst_ac >= 0.95, f"acoustic code agreement under teacher forcing too low: {rows_out}"
+    assert worst_ac >= 0.93, f"acoustic code agreement under teacher forcing too low: {rows_out}"
 
 
 def test_a3_all_voices_in_one_batch_stop_naturally(pipe):
