@@ -115,6 +115,12 @@ struct ComputeConfig {
     // intrinsics (auto-vectorization stays disabled); guard kernel-side vector code with
     // the compiler-provided __riscv_vector macro or the pack-thread defines.
     bool enable_trisc2_rvv = false;
+    // Opt-out: compile this kernel's TRISC binaries with -mno-tt-tensix-optimize-replay, so the SFPI
+    // compiler never records its own sequences into the replay buffer. Set it for kernels that record a
+    // replay sequence in one function and replay it from another: the compiler's replay optimization
+    // assumes the buffer is free at each function entry and can overwrite such recordings
+    // (tenstorrent/tt-metal#58433).
+    bool disable_sfpu_replay_optimization = false;
     std::vector<uint32_t> compile_args;
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation

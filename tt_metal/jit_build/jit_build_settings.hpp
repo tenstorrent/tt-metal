@@ -140,6 +140,9 @@ public:
     // TRISC2 (pack) compile (ComputeConfig::enable_trisc2_rvv). Default off: the build recipe
     // is byte-identical to a build without this knob.
     virtual bool get_trisc2_rvv_enabled() const { return false; }
+    // Returns true when this kernel opted out of the SFPI compiler's replay optimization for its TRISC
+    // compiles (ComputeConfig::disable_sfpu_replay_optimization). Default off: the build recipe is unchanged.
+    virtual bool get_sfpu_replay_optimization_disabled() const { return false; }
 
     // Called to process the user defines
     virtual void process_defines(std::function<void(const std::string& define, const std::string& value)>) const = 0;
