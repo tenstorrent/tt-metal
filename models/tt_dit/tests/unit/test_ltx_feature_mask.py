@@ -53,7 +53,7 @@ class Projection:
 
 
 def extractor(ops, enabled, video, audio, tp):
-    path = Path(__file__).resolve().parents[2] / "encoders" / "gemma" / "feature_extractor.py"
+    path = Path(__file__).resolve().parents[2] / "encoders" / "gemma3" / "feature_extractor.py"
     tree = ast.parse(path.read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "GemmaFeatureExtractor")
     methods = [
