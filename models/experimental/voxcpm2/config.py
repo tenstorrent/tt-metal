@@ -18,9 +18,9 @@ def validate_minicpm_config(config):
     for key in required:
         if key not in config:
             raise ValueError(f"Missing MiniCPM config: {key}")
-        if not isinstance(config[key], (int, float)) or isinstance(config[key], bool) or config[key] <= 0:
+        if not isinstance(config[key], (int, float)) or isinstance(config[key], bool) or not math.isfinite(config[key]) or config[key] <= 0:
             raise ValueError(f"MiniCPM {key} must be positive")
-    for key in required[:-2]:
+    for key in (*required[:-2], "max_position_embeddings"):
         if not isinstance(config[key], int):
             raise ValueError(f"MiniCPM {key} must be an integer")
     heads, kv_heads = config["num_attention_heads"], config["num_key_value_heads"]
@@ -52,6 +52,6 @@ def load_config(checkpoint):
     config = json.loads((path / "config.json").read_text())
     validate_minicpm_config(config["lm_config"])
     for key in ("patch_size", "feat_dim", "residual_lm_num_layers"):
-        if not isinstance(config.get(key), int) or config[key] <= 0:
+        if not isinstance(config.get(key), int) or not math.isfinite(config[key]) or config[key] <= 0:
             raise ValueError(f"Missing or invalid VoxCPM2 {key}")
     return config
