@@ -145,7 +145,8 @@ template <
     int ITERATIONS = 8,
     bool IS_BASE_TWO = false>
 inline void calculate_log(uint log_base_scale_factor) {
-    if constexpr (!is_fp32_dest_acc_en && !FAST_APPROX && IS_BASE_TWO == true && HAS_BASE_SCALING == true) {
+    if constexpr (
+        !is_fp32_dest_acc_en && !FAST_APPROX && IS_BASE_TWO == true && HAS_BASE_SCALING == true && ITERATIONS == 32) {
         if (log_base_scale_factor == 0x3fb8aa3bu) {
             init_log2_bf16();
             calculate_log2_bf16<ITERATIONS>();

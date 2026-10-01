@@ -9,8 +9,6 @@
 namespace ckernel::sfpu::bf16 {
 constexpr uint32_t kLog2Hold = ADDR_MOD_7;
 constexpr uint32_t kLog2Advance = ADDR_MOD_6;
-constexpr bool kLog2RawPartition = false;
-constexpr uint32_t kLog2TerminalSlots = 6u;
 
 template <typename Config>
 inline void init_log2() {
