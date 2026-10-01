@@ -1461,9 +1461,12 @@ def _request_batch() -> int:
     # "ask the pipeline" sentinel -- so reading the environment first resolved an eight-user run to 1
     # and priced every ceiling for a single user against an eight-user measurement.
     try:
-        from cc_optimize.perf_mcp import read_stage_batch
+        from cc_optimize.perf_mcp import read_stage_batch, _model_key
 
-        _b = int(read_stage_batch() or 0)
+        # NAME THE MODEL. emit-e2e persists the batch under the model's OWN stage file; a no-name
+        # read is refused by design (is_identified), which is what made a run that RECORDED 32
+        # print "batch: not reported". The ambient model key is the name every other reader passes.
+        _b = int(read_stage_batch(model=_model_key()) or 0)
         if _b > 0:
             return _b
     except Exception:  # noqa: BLE001 -- not recorded: fall through to what the operator asked for
