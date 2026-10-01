@@ -33,10 +33,14 @@ BYTES = {"BFLOAT16": 2, "BFLOAT8_B": 1088 / 1024, "BFLOAT4_B": 576 / 1024, "FLOA
 # key: (bs, label, first input's memory) -> floors.
 #   SDPA: sdpa_kernel_variants.py + bench_sdpa_floors.py --parse (NEGATIVE_RESULTS §65, e7f541d kernels)
 #   heads op: bench_heads_placement_ablate.py 8 8 / 16 16 / 8 32 (bs32: the quarter-batch chunk), add+RMSNorm:
-#   bench_add_norm_ablate.py (a in DRAM; AN_A_L1=1: in L1), both under the device profiler, device_kernel_us.py,
+#   bench_add_norm_ablate.py (a in DRAM; AN_A_L1=1: in L1), all under the device profiler, device_kernel_us.py,
 #   2026-10-01. bs16's a-in-L1 add+RMSNorm does not fit standalone and takes the a-in-DRAM floors (at bs8 the two
 #   placements' floors differ by 0-3 µs)
 MEASURED_FLOORS = {
+    # bs1 (2026-10-01): bench_silu_mul_floors.py (mode 3 at [512, 9728] in L1); bench_heads_placement_ablate.py 1 1 with
+    # HB1=1 (resident constants, Q / K / V in L1); the heads op runs 2.5 us faster in-model than standalone
+    (1, "silu·mul", "L1 I"): (28.4, 12.8, 30.1),
+    (1, "heads + QK-norm + RoPE", "L1 I"): (21.8, 15.1, 29.7),
     (8, "", "DRAM I"): (152.8, 102.0, None),
     (16, "", "DRAM I"): (248.5, 183.5, None),
     (32, "", "DRAM I"): (480.9, 355.7, None),
