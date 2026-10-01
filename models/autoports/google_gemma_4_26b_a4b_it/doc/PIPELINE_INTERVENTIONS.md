@@ -310,6 +310,13 @@ artifacts and exact next-step limits are in`eval_speed/README.md`. The full
 five-task release suite has not been rerun. Resume requires a new user request.
 
 - Analyze why standard and agentic evals take so long.
+- The user revoked the stop and resumed this investigation at~18:20 UTC.
+  The four-chip health smoke passed without reset. A configurable-weight BFP8
+  control (fixed prefill unchanged) turns one exact seeded91.65-second repetitive
+  response into a31.70-second response with a valid parsed tool call. This is
+  bounded next-action evidence only, not solved-task progress. A seeded900-second
+  Django outcome trial is running from18:32:53; policy remains unselected and
+  full readiness accuracy remains required. See`eval_speed/weight_control.json`.
 - Measure their TTFT and TSU.
 - Separate model/device performance from eval-framework overhead.
 - Check whether the same evals can run with more parallelism and finish sooner.

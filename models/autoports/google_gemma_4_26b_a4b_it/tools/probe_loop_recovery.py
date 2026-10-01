@@ -6,10 +6,37 @@
 import argparse
 import copy
 import json
+import signal
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from replay_eval_requests import TOOLS, post
+
+
+class DiagnosticDeadline(TimeoutError):
+    pass
+
+
+@contextmanager
+def wall_deadline(seconds, state):
+    """Bound blocking first-token/stream reads in this Linux main-thread tool."""
+    if seconds <= 0 or signal.getitimer(signal.ITIMER_REAL)[0]:
+        raise ValueError("A positive deadline and no existing interval timer are required")
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def expired(signum, frame):
+        raise DiagnosticDeadline("Diagnostic request wall deadline reached")
+
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    except DiagnosticDeadline:
+        state["expired"] = True
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def main():
@@ -88,7 +115,8 @@ def main():
         text, usage, finish = "", None, None
         first, last = None, None
         capped = False
-        with post(
+        deadline = {"expired": False}
+        with wall_deadline(args.wall_cap_sec, deadline), post(
             args.base_url,
             "/v1/completions",
             {
@@ -135,7 +163,7 @@ def main():
             "output": text,
             "usage": usage,
             "finish_reason": finish,
-            "diagnostic_wall_cap_reached": capped,
+            "diagnostic_wall_cap_reached": capped or deadline["expired"],
             "prompt_format": "pinned HF chat template with mini-swe bash schema",
             "quality_scope": "next-action diagnostic only; no tools executed; no solve/reward claim",
             "repetition_detection": args.repetition_detection,

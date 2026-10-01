@@ -8,10 +8,12 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from probe_context_dedup import compact
+from probe_loop_recovery import wall_deadline
 
 
 def turn(call_id, command, output):
@@ -89,6 +91,19 @@ class WeightControlTests(unittest.TestCase):
             node[parts[-1]] = change["before"]
         candidate["config_id"] = baseline["config_id"]
         self.assertEqual(candidate, baseline)
+
+
+class DiagnosticDeadlineTests(unittest.TestCase):
+    def test_interrupts_blocked_read_and_restores_timer(self):
+        state = {"expired": False}
+        with wall_deadline(0.02, state):
+            time.sleep(0.2)
+            self.fail("Deadline did not interrupt blocking work")
+        self.assertTrue(state["expired"])
+        next_state = {"expired": False}
+        with wall_deadline(0.1, next_state):
+            pass
+        self.assertFalse(next_state["expired"])
 
 
 if __name__ == "__main__":
