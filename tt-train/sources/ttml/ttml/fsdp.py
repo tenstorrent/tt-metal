@@ -713,12 +713,7 @@ def fully_shard(
     """
     if _is_fsdp_wrapped_module(module):
         raise RuntimeError(f"Module {module.get_name()!r} already wrapped with fully_shard.")
-    if isinstance(replicate, str):
-        raise TypeError(f"fully_shard: replicate must be a list of regex patterns, not a string: {replicate!r}")
-    try:
-        replicate_res = [re.compile(p) for p in replicate]
-    except re.error as e:
-        raise ValueError(f"fully_shard: invalid replicate pattern {e.pattern!r}: {e}") from e
+    replicate_res = _compile_replicate_patterns(replicate)
 
     mesh = ttml.mesh()
     if not mesh.has_axis(mesh_axis):
@@ -843,19 +838,49 @@ def _mark_fsdp_managed(parameter: Parameter, shard_dim: int, axis_index: int) ->
     parameter.add_post_materialize_callback(_mirror_to_tensor)
 
 
+def _compile_replicate_patterns(patterns: Sequence[str], what: str = "replicate") -> List[re.Pattern]:
+    """Compile ``replicate`` patterns, raising if they aren't a list of usable regex strings.
+
+    A pattern that matches the empty string (e.g. ``""`` or ``"q_norm|"``) matches every name, which
+    would keep the whole model replicated, so it is rejected. ``what`` names the setting in errors.
+    """
+    if isinstance(patterns, (str, bytes)) or not isinstance(patterns, Sequence):
+        raise TypeError(f"{what} must be a list of regex patterns, got {patterns!r}")
+    compiled = []
+    for p in patterns:
+        if not isinstance(p, str):
+            raise TypeError(f"{what} patterns must be strings, got {p!r}")
+        try:
+            pattern = re.compile(p)
+        except re.error as e:
+            raise ValueError(f"{what}: invalid pattern {p!r}: {e}") from e
+        if pattern.search(""):
+            raise ValueError(f"{what}: pattern {p!r} matches the empty string, so it would match every parameter")
+        compiled.append(pattern)
+    return compiled
+
+
 def _matching_replicate_patterns(name: str, patterns: Sequence[re.Pattern]) -> List[str]:
     """Return the patterns found in ``name`` by ``re.search``."""
     return [p.pattern for p in patterns if p.search(name)]
 
 
 def replicated_parameters(module: AbstractModuleBase) -> dict[str, List[str]]:
-    """Return ``{name: matching patterns}`` for every parameter kept replicated under ``module``."""
+    """Return ``{name: matching patterns}`` for every parameter ``replicate=`` kept replicated under ``module``."""
     out: dict[str, List[str]] = {}
     for prefix, mod in module.named_modules():
         if _is_fsdp_wrapped_module(mod):
             for name, patterns in mod._fsdp_state.replicated.items():
                 out[f"{prefix}.{name}" if prefix else name] = list(patterns)
     return out
+
+
+def unmatched_replicate_patterns(module: AbstractModuleBase, patterns: Sequence[str]) -> List[str]:
+    """Return the ``patterns`` that kept no parameter under ``module`` replicated."""
+    if not any(_is_fsdp_wrapped_module(mod) for _, mod in module.named_modules()):
+        return []
+    matched = {p for ps in replicated_parameters(module).values() for p in ps}
+    return [p for p in patterns if p not in matched]
 
 
 def is_fsdp_managed(param_tensor: Any) -> bool:
@@ -877,5 +902,6 @@ __all__ = [
     "FSDPState",
     "is_fsdp_managed",
     "replicated_parameters",
+    "unmatched_replicate_patterns",
     "fsdp_axis_of",
 ]

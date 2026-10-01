@@ -269,15 +269,19 @@ host-roundtrip:
 
 ### Gradient sync
 
-`ttml.sync_gradients(model.parameters(), axis_names=("dp",))` continues to
-work exactly like in DDP. For pure-FSDP runs (no `"dp"` axis on the mesh)
-it is a no-op for sharded parameters, whose gradients were already
-reduce-scattered in `backward_post`. Replicated parameters (from `replicate=`,
-or ones that couldn't be sharded) still need an all-reduce over `"fsdp"`, so
-the trainers pass `axis_names=("dp", "fsdp")`. For a hybrid mesh (`"fsdp"` and `"dp"`), each parameter
-is filtered per-axis: FSDP-sharded params skip the `"fsdp"` axis (already
-reduce-scattered) but still all-reduce on the `"dp"` axis (replicated
-across DP groups). The same call covers both cases, no rewrites needed.
+Call `ttml.sync_gradients(model.parameters(), axis_names=("dp", "fsdp"))`,
+as `SFTTrainer` and `GRPOTrainer` do. Axes missing from the mesh are
+skipped, so the same call works for DDP, FSDP and HSDP. Each parameter is
+filtered per axis:
+
+- FSDP-sharded parameters skip `"fsdp"`, since `backward_post` already
+  reduce-scattered their gradients. Under HSDP they still all-reduce over
+  `"dp"`.
+- Replicated parameters (from `replicate=`, or ones that couldn't be
+  sharded) all-reduce over both axes.
+
+`axis_names=("dp",)` alone, as in plain DDP, is not enough under FSDP: it
+never averages replicated gradients over `"fsdp"`.
 
 ## Gradient accumulation
 

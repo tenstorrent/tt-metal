@@ -90,8 +90,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         replicated = ttml.fsdp.replicated_parameters(tt_model)
         if replicated:
             logging.info("FSDP: %d parameter(s) kept replicated", len(replicated))
-        matched = {p for ps in replicated.values() for p in ps}
-        unmatched = [p for p in replicate if p not in matched]
+        unmatched = ttml.fsdp.unmatched_replicate_patterns(tt_model, replicate)
         if unmatched:
             logging.warning("fsdp_replicate_params: no parameter matches %s", unmatched)
 

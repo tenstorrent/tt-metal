@@ -35,7 +35,7 @@ marker and on actual data-level checks via host-side numpy gathers.
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pytest
@@ -406,6 +406,12 @@ class TestFullyShardLinear:
         assert not ttml.fsdp.is_fsdp_managed(linear.bias.tensor)
         assert ttml.fsdp.is_fsdp_managed(linear.weight.tensor)
         assert ttml.fsdp.replicated_parameters(linear) == {"bias": ["bias"]}
+        assert ttml.fsdp.unmatched_replicate_patterns(linear, ["bias", "no_such_param"]) == ["no_such_param"]
+
+    def test_unmatched_patterns_empty_without_fully_shard(self):
+        """If nothing was wrapped, no pattern was applied, so none is reported."""
+        linear = LinearLayer(64, 48, has_bias=True)
+        assert ttml.fsdp.unmatched_replicate_patterns(linear, ["no_such_param"]) == []
 
     def test_replicate_rejects_a_bare_string(self, expect_error):
         linear = LinearLayer(64, 48, has_bias=True)
@@ -414,8 +420,9 @@ class TestFullyShardLinear:
 
     def test_replicate_rejects_an_invalid_regex(self, expect_error):
         linear = LinearLayer(64, 48, has_bias=True)
-        with expect_error(ValueError, "invalid replicate pattern"):
+        with expect_error(ValueError, "invalid pattern"):
             ttml.fsdp.fully_shard(linear, replicate=["bias("])
+        assert not hasattr(linear, "_fsdp_state"), "a rejected pattern must not leave the module half-wrapped"
 
     def test_invalid_axis_raises(self, expect_error):
         """Sharding on an axis the mesh doesn't have raises before any state change."""
@@ -551,6 +558,7 @@ class TestFSDPEquivalence:
         loss_fsdp.backward(False)
 
         fsdp_grads: Dict[str, np.ndarray] = {}
+        unmanaged: List[str] = []
         for name, t in fsdp_model.named_parameters():
             if not t.is_grad_initialized():
                 continue
@@ -559,8 +567,13 @@ class TestFSDPEquivalence:
                 fsdp_grads[name] = _read_fsdp_sharded_to_numpy(grad_t, self.mesh, int(t._fsdp_shard_dim))
             else:
                 # Replicated: every rank got the same input, so the grads already match.
+                unmanaged.append(name)
                 fsdp_grads[name] = _read_replicated_to_numpy(grad_t, self.mesh)
         ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        # Exactly the params named by ``replicate`` stayed replicated; everything else was sharded.
+        assert ttml.fsdp.replicated_parameters(fsdp_model) == {p: [p] for p in replicate}
+        assert len(unmanaged) == len(replicate), f"unexpectedly unsharded: {unmanaged}"
 
         assert set(fsdp_grads.keys()) == set(
             ref_grads.keys()
@@ -571,6 +584,40 @@ class TestFSDPEquivalence:
                 f"FSDP gathered {fsdp_grads[name].shape} vs reference {ref_grads[name].shape}"
             )
             np.testing.assert_array_equal(fsdp_grads[name], ref_grads[name])
+
+    def test_sync_gradients_averages_replicated_grads(self):
+        """With a different batch slice on each rank, ``sync_gradients`` averages a replicated grad."""
+        in_features, hidden, out_features = 64, 128, 64
+        batch_size, seq_len = 2 * self.mesh.axis_size("fsdp"), 32
+        input_np = self._make_input(batch_size, seq_len, in_features, seed=2)
+
+        # ---- Reference: full batch on every device.
+        ref_model = _build_block_with_known_weights(in_features, hidden, out_features, seed=42)
+        ref_model.train()
+        x_ref = ttml.autograd.Tensor.from_numpy(
+            input_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, _replicated_mapper()
+        )
+        ttml.ops.unary.mean(ref_model(x_ref)).backward(False)
+        ref_grad = _read_replicated_to_numpy(ref_model.fc1.weight.tensor.get_grad_tensor(), self.mesh)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        # ---- FSDP with fc1.weight replicated, batch sharded over the fsdp axis.
+        fsdp_model = _build_block_with_known_weights(in_features, hidden, out_features, seed=42)
+        fsdp_model.train()
+        ttml.fsdp.fully_shard(fsdp_model, replicate=["fc1.weight"])
+        x_fsdp = ttml.autograd.Tensor.from_numpy(
+            input_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self.mesh.axis_mapper("fsdp", tdim=0)
+        )
+        ttml.ops.unary.mean(fsdp_model(x_fsdp)).backward(False)
+        weight = fsdp_model.fc1.weight.tensor
+        local_grad = _read_replicated_to_numpy(weight.get_grad_tensor(), self.mesh)  # rank 0's slice only
+        ttml.sync_gradients(fsdp_model.parameters(), axis_names=("fsdp",))
+        synced_grad = _read_replicated_to_numpy(weight.get_grad_tensor(), self.mesh)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        tol = {"rtol": 1e-2, "atol": 1e-2 * float(np.abs(ref_grad).max())}
+        assert not np.allclose(local_grad, ref_grad, **tol), "each rank should start with its own slice's grad"
+        np.testing.assert_allclose(synced_grad, ref_grad, **tol)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import yaml
 from dataclasses import dataclass
 from typing import Union
 from ttml.common.utils import get_tt_metal_runtime_root
+from ttml.fsdp import _compile_replicate_patterns
 
 
 class DeviceConfig:
@@ -40,9 +41,10 @@ class DeviceConfig:
         # Set to false to opt into the eager (full-replicated, then shard) path.
         self.lazy_parameter_init = device_config.get("lazy_parameter_init", True)
         # Regex patterns of parameters FSDP keeps replicated, passed to ``fully_shard(replicate=...)``.
-        replicate = device_config.get("fsdp_replicate_params", None) or []
-        if isinstance(replicate, str) or not all(isinstance(p, str) for p in replicate):
-            raise ValueError(f"device_config.fsdp_replicate_params must be a list of regex patterns, got {replicate!r}")
+        # Validated here so a bad pattern fails at config load, not after the model is built.
+        replicate = device_config.get("fsdp_replicate_params")
+        replicate = [] if replicate is None else replicate
+        _compile_replicate_patterns(replicate, what="device_config.fsdp_replicate_params")
         self.fsdp_replicate_params = list(replicate)
 
     def total_devices(self) -> int:

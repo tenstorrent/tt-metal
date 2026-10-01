@@ -179,8 +179,7 @@ def _report_fsdp_replicated(model: Any, patterns: list[str]) -> None:
     replicated = ttml.fsdp.replicated_parameters(model)
     if replicated:
         print(f"FSDP: {len(replicated)} parameter(s) kept replicated", flush=True)
-    matched = {p for ps in replicated.values() for p in ps}
-    unmatched = [p for p in patterns if p not in matched]
+    unmatched = ttml.fsdp.unmatched_replicate_patterns(model, patterns)
     if unmatched:
         print(f"WARNING: fsdp_replicate_params: no parameter matches {unmatched}", flush=True)
 

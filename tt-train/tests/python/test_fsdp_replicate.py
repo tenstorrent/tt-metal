@@ -41,7 +41,19 @@ def test_device_config_fsdp_replicate_params_parsed():
     assert cfg.fsdp_replicate_params == ["q_norm.weight", "k_norm.weight"]
 
 
-@pytest.mark.parametrize("bad", ["q_norm.weight", ["q_norm.weight", 3]])
-def test_device_config_fsdp_replicate_params_rejects_non_list_of_str(bad, expect_error):
-    with expect_error(ValueError, "fsdp_replicate_params must be a list of regex patterns"):
+@pytest.mark.parametrize(
+    "bad, error, message",
+    [
+        ("q_norm.weight", TypeError, "must be a list of regex patterns"),
+        (3, TypeError, "must be a list of regex patterns"),
+        ({"q_norm.weight": True}, TypeError, "must be a list of regex patterns"),
+        (["q_norm.weight", 3], TypeError, "patterns must be strings"),
+        (["q_norm("], ValueError, "invalid pattern"),
+        # Patterns that match the empty string match every parameter.
+        ([""], ValueError, "matches the empty string"),
+        (["q_norm|"], ValueError, "matches the empty string"),
+    ],
+)
+def test_device_config_fsdp_replicate_params_rejects_bad_patterns(bad, error, message, expect_error):
+    with expect_error(error, message):
         DeviceConfig({"device_config": {"fsdp_replicate_params": bad}})
