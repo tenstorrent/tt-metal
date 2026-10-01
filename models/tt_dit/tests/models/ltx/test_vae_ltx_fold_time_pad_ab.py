@@ -96,7 +96,13 @@ def test_vae_ltx_fold_time_pad_ab(mesh_device, device_params):
         ccl_manager=CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=2),
     )
     dec.load_torch_state_dict(_diffusers_decoder_state_to_tt(state))
-    n_folded = sum(1 for m in dec.modules() if getattr(m, "fold_time_pad", False))
+
+    def walk(m):
+        yield m
+        for _, c in m.named_children():
+            yield from walk(c)
+
+    n_folded = sum(1 for m in walk(dec) if getattr(m, "fold_time_pad", False))
     print(f"AB44 fold={fold} folded_convs={n_folded}")
     assert (n_folded > 0) == (fold == "1")
 
