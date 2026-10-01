@@ -1005,9 +1005,8 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     distributed::ReadShard(cq, out0_data, out0_dram, zero_coord, false);
     distributed::ReadShard(cq, out1_data, out1_dram, zero_coord, false);
     distributed::ReadShard(cq, out2_data, out2_dram, zero_coord, false);
-    // The three reads above are non-blocking, so ReadShard has sized the destination vectors but
-    // not filled them. Wait for the queue before comparing, or the comparison runs against the
-    // zeroes the resize left behind.
+    // The three reads above are non-blocking, so completion is not guaranteed when ReadShard returns.
+    // Wait for the queue before consuming the destination vectors.
     distributed::Finish(cq);
 
     bool pass = true;
