@@ -212,21 +212,34 @@ _TERNARY_EDGE_OPS = [
 ]
 # addcmul is not an edge op: c is a multiplicand, so edge_spec(operand=C) has no pole or
 # knee to return on any pipeline. It stays out of the list rather than being collected
-# and skipped on every cell.
-assert all(
-    edge_spec(
-        MathOperation.SfpuAddcmul,
-        fmt.input_format,
-        fmt.output_format,
-        operand=Operand.C,
-        dest_acc=dest_acc,
+# and skipped on every cell; test_addcmul_has_no_operand_c_edge below pins that.
+_TERNARY_EDGE_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float32], same=True
+)
+
+
+def test_addcmul_has_no_operand_c_edge():
+    """Host-only guard for the omission above: if edge_spec ever returns an operand-C
+    edge for addcmul, this one test fails and says to add it back to _TERNARY_EDGE_OPS,
+    rather than a module-level assert failing the whole file's collection."""
+    grown = [
+        (fmt, dest_acc)
+        for fmt in _TERNARY_EDGE_FORMATS
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        if edge_spec(
+            MathOperation.SfpuAddcmul,
+            fmt.input_format,
+            fmt.output_format,
+            operand=Operand.C,
+            dest_acc=dest_acc,
+        )
+        is not None
+    ]
+    assert not grown, (
+        "addcmul grew an operand-C edge; add it back to _TERNARY_EDGE_OPS: "
+        f"{[(str(f), d.name) for f, d in grown]}"
     )
-    is None
-    for fmt in input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float32], same=True
-    )
-    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-), "addcmul grew an operand-C edge; add it back to _TERNARY_EDGE_OPS"
+
 
 # Ops that divide by c, and therefore need a numerator held away from zero: c = 0 with an
 # unconstrained numerator would mix the pole (every element ±inf) with the 0/0 indeterminate
