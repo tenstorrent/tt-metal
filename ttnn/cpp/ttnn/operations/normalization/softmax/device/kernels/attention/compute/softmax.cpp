@@ -177,14 +177,32 @@ void kernel_main() {
 #endif
     for (std::uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef FUSED_SCALE_MASK
-        // apply fused scale [*= 1/sqrt(...)]
-        ckl::mul<
-            ckl::input(
-                dfb_in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
-            ckl::input(dfb_fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            // reuse exps buffer
-            ckl::output(dfb_scale_mask, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-            ckl::IterationShape::tiles(Wt).block_size(ndst));
+#ifdef MASK_PADDED_DATA
+        const std::uint32_t Wt_unpadded_tiles = Wt - 1;
+#else
+        const std::uint32_t Wt_unpadded_tiles = Wt;
+#endif
+        if (Wt_unpadded_tiles > 0) {
+            ckl::mul<
+                ckl::input(
+                    dfb_in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+                ckl::input(dfb_fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                ckl::output(dfb_scale_mask, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                ckl::IterationShape::tiles(Wt_unpadded_tiles).block_size(ndst));
+        }
+#ifdef MASK_PADDED_DATA
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(dfb_in0),
+                ckl::input(dfb_fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+            ckl::DestReuseBinary<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb_mask_padded, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                ckl::DestReuseType::DEST_TO_SRCA>{},
+            ckl::PackTile<ckl::output(dfb_scale_mask, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{});
+#endif
 #ifndef CAUSAL_MASK
         if (wait_mask) {
             dfb_fused_attn_obj.wait_front(Wt);
