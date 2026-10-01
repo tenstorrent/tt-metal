@@ -25,6 +25,7 @@ Two things about this tower differ from the text encoder in `model_qwen3vl.py`:
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
@@ -271,14 +272,20 @@ def pad_patches_for_sp(
     cu_seqlens: Sequence[int],
     *,
     sp_factor: int,
+    length: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor], tuple[int, ...], int]:
     """Pad a patch batch so its SP shards are tile-aligned, isolating the pad in a phantom window.
 
     The pad is trimmed after the SP gather via `Qwen3VlVisionModel.forward(logical_patches=...)`.
+    `length` is the padded patch count, a multiple of `sp_factor * TILE`; the smallest one that
+    holds the patches when omitted.
     """
     total = patches.shape[0]
     mult = sp_factor * _TILE
-    padded = -(-total // mult) * mult
+    padded = -(-total // mult) * mult if length is None else length
+    if padded % mult or padded < total:
+        msg = f"cannot pad {total} patches to {padded}, which must be a multiple of {mult}"
+        raise ValueError(msg)
     if padded == total:
         return patches, pos_embeds, rope, tuple(cu_seqlens), total
     if cu_seqlens[-1] != total:
@@ -905,7 +912,8 @@ class Qwen3VlVisionModel(Module):
 
     The position table is kept on the host rather than the device: interpolating it is a pure function
     of `grid_thw` and the table, so `prepare_pos_embeds` settles it with host arithmetic and the result
-    is uploaded, as with the rotary tensors.
+    is uploaded, as with the rotary tensors. Being no `Parameter`, it is saved to and loaded from the
+    weight cache next to them by `save` and `load`.
     """
 
     def __init__(
@@ -987,6 +995,17 @@ class Qwen3VlVisionModel(Module):
         weight = state.pop("pos_embed.weight", None)
         if weight is not None:
             self._pos_embed_weight = weight.detach().float()
+
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        if self._pos_embed_weight is None:
+            msg = "pos_embed weight is unavailable; call load_torch_state_dict first"
+            raise ValueError(msg)
+        super().save(directory, prefix=prefix)
+        torch.save(self._pos_embed_weight, Path(directory) / f"{prefix}pos_embed.weight.pt")
+
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        super().load(directory, prefix=prefix)
+        self._pos_embed_weight = torch.load(Path(directory) / f"{prefix}pos_embed.weight.pt")
 
     def prepare_pos_embeds(self, grid_thw: torch.Tensor) -> torch.Tensor:
         """The `(total_patches, hidden_size)` interpolated position embedding, on the host."""

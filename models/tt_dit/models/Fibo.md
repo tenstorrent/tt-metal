@@ -8,6 +8,10 @@ prompt into that JSON with [FIBO-vlm](https://huggingface.co/briaai/FIBO-vlm), a
 derivative. The pipeline therefore runs four models: the VLM, the SmolLM3 text encoder, the
 transformer, and the VAE decoder.
 
+The VLM can also start from an image. Given an image alone, it describes the image as a structured
+prompt. Given an image with a prompt, it treats the prompt as instructions for how to change the
+image.
+
 ## Details
 
 - Transformer: `models/tt_dit/models/transformers/transformer_fibo.py`
@@ -49,4 +53,7 @@ pytest models/tt_dit/tests/models/fibo/test_pipeline_fibo.py::test_fibo_pipeline
 
 # Generate images from natural-language prompts, expanded into JSON by the VLM
 pytest models/tt_dit/tests/models/fibo/test_pipeline_fibo.py::test_fibo_pipeline_vlm
+
+# Generate images from an image, alone or with editing instructions, turned into JSON by the VLM
+pytest models/tt_dit/tests/models/fibo/test_pipeline_fibo.py::test_fibo_pipeline_vlm_image
 ```

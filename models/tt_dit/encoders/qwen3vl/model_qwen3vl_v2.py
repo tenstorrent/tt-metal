@@ -18,6 +18,7 @@ from models.tt_dit.encoders.transformer import (
     TransformerEncoder,
     TransformerEncoderConfig,
 )
+from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache
@@ -118,7 +119,7 @@ class Qwen3VlCheckpoint:
             model,
             get_torch_state_dict=self._load_state_dict,
             model_name=self._name,
-            subfolder=self._subfolder,
+            subfolder=f"{self._subfolder}/text" if self._subfolder else "text",
             parallel_config=parallel_config,
             mesh_shape=tuple(device.shape),
             mesh_device=device,
@@ -132,6 +133,73 @@ class Qwen3VlCheckpoint:
             torch_dtype=torch.bfloat16,
         )
         return Qwen3VlEncoder.convert_state(torch_model.state_dict())
+
+
+class Qwen3VlVisionCheckpoint:
+    """The vision tower of a Qwen3-VL checkpoint: builds a loaded ``Qwen3VlVisionModel``.
+
+    Reads only ``config.json`` in ``__init__``; the actual torch weights are loaded lazily, on
+    ``build()`` cache-miss only.
+    """
+
+    # The tower's LayerNorms are built with this epsilon; the config does not carry it.
+    NORM_EPS = 1e-6
+
+    def __init__(self, name: str, *, subfolder: str = "") -> None:
+        hf_config = transformers.AutoConfig.from_pretrained(name, subfolder=subfolder)
+
+        self._name = name
+        self._subfolder = subfolder
+        self.config = hf_config.vision_config
+
+    def build(
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        parallel_config: EncoderParallelConfig,
+        ccl_manager: CCLManager | None = None,
+    ) -> Qwen3VlVisionModel:
+        """Construct a ``Qwen3VlVisionModel`` for this checkpoint and load its weights.
+
+        The tower is tensor parallel as ``parallel_config`` says, and sequence parallel if it says so.
+        """
+        config = self.config
+        model = Qwen3VlVisionModel(
+            hidden_size=config.hidden_size,
+            num_heads=config.num_heads,
+            depth=config.depth,
+            intermediate_size=config.intermediate_size,
+            in_channels=config.in_channels,
+            patch_size=config.patch_size,
+            temporal_patch_size=config.temporal_patch_size,
+            spatial_merge_size=config.spatial_merge_size,
+            num_position_embeddings=config.num_position_embeddings,
+            out_hidden_size=config.out_hidden_size,
+            hidden_act=config.hidden_act,
+            norm_eps=self.NORM_EPS,
+            deepstack_visual_indexes=config.deepstack_visual_indexes,
+            mesh_device=device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+        )
+        cache.load_model(
+            model,
+            get_torch_state_dict=self._load_state_dict,
+            model_name=self._name,
+            subfolder=f"{self._subfolder}/vision" if self._subfolder else "vision",
+            parallel_config=parallel_config,
+            mesh_shape=tuple(device.shape),
+            mesh_device=device,
+        )
+        return model
+
+    def _load_state_dict(self) -> dict[str, torch.Tensor]:
+        torch_model = transformers.Qwen3VLForConditionalGeneration.from_pretrained(
+            self._name,
+            subfolder=self._subfolder,
+            torch_dtype=torch.bfloat16,
+        )
+        return dict(torch_model.model.visual.state_dict())
 
 
 def mrope_position_ids(

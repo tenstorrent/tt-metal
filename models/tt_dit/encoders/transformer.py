@@ -404,15 +404,8 @@ class TransformerEncoder(Module):
         return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     def _last_token_logits(self, x: ttnn.Tensor, *, index: int) -> ttnn.Tensor:
-        """Applies the lm head to row `index` of the normalized prefill states `[batch, seq, embed]`.
-
-        The head runs over the tile-aligned block of rows holding `index` rather than the whole
-        sequence, and that slice stays on the tile-aligned fast path.
-        """
-        _batch_size, seq_len, _embed_size = x.shape
-        block = index // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-
-        x = x[:, block : min(block + ttnn.TILE_SIZE, seq_len), :]
+        """Applies the lm head to row `index` of the normalized prefill states `[batch, seq, embed]`."""
+        x = tensor.select_row_compile_once(x, index)
         x = self.final_linear.forward(x)
 
         if self._tp_axis is not None:
@@ -420,7 +413,7 @@ class TransformerEncoder(Module):
 
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
-        return x[:, index - block]
+        return x[:, 0]
 
     def _make_device_top_k(self, top_k: int | None) -> _DeviceTopK | None:
         return (

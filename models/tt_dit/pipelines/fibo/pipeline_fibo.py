@@ -389,6 +389,14 @@ class FiboPipeline(PipelineAPIMixin):
             msg = "use_vlm requires the pipeline to be created with a VLM checkpoint"
             raise ValueError(msg)
 
+        if images is not None and not use_vlm:
+            msg = "images require use_vlm"
+            raise ValueError(msg)
+
+        if images is not None and len(images) != prompt_count:
+            msg = f"got {len(images)} images for {prompt_count} prompts"
+            raise ValueError(msg)
+
         vae_traced = vae_traced if vae_traced is not None else traced
         encoder_traced = encoder_traced if encoder_traced is not None else traced
         vlm_traced = vlm_traced if vlm_traced is not None else traced
@@ -408,7 +416,10 @@ class FiboPipeline(PipelineAPIMixin):
             logger.info("generating structured prompts...")
             on_event(SectionStart("vlm"))
             with self._reshape_vlm():
-                prompts = [self._vlm.generate(prompt, seed=seed, traced=vlm_traced) for prompt in prompts]
+                prompts = [
+                    self._vlm.generate(prompt, image=image, seed=seed, traced=vlm_traced)
+                    for prompt, image in zip(prompts, images or [None] * prompt_count, strict=True)
+                ]
             self._synchronize_devices()  # for time profiling
             on_event(SectionEnd("vlm"))
 

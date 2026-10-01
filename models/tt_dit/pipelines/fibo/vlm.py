@@ -12,17 +12,37 @@ from typing import Any
 import torch
 import transformers
 from loguru import logger
+from PIL import Image
 
 import ttnn
-from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import Qwen3VlCheckpoint
+from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import (
+    Qwen3VlCheckpoint,
+    Qwen3VlVisionCheckpoint,
+    mrope_position_ids,
+)
+from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
 from models.tt_dit.encoders.transformer import GenerationOutput
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils import tensor
 
-# Sampling settings and stop sequences of the upstream ``briaai/FIBO-VLM-prompt-to-JSON`` pipeline.
+# Sampling settings, stop sequences and image size bounds of the upstream
+# ``briaai/FIBO-VLM-prompt-to-JSON`` pipeline. The bounds make an image 196 to 784 tokens.
 _TOP_P = 0.9
 _TEMPERATURE = 0.2
 _STOP_SEQUENCES = ("<|im_end|>", "<|end_of_text|>")
+_MIN_PIXELS = 256 * 28 * 28
+_MAX_PIXELS = 1024 * 28 * 28
+
+# The value of ``mm_token_type_ids`` that marks the image rows of a prompt.
+_IMAGE_TOKEN_TYPE = 1
+
+# The sides of the square images `warm_up` compiles the image path with. Every image is padded to
+# the patch limit, so the vision tower compiles the same programs for every image size, except that
+# its attention takes one of two programs: full SDPA for an image at the limit, and windowed SDPA,
+# which keeps image and padding apart, for any smaller one. Each side compiles one of them.
+_WARM_UP_IMAGE_SIDES = (math.isqrt(_MAX_PIXELS), math.isqrt(_MIN_PIXELS))
+
 
 # The fields of the generated JSON that FIBO takes, and the numeric scores it maps to levels.
 _FIELDS = (
@@ -53,12 +73,23 @@ class VlmOutput:
     completion_tokens: int
 
 
-class Vlm:
-    """FIBO-vlm, which writes the structured JSON prompt FIBO takes from a natural-language one.
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class _Inputs:
+    """Holds a tokenized chat message and, with an image, its pixel patches and patch grid."""
 
-    Follows the upstream ``briaai/FIBO-VLM-prompt-to-JSON`` pipeline: the prompt goes in as a
-    ``<generate>`` message, and the sampled JSON is reduced to FIBO's fields with empty values
-    dropped.
+    tokens: torch.Tensor
+    token_types: torch.Tensor
+    pixel_values: torch.Tensor | None
+    image_grid_thw: torch.Tensor | None
+
+
+class Vlm:
+    """Runs FIBO-vlm, which writes FIBO's structured JSON prompt from a prompt, an image, or both.
+
+    Follows the upstream ``briaai/FIBO-VLM-prompt-to-JSON`` pipeline, which picks the task from the
+    inputs: a prompt alone goes in as a ``<generate>`` message, an image alone as ``<inspire>``, and
+    an image with a prompt as ``<refine>``, the prompt being the editing instructions. The sampled
+    JSON is reduced to FIBO's fields with empty values dropped.
     """
 
     def __init__(
@@ -71,15 +102,21 @@ class Vlm:
         prompt_length: int,
         cache_length: int,
     ) -> None:
-        """Loads the tokenizer, the generation config and the encoder.
+        """Loads the processor, the generation config, the encoder and the vision tower.
 
         ``prompt_length`` is what every prompt is padded to for the prefill, so that it runs on one
-        set of compiled kernels. ``cache_length`` sizes the KV cache, bounding prompt and generated
-        tokens together.
+        set of compiled kernels; it includes the tokens of an image. ``cache_length`` sizes the KV
+        cache, bounding prompt and generated tokens together.
         """
+        self._device = device
         self._prompt_length = prompt_length
         self._cache_length = cache_length
-        self._tokenizer = transformers.AutoTokenizer.from_pretrained(checkpoint_name)
+        self._processor = transformers.AutoProcessor.from_pretrained(
+            checkpoint_name, min_pixels=_MIN_PIXELS, max_pixels=_MAX_PIXELS
+        )
+        self._tokenizer = self._processor.tokenizer
+        self._max_patches = _MAX_PIXELS // self._processor.image_processor.patch_size**2
+
         generation_config = transformers.GenerationConfig.from_pretrained(checkpoint_name)
         self._eos_tokens = generation_config.eos_token_id
         self._top_k = generation_config.top_k
@@ -88,72 +125,125 @@ class Vlm:
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
+        self._vision_tower = Qwen3VlVisionCheckpoint(checkpoint_name).build(
+            device=device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+        )
 
-    def generate(self, prompt: str, *, seed: int, traced: bool, max_length: int | None = None) -> str:
-        """Generates FIBO's structured JSON prompt from a natural-language one.
+    def generate(
+        self,
+        prompt: str | None = None,
+        *,
+        image: Image.Image | None = None,
+        seed: int,
+        traced: bool,
+        max_length: int | None = None,
+    ) -> str:
+        """Generates FIBO's structured JSON prompt from a natural-language one, an image, or both.
+
+        With an image, a prompt that is ``None`` or blank asks for the image to be described, and any
+        other is taken as instructions for how to change it.
 
         ``max_length`` bounds prompt and generated tokens together, up to the cache length, which is
         the default. Output that is not the expected JSON, as when it is cut off at ``max_length``,
         is returned as it is.
         """
-        text = self.generate_raw(prompt, seed=seed, traced=traced, max_length=max_length).text
+        text = self.generate_raw(prompt, image=image, seed=seed, traced=traced, max_length=max_length).text
         caption = clean(text)
         return json.dumps(caption, separators=(",", ":")) if caption is not None else text.strip()
 
-    def generate_raw(self, prompt: str, *, seed: int, traced: bool, max_length: int | None = None) -> VlmOutput:
+    def generate_raw(
+        self,
+        prompt: str | None = None,
+        *,
+        image: Image.Image | None = None,
+        seed: int,
+        traced: bool,
+        max_length: int | None = None,
+    ) -> VlmOutput:
         """Generates what the model emits, before it is reduced to the fields FIBO takes.
 
         The token counts are the model's own, which the reduced text no longer accounts for.
         """
         if max_length is None:
             max_length = self._cache_length
-        tokens = self._tokenize(prompt)
+        inputs = self._tokenize(prompt, image)
+        num_prompt_tokens = inputs.tokens.shape[1]
 
         torch.manual_seed(seed)
-        output = self._generate(tokens, max_length=max_length, traced=traced)
-        generated = output.tokens[0, tokens.shape[1] :]
+        output = self._generate(inputs, max_length=max_length, traced=traced)
+        generated = output.tokens[0, num_prompt_tokens:]
         logger.info(f"VLM generated {generated.shape[0]} tokens")
 
         text = self._tokenizer.decode(generated, skip_special_tokens=True)
         for stop in _STOP_SEQUENCES:
             text = text.split(stop, 1)[0]
 
-        return VlmOutput(text=text, prompt_tokens=int(tokens.shape[1]), completion_tokens=int(generated.shape[0]))
+        return VlmOutput(text=text, prompt_tokens=int(num_prompt_tokens), completion_tokens=int(generated.shape[0]))
 
     def warm_up(self, *, traced: bool) -> None:
-        """Compiles the prefill and the decode step, tracing the latter, on two generated tokens."""
-        tokens = self._tokenize("a dog")
-        self._generate(tokens, max_length=tokens.shape[1] + 2, traced=traced)
+        """Compiles the prefill and the decode step, tracing the latter, on two generated tokens.
 
-    def _tokenize(self, prompt: str) -> torch.Tensor:
-        """Tokenizes the chat message around ``prompt``.
+        An untraced call also compiles the image path.
+        """
+        if not traced:
+            for side in _WARM_UP_IMAGE_SIDES:
+                inputs = self._tokenize(None, Image.new("RGB", (side, side)))
+                self._generate(inputs, max_length=inputs.tokens.shape[1] + 2, traced=False)
+
+        inputs = self._tokenize("a dog", None)
+        self._generate(inputs, max_length=inputs.tokens.shape[1] + 2, traced=traced)
+
+    def _tokenize(self, prompt: str | None, image: Image.Image | None) -> _Inputs:
+        """Tokenizes the chat message of the task that ``prompt`` and ``image`` make.
 
         The prompt is truncated to fit ``prompt_length``, as the text encoders truncate theirs.
         """
-        prompt = prompt.strip()
-        tokens = self._chat_tokens(prompt)
+        prompt = prompt.strip() if prompt is not None else ""
+        inputs = self._chat_inputs(prompt, image)
 
-        if tokens.shape[1] > self._prompt_length:
-            # Drop the excess from the prompt's own tokens and re-tokenize the message, since a cut
-            # can re-merge at the boundary; the loop ends because each pass drops at least one.
+        if inputs.tokens.shape[1] > self._prompt_length:
+            # Cut the prompt, not the message, whose closing tokens the model needs to answer, and
+            # rebuild the message around it; repeat, as the seam can tokenize differently.
+
             ids = self._tokenizer(prompt, add_special_tokens=False)["input_ids"]
-            while tokens.shape[1] > self._prompt_length:
-                ids = ids[: len(ids) - max(tokens.shape[1] - self._prompt_length, 1)]
-                tokens = self._chat_tokens(self._tokenizer.decode(ids))
+            while inputs.tokens.shape[1] > self._prompt_length and ids:
+                excess = inputs.tokens.shape[1] - self._prompt_length
+                ids = ids[: max(len(ids) - excess, 0)]
+                inputs = self._chat_inputs(self._tokenizer.decode(ids), image)
+
             logger.warning(f"prompt truncated to {self._prompt_length} tokens")
 
-        return tokens
+        return inputs
 
-    def _chat_tokens(self, prompt: str) -> torch.Tensor:
-        messages = [{"role": "user", "content": f"<generate>\n{prompt}"}]
-        encoded = self._tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, return_tensors="pt", return_dict=True
+    def _chat_inputs(self, prompt: str, image: Image.Image | None) -> _Inputs:
+        """Tokenizes the chat message, expanding the image into its tokens and patches."""
+        if image is None:
+            content = f"<generate>\n{prompt}"
+        elif not prompt:
+            content = [{"type": "image"}, {"type": "text", "text": "<inspire>"}]
+        else:
+            content = [{"type": "image"}, {"type": "text", "text": f"<refine>\nEditing instructions:\n{prompt}"}]
+
+        text = self._tokenizer.apply_chat_template(
+            [{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True
         )
-        return encoded["input_ids"]
+        encoded = self._processor(
+            text=[text],
+            images=[image] if image is not None else None,
+            return_tensors="pt",
+        )
+        return _Inputs(
+            tokens=encoded["input_ids"],
+            token_types=encoded["mm_token_type_ids"],
+            pixel_values=encoded.get("pixel_values"),
+            image_grid_thw=encoded.get("image_grid_thw"),
+        )
 
-    def _generate(self, tokens: torch.Tensor, *, max_length: int, traced: bool) -> GenerationOutput:
+    def _generate(self, inputs: _Inputs, *, max_length: int, traced: bool) -> GenerationOutput:
         return self._encoder.generate(
-            tokens,
+            inputs.tokens,
             mask=None,
             max_length=max_length,
             cache_length=self._cache_length,
@@ -163,6 +253,46 @@ class Vlm:
             top_p=_TOP_P,
             temperature=_TEMPERATURE,
             traced=traced,
+            **self._vision_args(inputs),
+        )
+
+    def _vision_args(self, inputs: _Inputs) -> dict[str, Any]:
+        """Run the vision tower on the image of ``inputs``, if any."""
+        if inputs.pixel_values is None or inputs.image_grid_thw is None:
+            return {}
+
+        vision_embeds, deepstack_embeds = self._encode_image(inputs.pixel_values, inputs.image_grid_thw)
+        return {
+            "positions": mrope_position_ids(
+                inputs.token_types,
+                image_grid_thw=inputs.image_grid_thw,
+                spatial_merge_size=self._vision_tower.spatial_merge_size,
+            ),
+            "vision_embeds": vision_embeds,
+            "vision_mask": inputs.token_types == _IMAGE_TOKEN_TYPE,
+            "deepstack_embeds": deepstack_embeds,
+        }
+
+    def _encode_image(
+        self, pixel_values: torch.Tensor, grid_thw: torch.Tensor
+    ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
+        """Run the vision tower, returning its merged tokens and one feature per deepstack layer."""
+        tower = self._vision_tower
+
+        patches, pos_embeds, (cos, sin), cu_seqlens, _ = pad_patches_for_sp(
+            pixel_values,
+            tower.prepare_pos_embeds(grid_thw),
+            tower.prepare_rope(grid_thw),
+            vision_cu_seqlens(grid_thw),
+            sp_factor=1,
+            length=self._max_patches,
+        )
+
+        return tower.forward(
+            tensor.from_torch(patches, device=self._device),
+            pos_embeds=tensor.from_torch(pos_embeds, device=self._device),
+            rope=(tensor.from_torch(cos, device=self._device), tensor.from_torch(sin, device=self._device)),
+            cu_seqlens=cu_seqlens,
         )
 
 

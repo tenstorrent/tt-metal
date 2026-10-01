@@ -912,6 +912,33 @@ def arange(
     return result + offset
 
 
+def select_row_compile_once(x: ttnn.Tensor, index: int) -> ttnn.Tensor:
+    """Selects row `index` of a `[batch, seq, embed]` tile tensor, as `[batch, 1, embed]`.
+
+    Unlike `x[:, index : index + 1]`, whose constant offset makes ttnn compile a slice program per
+    index, the offsets reach the device as tensors, so one set of programs serves every index. The
+    tile of rows holding the row is sliced out, and the row is gathered from that tile with an
+    embedding lookup; only the tile is untilized.
+    """
+    device = x.device()
+    batch_size, _, embed_size = x.shape
+    tile_height = ttnn.TILE_SIZE
+
+    # The slice splits the sequence into whole tiles, so the tile padding is made logical. This is a
+    # view; the padding rows are never selected.
+    x = ttnn.reshape(x, x.padded_shape, x.padded_shape)
+
+    # The slice rounds `starts` down to a whole tile. It takes its size from `num_devices` and never
+    # reads the values in `ends`, so `starts` is passed for both.
+    starts = ttnn.Tensor([0, index, 0], [3], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device)
+    x = ttnn.slice(x, starts, starts, slice_dim=1, num_devices=x.shape[1] // tile_height)
+
+    rows = ttnn.arange(index % tile_height, batch_size * tile_height, tile_height, dtype=ttnn.uint32, device=device)
+    rows = ttnn.reshape(rows, (batch_size, 1))
+    table = ttnn.to_layout(ttnn.reshape(x, (batch_size * tile_height, embed_size)), ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.embedding(rows, table, layout=ttnn.TILE_LAYOUT)
+
+
 _tril_cache: dict[tuple, ttnn.Tensor] = {}
 _triu_cache: dict[tuple, ttnn.Tensor] = {}
 
