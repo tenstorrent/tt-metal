@@ -21,8 +21,15 @@ namespace ckernel::sfpu {
 // return x - tanh(x). bf16 needs only ~2 result ULP there, so it uses a local degree-3
 // tanh polynomial (cheaper than the shared deg-6 _sfpu_tanh_polynomial_); fp32 keeps the
 // sigmoid-based accurate tanh (deg-3 would be ~1700 fp32 ULP).
+template <int ITERATIONS>
+void calculate_tanhshrink_bf16();
+
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanhshrink() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        calculate_tanhshrink_bf16<ITERATIONS>();
+        return;
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -84,8 +91,14 @@ inline void calculate_tanhshrink() {
     }
 }
 
+void init_tanhshrink_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanhshrink_init() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        init_tanhshrink_bf16();
+        return;
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     // The bf16 large-|x| path uses only local literal polynomials, so it needs no init.
     if constexpr (is_fp32_dest_acc_en) {
@@ -96,3 +109,5 @@ inline void tanhshrink_init() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_tanhshrink_bf16.h"
