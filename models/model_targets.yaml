@@ -347,6 +347,22 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+  gemma-3-12b:
+    aliases: ["gemma-3-12b", "google/gemma-3-12b-it"]
+    skus:
+      bh_p150:
+        entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              # Provisional floor for the tt-opt accuracy gate (performance/bfp8,
+              # ci-token-matching). Set to the measured values minus a margin once
+              # the gate has been run on a clean tree.
+              top1: 95
+              top5: 95
+            team: models
   gemma-3-4b:
     aliases: ["gemma-3-4b", "google/gemma-3-4b-it", "gemma-3-4b-vision"]
     skus:
