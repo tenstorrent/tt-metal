@@ -348,6 +348,12 @@ five-task release suite has not been rerun. Resume requires a new user request.
   1,200-second CI follow-up (36916089719 / 110550407919) tests clean completion,
   and one separate-server 900-second Matplotlib probe tests generalization.
   Both are bounded and monitored; images are reused, the full suite stays gated.
+- Matplotlib completes at 20:00:28 UTC in 647.041 agent seconds with a native
+  submission, reward 1 and all 182 verifier tests passing. The adapter does not
+  fire. The same loaded server begins one 900-second Astropy check at 20:03:07;
+  remote Django CI has become reachable and completes its 98.167-second warmup.
+  These are positive cross-task outcomes, not an extrapolated all-five pass or
+  a causal speedup percentage against the older failed trajectories.
 - Measure their TTFT and TSU.
 - Separate model/device performance from eval-framework overhead.
 - Check whether the same evals can run with more parallelism and finish sooner.
