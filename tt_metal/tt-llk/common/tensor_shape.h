@@ -136,8 +136,8 @@ constexpr bool validate_matmul_tensor_shapes_(const TensorShape src_b_shape, con
     }
 
     constexpr std::uint8_t supported_pairs[][4] = {
-        {1, 2, 2, 1}, // Hx32  * 32x16
-        {1, 2, 2, 2}, // Hx32  * 32x32
+        {1, 2, 2, 1}, // (1x32, 2x32, 4x32, 8x32, 16x32) * 32x16
+        {1, 2, 2, 2}, // (1x32, 2x32, 4x32, 8x32, 16x32) * 32x32
         {2, 2, 2, 1}, // 32x32 * 32x16
         {2, 2, 2, 2}, // 32x32 * 32x32
         {1, 1, 1, 1}, // 16x16 * 16x16
