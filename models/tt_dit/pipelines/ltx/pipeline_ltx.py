@@ -97,6 +97,14 @@ class LTXTransformerState:
         self._tt_i2v_clean = StateTensor()
         self._tt_video_pad_mask = StateTensor()
         self._tt_audio_pad_mask = StateTensor()
+        # fp32 Euler scratch (LTX_EULER_FP32): preallocated so the per-step update allocates nothing
+        # while traces are live (fresh allocations land in trace activation regions -> static output).
+        self._tt_video_pad_mask32 = StateTensor()
+        self._tt_audio_pad_mask32 = StateTensor()
+        self._tt_video_lat32 = StateTensor()
+        self._tt_audio_lat32 = StateTensor()
+        self._tt_video_vel32 = StateTensor()
+        self._tt_audio_vel32 = StateTensor()
         self._tt_video_rope_cos = StateTensor()
         self._tt_video_rope_sin = StateTensor()
         self._tt_audio_rope_cos = StateTensor()
@@ -1349,6 +1357,11 @@ class LTXPipeline:
 
         _dump = os.environ.get("LTX_DUMP_AUDIO_LATENT")
         if _dump and float(audio_latent.abs().max()) > 0:  # skip the all-zero warmup latent
+            if os.path.exists(_dump):  # one file per generation: never overwrite an earlier gen's dump
+                n = 1
+                while os.path.exists(_dump.replace(".pt", f"_gen{n}.pt")):
+                    n += 1
+                _dump = _dump.replace(".pt", f"_gen{n}.pt")
             torch.save(audio_latent.cpu(), _dump)
             logger.info(f"dumped audio latent {tuple(audio_latent.shape)} -> {_dump}")
 

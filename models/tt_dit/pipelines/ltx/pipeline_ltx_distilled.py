@@ -47,6 +47,11 @@ class _I2VConditioning:
     n_cond: int  # count of pinned frame-0 tokens
 
 
+def euler_fp32_enabled() -> bool:
+    """LTX_EULER_FP32=1 selects the fp32-accumulate Euler step (see _euler_step_fp32)."""
+    return os.environ.get("LTX_EULER_FP32", "0") in ("1", "true", "True")
+
+
 class LTXDistilledPipeline(LTXPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
 
@@ -297,6 +302,18 @@ class LTXDistilledPipeline(LTXPipeline):
         a_mask[:, :, audio_N_real:, :] = 0.0
         state._tt_video_pad_mask.update(v_mask, False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
         state._tt_audio_pad_mask.update(a_mask, False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+        if euler_fp32_enabled():
+            # Zero-allocation fp32 Euler step: masks, fp32 latent shadows and fp32 velocity scratch are
+            # reserved here, alongside the baked trace inputs, never inside the step loop.
+            ax = [None, None, sp_axis, None]
+            f32 = ttnn.float32
+            state._tt_video_pad_mask32.update(v_mask, False, dtype=f32, mesh_axes=ax, device=self.mesh_device)
+            state._tt_audio_pad_mask32.update(a_mask, False, dtype=f32, mesh_axes=ax, device=self.mesh_device)
+            z_v, z_a = torch.zeros_like(v_mask), torch.zeros_like(a_mask)
+            state._tt_video_lat32.update(z_v, False, dtype=f32, mesh_axes=ax, device=self.mesh_device)
+            state._tt_audio_lat32.update(z_a, False, dtype=f32, mesh_axes=ax, device=self.mesh_device)
+            state._tt_video_vel32.update(z_v, False, dtype=f32, mesh_axes=ax, device=self.mesh_device)
+            state._tt_audio_vel32.update(z_a, False, dtype=f32, mesh_axes=ax, device=self.mesh_device)
 
     def _prealloc_trace_io(self, trace_key, *, num_frames, height, width):
         """Allocate a stage's persistent trace inputs (constants, latent buffers, masks) up front.
@@ -356,6 +373,19 @@ class LTXDistilledPipeline(LTXPipeline):
                 mesh_axes=[None, None, sp_axis, None],
                 device=self.mesh_device,
             )
+
+    @staticmethod
+    def _euler_step_fp32(lat_bf16, vel, dt, mask32, lat32, vel32):
+        """lat = bf16(f32(lat) + vel*dt*mask), with every intermediate in a preallocated buffer.
+
+        Reference parity (ltx_core EulerDiffusionStep): one rounding to the latent dtype per step.
+        No allocation happens here: under tracing, fresh buffers land in trace activation regions
+        and are clobbered on replay, which turns the output to static."""
+        ttnn.typecast(lat_bf16, ttnn.float32, output_tensor=lat32)
+        ttnn.multiply(vel, dt, output_tensor=vel32)  # vel is the fp32 proj_out output
+        ttnn.multiply_(vel32, mask32)
+        ttnn.add_(lat32, vel32)
+        ttnn.typecast(lat32, ttnn.bfloat16, output_tensor=lat_bf16)
 
     def _denoise_no_guidance(
         self,
@@ -512,11 +542,12 @@ class LTXDistilledPipeline(LTXPipeline):
         # EXPERIMENT (LTX_EULER_FP32=1): do the Euler step the reference way -- fp32 accumulate, one
         # rounding to bf16 per step (EulerDiffusionStep: (sample.float() + velocity.float()*dt).to(dtype)).
         # The default path rounds the fp32 velocity to bf16, multiplies by dt in bf16 and adds in bf16.
-        euler_fp32 = os.environ.get("LTX_EULER_FP32", "0") in ("1", "true", "True")
+        euler_fp32 = euler_fp32_enabled()
         if euler_fp32:
-            v_mask32 = ttnn.typecast(state.tt_video_pad_mask, ttnn.float32)
-            a_mask32 = ttnn.typecast(state.tt_audio_pad_mask, ttnn.float32)
-            logger.info("Euler step: fp32 accumulate (LTX_EULER_FP32=1)")
+            assert (
+                state.tt_video_lat32 is not None
+            ), "fp32 Euler scratch not allocated (statics ran without LTX_EULER_FP32)"
+            logger.info("Euler step: fp32 accumulate, preallocated scratch (LTX_EULER_FP32=1)")
 
         for step_idx in range(num_steps):
             sigma = sigmas[step_idx].item()
@@ -593,19 +624,17 @@ class LTXDistilledPipeline(LTXPipeline):
                 v_pin = ttnn.multiply(ttnn.subtract(state.tt_video_lat, x0), dt / sigma)
                 ttnn.add_(state.tt_video_lat, v_pin)
             elif euler_fp32:
-                lat32 = ttnn.add(
-                    ttnn.typecast(state.tt_video_lat, ttnn.float32), ttnn.multiply(ttnn.multiply(v_out, dt), v_mask32)
+                self._euler_step_fp32(
+                    state.tt_video_lat, v_out, dt, state.tt_video_pad_mask32, state.tt_video_lat32, state.tt_video_vel32
                 )
-                ttnn.copy(ttnn.typecast(lat32, ttnn.bfloat16), state.tt_video_lat)
             else:
                 ttnn.multiply_(v_vel, dt)
                 ttnn.add_(state.tt_video_lat, v_vel)
             ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
             if euler_fp32:
-                lat32 = ttnn.add(
-                    ttnn.typecast(state.tt_audio_lat, ttnn.float32), ttnn.multiply(ttnn.multiply(a_out, dt), a_mask32)
+                self._euler_step_fp32(
+                    state.tt_audio_lat, a_out, dt, state.tt_audio_pad_mask32, state.tt_audio_lat32, state.tt_audio_vel32
                 )
-                ttnn.copy(ttnn.typecast(lat32, ttnn.bfloat16), state.tt_audio_lat)
             else:
                 a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
                 ttnn.multiply_(a_vel, state.tt_audio_pad_mask)

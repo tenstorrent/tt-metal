@@ -233,3 +233,39 @@ Same reference s2 audio latent decoded three ways (`ltx_exp1/audio_oracle_check.
 - Our device mel decoder runs bf16 like Lightricks'; device vs oracle was PCC 0.984 / 28.7 dB (quality test), i.e. the same order
   as the bf16-vs-fp32 decoder gap. => residual audio-quality complaints are upstream of the decoder (latent quality: sampler precision,
   transformer numerics), not in the decode chain.
+
+#### 2026-10-01 — fp32 Euler under tracing produced static (server), fixed in the working tree
+Server (LTX_TRACED=True in dit_runners.py) with LTX_EULER_FP32=1: output was complete noise; flag off: normal.
+Cause: the first fp32 Euler implementation allocated fresh device tensors every step (typecast, multiply, add,
+typecast back) while the captured traces were live. Per the pipeline's own trace-I/O notes, buffers allocated
+after capture land in a trace's activation region and are clobbered on replay. Exp3 ran untraced, so it never hit this.
+Fix (uncommitted): `_euler_step_fp32` uses only in-place ops / `output_tensor=` into scratch that
+`_prepare_stage_statics` reserves alongside the baked trace inputs (fp32 masks, fp32 latent shadows, fp32 velocity),
+so the step allocates nothing. New state fields in pipeline_ltx.py (`_tt_*_pad_mask32`, `_tt_*_lat32`, `_tt_*_vel32`).
+Verify (device must be free): `ltx_exp3/run_exp3_traced_fp32.sh` — traced fp32 at 153f/25 must match the untraced
+fp32 clip (traced vs untraced was bit-identical for the bf16 step).
+Update 23:15 — the traced noise is NOT the Euler step. With the zero-allocation fp32 step, traced video is bit-identical
+to untraced fp32 (PSNR 108 dB) but the mp4 audio is crackle (oracle-vs-mp4 PCC 0.01 after AAC-lag alignment, vs 0.99
+for the untraced clip). Traced **bf16** (flag off) on today's binary shows the same: video bit-identical, audio PCC 0.01.
+So the traced audio decode is broken on today's build (Oct 1 20:17, umd bump f70cc57->5380941) regardless of the flag;
+the server's "normal" bf16 run very likely has bad audio too. Queued: untraced fp32 on today's binary (cache/binary
+check), traced fp32 with per-gen latent dumps (gen-0 latent vs untraced), eager audio suite, traced audio tests
+(6s quality test, test_audio_decode_girl). Tools: ltx_exp3/oracle_vs_mp4.py (latent -> torch oracle vs mp4 track).
+
+#### 2026-10-01 23:30 — RESOLVED: the "stale audio cache" is a shared-key conflict between the server and pytest
+Facts (all on today's binary, served shape, same seed/prompt; tools in ltx_exp3/):
+- Zero-allocation fp32 Euler step: traced == untraced bit-exact for video (PSNR 108 dB) AND the audio latent (PCC 1.00000).
+  The Euler fix is verified under tracing. (ltx_exp3/euler_fp32traced3_153f25_seed10.mp4, audio_latent_fp32traced3_153f25.pt)
+- The crackly audio in every pytest run today came from the mel-decoder weight folder, not from tracing or the Euler step:
+  untraced bf16/fp32 pytest runs with the server-regenerated folder (md5 fffc5dfcc5bb) -> crackle (oracle-vs-mp4 PCC 0.01);
+  the same run with a pytest-regenerated folder (d8de07dce4fd, at 145f or 153f alike) -> PCC 0.99.
+- The server decodes ITS OWN regeneration fine (22:50 server clip: natural audio), pytest decodes its own fine. Each
+  consumer prepares `audio_dec_cin55f0111e` differently (same file sizes, different content; 22/57 files) under the SAME
+  cache key (keyed by the vocoder's blocking hash). Whoever regenerates first wins; the other consumer gets crackle.
+  This also explains 09-25/09-29 ("stale cache") and my 10-01 21:50 "cleanup", which installed the pytest layout into the
+  server cache and broke the user's next server start (together with the fp32 allocation bug -> noise video + crackle).
+- Why the two layouts differ is NOT yet determined (candidates: mel-decoder C_in_block / exact-table hit differing between
+  the server's construction path and the test harness). Next: log get_conv3d_config picks for the mel decoder in both.
+Practical rule: NEVER point pytest at the server's TT_DIT_CACHE_DIR. Server: tt-metal/tt_dit_cache (its own layout, intact).
+Pytest: tt-metal/tt_dit_cache_pytest (hardlinked clone of the server cache with a pytest-made audio_dec; costs no disk).
+Code fix direction: key audio_dec by the mel decoder's own blocking hash AND whatever construction input differs.
