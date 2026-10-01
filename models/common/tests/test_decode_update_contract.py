@@ -234,8 +234,9 @@ def test_deepseek_rejects_partial_forward_reload_before_decode(expect_error):
 
 def test_decode_warmup_does_not_reset_absent_request_history():
     calls = []
+    device_params = object()
     fake = SimpleNamespace(
-        _create_sampling_params=lambda *args, **kwargs: [object()],
+        _create_sampling_params=lambda *args, **kwargs: [device_params, None],
         _create_decode_warmup_inputs=lambda *args: (
             torch.zeros((1, 1)),
             torch.zeros((1,)),
@@ -253,9 +254,12 @@ def test_decode_warmup_does_not_reset_absent_request_history():
         can_sample_on_device=True,
     )
 
-    assert len(calls) == 1
-    assert calls[0]["reload_sampling_params"] is True
-    assert calls[0]["reset_sampling_state"] is False
+    assert len(calls) == 2
+    assert [call["reload_sampling_params"] for call in calls] == [True, False]
+    for call in calls:
+        assert call["reset_sampling_state"] is False
+        assert "prompt_tokens" not in call
+        assert "output_tokens" not in call
 
 
 def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():

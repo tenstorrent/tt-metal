@@ -131,9 +131,13 @@ class PagedAdapter:
                 enable_trace=self.enable_trace,
                 read_from_device=True,
                 async_read=False,
-                reset_batch=reset_batch,
-                # As in serving, a layout change hands the generator complete active
-                # histories. Steady decode advances its resident state itself.
+                # The host owns tokens and positions in this adapter, so reload
+                # them on every step. Rebuild sampling state only after a layout
+                # change, when complete active histories are available.
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=reset_batch,
+                reset_sampling_state=reset_batch,
                 prompt_tokens=self._history(active, "prompt_tokens") if reset_batch else None,
                 output_tokens=self._history(active, "output_tokens") if reset_batch else None,
             )

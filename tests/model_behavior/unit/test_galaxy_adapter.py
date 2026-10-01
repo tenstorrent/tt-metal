@@ -69,7 +69,11 @@ def test_decode_rebuilds_survivor_history_at_its_physical_slot():
     assert positions[0].item() == 4 and positions[31].item() == 3
     assert positions[1:31].tolist() == [-1] * 30
     assert kwargs["page_table"] is adapter.page_table
-    assert kwargs["reset_batch"] is True
+    assert "reset_batch" not in kwargs
+    assert kwargs["reload_inputs"] is True
+    assert kwargs["reload_page_table"] is False
+    assert kwargs["reload_sampling_params"] is True
+    assert kwargs["reset_sampling_state"] is True
     assert kwargs["output_tokens"][0].tolist() == [10, 11, 12]
     assert kwargs["output_tokens"][31].tolist() == [20, -1, -1]
     assert (kwargs["output_tokens"][1:31] == -1).all()
@@ -80,7 +84,11 @@ def test_decode_rebuilds_survivor_history_at_its_physical_slot():
 
     adapter.decode(active, reset_batch=False)
     _, _, kwargs = adapter.generator.decode_call
-    assert kwargs["reset_batch"] is False
+    assert "reset_batch" not in kwargs
+    assert kwargs["reload_inputs"] is True
+    assert kwargs["reload_page_table"] is False
+    assert kwargs["reload_sampling_params"] is False
+    assert kwargs["reset_sampling_state"] is False
     assert kwargs["output_tokens"] is None
     assert kwargs["prompt_tokens"] is None
 

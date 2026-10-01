@@ -257,7 +257,10 @@ not its selection or generation of an analysis channel.
 
 Token budgets drive completion, even after EOS. Blocking readback keeps scheduler
 and asynchronous execution outside this suite. Layout changes pass complete
-surviving histories. Paged adapters require the generator's public
+surviving histories. The paged adapter rebuilds host tokens and positions on
+every step, so it always commands `reload_inputs`. It reloads sampling
+parameters and state only on a layout change, when it also passes the complete
+active histories. Paged adapters require the generator's public
 `release_request(slot)` hook at completion, as serving does; tests do not reset private KV or
 sampler state between requests. Traced decode must create a model trace. Unseeded decode also requires
 a sampler trace unless the model explicitly disables that path in production
