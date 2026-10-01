@@ -102,7 +102,7 @@ def build(device, inputs, variant, q_tiles, k_tiles, jobs, chunks):
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
-@pytest.mark.parametrize("k_chunk", [128, 256, 384, 512])
+@pytest.mark.parametrize("k_chunk", [128, 256, 384, 512] + ([768, 1024] if os.getenv("SDPA_BENCH_BIGK") else []))
 @pytest.mark.parametrize("q_chunk", [128, 192, 256, 320])
 def test_sdpa_recipe_compute_throughput(device, q_chunk, k_chunk, variant, record_property):
     if not is_blackhole():
