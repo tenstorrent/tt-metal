@@ -23,10 +23,10 @@ REPO = __file__.rsplit("/models/", 1)[0]
 ISL, CLK, CORES, FLOP_CYC = 512, 1.35e9, 120, 4096
 PEAK = CLK * CORES * FLOP_CYC
 BW, BW_DATASHEET = 450e9, 512e9
-# Ideal at the device's specs (the "ideal" fields): Blackhole's 13x10 worker grid (the 14x10 die harvests one column;
-# ttnn ops here get 12x10, the 13th column runs dispatch) at the rated 1.35 GHz, the datasheet 512 GB/s, analytic only
-# (no softmax / vector cost, no measured floors)
-SPEC_CORES = 130
+# Ideal at the device's specs (the "ideal" fields): the 12x10 = 120 cores ttnn ops get on this board (Blackhole's 13x10
+# worker grid less the dispatch column) at the rated 1.35 GHz, the datasheet 512 GB/s, analytic only (no softmax /
+# vector cost, no measured floors)
+SPEC_CORES = 120
 PEAK_SPEC = CLK * SPEC_CORES * FLOP_CYC
 # pplx-embed-4B per layer: QKV [2560, 6144], WO [4096, 2560], FF1 + FF3 [2560, 2 x 9728], FF2 [9728, 2560], bfp4
 N_LAYERS, WEIGHT_PARAMS_PER_LAYER = 36, 2560 * 6144 + 4096 * 2560 + 2560 * 2 * 9728 + 9728 * 2560
