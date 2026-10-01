@@ -8,9 +8,6 @@ struct HardshrinkBf16Config {
     static constexpr uint32_t kKind = 0x00000001u;
     static constexpr uint32_t kThresholdBits = 0x3f000000u;
     static constexpr uint32_t kComparatorBf16 = 0x00003f00u;
-    static constexpr uint32_t kSlopeBits = 0x00000000u;
-    static constexpr uint32_t kInterceptBits = 0x00000000u;
-    static constexpr uint32_t kRawEqual = 0x00000000u;
     static constexpr uint32_t kBodySlots = 0x0000000du;
     static constexpr uint32_t kRowsPerReplay = 0x00000002u;
 };

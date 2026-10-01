@@ -5,10 +5,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-namespace ckernel::sfpu {
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-void calculate_softshrink(uint32_t param0);
-}
 namespace sfpi {
 #include "ckernel_sfpu_bf16_min_max.h"
 #include "ckernel_sfpu_bf16_simple_algebraic.h"
@@ -16,7 +12,11 @@ namespace sfpi {
 namespace ckernel::sfpu::bf16 {
 template <typename Config>
 inline void init_simple_forward() {
-    if constexpr (Config::kRowsPerReplay) {
+    // Only the replay's advance mode needs programming. A threshold pair that
+    // folds its identity store (always on WH, at 11 slots on BH) advances with
+    // INCRWC and never reads it.
+    constexpr bool folds = Config::kKind == 1 && Config::kBodySlots == 11;
+    if constexpr (Config::kRowsPerReplay && !folds) {
         addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * Config::kRowsPerReplay}}.set(
             ADDR_MOD_6);
     }
@@ -70,6 +70,3 @@ inline void calculate_simple_forward() {
     }
 }
 }  // namespace ckernel::sfpu::bf16
-// The stock wrapper also imports its generated configuration in composed
-// packages. Expose this runtime before entering that wrapper's include cycle.
-#include "ckernel_sfpu_softshrink.h"

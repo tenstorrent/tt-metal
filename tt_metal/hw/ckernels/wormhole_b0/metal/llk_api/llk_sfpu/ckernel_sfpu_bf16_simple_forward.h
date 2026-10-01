@@ -12,7 +12,11 @@ namespace sfpi {
 namespace ckernel::sfpu::bf16 {
 template <typename Config>
 inline void init_simple_forward() {
-    if constexpr (Config::kRowsPerReplay) {
+    // Only the replay's advance mode needs programming. A threshold pair that
+    // folds its identity store (always on WH, at 11 slots on BH) advances with
+    // INCRWC and never reads it.
+    constexpr bool folds = Config::kKind == 1;
+    if constexpr (Config::kRowsPerReplay && !folds) {
         addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * Config::kRowsPerReplay}}.set(
             ADDR_MOD_6);
     }

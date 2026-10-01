@@ -19,7 +19,7 @@ void init_hardshrink_bf16();
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_hardshrink(std::uint32_t param0) {
-    if constexpr (!is_fp32_dest_acc_en) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (param0 == 0x3f000000u) {
             init_hardshrink_bf16();
             calculate_hardshrink_bf16<ITERATIONS>();

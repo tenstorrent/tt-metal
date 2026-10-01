@@ -18,6 +18,10 @@ their output to L1 when it fits. The expert matmuls run in one of two layouts pe
 (tt/experts.py): token-major on small passes, w1 through ttnn.sparse_matmul and w2 through a 1D
 ttnn.matmul; transposed on large ones, w1 through minimal_matmul and w2 through a 2D ttnn.matmul.
 minimal_matmul takes no batched second operand, so the router and w2 keep ttnn.matmul.
+
+The two matmuls a GELU follows, fc1 above _SMALL_M_TILES and the transposed w1, run as 2D
+multicast ttnn.matmul instead when the GELU is fused into them (gelu_on_packer): that program
+applies it from the packer, where it partly overlaps the matmul.
 """
 
 from __future__ import annotations
@@ -196,19 +200,84 @@ _L1_OUTPUT_GROUPS = frozenset({OpGroup.QKV, OpGroup.ATTN_OUT, OpGroup.FC1})
 _L1_OUTPUT_SHARE = 4
 
 
+def gelu_activation(variant: ttnn.GeluVariant) -> ttnn.UnaryWithParam:
+    """A GELU variant as a matmul's fused activation: the SFPU routine ttnn.gelu runs for it."""
+    if variant == ttnn.GeluVariant.Tanh:
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)
+    return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0 if variant == ttnn.GeluVariant.FastLut else 0.0)
+
+
+def gelu_on_packer(variant: ttnn.GeluVariant) -> bool:
+    """Whether a GELU fuses into a 2D multicast ttnn.matmul, rather than into minimal_matmul.
+
+    The 2D program applies a fused activation from the packer (apply_activation_from_pack), beside
+    the math thread computing the next subblock; minimal_matmul applies it on the math thread,
+    where the tanh and accurate GELUs cost as much as their own op. On the packer the tanh GELU
+    hides under the matmul in part: 1630 us for the expert w1 and its GELU at 8x512 against 786 +
+    1353 unfused, 260 us for fc1 against 132 + 171; the accurate one 2227 against 786 + 1645. The
+    LUT, a few instructions a row, stays on minimal_matmul: 862 us over the w1 against 924.
+    """
+    return variant != ttnn.GeluVariant.FastLut
+
+
+@cache
+def dense_gelu_config(
+    m_tiles: int,
+    k_tiles: int,
+    n_tiles: int,
+    grid: ttnn.CoreCoord,
+    variant: ttnn.GeluVariant,
+    compute_kernel_config,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    """2D multicast program for a dense projection with its GELU fused, above _SMALL_M_TILES.
+
+    M over the grid's rows and N over its columns, each core's N share in one block of up to 13
+    rows, K in blocks of 4. Measured for fc1 at 8x512: 259.7 us, within 1% at K blocks of 2 or 3,
+    and 274 to 317 us with N blocks of 3 tiles; 199.9 us at 8x384.
+    """
+    per_core_m = ttnn.core.divup(m_tiles, grid.y)
+    per_core_n = ttnn.core.divup(n_tiles, grid.x)
+    block_h = _largest_divisor_at_most(per_core_m, 13)
+    sub_h, sub_w = _subblock(block_h, per_core_n, dest_tiles(compute_kernel_config), wide=True)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=_largest_divisor_at_most(k_tiles, 4),
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        out_block_h=block_h,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fuse_batch=True,
+        fused_activation=gelu_activation(variant),
+    )
+
+
 def l1_bank_bytes(tiles: int, tt_config, dtype: ttnn.DataType | None = None) -> int:
     """The share of each L1 bank an interleaved tensor of `tiles` tiles takes, activation dtype by default."""
     return ttnn.core.divup(tiles, tt_config.l1_banks) * ttnn.tile_size(dtype or tt_config.activation_dtype)
 
 
-def dense_linear(x: ttnn.Tensor, weight: ttnn.Tensor, bias: ttnn.Tensor, group: OpGroup, tt_config) -> ttnn.Tensor:
-    """x @ weight + bias for a (B, 1, S, K) activation.
+def dense_linear(
+    x: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    bias: ttnn.Tensor,
+    group: OpGroup,
+    tt_config,
+    gelu: ttnn.GeluVariant | None = None,
+) -> ttnn.Tensor:
+    """gelu(x @ weight + bias) for a (B, 1, S, K) activation, or the bare projection if gelu is None.
 
     M counts each sequence at its tile-padded length, as both programs fold the batch into M.
     Above _SMALL_M_TILES the groups in _L1_OUTPUT_GROUPS return an L1-interleaved tensor when it
     fits (see _L1_OUTPUT_SHARE), and a DRAM one otherwise. An input already in L1 takes twice its
     share of the banks out of the budget the blocking is planned in: its producer ran out of
     place, and the buffer that producer freed sits above it, where no circular buffer can reach.
+
+    Above _SMALL_M_TILES a GELU is fused into the matmul: into a 2D multicast ttnn.linear when
+    gelu_on_packer, into minimal_matmul otherwise. At or below it, it runs as its own op on the
+    small-M program's output and keeps that output's placement.
     """
     batch, _, seqlen, k = x.shape
     m_tiles = batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE)
@@ -216,21 +285,51 @@ def dense_linear(x: ttnn.Tensor, weight: ttnn.Tensor, bias: ttnn.Tensor, group: 
     n_tiles = ttnn.core.divup(weight.shape[-1], ttnn.TILE_SIZE)
     compute_kernel_config = tt_config.compute_kernel_config(group)
     if m_tiles <= _SMALL_M_TILES:
-        return ttnn.linear(
+        out = ttnn.linear(
             x,
             weight,
             bias=bias,
             program_config=dense_small_m_config(m_tiles, k_tiles, n_tiles, tt_config.core_grid, compute_kernel_config),
             compute_kernel_config=compute_kernel_config,
         )
+        if gelu is None:
+            return out
+        activated = ttnn.gelu(out, variant=gelu)
+        ttnn.deallocate(out)
+        return activated
     budget = tt_config.l1_cb_bytes
     if x.memory_config().buffer_type == ttnn.BufferType.L1:
         budget -= 2 * l1_bank_bytes(m_tiles * k_tiles, tt_config, x.dtype)
+    out_bank = l1_bank_bytes(m_tiles * n_tiles, tt_config)
+    if gelu is not None and gelu_on_packer(gelu):
+        config = dense_gelu_config(m_tiles, k_tiles, n_tiles, tt_config.core_grid, gelu, compute_kernel_config)
+        # The factory's buffers: _multicast_footprint's blocks and one row of bias tiles.
+        footprint = _multicast_footprint(
+            config.out_block_h,
+            config.out_block_w,
+            config.in0_block_w,
+            x.dtype,
+            weight.dtype,
+            tt_config.activation_dtype,
+        ) + config.out_block_w * ttnn.tile_size(bias.dtype)
+        in_l1 = (
+            group in _L1_OUTPUT_GROUPS
+            and out_bank <= tt_config.l1_cb_bytes // _L1_OUTPUT_SHARE
+            and out_bank + footprint <= budget
+        )
+        return ttnn.linear(
+            x,
+            weight,
+            bias=bias,
+            program_config=config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG if in_l1 else ttnn.DRAM_MEMORY_CONFIG,
+            dtype=tt_config.activation_dtype,
+        )
     dtypes = (x.dtype, weight.dtype, tt_config.activation_dtype)
     config = dense_minimal_config(
         group, m_tiles, k_tiles, n_tiles, tt_config.core_grid, budget, compute_kernel_config, *dtypes
     )
-    out_bank = l1_bank_bytes(m_tiles * n_tiles, tt_config)
     in_l1 = (
         group in _L1_OUTPUT_GROUPS
         and out_bank <= tt_config.l1_cb_bytes // _L1_OUTPUT_SHARE
@@ -240,6 +339,7 @@ def dense_linear(x: ttnn.Tensor, weight: ttnn.Tensor, bias: ttnn.Tensor, group: 
         x,
         weight,
         bias_tensor=bias,
+        fused_activation=None if gelu is None else gelu_activation(gelu),
         config=config,
         memory_config=ttnn.L1_MEMORY_CONFIG if in_l1 else ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=compute_kernel_config,
@@ -453,6 +553,53 @@ def expert_w1_transposed_config(
         if n_block == 1 or footprint <= cb_bytes:
             return config
         n_block = ttnn.core.divup(n_block, 2)
+
+
+# A core's share of token tiles in the fused transposed w1, raised where it has no divisor that
+# makes a useful block: 5, 7, 10 or 11 tiles would leave blocks 1 tile wide. A larger share only
+# leaves columns of the grid idle.
+_W1_TOKEN_SHARE_RAISED = {5: 6, 7: 8, 10: 12, 11: 12}
+
+
+@cache
+def expert_w1_gelu_config(
+    m_tiles: int,
+    k_tiles: int,
+    tokens: int,
+    grid: ttnn.CoreCoord,
+    variant: ttnn.GeluVariant,
+    compute_kernel_config,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    """2D multicast program for the transposed w1 with its GELU fused: (1, 1, E*F, H) x (1, 1, H, t).
+
+    The weight-row tiles over the grid's rows and the token tiles over its columns, K in one block,
+    which leaves the inputs single-buffered. Measured at 8x512, 12 token tiles a core: blocks of 11
+    x 4 tiles, 1630 us, against 1687 to 1963 for the other blocks tried. At 8x384, 9 a core: 7 x 9,
+    1258 us, against 1280 to 1380.
+    """
+    per_core_m = ttnn.core.divup(m_tiles, grid.y)
+    per_core_n = ttnn.core.divup(ttnn.core.divup(tokens, ttnn.TILE_SIZE), grid.x)
+    per_core_n = _W1_TOKEN_SHARE_RAISED.get(per_core_n, per_core_n)
+    if per_core_n <= 9:
+        block_w = per_core_n
+        block_h = next((d for d in (7, 11) if per_core_m % d == 0), 1)
+    else:
+        block_w = _largest_divisor_at_most(per_core_n, 4)
+        block_h = next((d for d in (11, 7) if per_core_m % d == 0), 1)
+    sub_h, sub_w = _subblock(block_h, block_w, dest_tiles(compute_kernel_config), wide=True)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=k_tiles,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        out_block_h=block_h,
+        out_block_w=block_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fuse_batch=True,
+        fused_activation=gelu_activation(variant),
+    )
 
 
 @cache
