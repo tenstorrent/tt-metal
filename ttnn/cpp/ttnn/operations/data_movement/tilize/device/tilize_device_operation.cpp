@@ -198,6 +198,20 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::UINT8 or
             input_tensor_a.dtype() == DataType::FP8_E4M3,
         "data type must be bfloat16, float32, uint32, int32, uint16, uint8, or fp8_e4m3");
+    // Quasar: the wide multicore tilize path (num_tiles_per_row > 32 → the Block/Default factories) HANGS on
+    // a FLOAT32 input — the fp32 unpack-to-DEST (UNP_DEST) LLK path is not implemented on Quasar (the
+    // lossless-fp32 tilize fix lives only on gchoudhary/quasar-tilize-default-factory-...; the in-branch
+    // factory fixes cover bf16, not fp32), so it freezes at NTW/WFW (producer/consumer credit stall). Reject
+    // with a clear message instead of hanging. bf16 wide tilize is unaffected, and narrow (<= 32 tiles/row)
+    // fp32 tilize uses the single/narrow path and still works. Workaround: cast to BFLOAT16 before tilizing,
+    // or use ttnn.experimental.quasar.tilize (the llama e2e does this via _install_quasar_tilize_from_torch).
+    TT_FATAL(
+        !(input_tensor_a.device()->arch() == tt::ARCH::QUASAR && input_tensor_a.dtype() == DataType::FLOAT32 &&
+          operation_attributes.use_multicore && (width / tile_width) > 32),
+        "Wide FLOAT32 tilize ({} tiles/row) is not supported on Quasar: the fp32 unpack-to-DEST LLK path is "
+        "unimplemented and the wide multicore tilize hangs. Cast the input to BFLOAT16 before tilizing, or use "
+        "ttnn.experimental.quasar.tilize.",
+        width / tile_width);
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     {

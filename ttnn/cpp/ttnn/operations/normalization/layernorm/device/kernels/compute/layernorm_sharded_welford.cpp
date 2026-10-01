@@ -397,6 +397,12 @@ void kernel_main() {
     // Compute E[x] and Var[x] using Welford's algorithm
     // ---------------------------------------------------------------------------
     reconfig_data_format_srca(dfb_x_welford_id);
+    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+    // destination (BFD) is set by pack_init. Retarget it before every pack-target switch, else pack_tile
+    // keeps writing into the previously programmed buffer and the new one is never written (all-zero output).
+#ifdef ARCH_QUASAR
+    pack_init(dfb_ex_partial_id);
+#endif
     dfb_ex_partial.reserve_back(num_block_ht_result_tiles);
     // Reconfigure the transpose op for the welford intake buffer. When the alias is active,
     // it has UnpackToDest mode so transpose_tile preserves fp32 precision.
@@ -468,6 +474,9 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     reconfig_data_format_srca(dfb_ex_partial_id);
     if constexpr (is_allgather_worker) {
+#ifdef ARCH_QUASAR
+        pack_init(dfb_ex_id);
+#endif
         dfb_ex.reserve_back(static_cast<uint16_t>(2 * num_tiles_per_allgather_worker));
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             norm::kernel_util::compute::combine_welford_partials(
@@ -507,6 +516,9 @@ void kernel_main() {
     // Receive the global reduce result and transpose back to columns
     // ---------------------------------------------------------------------------
     dfb_ex_global.wait_front(num_block_ht_result_tiles);
+#ifdef ARCH_QUASAR
+    pack_init(dfb_transpose_id);
+#endif
     dfb_transpose.reserve_back(num_block_ht_result_tiles);
     transpose_init(dfb_ex_global_id);
     uint32_t processed_tiles = 0;
@@ -537,6 +549,9 @@ void kernel_main() {
     }
     index_h_offset = 0;
     sub_bcast_cols_init(dfb_in_id, dfb_transpose_id);
+#ifdef ARCH_QUASAR
+    pack_init(dfb_xmm_id);
+#endif
     dfb_xmm.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
@@ -545,7 +560,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_wt; w++) {
-                index = w + index_subblock_w_offset;
+                index = w + index_subblock_w_offset + index_h_offset;
                 sub_tiles_bcast_cols(dfb_in_id, dfb_transpose_id, index, mean_idx, w);
             }
             tile_regs_commit();
@@ -556,13 +571,19 @@ void kernel_main() {
             tile_regs_release();
             index_subblock_w_offset += subblock_wt;
         }
-        dfb_in.pop_front(block_wt);
+        index_h_offset += block_wt;
         // Don't pop transpose buffer until after the mul below
     }
-    dfb_xmm.push_back(num_tiles_per_block);
-#ifndef FUSE_PRE_ADD
+#ifdef FUSE_PRE_ADD
+    // The fused-add result is a kernel-local scratch buffer that the loop read by absolute tile index;
+    // this was its last read, so pop it once to leave it balanced. On the non-fused path the intake
+    // aliases the resident input shard, which is never pushed and therefore never popped (a pop with no
+    // matching post faults Quasar's hardware tile counters).
+    dfb_in.pop_front(num_tiles_per_block);
+#else
     reconfig_data_format_srca(dfb_in_id, dfb_xmm_id);
 #endif
+    dfb_xmm.push_back(num_tiles_per_block);
     dfb_xmm.wait_front(num_tiles_per_block);
 
     if constexpr (!do_gamma && !do_beta) {
@@ -577,6 +598,9 @@ void kernel_main() {
     }
     mul_bcast_cols_init(dfb_xmm_id, dfb_transpose_id);
     index_h_offset = 0;
+#ifdef ARCH_QUASAR
+    pack_init(dfb_im_id);
+#endif
     dfb_im.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
@@ -613,6 +637,9 @@ void kernel_main() {
         mul_bcast_rows_init(dfb_im_id, dfb_gamma_id);
         dfb_gamma.wait_front(block_wt);
         index_h_offset = 0;
+#ifdef ARCH_QUASAR
+        pack_init(dfb_outgamma_id);
+#endif
         dfb_outgamma.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_ht; i++) {
             index_subblock_w_offset = 0;
@@ -649,6 +676,9 @@ void kernel_main() {
         add_bcast_rows_init(dfb_beta_src_id, dfb_beta_id);
         dfb_beta.wait_front(block_wt);
         index_h_offset = 0;
+#ifdef ARCH_QUASAR
+        pack_init(dfb_out_id);
+#endif
         dfb_out.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_ht; i++) {
             index_subblock_w_offset = 0;
