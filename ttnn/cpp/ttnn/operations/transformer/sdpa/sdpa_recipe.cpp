@@ -188,6 +188,10 @@ ProgramDescriptor recipe_compute_program(
     }
     if (proto_pa) {
         compute.defines.emplace_back("SDPA_PROTO_PA", "1");
+        // LOW_PRECISION is pack-bound with an idle-ish FPU: its denominator comes from a P * 1 matmul.
+        if (policy.selection.recipe == Recipe::E && std::getenv("SDPA_PA_NO_DENOM") == nullptr) {
+            compute.defines.emplace_back("SDPA_PA_DENOM", "1");
+        }
         if (const char* dbg = std::getenv("SDPA_PA_DBG")) {
             compute.defines.emplace_back("SDPA_PA_DBG", dbg);
         }
