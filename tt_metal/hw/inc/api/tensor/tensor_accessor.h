@@ -10,6 +10,7 @@
 #include "internal/tensor/array_wrapper.h"
 #include "internal/tensor/dspec.h"
 #include "api/dataflow/buf_rw_note.h"
+#include "api/tensor/transfer_noc_addr.h"
 #include "internal/tensor/helpers.h"
 #include "api/tensor/shard_pages_address_iterator.h"
 #include "api/tensor/pages_address_iterator.h"
@@ -148,7 +149,8 @@ public:
     // Op-to-op R/W inference: the public address getters hand the kernel a raw address, which it can then use with any
     // NoC call (noc_async_read/write, a UnicastEndpoint, ...) or none, so the access can't be attributed later. Each
     // notes the tensor as both read and written (api/dataflow/buf_rw_note.h). The library's own transfer paths use the
-    // transfer_* twins instead, which note nothing: the path notes its exact access itself.
+    // un-noted transfer_* members instead (private; reached through api/tensor/transfer_noc_addr.h), since each path
+    // notes its exact access itself.
     // NOC APIs
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t page_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
@@ -169,22 +171,6 @@ public:
         const uint32_t shard_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         tt_buf_rw::note_read_write<DSpec::binding_id>();
         return transfer_shard_noc_addr(shard_id, offset, noc);
-    }
-
-    // get_noc_addr / get_shard_noc_addr without the note, for the library's transfer paths (see above).
-    FORCE_INLINE
-    std::uint64_t transfer_noc_addr(const uint32_t page_id, const uint32_t offset, uint8_t noc) const {
-        return get_noc_addr(get_bank_and_offset(page_id), offset, noc);
-    }
-
-    FORCE_INLINE
-    std::uint64_t transfer_shard_noc_addr(const uint32_t shard_id, const uint32_t offset, uint8_t noc) const {
-        const auto bank_shard = shard_to_bank(shard_id);
-        PageMapping page_mapping{
-            .bank_id = bank_shard.bank_id,
-            .bank_page_offset = bank_shard.shard_in_bank * dspec().shard_volume(),
-        };
-        return get_noc_addr(page_mapping, offset, noc);
     }
 
     template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
@@ -336,6 +322,22 @@ public:
 private:
     const uint32_t bank_base_address = 0;
     const uint32_t aligned_page_size = 0;
+
+    // get_noc_addr / get_shard_noc_addr without the note, for the library's transfer paths (see get_noc_addr).
+    FORCE_INLINE
+    std::uint64_t transfer_noc_addr(const uint32_t page_id, const uint32_t offset, uint8_t noc) const {
+        return get_noc_addr(get_bank_and_offset(page_id), offset, noc);
+    }
+
+    FORCE_INLINE
+    std::uint64_t transfer_shard_noc_addr(const uint32_t shard_id, const uint32_t offset, uint8_t noc) const {
+        const auto bank_shard = shard_to_bank(shard_id);
+        PageMapping page_mapping{
+            .bank_id = bank_shard.bank_id,
+            .bank_page_offset = bank_shard.shard_in_bank * dspec().shard_volume(),
+        };
+        return get_noc_addr(page_mapping, offset, noc);
+    }
     // NOC APIs
     FORCE_INLINE
     std::uint64_t get_noc_addr(
@@ -412,6 +414,7 @@ public:
     friend class tensor_accessor::StridedShardPagesIterator<TensorAccessor>;
     friend class tensor_accessor::PagesAddressIteratorSharded<TensorAccessor>;
     friend class tensor_accessor::PagesAddressIteratorInterleaved<TensorAccessor>;
+    friend struct tensor_accessor::detail::TransferAccess;
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -480,17 +483,13 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     // Op-to-op R/W inference: the public address getters hand the kernel a raw address, which it can then use with any
     // NoC call (noc_async_read/write, a UnicastEndpoint, ...) or none, so the access can't be attributed later. Each
     // notes the tensor as both read and written (api/dataflow/buf_rw_note.h). The library's own transfer paths use the
-    // transfer_* twins instead, which note nothing: the path notes its exact access itself.
+    // un-noted transfer_* members instead (private; reached through api/tensor/transfer_noc_addr.h), since each path
+    // notes its exact access itself.
     // These hide InterleavedAddrGen's get_noc_addr, which raw kernels also use directly.
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         tt_buf_rw::note_read_write<BindingId>();
         return transfer_noc_addr(id, offset, noc);
-    }
-
-    FORCE_INLINE
-    std::uint64_t transfer_noc_addr(const uint32_t id, const uint32_t offset, uint8_t noc) const {
-        return InterleavedAddrGen<IsDram>::get_noc_addr(id, offset, noc);
     }
 
     // Locality APIs
@@ -569,6 +568,14 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 
 private:
     const uint32_t aligned_page_size = 0;
+
+    // get_noc_addr without the note, for the library's transfer paths (see get_noc_addr).
+    FORCE_INLINE
+    std::uint64_t transfer_noc_addr(const uint32_t id, const uint32_t offset, uint8_t noc) const {
+        return InterleavedAddrGen<IsDram>::get_noc_addr(id, offset, noc);
+    }
+
+    friend struct tensor_accessor::detail::TransferAccess;
 };
 #endif
 
