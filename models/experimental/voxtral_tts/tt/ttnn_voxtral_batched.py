@@ -234,6 +234,38 @@ class TtVoxtralBatchedPipeline:
         finally:
             self._trace_release()
 
+    def backbone_graph_ms(self, replays=32):
+        """Device-only ms per frame of the backbone step alone (traced), so the flow model's share
+        of frame_graph_ms is measured, not inferred."""
+        import models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt as gpt
+
+        dev, bb, B = self.device, self.backbone, self.B
+        buf = self._buffers()
+        self._fill(
+            buf,
+            torch.zeros(1, B, DIM),
+            torch.full((B,), gpt.PREFILL_MULTIPLE, dtype=torch.int32),
+            torch.zeros(B, N_ACOUSTIC_CODEBOOK),
+        )
+        for _ in range(3):
+            bb.step_device(ttnn.clone(buf["xin"]), buf["pos_u32"], buf["pos_i32"])
+        ttnn.synchronize_device(dev)
+        tid = ttnn.begin_trace_capture(dev, cq_id=0)
+        try:
+            out = bb.step_device(ttnn.clone(buf["xin"]), buf["pos_u32"], buf["pos_i32"])
+        finally:
+            ttnn.end_trace_capture(dev, tid, cq_id=0)
+        ttnn.synchronize_device(dev)
+        try:
+            t0 = time.perf_counter()
+            for _ in range(replays):
+                ttnn.execute_trace(dev, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(dev)
+            return (time.perf_counter() - t0) / replays * 1e3
+        finally:
+            ttnn.release_trace(dev, tid)
+            del out
+
     @staticmethod
     def noise_for(seed, n_frames):
         """[n_frames, 36]: the x0 sequence TtVoxtralPipeline's request with `seed` would draw.

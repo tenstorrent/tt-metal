@@ -10,6 +10,8 @@ bidirectional transformer over a 3-token sequence, CFG batched to 2B.
     pytest models/experimental/voxtral_tts/tests/pcc/test_flow_pcc.py   # on device
 """
 
+import os
+
 import torch
 import ttnn
 
@@ -155,7 +157,12 @@ class TtVoxtralFlow:
         m = -(-int(rows) // 32)
         prg = self._prg_by_tiles.get(m)
         if prg is None:
-            prg = self._prg_by_tiles[m] = decode_program_configs(self._grid, m_tiles=m)
+            if m > 1 and os.environ.get("VOXTRAL_FLOW_PRG", "mcast1d") == "default":
+                # ttnn's own matmul choice for multi-tile rows; for the B>1 timing comparison.
+                prg = {k: None for k in decode_program_configs(self._grid)}
+            else:
+                prg = decode_program_configs(self._grid, m_tiles=m)
+            self._prg_by_tiles[m] = prg
         return prg
 
     def _block(self, x, w, B):
