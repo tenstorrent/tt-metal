@@ -43,7 +43,8 @@ _COMPUTE = ttnn.WormholeComputeKernelConfig(
 )
 
 
-# Tall (>= 8 tile rows) linears are compute-bound, so they run one fidelity rung below HiFi4.
+# Tall (>= 8 tile rows) linears get their own config object; fidelity stays HiFi4 (fp32 accumulation),
+# like every acoustic linear, because the stage's output is rounded onto 21 code levels.
 _TALL_COMPUTE = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )

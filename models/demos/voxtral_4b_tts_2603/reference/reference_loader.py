@@ -75,6 +75,7 @@ from transformers.models.mistral.modeling_mistral import MistralRotaryEmbedding
 REFERENCE_LOADER_CONTRACT = 2
 
 _DEFAULT_MODEL_ID = "mistralai/Voxtral-4B-TTS-2603"
+_DEFAULT_REVISION = "b81be46c3777f88621676791b512bb01dc1cb970"
 
 # Number of Euler ODE steps for the flow-matching sampler.  Absent from
 # params.json; vllm-omni's parser warns and defaults to 7.
@@ -1093,7 +1094,8 @@ def _resolve_repo(model_id: str) -> str:
         return model_id
     from huggingface_hub import snapshot_download
 
-    return snapshot_download(model_id, allow_patterns=["params.json", "consolidated.safetensors"])
+    revision = os.environ.get("VOXTRAL_HF_REVISION", _DEFAULT_REVISION) if model_id == _DEFAULT_MODEL_ID else None
+    return snapshot_download(model_id, revision=revision, allow_patterns=["params.json", "consolidated.safetensors"])
 
 
 def _build_text_config(params: dict) -> MistralConfig:

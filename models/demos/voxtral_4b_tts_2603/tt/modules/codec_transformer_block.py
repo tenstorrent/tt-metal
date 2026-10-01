@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Native TTNN port of `codec_transformer` (`audio_tokenizer.decoder_blocks.1`).
+"""Native TTNN port of `codec_transformer_block` (`audio_tokenizer.decoder_blocks.1.layers.0`).
 
-A stack of `CodecTransformerBlock`s (two, for this decoder stage), each:
+One `CodecTransformerBlock`:
 
     r = attention_scale * attention(attention_norm(x));  h = x + r
     r = ffn_scale      * feed_forward(ffn_norm(h));       out = h + r
@@ -15,8 +15,8 @@ would not merely rescale the residual, it would flip its sign.
 
 The attention is ALiBi + sliding-window causal + QK-norm with no RoPE; see `_stubs/codec_attention.py`
 for the details. The window belongs to the decoder STAGE, not the model: the four stages run 2, 4,
-8, 16 as each transposed convolution doubles it, so the mask is built from this stack's own
-`args.attn_sliding_window_size`.
+8, 16 as each transposed convolution doubles it, so the mask is built from this block's own
+`attention.sliding_window`.
 
 `norm_eps` here is **1e-2**, three orders of magnitude larger than the text backbone's 1e-5; it is
 read off the modules rather than assumed.
@@ -300,52 +300,36 @@ def _softmax(x, dim=-1):
     return ttnn.divide(e, ttnn.sum(e, dim=dim, keepdim=True))
 
 
-def _largest_divisor(n, cap):
-    return max(d for d in range(1, min(n, cap) + 1) if n % d == 0)
-
-
 def _bmm(a, b, transpose_b=False):
-    """Head-batched attention `a @ b` over the full grid, every (batch, head, 4-tile M block) its own
-    work unit. With no program config these `[B, H, S, S]` products ran on 16-64 cores."""
-    m, k, n = (-(-int(d) // 32) for d in (a.shape[-2], a.shape[-1], b.shape[-2 if transpose_b else -1]))
-    pm = _largest_divisor(m, 4)
-    # Whole-K, whole-N blocks: a long sequence (a longer utterance) outgrows L1, so fall back then.
-    tile = lambda t: 4096 if t.dtype == ttnn.float32 else 2048
-    if 2 * pm * k * tile(a) + 2 * k * n * tile(b) + 2 * pm * n * 4096 > 1_200_000:
-        return ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=_COMPUTE)
-    grid = a.device().compute_with_storage_grid_size()
-    cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(grid.x, grid.y),
-        in0_block_w=k,
-        out_subblock_h=1,
-        out_subblock_w=_largest_divisor(n, 4),
-        per_core_M=pm,
-        per_core_N=n,
-    )
+    """Head-batched attention `a @ b` (`[B, H, S, S]` scores, then `P @ V`).
+
+    No program config: a `MatmulMultiCoreReuseProgramConfig` with per-core (batch, head, 4-tile M)
+    blocks was tried here and gives WRONG results for these head-batched shapes (waveform PCC -0.005
+    in the e2e test), so the stock schedule is used.
+    """
     return ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=_COMPUTE)
 
 
 def build(device, torch_module):
-    stack = torch_module
-    blocks_torch = [stack.layers[str(i)] for i in stack.layers_ids]
-    dim = int(blocks_torch[0].dim)
+    blk = torch_module
+    dim = int(blk.dim)
 
     mask = _from_torch(
         _alibi_window_mask(
-            blocks_torch[0].attention.alibi_slopes.detach(),
-            int(stack.args.attn_sliding_window_size),
+            blk.attention.alibi_slopes.detach(),
+            int(blk.attention.sliding_window),
             _MASK_MAX_SEQ,
         ),
         device,
         dtype=ttnn.float32,
     )
-    blocks = [_compile_block(device, blk, mask) for blk in blocks_torch]
+    block = _compile_block(device, blk, mask)
 
-    def codec_transformer(hidden_states, **kwargs):
+    def codec_transformer_block(x, **kwargs):
         # The leading bound comes from the TENSOR, never from a literal 1: the pipeline drives this
         # with 32 independent samples stacked on axis 0, and a hardcoded 1 would silently decode
         # only the first of them.
-        shape = [int(v) for v in hidden_states.shape]
+        shape = [int(v) for v in x.shape]
         seq = shape[-2]
         batch = shape[0] if len(shape) >= 3 else 1
         if seq > _MASK_MAX_SEQ:
@@ -353,9 +337,7 @@ def build(device, torch_module):
                 f"sequence {seq} exceeds the prebuilt ALiBi mask ({_MASK_MAX_SEQ}); raise "
                 f"_MASK_MAX_SEQ -- the mask cannot be rebuilt inside the forward"
             )
-        h = ttnn.reshape(hidden_states, [batch, 1, seq, dim])
-        for block in blocks:
-            h = block(h)
+        h = block(ttnn.reshape(x, [batch, 1, seq, dim]))
         return ttnn.reshape(h, [batch, seq, dim])
 
-    return codec_transformer
+    return codec_transformer_block

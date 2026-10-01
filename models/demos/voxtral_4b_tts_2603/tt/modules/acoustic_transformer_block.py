@@ -41,7 +41,8 @@ _COMPUTE = ttnn.WormholeComputeKernelConfig(
 )
 
 
-# Tall (>= 8 tile rows) linears are compute-bound, so they run one fidelity rung below HiFi4.
+# Tall (>= 8 tile rows) linears get their own config object; fidelity stays HiFi4 (fp32 accumulation),
+# like every acoustic linear, because the stage's output is rounded onto 21 code levels.
 _TALL_COMPUTE = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )
@@ -512,7 +513,7 @@ def build(device, torch_module):
     w1 = _from_torch(
         (ff.w1.weight.detach().float().transpose(0, 1) * g_ffn_t).contiguous(), device, dtype=ttnn.bfloat16
     )
-    # The down projection is DRAM-bound at 1024 rows; bf8_b halves the weight it streams.
+    # The down projection stays bfloat16: bf8_b weights here cost the acoustic stage its accuracy.
     w2 = _from_torch(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat16)
     w2_ttl = ttl_down.weight(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, _from_torch)
     w2_cpp = cpp_down.shard(ff.w2.weight.detach().transpose(0, 1).contiguous(), device)

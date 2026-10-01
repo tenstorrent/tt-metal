@@ -37,6 +37,10 @@ DEVICE_ID = int(os.environ.get("TT_PERF_DEVICE_ID", os.environ.get("VOXTRAL_DEVI
 L1_SMALL_SIZE = 24576
 TRACE_REGION_SIZE = int(os.environ.get("TT_PERF_TRACE_REGION", str(200 * 1024 * 1024)))
 REAL_TIME_FRAMES_PER_S = 12.5
+# The README's expected numbers (one Blackhole chip, batch 32, trace + 1 CQ), in ms per traced step. A
+# run fails when any stage, or the per-frame cost, is more than PERF_MARGIN slower than this.
+EXPECTED_MS = {"prefill": 88.7, "decode": 37.1, "acoustic": 41.9, "vocode": 80.1}
+PERF_MARGIN = float(os.environ.get("TT_PERF_MARGIN", "0.10"))
 
 
 def _time_stage(device, pipe, stage: str) -> float:
@@ -85,3 +89,8 @@ def test_text_to_speech_perf():
         f"frames/s total: {per_user * batch:.1f}; {per_user / REAL_TIME_FRAMES_PER_S:.2f}x real time"
     )
     assert set(ms) == set(PIPELINE_STAGES) and all(v > 0 for v in ms.values())
+    limits = {stage: EXPECTED_MS[stage] * (1 + PERF_MARGIN) for stage in PIPELINE_STAGES}
+    slow = {stage: round(ms[stage], 2) for stage in PIPELINE_STAGES if ms[stage] > limits[stage]}
+    assert not slow, f"stages slower than expected +{PERF_MARGIN:.0%}: {slow} (limits {limits})"
+    frame_limit = (EXPECTED_MS["decode"] + EXPECTED_MS["acoustic"]) * (1 + PERF_MARGIN)
+    assert frame_ms <= frame_limit, f"{frame_ms:.2f} ms per audio frame exceeds {frame_limit:.2f}"

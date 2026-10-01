@@ -19,6 +19,7 @@ reserved blocks.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 
@@ -54,13 +55,25 @@ def _repair(source: str) -> str:
     return source
 
 
+@contextlib.contextmanager
+def repaired_kernel_writes():
+    """Apply `_repair` to the kernels ttl writes, only while THIS model's ttl ops compile and run.
+
+    Scoped rather than installed at import: importing the model must not change how any other ttl
+    operation in the same process is compiled.
+    """
+    if not _HAVE_TTL:
+        yield
+        return
+    original = _ttl_api._write_kernel_to_tmp
+    _ttl_api._write_kernel_to_tmp = lambda name, source: original(name, _repair(source))
+    try:
+        yield
+    finally:
+        _ttl_api._write_kernel_to_tmp = original
+
+
 if _HAVE_TTL:
-    _orig_write = _ttl_api._write_kernel_to_tmp
-
-    def _write_repaired(name, source):
-        return _orig_write(name, _repair(source))
-
-    _ttl_api._write_kernel_to_tmp = _write_repaired
 
     @ttl.operation(grid=(_GX, _GY))
     def swiglu_matmul(a: ttnn.Tensor, wg: ttnn.Tensor, wu: ttnn.Tensor, y: ttnn.Tensor) -> None:
@@ -149,5 +162,6 @@ def apply(h, wg, wu):
     y = ttnn.allocate_tensor_on_device(
         ttnn.Shape([rows, n]), ttnn.bfloat16, ttnn.TILE_LAYOUT, a.device(), ttnn.DRAM_MEMORY_CONFIG
     )
-    swiglu_matmul(a, wg, wu, y)
+    with repaired_kernel_writes():
+        swiglu_matmul(a, wg, wu, y)
     return y if len(dims) == 2 else ttnn.reshape(y, tuple(dims[:-1] + [n]))

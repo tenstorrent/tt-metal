@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Native TTNN port of `mlp` -- the text backbone's `MistralMLP` (`model.layers.0.mlp`).
+"""Native TTNN port of `mistral_m_l_p` -- the text backbone's `MistralMLP` (`model.layers.0.mlp`).
 
 SwiGLU: `down_proj(silu(gate_proj(x)) * up_proj(x))`, 3072 -> 9216 -> 3072, no biases.
 
@@ -349,8 +349,8 @@ def _fused_swiglu(h, w_gu, w_ttl=None):
     grid = ttnn.CoreCoord(int(grid.x), -(-(rows // 32) // share))
     # A share of <= 8 tiles fits one M block, so each core streams its weight columns ONCE.
     m_blk = share if share <= 8 else -(-share // 2)
-    # At <= 2 M tiles a core the bf4_b weight's blocks are small enough for 8-tile K blocks
-    # (half the K steps of 4) within the ~1 MB of L1 that still traces.
+    # At <= 2 M tiles a core the weight's blocks are small enough for 8-tile K blocks (half the K
+    # steps of 4): 8 x 18 bf8_b tiles double-buffered is ~313 KB, within the ~1 MB of L1 that traces.
     wide = m_blk <= 2
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=m_blk,
@@ -378,15 +378,16 @@ def build(device, torch_module):
     )
     # bf8_b halves the weight both the prefill (LoFi) and decode down projections unpack.
     w_down = _from_torch(mlp.down_proj.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat8_b)
-    # Prefill's fused SwiGLU weight, bf4_b against the bf16 norm output; the float32 decode
-    # activation keeps the separate pair above.
+    # Prefill's fused SwiGLU weight, bf8_b against the bf16 norm output; the float32 decode
+    # activation keeps the separate pair above. Not bf4_b: 4-bit gate/up weights cost the prefill
+    # hidden ~0.01 PCC (ar_male 0.980 vs 0.991 at bf8_b).
     w_gu = _from_torch(
         _swiglu_pairs(
             mlp.gate_proj.weight.detach().float().transpose(0, 1),
             mlp.up_proj.weight.detach().float().transpose(0, 1),
         ),
         device,
-        dtype=ttnn.bfloat4_b,
+        dtype=ttnn.bfloat8_b,
     )
     w_ttl = _ttl_swiglu_weights(
         mlp.gate_proj.weight.detach().float().transpose(0, 1),
@@ -394,7 +395,7 @@ def build(device, torch_module):
         device,
     )
 
-    def mlp_forward(x, **kwargs):
+    def mistral_m_l_p(x, **kwargs):
         h, lead, seq, rank = _view4(x, dim)
         if h.dtype == ttnn.bfloat16 and lead * seq >= 256:
             gated = _fused_swiglu(h, w_gu, w_ttl)
@@ -408,4 +409,4 @@ def build(device, torch_module):
         ttnn.deallocate(gated)
         return _restore(out, lead, seq, rank, out_dim)
 
-    return mlp_forward
+    return mistral_m_l_p

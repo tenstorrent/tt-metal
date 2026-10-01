@@ -2,27 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Native TTNN port of `codec_attention` (`audio_tokenizer.decoder_blocks.1.layers.0.attention`).
+"""Native TTNN port of `codec_transformer` (`audio_tokenizer.decoder_blocks.1`).
 
-The canonical `models/tt_transformers/tt/attention.py` cannot be reused: it builds itself from
-`ModelArgs`, which resolves the model through `AutoConfig`, and this checkpoint has no
-`config.json` / `model_type` at all. It also implements different math -- this attention is
-**ALiBi + sliding-window causal + QK-norm**, with no RoPE:
+A stack of `CodecTransformerBlock`s (two, for this decoder stage), each:
 
-  * 8 heads / 8 KV heads, head_dim 128, dim 1024, no biases.
-  * QK-norm is an `RMSNorm(eps=1e-6)` over the FULL 1024-wide `wq(x)` / `wk(x)` -- across all eight
-    heads at once, BEFORE the head split -- so the projections cannot be fused into one `wqkv`
-    matmul the way an un-normed attention's can. They are re-joined afterwards purely so
-    `nlp_create_qkv_heads` can do the split.
-  * The additive mask is `slope[h] * (j - i)`, with `-inf` wherever `j > i` (causal) or
-    `j < i - window` (window 2 for this block; the decoder's windows are 2, 4, 8, 16).
+    r = attention_scale * attention(attention_norm(x));  h = x + r
+    r = ffn_scale      * feed_forward(ffn_norm(h));       out = h + r
 
-The mask depends only on `j - i`, so it is translation-invariant along the diagonal: one
-`[1, H, SMAX, SMAX]` tensor is built on the host at `build` time and the top-left `[S, S]` corner is
-sliced per call. That keeps the forward pure ttnn -- the runtime native probe counts every torch
-call the forward makes and graduates only at zero, so the mask cannot be built per call.
-`-inf` is replaced by a large finite negative so a fully-masked row could never produce NaN; every
-ALiBi term is <= 2 in magnitude, so after softmax the two are indistinguishable.
+`attention_scale` / `ffn_scale` are LayerScale parameters -- per-channel `[dim]` vectors, not
+scalars -- and this checkpoint's values are small and signed (~-5e-3, ~-1.5e-4), so dropping them
+would not merely rescale the residual, it would flip its sign.
+
+The attention is ALiBi + sliding-window causal + QK-norm with no RoPE; see `_stubs/codec_attention.py`
+for the details. The window belongs to the decoder STAGE, not the model: the four stages run 2, 4,
+8, 16 as each transposed convolution doubles it, so the mask is built from this stack's own
+`args.attn_sliding_window_size`.
+
+`norm_eps` here is **1e-2**, three orders of magnitude larger than the text backbone's 1e-5; it is
+read off the modules rather than assumed.
 """
 
 from __future__ import annotations
@@ -34,15 +31,14 @@ import torch
 import ttnn
 
 _SHARD_HEIGHT = 32
-# 2048 rows = 256 codec frames after the decoder's 8x upsampling, which is the whole stage's
-# frame ceiling. The mask is translation-invariant, so a longer sequence needs a LARGER constant
-# here (and nothing else); it cannot be rebuilt inside the forward, which must stay torch-free.
+# 2048 rows = 256 codec frames after the decoder's 8x upsampling, which is the whole stage's frame
+# ceiling. The mask is translation-invariant, so a longer sequence needs a LARGER constant here
+# (and nothing else); it cannot be rebuilt inside the forward, which must stay torch-free.
 _MASK_MAX_SEQ = 2048
 _MASK_NEG = -1.0e9
 
-# fp32 accumulation in DEST. The activation path is float32 (bfloat16 end to end put the full codec
-# chain at PCC 0.9873 over eight residual blocks plus five convolutions) and the default
-# configuration would accumulate a float32 matmul in a narrower DEST.
+# fp32 accumulation in DEST. The activation path is float32 -- bfloat16 end to end put the full
+# codec chain at PCC 0.9873 over eight residual blocks plus five convolutions.
 _COMPUTE = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )
@@ -163,13 +159,107 @@ def _weight(linear, device):
 
 
 def _alibi_window_mask(slopes, window, seq):
-    """`[1, H, seq, seq]` additive mask: ALiBi bias, causal, and clipped to the left window."""
+    """`[1, H, seq, seq]`: ALiBi bias `slope[h] * (j - i)`, blocked where `j > i` or `j < i - window`.
+
+    Depends only on `j - i`, so the top-left `[S, S]` corner of one big mask is exactly the mask for
+    a length-`S` sequence -- which is what lets the forward stay free of torch calls (the runtime
+    native probe graduates only at zero torch ops, so a per-call rebuild is not an option).
+    """
     pos = torch.arange(seq)
     rel = pos.unsqueeze(0) - pos.unsqueeze(1)
     bias = slopes.reshape(-1, 1, 1).float() * rel.unsqueeze(0).float()
     blocked = (rel > 0) | (rel < -window)
-    bias = bias.masked_fill(blocked.unsqueeze(0), _MASK_NEG)
-    return bias.unsqueeze(0)
+    return bias.masked_fill(blocked.unsqueeze(0), _MASK_NEG).unsqueeze(0)
+
+
+def _compile_block(device, blk, mask):
+    """One `CodecTransformerBlock` as a callable on a `[1, 1, S, dim]` ttnn tensor."""
+    attn = blk.attention
+    ff = blk.feed_forward
+    args = blk.args
+
+    n_heads = int(attn.n_local_heads)
+    n_kv_heads = int(attn.n_local_kv_heads)
+    head_dim = int(args.head_dim)
+    dim = int(blk.dim)
+    scale = 1.0 / math.sqrt(head_dim)
+    qk_norm = bool(args.qk_norm)
+
+    attn_gamma = _norm_gamma(blk.attention_norm, device)
+    attn_eps = float(blk.attention_norm.eps)
+    ffn_gamma = _norm_gamma(blk.ffn_norm, device)
+    ffn_eps = float(blk.ffn_norm.eps)
+
+    wq, wk, wv, wo = (_weight(m, device) for m in (attn.wq, attn.wk, attn.wv, attn.wo))
+    q_gamma = _norm_gamma(attn.q_norm, device) if qk_norm else None
+    k_gamma = _norm_gamma(attn.k_norm, device) if qk_norm else None
+    q_eps = float(attn.q_norm.eps) if qk_norm else 0.0
+    k_eps = float(attn.k_norm.eps) if qk_norm else 0.0
+
+    w1, w2, w3 = (_weight(m, device) for m in (ff.w1, ff.w2, ff.w3))
+
+    attn_scale = ffn_scale = None
+    if blk.layer_scale:
+        attn_scale = _from_torch(blk.attention_scale.detach().reshape(1, 1, 1, dim), device, dtype=ttnn.float32)
+        ffn_scale = _from_torch(blk.ffn_scale.detach().reshape(1, 1, 1, dim), device, dtype=ttnn.float32)
+
+    if blk.post_attention_norm is not None or blk.post_ffn_norm is not None:
+        raise NotImplementedError("post_attention_norm / post_ffn_norm are not ported")
+
+    def block(h):
+        seq = int(h.shape[-2])
+        xn = _rms_norm(h, attn_gamma, attn_eps)
+
+        q = _lin(xn, wq, compute_kernel_config=_COMPUTE)
+        k = _lin(xn, wk, compute_kernel_config=_COMPUTE)
+        v = _lin(xn, wv, compute_kernel_config=_COMPUTE)
+        if qk_norm:
+            q = _rms_norm(q, q_gamma, q_eps)
+            k = _rms_norm(k, k_gamma, k_eps)
+
+        # SDPA rejects float32 outright (`sdpa_device_operation.cpp:43`) -- so this does not call
+        # it. Spelling the attention out as two matmuls and a softmax keeps Q/K/V, the ALiBi mask
+        # and the whole reduction in FLOAT32, which SDPA cannot do at any fidelity. The codec runs
+        # eight residual blocks over a few hundred rows, so the explicit form costs little, and
+        # the bfloat16 narrowing it removes was compounding through all eight.
+        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.concat([q, k, v], dim=-1),
+            num_heads=n_heads,
+            num_kv_heads=n_kv_heads,
+            transpose_k_heads=False,
+        )
+        scores = _bmm(qh, kh, transpose_b=True)
+        scores = ttnn.add(
+            ttnn.multiply(scores, scale),
+            ttnn.slice(mask, [0, 0, 0, 0], [1, n_heads, seq, seq]),
+        )
+        a = _bmm(_softmax(scores), vh)
+        ttnn.deallocate(scores)
+        r = _lin(
+            ttnn.experimental.nlp_concat_heads(a),
+            wo,
+            dtype=ttnn.float32,
+            compute_kernel_config=_COMPUTE,
+        )
+        if attn_scale is not None:
+            r = ttnn.multiply(r, attn_scale)
+        h = ttnn.add(h, r)
+
+        hn = _rms_norm(h, ffn_gamma, ffn_eps)
+        r = _lin(
+            ttnn.multiply(
+                _lin(hn, w1, compute_kernel_config=_COMPUTE),
+                _lin(hn, w3, compute_kernel_config=_COMPUTE),
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            ),
+            w2,
+            compute_kernel_config=_COMPUTE,
+        )
+        if ffn_scale is not None:
+            r = ttnn.multiply(r, ffn_scale)
+        return ttnn.add(h, r)
+
+    return block
 
 
 def _norm_gamma(norm, device):
@@ -210,62 +300,37 @@ def _softmax(x, dim=-1):
     return ttnn.divide(e, ttnn.sum(e, dim=dim, keepdim=True))
 
 
-def _largest_divisor(n, cap):
-    return max(d for d in range(1, min(n, cap) + 1) if n % d == 0)
-
-
 def _bmm(a, b, transpose_b=False):
-    """Head-batched attention `a @ b` over the full grid, every (batch, head, 4-tile M block) its own
-    work unit. With no program config these `[B, H, S, S]` products ran on 16-64 cores."""
-    m, k, n = (-(-int(d) // 32) for d in (a.shape[-2], a.shape[-1], b.shape[-2 if transpose_b else -1]))
-    pm = _largest_divisor(m, 4)
-    # Whole-K, whole-N blocks: a long sequence (a longer utterance) outgrows L1, so fall back then.
-    tile = lambda t: 4096 if t.dtype == ttnn.float32 else 2048
-    if 2 * pm * k * tile(a) + 2 * k * n * tile(b) + 2 * pm * n * 4096 > 1_200_000:
-        return ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=_COMPUTE)
-    grid = a.device().compute_with_storage_grid_size()
-    cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(grid.x, grid.y),
-        in0_block_w=k,
-        out_subblock_h=1,
-        out_subblock_w=_largest_divisor(n, 4),
-        per_core_M=pm,
-        per_core_N=n,
-    )
+    """Head-batched attention `a @ b` (`[B, H, S, S]` scores, then `P @ V`).
+
+    No program config: a `MatmulMultiCoreReuseProgramConfig` with per-core (batch, head, 4-tile M)
+    blocks was tried here and gives WRONG results for these head-batched shapes (waveform PCC -0.005
+    in the e2e test), so the stock schedule is used.
+    """
     return ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=_COMPUTE)
 
 
 def build(device, torch_module):
-    attn = torch_module
-    args = attn.args
-    n_heads = int(attn.n_local_heads)
-    n_kv_heads = int(attn.n_local_kv_heads)
-    head_dim = int(args.head_dim)
-    dim = int(attn.wq.in_features)
-    out_dim = int(attn.wo.out_features)
-    scale = 1.0 / math.sqrt(head_dim)
-    qk_norm = bool(args.qk_norm)
-
-    wq = _weight(attn.wq, device)
-    wk = _weight(attn.wk, device)
-    wv = _weight(attn.wv, device)
-    wo = _weight(attn.wo, device)
-    q_gamma = _norm_gamma(attn.q_norm, device) if qk_norm else None
-    k_gamma = _norm_gamma(attn.k_norm, device) if qk_norm else None
-    q_eps = float(attn.q_norm.eps) if qk_norm else 0.0
-    k_eps = float(attn.k_norm.eps) if qk_norm else 0.0
+    stack = torch_module
+    blocks_torch = [stack.layers[str(i)] for i in stack.layers_ids]
+    dim = int(blocks_torch[0].dim)
 
     mask = _from_torch(
-        _alibi_window_mask(attn.alibi_slopes.detach(), int(attn.sliding_window), _MASK_MAX_SEQ),
+        _alibi_window_mask(
+            blocks_torch[0].attention.alibi_slopes.detach(),
+            int(stack.args.attn_sliding_window_size),
+            _MASK_MAX_SEQ,
+        ),
         device,
         dtype=ttnn.float32,
     )
+    blocks = [_compile_block(device, blk, mask) for blk in blocks_torch]
 
-    def codec_attention(x, **kwargs):
+    def codec_transformer(hidden_states, **kwargs):
         # The leading bound comes from the TENSOR, never from a literal 1: the pipeline drives this
         # with 32 independent samples stacked on axis 0, and a hardcoded 1 would silently decode
         # only the first of them.
-        shape = [int(v) for v in x.shape]
+        shape = [int(v) for v in hidden_states.shape]
         seq = shape[-2]
         batch = shape[0] if len(shape) >= 3 else 1
         if seq > _MASK_MAX_SEQ:
@@ -273,37 +338,9 @@ def build(device, torch_module):
                 f"sequence {seq} exceeds the prebuilt ALiBi mask ({_MASK_MAX_SEQ}); raise "
                 f"_MASK_MAX_SEQ -- the mask cannot be rebuilt inside the forward"
             )
-        h = ttnn.reshape(x, [batch, 1, seq, dim])
+        h = ttnn.reshape(hidden_states, [batch, 1, seq, dim])
+        for block in blocks:
+            h = block(h)
+        return ttnn.reshape(h, [batch, seq, dim])
 
-        q = _lin(h, wq, compute_kernel_config=_COMPUTE)
-        k = _lin(h, wk, compute_kernel_config=_COMPUTE)
-        v = _lin(h, wv, compute_kernel_config=_COMPUTE)
-        if qk_norm:
-            q = _rms_norm(q, q_gamma, q_eps)
-            k = _rms_norm(k, k_gamma, k_eps)
-
-        # SDPA rejects float32 outright (`sdpa_device_operation.cpp:43`) -- so this does not call
-        # it. Spelling the attention out as two matmuls and a softmax keeps Q/K/V, the ALiBi mask
-        # and the whole reduction in FLOAT32, which SDPA cannot do at any fidelity. The codec runs
-        # eight residual blocks over a few hundred rows, so the explicit form costs little, and
-        # the bfloat16 narrowing it removes was compounding through all eight.
-        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
-            ttnn.concat([q, k, v], dim=-1),
-            num_heads=n_heads,
-            num_kv_heads=n_kv_heads,
-            transpose_k_heads=False,
-        )
-        scores = _bmm(qh, kh, transpose_b=True)
-        scores = ttnn.add(
-            ttnn.multiply(scores, scale),
-            ttnn.slice(mask, [0, 0, 0, 0], [1, n_heads, seq, seq]),
-        )
-        a = _bmm(_softmax(scores), vh)
-        ttnn.deallocate(scores)
-        a = ttnn.experimental.nlp_concat_heads(a)
-        return ttnn.reshape(
-            _lin(a, wo, dtype=ttnn.float32, compute_kernel_config=_COMPUTE),
-            [batch, seq, out_dim],
-        )
-
-    return codec_attention
+    return codec_transformer

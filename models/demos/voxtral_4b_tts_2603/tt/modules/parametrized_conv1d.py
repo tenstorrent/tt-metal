@@ -105,9 +105,11 @@ def build(device, torch_module):
         """The `k` `[C_in, C_out]` taps of a device-resident `[C_out, C_in, k]` weight.
 
         `permute(2, 1, 0)` puts the tap axis first, so each tap is a leading-axis slice -- no
-        sub-tile slice on the length-`k` axis. Narrowed to bfloat16 to match the taps `build`
-        prepares: the reconstruction is computed wide, but the weight the matmul consumes is the
-        same width either way.
+        sub-tile slice on the length-`k` axis. Narrowed to bfloat16, unlike the float32 taps `build`
+        prepares for the static path: the vocoder supplies its `output_proj` weight this way, and the
+        whole-section tokenizer stub (`voxtral_t_t_s_audio_tokenizer.py`) runs the same projection
+        with bfloat16 taps, so both halves of the batch use the same precision -- the precision the
+        accuracy test was measured with.
         """
         wp = ttnn.permute(weight, (2, 1, 0))
         return [

@@ -32,7 +32,6 @@ are read off the HF golden scored the same way (`WER_MARGIN`, `MOS_MARGIN`).
 """
 from __future__ import annotations
 
-import json
 import os
 
 import pytest
@@ -66,6 +65,21 @@ MOS_MARGIN = 0.20  # mean UTMOS22, on its 1-5 scale
 # element's own spread under the device's measured matmul error, over NOISE_DRAWS torch draws.
 TIE_SIGMA = 6.0
 NOISE_DRAWS = 4
+
+# THE TIE BANDS ARE FIXED NUMBERS, not read off the run being judged. They used to scale with the TT
+# stage's own measured error, so a worse acoustic stage widened its own tolerance: the pre-fix branch
+# had a held-out x_final error of 1.1e-1 (26x this build's) and its band then covered every code, so
+# the test passed with 70% of acoustic codes wrong. The values below were measured on the
+# accuracy-fixed build and are identical on a p300c chip and a p150 (held-out x_final RMS deviation
+# 4.195e-3 at a single-matmul floor of 4.906e-4 -> noise-model scale 1.648e-3; semantic logit RMS
+# deviation 1.53-1.56e-3).
+ACOUSTIC_NOISE_SCALE = 1.648e-3  # relative Linear-output noise the per-element spread is drawn at
+ACOUSTIC_BASELINE_RMS = 4.195e-3  # the stage's held-out x_final RMS error, the band's floor
+SEMANTIC_LOGIT_RMS = 1.6e-3  # RMS semantic-logit deviation the semantic tie band is built on
+# Absolute limits on the stage itself, so a degraded stage fails here instead of only widening ties.
+MAX_HELDOUT_RMS = 2.0 * ACOUSTIC_BASELINE_RMS  # held-out x_final RMS deviation, TT vs reference
+MIN_ACOUSTIC_AGREEMENT = 0.98  # fraction of live acoustic codes equal to the teacher-forced reference
+MAX_SEMANTIC_LOGIT_RMS = 2.0 * SEMANTIC_LOGIT_RMS
 
 
 def sigma_upper_bound(sample_std, n: int, alpha: float = 0.05):
@@ -102,18 +116,9 @@ def measure_matmul_floor(device) -> float:
     return float((out - ref).pow(2).mean().sqrt() / ref.pow(2).mean().sqrt())
 
 
-PKG_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-HARNESS_CAPPED = bool(os.environ.get("TT_PERF_OSL_TOKENS"))
-
-
 def routed_modules(call_name: str) -> set:
-    """The graduated modules this call routes, read from the PLAN rather than typed here."""
-    with open(os.path.join(PKG_ROOT, "e2e_plan.json")) as f:
-        plan = json.load(f)
-    for head in plan["task_heads"]:
-        if head["name"] == call_name:
-            return set(head["graduated_modules_routed"])
-    raise KeyError(call_name)
+    """The graduated modules this call routes, read from `common.ROUTED_MODULES` rather than typed here."""
+    return set(common.ROUTED_MODULES[call_name])
 
 
 @pytest.fixture(scope="module")
@@ -245,11 +250,6 @@ def test_run_ended_on_the_models_stop_rule(evidence):
     print(f"HF stop: {free['stop_reason']}  ({free['frames_decoded']} frames)")
     print(f"TT per-row end frames: {tt['end_frame']}")
     print(f"HF per-row end frames: {free['end_frame']}")
-    if HARNESS_CAPPED:
-        # The contract's one exception: the harness caps the horizon for profiling BY DESIGN, so
-        # the termination assert (and only it) does not apply. Never true under the e2e gate.
-        print("termination assert NOT applied: TT_PERF_OSL_TOKENS is set, the harness caps the horizon BY DESIGN")
-        return
     cap = evidence["max_frames"]
     assert tt["stop_reason"].startswith(
         "every row emitted end_audio"
@@ -405,13 +405,14 @@ def test_discrete_codes_equal_the_teacher_forced_reference(device, hf_model, evi
       logit deviations;
     * acoustic code: the flow sampler is ill-conditioned at some elements (CFG alpha=3 over 7 Euler
       steps), so the band is PER ELEMENT: the spread of the reference's own x_final when every Linear
-      carries noise at the stage's device precision -- the single-matmul floor measured here, scaled
-      on a held-out input to the stage's own measured error (`calibrate_stage_noise`) -- floored at
-      that held-out baseline error, which covers the error sources the Linear-only model omits. A
-      mismatch is a tie only if the reference value sits within `TIE_SIGMA` of that band from the
-      rounding edge.
+      carries noise at `ACOUSTIC_NOISE_SCALE`, floored at `ACOUSTIC_BASELINE_RMS`. Both are FIXED
+      (measured on the accuracy-fixed build), so a worse stage cannot widen its own band. A mismatch
+      is a tie only if the reference value sits within `TIE_SIGMA` of that band from the rounding edge.
 
-    Every other mismatch fails.
+    Every other mismatch fails. On top of that, three absolute limits: the stage's held-out x_final
+    error (`calibrate_stage_noise`) is at most `MAX_HELDOUT_RMS`, at least `MIN_ACOUSTIC_AGREEMENT` of
+    the live acoustic codes equal the reference's, and the semantic logits' RMS deviation is at most
+    `MAX_SEMANTIC_LOGIT_RMS`.
     """
     tt, hf = evidence["tt"], evidence["hf"]
     frames, levels = tt["frames_decoded"], evidence["levels"]
@@ -425,10 +426,12 @@ def test_discrete_codes_equal_the_teacher_forced_reference(device, hf_model, evi
     agree = float((tt["codes"][:, 1:, :] == hf["codes"][:, 1:, :]).float().mean())
 
     floor_eps = measure_matmul_floor(device)
-    rel_eps, cal_tt, cal_model = calibrate_stage_noise(evidence["pipe"], hf_model, floor_eps)
+    _, held_out_rms, cal_model = calibrate_stage_noise(evidence["pipe"], hf_model, floor_eps)
+    rel_eps, cal_tt = ACOUSTIC_NOISE_SCALE, ACOUSTIC_BASELINE_RMS
     print(
-        f"\nnoise model: one device matmul {floor_eps:.3e} relative; held-out calibration (trace inputs): "
-        f"TT x_final RMS dev {cal_tt:.3e} vs model {cal_model:.3e} at the floor -> scale {rel_eps:.3e}"
+        f"\nnoise model (FIXED): scale {rel_eps:.3e}, baseline {cal_tt:.3e}. Measured here: one device matmul "
+        f"{floor_eps:.3e} relative; held-out TT x_final RMS dev {held_out_rms:.3e} (limit {MAX_HELDOUT_RMS:.3e}) "
+        f"vs model {cal_model:.3e} at the floor"
     )
     tt_hidden = torch.stack([d["llm_hidden"] for d in tt["diagnostics"]], dim=-1)
     ties = decided_wrong = 0
@@ -458,8 +461,9 @@ def test_discrete_codes_equal_the_teacher_forced_reference(device, hf_model, evi
                 f"band {float(band[b, c]):.4f}"
             )
     n_live = int(live.expand_as(room).sum())
+    agree_live = 1.0 - int(differ.sum()) / max(n_live, 1)
     print(
-        f"\nacoustic codes vs teacher-forced reference: agreement {agree:.6f} over {n_live} live codes; "
+        f"\nacoustic codes vs teacher-forced reference: agreement {agree:.6f} ({agree_live:.6f} of {n_live} live codes); "
         f"{int(differ.sum())} differ -> {ties} ties (band {TIE_SIGMA} x max(per-element spread at {rel_eps:.3e}, 95% upper bound "
         f"from {NOISE_DRAWS} draws; held-out baseline {cal_tt:.3e})), {decided_wrong} decidable mismatches; codes "
         f"inside the baseline band alone: {int(((room <= TIE_SIGMA * cal_tt * scale) & live.expand_as(room)).sum())}/{n_live}"
@@ -468,7 +472,8 @@ def test_discrete_codes_equal_the_teacher_forced_reference(device, hf_model, evi
     lo_tt = torch.stack([tt["diagnostics"][t]["semantic_logits"] for t in range(frames)], -1)
     lo_hf = torch.stack([hf["diagnostics"][t]["semantic_logits"] for t in range(frames)], -1)
     finite = torch.isfinite(lo_hf)
-    ldev = (lo_tt[finite] - lo_hf[finite]).pow(2).mean().sqrt()
+    measured_ldev = float((lo_tt[finite] - lo_hf[finite]).pow(2).mean().sqrt())
+    ldev = SEMANTIC_LOGIT_RMS
     top2 = lo_hf.topk(2, dim=1).values
     sem_decidable = (top2[:, 0] - top2[:, 1]) > TIE_SIGMA * ldev
     sem_differ = tt["codes"][:, 0, :] != hf["codes"][:, 0, :]
@@ -482,8 +487,17 @@ def test_discrete_codes_equal_the_teacher_forced_reference(device, hf_model, evi
     print(
         f"semantic codes vs teacher-forced reference: agreement {float((~sem_differ).float().mean()):.6f}; "
         f"{int(sem_differ.sum())} differ -> {int((sem_differ & ~sem_decidable).sum())} ties "
-        f"(band {TIE_SIGMA} x RMS {float(ldev):.3e}), {int(sem_wrong.sum())} decidable mismatches"
+        f"(band {TIE_SIGMA} x RMS {ldev:.3e}, measured {measured_ldev:.3e}), {int(sem_wrong.sum())} decidable mismatches"
     )
+    assert (
+        held_out_rms <= MAX_HELDOUT_RMS
+    ), f"the acoustic stage's held-out x_final RMS error {held_out_rms:.3e} exceeds {MAX_HELDOUT_RMS:.3e}"
+    assert (
+        agree_live >= MIN_ACOUSTIC_AGREEMENT
+    ), f"only {agree_live:.4f} of live acoustic codes match the reference (need {MIN_ACOUSTIC_AGREEMENT})"
+    assert (
+        measured_ldev <= MAX_SEMANTIC_LOGIT_RMS
+    ), f"semantic logit RMS deviation {measured_ldev:.3e} exceeds {MAX_SEMANTIC_LOGIT_RMS:.3e}"
     assert decided_wrong == 0, f"{decided_wrong} DECIDABLE acoustic codes differ from the reference"
     assert int(sem_wrong.sum()) == 0, f"{int(sem_wrong.sum())} DECIDABLE semantic codes differ from the reference"
 

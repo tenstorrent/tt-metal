@@ -317,11 +317,11 @@ class TextStack:
         """The SHARED PROMPT PREFIX, measured on the host ids, and everything its split prefill reads.
 
         Every row carries the same voice, so `[BOS] [BEGIN_AUDIO] [AUDIO]*N [NEXT_AUDIO_TEXT]` is the
-        same ~150 tokens on all of them, and a causal stack computes the same hidden state at those
+        same N + 3 tokens on all of them, and a causal stack computes the same hidden state at those
         positions for every row. `prefill_voiced` then runs row 0's first P = tile_ceil(t0) positions
         ONCE, at batch 1, and only the T-row TAIL -- positions [t0, R), exactly the positions the
         rows disagree on -- for every row, packed compact as one `[1, 1, B * T, dim]` sequence. For
-        the package's 170-token prompt that is 20 rows per user instead of 192.
+        casual_male's 170-token prompt (N = 147) that is 20 rows per user instead of 192.
 
         The tail attends to the prefix's k/v through `mask`: prefix columns before t0 open, the
         prefix's own rows past t0 (row 0's tokens, not this row's) closed, the tail's columns causal.
@@ -558,7 +558,15 @@ class TextStack:
         if batch != split["batch"]:
             raise ValueError(f"batch {batch} != the staged compact tail's {split['batch']}")
         self._arm_cache(batch, rows + split["tail_slots"])
-        pre_in = self._voiced(ttnn.slice(input_ids_tt, [0, 0], [1, rows]), split["keep_head"], split["placed_head"])
+        # The prefix runs row 0's first `rows` = tile_ceil(start) positions. When the shared prefix ends
+        # just past a tile edge, `rows` can exceed the prompt itself (7 of the 20 presets with the
+        # package's 18-token texts, e.g. ar_male: start 70 -> rows 96 > real 90), so the ids are padded
+        # out to `rows`. Positions past `start` are masked from the tail and from decode either way.
+        width = int(input_ids_tt.shape[-1])
+        pre_ids = ttnn.slice(input_ids_tt, [0, 0], [1, min(rows, width)])
+        if rows > width:
+            pre_ids = ttnn.pad(pre_ids, [(0, 0), (0, rows - width)], value=0)
+        pre_in = self._voiced(pre_ids, split["keep_head"], split["placed_head"])
         tail_ids = ttnn.reshape(ttnn.slice(input_ids_tt, [0, start], [batch, real]), [1, batch * tail])
         tail_in = self._voiced(tail_ids, split["keep_tail"], split["placed_tail"])
         for block in self.blocks:
@@ -598,9 +606,6 @@ class TextStack:
             ),
             ttnn.TILE_LAYOUT,
         )
-        if not need_hidden:
-            ttnn.deallocate(pre_out)
-            return None, last
         # The whole prompt's hidden state, positions [0, R): row 0's first t0 prefix rows for every
         # sample, then each sample's own tail. The seam is off-tile, so it is joined ROW_MAJOR.
         head = ttnn.slice(ttnn.to_layout(pre_out, ttnn.ROW_MAJOR_LAYOUT), [0, 0, 0, 0], [1, 1, start, self.hidden_size])

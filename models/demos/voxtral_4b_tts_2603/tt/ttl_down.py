@@ -110,5 +110,6 @@ def apply(x, w):
     y = ttnn.allocate_tensor_on_device(
         ttnn.Shape([rows, n]), ttnn.bfloat16, ttnn.TILE_LAYOUT, a.device(), ttnn.DRAM_MEMORY_CONFIG
     )
-    down_matmul(a, w, y)
+    with ttl_swiglu.repaired_kernel_writes():
+        down_matmul(a, w, y)
     return ttnn.reshape(ttnn.typecast(y, ttnn.float32), tuple(dims[:-1] + [n]))

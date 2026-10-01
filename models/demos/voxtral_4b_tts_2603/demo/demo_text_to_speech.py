@@ -53,10 +53,20 @@ def main(argv=None):
     parser.add_argument("--score", action="store_true", help="also transcribe (Whisper WER) and MOS-score the output")
     args = parser.parse_args(argv)
 
+    # Checked HERE, before the checkpoint loads and the device opens: the pipeline serves at most
+    # DEFAULT_BATCH rows per call, and a bad request should fail in a second, not after minutes.
+    if not 1 <= args.batch <= common.DEFAULT_BATCH:
+        parser.error(f"--batch must be between 1 and {common.DEFAULT_BATCH}, got {args.batch}")
+    if args.max_frames is not None and args.max_frames < 1:
+        parser.error(f"--max-frames must be at least 1, got {args.max_frames}")
     texts = list(args.text or [])
     if args.texts_file:
         with open(args.texts_file) as handle:
             texts += [line.strip() for line in handle if line.strip()]
+    if len(texts) > common.DEFAULT_BATCH:
+        parser.error(f"{len(texts)} prompts given; at most {common.DEFAULT_BATCH} per call")
+    if args.voice not in common.available_voices():
+        parser.error(f"unknown voice {args.voice!r}; presets: {', '.join(sorted(common.available_voices()))}")
     if not texts:
         texts = list(common.SPEECH_TEXTS[: args.batch])
     if len(texts) < common.DEFAULT_BATCH:

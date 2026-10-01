@@ -9,7 +9,7 @@ stub importer and the Gate-2 invocation counter.
 Source A (the hub repo) ships `params.json`, `consolidated.safetensors` and
 `tekken.json` -- no `config.json`, so `AutoConfig`/`AutoModel` raise. Source B
 ships the verified reconstruction of the reference
-(`tests/pcc/_reference_loader.py`), which is what `load_reference_model()`
+(`reference/reference_loader.py`), which is what `load_reference_model()`
 delegates to.
 """
 from __future__ import annotations
@@ -19,50 +19,62 @@ import importlib
 import json
 import os
 import re
-import sys
 from functools import lru_cache
 
 import torch
 
 HF_MODEL_ID = "mistralai/Voxtral-4B-TTS-2603"
-
-STUB_PKG = "models.tt_transformers.demo.voxtral_4b_tts_2603._stubs"
-BRINGUP_PKG = "models.tt_transformers.demo.voxtral_4b_tts_2603"
-
-
-def _resolve_bringup_root() -> str:
-    """Filesystem path of Source B, resolved through the IMPORT system rather than off `__file__`.
-
-    `models` is a NAMESPACE package, so this package and the bring-up subtree do not have to sit
-    in the same repo root -- a git worktree checks this package out but not the (untracked)
-    bring-up output, which then still resolves from the primary checkout. Walking up from
-    `__file__` names a sibling directory in THIS root and silently misses that, which is how
-    `_reference_loader` went missing on a worktree run while the stub imports beside it worked:
-    the stub imports go through the namespace path, and only this one path did not.
-
-    Falls back to the `__file__`-relative guess so a tree with no importable bring-up package
-    still produces the same path (and the same error message) it did before.
-    """
-    try:
-        import importlib.util
-
-        spec = importlib.util.find_spec(BRINGUP_PKG)
-        for loc in list(getattr(spec, "submodule_search_locations", None) or []):
-            if os.path.isdir(loc):
-                return os.path.abspath(loc)
-    except Exception:  # noqa: BLE001 - a missing/unimportable package falls through to the guess
-        pass
-    return os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
-        "tt_transformers",
-        "demo",
-        "voxtral_4b_tts_2603",
-    )
+# The checkpoint snapshot every number in the README was measured on.
+HF_REVISION = os.environ.get("VOXTRAL_HF_REVISION", "b81be46c3777f88621676791b512bb01dc1cb970")
 
 
-# Source B, the bring-up tool's output for this model.
-BRINGUP_ROOT = _resolve_bringup_root()
-CAPTURED_ROOT = os.path.join(BRINGUP_ROOT, "_captured")
+def _revision(model_id: str):
+    return HF_REVISION if model_id == HF_MODEL_ID else None
+
+
+# The TTNN component ports and the component list (`bringup_status.json`) live in `tt/modules/`.
+STUB_PKG = "models.demos.voxtral_4b_tts_2603.tt.modules"
+STUB_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules")
+
+
+# The graduated components each task head routes through (test_gate2 checks every one is invoked).
+ROUTED_MODULES = {
+    "text_to_speech": (
+        "acoustic_codebook",
+        "acoustic_transformer_block",
+        "attention",
+        "bidirectional_attention",
+        "causal_conv1d",
+        "causal_conv_transpose1d",
+        "codec_attention",
+        "codec_transformer",
+        "codec_transformer_block",
+        "feed_forward",
+        "flow_matching_audio_transformer",
+        "layer",
+        "mistral_attention",
+        "mistral_audio_codebook",
+        "mistral_decoder_layer",
+        "mistral_m_l_p",
+        "mistral_r_m_s_norm",
+        "mistral_rotary_embedding",
+        "mlp",
+        "multi_vocab_embeddings",
+        "parametrization_list",
+        "parametrized_conv1d",
+        "parametrized_conv_transpose1d",
+        "semantic_codebook",
+        "time_embedding",
+        "token_embed",
+        "voxtral_t_t_s_audio_tokenizer",
+        "weight_norm",
+    ),
+    "text_continuation": (
+        "decoder_head",
+        "encoder_stack",
+        "mistral_model",
+    ),
+}
 
 # BATCH=32: 32 independent samples per pipeline call. A single sample wastes 31/32 of a
 # 32-row matmul tile; filling it raises aggregate throughput ~32x at unchanged per-sample latency.
@@ -78,16 +90,9 @@ DEFAULT_SEQ_LEN = 32
 # --------------------------------------------------------------------------------------
 
 
-def _bringup_pcc_dir() -> str:
-    return os.path.join(BRINGUP_ROOT, "tests", "pcc")
-
-
 @lru_cache(maxsize=1)
 def _reference_loader_module():
-    path = _bringup_pcc_dir()
-    if path not in sys.path:
-        sys.path.insert(0, path)
-    return importlib.import_module("_reference_loader")
+    return importlib.import_module("models.demos.voxtral_4b_tts_2603.reference.reference_loader")
 
 
 def load_reference_model(model_id: str = HF_MODEL_ID):
@@ -101,7 +106,11 @@ def resolve_repo(model_id: str = HF_MODEL_ID) -> str:
         return model_id
     from huggingface_hub import snapshot_download
 
-    return snapshot_download(model_id, allow_patterns=["params.json", "consolidated.safetensors", "tekken.json"])
+    return snapshot_download(
+        model_id,
+        revision=_revision(model_id),
+        allow_patterns=["params.json", "consolidated.safetensors", "tekken.json"],
+    )
 
 
 def load_params(model_id: str = HF_MODEL_ID) -> dict:
@@ -271,8 +280,8 @@ def load_voice_embedding(voice: str, model_id: str = HF_MODEL_ID):
     """The speaker's voice embedding, `[N, hidden]`, from the checkpoint repo."""
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(model_id, f"voice_embedding/{voice}.pt")
-    emb = torch.load(path, map_location="cpu", weights_only=False)
+    path = hf_hub_download(model_id, f"voice_embedding/{voice}.pt", revision=_revision(model_id))
+    emb = torch.load(path, map_location="cpu", weights_only=True)
     if not torch.is_tensor(emb) or emb.dim() != 2:
         raise ValueError(f"voice {voice!r}: expected a 2-D embedding, got {type(emb).__name__}")
     return emb.to(torch.float32)
@@ -282,7 +291,7 @@ def available_voices(model_id: str = HF_MODEL_ID) -> dict:
     """`{voice: n_audio_tokens}` as the tokenizer publishes it."""
     from huggingface_hub import hf_hub_download
 
-    with open(hf_hub_download(model_id, "tekken.json"), encoding="utf-8") as fh:
+    with open(hf_hub_download(model_id, "tekken.json", revision=_revision(model_id)), encoding="utf-8") as fh:
         meta = json.load(fh)
     return dict(((meta.get("audio") or {}).get("voice_num_audio_tokens") or {}))
 
@@ -361,7 +370,7 @@ def full_prompt_len(batch: int = DEFAULT_BATCH, model_id: str = HF_MODEL_ID) -> 
 
 
 # --------------------------------------------------------------------------------------
-# Decode horizon -- see e2e_plan.json -> decode_horizon
+# Decode horizon: each row runs until its semantic head emits end_audio (`resolve_max_frames` is only a cap)
 # --------------------------------------------------------------------------------------
 
 
@@ -441,7 +450,7 @@ def eos_token_id(hf_model):
 @lru_cache(maxsize=1)
 def bringup_status() -> dict:
     """Source B's `bringup_status.json` -- the authority on which components exist."""
-    with open(os.path.join(BRINGUP_ROOT, "bringup_status.json")) as f:
+    with open(os.path.join(STUB_ROOT, "bringup_status.json")) as f:
         return json.load(f)
 
 
@@ -449,7 +458,7 @@ def bringup_status() -> dict:
 def graduated_modules() -> tuple:
     """The graduated component names, READ FROM Source B rather than typed here.
 
-    A component is graduated when `bringup_status.json` lists it and its live `_stubs/<name>.py`
+    A component is graduated when `bringup_status.json` lists it and its live `tt/modules/<name>.py`
     exists. (The bring-up tool's `.py.last_good_native` snapshots are not shipped.) Reading the set
     instead of listing it is what keeps Gate 2 from drifting: a component the bring-up tool adds
     appears in the gate's expected set immediately, so the pipeline cannot silently leave one out.
@@ -457,7 +466,7 @@ def graduated_modules() -> tuple:
     names = []
     for comp in bringup_status()["components"]:
         name = comp["name"]
-        if os.path.exists(os.path.join(BRINGUP_ROOT, "_stubs", f"{name}.py")):
+        if os.path.exists(os.path.join(STUB_ROOT, f"{name}.py")):
             names.append(name)
     return tuple(sorted(names))
 
@@ -492,7 +501,7 @@ def _stub_sources() -> dict:
 
     out = {}
     for name in graduated_modules():
-        with open(os.path.join(BRINGUP_ROOT, "_stubs", f"{name}.py")) as f:
+        with open(os.path.join(STUB_ROOT, f"{name}.py")) as f:
             src = f.read()
         tree = ast.parse(src)
         if ast.get_docstring(tree) is not None:
@@ -555,26 +564,12 @@ def import_stub(name: str):
 def build_stub(name: str, device, torch_module, counter=None):
     """Build a graduated stub through its own `build(device, torch_module)` constructor.
 
-    The body that runs is the LIVE `_stubs/<name>.py` -- the graduated work product, composed
+    The body that runs is the LIVE `tt/modules/<name>.py` -- the graduated work product, composed
     as-is. When a `counter` is supplied the returned callable is wrapped so Gate 2 can observe
     that it really ran; the wrapper adds nothing to the forward but the count.
     """
     stub = import_stub(name).build(device, torch_module)
     return stub if counter is None else counter.wrap(name, stub)
-
-
-def captured_golden_cache(component: str) -> dict:
-    """The bring-up tool's captured reference inputs/golden for a component.
-
-    A dict with keys ``module``, ``kwargs``, ``primary`` and ``golden``. The pickle holds live
-    references to the reference loader's CLASSES, so `_reference_loader` has to be importable
-    under that exact name before `torch.load` can resolve them -- it lives in Source B's
-    `tests/pcc/`, which is not on `sys.path` by default, and without this the load fails with a
-    bare `ModuleNotFoundError: No module named '_reference_loader'`.
-    """
-    _reference_loader_module()  # puts Source B's tests/pcc on sys.path and the module in sys.modules
-    path = os.path.join(CAPTURED_ROOT, component, "golden_cache_s0.pt")
-    return torch.load(path, weights_only=False)
 
 
 # --------------------------------------------------------------------------------------
@@ -662,8 +657,13 @@ def use_all_cpu_threads() -> int:
 
 
 def golden_cache_path(key: str) -> str:
-    root = os.environ.get("VOXTRAL_GOLDEN_CACHE", os.path.join("/tmp", "voxtral_4b_tts_2603_golden"))
-    os.makedirs(root, exist_ok=True)
+    # A per-user cache directory, not a fixed world-writable one under /tmp: these files are loaded back.
+    default = os.path.join(
+        os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"),
+        "voxtral_4b_tts_2603_golden",
+    )
+    root = os.environ.get("VOXTRAL_GOLDEN_CACHE", default)
+    os.makedirs(root, mode=0o700, exist_ok=True)
     return os.path.join(root, f"{key}.pt")
 
 
@@ -699,7 +699,7 @@ def cached_golden(key: str, compute):
     """
     path = golden_cache_path(key)
     if os.path.exists(path) and not os.environ.get("VOXTRAL_GOLDEN_REFRESH"):
-        return torch.load(path, weights_only=False)
+        return torch.load(path, weights_only=True)
     value = compute()
     torch.save(value, path)
     return value

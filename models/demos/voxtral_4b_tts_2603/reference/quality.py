@@ -15,7 +15,9 @@ Host-side scoring of the OUTPUT. Nothing here is in, or imported by, the forward
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.machinery
+import os
 import sys
 import types
 from functools import lru_cache
@@ -24,7 +26,16 @@ import numpy as np
 import torch
 
 ASR_MODEL_ID = "openai/whisper-large-v3-turbo"
+# Pinned: the scores these tests compare are only reproducible against one Whisper snapshot.
+ASR_REVISION = os.environ.get("VOXTRAL_ASR_REVISION", "41f01f3fe87f28c78e2fbf8b568835947dd65ed9")
 MOS_HUB_REPO = "tarepan/SpeechMOS:v1.2.0"
+# UTMOS22 runs from a LOCAL copy of the SpeechMOS hub code with a checkpoint verified against this
+# hash. Nothing is downloaded or executed from GitHub at test time unless VOXTRAL_ALLOW_REMOTE_MOS=1
+# is set once to populate the torch hub cache (see the README).
+MOS_HUB_DIR = "tarepan_SpeechMOS_v1.2.0"
+MOS_CHECKPOINT = "utmos22_strong_step7459_v1.pt"
+MOS_CHECKPOINT_URL = "https://github.com/tarepan/SpeechMOS/releases/download/v1.0.0/" + MOS_CHECKPOINT
+MOS_CHECKPOINT_SHA256 = "38aa51ab79e2a4e09a1449758a4b37e9cbb2e8235a49662a732d33a9ba1e9bff"
 SCORE_RATE = 16000
 
 
@@ -45,8 +56,10 @@ def resample(wave: torch.Tensor, orig_rate: int, new_rate: int = SCORE_RATE) -> 
 def _asr():
     from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
-    processor = WhisperProcessor.from_pretrained(ASR_MODEL_ID)
-    model = WhisperForConditionalGeneration.from_pretrained(ASR_MODEL_ID, torch_dtype=torch.float32).eval()
+    processor = WhisperProcessor.from_pretrained(ASR_MODEL_ID, revision=ASR_REVISION)
+    model = WhisperForConditionalGeneration.from_pretrained(
+        ASR_MODEL_ID, revision=ASR_REVISION, torch_dtype=torch.float32
+    ).eval()
     return processor, model
 
 
@@ -104,10 +117,39 @@ def _install_torchaudio_shim() -> None:
     sys.modules["torchaudio.functional"] = fn
 
 
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 @lru_cache(maxsize=1)
 def _mos():
+    """UTMOS22 (strong) from the local torch hub cache, its checkpoint checked against a pinned hash."""
     _install_torchaudio_shim()
-    return torch.hub.load(MOS_HUB_REPO, "utmos22_strong", trust_repo=True).eval()
+    hub = torch.hub.get_dir()
+    code = os.path.join(hub, MOS_HUB_DIR)
+    ckpt = os.path.join(hub, "checkpoints", MOS_CHECKPOINT)
+    remote_ok = os.environ.get("VOXTRAL_ALLOW_REMOTE_MOS") == "1"
+    if not (os.path.isdir(code) and os.path.isfile(ckpt)):
+        if not remote_ok:
+            raise RuntimeError(
+                f"UTMOS22 is not cached under {hub} ({MOS_HUB_DIR}/, checkpoints/{MOS_CHECKPOINT}). Run once with "
+                f"VOXTRAL_ALLOW_REMOTE_MOS=1 to fetch {MOS_HUB_REPO} and its checkpoint (this executes that "
+                "repository's hub code), or copy both into the cache."
+            )
+        if not os.path.isdir(code):
+            torch.hub.load(MOS_HUB_REPO, "utmos22_strong", trust_repo=True, pretrained=False)
+        if not os.path.isfile(ckpt):
+            os.makedirs(os.path.dirname(ckpt), exist_ok=True)
+            torch.hub.download_url_to_file(MOS_CHECKPOINT_URL, ckpt, hash_prefix=MOS_CHECKPOINT_SHA256[:16])
+    if _sha256(ckpt) != MOS_CHECKPOINT_SHA256:
+        raise RuntimeError(f"{ckpt} does not match the pinned UTMOS22 checkpoint hash {MOS_CHECKPOINT_SHA256}")
+    model = torch.hub.load(code, "utmos22_strong", source="local", pretrained=False)
+    model.load_state_dict(torch.load(ckpt, map_location="cpu", weights_only=True))
+    return model.eval()
 
 
 def mos(waves, rate: int) -> list[float]:

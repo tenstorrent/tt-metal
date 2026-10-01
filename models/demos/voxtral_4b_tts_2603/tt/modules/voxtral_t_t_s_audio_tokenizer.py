@@ -438,28 +438,13 @@ def _split_embedding(ids, tables, layout=None):
     )
 
 
-def _largest_divisor(n, cap):
-    return max(d for d in range(1, min(n, cap) + 1) if n % d == 0)
-
-
 def _bmm(a, b, transpose_b=False):
-    """Head-batched attention `a @ b` over the full grid, every (batch, head, 4-tile M block) its own
-    work unit. With no program config these `[B, H, S, S]` products ran on 16-64 cores."""
-    m, k, n = (-(-int(d) // 32) for d in (a.shape[-2], a.shape[-1], b.shape[-2 if transpose_b else -1]))
-    pm = _largest_divisor(m, 4)
-    # Whole-K, whole-N blocks: a long sequence (a longer utterance) outgrows L1, so fall back then.
-    tile = lambda t: 4096 if t.dtype == ttnn.float32 else 2048
-    if 2 * pm * k * tile(a) + 2 * k * n * tile(b) + 2 * pm * n * 4096 > 1_200_000:
-        return ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=_COMPUTE)
-    grid = a.device().compute_with_storage_grid_size()
-    cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(grid.x, grid.y),
-        in0_block_w=k,
-        out_subblock_h=1,
-        out_subblock_w=_largest_divisor(n, 4),
-        per_core_M=pm,
-        per_core_N=n,
-    )
+    """Head-batched attention `a @ b` (`[B, H, S, S]` scores, then `P @ V`).
+
+    No program config: a `MatmulMultiCoreReuseProgramConfig` with per-core (batch, head, 4-tile M)
+    blocks was tried here and gives WRONG results for these head-batched shapes (waveform PCC -0.005
+    in the e2e test), so the stock schedule is used.
+    """
     return ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=_COMPUTE)
 
 

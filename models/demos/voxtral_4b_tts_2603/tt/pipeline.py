@@ -66,7 +66,8 @@ _HEAD_SECTIONS = {
 # The pinned trace capacity for the sequence axis. The VARIABLE dim is the sequence length, whose
 # bound is `config.max_position_embeddings` (128000) -- far past anything a trace region holds, so
 # the stage pins it instead. 256 is tile-aligned and covers the real voiced speech request (the
-# default voice's 147-token block + text + controls = 197 tokens). Shrunk with a PRINTED fallback if a capture overflows the region, never silently.
+# default voice's 147-token block + 18-token text + controls = 170 tokens; the longest preset, it_male,
+# gives 191). Shrunk with a PRINTED fallback if a capture overflows the region, never silently.
 DEFAULT_TRACE_CAPACITY = int(os.environ.get("VOXTRAL_TRACE_C", "256"))
 
 # Frames the `vocode` stage is captured at. The codec upsamples 8x, so 32 frames become 256 rows,
@@ -307,7 +308,7 @@ class VoxtralTTSPipeline:
 
         frames, diagnostics = [], []
         # The stop test is accumulated ON DEVICE. `finished |= semantic == stop_id` in torch would
-        # be host compute inside the forward, which `host_op_selftest` exists to catch; here the
+        # be host compute inside the forward, which the trace capture forbids; here the
         # comparison and the OR are ttnn ops over a resident `[batch, 1]` flag and only a single
         # reduced scalar crosses to the host, as a loop-control decision rather than as math.
         finished_flag = ttnn.zeros([batch, 1], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
@@ -569,47 +570,14 @@ class VoxtralTTSPipeline:
     # -- acoustic ------------------------------------------------------------------------
 
     def acoustic_trace_inputs(self):
-        """ZERO-ARG. The conditioning hidden state, assembled from the captured reference tensors.
-
-        `_captured/flow_matching_audio_transformer/` holds the bring-up tool's own golden inputs
-        for this section; its primary is the `[B, 3072]` backbone hidden state the stage is
-        conditioned on. Falling back to the reference's real hidden state for this package's own
-        prompts keeps the seam working when only `golden_cache_s0.pt` was captured.
-        """
+        """ZERO-ARG. The conditioning hidden state: the reference backbone's last hidden state for
+        this package's own default prompts, and one draw of the sampler noise."""
         batch = self.batch
-        captured = None
-        try:
-            # `_captured/<comp>/golden_cache_s0.pt` is a dict with keys module/kwargs/primary/
-            # golden; this component's kwargs are exactly (llm_hidden, x_t, t), captured at
-            # batch 2.
-            cache = common.captured_golden_cache("flow_matching_audio_transformer")
-            kwargs = cache.get("kwargs") or {}
-            if isinstance(kwargs.get("llm_hidden"), torch.Tensor):
-                captured = kwargs
-        except Exception:  # noqa: BLE001 - a missing or cleared capture falls back to the reference
-            captured = None
-
-        def _to_batch(tensor):
-            """Tile the captured rows up to the pipeline's batch.
-
-            The capture is batch 2 and this seam exists to hand the perf engine the stage's
-            SHAPES, so repeating rows is correct here; the PCC gate is what drives 32 independent
-            samples, and it builds its own inputs from the real tokenizer.
-            """
-            tensor = tensor.to(torch.float32)
-            if tensor.shape[0] >= batch:
-                return tensor[:batch]
-            return tensor.repeat(-(-batch // tensor.shape[0]), 1)[:batch]
-
-        if captured is not None:
-            llm_hidden = _to_batch(captured["llm_hidden"])
-            x0 = _to_batch(captured["x_t"])
-        else:
-            input_ids, _ = self.default_inputs()
-            with torch.no_grad():
-                llm_hidden = self.reference_model.model(input_ids=input_ids).last_hidden_state[:, -1]
-            llm_hidden = llm_hidden.to(torch.float32)
-            x0 = self.noise(1, batch=batch)[0]
+        input_ids, _ = self.default_inputs()
+        with torch.no_grad():
+            llm_hidden = self.reference_model.model(input_ids=input_ids).last_hidden_state[:, -1]
+        llm_hidden = llm_hidden.to(torch.float32)
+        x0 = self.noise(1, batch=batch)[0]
         return {
             "llm_hidden": llm_hidden,
             "x0": x0,
@@ -964,61 +932,5 @@ def trace_capture_selftest(device=None, verbose: bool = True, pipe=None) -> bool
     return ok
 
 
-def host_op_selftest(device=None, pipe=None):
-    """The AUTHORITATIVE fully-on-device check, for EVERY task head.
-
-    Input ENCODING (tokenization) and the one-time weight build happen OUTSIDE the observed
-    region; the model math -- encoded inputs to waveform / token ids, every stage including the
-    prefix embedding and the on-device argmax -- happens INSIDE it. ttnn ops do not dispatch
-    through torch, so a truly on-device forward fires ZERO host aten ops; any aten op inside is
-    host compute that the ttnn-crossing checks cannot see.
-    """
-    from models.demos.voxtral_4b_tts_2603 import device_session
-    from scripts.tt_hw_planner.host_op_observer import observe_host_ops, verdict
-
-    # A CALLER THAT ALREADY HOLDS A DEVICE MUST NOT MAKE US OPEN A SECOND ONE. Opening one here
-    # while a test fixture's is live raises `No MetalContext instance for context_id N` and leaves
-    # the device needing a reset; the observers call this zero-arg in a fresh process, which is the
-    # branch below.
-    if device is None:
-        with device_session.selftest_device() as opened:
-            return host_op_selftest(opened, pipe=pipe)
-
-    results = {}
-    # One build serves both heads -- the weights are ~4.19 GB of 4.25 GB, so a per-head build
-    # beside a caller's live pipeline is an out-of-memory, and running one head's entry point
-    # exercises only that head's path either way.
-    shared = pipe if pipe is not None else build_pipeline(device)
-    for head in TASK_HEADS:
-        # OUTSIDE: tokenize, fetch and stage the voice, draw the sampler's noise, build weights.
-        max_frames = 2
-        if head == "text_to_speech":
-            input_ids, audio_mask, voice_embedding, _ = shared.speech_inputs()
-            voice = shared.stage_voice(audio_mask, voice_embedding, input_ids=input_ids)
-            x0 = shared.noise(max_frames)
-        else:
-            input_ids, _ = common.build_batch_inputs(batch=shared.batch)
-        with observe_host_ops() as ops:
-            # INSIDE: the model math only.
-            if head == "text_to_speech":
-                shared.run_text_to_speech(input_ids=input_ids, x0=x0, max_frames=max_frames, voice=voice)
-            else:
-                shared.run_text_continuation(input_ids=input_ids)
-        results[head] = verdict(ops)
-        print(f"[host-ops] {head}: {results[head]}")
-    failing = {h: v for h, v in results.items() if not _verdict_ok(v)}
-    if failing:
-        return failing
-    return results
-
-
-def _verdict_ok(value) -> bool:
-    """`host_op_observer.verdict()` reports `on_device`; anything else is not a verdict."""
-    if isinstance(value, dict):
-        return bool(value["on_device"])
-    return bool(value)
-
-
 if __name__ == "__main__":
     print("trace_capture_selftest ->", trace_capture_selftest())
-    print("host_op_selftest ->", host_op_selftest())

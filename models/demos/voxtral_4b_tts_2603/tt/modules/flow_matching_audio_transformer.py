@@ -190,7 +190,8 @@ _COMPUTE = ttnn.WormholeComputeKernelConfig(
 )
 
 
-# Tall (>= 8 tile rows) linears are compute-bound, so they run one fidelity rung below HiFi4.
+# Tall (>= 8 tile rows) linears get their own config object; fidelity stays HiFi4 (fp32 accumulation),
+# like every acoustic linear, because the stage's output is rounded onto 21 code levels.
 _TALL_COMPUTE = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )
@@ -520,12 +521,11 @@ def _compile_block(device, blk, mask):
         dtype=ttnn.bfloat16,
     )
     wo = _from_torch(attn.wo.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat16)
-    # Weight-stream bound at 96 rows; bf8_b halves the bytes each FFN projection reads, and HiFi2
-    # (two phases, enough for a bf8_b mantissa) halves the math that sits behind the stream.
+    # bfloat16 FFN weights at HiFi4: the 8-bit / HiFi2 variant was faster but cost the stage its accuracy.
     w1_t, w3_t = ((m.weight.detach().float().transpose(0, 1) * g_ffn_t).contiguous() for m in (ff.w1, ff.w3))
     w1, w3 = (_from_torch(t, device, dtype=ttnn.bfloat16) for t in (w1_t, w3_t))
     w13 = cpp_swiglu.fuse(w1_t, w3_t, device)
-    # The down projection is DRAM-bound at 1024 rows; bf8_b halves the weight it streams.
+    # The down projection stays bfloat16: bf8_b weights here cost the acoustic stage its accuracy.
     w2 = _from_torch(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat16)
     w2_ttl = ttl_down.weight(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, _from_torch)
     w2_cpp = cpp_down.shard(ff.w2.weight.detach().transpose(0, 1).contiguous(), device)
@@ -565,9 +565,7 @@ def _compile_block(device, blk, mask):
             _lin(hn, w1, dtype=ttnn.float32, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG),
             _lin(hn, w3, dtype=ttnn.float32, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG),
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            # Consumed once, by the down projection: hand it over in L1, not through DRAM, and in
-            # bf16 -- the down projection multicasts all of it to every core, and its bf8_b weight
-            # already rounds coarser than a bf16 activation does.
+            # Consumed once, by the down projection: hand it over in L1, not through DRAM.
             dtype=ttnn.float32,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
