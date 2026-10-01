@@ -246,7 +246,8 @@ def test_cmd_change_runs_every_sku_leg_of_that_entry(repo: Repo):
 
 
 def test_added_entry_runs(repo: Repo):
-    added = BASE_TESTS_YAML + textwrap.dedent("""
+    added = BASE_TESTS_YAML + textwrap.dedent(
+        """
         - name: unit gamma
           cmd: ./build/test/gamma
           skus:
@@ -255,7 +256,8 @@ def test_added_entry_runs(repo: Repo):
           team: llk
           owner_id: U004
           arch: blackhole
-        """)
+        """
+    )
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", added)
     code, payload, _ = repo.scope()
     assert code == 0
@@ -414,7 +416,8 @@ def test_duplicate_composite_key_fails_closed(repo: Repo):
 def test_same_name_on_different_skus_fails_closed(repo: Repo):
     """Identity is (name, gtest_shard_index), so a distinct `id` no longer rescues
     two entries that share a name."""
-    same_name = textwrap.dedent("""\
+    same_name = textwrap.dedent(
+        """\
         - id: unit-shared-wh
           name: shared name
           cmd: ./build/test/shared-wh
@@ -432,7 +435,8 @@ def test_same_name_on_different_skus_fails_closed(repo: Repo):
               timeout: 5
           team: llk
           owner_id: U006
-        """)
+        """
+    )
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", same_name)
     code, _, stderr = repo.scope()
     assert code == 1
@@ -455,7 +459,8 @@ def test_duplicates_already_on_the_base_do_not_fail_the_pr_that_fixes_them(repo:
     duplicates is itself diffed against a base that still has them. Both renamed
     entries read as added, so their legs run.
     """
-    entry = textwrap.dedent("""\
+    entry = textwrap.dedent(
+        """\
         - name: shared name
           cmd: ./build/test/shared
           skus:
@@ -463,7 +468,8 @@ def test_duplicates_already_on_the_base_do_not_fail_the_pr_that_fixes_them(repo:
               timeout: 5
           team: llk
           owner_id: U006
-        """)
+        """
+    )
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", entry + entry)
     repo.commit_base()
     repo.write(
@@ -477,12 +483,14 @@ def test_duplicates_already_on_the_base_do_not_fail_the_pr_that_fixes_them(repo:
 
 
 def test_entry_without_skus_fails_closed(repo: Repo):
-    no_skus = BASE_TESTS_YAML + textwrap.dedent("""
+    no_skus = BASE_TESTS_YAML + textwrap.dedent(
+        """
         - name: unit orphan
           cmd: ./build/test/orphan
           team: llk
           owner_id: U005
-        """)
+        """
+    )
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", no_skus)
     code, _, stderr = repo.scope()
     assert code == 1
@@ -497,7 +505,8 @@ def test_unknown_review_sku_name_fails_closed(repo: Repo):
 
 def test_shard_and_arch_disambiguate_same_name(repo: Repo):
     """Two entries sharing a name are distinct legs, and only the edited one runs."""
-    sharded = textwrap.dedent("""\
+    sharded = textwrap.dedent(
+        """\
         - name: shared name
           cmd: ./build/test/s --shard=0
           skus:
@@ -517,7 +526,8 @@ def test_shard_and_arch_disambiguate_same_name(repo: Repo):
           owner_id: U006
           arch: blackhole
           gtest_shard_index: 1
-        """)
+        """
+    )
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", sharded)
     repo.commit_base()
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", sharded.replace("--shard=1", "--shard=1 --extra"))
@@ -585,7 +595,8 @@ def test_filter_keeps_only_the_touched_legs(repo: Repo):
 def test_same_name_same_sku_fails_closed(repo: Repo):
     """Nothing downstream could tell the legs apart, so the gate refuses the yaml
     rather than resolving one arbitrarily."""
-    same_sku = textwrap.dedent("""\
+    same_sku = textwrap.dedent(
+        """\
         - name: shared name
           id: shared-one
           cmd: ./build/test/s --one
@@ -603,7 +614,8 @@ def test_same_name_same_sku_fails_closed(repo: Repo):
               timeout: 5
           team: llk
           owner_id: U008
-        """)
+        """
+    )
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", same_sku)
     rows = [
         matrix_row("shared name [bh_p150]", "bh_p150", id="shared-one"),
