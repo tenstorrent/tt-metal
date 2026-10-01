@@ -229,7 +229,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // FP32 DEST has room for four tiles under half sync; do not let the chain shrink it.
     uint32_t subblock_wt = get_max_subblock(block_wt, fp32_dest_acc_en && !dst_full_sync_en ? 4 : 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
-    bool block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
+    uint32_t block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
 
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(tt::LogOp, "num_rows_per_batch_per_core: {}", per_core_M / num_batches_per_core);
