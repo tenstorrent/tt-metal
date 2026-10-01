@@ -211,6 +211,8 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
         "results/block_graphs.json",
         "spec.yaml",
         "supervision.md",
+        "serving_contract.md",  # F58: the serving contract (SC.1) and its test list
+        "contract_tests.yaml",
     ):
         if (ledger.dir / extra).exists():
             paths.append(rel(ledger.dir / extra))
@@ -220,6 +222,10 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     # record of the model's ttnn.bringup calls the derived-op test task writes.
     paths += [rel(p) for p in gate_outputs(ledger, task) if p.exists() and p.name != f"{task['id']}.json"]
     paths += [p for p in task.get("paths", []) if _files_under(repo, [p])]  # an empty folder is no pathspec for git
+    if task.get("step") == "serving":  # SC.1's frozen contract tests (agents/serving-contract.md)
+        tests = Path(spec.model_dir) / "tests" / "bringup" / "contract"
+        if tests.is_dir():
+            paths.append(rel(tests))
     if task.get("step") == "contract":
         paths.append("models/demos/common/prefill")  # orchestrator.CONTRACT_SHARED: the contract agent may change it
         paths.append(rel(ledger.dir / "hooks.py"))  # and the model's hooks (contract_state_pcc)
