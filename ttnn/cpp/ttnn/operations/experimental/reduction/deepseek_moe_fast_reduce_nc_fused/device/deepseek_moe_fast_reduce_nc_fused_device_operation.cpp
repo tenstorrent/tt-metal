@@ -122,6 +122,12 @@ tt::tt_metal::TensorSpec DeepseekMoEFastReduceNCFusedDeviceOperation::compute_ou
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.logical_shape();
 
+    TT_FATAL(
+        operation_attributes.split_size > 0 && operation_attributes.split_size <= input_shape[-1] &&
+            input_shape[-1] % operation_attributes.split_size == 0,
+        "split_size ({}) must be greater than 0 and divide the last dim ({})",
+        operation_attributes.split_size,
+        input_shape[-1]);
     const uint32_t num_output_tensors = input_shape[-1] / operation_attributes.split_size;
     const uint32_t split_dim = input_shape.rank() - 1;
 
