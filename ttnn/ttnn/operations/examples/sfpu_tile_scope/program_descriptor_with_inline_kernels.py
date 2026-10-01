@@ -143,12 +143,12 @@ using ckernel::VectorMode;
 template <int IT>
 ALWI void rsqrt_scoped(uint32_t idst, VectorMode vm) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsqrt,
-        (APPROX, IT, DST_ACCUM_MODE, false /*FAST_APPROX*/, false /*legacy_compat*/), idst, vm));
+        (APPROX, IT, DST_ACCUM_MODE, false /*FAST_APPROX*/), idst, vm));
 }
 template <int IT>
 ALWI void recip_scoped(uint32_t idst, VectorMode vm) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reciprocal,
-        (APPROX, DST_ACCUM_MODE, IT, true /*legacy_compat*/), idst, vm));
+        (APPROX, DST_ACCUM_MODE, IT), idst, vm));
 }
 
 // --- Axis-optimal COLUMN-0 trick (c_skip): the SFPU walks a face as [rg0-even, rg0-odd, rg1-even,
