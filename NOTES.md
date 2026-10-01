@@ -16,3 +16,13 @@
     cd ~/fasth3/tt-metal && tmp/blx03/submit.sh 1500 bash /home/smarton/fasth3/t78/tmp/blx03/run78.sh
   Read /var/tmp/fasth3/t78/run78.log: T78_CMP identical=True and AB min decode_s h0 vs h1 (baseline ~2.05 s).
 - Cleanup after the A/B: git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/t78; rm -rf /var/tmp/fasth3/t78/jit.
+
+## t79 run (2026-10-01 14:35 UTC)
+- blx03 /home 194 GB free (>=150). Build started 14:31: ~/fasth3/t78-setup.log (setup78.sh extracted to ~/fasth3/setup78.sh).
+- Detached driver on blx03: ~/fasth3/t78drv/driver.sh (copy in tmp/blx03/t78drv/), log /var/tmp/fasth3/t78/driver.log.
+  build -> health -> job ab (run78.sh) -> if identical: health -> job halo (run78b.sh: test_conv3d.py -k halo on a
+  2x4 submesh of the full mesh via an untracked conv/conftest.py override of `device`). Stops on any broker ERROR,
+  non-OK HEALTH-GATE or reboot since our submit. Final marker "T78_DRIVER_DONE <stage> <rc>".
+- Next: read driver.log, /var/tmp/fasth3/t78/run78.log (T78_CMP, AB decode_s per arm), run78b.log (T78B_EXIT).
+  Then clean up: git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/t78; rm -rf /var/tmp/fasth3/t78/jit
+  ~/fasth3/t78drv ~/fasth3/setup78.sh.
