@@ -1,73 +1,113 @@
 # SPDX-License-Identifier: MIT
-"""33-layer device hidden-NRMSE mini-check vs the CPU fp32 twin.
-
-Go/no-go gate for the bf16 smoke rerun after the fp32-residual-stream fix:
-runs the fixed TT backend on the exact public smoke input (short case) and
-compares hidden/logits against the fp32 reference implementation
-(reference_layers; matched the harness oracle to 2.7e-5,.
-using the harness metric (per-row RMS error / RMS reference, max over rows).
-
-Gate: hidden max-row NRMSE <= ~0.02 (sim prediction 1.94e-2, CPU bf16
-attribution study fa9696c0) agrees with the simulation; device full-bf16
-measured 5.40e-2 on the same input.
-"""
+"""End-to-end model test: full 33-layer ESM-2 on device with the real checkpoint."""
 
 from __future__ import annotations
 
-import json
-import sys
-
 import numpy as np
+import pytest
 import torch
 
-sys.path.insert(0, "/work")
-from tt.esm2.config import Esm2TTConfig
-from tt.esm2.loader import load_canonical_weights
-from tt.esm2.reference_layers import Esm2Model
+from models.experimental.esm2.tt.esm2.reference_layers import Esm2Model
+from models.experimental.esm2.tt.esm2.ttnn_backend import TtnnEsm2
+
+TEST_SEQUENCE = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
+MASKED_POSITIONS = [5, 21, 37]
+HIDDEN_NRMSE_GATE = 0.035
+LOGITS_NRMSE_GATE = 0.035
 
 
-def row_nrmse(actual: np.ndarray, expected: np.ndarray):
-    axes = tuple(range(1, actual.ndim))
-    err = np.sqrt(np.mean((actual - expected) ** 2, axis=axes)) / np.maximum(
-        1e-12, np.sqrt(np.mean(expected**2, axis=axes))
-    )
-    return float(err.max()), float(err.mean())
+def _load_vocab(path):
+    vocab = {}
+    with open(path) as f:
+        for i, line in enumerate(f):
+            token = line.strip()
+            if token:
+                vocab[token] = i
+    return vocab
 
 
-def main():
-    d = np.load("/input/inputs.npz")
-    ids = d["short__input_ids"]
-    am = d["short__attention_mask"]
-    with open("/weights/config.json") as f:
-        cfg = Esm2TTConfig.from_dict(json.load(f))
-    w = load_canonical_weights("/weights", cfg)
+def _tokenize(sequence, vocab):
+    ids = [0]
+    for c in sequence:
+        ids.append(vocab.get(c, vocab.get("<unk>", 0)))
+    ids.append(2)
+    return ids
 
-    ref = Esm2Model(cfg, weights=w).eval()
+
+def _row_nrmse(actual, expected):
+    a, b = np.asarray(actual, dtype=np.float64), np.asarray(expected, dtype=np.float64)
+    return float(np.sqrt(np.mean((a - b) ** 2)) / max(np.sqrt(np.mean(b**2)), 1e-12))
+
+
+@pytest.fixture(scope="module")
+def ref_model(config, weights):
+    m = Esm2Model(config, weights)
+    m.eval()
+    return m
+
+
+@pytest.fixture(scope="module")
+def vocab(checkpoint):
+    return _load_vocab(str(checkpoint / "vocab.txt"))
+
+
+@pytest.fixture(scope="module")
+def input_ids(config, vocab):
+    return torch.tensor([_tokenize(TEST_SEQUENCE, vocab)], dtype=torch.long)
+
+
+@pytest.fixture(scope="module")
+def masked_ids(config, input_ids):
+    ids = input_ids.clone()
+    for pos in MASKED_POSITIONS:
+        ids[0, pos + 1] = config.mask_token_id
+    return ids
+
+
+@pytest.fixture(scope="module")
+def attention_mask(input_ids):
+    return torch.ones_like(input_ids)
+
+
+@pytest.fixture(scope="module")
+def reference_logits(ref_model, masked_ids, attention_mask):
     with torch.no_grad():
-        logits_ref, hidden_ref = ref(torch.from_numpy(ids), torch.from_numpy(am))
-    logits_ref, hidden_ref = logits_ref.numpy(), hidden_ref.numpy()
-    print(f"twin done shapes logits={logits_ref.shape} hidden={hidden_ref.shape}", flush=True)
-
-    from tt.esm2.ttnn_backend import TtnnEsm2
-
-    import ttnn
-
-    device = ttnn.open_device(device_id=0)
-    try:
-        tt = TtnnEsm2(cfg, w, device=device, precision="bf16").build()
-        out = tt.forward(ids, am)
-        out2 = tt.forward(ids, am)  # determinism spot check
-        det = float(np.max(np.abs(out["logits"] - out2["logits"])))
-        hm, ha = row_nrmse(out["hidden"], hidden_ref)
-        lm, la = row_nrmse(out["logits"], logits_ref)
-        print(f"cast_fn={getattr(tt._cast_fn, '__name__', None)}", flush=True)
-        print(f"hidden  NRMSE max={hm:.4e} mean={ha:.4e}  (device pre-fix 5.40e-2, sim fix 1.94e-2)", flush=True)
-        print(f"logits  NRMSE max={lm:.4e} mean={la:.4e}  (pre-fix 1.62e-2)", flush=True)
-        print(f"determinism max|dlogits|={det:.1e}", flush=True)
-        print("MINI_CHECK_" + ("AGREE" if hm <= 0.024 else "DISAGREE"), flush=True)
-    finally:
-        ttnn.close_device(device)
+        logits, hidden = ref_model(masked_ids, attention_mask)
+    return logits, hidden
 
 
-if __name__ == "__main__":
-    main()
+@pytest.fixture(scope="module")
+def backend(config, weights, device):
+    b = TtnnEsm2(config, weights, device=device, precision="bf16")
+    b.build()
+    return b
+
+
+@pytest.fixture(scope="module")
+def backend_output(backend, masked_ids, attention_mask):
+    return backend.forward(masked_ids, attention_mask)
+
+
+class TestEndToEnd:
+    def test_hidden_nrmse(self, backend_output, reference_logits):
+        _, ref_hidden = reference_logits
+        got = np.asarray(backend_output["hidden"])
+        nrmse = _row_nrmse(got, ref_hidden.numpy())
+        print(f"\n[e2e] hidden NRMSE = {nrmse:.6f} (gate {HIDDEN_NRMSE_GATE})")
+        assert nrmse <= HIDDEN_NRMSE_GATE, f"hidden NRMSE {nrmse:.6f} > {HIDDEN_NRMSE_GATE}"
+
+    def test_logits_nrmse(self, backend_output, reference_logits):
+        ref_logits, _ = reference_logits
+        got = np.asarray(backend_output["logits"])
+        nrmse = _row_nrmse(got, ref_logits.numpy())
+        print(f"\n[e2e] logits NRMSE = {nrmse:.6f} (gate {LOGITS_NRMSE_GATE})")
+        assert nrmse <= LOGITS_NRMSE_GATE, f"logits NRMSE {nrmse:.6f} > {LOGITS_NRMSE_GATE}"
+
+    def test_masked_argmax(self, backend_output, reference_logits):
+        ref_logits, _ = reference_logits
+        got_logits = np.asarray(backend_output["logits"])
+        for pos in MASKED_POSITIONS:
+            idx = pos + 1  # +1 for <cls>
+            expected = int(ref_logits[0, idx].argmax())
+            got = int(got_logits[0, idx].argmax())
+            assert got == expected, f"masked pos {pos}: got {got}, expected {expected}"

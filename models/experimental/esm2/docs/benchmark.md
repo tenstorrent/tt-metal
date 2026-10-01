@@ -122,7 +122,7 @@ disable-on-failure + eager fallback; ≤4 entries, released on eviction/close.
 Artifacts: `benchmarks/artifacts/opt_h1_trace.json` (sizing, job
 `537c6992a7174647915cdac3490e2ea6`), `benchmarks/artifacts/
 opt_h1_trace_integrated.json` (integration verification, job
-`e7e373e1c7bc4a8ea6480979423d49c9`, probe `tests/probe_opt_h1_trace_integrated.py`).
+`e7e373e1c7bc4a8ea6480979423d49c9`, probe the measured evidence in this table).
 
 Interpretation: the warm short-L forward is host-dispatch-bound (~700 ops);
 trace replay removes ~38 ms/forward of per-op dispatch and lands at the
@@ -140,7 +140,7 @@ artifacts persisted)
 
 #### H1 follow-up: long-L trace replay — GO by rule, NOT integrated (immaterial 1.2%)
 
-Probe `tests/probe_opt_h1_trace_long.py`; **job
+Probe the measured evidence in this table; **job
 `5f63c8f842044f4b9eb01ce6abf0293b`** (bf16, bringup long B=1 L=1026 Lt=1056,
 32.8 s); artifact **`benchmarks/artifacts/opt_h1_trace_long.json`**. No
 backend change — the probe drove `model._trace_path` directly and re-verified
@@ -162,7 +162,7 @@ per-Lt-class keys) measured and closed.
 
 #### H2: out_fp32 site trim {qkv, pv, ao, ffn2} — sized GO, INTEGRATED as the default
 
-Probe `tests/probe_opt_h2_out32_trim.py`; sizing **job
+Probe the measured evidence in this table; sizing **job
 `2ebec6a3af8a423a978370246328fecb`** (bf16, bringup inputs, 56.5 s; A/B
 sandwich all8_A → 3 trims → all8_B in ONE process, anchors and spreads
 recorded per config); artifact **`benchmarks/artifacts/opt_h2_out32_trim.json`**.
@@ -193,7 +193,7 @@ exact → KEEP).
 
 #### H3: erf-exact gelu composite — NO-GO on every arm; closed WITH attribution
 
-Probe `tests/probe_opt_h3_erf_gelu.py`; **job
+Probe the measured evidence in this table; **job
 `5e9a21d2f7a044afb03509b888c1ce1e`** (bf16, current trim source, 54.5 s);
 artifact **`benchmarks/artifacts/opt_h3_erf_gelu.json`**. Gelu swapped
 per-instance via a namespace proxy on `model.ttnn` (zero source edits; both
@@ -238,8 +238,7 @@ op sites: encoder FFN ×33 + MLM head ×1; trace-capture compatible).
    study (`benchmarks/artifacts/sim_floor_study.json`, jobs `9be15994`,
    `f770a9c2`, `087c2b46`) predicts 0.039–0.042 for truncation-mode
    activation rounds + TT piecewise-CDF gelu (RNE-policy floor 0.019); every
-   lever sized and rejected (`tests/probe_sim_floor4.py`, round-removal
-   levers worsen it). Under the current trim source the miss sits at **long
+   lever sized and rejected (see the measured evidence above). Under the current trim source the miss sits at **long
    hidden 0.0424** with a BETTER suite max (0.0424 vs 0.0433) — the measured
    sr↔long trade of .
    Gelu attribution was tested directly and **rejected** (the erf-exact arm

@@ -45,8 +45,7 @@ manual attention path.
 4. **out_fp32 matmul sites (fp32 outputs where device bf16-out excess
    bites)**: device bf16-out matmuls carry contraction-dependent excess (up
    to 3.9× over the clean model at the gate misses). Per-site A/B
-   (`tests/probe_out32_ab.py`, .: base misses the gates
-   (long 0.0673 / single-residue 0.0929); all-8 sites land 0.0359/0.0292 at
+   (see the measured evidence above); all-8 sites land 0.0359/0.0292 at
    +24% p50 (L=1026). **Measured trim (+
    `88c1636e` re-gate, artifact `benchmarks/artifacts/opt_h2_out32_trim.json`):
    the default is now {qkv, pv, ao, ffn2}** — long −12.8% p50 with suite max

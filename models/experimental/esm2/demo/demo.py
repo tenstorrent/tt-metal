@@ -79,7 +79,7 @@ def main() -> int:
     import sys
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from backend import create_backend
+    from models.experimental.esm2.tt.esm2.ttnn_backend import TtnnEsm2
 
     if args.fasta == "demo/example.fasta" and not os.path.exists(args.fasta):
         with open(args.fasta, "w") as f:
@@ -87,7 +87,7 @@ def main() -> int:
 
     with open(os.path.join(args.checkpoint, "config.json")) as f:
         cfg_dict = json.load(f)
-    backend = create_backend(args.checkpoint, cfg_dict, args.device, precision=args.precision)
+    backend = TtnnEsm2.build(args.checkpoint, cfg_dict, args.device, precision=args.precision)
 
     vocab = load_vocab(os.path.join(args.checkpoint, "vocab.txt"))
     with open(args.fasta) as f:

@@ -47,7 +47,7 @@ Full rationale + measurements: `tt/esm2/ttnn_backend.py` and
   - L=144: 79.9 ms vs 324 ms CPU (**4.1×**)
   - Traced short-sequence replay: **14.9 ms** (dispatch-bound fast path)
   - A100 FP32 p50 32 ms recorded as context.
-- **Memory**: 50% weight reduction via bf16 (1.3 GB → 0.65 GB).
+- **Memory**: 50% weight reduction via bf16 (2.6 GB fp32 → 1.3 GB bf16).
 
 ## Known limitations (honest, measured)
 
