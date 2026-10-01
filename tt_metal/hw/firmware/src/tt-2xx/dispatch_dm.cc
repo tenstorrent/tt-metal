@@ -207,11 +207,6 @@ extern "C" uint32_t _start1() {
 
                 wait_subordinates();
 
-                if (g_remapper_configurator.is_remapper_enabled()) {
-                    g_remapper_configurator.clear_all_pairs();
-                    g_remapper_configurator.disable_remapper();
-                }
-
                 uint32_t go_message_index = mailboxes->go_message_index;
                 mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
 
