@@ -29,6 +29,7 @@ prompts the eager chunk loop _prefill_chunked_eager_tp (the forward the tp2-dfla
 drafter taps); used to gate QWEN36_EAGER_FULL_CHUNK_UNMASKED.
 """
 
+import hashlib
 import os
 import time
 
@@ -69,6 +70,9 @@ def _blocks_for(isl):
         pytest.param(8192, "0,1,2,3", 1, id="tp2_8192_L4"),
         pytest.param(16384, "0,1,2,3", 1, id="tp2_16384_L4"),
         pytest.param(32768, "0,1,2,3", 1, id="tp2_32768_L4"),
+        # lane L: layer-count scaling, walls only (NOPROF); a tracy capture at L16 fills the disk / drops sessions
+        pytest.param(8192, ",".join(str(i) for i in range(16)), 1, id="tp2_8192_L16"),
+        pytest.param(32768, ",".join(str(i) for i in range(16)), 1, id="tp2_32768_L16"),
         pytest.param(2048, "all", 1, id="tp2_2048_all"),
         pytest.param(8192, "all", 1, id="tp2_8192_all"),
         pytest.param(32768, "all", 1, id="tp2_32768_all"),
@@ -92,6 +96,29 @@ def test_prefill_profile_tp2(mesh_device, isl, layers, repeats):
         f"grid={device.compute_with_storage_grid_size()} tuning={model.args.prefill_tuning}"
     )
 
+    # PROFILE_EXTRA_OPS=<k> (lane L, per-op overhead probe): after every layer's forward append k tiny device copies
+    # (a [1,1,32,5120] bf16 tile row into a scratch) -- trace-safe, numerically inert; the wall delta per added op vs
+    # k=0 is the in-trace cost of one small op (compare with its tracy duration).
+    _extra = int(os.environ.get("PROFILE_EXTRA_OPS", "0"))
+    if _extra:
+        _rep = ttnn.ReplicateTensorToMesh(device)
+        _src = ttnn.from_torch(
+            torch.zeros(1, 1, 32, 5120), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=_rep
+        )
+        _dst = ttnn.from_torch(
+            torch.zeros(1, 1, 32, 5120), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=_rep
+        )
+        for _layer in model.layers:
+            _fwd = _layer.forward
+
+            def _wrapped(*a, _fwd=_fwd, **k):
+                out = _fwd(*a, **k)
+                if k.get("mode") == "prefill":
+                    for _ in range(_extra):
+                        ttnn.copy(_src, _dst)
+                return out
+
+            _layer.forward = _wrapped
     kv_cache_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat8_b, batch_size=1)
     page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
@@ -146,13 +173,44 @@ def _run_one(model, device, page_table, isl, repeats):
 
     ttfts = []
     repeats = int(os.environ.get("PROFILE_REPEATS", repeats))
-    signpost("start")
-    for _ in range(repeats):
-        t0 = time.time()
-        logits = _prefill(model, token_ids, page_table, isl)
-        ttnn.synchronize_device(device)
-        ttfts.append(time.time() - t0)
-    signpost("stop")
+    # PROFILE_CHUNK_TIMING=1 (lane L): host timestamps of every execute_trace / synchronize_device inside the timed
+    # requests (pair with QWEN36_PREFILL_OVERLAP=0 for a sync after every chunk replay = per-chunk wall).
+    _ev = []
+    _orig = (ttnn.execute_trace, ttnn.synchronize_device)
+    if os.environ.get("PROFILE_CHUNK_TIMING") == "1":
+
+        def _ex(*a, **k):
+            _ev.append(("x", time.perf_counter()))
+            return _orig[0](*a, **k)
+
+        def _sy(*a, **k):
+            r = _orig[1](*a, **k)
+            _ev.append(("s", time.perf_counter()))
+            return r
+
+        ttnn.execute_trace, ttnn.synchronize_device = _ex, _sy
+    try:
+        signpost("start")
+        for _ in range(repeats):
+            t0 = time.time()
+            _ev.append(("0", time.perf_counter()))
+            logits = _prefill(model, token_ids, page_table, isl)
+            ttnn.synchronize_device(device)
+            ttfts.append(time.time() - t0)
+        signpost("stop")
+    finally:
+        ttnn.execute_trace, ttnn.synchronize_device = _orig
+    if _ev:
+        t_prev, line = None, []
+        for tag, t in _ev:
+            if tag == "0":
+                if line:
+                    print("PROFILE_CHUNKS " + " ".join(line))
+                line, t_prev = [], t
+                continue
+            line.append(f"{tag}{(t - t_prev) * 1e3:.2f}")
+            t_prev = t
+        print("PROFILE_CHUNKS " + " ".join(line))
     n_layers = len(model.layers)
     lg_all = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
     lg_all = lg_all.reshape(-1, model.args.vocab_size).float()
@@ -163,6 +221,8 @@ def _run_one(model, device, page_table, isl, repeats):
     if dump:
         torch.save(lt, f"{_OUT_DIR}/logits_{dump}_{isl}.pt")
         logger.info(f"[PROFILE] dumped logits to {_OUT_DIR}/logits_{dump}_{isl}.pt")
+    # Durable numerics record (review F1): cross-process / cross-build logits equality is checked on these hashes.
+    print(f"PROFILE_LOGITS_SHA256 isl={isl} layers={n_layers} {hashlib.sha256(lt.numpy().tobytes()).hexdigest()}")
     top = torch.topk(lt, 2)
     logger.info(
         f"[PROFILE] isl={isl} layers={n_layers} TTFT(s)={['%.3f' % t for t in ttfts]} "

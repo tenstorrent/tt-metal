@@ -532,7 +532,11 @@ class TPGatedDeltaNet:
             logger.warning(f"QWEN36_GDN_CONV=kda needs a 4-tap conv (got K={self.K}); using conv2d")
             self._gdn_conv_kda = False
         # channel_chunk_size must divide the per-device qkv width and be tile-aligned: 2560 -> 512 (TP=4), 1280 -> 256 (TP=8).
-        self._kda_chunk = math.gcd(self.qkv_dim_tp, int(os.environ.get("QWEN36_GDN_KDA_CHUNK", "512")))
+        # TP=2 default 128 (lane L): with the op's block-major work order a core walks tile-rows of one 128-channel
+        # block, so its tap weights load once and the small blocks pipeline; conv 449 -> 252 us/layer at 2048 tokens,
+        # bit-identical (channel blocking never changes per-element math). Other TPs keep 512 (not re-measured).
+        _kda_chunk_default = "128" if args.num_devices == 2 else "512"
+        self._kda_chunk = math.gcd(self.qkv_dim_tp, int(os.environ.get("QWEN36_GDN_KDA_CHUNK", _kda_chunk_default)))
         assert self._kda_chunk % tpc.TILE_SIZE == 0, f"KDA channel chunk {self._kda_chunk} must be tile aligned"
         # QWEN36_KDA_TILE_IN=1: feed the fused conv op the TILE-layout activation directly. The op then reads
         # whole tiles and shifts rows on the math engine (matmul against constant 0/1 matrices) instead of

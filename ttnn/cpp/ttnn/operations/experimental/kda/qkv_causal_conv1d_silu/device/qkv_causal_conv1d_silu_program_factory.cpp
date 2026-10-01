@@ -3,6 +3,7 @@
 
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_program_factory.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <string>
@@ -57,6 +58,27 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     // TILE input skips the caller's untilize: the reader moves whole tiles and the compute kernel does the
     // causal row shift as a matmul against constant 0/1 matrices. Validation already forced history to match.
     const bool tile_in = in.input.layout() == tt::tt_metal::Layout::TILE;
+    // TILE path, several channel blocks: order the work items block-major (work = block * Mt + mt) so a core's
+    // contiguous range walks consecutive tile-rows of ONE channel block and loads that block's four tap weight
+    // blocks once per run instead of once per item (the weights were 2/3 of the op's DRAM reads: 4 * block_ct
+    // tiles per item vs 2 * block_ct activation tiles). Data movement only: every output tile is computed from
+    // the same tiles by the same ops, so the result is bit-identical. TT_KDA_CONV_BLOCK_MAJOR=0 restores the
+    // tile-row-major order. Process-level knob: read once (it is not part of the program hash, so a per-call
+    // read would let an in-process toggle silently reuse a cached program built with the other order).
+    static const bool block_major_env = [] {
+        const char* e = std::getenv("TT_KDA_CONV_BLOCK_MAJOR");
+        return e == nullptr || e[0] != '0';
+    }();
+    const uint32_t block_major = (tile_in && num_blocks > 1 && block_major_env) ? 1u : 0u;
+    // Reader + compute CTAs: the TILE kernels also take the work-item order (the ROW_MAJOR ones never reorder).
+    // Mt is compile-time, so each sequence length builds its own kernels; today only full prefill chunks reach this
+    // op (masked KDA is off), i.e. a fixed set of warmed shapes.
+    const tt::tt_metal::experimental::KernelSpec::CompileTimeArgs conv_cta =
+        tile_in
+            ? tt::tt_metal::experimental::KernelSpec::
+                  CompileTimeArgs{{"block_ct", block_ct}, {"num_blocks", num_blocks}, {"Mt", Mt}, {"block_major", block_major}}
+            : tt::tt_metal::experimental::KernelSpec::CompileTimeArgs{
+                  {"block_ct", block_ct}, {"num_blocks", num_blocks}};
     auto dist = kda_factory_detail::distribute_prep(
         device.compute_with_storage_grid_size(), Mt * num_blocks, std::numeric_limits<uint32_t>::max());
     const auto& cores = dist.core_set;
@@ -153,7 +175,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
                 tt::tt_metal::experimental::TensorBinding{tap2_tensor_name, "tap2"},
                 tt::tt_metal::experimental::TensorBinding{tap3_tensor_name, "tap3"},
             },
-        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
+        .compile_time_args = conv_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
@@ -171,7 +193,14 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
                 tt::tt_metal::experimental::TensorBinding{k_tensor_name, "k"},
                 tt::tt_metal::experimental::TensorBinding{v_tensor_name, "v"},
             },
-        .compile_time_args = {{"Qt", Qt}, {"Kt", Kt}, {"Vt", Vt}, {"block_ct", block_ct}, {"num_blocks", num_blocks}},
+        .compile_time_args =
+            {{"Qt", Qt},
+             {"Kt", Kt},
+             {"Vt", Vt},
+             {"block_ct", block_ct},
+             {"num_blocks", num_blocks},
+             {"Mt", Mt},
+             {"block_major", block_major}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
@@ -230,7 +259,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
                       "qkv_causal_conv1d_silu.cpp"),
         .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
-        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
+        .compile_time_args = conv_cta,
         .runtime_arg_schema = std::move(compute_arg_schema),
         .hw_config = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config),
     };
