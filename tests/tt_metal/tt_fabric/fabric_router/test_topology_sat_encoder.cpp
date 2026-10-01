@@ -8,7 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include <fabric/topology_solver_sat_solver.hpp>
+#include "fabric/topology_solver_sat_solver.hpp"
 
 namespace tt::tt_fabric {
 

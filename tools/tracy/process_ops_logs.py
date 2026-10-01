@@ -7,6 +7,7 @@
 # Debug shebang
 #!/usr/bin/env -S python3 -m pdb
 
+import ast
 import os
 import csv
 from pathlib import Path
@@ -69,6 +70,7 @@ OPS_CSV_HEADER = [
     "MATH FIDELITY",
     "CORE COUNT",
     "AVAILABLE WORKER CORE COUNT",
+    "SUB DEVICE ID",
     "PARALLELIZATION STRATEGY",
     "HOST START TS",
     "HOST END TS",
@@ -104,15 +106,7 @@ OPS_CSV_HEADER = [
     "DATA MOVEMENT KERNEL HASH",
     "PROGRAM HASH",
     "PROGRAM CACHE HIT",
-    "TENSIX DM 0 MAX KERNEL SIZE [B]",
-    "TENSIX DM 1 MAX KERNEL SIZE [B]",
-    "TENSIX COMPUTE 0 MAX KERNEL SIZE [B]",
-    "TENSIX COMPUTE 1 MAX KERNEL SIZE [B]",
-    "TENSIX COMPUTE 2 MAX KERNEL SIZE [B]",
-    "ACTIVE ETH DM 0 MAX KERNEL SIZE [B]",
-    "ACTIVE ETH DM 1 MAX KERNEL SIZE [B]",
-    "IDLE ETH DM 0 MAX KERNEL SIZE [B]",
-    "IDLE ETH DM 1 MAX KERNEL SIZE [B]",
+    # "... MAX KERNEL SIZE [B]" columns are inserted here dynamically
     "PM IDEAL [ns]",
     "PM COMPUTE [ns]",
     "PM BANDWIDTH [ns]",
@@ -128,6 +122,68 @@ OPS_CSV_HEADER = [
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
+
+# Kernel-size columns ("<PROCESSOR CLASS> <index> MAX KERNEL SIZE [B]") are grouped by processor class
+# in this fixed order and by ascending processor index within a class
+_KERNEL_SIZE_SUFFIX = " MAX KERNEL SIZE [B]"
+_KERNEL_SIZE_CLASS_ORDER = ["TENSIX DM", "TENSIX COMPUTE", "ACTIVE ETH DM", "IDLE ETH DM"]
+
+
+def _kernel_size_sort_key(column):
+    group, _, index = column[: -len(_KERNEL_SIZE_SUFFIX)].rpartition(" ")
+    rank = _KERNEL_SIZE_CLASS_ORDER.index(group) if group in _KERNEL_SIZE_CLASS_ORDER else len(_KERNEL_SIZE_CLASS_ORDER)
+    return rank, int(index)
+
+
+# On Quasar, device durations that belong to a single processor type are reported per type in ns.
+# Each per-type value is (max <type>-<phase> ZONE_END - min <type>-<phase> ZONE_START, over all cores
+# of that type) / clock.
+_QUASAR_DM_KERNEL_COL = "DEVICE QUASAR_DM KERNEL DURATION [ns]"
+_QUASAR_TRISC_KERNEL_COL = "DEVICE QUASAR_NEO_TRISC KERNEL DURATION [ns]"
+_QUASAR_DM_FW_COL = "DEVICE DM FW DURATION [ns]"
+_QUASAR_TRISC_FW_COL = "DEVICE TRISC FW DURATION [ns]"
+# Per-type columns copied verbatim from the C++ device perf report onto each Quasar op row.
+_QUASAR_DEVICE_DURATION_COLS = [
+    _QUASAR_DM_KERNEL_COL,
+    _QUASAR_TRISC_KERNEL_COL,
+    _QUASAR_DM_FW_COL,
+    _QUASAR_TRISC_FW_COL,
+]
+# Op-to-op latency on Quasar is reported per processor type: the gap from the previous op's last
+# <type>-KERNEL end to this op's first <type>-KERNEL start.
+_QUASAR_OP2OP_DM_COL = "OP TO OP DM LATENCY [ns]"
+_QUASAR_OP2OP_TRISC_COL = "OP TO OP TRISC LATENCY [ns]"
+# Stock columns replaced in place by the per-type columns above.
+_QUASAR_COL_REPLACEMENTS = {
+    "DEVICE BRISC KERNEL DURATION [ns]": [_QUASAR_DM_KERNEL_COL, _QUASAR_TRISC_KERNEL_COL],
+    "DEVICE FW DURATION [ns]": [_QUASAR_DM_FW_COL, _QUASAR_TRISC_FW_COL],
+    "OP TO OP LATENCY [ns]": [_QUASAR_OP2OP_DM_COL, _QUASAR_OP2OP_TRISC_COL],
+}
+_QUASAR_COLS_TO_REMOVE = {
+    "DEVICE NCRISC KERNEL DURATION [ns]",
+    "DEVICE TRISC0 KERNEL DURATION [ns]",
+    "DEVICE TRISC1 KERNEL DURATION [ns]",
+    "DEVICE TRISC2 KERNEL DURATION [ns]",
+    "DEVICE ERISC KERNEL DURATION [ns]",
+    # Replaced on Quasar by the per-type OP TO OP DM/TRISC LATENCY columns
+    "OP TO OP LATENCY BR/NRISC START [ns]",
+}
+# Stale [ns] row keys to strip so the strict DictWriter accepts the reshaped rows.
+_QUASAR_STALE_ROW_KEYS = list(_QUASAR_COLS_TO_REMOVE) + list(_QUASAR_COL_REPLACEMENTS)
+
+
+def shape_device_headers_for_quasar(headers):
+    """Rewrite the fixed device-timing headers for a Quasar report: replace certain single-processor-type
+    columns in place with two per-type [ns] columns (DM / Neo-TRISC). All other columns are unchanged."""
+    shaped = []
+    for header in headers:
+        if header in _QUASAR_COL_REPLACEMENTS:
+            shaped.extend(_QUASAR_COL_REPLACEMENTS[header])
+        elif header in _QUASAR_COLS_TO_REMOVE:
+            continue
+        else:
+            shaped.append(header)
+    return shaped
 
 
 DEVICE_PERF_INT_FIELDS = {
@@ -155,7 +211,118 @@ DEVICE_PERF_INT_FIELDS = {
     "DEVICE TRISC1 KERNEL DURATION [ns]",
     "DEVICE TRISC2 KERNEL DURATION [ns]",
     "DEVICE ERISC KERNEL DURATION [ns]",
+    # Quasar per-processor-type aggregated durations
+    "DEVICE QUASAR_DM KERNEL DURATION [ns]",
+    "DEVICE QUASAR_NEO_TRISC KERNEL DURATION [ns]",
+    "DEVICE DM FW DURATION [ns]",
+    "DEVICE TRISC FW DURATION [ns]",
+    # Quasar per-type KERNEL start/end cycles
+    "DEVICE QUASAR_DM KERNEL START CYCLE",
+    "DEVICE QUASAR_DM KERNEL END CYCLE",
+    "DEVICE QUASAR_NEO_TRISC KERNEL START CYCLE",
+    "DEVICE QUASAR_NEO_TRISC KERNEL END CYCLE",
 }
+
+
+def parse_device_csv_meta_data(meta_data_str: Any) -> Optional[Dict[str, Any]]:
+    if meta_data_str is None:
+        return None
+    meta_data_str = str(meta_data_str).strip()
+    if not meta_data_str:
+        return None
+    try:
+        return json.loads(meta_data_str.replace(";", ","))
+    except json.JSONDecodeError:
+        try:
+            parsed = ast.literal_eval(meta_data_str)
+            return parsed if isinstance(parsed, dict) else None
+        except (ValueError, SyntaxError):
+            return None
+
+
+def normalize_device_csv_trace_field(value: Any, default: int = -1) -> int:
+    if value is None or str(value).strip() in ("", "None"):
+        return default
+    return int(value)
+
+
+def get_op_sub_device_lookup_key(op: OpDict, device_id: int) -> Tuple[int, int, int, int]:
+    """Build a lookup key aligned with device CSV run_host_id / ProgramExecutionUID."""
+
+    perf_row = op.get("_device_perf_row")
+    if perf_row is not None:
+        runtime_id = int(perf_row["GLOBAL CALL COUNT"])
+        trace_id = normalize_device_csv_trace_field(perf_row.get("METAL TRACE ID"))
+        trace_id_counter = normalize_device_csv_trace_field(perf_row.get("METAL TRACE REPLAY SESSION ID"))
+        op_device_id = int(perf_row.get("DEVICE ID", op.get("device_id", device_id)))
+    else:
+        runtime_id = int(op["global_call_count"])
+        trace_id = normalize_device_csv_trace_field(op.get("metal_trace_id"))
+        trace_id_counter = normalize_device_csv_trace_field(op.get("metal_trace_replay_session_id"))
+        op_device_id = int(op.get("device_id", device_id))
+
+    return (op_device_id, runtime_id, trace_id, trace_id_counter)
+
+
+def build_sub_device_id_lookup_from_device_csv(
+    device_log_path: Path,
+) -> Dict[Tuple[int, int, int, int], int]:
+    """Map (device_id, run_host_id, trace_id, trace_id_counter) -> sub_device_id from device CSV meta data."""
+
+    lookup: Dict[Tuple[int, int, int, int], int] = {}
+    device_log_path = Path(device_log_path)
+    if not device_log_path.is_file():
+        return lookup
+
+    df = pd.read_csv(device_log_path, skiprows=1, header=0, na_filter=False)
+    for row in df.itertuples():
+        meta_data = parse_device_csv_meta_data(row[15])
+        if meta_data is None or "sub_device_id" not in meta_data:
+            continue
+
+        sub_device_id = int(meta_data["sub_device_id"])
+        key = (
+            int(row[1]),
+            int(row[8]),
+            normalize_device_csv_trace_field(row[9]),
+            normalize_device_csv_trace_field(row[10]),
+        )
+        if key in lookup and lookup[key] != sub_device_id:
+            logger.warning(
+                "Inconsistent sub_device_id for device {} run_host_id {} trace_id {} trace_id_counter {}: {} vs {}",
+                key[0],
+                key[1],
+                key[2],
+                key[3],
+                lookup[key],
+                sub_device_id,
+            )
+        lookup[key] = sub_device_id
+
+    return lookup
+
+
+def is_quasar_device_log(device_log_path: Path) -> bool:
+    """Whether the device log is from a Quasar run. The first line is the
+    "ARCH: <arch>, CHIP_FREQ[MHz]: ..." preamble; only Quasar carries the per-processor-type ns columns
+    (computed C++-side with hardcoded clocks) and needs its device-timing header reshaped."""
+    device_log_path = Path(device_log_path)
+    if not device_log_path.is_file():
+        return False
+    with device_log_path.open() as f:
+        preamble = f.readline()
+    return "quasar" in preamble.lower()
+
+
+def attach_sub_device_ids_to_ops(
+    host_ops_by_device: DeviceOpsDict,
+    sub_device_id_lookup: Dict[Tuple[int, int, int, int], int],
+) -> None:
+    for device_id, device_ops in host_ops_by_device.items():
+        for op in device_ops:
+            lookup_key = get_op_sub_device_lookup_key(op, device_id)
+            if lookup_key in sub_device_id_lookup:
+                op["sub_device_id"] = sub_device_id_lookup[lookup_key]
 
 
 def _parse_int_field(value: str) -> Optional[int]:
@@ -477,23 +644,35 @@ def _convert_device_op_entry(device_op_time: Dict[str, Any], freq: int) -> OpDic
     return device_op
 
 
+def _host_replayed_trace(trace_replays: Optional[TraceReplayDict], device_id: int, trace_id: int) -> bool:
+    """True if the host log holds a TT_METAL_TRACE_REPLAY marker for this trace on this device."""
+    if not trace_replays:
+        return False
+    return trace_id in trace_replays.get(device_id, {})
+
+
 def _enrich_ops_from_perf_csv(
     host_ops_by_device: DeviceOpsDict,
     device_perf_by_device: Dict[int, Dict[Tuple[int, Optional[int], Optional[int]], Dict[str, Any]]],
     trace_replays: Optional[TraceReplayDict],
 ) -> DeviceOpsDict:
     for device_id in host_ops_by_device:
-        assert (
-            device_id in device_perf_by_device
-        ), f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+        # A device absent from the report is not an error by itself: if all of its host ops belong to traces
+        # that were captured but never replayed, the device ran nothing and the loader created no entry for it.
+        # Treat it as having no rows and let the per-op checks below decide.
+        device_rows = device_perf_by_device.get(device_id, {})
 
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
         perf_rows_by_key: Dict[Tuple[int, Optional[int]], List[Dict[str, Any]]] = {}
-        for (op_id, trace_id, session_id), row in device_perf_by_device[device_id].items():
+        replayed_trace_ids: Set[int] = set()
+        for (op_id, trace_id, session_id), row in device_rows.items():
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
+            if trace_id is not None:
+                replayed_trace_ids.add(int(trace_id))
 
         enriched_ops = []
+        dropped_ops_by_trace: Dict[int, int] = {}
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -513,9 +692,29 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
+            if (
+                not candidates
+                and host_trace_id is not None
+                and host_trace_id not in replayed_trace_ids
+                and not _host_replayed_trace(trace_replays, device_id, host_trace_id)
+            ):
+                # The host captured this trace but never replayed it (e.g. a prefill-only demo
+                # that records the decode trace up front), so the device produced no data for
+                # any of its ops. Both sources agree: no REPLAY marker from the host and no rows
+                # from the device. Leave these ops without device data instead of failing the
+                # whole report. A trace that the host did replay keeps the assert below, so a
+                # device report that lost every row of a replayed trace is still an error.
+                dropped_ops_by_trace[host_trace_id] = dropped_ops_by_trace.get(host_trace_id, 0) + 1
+                continue
+
+            missing_hint = ""
+            if host_trace_id is not None and host_trace_id not in replayed_trace_ids:
+                missing_hint += "; the host replayed this trace, so the device report should have rows for it"
+            if not device_rows:
+                missing_hint += "; the report has no rows at all for this device"
             assert candidates, (
                 f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
+                f"for device {device_id} (trace_id={host_trace_id}){missing_hint}"
             )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
@@ -540,6 +739,13 @@ def _enrich_ops_from_perf_csv(
 
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
+
+        for dropped_trace_id, dropped_count in sorted(dropped_ops_by_trace.items()):
+            logger.warning(
+                f"Device {device_id}: trace {dropped_trace_id} was captured but never replayed (no REPLAY marker "
+                f"from the host, no rows in {PROFILER_CPP_DEVICE_PERF_REPORT}); its {dropped_count} host ops get no "
+                f"device data and appear in the report as host-only rows"
+            )
 
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device
@@ -838,11 +1044,6 @@ def _enrich_ops_from_device_logs(
                 )
                 assign_metric("Math Scoreboard Stall Rate", per_op_stats.get("Math Scoreboard Stall Rate", {}))
 
-                # Fidelity metrics
-                assign_metric("Fidelity Stall Rate", per_op_stats.get("Fidelity Stall Rate", {}))
-                assign_metric("HiFi Fraction", per_op_stats.get("HiFi Fraction", {}))
-                assign_metric("Avg HF Cycles Per Instrn", per_op_stats.get("Avg HF Cycles Per Instrn", {}), suffix="")
-
                 # Instruction issue rates
                 assign_metric("T0 Instrn Issue Rate", per_op_stats.get("T0 Instrn Issue Rate", {}), suffix="")
                 assign_metric("T1 Instrn Issue Rate", per_op_stats.get("T1 Instrn Issue Rate", {}), suffix="")
@@ -943,6 +1144,9 @@ def append_device_data(
             host_ops_by_device, logFolder, device_analysis_types, traceReplays
         )
 
+    sub_device_id_lookup = build_sub_device_id_lookup_from_device_csv(Path(logFolder) / PROFILER_DEVICE_SIDE_LOG)
+    attach_sub_device_ids_to_ops(host_ops_by_device, sub_device_id_lookup)
+
     trace_ops_by_augmented_id = _build_trace_ops_mapping(host_ops_by_device, ops)
 
     if analyze_noc_traces:
@@ -1018,6 +1222,7 @@ def get_device_data_generate_report(
 
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
+        sub_device_id_lookup = build_sub_device_id_lookup_from_device_csv(Path(deviceTimesLog))
         setup = device_post_proc_config.default_setup()
         if device_analysis_types:
             allAnalysis = setup.timerAnalysis
@@ -1080,6 +1285,14 @@ def get_device_data_generate_report(
                 deviceOps[device].append(deviceOp)
 
                 rowDict = {csv_header_format("global_call_count"): deviceOp["global_call_count"]}
+                sub_device_lookup_key = (
+                    int(device),
+                    int(deviceOp["global_call_count"]),
+                    -1,
+                    -1,
+                )
+                if sub_device_lookup_key in sub_device_id_lookup:
+                    rowDict["SUB DEVICE ID"] = sub_device_id_lookup[sub_device_lookup_key]
                 for analysis, data in deviceOp["device_time"].items():
                     analysisData = data["series"]
                     analysisStats = data["stats"]
@@ -1125,9 +1338,7 @@ def get_device_data_generate_report(
                     metrics = device_efficiency_metrics[device]
 
                     for base_name, m in metrics.items():
-                        is_raw = (
-                            "IPC" in base_name or "Issue Rate" in base_name or base_name == "Avg HF Cycles Per Instrn"
-                        )
+                        is_raw = "IPC" in base_name or "Issue Rate" in base_name
                         suffix = "" if is_raw else " (%)"
                         # Legacy "Avg on full grid" column names.
                         if base_name == "SFPU Util":
@@ -1245,6 +1456,8 @@ def generate_reports(
     name = OUT_NAME
     outFolder = os.path.abspath(outFolder)
 
+    is_quasar_report = is_quasar_device_log(Path(logFolder) / PROFILER_DEVICE_SIDE_LOG)
+
     if nameAppend:
         name += f"_{nameAppend}"
         outFolder = os.path.join(outFolder, nameAppend)
@@ -1271,7 +1484,8 @@ def generate_reports(
 
         prev_device_kernel_end_cycle = {}
         prev_device_dm_start_cycle = {}
-        prev_device_fw_end_cycle: Dict[int, int] = {}
+        prev_device_dm_kernel_end_cycle: Dict[int, int] = {}
+        prev_device_trisc_kernel_end_cycle: Dict[int, int] = {}
         device_ns_per_cycle: Dict[int, Optional[float]] = {}
 
         tensorCSVData = {
@@ -1535,6 +1749,39 @@ def generate_reports(
                     if "OP TO OP LATENCY BR/NRISC START [ns]" not in csv_row and perf_device_id is not None:
                         csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
 
+                    # Quasar: per-type op-to-op latency — gap from the previous op's last <type>-KERNEL end
+                    # to this op's first <type>-KERNEL start, per processor type.
+                    if is_quasar_report and perf_device_id is not None:
+                        for start_col, end_col, dur_col, prev_map, out_col in (
+                            (
+                                "DEVICE QUASAR_DM KERNEL START CYCLE",
+                                "DEVICE QUASAR_DM KERNEL END CYCLE",
+                                _QUASAR_DM_KERNEL_COL,
+                                prev_device_dm_kernel_end_cycle,
+                                _QUASAR_OP2OP_DM_COL,
+                            ),
+                            (
+                                "DEVICE QUASAR_NEO_TRISC KERNEL START CYCLE",
+                                "DEVICE QUASAR_NEO_TRISC KERNEL END CYCLE",
+                                _QUASAR_TRISC_KERNEL_COL,
+                                prev_device_trisc_kernel_end_cycle,
+                                _QUASAR_OP2OP_TRISC_COL,
+                            ),
+                        ):
+                            kernel_start = device_perf_row.get(start_col)
+                            kernel_end = device_perf_row.get(end_col)
+                            kernel_dur_ns = device_perf_row.get(dur_col)
+                            if kernel_start is not None:
+                                prev_end = prev_map.get(perf_device_id)
+                                span = (kernel_end - kernel_start) if kernel_end is not None else 0
+                                ns_per_cycle_type = (kernel_dur_ns / span) if (kernel_dur_ns and span > 0) else None
+                                if prev_end is not None and ns_per_cycle_type is not None:
+                                    csv_row[out_col] = round((kernel_start - prev_end) * ns_per_cycle_type)
+                                else:
+                                    csv_row[out_col] = 0
+                            if kernel_end is not None:
+                                prev_map[perf_device_id] = kernel_end
+
                     skip_headers = {
                         "GLOBAL CALL COUNT",
                         "DEVICE ID",
@@ -1637,6 +1884,19 @@ def generate_reports(
                         except ZeroDivisionError:
                             csv_row["PM FPU UTIL (%)"] = 0.0
 
+            # Quasar: copy the per-type DM / Neo-TRISC kernel & FW durations (ns) straight from the device
+            # perf report and drop the WH/BH per-RISC / cross-clock-domain [ns] columns they replace.
+            if is_quasar_report and isinstance(row, int) and active_op_record is not None:
+                if device_perf_row:
+                    for col in _QUASAR_DEVICE_DURATION_COLS:
+                        val = device_perf_row.get(col)
+                        if val not in (None, ""):
+                            csv_row[col] = val
+                # Strip the stock [ns] columns the Quasar-shaped header no longer carries (replaced or
+                # dropped) so the writer (which rejects unknown fields) doesn't choke on their values.
+                for stale_column in _QUASAR_STALE_ROW_KEYS:
+                    csv_row.pop(stale_column, None)
+
             csv_rows.append(csv_row)
 
         # Determine which perf counter headers have data in any row
@@ -1646,11 +1906,24 @@ def generate_reports(
         active_perf_headers = [h for h in PERF_COUNTER_CSV_HEADERS if h in all_row_keys]
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
+        head_part = list(OPS_CSV_HEADER[:ioHeaderIndex])
+        tail_part = list(OPS_CSV_HEADER[ioHeaderIndex + 2 :])
+        # Quasar: replace the WH/BH per-RISC KERNEL DURATION block with the per-type DM / Neo-TRISC
+        # kernel- and FW-duration columns (ns).
+        if is_quasar_report:
+            head_part = shape_device_headers_for_quasar(head_part)
+        kernel_size_headers = sorted(
+            {key for row in csv_rows for key in row if key.endswith(_KERNEL_SIZE_SUFFIX)},
+            key=_kernel_size_sort_key,
+        )
+        if kernel_size_headers:
+            anchor = tail_part.index("PROGRAM CACHE HIT") + 1
+            tail_part[anchor:anchor] = kernel_size_headers
         allHeaders = (
-            OPS_CSV_HEADER[:ioHeaderIndex]
+            head_part
             + tensorCSVData["INPUT"]["headers"]
             + tensorCSVData["OUTPUT"]["headers"]
-            + OPS_CSV_HEADER[ioHeaderIndex + 2 :]
+            + tail_part
             + active_perf_headers
             + sorted(list(childCallKeys))
         )

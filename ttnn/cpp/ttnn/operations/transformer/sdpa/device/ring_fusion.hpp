@@ -13,7 +13,7 @@ namespace ttnn::prim {
 
 struct RingSDPAFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;  // [dir0, dir1]
     ttnn::experimental::ccl::FusedOpSignalerMode fused_op_signaler_mode =
         ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
@@ -23,6 +23,9 @@ struct RingSDPAFusedOpSignaler {
     uint32_t ring_index = 0;
     uint32_t forward_writes_expected = 0;
     uint32_t backward_writes_expected = 0;
+
+    // Set by the program factory when the all-gather relays the diametric slice split across both links
+    bool split_forwarding_enabled = false;
 
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;

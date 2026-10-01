@@ -6,6 +6,8 @@
 
 #include <variant>
 
+#include <tt_stl/small_vector.hpp>
+
 #include "ttnn/tensor/types.hpp"
 #include "full_device_operation_types.hpp"
 #include "full_program_factory_interleaved.hpp"
@@ -33,10 +35,11 @@ struct FullDeviceOperation {
 
 namespace ttnn::prim {
 ttnn::operations::full::FullDeviceOperation::tensor_return_value_t full(
-    ttnn::SmallVector<uint32_t> shape,
+    ttsl::SmallVector<uint32_t> shape,
     std::variant<float, int> fill_value,
     ttnn::MeshDevice* mesh_device,
     const DataType& dtype,
     const Layout& layout,
-    const MemoryConfig& memory_config);
+    const MemoryConfig& memory_config,
+    std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt);
 }  // namespace ttnn::prim

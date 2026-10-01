@@ -4,7 +4,17 @@
 
 #pragma once
 
+// NOTE: A Metal 2.0 fork of this header lives beside it, as embeddings_common_metal2.hpp. Readers
+// ported to Metal 2.0 include the fork, which takes a DataflowBuffer binding token and the pad-token
+// value; this file serves the readers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // TODO: Should get this from somewhere
 constexpr uint32_t tile_height = 32;
@@ -17,60 +27,122 @@ using input_token_t = uint32_t;
 
 // TODO: Can probably make this not global
 uint32_t pad_token;
-uint64_t pad_noc_addr;
-uint64_t zero_noc_addr;
-uint64_t one_noc_addr;
+uint32_t pad_local_addr;
+uint32_t zero_local_addr;
+uint32_t one_local_addr;
 
+// Fills the local weight cache (pad row under PADDED, rows 0 and 1 under BINARY) with
+// `weight_stick_size` bytes of each cached row, starting `weight_col_offset_bytes` into the row.
+// The offset is the core's column slice of the weight row (non-zero only for width-/block-sharded
+// output); it is applied per read so that `weights` can be built on the clean buffer base.
 template <typename T>
 FORCE_INLINE constexpr void prepare_local_cache(
-    uint32_t local_cache_cb, const T& weights, uint32_t weight_stick_size, uint32_t pad_token_arg_idx = 0) {
+    const Noc& noc,
+    uint32_t local_cache_cb,
+    const T& weights,
+    uint32_t weight_stick_size,
+    uint32_t pad_token_arg_idx = 0,
+    uint32_t weight_col_offset_bytes = 0) {
 #if defined PADDED
     pad_token = get_arg_val<uint32_t>(pad_token_arg_idx);
-    cb_reserve_back(local_cache_cb, 1);
-    uint32_t local_pad_addr = get_write_ptr(local_cache_cb);
-    uint64_t src_noc_addr = get_noc_addr(pad_token, weights);
-    noc_async_read(src_noc_addr, local_pad_addr, weight_stick_size);
-    noc_async_read_barrier();
-    pad_noc_addr = get_noc_addr(local_pad_addr);
+    CircularBuffer cb(local_cache_cb);
+    cb.reserve_back(1);
+    pad_local_addr = cb.get_write_ptr();
+    noc.async_read(
+        weights,
+        CoreLocalMem<uint32_t>(pad_local_addr),
+        weight_stick_size,
+        {.page_id = pad_token, .offset_bytes = weight_col_offset_bytes},
+        {});
+    noc.async_read_barrier();
 #elif defined BINARY
-    cb_reserve_back(local_cache_cb, 2);
-    uint32_t local_write_addr = get_write_ptr(local_cache_cb);
-    uint64_t src_noc_addr = get_noc_addr(0, weights);
-    noc_async_read(src_noc_addr, local_write_addr, weight_stick_size);
-    zero_noc_addr = get_noc_addr(local_write_addr);
+    CircularBuffer cb(local_cache_cb);
+    cb.reserve_back(2);
+    zero_local_addr = cb.get_write_ptr();
+    noc.async_read(
+        weights,
+        CoreLocalMem<uint32_t>(zero_local_addr),
+        weight_stick_size,
+        {.page_id = 0, .offset_bytes = weight_col_offset_bytes},
+        {});
 
-    local_write_addr += weight_stick_size;
-    src_noc_addr = get_noc_addr(1, weights);
-    noc_async_read(src_noc_addr, local_write_addr, weight_stick_size);
-    one_noc_addr = get_noc_addr(local_write_addr);
+    one_local_addr = zero_local_addr + weight_stick_size;
+    noc.async_read(
+        weights,
+        CoreLocalMem<uint32_t>(one_local_addr),
+        weight_stick_size,
+        {.page_id = 1, .offset_bytes = weight_col_offset_bytes},
+        {});
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 #endif
 }
 
+// Issues an async read of one token's weight stick (or a chunk of it) into the destination L1
+// address. Caller must barrier before use.
+//
+// `chunk_offset_bytes` selects the chunk within the (already column-sliced) stick and applies to
+// both the DRAM read and the local-cache replay. `weight_col_offset_bytes` is the core's column
+// slice of the weight row; it applies to the DRAM read only, because prepare_local_cache already
+// filled the local cache from that offset. Passing it here (rather than folding it into the
+// accessor's base address) keeps `weights` on the clean buffer base.
 template <typename T>
-FORCE_INLINE uint64_t get_token_noc_addr(input_token_t token, const T& weights) {
+FORCE_INLINE void read_token_async(
+    const Noc& noc,
+    input_token_t token,
+    const T& weights,
+    uint32_t dst_l1_addr,
+    uint32_t size_bytes,
+    uint32_t chunk_offset_bytes = 0,
+    uint32_t weight_col_offset_bytes = 0) {
+    const uint32_t weight_offset_bytes = weight_col_offset_bytes + chunk_offset_bytes;
 #if defined PADDED
     if (token == pad_token) {
-        return pad_noc_addr;
-    } else {
-        return get_noc_addr(token, weights);
+        const uint8_t noc_id = noc.get_noc_id();
+        UnicastEndpoint src;
+        noc.async_read(
+            src,
+            CoreLocalMem<uint32_t>(dst_l1_addr),
+            size_bytes,
+            {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = pad_local_addr + chunk_offset_bytes},
+            {});
+        return;
     }
+    noc.async_read(
+        weights,
+        CoreLocalMem<uint32_t>(dst_l1_addr),
+        size_bytes,
+        {.page_id = static_cast<uint32_t>(token), .offset_bytes = weight_offset_bytes},
+        {});
 #elif defined BINARY
-    if (token == 0) {
-        return zero_noc_addr;
-    } else {
-        return one_noc_addr;
-    }
+    const uint8_t noc_id = noc.get_noc_id();
+    UnicastEndpoint src;
+    const uint32_t local_addr = (token == 0) ? zero_local_addr : one_local_addr;
+    noc.async_read(
+        src,
+        CoreLocalMem<uint32_t>(dst_l1_addr),
+        size_bytes,
+        {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = local_addr + chunk_offset_bytes},
+        {});
 #elif defined BFP16
     union {
         float f;
         uint32_t u;
     } u;
-    u.u = (uint32_t)token << 16;
+    u.u = static_cast<uint32_t>(token) << 16;
     uint32_t token_casted = static_cast<uint32_t>(u.f);
-    return get_noc_addr(token_casted, weights);
+    noc.async_read(
+        weights,
+        CoreLocalMem<uint32_t>(dst_l1_addr),
+        size_bytes,
+        {.page_id = token_casted, .offset_bytes = weight_offset_bytes},
+        {});
 #else
-    return get_noc_addr(token, weights);
+    noc.async_read(
+        weights,
+        CoreLocalMem<uint32_t>(dst_l1_addr),
+        size_bytes,
+        {.page_id = static_cast<uint32_t>(token), .offset_bytes = weight_offset_bytes},
+        {});
 #endif
 }

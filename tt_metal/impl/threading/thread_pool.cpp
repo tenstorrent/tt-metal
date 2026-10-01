@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
 #include <cstddef>
 #include <future>
 #include <type_traits>
@@ -80,6 +81,16 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
     return physical_device_id % num_threads;
 }
 
+void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node) {
+    if (base == nullptr || bytes == 0 || numa_node < 0 || numa_available() == -1) {
+        return;
+    }
+    if (numa_node > numa_max_node()) {
+        return;
+    }
+    numa_tonode_memory(base, bytes, numa_node);
+}
+
 void set_worker_affinity(std::thread& worker, uint32_t cpu_core) {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
@@ -108,6 +119,10 @@ void set_process_priority(int requested_priority) {
 }
 
 }  // namespace thread_binding
+
+void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node) {
+    thread_binding::bind_memory_to_numa_node(base, bytes, numa_node);
+}
 
 namespace threading_primitives {
 
@@ -190,17 +205,15 @@ public:
             std::function<void()> task;  // Task container for this thread
             while (true) {
                 {
-                    // Retry loop with linear backoff:
-                    // - Increment attempts up to BACKOFF_START_ATTEMPT. If a task is seen, exit.
-                    // - If above BACKOFF_START_ATTEMPT, apply a delay that increases with each attempt
-                    // (scaling with BACKOFF_FACTOR_MICROSECONDS and bound by BACKOFF_END_ATTEMPT).
-                    // - The goal is to minimize CPU overhead and thread startup latency
+                    // Spin briefly so back-to-back tasks are picked up without entering the kernel,
+                    // then block until a producer publishes work. Sleeping for a growing interval
+                    // instead costs the producer the remainder of that interval: a thread idle for
+                    // as little as one dispatch's worth of work was already sleeping in 5 us steps,
+                    // which put tens of microseconds between enqueue() and the task starting.
                     uint32_t attempts = 0;
                     while (task_counter_.load(std::memory_order_acquire) == 0) {
-                        attempts = std::min(attempts + 1, BACKOFF_END_ATTEMPT);
-                        if (attempts > BACKOFF_START_ATTEMPT) {
-                            std::this_thread::sleep_for(std::chrono::microseconds(
-                                (attempts - BACKOFF_START_ATTEMPT) * BACKOFF_FACTOR_MICROSECONDS));
+                        if (++attempts > BACKOFF_START_ATTEMPT) {
+                            task_counter_.wait(0, std::memory_order_relaxed);
                         }
                     }
                     if (shutdown_) {
@@ -240,6 +253,7 @@ public:
         this->wait();
         shutdown_ = true;
         task_counter_.fetch_add(1);
+        task_counter_.notify_all();
         worker.join();
     }
 
@@ -247,6 +261,10 @@ public:
         tasks_.push(std::move(f));  // Move the task directly into queue
         // Light-Weight counter increment to track the number of tasks in flight
         task_counter_.fetch_add(1, std::memory_order_relaxed);
+        // Both the worker (waiting for work) and a thread in wait() (waiting for the count to reach
+        // zero) block on this counter, so wake all of them: waking just one could wake the waiter
+        // that has no reason to run yet and leave the worker asleep.
+        task_counter_.notify_all();
     }
 
     std::exception_ptr wait() const {
@@ -269,7 +287,9 @@ private:
     TaskQueue tasks_;
     std::thread worker;
     std::atomic<int> task_counter_ = 0;
-    bool shutdown_ = false;
+    // Accessed from both the worker thread (read, worker loop) and the main thread (write, destructor).
+    // Atomic to avoid a data race; the surrounding task_counter_ operations provide the ordering.
+    std::atomic<bool> shutdown_ = false;
     mutable std::exception_ptr stored_exception_;
     // Variables managing the linear backoff strategy used by worker threads
     // when waiting on a task to be inserted in the queue

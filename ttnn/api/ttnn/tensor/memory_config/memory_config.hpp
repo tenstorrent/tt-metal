@@ -4,4 +4,4 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>

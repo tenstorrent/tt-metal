@@ -3,36 +3,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
-#include "api/compute/bcast.h"
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    uint32_t w = 0;
-    constexpr uint32_t onetile = 1;
-    uint32_t B = get_arg_val<uint32_t>(0);
-    uint32_t Ht = get_arg_val<uint32_t>(1);
-    uint32_t Wt = get_arg_val<uint32_t>(2);
+    auto B = get_arg(args::B);
+    auto Ht = get_arg(args::Ht);
+    auto Wt = get_arg(args::Wt);
 
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
-    for (uint32_t b = 0; b < B; b++) {
-        for (uint32_t h = 0; h < Ht; h++) {
-            cb_wait_front(tt::CBIndex::c_1, onetile);
-            for (uint32_t w = 0; w < Wt; w++) {
-                cb_reserve_back(tt::CBIndex::c_16, onetile);
-
-                acquire_dst();
-
-                cb_wait_front(tt::CBIndex::c_0, onetile);
-                BCAST_OP<BroadcastType::COL>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-                pack_tile(0, tt::CBIndex::c_16);
-                cb_pop_front(tt::CBIndex::c_0, onetile);
-
-                release_dst();
-
-                cb_push_back(tt::CBIndex::c_16, onetile);
-            }
-            cb_pop_front(tt::CBIndex::c_1, onetile);
-        }
-    }
+    ckl::eltwise_chain(
+        ckl::IterationShape::grid(B * Ht, Wt),
+        ckl::BinaryFpu<
+            CHAIN_BCAST_OP,
+            // dfb::in0: one tile per (row,col)
+            ckl::input(dfb::in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            // dfb::in1: one broadcast tile per row
+            ckl::input(
+                dfb::in1,
+                CHAIN_BCAST_DIM,
+                ckl::WaitPolicy::PerTile,
+                ckl::PopPolicy::PerTile,
+                ckl::InputTileMapping::Col,
+                ckl::DataFormatReconfig::Disabled)>{},
+        // Output remains one tile per (row,col); only the column-shaped input is streamed per row.
+        ckl::PackTile<ckl::output(
+            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

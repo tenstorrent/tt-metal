@@ -153,6 +153,7 @@ class BenchmarkData:
         batch_size: int = None,
         config_params: dict = None,
         precision: str = None,
+        device_hostname: str = None,
         dataset_name: str = None,
         profiler_name: str = None,
         input_sequence_length: int = None,
@@ -182,6 +183,7 @@ class BenchmarkData:
                 run_start_ts=run_start_ts,
                 run_end_ts=run_end_ts,
                 run_type=run_type,
+                device_hostname=device_hostname,
                 device_info=device_info,
                 ml_model_name=ml_model_name,
                 ml_model_type=ml_model_type,
@@ -203,8 +205,9 @@ class BenchmarkData:
 
             filename = os.path.join(self.output_folder, f"partial_run_{run_start_ts}.pkl")
             parent_dir = os.path.dirname(filename)
-            if parent_dir != "" and not os.path.exists(parent_dir):
-                os.makedirs(parent_dir)
+            if parent_dir != "":
+                # exist_ok=True avoids a race when parallel MPI ranks create the directory concurrently
+                os.makedirs(parent_dir, exist_ok=True)
             with open(filename, "wb") as f:
                 f.write(pkl_data)
             logger.info(f"Run and measurement data saved to {filename}")

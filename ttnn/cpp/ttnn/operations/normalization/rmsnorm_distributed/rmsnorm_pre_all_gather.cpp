@@ -17,7 +17,8 @@ ttnn::Tensor rms_norm_pre_all_gather(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<bool>& use_2d_core_grid) {
+    const std::optional<bool>& use_2d_core_grid,
+    bool fast_and_approximate_mode) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
@@ -38,12 +39,14 @@ ttnn::Tensor rms_norm_pre_all_gather(
     }
     return ttnn::prim::layer_norm_pre_all_gather(
         input_tensor,
-        std::nullopt,  // recip_tensor not needed for rmsnorm (second argument)
+        residual_input_tensor,
+        std::nullopt,  // recip_tensor not needed for rmsnorm
         ttnn::prim::LayerNormDistributedType::RMSNORM,
         dtype,
         kernel_config_val,
         program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),
-        use_2d_core_grid);
+        use_2d_core_grid,
+        fast_and_approximate_mode);
 }
 
 }  // namespace ttnn

@@ -114,7 +114,7 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
             for (std::uint32_t p = 0; p < replay_pacrs; p++)
             {
                 const bool is_last_pacr_of_face = (p == pacrs_per_face - 1);
-                ckernel::instrn_buffer[0]       = is_last_pacr_of_face ? pacr_mod2 : pacr_mod0;
+                TT_INSN(is_last_pacr_of_face ? pacr_mod2 : pacr_mod0);
             }
         }
     }
@@ -181,9 +181,6 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
 // tile_index: starting tile in DEST (sets W counter)
 // address: L1 destination address for the contiguous output block
 // num_tiles: number of tiles to pack (1-8, runtime parameter)
-//
-// The outer loop count is patched via mop_cfg[0] before each MOP run,
-// matching the pattern used by _llk_pack_set_mop_outer_loop_().
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_block_contiguous_(const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
 {

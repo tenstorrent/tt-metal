@@ -3,18 +3,69 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
-inline void llk_unpack_AB_matmul_mop_config(
-    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool partial_face_a, const bool partial_face_b) {
-    // in0 - loaded to SrcB
-    // in1 - loaded to SrcA
-    _llk_unpack_AB_matmul_mop_config_(ct_dim, rt_dim, partial_face_a, partial_face_b);
+// Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). Matmul unpack is
+// FORMAT-FREE at the op level (src/dst formats are programmed at compute_kernel_hw_startup<SrcOrder::Reverse>),
+// so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
+// runtime addresses + per-tile sizes. The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
+inline void llk_unpack_AB_matmul_init_impl(
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t unpA_face_r_dim,
+    const std::uint32_t unpB_face_r_dim,
+    const std::uint32_t unpA_num_faces,
+    const std::uint32_t unpB_num_faces,
+    const bool partial_face_a,
+    const bool partial_face_b) {
+    _llk_unpack_AB_matmul_init_(
+        transpose,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        unpA_num_faces,
+        unpB_num_faces,
+        partial_face_a,
+        partial_face_b);
+}
+
+inline void llk_unpack_AB_matmul_impl(
+    const std::uint32_t base_address_a,
+    const std::uint32_t base_address_b,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t tile_size_a,
+    const std::uint32_t tile_size_b,
+    const bool partial_face_a,
+    const bool partial_face_b,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+    WAYPOINT("UPMW");
+    _llk_unpack_AB_matmul_(
+        base_address_a,
+        base_address_b,
+        tile_index_a,
+        tile_index_b,
+        tile_size_a,
+        tile_size_b,
+        partial_face_a,
+        partial_face_b,
+        ct_dim,
+        rt_dim,
+        kt_dim);
+    WAYPOINT("UPMD");
 }
 
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
@@ -26,19 +77,18 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t kt_dim = 1) {
     // In0 -> srcB (supports partial face)
     // In1 -> srcA
-    const uint32_t operandA_id = get_operand_id(operandB);
-    const uint32_t operandB_id = get_operand_id(operandA);
+    const std::uint32_t operandA_id = get_operand_id(operandB);
+    const std::uint32_t operandB_id = get_operand_id(operandA);
 
-    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
-    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
+    const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
     const bool reuse_a = ct_dim >= rt_dim;
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
-    const uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandA_id);
-    const uint32_t unpB_num_faces =
-        partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
+    const std::uint32_t unpA_num_faces = get_operand_num_faces(operandA_id);
+    const std::uint32_t unpB_num_faces = get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
@@ -50,7 +100,23 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpA_num_faces,
         unpB_num_faces));
 
-    _llk_unpack_AB_matmul_init_(
+    SAN_HOOK(init<OperationUnpackMatmul>(
+        StateVal<OperationUnpackMatmul::Transpose>(transpose),
+        StateVal<OperationUnpackMatmul::CtDim>(ct_dim),
+        StateVal<OperationUnpackMatmul::RtDim>(rt_dim),
+        StateVal<OperationUnpackMatmul::KtDim>(kt_dim),
+        StateVal<OperationUnpackMatmul::PartialFaceA>(partial_face_a),
+        StateVal<OperationUnpackMatmul::PartialFaceB>(partial_face_b),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(unpA_face_r_dim),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(unpB_face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
+
+    llk_unpack_AB_matmul_init_impl(
         transpose,
         ct_dim,
         rt_dim,
@@ -74,8 +140,6 @@ inline void llk_unpack_AB_matmul(
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
-    volatile uint* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
-
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
@@ -96,11 +160,27 @@ inline void llk_unpack_AB_matmul(
         unpack_dst_format[operandA_id],
         get_operand_face_r_dim(operandB_id),
         get_operand_face_r_dim(operandA_id),
-        partial_face_a ? 1 : get_operand_num_faces(operandB_id),
-        partial_face_b ? 1 : get_operand_num_faces(operandA_id)));
+        get_operand_num_faces(operandB_id),
+        get_operand_num_faces(operandA_id)));
 
-    WAYPOINT("UPMW");
-    _llk_unpack_AB_matmul_(
+    SAN_HOOK(execute<OperationUnpackMatmul>(
+        StateVal<OperationUnpackMatmul::CtDim>(ct_dim),
+        StateVal<OperationUnpackMatmul::RtDim>(rt_dim),
+        StateVal<OperationUnpackMatmul::KtDim>(kt_dim),
+        StateVal<OperationUnpackMatmul::PartialFaceA>(partial_face_a),
+        StateVal<OperationUnpackMatmul::PartialFaceB>(partial_face_b),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operandB_id)),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operandB_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandA_id)),
+        StateDiscard<std::uint32_t>(tile_index_a),
+        StateDiscard<std::uint32_t>(tile_index_b)));
+
+    llk_unpack_AB_matmul_impl(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -112,5 +192,4 @@ inline void llk_unpack_AB_matmul(
         ct_dim,
         rt_dim,
         kt_dim);
-    WAYPOINT("UPMD");
 }

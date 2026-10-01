@@ -70,7 +70,7 @@ class Generator(WarmupForwardMixin):
             if page_table is not None:
                 page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
 
-            logits = self.__prefill_forward_single_user_text(
+            logits = self.prefill_forward_single_user_text(
                 tokens[user_id : user_id + 1],
                 page_table=page_table_user if page_table is not None else None,
                 user_id=user_id,
@@ -104,6 +104,18 @@ class Generator(WarmupForwardMixin):
         # convert to torch tensor
         self.model.rope_setup.rope_deltas = torch.tensor(rope_deltas_list)
 
+    def remap_rope_deltas(self, slot_remap):
+        """Move persistent per-slot RoPE state after vLLM condenses a batch."""
+        rope_setup = self.model.rope_setup
+        batch_size = rope_setup.batch_size
+        indices = torch.as_tensor(slot_remap, dtype=torch.long).reshape(-1)
+        if indices.numel() < batch_size:
+            raise ValueError(f"slot_remap has {indices.numel()} entries, expected at least {batch_size}")
+        indices = indices[:batch_size]
+        if torch.any(indices < 0) or torch.any(indices >= batch_size):
+            raise ValueError(f"slot_remap entries must be in [0, {batch_size})")
+        rope_setup.rope_deltas = rope_setup.rope_deltas.index_select(0, indices).clone()
+
     def decode_forward(
         self,
         tokens,
@@ -113,6 +125,12 @@ class Generator(WarmupForwardMixin):
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
+        slot_remap=None,
+        *,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
     ):
         return self._ttt_generator.decode_forward(
             tokens=tokens,
@@ -122,9 +140,14 @@ class Generator(WarmupForwardMixin):
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
+            slot_remap=slot_remap,
+            reload_inputs=reload_inputs,
+            reload_page_table=reload_page_table,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
         )
 
-    def __prefill_forward_single_user_text(
+    def prefill_forward_single_user_text(
         self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None, deepstack_visual_embeds=None
     ):
         seq_len = tokens.shape[1]
@@ -187,7 +210,7 @@ class Generator(WarmupForwardMixin):
                 )
                 tt_logits = self.model.ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in chunk_rot_mats_prefill],
+                    rot_mats_global=[rm[0:1, ...] for rm in chunk_rot_mats_prefill],
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
@@ -221,7 +244,7 @@ class Generator(WarmupForwardMixin):
 
             tt_logits = self.model.ttnn_prefill_forward(
                 prefill_input,
-                rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
+                rot_mats_global=[rm[0:1, ...] for rm in rot_mats_prefill],
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
@@ -240,7 +263,7 @@ class Generator(WarmupForwardMixin):
 
             return logits
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False) -> None:
         logger.warning("Warmup model prefill not implemented for Qwen3_VL Generator")
         logger.warning("Tracing in prefill mode is not supported for Qwen3_VL")
 

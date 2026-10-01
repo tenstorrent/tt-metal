@@ -5,49 +5,60 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-
-import torch
-from diffusers.schedulers.scheduling_utils import SchedulerMixin
+from typing import Any
 
 import ttnn
 
+from .schedule import Schedule
+
 
 class Solver(ABC):
-    def __init__(self, scheduler: SchedulerMixin) -> None:
-        if not isinstance(scheduler, SchedulerMixin):
-            msg = f"scheduler must be a diffusers SchedulerMixin, got {type(scheduler).__name__}"
-            raise ValueError(msg)
+    """On-device solver for one denoising trajectory.
+
+    A solver owns the scheduler defining its discretization (where it has one) and the
+    `Schedule` derived from it, so the schedule has a single owner across a run.
+    """
+
+    def __init__(self, *, scheduler: Any = None) -> None:
         self._scheduler = scheduler
-        self._sigmas = None
-        self._alphas = None
-        self._timesteps = None
+        self._schedule = None
 
     @property
-    def scheduler(self) -> SchedulerMixin:
+    def scheduler(self) -> Any:
+        """The scheduler this solver was built from, or `None` if it has none."""
         return self._scheduler
 
     @property
-    def sigmas(self) -> list[float] | None:
-        """Returns the active sigma schedule, or None when no schedule has been provided."""
-        return self._sigmas
+    def schedule(self) -> Schedule:
+        if self._schedule is None:
+            msg = "schedule must be set before stepping"
+            raise ValueError(msg)
+        return self._schedule
 
     @property
-    def alphas(self) -> list[float] | None:
-        """Returns the active alpha schedule, or None when no schedule has been provided."""
-        return self._alphas
+    def sigmas(self) -> tuple[float, ...]:
+        return self.schedule.sigmas
 
     @property
-    def timesteps(self) -> torch.Tensor | None:
-        """Returns the active timesteps, or None when no timesteps have been provided."""
-        return self._timesteps
+    def alphas(self) -> tuple[float, ...]:
+        return self.schedule.alphas
 
-    def set_schedule(self, num_inference_steps: int | None = None, *, device: object = None, **kwargs: object) -> None:
-        """Forward to ``scheduler.set_timesteps`` and cache sigmas/alphas for device stepping."""
-        self._scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
-        sigmas = self._scheduler.sigmas
-        self._sigmas = sigmas.tolist()
-        self._alphas = (1.0 - sigmas).tolist()
-        self._timesteps = self._scheduler.timesteps
+    @property
+    def timesteps(self) -> tuple[float, ...]:
+        return self.schedule.timesteps
+
+    @abstractmethod
+    def set_schedule(
+        self, num_inference_steps: int | None = None, *, shift: float | None = None, **kwargs: Any
+    ) -> None:
+        """Derive and adopt the schedule for one denoising run.
+
+        Args:
+            num_inference_steps: Number of denoising steps.
+            shift: Flow shift for this run only; the construction-time value is used when
+                omitted. Each solver maps this onto its own scheduler's spelling.
+            kwargs: Solver-specific schedule arguments.
+        """
 
     @abstractmethod
     def step(self, *, step: int, latent: ttnn.Tensor, velocity_pred: ttnn.Tensor) -> ttnn.Tensor:
@@ -61,8 +72,3 @@ class Solver(ABC):
         Returns:
             The predicted latent at the next step.
         """
-
-    def _assert_schedule(self) -> None:
-        if self._sigmas is None or self._alphas is None:
-            msg = "schedule must be set before stepping"
-            raise ValueError(msg)

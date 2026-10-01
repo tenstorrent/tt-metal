@@ -11,7 +11,7 @@
 
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;

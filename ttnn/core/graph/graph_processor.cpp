@@ -10,10 +10,13 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/cluster.hpp"
 #include "ttnn/reports.hpp"
+#include <tt_metal/impl/version.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <cstdlib>
 
+#include <algorithm>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <enchantum/enchantum.hpp>
 #include <memory>
@@ -21,13 +24,25 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
+#include <internal/graph_function_abort.hpp>
 #include <unordered_map>
 
 using namespace tt::tt_metal;
 
 namespace {
+
+inline bool from_bool_param(const std::string& value) {
+    return (
+        (value.length() == 4) && ('t' == value[0] || 'T' == value[0]) && ('r' == value[1] || 'R' == value[1]) &&
+        ('u' == value[2] || 'U' == value[2]) && ('e' == value[3] || 'E' == value[3]));
+}
+
+bool is_graph_processor(const std::shared_ptr<IGraphProcessor>& processor) {
+    return dynamic_cast<ttnn::graph::GraphProcessor*>(processor.get()) != nullptr;
+}
 
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
     switch (layout) {
@@ -53,11 +68,17 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
         ttnn::graph::kPageSize,
         ttnn::graph::kNumCores,
         ttnn::graph::kMaxSizePerBank,
+        ttnn::graph::kProgramFactoryIndex,
+    };
+    static const std::unordered_set<std::string> boolean_params = {
+        ttnn::graph::kProgramCacheHit,
     };
     nlohmann::json params_json;
     for (const auto& [key, value] : data.params) {
         if (integer_params.contains(key)) {
             params_json[key] = std::stoll(value);
+        } else if (boolean_params.contains(key)) {
+            params_json[key] = from_bool_param(value);
         } else {
             params_json[key] = value;
         }
@@ -107,8 +128,8 @@ std::string get_cluster_descriptor_content() {
     return buffer.str();
 }
 
-// Get mesh coordinate mapping from generated/fabric/ directory
-// This matches the old behavior of save_mesh_descriptor() which copied these YAML files
+// Get mesh coordinate mapping from generated/fabric/ directory for the current rank.
+// Matches control_plane naming: physical_chip_mesh_coordinate_mapping_<rank+1>_of_<world_size>.yaml
 // Note: Only called during report generation (offline), not on hot path
 std::string get_mesh_coordinate_mapping_content() {
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
@@ -122,27 +143,27 @@ std::string get_mesh_coordinate_mapping_content() {
         return "";
     }
 
-    // Collect all physical_chip_mesh_coordinate_mapping*.yaml files
-    std::string combined_content;
-    for (const auto& entry : std::filesystem::directory_iterator(fabric_dir)) {
-        if (entry.is_regular_file()) {
-            std::string filename = entry.path().filename().string();
-            if (filename.find("physical_chip_mesh_coordinate_mapping") != std::string::npos &&
-                filename.find(".yaml") != std::string::npos) {
-                std::ifstream file(entry.path());
-                if (file.is_open()) {
-                    if (!combined_content.empty()) {
-                        combined_content += "\n---\n";  // YAML document separator
-                    }
-                    combined_content += "# " + filename + "\n";
-                    std::stringstream buffer;
-                    buffer << file.rdbuf();
-                    combined_content += buffer.str();
-                }
-            }
-        }
+    const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const int rank = *world_ctx->rank();
+    const int world_size = *world_ctx->size();
+
+    std::filesystem::path mapping_file =
+        fabric_dir / ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
+                      std::to_string(world_size) + ".yaml");
+    if (world_size == 1 && !std::filesystem::exists(mapping_file)) {
+        mapping_file = fabric_dir / "physical_chip_mesh_coordinate_mapping.yaml";
     }
-    return combined_content;
+    if (!std::filesystem::exists(mapping_file)) {
+        return "";
+    }
+
+    std::ifstream file(mapping_file);
+    if (!file.is_open()) {
+        return "";
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
 }
 
 }  // namespace
@@ -150,12 +171,25 @@ std::string get_mesh_coordinate_mapping_content() {
 namespace ttnn::graph {
 
 std::atomic<bool> GraphProcessor::capture_detailed_buffer_tracing_{false};
+thread_local std::optional<GraphProcessor::PendingProgramFactory> GraphProcessor::pending_program_factory_;
 
 void GraphProcessor::enable_detailed_buffer_tracing() { capture_detailed_buffer_tracing_ = true; }
 
 void GraphProcessor::disable_detailed_buffer_tracing() { capture_detailed_buffer_tracing_ = false; }
 
 bool GraphProcessor::is_detailed_buffer_tracing_enabled() { return capture_detailed_buffer_tracing_; }
+
+bool GraphProcessor::has_active_instance() {
+    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+    return std::any_of(processors.begin(), processors.end(), is_graph_processor);
+}
+
+void GraphProcessor::set_pending_program_factory(std::string type, std::size_t index, bool cache_hit) {
+    if (!has_active_instance()) {
+        return;
+    }
+    pending_program_factory_ = PendingProgramFactory{std::move(type), index, cache_hit};
+}
 
 GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { GraphProcessor::begin_capture(mode); }
 
@@ -303,7 +337,7 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
 }
 
 void GraphProcessor::track_allocate_cb(
-    const CoreRangeSet& core_range_set,
+    const tt::tt_metal::CoreRangeSet& core_range_set,
     uint64_t addr,
     uint64_t size,
     bool is_globally_allocated,
@@ -326,6 +360,64 @@ void GraphProcessor::track_allocate_cb(
         graph.push_back(Vertex{
             .counter = counter,
             .node_type = kNodeCBAllocate,
+            .params = std::move(params),
+            .connections = {},
+            .stacking_level = stacking_level});
+        graph[current_op_id.top()].connections.push_back(counter);
+    }
+}
+
+void GraphProcessor::track_allocate_dataflow_buffer(
+    const tt::tt_metal::CoreRangeSet& core_range_set,
+    uint64_t addr,
+    uint64_t size,
+    bool borrows_memory,
+    const tt::tt_metal::IDevice* device) {
+    TT_ASSERT(device);
+    const std::lock_guard<std::mutex> lock(mutex);
+
+    track_device(device);
+
+    std::unordered_map<std::string, std::string> params = {
+        {kSize, std::to_string(size)},
+        {kAddress, std::to_string(addr)},
+        {kCoreRangeSet, core_range_set.str()},
+        {kBorrowsMemory, std::to_string(borrows_memory)},
+        {kDeviceId, std::to_string(device->id())}};
+    node_id counter = graph.size();
+    int stacking_level = static_cast<int>(current_op_id.size()) - 1;
+    {
+        graph.push_back(Vertex{
+            .counter = counter,
+            .node_type = kNodeDataflowBufferAllocate,
+            .params = std::move(params),
+            .connections = {},
+            .stacking_level = stacking_level});
+        graph[current_op_id.top()].connections.push_back(counter);
+    }
+}
+
+void GraphProcessor::track_allocate_scratchpad(
+    const tt::tt_metal::CoreRangeSet& core_range_set,
+    uint64_t addr,
+    uint64_t size,
+    const tt::tt_metal::IDevice* device) {
+    TT_ASSERT(device);
+    const std::lock_guard<std::mutex> lock(mutex);
+
+    track_device(device);
+
+    std::unordered_map<std::string, std::string> params = {
+        {kSize, std::to_string(size)},
+        {kAddress, std::to_string(addr)},
+        {kCoreRangeSet, core_range_set.str()},
+        {kDeviceId, std::to_string(device->id())}};
+    node_id counter = graph.size();
+    int stacking_level = static_cast<int>(current_op_id.size()) - 1;
+    {
+        graph.push_back(Vertex{
+            .counter = counter,
+            .node_type = kNodeScratchpadAllocate,
             .params = std::move(params),
             .connections = {},
             .stacking_level = stacking_level});
@@ -460,7 +552,7 @@ void GraphProcessor::track_function_start(
     graph[counter].input_tensors = current_input_tensors;
 }
 
-void GraphProcessor::track_function_end_impl() {
+node_id GraphProcessor::track_function_end_impl() {
     // Calculate duration - get end time first for accuracy
     uint64_t duration_ns = 0;
     if (!function_start_times.empty()) {
@@ -489,22 +581,74 @@ void GraphProcessor::track_function_end_impl() {
     }
     last_finished_op_id = counter;
 
+    if (pending_program_factory_) {
+        auto& params = graph[function_start_id].params;
+        params[kProgramFactoryType] = pending_program_factory_->type;
+        params[kProgramFactoryIndex] = std::to_string(pending_program_factory_->index);
+        params[kProgramCacheHit] = pending_program_factory_->cache_hit ? "true" : "false";
+        const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+        // Reset after the last GraphProcessor copies.
+        const auto it = std::find_if(processors.rbegin(), processors.rend(), is_graph_processor);
+        if (it == processors.rend() || it->get() == this) {
+            pending_program_factory_.reset();
+        }
+    }
+
     // Snapshot live buffer state after each top-level operation completes.
     // Only collected when detailed buffer tracing is enabled (report/visualization path)
     // to avoid the overhead of iterating all allocated buffers on every operation.
     if (stacking_level == 1 && capture_detailed_buffer_tracing_ && !captured_mesh_devices.empty()) {
         per_op_buffers_[function_start_id] = ttnn::reports::get_buffers(captured_mesh_devices);
     }
+
+    return counter;
 }
 
 void GraphProcessor::track_function_end() {
     const std::lock_guard<std::mutex> lock(mutex);
+    if (!has_open_function()) {
+        // An end with no matching start, e.g. a capture that began inside an already-open scope.
+        // Honouring it would pop the capture_start sentinel and leave every later end reading off
+        // an empty stack.
+        log_debug(tt::LogAlways, "Ignoring function_end with no open function_start");
+        return;
+    }
     this->track_function_end_impl();
-    TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
+    current_op_id.pop();
+}
+
+void GraphProcessor::abort_open_function_impl(std::string_view reason) {
+    // The scope is closed like any other so the trace stays balanced and later operations keep
+    // their real nesting; the marker is what tells the two apart downstream. There is no output
+    // to record: the operation never produced one.
+    const node_id end_id = this->track_function_end_impl();
+    graph[end_id].params[kAborted] = "true";
+    if (!reason.empty()) {
+        graph[end_id].params[kAbortReason] = std::string(reason);
+    }
     current_op_id.pop();
 }
 
 void GraphProcessor::track_function_end(const std::any& output_tensors) {
+    if (const auto* abort = std::any_cast<internal::GraphFunctionAbort>(&output_tensors)) {
+        const std::lock_guard<std::mutex> lock(mutex);
+        if (abort->unwind_all) {
+            // Innermost first, so the scopes are closed in the order they would have been on the
+            // way out of the operation that abandoned them.
+            while (has_open_function()) {
+                log_debug(tt::LogAlways, "Unwinding abandoned op: {}", graph[current_op_id.top()].params[kName]);
+                this->abort_open_function_impl(abort->reason);
+            }
+            return;
+        }
+        if (!has_open_function()) {
+            log_debug(tt::LogAlways, "Ignoring function_abort with no open function_start");
+            return;
+        }
+        this->abort_open_function_impl(abort->reason);
+        return;
+    }
+
     static constexpr std::array end_function_any_map{
         make_process<std::vector<Tensor>, &GraphProcessor::end_function_process>(),
         make_process<std::vector<std::optional<Tensor>>, &GraphProcessor::end_function_process>(),
@@ -513,6 +657,10 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     };
 
     const std::lock_guard<std::mutex> lock(mutex);
+    if (!has_open_function()) {
+        log_debug(tt::LogAlways, "Ignoring function_end with no open function_start");
+        return;
+    }
     this->track_function_end_impl();
 
     const auto* const it = std::ranges::find(
@@ -523,7 +671,6 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     } else {
         log_debug(tt::LogAlways, "output any type name ignored: {}", output_tensors.type().name());
     }
-    TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
     current_op_id.pop();
 }
 
@@ -538,8 +685,17 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         // buffer.
         buffer = mesh_buffer.get_backing_buffer();
 
-        // For multi-device tensors, capture per-device addresses and mesh device IDs
+        // For multi-device tensors, capture per-device addresses and mesh device IDs.
+        // In multi-host (SPMD) runs the tensor's coords span the full global mesh, but this
+        // process only owns a local subset of the chips. MeshBuffer::get_device_buffer(coord)
+        // dereferences a MaybeRemote and throws "Attempted to access remote device..." for a
+        // coord owned by another host, so skip non-local coords. Each rank records only its
+        // local shards.
+        auto* const tensor_mesh_device = mesh_buffer.device();
         for (const auto& coord : t.device_storage().get_coords()) {
+            if (tensor_mesh_device != nullptr && !tensor_mesh_device->is_local(coord)) {
+                continue;
+            }
             auto* device_buffer = mesh_buffer.get_device_buffer(coord);
             if (device_buffer != nullptr) {
                 device_tensors_json.push_back(
@@ -672,6 +828,7 @@ void GraphProcessor::end_function_process(const std::vector<T>& tensor_vec) {
 
 void GraphProcessor::begin_capture(RunMode mode) {
     const std::lock_guard<std::mutex> lock(mutex);
+    pending_program_factory_.reset();
     graph.clear();
     buffer_id_to_counter.clear();
     captured_device_info.clear();
@@ -751,6 +908,15 @@ nlohmann::json GraphProcessor::get_report() const {
         metadata[kReportTotalDurationNs] = graph.back().duration_ns;
     }
 
+    // Add distributed context metadata
+    const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    metadata[kReportRank] = *world_ctx->rank();
+    metadata[kReportWorldSize] = *world_ctx->size();
+    metadata[kReportGitSha] = std::string(tt::tt_metal::kGitSha);
+    metadata[kReportGitShaShort] = std::string(tt::tt_metal::kGitShaShort);
+    metadata[kReportGitVersion] = std::string(tt::tt_metal::kVersionFull);
+    metadata[kReportBuildType] = std::string(tt::tt_metal::kBuildType);
+    metadata[kReportGitDirty] = tt::tt_metal::kGitDirty;
     report[kReportMetadata] = metadata;
 
     // Cluster descriptor (YAML content) - always try, returns empty if unavailable
@@ -759,7 +925,7 @@ nlohmann::json GraphProcessor::get_report() const {
         report["cluster_descriptor"] = cluster_desc;
     }
 
-    // Mesh coordinate mapping (from generated/fabric/*.yaml) - matches old behavior
+    // Mesh coordinate mapping (from generated/fabric/, current rank only)
     std::string mesh_mapping = get_mesh_coordinate_mapping_content();
     if (!mesh_mapping.empty()) {
         report["mesh_coordinate_mapping"] = mesh_mapping;

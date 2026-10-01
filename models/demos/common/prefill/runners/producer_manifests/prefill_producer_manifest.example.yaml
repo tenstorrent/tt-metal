@@ -1,0 +1,38 @@
+model:
+  variant: deepseek_v3_d_p
+  num_layers: 61
+  max_seq_len: 56320
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: ds_prefill
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2
+  chunks: "11"
+  max_requests: 2
+  duration_s: "inf"
+  interleave: round_robin
+  check_pcc: false
+  trace_dir: /path/to/golden/traces/prompt_a
+
+migration:
+  issue: false
+  dest_endpoint_id: 1
+  dst_slot_offset: 2
+  timeout_ms: 3600000
+  done_file: /tmp/migration_done.sentinel
+  client_dir: /path/to/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+  table_path: /tmp/prefill_kv_chunk_table.pb
+  device_map_path: /tmp/prefill_kv_device_map.json
+
+env:
+  PREFILL_SEND_SHUTDOWN: "0"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.93"
+  PREFILL_VERIFY_MIGRATION: "dst-bytes"

@@ -2,23 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <string>
-
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
 
+#include <map>
+#include <string>
+#include <utility>
+
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace {
 constexpr uint32_t ONE_TILE = 1;
 }  // namespace
 
-RepeatAndInterleaveEltwiseMulProgramFactory::cached_program_t RepeatAndInterleaveEltwiseMulProgramFactory::create(
+ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFactory::create_program_artifacts(
     const RepeatMulParams& operation_attributes, const RepeatMulInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
@@ -27,11 +33,13 @@ RepeatAndInterleaveEltwiseMulProgramFactory::cached_program_t RepeatAndInterleav
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    tt::tt_metal::Buffer* src1_buffer = b.buffer();
+    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
-    tt::tt_metal::Buffer* out_buffer = output.buffer();
-    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
+    // Metalium-native device tensors: these back the TensorParameter specs and the
+    // TensorArguments, which the framework matches by MeshTensor identity.
+    const auto& a_tensor = a.mesh_tensor();
+    const auto& b_tensor = b.mesh_tensor();
+    const auto& output_tensor = output.mesh_tensor();
 
     tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
@@ -43,210 +51,290 @@ RepeatAndInterleaveEltwiseMulProgramFactory::cached_program_t RepeatAndInterleav
     uint32_t interm_single_tile_size = tt::tile_size(interm_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
     // Parallelize on bshape[-1]
     auto num_output_blocks_total = bshape[-1] / TILE_WIDTH;
     const bool row_major = false;
-    auto device_compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
+    auto* device = a.device();
+    auto device_compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(device_compute_with_storage_grid_size, num_output_blocks_total, row_major);
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
     std::vector<CoreCoord> cores = grid_to_cores(
         num_cores, device_compute_with_storage_grid_size.x, device_compute_with_storage_grid_size.y, row_major);
 
-    // Create circular buffers
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t cb0_tiles = ONE_TILE * 2;  // double buffer
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb0_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    // Kernel identifiers
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
-    uint32_t cb1_tiles = ONE_TILE * 2;  // double buffer
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(cb1_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    // Dataflow buffer identifiers
+    const DFBSpecName IN0{"in0"};
+    const DFBSpecName IN1{"in1"};
+    const DFBSpecName OUT{"out"};
+    const DFBSpecName IN0_TRANSPOSED{"in0_transposed"};
+    const DFBSpecName IN1_TRANSPOSED{"in1_transposed"};
+    const DFBSpecName IN1_BCAST_ROW{"in1_bcast_row"};
+    const DFBSpecName OUT_TRANSPOSED{"out_transposed"};
 
-    uint32_t output_cb_index = 16;
-    uint32_t output_cb_tiles = ONE_TILE * 2;  // double buffer
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            output_cb_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
-            .set_page_size(output_cb_index, output_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    // Tensor parameter identifiers
+    const TensorParamName SRC0{"src0"};
+    const TensorParamName SRC1{"src1"};
+    const TensorParamName DST{"dst"};
 
-    uint32_t interm_num_tiles = ONE_TILE * 2;  // double buffer
-    uint32_t interm_cb_size = interm_num_tiles * interm_single_tile_size;
-    uint32_t cb_intermed0_index = tt::CBIndex::c_24;  // cb_in0_transposed
-    tt::tt_metal::CircularBufferConfig cb_intermed0_config =
-        tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed0_index, interm_data_format}})
-            .set_page_size(cb_intermed0_index, interm_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
+    uint32_t dfb0_entries = ONE_TILE * 2;        // double buffer
+    uint32_t dfb1_entries = ONE_TILE * 2;        // double buffer
+    uint32_t output_dfb_entries = ONE_TILE * 2;  // double buffer
+    uint32_t interm_num_entries = ONE_TILE * 2;  // double buffer
 
-    uint32_t cb_intermed1_index = tt::CBIndex::c_25;  // cb_in1_transposed
-    tt::tt_metal::CircularBufferConfig cb_intermed1_config =
-        tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed1_index, interm_data_format}})
-            .set_page_size(cb_intermed1_index, interm_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
-
-    uint32_t cb_intermed2_index = tt::CBIndex::c_26;  // cb_in1_bcast_row
-    tt::tt_metal::CircularBufferConfig cb_intermed2_config =
-        tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed2_index, interm_data_format}})
-            .set_page_size(cb_intermed2_index, interm_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed2_config);
-
-    uint32_t cb_intermed3_index = tt::CBIndex::c_27;  // cb_out_transposed
-    tt::tt_metal::CircularBufferConfig cb_intermed3_config =
-        tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed3_index, interm_data_format}})
-            .set_page_size(cb_intermed3_index, interm_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed3_config);
-
-    // Compile time args
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)cb_intermed1_index,
-        (std::uint32_t)cb_intermed2_index,
-    };
-    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(src1_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
-    };
-    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
-    std::vector<uint32_t> compute_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)cb_intermed0_index,
-        (std::uint32_t)cb_intermed1_index,
-        (std::uint32_t)cb_intermed2_index,
-        (std::uint32_t)cb_intermed3_index,
-    };
-
+    // Kernel-source configuration. The compute path taken depends on which of the two inputs
+    // arrives already widened, and the kernels select it with these defines.
     std::map<std::string, std::string> ssm_eltwise_defines;
     if (ashape[-1] == TILE_WIDTH) {
         ssm_eltwise_defines["REPEAT_IN0"] = "1";
     }
-    if (bshape[-1] == HIDDEN_SIZE) {
+    const bool repeat_interleave_in1 = bshape[-1] == HIDDEN_SIZE;
+    if (repeat_interleave_in1) {
         ssm_eltwise_defines["REPEAT_INTERLEAVE_IN1"] = "1";
     }
+    const KernelSpec::CompilerOptions::Defines kernel_defines(ssm_eltwise_defines);
 
-    // Load kernels
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
-        "reader_ssm_eltwise_mul.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, ssm_eltwise_defines));
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build ProgramSpec
+    ////////////////////////////////////////////////////////////////////////////
 
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
-        "writer_ssm_eltwise_mul.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    auto compute_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
-        "ssm_eltwise_mul.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = operation_attributes.math_fidelity,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = compute_args,
-            .defines = ssm_eltwise_defines});
-
-    // Store shared variables
-    shared_variables_t shared_variables;
-    shared_variables.reader_kernel_id = reader_kernel_id;
-    shared_variables.writer_kernel_id = writer_kernel_id;
-    shared_variables.compute_kernel_id = compute_kernel_id;
-    shared_variables.compute_with_storage_grid_size = device_compute_with_storage_grid_size;
-    shared_variables.all_cores = all_cores;
-    shared_variables.cores = cores;
-    shared_variables.num_cores = num_cores;
-    shared_variables.g1_numcores = g1_numcores;
-    shared_variables.g2_numcores = g2_numcores;
-    shared_variables.num_blocks_per_core_group_1 = num_blocks_per_core_group_1;
-    shared_variables.num_blocks_per_core_group_2 = num_blocks_per_core_group_2;
-    shared_variables.ashape = ashape;
-    shared_variables.bshape = bshape;
-    shared_variables.hidden_size = HIDDEN_SIZE;
-
-    cached_program_t cached_program{std::move(program), std::move(shared_variables)};
-
-    // Set initial runtime args
-    override_runtime_arguments(cached_program, operation_attributes, tensor_args, tensor_return_value);
-
-    return cached_program;
-}
-
-void RepeatAndInterleaveEltwiseMulProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const RepeatMulParams&,
-    const RepeatMulInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    const auto& a = tensor_args.a;
-    const auto& b = tensor_args.b;
-    const auto& output = tensor_return_value;
-
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    tt::tt_metal::Buffer* src1_buffer = b.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-
-    auto& program = cached_program.program;
-    const auto& cores = cached_program.shared_variables.cores;
-    const auto& num_cores = cached_program.shared_variables.num_cores;
-    const auto& g1_numcores = cached_program.shared_variables.g1_numcores;
-    const auto& num_blocks_per_core_group_1 = cached_program.shared_variables.num_blocks_per_core_group_1;
-    const auto& num_blocks_per_core_group_2 = cached_program.shared_variables.num_blocks_per_core_group_2;
-    const auto& bshape = cached_program.shared_variables.bshape;
-    const auto& ashape = cached_program.shared_variables.ashape;
-    const auto& hidden_size = cached_program.shared_variables.hidden_size;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
-
-    // Default reader runtime args
-    std::vector<uint32_t> reader_runtime_args = {
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
+    // Dataflow buffers.
+    //
+    // in0_transposed and out_transposed are compute-private. Under REPEAT_INTERLEAVE_IN1 compute
+    // both fills and drains them; without it that code is compiled out and compute merely names
+    // them — it constructs the buffers, and reads in0_transposed's data format for a pack
+    // reconfig — without touching either. Compute is the only kernel involved either way, so each
+    // is bound as a self-loop: PRODUCER and CONSUMER on that one kernel. Every DFB needs both
+    // endpoints, and the role labels only drive FIFO machinery that a non-touching kernel never
+    // invokes.
+    //
+    // in1_transposed carries the transposed in1 tile from compute to the reader, which slices it
+    // into single rows. Compute produces and the reader consumes, one endpoint apiece, in every
+    // configuration — the same shape as out. Outside REPEAT_INTERLEAVE_IN1 neither kernel touches
+    // the buffer, but the endpoints stay as they are because every DFB needs both.
+    Group<DataflowBufferSpec> dataflow_buffers = {
+        DataflowBufferSpec{
+            .unique_id = IN0,
+            .entry_size = in0_single_tile_size,
+            .num_entries = dfb0_entries,
+            .data_format_metadata = in0_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = IN1,
+            .entry_size = in1_single_tile_size,
+            .num_entries = dfb1_entries,
+            .data_format_metadata = in1_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = OUT,
+            .entry_size = output_single_tile_size,
+            .num_entries = output_dfb_entries,
+            .data_format_metadata = output_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = IN0_TRANSPOSED,
+            .entry_size = interm_single_tile_size,
+            .num_entries = interm_num_entries,
+            .data_format_metadata = interm_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = IN1_TRANSPOSED,
+            .entry_size = interm_single_tile_size,
+            .num_entries = interm_num_entries,
+            .data_format_metadata = interm_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = IN1_BCAST_ROW,
+            .entry_size = interm_single_tile_size,
+            .num_entries = interm_num_entries,
+            .data_format_metadata = interm_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = OUT_TRANSPOSED,
+            .entry_size = interm_single_tile_size,
+            .num_entries = interm_num_entries,
+            .data_format_metadata = interm_data_format,
+        },
     };
 
-    // Default writer runtime args
-    std::vector<uint32_t> writer_runtime_args = {
-        0,
-        0,
-        0,
-        0,
-        0,
+    // Kernels
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
+            "reader_ssm_eltwise_mul.cpp",
+        .compiler_options = {.defines = kernel_defines},
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = IN0,
+                    .accessor_name = "in0",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = IN1,
+                    .accessor_name = "in1",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = IN1_TRANSPOSED,
+                    .accessor_name = "in1_transposed",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = IN1_BCAST_ROW,
+                    .accessor_name = "in1_bcast_row",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = SRC0, .accessor_name = "src0"},
+                TensorBinding{.tensor_parameter_name = SRC1, .accessor_name = "src1"},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {"in1_num_blocks", "in1_start_id", "in1_num_blocks_h", "in1_num_blocks_w", "in0_num_blocks_w"},
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    // Default compute runtime args
-    std::vector<uint32_t> compute_runtime_args = {
-        0,
-        0,
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
+            "writer_ssm_eltwise_mul.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = OUT,
+                    .accessor_name = "out",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {"out_num_blocks_w_per_core", "start_id", "out_num_blocks_h", "out_total_blocks_w"},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    std::vector<std::vector<uint32_t>> all_reader_runtime_args = {cores.size(), reader_runtime_args};
-    std::vector<std::vector<uint32_t>> all_writer_runtime_args = {cores.size(), writer_runtime_args};
-    std::vector<std::vector<uint32_t>> all_compute_runtime_args = {cores.size(), compute_runtime_args};
+    Group<DFBBinding> compute_dfb_bindings = {
+        DFBBinding{
+            .dfb_spec_name = IN0,
+            .accessor_name = "in0",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = IN1,
+            .accessor_name = "in1",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = OUT,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = IN0_TRANSPOSED,
+            .accessor_name = "in0_transposed",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = IN0_TRANSPOSED,
+            .accessor_name = "in0_transposed",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = IN1_TRANSPOSED,
+            .accessor_name = "in1_transposed",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = IN1_BCAST_ROW,
+            .accessor_name = "in1_bcast_row",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = OUT_TRANSPOSED,
+            .accessor_name = "out_transposed",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = OUT_TRANSPOSED,
+            .accessor_name = "out_transposed",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+    };
 
-    // Set runtime args
-    uint32_t num_blocks_per_core;
+    // Compute hw_config — Style B (the legacy factory set a Metal ComputeConfigDescriptor directly,
+    // with no TTNN ComputeKernelConfig behind it). Build ComputeHardwareConfig field by field: the three
+    // fields the descriptor set explicitly are carried over (math_approx_mode = false becomes
+    // sfpu_precision_mode = Precise), and the three it left alone stay at ComputeHardwareConfig's
+    // defaults, which coincide with the legacy descriptor's. No unpack_modes entry is required
+    // because enable_32_bit_dest is false.
+    const ComputeHardwareConfig compute_hw_config = ComputeHardwareConfig{
+        .fpu_math_fidelity = operation_attributes.math_fidelity,
+        .sfpu_precision_mode = Precision::Precise,
+        .enable_32_bit_dest = false,
+    };
+
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
+            "ssm_eltwise_mul.cpp",
+        // O3 is the level a compute kernel got from the legacy per-kernel-type default; Metal 2.0's
+        // single CompilerOptions defaults to O2, so it has to be asked for.
+        .compiler_options = {.defines = kernel_defines, .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings = std::move(compute_dfb_bindings),
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"in1_num_blocks", "in1_num_blocks_h"},
+            },
+        .hw_config = compute_hw_config,
+    };
+
+    ProgramSpec spec{
+        .name = "repeat_and_interleave_eltwise_mul",
+        .kernels = {reader, writer, compute},
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = SRC0, .spec = a_tensor.tensor_spec()},
+                TensorParameter{.unique_id = SRC1, .spec = b_tensor.tensor_spec()},
+                TensorParameter{.unique_id = DST, .spec = output_tensor.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER, COMPUTE},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build ProgramRunArgs
+    ////////////////////////////////////////////////////////////////////////////
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
+
+    // Set runtime args per core
+    uint32_t num_blocks_per_core = 0;
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
         if (i < g1_numcores) {
             num_blocks_per_core = num_blocks_per_core_group_1;
@@ -254,38 +342,50 @@ void RepeatAndInterleaveEltwiseMulProgramFactory::override_runtime_arguments(
             num_blocks_per_core = num_blocks_per_core_group_2;
         }
 
-        // Update core dependent runtime args
-        all_reader_runtime_args[i][0] = src0_buffer->address();
-        all_reader_runtime_args[i][1] = src1_buffer->address();
-        all_reader_runtime_args[i][2] = num_blocks_per_core;
-        all_reader_runtime_args[i][3] = num_blocks_written;
-        all_reader_runtime_args[i][4] = bshape[2] / TILE_HEIGHT;
-        all_reader_runtime_args[i][5] = bshape[-1] / TILE_WIDTH;
-        all_reader_runtime_args[i][6] = ashape[-1] / TILE_WIDTH;
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            cores[i],
+            {{"in1_num_blocks", num_blocks_per_core},
+             {"in1_start_id", num_blocks_written},
+             {"in1_num_blocks_h", static_cast<uint32_t>(bshape[2] / TILE_HEIGHT)},
+             {"in1_num_blocks_w", static_cast<uint32_t>(bshape[-1] / TILE_WIDTH)},
+             {"in0_num_blocks_w", static_cast<uint32_t>(ashape[-1] / TILE_WIDTH)}});
 
-        all_writer_runtime_args[i][0] = dst_buffer->address();
-
-        // update writer's num_tiles based on input_b already repeat_interleaved or not
-        if (bshape[-1] == hidden_size) {
-            all_writer_runtime_args[i][1] = num_blocks_per_core * TILE_WIDTH;
-            all_writer_runtime_args[i][2] = num_blocks_written * TILE_WIDTH;
-        } else {
-            all_writer_runtime_args[i][1] = num_blocks_per_core;
-            all_writer_runtime_args[i][2] = num_blocks_written;
+        // update writer's block count based on input_b already repeat_interleaved or not
+        uint32_t writer_num_tiles = num_blocks_per_core;
+        uint32_t writer_start_id = num_blocks_written;
+        if (bshape[-1] == HIDDEN_SIZE) {
+            writer_num_tiles = num_blocks_per_core * TILE_WIDTH;
+            writer_start_id = num_blocks_written * TILE_WIDTH;
         }
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            cores[i],
+            {{"out_num_blocks_w_per_core", writer_num_tiles},
+             {"start_id", writer_start_id},
+             {"out_num_blocks_h", static_cast<uint32_t>(bshape[2] / TILE_HEIGHT)},
+             {"out_total_blocks_w", HIDDEN_SIZE}});
 
-        all_writer_runtime_args[i][3] = bshape[2] / TILE_HEIGHT;
-        all_writer_runtime_args[i][4] = hidden_size;
-
-        all_compute_runtime_args[i][0] = num_blocks_per_core;
-        all_compute_runtime_args[i][1] = bshape[2] / TILE_HEIGHT;
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values,
+            cores[i],
+            {{"in1_num_blocks", num_blocks_per_core},
+             {"in1_num_blocks_h", static_cast<uint32_t>(bshape[2] / TILE_HEIGHT)}});
 
         num_blocks_written += num_blocks_per_core;
     }
 
-    SetRuntimeArgs(program, reader_kernel_id, cores, all_reader_runtime_args);
-    SetRuntimeArgs(program, writer_kernel_id, cores, all_writer_runtime_args);
-    SetRuntimeArgs(program, compute_kernel_id, cores, all_compute_runtime_args);
+    ProgramRunArgs run_args{
+        .kernel_run_args = {reader_run_args, writer_run_args, compute_run_args},
+        .tensor_args =
+            {
+                {SRC0, a_tensor},
+                {SRC1, b_tensor},
+                {DST, output_tensor},
+            },
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::experimental::prim

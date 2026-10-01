@@ -4,7 +4,10 @@
 
 #include "paged_fused_update_cache_device_operation.hpp"
 #include "paged_fused_update_cache_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 using namespace tt::tt_metal;
 
@@ -202,7 +205,8 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         // Data type validation
         TT_FATAL(
             input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16,
-            "Data type of input tensor for update cache must be FLOAT32 or BFLOAT16");
+            "Data type of input tensor for paged_fused_update_cache must be FLOAT32 or BFLOAT16; decode update "
+            "repacks into the cache dtype and should not receive low-precision packed input");
 
         TT_FATAL(operation_attributes.batch_offset == 0, "batch_offset must be 0");
     }

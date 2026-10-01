@@ -852,7 +852,7 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device, inp
     # TODO: This is a hack to support batch size > 1, till the Conv OOM issue is resolved
     input_embeds_all_batches_splits = []
     for j in range(batch_size):
-        input_features_slice = input_features[j : j + 1, :, :, :]
+        input_features_slice = input_features[j : j + 1, :, :]
         input_embeds, [weights_device, _] = ttnn.conv1d(
             input_tensor=input_features_slice,
             weight_tensor=parameters.conv1.weight,

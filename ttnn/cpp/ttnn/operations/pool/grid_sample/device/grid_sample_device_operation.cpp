@@ -141,19 +141,9 @@ void GridSampleOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH,
         input_tensor.padded_shape()[-1],
         input_tensor.padded_shape());
-    const uint32_t max_tiles_per_reduction = 8;
-    TT_FATAL(
-        input_tensor.padded_shape()[-1] <= tt::constants::TILE_WIDTH * max_tiles_per_reduction,
-        "Wide reduction not supported: input tensor width {} exceeds maximum {} (TILE_WIDTH {} * max_tiles {}), padded "
-        "shape: {}",
-        input_tensor.padded_shape()[-1],
-        tt::constants::TILE_WIDTH * max_tiles_per_reduction,
-        tt::constants::TILE_WIDTH,
-        max_tiles_per_reduction,
-        input_tensor.padded_shape());
 }
 
-TensorSpec GridSampleOperation::compute_output_specs(
+tt::tt_metal::TensorSpec GridSampleOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& grid_tensor = tensor_args.grid;
@@ -235,10 +225,11 @@ TensorSpec GridSampleOperation::compute_output_specs(
                 grid_points_per_shard = grid_shard_spec.shape[0];
             } else {
                 // Case 2: Grid is not sharded - create sharding based on grid dimensions
-                const uint32_t total_grid_points = grid_padded_shape[1] * grid_padded_shape[2];  // H * W
+                const uint32_t total_grid_points =
+                    grid_padded_shape[0] * grid_padded_shape[1] * grid_padded_shape[2];  // N * H * W
 
                 // Get device compute grid for sharding
-                tt::tt_metal::IDevice* device = input_tensor.device();
+                tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
                 const auto compute_grid_size = device->compute_with_storage_grid_size();
 
                 // Split grid points across available cores
@@ -295,7 +286,7 @@ TensorSpec GridSampleOperation::compute_output_specs(
 
     ttnn::Shape output_padded_shape({N_padded, H_out_padded, W_out_padded, C_padded});
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_logical_shape,
         TensorLayout::fromPaddedShape(
             output_data_type,
@@ -319,8 +310,16 @@ ttnn::Tensor grid_sample(
     bool align_corners,
     bool use_precomputed_grid,
     bool batch_output_channels,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = GridSampleOperation;
+    const auto resolved_compute_kernel_config = ttnn::init_device_compute_kernel_config(
+        input_tensor.device()->arch(),
+        compute_kernel_config,
+        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/false,
+        /*default_l1_acc=*/false);
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .mode = mode,
@@ -329,6 +328,7 @@ ttnn::Tensor grid_sample(
             .use_precomputed_grid = use_precomputed_grid,
             .batch_output_channels = batch_output_channels,
             .output_mem_config = memory_config.value_or(grid.memory_config()),
+            .compute_kernel_config = resolved_compute_kernel_config,
         },
         OperationType::tensor_args_t{.input_tensor = input_tensor, .grid = grid});
 }

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "mesh_dispatch_fixture.hpp"
+#include "device_fixture.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -13,17 +13,17 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt-metalium/distributed.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
 
 // Tests dataflow through CBs at indices 0, 8, 16, ... and topmost CB
 // Validates data integrity: DRAM -> Reader -> CB -> Writer -> DRAM (src == dst)
-TEST_F(MeshDispatchFixture, DataflowCb) {
-    auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
-    if (dev->arch() == ARCH::QUASAR) {
+TEST_F(UnitMeshAnyDispatchFixture, DataflowCb) {
+    if (this->device().arch() == ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar does not support CBs, skipping test";
     }
     Program program = CreateProgram();
@@ -44,19 +44,20 @@ TEST_F(MeshDispatchFixture, DataflowCb) {
     // CB index configuration
     constexpr uint32_t start_cb = 0;
     constexpr uint32_t stride = 8;
-    const uint32_t strided_cb_count = max_cbs_ / stride;  // CBs at 0, 8, 16, ...
-    const uint32_t topmost_cb = max_cbs_ - 1;
+    const uint32_t strided_cb_count = max_dfbs_ / stride;  // CBs at 0, 8, 16, ...
+    const uint32_t topmost_cb = max_dfbs_ - 1;
     const uint32_t total_cbs = strided_cb_count + 1;  // Strided + topmost
 
     const uint32_t num_tiles = tiles_to_transfer_per_cb * total_cbs;
     const uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    auto& cq = this->device().mesh_command_queue();
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
 
-    auto src_dram_buffer = CreateBuffer(dram_config);
+    auto src_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, &this->device());
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, &this->device());
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     auto create_cb = [&](uint32_t cb_index) {
@@ -67,7 +68,7 @@ TEST_F(MeshDispatchFixture, DataflowCb) {
     };
 
     // Create CBs at 0, 8, 16, ...
-    for (uint32_t cb_idx = 0; cb_idx < max_cbs_; cb_idx += stride) {
+    for (uint32_t cb_idx = 0; cb_idx < max_dfbs_; cb_idx += stride) {
         create_cb(cb_idx);
     }
     // Also test topmost
@@ -98,28 +99,21 @@ TEST_F(MeshDispatchFixture, DataflowCb) {
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    detail::WriteToBuffer(src_dram_buffer, src_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, /*blocking=*/true);
 
     SetRuntimeArgs(program, reader_cb_kernel, core, {dram_buffer_src_addr, 0, tiles_to_transfer_per_cb});
     SetRuntimeArgs(program, writer_cb_kernel, core, {dram_buffer_dst_addr, 0, tiles_to_transfer_per_cb});
 
-    // Execute
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    this->RunProgram(mesh_device, workload);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     // Validation
     EXPECT_EQ(src_vec, result_vec);
 }
 
-TEST_F(MeshDispatchFixture, DataflowDfb) {
-    auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+TEST_F(UnitMeshAnyDispatchFixture, DataflowDfb) {
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -135,17 +129,18 @@ TEST_F(MeshDispatchFixture, DataflowDfb) {
         tiles_to_transfer_per_dfb % writer_ublock_size == 0,
         "tiles_to_transfer_per_dfb must be divisible by writer_ublock_size");
 
-    const uint32_t total_dfbs = max_cbs_;
+    const uint32_t total_dfbs = max_dfbs_;
 
     const uint32_t num_tiles = tiles_to_transfer_per_dfb * total_dfbs;
     const uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    auto& cq = this->device().mesh_command_queue();
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
 
-    auto src_dram_buffer = CreateBuffer(dram_config);
+    auto src_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, &this->device());
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, &this->device());
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     tt_metal::experimental::dfb::DataflowBufferConfig dfb_config = {
@@ -155,7 +150,8 @@ TEST_F(MeshDispatchFixture, DataflowDfb) {
         .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
         .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false,
         .data_format = tt::DataFormat::Float16_b};
 
     std::vector<uint32_t> dfb_ids(total_dfbs);
@@ -193,20 +189,15 @@ TEST_F(MeshDispatchFixture, DataflowDfb) {
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    detail::WriteToBuffer(src_dram_buffer, src_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, /*blocking=*/true);
 
     SetRuntimeArgs(program, reader_cb_kernel, core, {dram_buffer_src_addr, 0, tiles_to_transfer_per_dfb});
     SetRuntimeArgs(program, writer_cb_kernel, core, {dram_buffer_dst_addr, 0, tiles_to_transfer_per_dfb});
 
-    // Execute
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    this->RunProgram(mesh_device, workload);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     // Validation
     EXPECT_EQ(src_vec, result_vec);

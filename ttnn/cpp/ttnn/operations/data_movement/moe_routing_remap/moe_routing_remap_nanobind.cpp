@@ -39,7 +39,7 @@ Args:
     routing_weights_tensor (ttnn.Tensor): tensor of weights for selected experts, replicated on all devices `[1, total_experts]`
     non_zero_weight_size (integer): Total number of selected experts, non-zero weights in routing_weights_tensor.
     expert_parallel_size (integer): Number of devices in a cluster.
-    cluster_axis (integer): Device mesh axis of cluster, 0: columns, 1: rows.
+    cluster_axis (integer): Device mesh axis of cluster, 0: rows, 1: columns.
 
 Keyword Args:
     memory_config (ttnn.MemoryConfig, optional): Optional memory configuration for the output. Defaults to `None`.

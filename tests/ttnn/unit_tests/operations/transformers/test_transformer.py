@@ -118,6 +118,84 @@ def test_transformer_attention_softmax_(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
 
 
+# Regression tests for #28525: when softmax inputs exceed bf16's exp() overflow point (~88),
+# an unstable softmax kernel collapses entire rows to all zeros. attention_softmax (out-of-place)
+# and attention_softmax_ (in-place; trailing underscore per PyTorch's naming convention) both
+# default to numerically stable softmax, so these inputs should still produce a correct
+# distribution that matches the torch golden.
+#
+# target_sequence_size also doubles as kernel-selection coverage:
+#   - 384 (Wt=12)   exercises the typical small-kernel path.
+#   - 4096 (Wt=128) used to push the small kernel past the 90% L1 budget and fall through to
+#                   the streaming large kernel; for the in-place variant that path then hit
+#                   TT_FATAL. The CB right-sizing in softmax_program_factory_attention_optimized
+#                   keeps both Wts in the small kernel.
+@pytest.mark.parametrize(
+    "input_low, input_high",
+    [
+        (-100.0, 100.0),  # entries straddle the bf16 exp() overflow threshold
+        (-1000.0, 1000.0),  # well past it; matches the magnitudes seen in #28525
+    ],
+)
+@pytest.mark.parametrize("target_sequence_size", [384, 4096])
+def test_transformer_attention_softmax_numeric_stability(target_sequence_size, input_low, input_high, device):
+    torch.manual_seed(0)
+
+    input_shape = (1, 1, 384, target_sequence_size)
+    torch_input_tensor = torch_random(input_shape, input_low, input_high, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax)
+    torch_output_tensor = golden_function(torch_input_tensor, head_size=None, attention_mask=None)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # Out-of-place: returns a new tensor; input_tensor is left untouched.
+    attention_softmax_out_of_place = ttnn.transformer.attention_softmax
+    output_tensor = attention_softmax_out_of_place(
+        input_tensor, head_size=None, attention_mask=None, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+
+# In-place counterpart of test_transformer_attention_softmax_numeric_stability.
+@pytest.mark.parametrize(
+    "input_low, input_high",
+    [
+        (-100.0, 100.0),
+        (-1000.0, 1000.0),
+    ],
+)
+@pytest.mark.parametrize("target_sequence_size", [384, 4096])
+def test_transformer_attention_softmax_inplace_numeric_stability(target_sequence_size, input_low, input_high, device):
+    torch.manual_seed(0)
+
+    input_shape = (1, 1, 384, target_sequence_size)
+    torch_input_tensor = torch_random(input_shape, input_low, input_high, dtype=torch.bfloat16)
+    torch_attention_mask = torch_random((1, 1, 384, target_sequence_size), 0, 1.0, dtype=torch.bfloat16)
+
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax_)
+    torch_output_tensor = golden_function(torch_input_tensor, head_size=None, attention_mask=torch_attention_mask)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    attention_mask = ttnn.from_torch(torch_attention_mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    # In-place: mutates input_tensor; the returned handle aliases the same buffer.
+    attention_softmax_in_place = ttnn.transformer.attention_softmax_
+    output_tensor = attention_softmax_in_place(
+        input_tensor, head_size=None, attention_mask=attention_mask, causal_mask=True
+    )
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_heads", [4, 16])
 @pytest.mark.parametrize("sequence_size", [384, 1024])
@@ -461,7 +539,7 @@ def test_sharded_split_query_key_value_and_split_heads(
     assert_with_pcc(torch_value_tensor, value_tensor, 0.999)
 
 
-def test_split_query_key_value_and_split_heads_when_head_size_is_not_a_multiple_of_32(device):
+def test_split_query_key_value_and_split_heads_when_head_size_is_not_a_multiple_of_32(device, expect_error):
     """
     This test is to check that the split_query_key_value_and_split_heads function raises an error when the head size is not a multiple of 32
     And then it shows what user could do to fix the error
@@ -498,14 +576,8 @@ def test_split_query_key_value_and_split_heads_when_head_size_is_not_a_multiple_
         layout=ttnn.TILE_LAYOUT,
     )
 
-    with pytest.raises(RuntimeError) as e:
-        query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
-            input_tensor, num_heads=num_heads
-        )
-        assert (
-            "Head size must be a multiple of 32! Update the preceding matmul to have the padding in the weights!"
-            in str(e.value)
-        )
+    with expect_error(RuntimeError, "The head size must be a multiple of the tile width"):
+        ttnn.transformer.split_query_key_value_and_split_heads(input_tensor, num_heads=num_heads)
 
     # Manually each head to a mutliple of 32
     input_tensor_heads = torch.split(torch_input_tensor, head_size, dim=-1)
@@ -538,7 +610,7 @@ def test_split_query_key_value_and_split_heads_when_head_size_is_not_a_multiple_
 
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.skip(reason="#9267: need to fix since it never ran in CI")
-def test_concatenate_heads_when_head_size_is_not_a_multiple_of_32(device):
+def test_concatenate_heads_when_head_size_is_not_a_multiple_of_32(device, expect_error):
     """
     This test is to check that the concatenate_heads function raises an error when the head size is not a multiple of 32
     And then it shows what user could do to fix the error
@@ -568,13 +640,8 @@ def test_concatenate_heads_when_head_size_is_not_a_multiple_of_32(device):
         layout=ttnn.TILE_LAYOUT,
     )
 
-    with pytest.raises(RuntimeError) as e:
-        output_tensor = ttnn.transformer.concatenate_heads(input_tensor)
-
-    assert (
-        "Head size must be a multiple of 32!  Update matmul that uses the output of this operation to have the padding in the weights!"
-        in str(e.value)
-    )
+    with expect_error(RuntimeError, "Head size must be a multiple of 32"):
+        ttnn.transformer.concatenate_heads(input_tensor)
 
     input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, padded_head_size - head_size), "constant", 0)
     input_tensor = ttnn.from_torch(

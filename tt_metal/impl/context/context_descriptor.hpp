@@ -32,7 +32,7 @@ class DeviceManager;
 
 // Used internally to share runtime configuration
 // Provides both lower level (MetalEnv) and runtime configuration (MetalContext)
-class ContextDescriptor : public MetalEnvDescriptor {
+class ContextDescriptor {
 public:
     // MetalEnv is provided for access to the cluster, hal, and rtoptions
     // It's settings may or may not match the settings (e.g. fabric config) in this descriptor yet
@@ -45,11 +45,8 @@ public:
         size_t trace_region_size = 0,
         size_t worker_l1_size = 0,
         const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         const std::string& mock_cluster_desc_path = "") :
-        MetalEnvDescriptor(
-            mock_cluster_desc_path.empty() ? std::optional<std::string>(std::nullopt)
-                                           : std::optional<std::string>(mock_cluster_desc_path)),
         env_(env),
         metal_context_(metal_context),
         num_cqs_(num_cqs),
@@ -57,7 +54,8 @@ public:
         trace_region_size_(trace_region_size),
         worker_l1_size_(worker_l1_size),
         dispatch_core_config_(dispatch_core_config),
-        l1_bank_remap_(l1_bank_remap) {}
+        l1_bank_remap_(l1_bank_remap),
+        mock_cluster_desc_path_(mock_cluster_desc_path) {}
 
     ContextDescriptor() = default;
 
@@ -79,7 +77,8 @@ public:
     size_t trace_region_size() const { return trace_region_size_; }
     size_t worker_l1_size() const { return worker_l1_size_; }
     const DispatchCoreConfig& dispatch_core_config() const { return dispatch_core_config_; }
-    const tt::stl::Span<const std::uint32_t>& l1_bank_remap() const { return l1_bank_remap_; }
+    const ttsl::Span<const std::uint32_t>& l1_bank_remap() const { return l1_bank_remap_; }
+    bool is_mock_device() const { return !mock_cluster_desc_path_.empty(); }
 
     const Hal& hal() const { return env_impl().get_hal(); }
     Cluster& cluster() const { return env_impl().get_cluster(); }
@@ -106,7 +105,9 @@ public:
     size_t trace_region_size_ = 0;
     size_t worker_l1_size_ = 0;
     DispatchCoreConfig dispatch_core_config_;
-    tt::stl::Span<const std::uint32_t> l1_bank_remap_;
+    ttsl::Span<const std::uint32_t> l1_bank_remap_;
+
+    std::string mock_cluster_desc_path_;
 };
 
 }  // namespace tt::tt_metal

@@ -4,17 +4,22 @@
 
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
 #include <mutex>
 
 namespace ttnn::operations::unary {
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
-bool is_uneven(const TensorSpec& t) {
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (!t.memory_config().is_sharded()) {
+        return false;
+    }
+    // is_sharded() is true for ND_SHARDED and leaves shard_spec empty
+    if (!get_shard_spec(t).has_value()) {
         return false;
     }
     const auto& shape = t.padded_shape();
@@ -28,11 +33,16 @@ bool is_uneven(const TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
 }
 
-bool is_native_L1_sharding(const TensorSpec& input_spec, const tt::tt_metal::MemoryConfig& output_memory_config) {
+bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::MemoryConfig& output_memory_config) {
     if (!output_memory_config.is_sharded()) {
         return false;
     }
     if (!input_spec.memory_config().is_sharded()) {
+        return false;
+    }
+    // ND_SHARDED config carries nd_shard_spec and not shard_spec
+    if (!input_spec.memory_config().shard_spec().has_value() || !output_memory_config.shard_spec().has_value()) {
         return false;
     }
     if (is_uneven(input_spec)) {
@@ -42,17 +52,14 @@ bool is_native_L1_sharding(const TensorSpec& input_spec, const tt::tt_metal::Mem
         output_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM) {
         return false;
     }
-    if (output_memory_config.shard_spec().has_value() && input_spec.memory_config().shard_spec().has_value()) {
-        const auto& in_grid = input_spec.memory_config().shard_spec()->grid;
-        const auto& out_grid = output_memory_config.shard_spec()->grid;
-        if (in_grid != out_grid) {
-            return false;
-        }
+    if (input_spec.memory_config().shard_spec()->grid != output_memory_config.shard_spec()->grid) {
+        return false;
     }
     return true;
 }
 
-std::optional<UnaryShardSpecs> get_shard_specs(const TensorSpec& input_spec, const TensorSpec& output_spec) {
+std::optional<UnaryShardSpecs> get_shard_specs(
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec) {
     const bool input_sharded = input_spec.memory_config().is_sharded();
     const bool output_sharded = output_spec.memory_config().is_sharded();
 
@@ -68,7 +75,7 @@ std::optional<UnaryShardSpecs> get_shard_specs(const TensorSpec& input_spec, con
     // for the sharded CB-aliasing path to work (it requires whole-tile pages).
     // Fall back to the interleaved path otherwise.
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        auto is_shard_tile_aligned = [](const TensorSpec& spec) {
+        auto is_shard_tile_aligned = [](const tt::tt_metal::TensorSpec& spec) {
             const auto& shard = *get_shard_spec(spec);
             const auto tile_hw = spec.tile().get_tile_hw();
             const uint64_t shard_elements = static_cast<uint64_t>(shard.shape[0]) * shard.shape[1];
@@ -130,36 +137,32 @@ CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const tt::tt_metal::MemoryConfig& memory_config_actual) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "Unary: Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
     }
 
-    auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
-        const auto& grid = tensor.shard_spec()->grid;
-        auto* device = tensor.device();
-        for (const auto& sub_device_id : device->get_sub_device_ids()) {
-            const auto& sub_device_workers =
-                device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
-            if (sub_device_workers.intersects(grid)) {
-                return sub_device_workers;
-            }
+    // A sharded tensor's grid is in shard_spec or in nd_shard_spec when the config is ND_SHARDED
+    auto shard_grid_of = [](const tt::tt_metal::MemoryConfig& mem_config) -> std::optional<CoreRangeSet> {
+        if (!mem_config.is_sharded()) {
+            return std::nullopt;
         }
-        __builtin_unreachable();
+        if (mem_config.shard_spec().has_value()) {
+            return mem_config.shard_spec()->grid;
+        }
+        if (mem_config.nd_shard_spec().has_value()) {
+            return mem_config.nd_shard_spec()->grid;
+        }
+        return std::nullopt;
     };
 
-    if (output_tensor.has_value() && output_tensor->is_sharded()) {
-        log_debug(
-            tt::LogOp, "Unary: Using output tensor grid for worker grid {}", output_tensor->shard_spec()->grid.str());
-        return get_tensor_grid(*output_tensor);
-    }
-
-    if (memory_config.has_value() && memory_config->is_sharded() && memory_config->shard_spec().has_value()) {
-        const auto& grid = memory_config->shard_spec()->grid;
-        log_debug(tt::LogOp, "Unary: Using memory config shard spec grid for worker grid {}", grid.str());
-        auto* device = input_tensor.device();
+    // All worker cores of the sub-device holding this grid, or nullopt if no sub-device holds it. Callers
+    // fall through to the all-workers default on nullopt; the previous __builtin_unreachable() here made
+    // that case UB instead. Returns by value: a pointer into worker_cores() would be valid, but the
+    // grid is a small vector and copying it keeps the lifetime obvious.
+    auto sub_device_workers_for = [](const CoreRangeSet& grid,
+                                     tt::tt_metal::IDevice* device) -> std::optional<CoreRangeSet> {
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers =
                 device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
@@ -167,57 +170,65 @@ CoreRangeSet get_worker_grid(
                 return sub_device_workers;
             }
         }
+        return std::nullopt;
+    };
+
+    // Each log sits inside the return so it never claims a grid the function then falls through.
+    if (output_tensor.has_value()) {
+        if (const auto grid = shard_grid_of(output_tensor->memory_config())) {
+            if (const auto workers = sub_device_workers_for(*grid, output_tensor->device())) {
+                log_debug(tt::LogOp, "Unary: Using output tensor grid for worker grid {}", grid->str());
+                return *workers;
+            }
+        }
     }
 
-    if (output_tensor.has_value() || memory_config.has_value()) {
-        log_debug(tt::LogOp, "Unary: Using all worker cores (output or memory config not sharded)");
-        auto* device = input_tensor.device();
-        return device->worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    if (memory_config.has_value()) {
+        if (const auto grid = shard_grid_of(*memory_config)) {
+            if (const auto workers = sub_device_workers_for(*grid, input_tensor.device())) {
+                log_debug(tt::LogOp, "Unary: Using memory config shard spec grid for worker grid {}", grid->str());
+                return *workers;
+            }
+        }
     }
 
-    if (input_tensor.is_sharded() && is_native_L1_sharding(input_tensor.tensor_spec(), memory_config_actual)) {
-        log_debug(
-            tt::LogOp, "Unary: Native L1 sharding using input tensor grid {}", input_tensor.shard_spec()->grid.str());
-        return get_tensor_grid(input_tensor);
-    }
-
+    // No branch on the input's own grid: native L1 sharding needs both sides on one grid, so the
+    // memory_config branch above already returned it.
     log_debug(tt::LogOp, "Unary: Using all worker cores of the device");
     auto* device = input_tensor.device();
     return device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
 }
 
-tt::tt_metal::ShardSpec generate_shard_spec_all_cores(
-    const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, tt::tt_metal::TensorMemoryLayout memory_layout) {
-    using namespace tt::tt_metal;
+tt::tt_metal::ShardSpec generate_output_shard_spec(
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    uint32_t output_element_size_bytes) {
+    // Unary: forced ROW_MAJOR — no input-orientation inheritance path (unlike Transpose/Repeat/Fold).
+    // Output layout mirrors input (unary is dtype-only), so is_tile is derived from input layout.
     auto* device = input_tensor.device();
-    auto compute_grid_size = device->compute_with_storage_grid_size();
-    CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
-    uint32_t num_cores = all_cores.num_cores();
-
-    uint32_t tensor_height = 1;
-    for (int i = 0; i < static_cast<int>(padded_out_shape.rank()) - 1; ++i) {
-        tensor_height *= padded_out_shape[i];
+    const auto compute_grid_size = device->compute_with_storage_grid_size();
+    const bool is_tile = (input_tensor.layout() == tt::tt_metal::Layout::TILE);
+    auto spec = ttnn::operations::data_movement::common::synthesize_output_shard_spec(
+        compute_grid_size,
+        padded_out_shape,
+        memory_layout,
+        {.is_tile = is_tile,
+         .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR,
+         .caller_tag = "Unary"});
+    // Shrink only when we produced an RM synth; typecast means the OUTPUT element size drives the page.
+    if (!is_tile) {
+        spec = *ttnn::operations::data_movement::common::shrink_shard_for_rm_page_alignment(
+            spec,
+            input_tensor.layout(),
+            output_element_size_bytes,
+            static_cast<uint64_t>(padded_out_shape[-1]),
+            compute_grid_size,
+            memory_layout,
+            ttnn::operations::data_movement::common::RmPageAlignmentMode::Lenient);
     }
-    uint32_t tensor_width = padded_out_shape[-1];
-
-    std::array<uint32_t, 2> shard_shape = {0, 0};
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, num_cores * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tt::constants::TILE_HEIGHT);
-        shard_shape = {shard_height, tensor_width};
-    } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tt::constants::TILE_WIDTH);
-        shard_shape = {tensor_height, shard_width};
-    } else {
-        CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        auto height_padded = tt::round_up(tensor_height, grid_size.y * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tt::constants::TILE_HEIGHT);
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
-        shard_shape = {shard_height, shard_width};
-    }
-    log_debug(tt::LogOp, "Unary: Generated shard spec using all {} worker cores", num_cores);
-    return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
+    log_debug(tt::LogOp, "Unary: Generated shard spec over {} populated cores", spec.grid.num_cores());
+    return spec;
 }
 
 }  // namespace ttnn::operations::unary

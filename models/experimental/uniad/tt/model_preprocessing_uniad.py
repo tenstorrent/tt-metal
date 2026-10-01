@@ -408,8 +408,8 @@ def custom_preprocessor(model, name):
         # Initial conv + bn
         weight, bias = fold_batch_norm2d_into_conv2d(backbone.conv1, backbone.bn1)
         parameters["conv1"] = {
-            "weight": ttnn.from_torch(weight, dtype=ttnn.float32),
-            "bias": ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+            "weight": ttnn.from_torch(weight, dtype=ttnn.bfloat16),
+            "bias": ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=ttnn.bfloat16),
         }
 
         # Loop over all layers (layer1 to layer4)
@@ -428,8 +428,8 @@ def custom_preprocessor(model, name):
                         parameters[prefix][block_idx][conv_name]["weight"] = conv.weight
                         parameters[prefix][block_idx][conv_name]["bias"] = conv.bias
                         parameters[prefix][block_idx][conv_name]["conv_offset"] = {
-                            "weight": ttnn.from_torch(conv.conv_offset.weight, dtype=ttnn.float32),
-                            "bias": ttnn.from_torch(conv.conv_offset.bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                            "weight": ttnn.from_torch(conv.conv_offset.weight, dtype=ttnn.bfloat16),
+                            "bias": ttnn.from_torch(conv.conv_offset.bias.reshape((1, 1, 1, -1)), dtype=ttnn.bfloat16),
                         }
 
                         bn = getattr(block, f"bn{conv_name[-1]}")
@@ -474,8 +474,8 @@ def custom_preprocessor(model, name):
                         bn = getattr(block, f"bn{conv_name[-1]}")
                         w, b = fold_batch_norm2d_into_conv2d(conv, bn)
                         parameters[prefix][block_idx][conv_name] = {
-                            "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                            "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                            "weight": ttnn.from_torch(w, dtype=ttnn.bfloat16),
+                            "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.bfloat16),
                         }
 
                 # downsample (if present)
@@ -486,8 +486,8 @@ def custom_preprocessor(model, name):
                         bn = ds[1]
                         w, b = fold_batch_norm2d_into_conv2d(conv, bn)
                         parameters[prefix][block_idx]["downsample"] = {
-                            "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                            "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                            "weight": ttnn.from_torch(w, dtype=ttnn.bfloat16),
+                            "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.bfloat16),
                         }
 
     if isinstance(model, FPN):
@@ -502,10 +502,10 @@ def custom_preprocessor(model, name):
         parameters["fpn"]["lateral_convs"]["0"] = {}
         parameters["fpn"]["lateral_convs"]["0"]["conv"] = {}
         parameters["fpn"]["lateral_convs"]["0"]["conv"]["weight"] = ttnn.from_torch(
-            model.lateral_convs[0].conv.weight, dtype=ttnn.float32
+            model.lateral_convs[0].conv.weight, dtype=ttnn.bfloat16
         )
         bias = model.lateral_convs[0].conv.bias.reshape((1, 1, 1, -1))
-        parameters["fpn"]["lateral_convs"]["0"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["lateral_convs"]["0"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16)
         parameters["fpn"]["lateral_convs"]["0"]["conv"]["height"] = 80
         parameters["fpn"]["lateral_convs"]["0"]["conv"]["width"] = 45
         parameters["fpn"]["lateral_convs"]["0"]["conv"]["batch"] = 6
@@ -513,10 +513,10 @@ def custom_preprocessor(model, name):
         parameters["fpn"]["lateral_convs"]["1"] = {}
         parameters["fpn"]["lateral_convs"]["1"]["conv"] = {}
         parameters["fpn"]["lateral_convs"]["1"]["conv"]["weight"] = ttnn.from_torch(
-            model.lateral_convs[1].conv.weight, dtype=ttnn.float32
+            model.lateral_convs[1].conv.weight, dtype=ttnn.bfloat16
         )
         bias = model.lateral_convs[1].conv.bias.reshape((1, 1, 1, -1))
-        parameters["fpn"]["lateral_convs"]["1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["lateral_convs"]["1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16)
         parameters["fpn"]["lateral_convs"]["1"]["conv"]["height"] = 40
         parameters["fpn"]["lateral_convs"]["1"]["conv"]["width"] = 23
         parameters["fpn"]["lateral_convs"]["1"]["conv"]["batch"] = 6
@@ -524,10 +524,10 @@ def custom_preprocessor(model, name):
         parameters["fpn"]["lateral_convs"]["2"] = {}
         parameters["fpn"]["lateral_convs"]["2"]["conv"] = {}
         parameters["fpn"]["lateral_convs"]["2"]["conv"]["weight"] = ttnn.from_torch(
-            model.lateral_convs[2].conv.weight, dtype=ttnn.float32
+            model.lateral_convs[2].conv.weight, dtype=ttnn.bfloat16
         )
         bias = model.lateral_convs[2].conv.bias.reshape((1, 1, 1, -1))
-        parameters["fpn"]["lateral_convs"]["2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["lateral_convs"]["2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16)
         parameters["fpn"]["lateral_convs"]["2"]["conv"]["height"] = 20
         parameters["fpn"]["lateral_convs"]["2"]["conv"]["width"] = 12
         parameters["fpn"]["lateral_convs"]["2"]["conv"]["batch"] = 6
@@ -537,10 +537,10 @@ def custom_preprocessor(model, name):
         parameters["fpn"]["fpn_convs"]["0"] = {}
         parameters["fpn"]["fpn_convs"]["0"]["conv"] = {}
         parameters["fpn"]["fpn_convs"]["0"]["conv"]["weight"] = ttnn.from_torch(
-            model.fpn_convs[0].conv.weight, dtype=ttnn.float32
+            model.fpn_convs[0].conv.weight, dtype=ttnn.bfloat16
         )
         bias = model.fpn_convs[0].conv.bias.reshape((1, 1, 1, -1))
-        parameters["fpn"]["fpn_convs"]["0"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["fpn_convs"]["0"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16)
         parameters["fpn"]["fpn_convs"]["0"]["conv"]["height"] = 80
         parameters["fpn"]["fpn_convs"]["0"]["conv"]["width"] = 45
         parameters["fpn"]["fpn_convs"]["0"]["conv"]["batch"] = 6
@@ -548,10 +548,10 @@ def custom_preprocessor(model, name):
         parameters["fpn"]["fpn_convs"]["1"] = {}
         parameters["fpn"]["fpn_convs"]["1"]["conv"] = {}
         parameters["fpn"]["fpn_convs"]["1"]["conv"]["weight"] = ttnn.from_torch(
-            model.fpn_convs[1].conv.weight, dtype=ttnn.float32
+            model.fpn_convs[1].conv.weight, dtype=ttnn.bfloat16
         )
         bias = model.fpn_convs[1].conv.bias.reshape((1, 1, 1, -1))
-        parameters["fpn"]["fpn_convs"]["1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["fpn_convs"]["1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16)
         parameters["fpn"]["fpn_convs"]["1"]["conv"]["height"] = 40
         parameters["fpn"]["fpn_convs"]["1"]["conv"]["width"] = 23
         parameters["fpn"]["fpn_convs"]["1"]["conv"]["batch"] = 6
@@ -559,10 +559,10 @@ def custom_preprocessor(model, name):
         parameters["fpn"]["fpn_convs"]["2"] = {}
         parameters["fpn"]["fpn_convs"]["2"]["conv"] = {}
         parameters["fpn"]["fpn_convs"]["2"]["conv"]["weight"] = ttnn.from_torch(
-            model.fpn_convs[2].conv.weight, dtype=ttnn.float32
+            model.fpn_convs[2].conv.weight, dtype=ttnn.bfloat16
         )
         bias = model.fpn_convs[2].conv.bias.reshape((1, 1, 1, -1))
-        parameters["fpn"]["fpn_convs"]["2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["fpn_convs"]["2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16)
         parameters["fpn"]["fpn_convs"]["2"]["conv"]["height"] = 20
         parameters["fpn"]["fpn_convs"]["2"]["conv"]["width"] = 12
         parameters["fpn"]["fpn_convs"]["2"]["conv"]["batch"] = 6
@@ -570,10 +570,10 @@ def custom_preprocessor(model, name):
         parameters["fpn"]["fpn_convs"]["3"] = {}
         parameters["fpn"]["fpn_convs"]["3"]["conv"] = {}
         parameters["fpn"]["fpn_convs"]["3"]["conv"]["weight"] = ttnn.from_torch(
-            model.fpn_convs[3].conv.weight, dtype=ttnn.float32
+            model.fpn_convs[3].conv.weight, dtype=ttnn.bfloat16
         )
         bias = model.fpn_convs[3].conv.bias.reshape((1, 1, 1, -1))
-        parameters["fpn"]["fpn_convs"]["3"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["fpn_convs"]["3"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16)
         parameters["fpn"]["fpn_convs"]["3"]["conv"]["height"] = 20
         parameters["fpn"]["fpn_convs"]["3"]["conv"]["width"] = 12
         parameters["fpn"]["fpn_convs"]["3"]["conv"]["batch"] = 6
@@ -673,10 +673,10 @@ def custom_preprocessor(model, name):
 
     if isinstance(model, nn.Conv2d):
         parameters["conv"] = {}
-        parameters["conv"]["weight"] = ttnn.from_torch(model.weight, dtype=ttnn.float32)
+        parameters["conv"]["weight"] = ttnn.from_torch(model.weight, dtype=ttnn.bfloat16)
         if model.bias is not None:
             bias = model.bias.reshape((1, 1, 1, -1))
-            parameters["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+            parameters["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16)
 
     return parameters
 
@@ -883,6 +883,236 @@ def custom_preprocessor_motion_decoder(model, name):
     return parameters
 
 
+def _prepare_one_conv_in_place(
+    param_node,
+    conv_args_node,
+    conv_module,
+    device,
+    torch_weight,
+    torch_bias,
+    weights_dtype=ttnn.bfloat8_b,
+    shard_layout=None,
+    activation=None,
+):
+    """Replace the float32 raw weight/bias in `param_node` with TTNN-prepared
+    versions, eliminating conv2d's first-call 'pull back to host' warning.
+
+    Takes torch_weight/torch_bias directly (not pulled back from device) to
+    avoid an extra D2H+H2D round-trip during prep. `weights_dtype` and
+    `shard_layout` must match the Conv2dConfig the consuming
+    TtConv2d/TtnnConv2D wrapper uses at runtime — mismatch leads to wrong
+    sharding spec and a giant allocator request at runtime.
+    """
+    has_bias = torch_bias is not None
+
+    conv_config_kwargs = {"weights_dtype": weights_dtype}
+    if shard_layout is not None:
+        conv_config_kwargs["shard_layout"] = shard_layout
+    if activation is not None:
+        conv_config_kwargs["activation"] = activation
+
+    common_kwargs = dict(
+        # L1 (not DRAM): the runtime TtnnConv2D wrapper uses Conv2dConfig(shard_layout=HEIGHT_SHARDED)
+        # and lets the op manage its own activations. Passing DRAM here drives setup_conv_prep_config
+        # down the is_dram_conv branch, which constructs a dummy weight TensorSpec with
+        # BFLOAT8_B + Layout::ROW_MAJOR — a combo the new (2026-05-22) TensorSpec validator rejects.
+        input_memory_config=ttnn.L1_MEMORY_CONFIG,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        in_channels=conv_module.in_channels,
+        out_channels=conv_module.out_channels,
+        batch_size=conv_args_node.batch_size,
+        input_height=conv_args_node.input_height,
+        input_width=conv_args_node.input_width,
+        kernel_size=tuple(conv_module.kernel_size),
+        stride=tuple(conv_module.stride),
+        padding=tuple(conv_module.padding),
+        dilation=tuple(conv_module.dilation),
+        groups=conv_module.groups,
+        device=device,
+        input_dtype=ttnn.bfloat16,
+        conv_config=ttnn.Conv2dConfig(**conv_config_kwargs),
+    )
+    # NOTE: feed prepare_conv_weights the raw torch weight as float32 so its
+    # internal layout/dtype conversion sees the full precision input (it will
+    # produce a properly-tiled bf8_b weight per conv_config). Feeding lossy
+    # input dtypes (bf16/bf8_b) here was measured to noticeably degrade the
+    # first ttnn forward.
+    param_node.weight = ttnn.prepare_conv_weights(
+        weight_tensor=ttnn.from_torch(torch_weight, dtype=ttnn.float32),
+        weights_format="OIHW",
+        has_bias=has_bias,
+        **common_kwargs,
+    )
+    if has_bias:
+        bias_for_prep = torch_bias.reshape((1, 1, 1, -1)) if torch_bias.ndim == 1 else torch_bias
+        param_node.bias = ttnn.prepare_conv_bias(
+            bias_tensor=ttnn.from_torch(bias_for_prep, dtype=ttnn.float32),
+            **common_kwargs,
+        )
+
+
+def _prepare_resnet_backbone_convs(parameters, model, device):
+    """Pre-prepare every nn.Conv2d weight in ResNet-101 (skipping DCN which is
+    a host fallback). Eliminates ~200 of the ~234 conv2d 'not properly
+    prepared' warnings produced on the first e2e inference."""
+    backbone = model.img_backbone
+    bp = parameters.img_backbone
+    ca = bp.conv_args
+
+    # Stem: conv1 is folded with bn1.
+    w, b = fold_batch_norm2d_into_conv2d(backbone.conv1, backbone.bn1)
+    _prepare_one_conv_in_place(bp.conv1, ca.conv1, backbone.conv1, device, w, b)
+
+    # layer1..layer4 (Bottleneck blocks)
+    for li in range(1, 5):
+        layer_key = f"layer{li}"
+        ca_layer = ca[layer_key]
+        bp_layer = bp[layer_key]
+        torch_layer = getattr(backbone, layer_key)
+        for block_idx, torch_block in enumerate(torch_layer):
+            bp_block = bp_layer[block_idx]
+            ca_block = ca_layer[block_idx]
+            for conv_name in ("conv1", "conv2", "conv3"):
+                torch_conv = getattr(torch_block, conv_name)
+                if isinstance(torch_conv, ModulatedDeformConv2dPack):
+                    # DCN itself is a host fallback; pre-prep the conv_offset
+                    # sub-conv (which DOES use ttnn.conv2d). conv_offset is
+                    # unfolded — pass its raw weight/bias.
+                    if conv_name in ca_block and "conv_offset" in ca_block[conv_name]:
+                        _prepare_one_conv_in_place(
+                            bp_block[conv_name].conv_offset,
+                            ca_block[conv_name].conv_offset,
+                            torch_conv.conv_offset,
+                            device,
+                            torch_conv.conv_offset.weight,
+                            torch_conv.conv_offset.bias,
+                        )
+                    continue
+                if conv_name not in ca_block:
+                    continue
+                # Bottleneck convN is folded with bnN.
+                bn = getattr(torch_block, f"bn{conv_name[-1]}")
+                w, b = fold_batch_norm2d_into_conv2d(torch_conv, bn)
+                _prepare_one_conv_in_place(bp_block[conv_name], ca_block[conv_name], torch_conv, device, w, b)
+            # downsample (if present). conv_args.downsample is a Sequential,
+            # so the Conv2d entry is keyed by its Sequential index (0).
+            if (
+                hasattr(torch_block, "downsample")
+                and torch_block.downsample is not None
+                and "downsample" in bp_block
+                and "downsample" in ca_block
+            ):
+                torch_ds_conv = torch_block.downsample[0]
+                torch_ds_bn = torch_block.downsample[1]
+                w, b = fold_batch_norm2d_into_conv2d(torch_ds_conv, torch_ds_bn)
+                ds_ca = ca_block.downsample
+                ds_conv_args = ds_ca[0] if 0 in ds_ca else ds_ca["0"]
+                if "batch_size" in ds_conv_args:
+                    _prepare_one_conv_in_place(bp_block.downsample, ds_conv_args, torch_ds_conv, device, w, b)
+
+
+def _conv_args_dict(
+    *, in_channels, out_channels, kernel_size, stride, padding, dilation, groups, batch_size, input_height, input_width
+):
+    """Build a simple namespace-like dict that matches the attribute access in
+    `_prepare_one_conv_in_place` for cases where we don't have a real
+    conv_args entry from infer_ttnn_module_args (e.g., FPN, bev_adapter)."""
+
+    class _Ns:
+        pass
+
+    ns = _Ns()
+    ns.in_channels = in_channels
+    ns.out_channels = out_channels
+    ns.kernel_size = kernel_size
+    ns.stride = stride
+    ns.padding = padding
+    ns.dilation = dilation
+    ns.groups = groups
+    ns.batch_size = batch_size
+    ns.input_height = input_height
+    ns.input_width = input_width
+    return ns
+
+
+def _prepare_fpn_convs(parameters, model, device):
+    """Pre-prepare FPN lateral and FPN-output Conv2d weights/bias. The input
+    spatial dimensions are already encoded in the parameters tree as
+    height/width/batch."""
+    fpn = model.img_neck
+    bp_fpn = parameters.img_neck.fpn
+
+    for group_name, group_module in (("lateral_convs", fpn.lateral_convs), ("fpn_convs", fpn.fpn_convs)):
+        bp_group = bp_fpn[group_name]
+        for idx, conv_block in enumerate(group_module):
+            torch_conv = conv_block.conv  # ConvModule wraps a nn.Conv2d at .conv
+            bp_node = bp_group[str(idx)].conv
+            ca = _conv_args_dict(
+                in_channels=torch_conv.in_channels,
+                out_channels=torch_conv.out_channels,
+                kernel_size=tuple(torch_conv.kernel_size),
+                stride=tuple(torch_conv.stride),
+                padding=tuple(torch_conv.padding),
+                dilation=tuple(torch_conv.dilation),
+                groups=torch_conv.groups,
+                batch_size=bp_node["batch"],
+                input_height=bp_node["height"],
+                input_width=bp_node["width"],
+            )
+            _prepare_one_conv_in_place(bp_node, ca, torch_conv, device, torch_conv.weight, torch_conv.bias)
+
+
+def _prepare_bev_adapter_convs(parameters, model, device):
+    """Pre-prepare PlanningHead bev_adapter's 6 Conv2d.
+
+    bev_adapter = nn.Sequential of 3 blocks, each block = nn.Sequential(
+        Conv2d(256->128, 3x3, pad=1), ReLU, Conv2d(128->256, 1x1)
+    )
+    Input to bev_adapter is the BEV grid (50x50, batch=1) and the spatial size
+    is preserved through every conv (3x3 with padding=1; 1x1).
+
+    Different from ResNet/FPN: bev_adapter uses TtConv2d (in ttnn_planning_head)
+    which defaults to weights_dtype=bfloat16. The prep dtype must match.
+    """
+    bev_adapter = model.planning_head.bev_adapter
+    bp_bev = parameters.planning_head.bev_adapter
+    BEV_H, BEV_W, BATCH = 50, 50, 1
+    relu_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+    for block_idx in range(len(bev_adapter)):
+        block = bev_adapter[block_idx]
+        bp_block = bp_bev[block_idx]
+        for conv_local_idx in (0, 2):  # 0 = 3x3 (+RELU), 2 = 1x1 (no activation)
+            torch_conv = block[conv_local_idx]
+            bp_node = bp_block[conv_local_idx].conv
+            ca = _conv_args_dict(
+                in_channels=torch_conv.in_channels,
+                out_channels=torch_conv.out_channels,
+                kernel_size=tuple(torch_conv.kernel_size),
+                stride=tuple(torch_conv.stride),
+                padding=tuple(torch_conv.padding),
+                dilation=tuple(torch_conv.dilation),
+                groups=torch_conv.groups,
+                batch_size=BATCH,
+                input_height=BEV_H,
+                input_width=BEV_W,
+            )
+            # TtConv2d (planning_head) defaults: shard_layout=HEIGHT_SHARDED,
+            # activation=RELU on the 3x3 conv (idx 0), activation=None on
+            # the 1x1 conv (idx 2). Mirror these in prep to keep weight
+            # spec aligned with the runtime path.
+            _prepare_one_conv_in_place(
+                bp_node,
+                ca,
+                torch_conv,
+                device,
+                torch_conv.weight,
+                torch_conv.bias,
+                weights_dtype=ttnn.bfloat16,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                activation=relu_activation if conv_local_idx == 0 else None,
+            )
+
+
 def create_uniad_model_parameters_uniad(model, device=None):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -897,4 +1127,13 @@ def create_uniad_model_parameters_uniad(model, device=None):
     assert parameters.img_backbone is not None
     for key in parameters.img_backbone.conv_args.keys():
         parameters.img_backbone.conv_args[key].module = getattr(model.img_backbone, key)
+
+    # Pre-prepare ResNet + FPN Conv2d weights so the first-call "pulling back
+    # to host" reprep is avoided. The bev_adapter prep helper is kept in this
+    # file but not called — it currently triggers a 5.5 TB DRAM allocation at
+    # planning_head.forward_test (matching the runtime Conv2dConfig
+    # shard_layout / activation flags still produced wrong weight specs).
+    # Tracking as a follow-up.
+    _prepare_resnet_backbone_convs(parameters, model, device)
+    _prepare_fpn_convs(parameters, model, device)
     return parameters

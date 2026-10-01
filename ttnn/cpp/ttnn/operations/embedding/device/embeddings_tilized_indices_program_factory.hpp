@@ -6,24 +6,13 @@
 
 #include "embedding_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::prim {
 
 struct EmbeddingsTilizedIndicesProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id {};
-        tt::tt_metal::KernelHandle writer_kernel_id {};
-        std::vector<tt::tt_metal::CoreCoord> cores;
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const EmbeddingParams& operation_attributes,
-        const EmbeddingInputs& tensor_args,
-        Tensor& tensor_return_value);
 };
+
 }  // namespace ttnn::prim

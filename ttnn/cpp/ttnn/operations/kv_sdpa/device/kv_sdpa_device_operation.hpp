@@ -45,7 +45,7 @@ struct KvSdpaDeviceOperation {
         std::optional<Tensor> past_v;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     // One core per Q head; the compute kernel calls the transformer-SDPA sdpa_standard() flash loop.

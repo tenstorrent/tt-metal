@@ -15,7 +15,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
+#include "common/work_split_internal.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -57,6 +57,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using std::vector;
 using namespace tt;
@@ -333,7 +334,7 @@ int main(int argc, char** argv) {
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             1 /* num_command_queues */,
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+            tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config());
 
         const std::shared_ptr<tt_metal::distributed::MeshDevice>& device = mesh_device_map.at(pci_express_slot);
         uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -430,14 +431,14 @@ int main(int argc, char** argv) {
                 // in0
                 auto activations_tilized = tilize_swizzled(tensor_in0_fp16.get_values(), M, K);
                 auto activations_tile_layout =
-                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
+                    convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
                 vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 input_buffer0 = create_and_transfer_data_sharded_cb(device.get(), activations, Mt, Kt);
 
                 // in1
                 auto identity_tilized = tilize_swizzled(tensor_in1_fp16.get_values(), K, N);
                 auto weights_tile_layout =
-                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
+                    convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 input_buffer1 = create_and_transfer_data_sharded_cb(device.get(), weights, Kt, Nt);
 
@@ -456,12 +457,12 @@ int main(int argc, char** argv) {
                 // in0
                 auto activations_tilized = tilize_swizzled(tensor_in0_fp8.get_values(), M, K);
                 std::vector<uint32_t> activations =
-                    pack_as_bfp8_tiles(tt::stl::make_const_span(activations_tilized), true, false);
+                    pack_as_bfp8_tiles(ttsl::make_const_span(activations_tilized), true, false);
                 input_buffer0 = create_and_transfer_data_sharded_cb_fp8(device.get(), activations, Mt, Kt);
 
                 // in1
                 auto identity_tilized = tilize_swizzled(tensor_in1_fp8.get_values(), K, N);
-                auto weights = pack_as_bfp8_tiles(tt::stl::make_const_span(identity_tilized), true, false);
+                auto weights = pack_as_bfp8_tiles(ttsl::make_const_span(identity_tilized), true, false);
                 input_buffer1 = create_and_transfer_data_sharded_cb_fp8(device.get(), weights, Kt, Nt);
 
                 // output
@@ -473,7 +474,7 @@ int main(int argc, char** argv) {
                     100,
                     std::chrono::system_clock::now().time_since_epoch().count());
                 auto output_tilized = tilize_swizzled(out_tensor.get_values(), M, N);
-                auto outputs = pack_as_bfp8_tiles(tt::stl::make_const_span(output_tilized), true, false);
+                auto outputs = pack_as_bfp8_tiles(ttsl::make_const_span(output_tilized), true, false);
                 output_buffer = create_and_transfer_data_sharded_cb_fp8(device.get(), outputs, Mt, Nt);
             }
         }
@@ -588,7 +589,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         constexpr int giga_byte = 1000000;
         constexpr long long tera_byte = 1000000000000LL;
-        int tt_npu_clock = get_tt_npu_clock(device->get_devices()[0]);
+        int tt_npu_clock = device->get_clock_rate_mhz();
         double rpeak_tflops = get_tt_npu_rpeak_tflops(arch, grid_size, tt_npu_clock);
         std::vector<double> rmax_tflops;
         uint64_t num_of_matmul_ops =
@@ -606,8 +607,8 @@ int main(int argc, char** argv) {
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, true);
                 log_debug(LogTest, "EnqueueMeshWorkload done");
 
-                uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(
-                    device->get_devices()[0], mesh_workload.get_programs().begin()->second);
+                uint64_t t0_to_any_riscfw_end =
+                    get_t0_to_any_riscfw_end_cycle(*device, mesh_workload.get_programs().begin()->second);
                 double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                 auto execution_time = t0_to_any_riscfw_end * cycle_time;
                 rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
@@ -632,7 +633,7 @@ int main(int argc, char** argv) {
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end =
-                        get_t0_to_any_riscfw_end_cycle(device.get(), mesh_workload.get_programs().begin()->second);
+                        get_t0_to_any_riscfw_end_cycle(*device, mesh_workload.get_programs().begin()->second);
                     double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                     auto execution_time = t0_to_any_riscfw_end * cycle_time;
                     rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
@@ -1441,7 +1442,7 @@ void prepare_inputs(
         auto in0_block_slice = get_col_slice(in0_slice, 0, in0_block_w * 32, num_r * 32, Kt * 32);
         auto in0_block_tilized = tilize_swizzled(in0_block_slice, num_r * 32, in0_block_w * 32);
         std::vector<uint32_t> in0 = pack_as_bfp8_tiles(
-            tt::stl::make_const_span(in0_block_tilized), /*row_major_input=*/true, /*is_exp_a=*/false);
+            ttsl::make_const_span(in0_block_tilized), /*row_major_input=*/true, /*is_exp_a=*/false);
 
         auto unpack_vec = unpack_bfp8_tiles_into_float_vec(in0, true, false);
         auto untilize_vec = untilize_swizzled(unpack_vec, num_r * 32, in0_block_w * 32);
@@ -1458,16 +1459,15 @@ void prepare_inputs(
 
             auto in1_block_tilized = tilize_swizzled(in1_block_slice, in0_block_w * 32, num_c * 32);
             std::vector<uint32_t> in1 = pack_as_bfp8_tiles(
-                tt::stl::make_const_span(in1_block_tilized), /*row_major_input=*/true, /*is_exp_a=*/false);
+                ttsl::make_const_span(in1_block_tilized), /*row_major_input=*/true, /*is_exp_a=*/false);
 
             // copy in0, in1, in2 to L1
             CoreCoord core = {(std::size_t)c, (std::size_t)r};
-            auto* target_device = device->get_devices()[0];
-            pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in0_addr, in0);
+            pass &= slow_dispatch::WriteToL1(*device, core, in0_addr, in0);
             TT_FATAL(pass, "Failed to write in0 to device L1");
-            pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in1_addr, in1);
+            pass &= slow_dispatch::WriteToL1(*device, core, in1_addr, in1);
             TT_FATAL(pass, "Failed to write in1 to device L1");
-            pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in2_cb_addr, in2);
+            pass &= slow_dispatch::WriteToL1(*device, core, in2_cb_addr, in2);
             TT_FATAL(pass, "Failed to write in2 to device L1");
         }
     }
@@ -1490,7 +1490,7 @@ bool validation_single_core(
     tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, out_buffer, {0, 0}, true);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
+    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
     auto result_untilized = untilize_swizzled(result_flat_layout, Mt * 32, Nt * 32);
 
     std::vector<float> golden_vec(Mt * Nt * 32 * 32, 0);  // Initialize with zeros
@@ -1599,9 +1599,7 @@ bool validation(
             std::vector<uint32_t> result_vec;
             uint32_t num_r = (r == num_cores_y - 1) ? (last_block_h) : (per_core_Mt);
             uint32_t num_c = (c == num_cores_x - 1) ? (last_block_w) : (per_core_Nt);
-            auto* target_device = device->get_devices()[0];
-            tt_metal::detail::ReadFromDeviceL1(
-                target_device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
+            slow_dispatch::ReadFromL1(*device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
             auto result_flat_layout = unpack_bfp8_tiles_into_float_vec(result_vec, true, false);
             auto result_untilized = untilize_swizzled(result_flat_layout, num_r * 32, num_c * 32);
 

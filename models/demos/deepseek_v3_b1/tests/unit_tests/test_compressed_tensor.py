@@ -102,6 +102,65 @@ def test_bfp2_cpp_matches_python_edge_cases():
     _check_bfp2_cpp_vs_python(x, "edge_cases")
 
 
+def test_assigner_single_format_short_circuit():
+    """Single-format assigner must skip quantize_fn + tile_metrics entirely.
+
+    With ``formats=[fmt]`` every tile is unconditionally assigned ``fmt`` (the
+    fallback ``best_precision`` and the only ``formats_by_cost`` entry are the
+    same), so the per-format quantize/score loop and the per-tile assignment
+    loop are pure waste. This test asserts the fast path is taken by failing
+    if ``quantize_fn`` is invoked.
+    """
+    torch.manual_seed(0)
+    x = torch.randn(96, 128)  # 3x4 tile grid -> 12 tiles
+    tiles_h, tiles_w = 3, 4
+    num_tiles = tiles_h * tiles_w
+
+    def _forbidden_quantize_fn(_t, _fmt):
+        raise AssertionError("quantize_fn must not be called in single-format short-circuit")
+
+    for fmt in ["bfp8", "bfp4", "bfp2", "bfp0"]:
+        assigner = CompressedTensorAssigner(metric="pcc", threshold=0.999, formats=[fmt])
+        result = assigner.assign(x, _forbidden_quantize_fn)
+
+        expected_idx = COMPRESSED_FORMATS.index(fmt)
+        assert result.assignment.shape == (tiles_h, tiles_w)
+        assert np.all(
+            result.assignment == expected_idx
+        ), f"format={fmt}: expected all entries {expected_idx}, got {np.unique(result.assignment)}"
+        assert result.tile_counts[fmt] == num_tiles
+        for other_fmt in COMPRESSED_FORMATS:
+            if other_fmt != fmt:
+                assert result.tile_counts.get(other_fmt, 0) == 0
+        assert result.quantized is None
+
+
+def test_assigner_multi_format_still_runs_assigner():
+    """Multi-format assigner must keep running quantize_fn + tile_metrics.
+
+    Sanity guard for the short-circuit: any ``len(formats) > 1`` config must
+    fall through to the full assignment path. Uses the pure-numpy
+    ``quantize_dequantize_bfp`` so the test is host-only (no TTNN device).
+    Asserts ``quantize_fn`` is invoked and ``quantized`` is materialized
+    (the fast path leaves it as ``None``).
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import BFP_MANT_BITS
+
+    torch.manual_seed(0)
+    x = np.random.RandomState(0).randn(96, 128).astype(np.float32)
+    calls: list[str] = []
+
+    def _numpy_quantize_fn(t, fmt):
+        calls.append(fmt)
+        return quantize_dequantize_bfp(t, BFP_MANT_BITS[fmt])
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.999, formats=["bfp8", "bfp4"])
+    result = assigner.assign(x, _numpy_quantize_fn)
+    assert calls == ["bfp8", "bfp4"], f"expected one quantize call per format, got {calls}"
+    assert result.quantized is not None
+    assert result.assignment.shape == (3, 4)
+
+
 def _div_up(a, b):
     return (a + b - 1) // b
 
@@ -573,3 +632,142 @@ def test_from_bspm_tile_counts(device):
     assert counts.get("bfp4", 0) > total_tiles // 2, f"bfp4 should dominate at 3.5 b/e: {counts}"
     # Should NOT be all-bfp4 (that would mean BSPM codes were ignored)
     assert counts.get("bfp4", 0) < total_tiles, f"All tiles are bfp4 — BSPM assignment was not applied: {counts}"
+
+
+# ---------------------------------------------------------------------------
+# Batched _compress_shard equivalence with per-tile pack_bfp_tile
+# ---------------------------------------------------------------------------
+
+
+def _per_tile_compress_shard_reference(data_np, page_indices, assignment_flat, tiles_w, tile_hw):
+    """Reference implementation: pack each tile in its own ``pack_bfp_tile`` call.
+
+    Mirrors the pre-batched ``_compress_shard`` body (one C++ crossing per
+    tile) and is used purely to gate the batched implementation against
+    byte-identical output.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import _FMT_IDX_TO_MANT_BITS
+
+    tile_data_list, tile_format_list, total_bytes = [], [], 0
+    for page_idx in page_indices:
+        fmt = _FMT_IDX_TO_MANT_BITS[int(assignment_flat[page_idx])]
+        if fmt == 0:
+            tile_data_list.append(np.array([], dtype=np.uint8))
+            tile_format_list.append(0)
+            continue
+        tr = page_idx // tiles_w
+        tc = page_idx % tiles_w
+        tile = data_np[
+            tr * tile_hw : (tr + 1) * tile_hw,
+            tc * tile_hw : (tc + 1) * tile_hw,
+        ]
+        packed = pack_bfp_tile(tile, fmt)
+        tile_data_list.append(packed)
+        tile_format_list.append(fmt)
+        total_bytes += len(packed)
+    return tile_data_list, tile_format_list, total_bytes
+
+
+def test_compress_shard_batched_matches_per_tile_single_format():
+    """Batched ``_compress_shard`` is byte-identical to per-tile packing for single-format shards.
+
+    Single-format is the production hot path for SRAM hot experts
+    (``CompressedTensorAssigner(formats=["bfp4"])``).  Verifies all three
+    BFP formats independently to guard against output-layout drift in the
+    C++ ``pack_as_bfpN_tiles`` for any single format.
+    """
+    rng = np.random.default_rng(0)
+    tile_hw = 32
+    tiles_h, tiles_w = 4, 6
+    n_tiles = tiles_h * tiles_w
+
+    # Synthetic 2D data laid out as a (tiles_h * tile_hw, tiles_w * tile_hw) tile grid.
+    data_np = rng.standard_normal((tiles_h * tile_hw, tiles_w * tile_hw)).astype(np.float32)
+    page_indices = list(range(n_tiles))
+
+    # Format index 0=bfp8 (mant=7), 1=bfp4 (mant=3), 2=bfp2 (mant=1)
+    for fmt_idx in (0, 1, 2):
+        assignment_flat = np.full(n_tiles, fmt_idx, dtype=np.int8)
+
+        ref = _per_tile_compress_shard_reference(data_np, page_indices, assignment_flat, tiles_w, tile_hw)
+        got = CompressedTensor._compress_shard(data_np, page_indices, assignment_flat, tiles_w, tile_hw)
+
+        ref_data, ref_fmts, ref_total = ref
+        got_data, got_fmts, got_total = got
+
+        assert got_total == ref_total, f"fmt_idx={fmt_idx}: total bytes mismatch ({got_total} vs {ref_total})"
+        assert got_fmts == ref_fmts, f"fmt_idx={fmt_idx}: tile formats mismatch"
+        assert len(got_data) == len(ref_data) == n_tiles
+        for i, (g, r) in enumerate(zip(got_data, ref_data)):
+            assert np.array_equal(g, r), f"fmt_idx={fmt_idx}: bytes mismatch at slot {i}"
+
+
+def test_compress_shard_batched_matches_per_tile_mixed_format():
+    """Batched ``_compress_shard`` is byte-identical to per-tile packing for mixed-format shards.
+
+    Mixed-format is the BSPM (precision-map) hot path; verifies that the
+    by-format grouping reassembles slots back at their original
+    ``page_indices`` order rather than format-bucketed order.
+    """
+    rng = np.random.default_rng(1)
+    tile_hw = 32
+    tiles_h, tiles_w = 3, 5
+    n_tiles = tiles_h * tiles_w
+
+    data_np = rng.standard_normal((tiles_h * tile_hw, tiles_w * tile_hw)).astype(np.float32)
+    page_indices = list(range(n_tiles))
+
+    # Mix all four format codes (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0).  The
+    # specific pattern ensures every format appears at least twice and
+    # is interleaved with others.
+    pattern = [0, 1, 2, 3, 0, 1, 2, 3, 1, 0, 2, 1, 3, 2, 0]
+    assert len(pattern) == n_tiles
+    assignment_flat = np.array(pattern, dtype=np.int8)
+
+    ref_data, ref_fmts, ref_total = _per_tile_compress_shard_reference(
+        data_np, page_indices, assignment_flat, tiles_w, tile_hw
+    )
+    got_data, got_fmts, got_total = CompressedTensor._compress_shard(
+        data_np, page_indices, assignment_flat, tiles_w, tile_hw
+    )
+
+    assert got_total == ref_total
+    assert got_fmts == ref_fmts
+    assert len(got_data) == len(ref_data) == n_tiles
+    for i, (g, r) in enumerate(zip(got_data, ref_data)):
+        assert np.array_equal(g, r), f"slot {i} bytes mismatch (fmt={got_fmts[i]})"
+
+
+def test_compress_shard_batched_handles_partial_pages():
+    """Batched ``_compress_shard`` honours arbitrary ``page_indices`` ordering and gaps.
+
+    Real shards from ``compute_shard_page_mapping`` produce non-contiguous
+    page_indices (e.g. WIDTH_SHARDED stripes a tile grid round-robin
+    across cores).  Verifies the batched path reassembles output at the
+    correct slots when ``page_indices`` is neither sorted nor dense.
+    """
+    rng = np.random.default_rng(2)
+    tile_hw = 32
+    tiles_h, tiles_w = 4, 8
+    total_pages = tiles_h * tiles_w
+    data_np = rng.standard_normal((tiles_h * tile_hw, tiles_w * tile_hw)).astype(np.float32)
+
+    # Pick a non-contiguous, non-sorted subset (every-other-tile from
+    # rows 0 and 2, in reverse order, plus a couple from row 3).
+    page_indices = [12, 8, 4, 0, 28, 24, 20, 16, 31, 25]
+    assignment_flat = np.zeros(total_pages, dtype=np.int8)
+    # Different formats per slot to exercise grouping + reassembly.
+    fmt_codes = [0, 1, 2, 3, 1, 0, 2, 1, 3, 0]
+    for p, c in zip(page_indices, fmt_codes):
+        assignment_flat[p] = c
+
+    ref = _per_tile_compress_shard_reference(data_np, page_indices, assignment_flat, tiles_w, tile_hw)
+    got = CompressedTensor._compress_shard(data_np, page_indices, assignment_flat, tiles_w, tile_hw)
+
+    ref_data, ref_fmts, ref_total = ref
+    got_data, got_fmts, got_total = got
+
+    assert got_total == ref_total
+    assert got_fmts == ref_fmts
+    for i, (g, r) in enumerate(zip(got_data, ref_data)):
+        assert np.array_equal(g, r), f"slot {i} bytes mismatch (fmt={got_fmts[i]})"

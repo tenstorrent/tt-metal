@@ -6,8 +6,8 @@
 // DM producer posts tiles, 2 NEO TRISC0 consume and 2 NEO TRISC0 exit early
 // Creates predictable TC mismatches for watcher to detect and log
 
-#include "experimental/dataflow_buffer.h"
-#include "api/compile_time_args.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "api/kernel_thread_globals.h"
 #include "risc_common.h"
 #include "api/debug/dprint.h"
@@ -18,13 +18,12 @@
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 #endif
 
-constexpr uint32_t dfb_id = get_compile_time_arg_val(0);
-constexpr uint32_t num_entries = get_compile_time_arg_val(1);
+constexpr uint32_t num_entries = get_arg(args::num_entries);
 
 void kernel_main() {
 #if defined(COMPILE_FOR_DM)
     // DM Producer: post tiles to DFB for all 4 NEO consumers
-    experimental::DataflowBuffer dfb(dfb_id);
+    DataflowBuffer dfb(dfb::tile_counter_dfb);
     for (uint32_t entry = 0; entry < num_entries; entry++) {
         dfb.reserve_back(1);
         dfb.push_back(1);
@@ -32,8 +31,8 @@ void kernel_main() {
 
 #elif defined(UCK_CHLKC_UNPACK)
     // NEO TRISC0 Consumer: consume tiles from DFB
-    constexpr uint32_t num_consumers_to_run = get_compile_time_arg_val(2);
-    constexpr uint32_t sync_flag_addr = get_compile_time_arg_val(3);
+    constexpr uint32_t num_consumers_to_run = get_arg(args::num_consumers_to_run);
+    constexpr uint32_t sync_flag_addr = get_arg(args::sync_flag_addr);
     uint32_t thread_idx = get_my_thread_id();
 
     // Early exit for stalled consumers - their TCs won't be acked -> mismatch
@@ -42,7 +41,7 @@ void kernel_main() {
     }
 
     // Running consumers: consume all entries
-    experimental::DataflowBuffer dfb(dfb_id);
+    DataflowBuffer dfb(dfb::tile_counter_dfb);
     for (uint32_t entry = 0; entry < num_entries; entry++) {
         dfb.wait_front(1);
         dfb.pop_front(1);

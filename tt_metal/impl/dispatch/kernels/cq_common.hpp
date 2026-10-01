@@ -7,11 +7,14 @@
 #include "core_config.h"
 #include "internal/risc_attribs.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "cq_commands.hpp"
 #include "cq_helpers.hpp"
+#include "telemetry.hpp"
 
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
-#include <limits>
+#include <array>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -31,10 +34,13 @@ struct CQWriteInterface {
     uint32_t completion_fifo_wr_toggle;
 };
 
-constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
+// PROGRAMMABLE_CORE_TYPE is set by the HAL JIT defines from the build's HalProgrammableCoreType.
+constexpr ProgrammableCoreType programmable_core_type = static_cast<ProgrammableCoreType>(PROGRAMMABLE_CORE_TYPE);
 
-FORCE_INLINE
-uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) { return (v + (pow2_size - 1)) & ~(pow2_size - 1); }
+template <typename T>
+FORCE_INLINE T round_up_pow2(T v, uint32_t pow2_size) {
+    return (v + (pow2_size - 1)) & ~static_cast<T>(pow2_size - 1);
+}
 
 FORCE_INLINE
 uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
@@ -57,7 +63,91 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     return diff > 0;
 }
 
+// On Quasar, an L1 word shared with another agent must use the uncached alias, on both the writing and
+// the reading side: NoC writes and atomics do not snoop the DM caches, and the NIU reads TL1 directly.
+// No-op on BH/WH.
+constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
+#ifdef ARCH_QUASAR
+    return addr + MEM_L1_UNCACHED_BASE;
+#else
+    return addr;
+#endif
+}
+
+// Inverse of l1_uncached_addr: maps an uncached-alias address back to its cached form.
+// Identity on non-Quasar. Used to store the host-visible (cached-form) prefetch_q_rd_ptr value.
+constexpr FORCE_INLINE uintptr_t l1_cached_addr(uintptr_t addr) {
+#ifdef ARCH_QUASAR
+    ASSERT(addr >= MEM_L1_UNCACHED_BASE);
+    return addr - MEM_L1_UNCACHED_BASE;
+#else
+    return addr;
+#endif
+}
+
+template <typename T>
+FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
+    return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
+}
+
+// Credits dispatch and dispatch_s return to prefetch. A cached AMO only reaches the local node's
+// pool row, which works because Quasar FD is hd-only -- all three stages share one dispatch engine,
+// enforced by the #error in cq_prefetch.cpp. Emule has no cached pool.
+#if defined(ARCH_QUASAR) && !defined(TT_EMULE_USE_L1_POOL)
+constexpr SemScope fd_upstream_sem_scope = SemScope::DM_LOCAL_CACHED;
+#else
+constexpr SemScope fd_upstream_sem_scope = SemScope::LOCAL_NONATOMIC;
+#endif
+
+// Never store in a global: the constructor resolves through sem_l1_base, which firmware populates only
+// in firmware_config_init(). The token is built here, not host-generated, because only it takes a scope.
+template <uint32_t sem_id, SemScope scope>
+FORCE_INLINE auto fd_semaphore() {
+    return Semaphore<programmable_core_type>(SemaphoreBindingToken{sem_id, scope});
+}
+
+// The host's init write lands in the ordinary semaphore slot, not the pool, so copy it across. Remove this
+// if FD becomes a Metal 2.0 kernel -- the firmware's init_dm_local_cached() does it. A plain store is safe here:
+// a consumer returns credits only after consuming a command, which prefetch can only send after seeding.
+template <uint32_t sem_id>
+FORCE_INLINE void fd_seed_upstream_sem() {
+    if constexpr (fd_upstream_sem_scope == SemScope::DM_LOCAL_CACHED) {
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+        static_assert(
+            sem_id < MEM_SEM_CACHED_POOL_SIZE / MEM_SEM_CACHED_POOL_ROW, "semaphore id has no row in the cached pool");
+        *reinterpret_cast<uint32_t*>(
+            static_cast<uintptr_t>(MEM_SEM_CACHED_POOL_BASE) + sem_id * MEM_SEM_CACHED_POOL_ROW) =
+            *uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(sem_id));
+#endif
+    }
+}
+
+#ifdef ARCH_QUASAR
+// Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
+// into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers. `completion_counter_offset`
+// selects this CQ's range of counters, when multiple CQs share this dispatch core. `first_stream_used`
+// is the index of the first stream used by this CQ. Workers increment it with a NoC atomic, so every
+// access to it uses the uncached view.
+FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
+    uint32_t stream, uint32_t first_stream_used, uint32_t completion_counter_offset) {
+    return uncached_l1_ptr<uint32_t>(
+        DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (completion_counter_offset + stream - first_stream_used));
+}
+#endif
+
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
+
+// Compose a multicast destination from a host-packed NOC_MULTICAST_ENCODING
+// rectangle and a local offset. On XY backends this is the ordinary packed
+// composition. Under ATT a packed rectangle must not go through
+// get_noc_addr_helper.
+FORCE_INLINE uint64_t cq_mcast_noc_addr(uint32_t packed_rect, uint64_t offset) {
+#if defined(NOC_ATT_ENABLED)
+    return noc_v3_cq_packed_mcast_base(packed_rect) | (offset & NOC_V3_CQ_MCAST_LOCAL_MASK);
+#else
+    return get_noc_addr_helper(packed_rect, offset);
+#endif
+}
 
 template <
     enum CQNocFlags flags,
@@ -113,11 +203,15 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an arbitrary amount of data, when the NOC
 // config (dst_noc, VC..) have been specified.
+// flush_last_transfer sets the flush packet tag on the final transfer so that a credit atomic issued after
+// this call -- typically from CBWriter::release_pages -- cannot commit to L1 ahead of the payload.
+// No-op on tt-1xx, which has no packet tags.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
     enum CQNocWait wait_first = CQ_NOC_WAIT,
-    uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
+    uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
+    bool flush_last_transfer = false>
 inline uint32_t cq_noc_async_write_with_state_any_len(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     if (size > NOC_MAX_BURST_SIZE) {
@@ -135,17 +229,31 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
         }
     }
     if constexpr (write_last_packet) {
+#if defined(ARCH_QUASAR)
+        if constexpr (flush_last_transfer) {
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/true);
+        }
+#endif
         cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
             src_addr, dst_addr, size, ndests, noc);
+#if defined(ARCH_QUASAR)
+        if constexpr (flush_last_transfer) {
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/false);
+        }
+#endif
         return 0;
     } else {
+        static_assert(
+            !flush_last_transfer,
+            "flush_last_transfer requires write_last_packet: this call does not issue the final transfer, so there "
+            "is nothing to tag here. Tag it at the call that does.");
         return size;
     }
 }
 
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 FORCE_INLINE void cq_noc_async_write_init_state(
-    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint8_t noc = noc_index) {
+    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     WAYPOINT("CNIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc, cmd_buf)) {
@@ -160,13 +268,18 @@ FORCE_INLINE void cq_noc_async_write_init_state(
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, mcast ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
 
     noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
-    cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size);
+    cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size, ndests);
 }
 // Similar to the above function but this one takes noc-xy coordinates as a separate argument to permit 64-bit
 // addressing at NOC tile
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 FORCE_INLINE void cq_noc_async_wwrite_init_state(
-    uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint8_t noc = noc_index) {
+    uint32_t src_addr,
+    uint32_t dst_noc_addr,
+    uint64_t dst_addr,
+    uint32_t size = 0,
+    uint8_t noc = noc_index,
+    uint32_t ndests = 1) {
     WAYPOINT("CNIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc, cmd_buf)) {
@@ -182,7 +295,7 @@ FORCE_INLINE void cq_noc_async_wwrite_init_state(
 
     noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
     cq_noc_async_wwrite_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(
-        src_addr, dst_noc_addr, dst_addr, size, noc);
+        src_addr, dst_noc_addr, dst_addr, size, ndests, noc);
 }
 
 template <enum CQNocInlineFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
@@ -190,12 +303,12 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
     uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF, uint8_t noc = noc_index) {
 #if defined(ARCH_BLACKHOLE)
     noc_async_writes_flushed();  // ensure inline_l1_src_addr is not overwritten
-    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
+    uintptr_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
     volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
     *inline_l1_src_addr_ptr = val;
     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_REG_CMD_BUF>(
-        inline_l1_src_addr, dst_addr, 4);
+        static_cast<uint32_t>(inline_l1_src_addr), dst_addr, 4);
 #else
     if constexpr (wait) {
         WAYPOINT("NISW");
@@ -221,7 +334,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
 #if defined(ARCH_BLACKHOLE)
     // On Blackhole inline writes are disabled so use cq_noc_async_write_init_state with inline write cmd buf
     // See comment in `noc_inline_dw_write` for more details
-    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
+    uintptr_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
     volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, NCRISC_WR_REG_CMD_BUF>(0, dst_addr, 0);
@@ -246,7 +359,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
 template <uint32_t sem_id>
 FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(sem_id)));
 
     // Downstream component sets the MSB as a terminate bit
     // Mask that off to avoid a race between the sem count and terminate
@@ -259,6 +372,8 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPD");
 }
 
+// my_sem_scope applies only to my_sem_id, the credits a consumer returns here; downstream_sem_id is
+// always reached over the NoC.
 template <
     uint32_t my_sem_id,
     uint8_t noc_idx,
@@ -266,24 +381,20 @@ template <
     uint32_t downstream_sem_id,
     uint32_t buffer_base = 0,
     uint32_t buffer_end = 0,
-    uint32_t buffer_page_size = 0>
+    uint32_t buffer_page_size = 0,
+    SemScope my_sem_scope = SemScope::LOCAL_NONATOMIC>
 class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
-
-        // Ensure last sem_inc has landed
-        noc_async_atomic_barrier();
+        auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
 
         WAYPOINT("DAPW");
         // Use a wrapping compare here to compare distance
         // Required for trace which steals downstream credits and may make the value negative
         uint32_t heartbeat = 0;
         do {
-            invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-        } while (wrap_gt(n, additional_count + *sem_addr));
+        } while (wrap_gt(n, additional_count + my_sem.value()));
         WAYPOINT("DAPD");
         additional_count -= n;
     }
@@ -291,17 +402,15 @@ public:
     // Wait for all n pages to be available. If the consumer is using blocks, it may never return all pages at once
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+        auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
         n &= 0x7fffffff;
 
         WAYPOINT("TAPW");
-        do {
-            invalidate_l1_cache();
-        } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
+        while (((additional_count + my_sem.value()) & 0x7fffffff) != n) {  // mask off terminate bit
+        }
         WAYPOINT("TAPD");
     }
 
@@ -348,7 +457,9 @@ public:
         }
 #endif
         noc_semaphore_inc(
-            get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)),
+            n,
+            noc_idx);
     }
 
     uint32_t additional_count{0};
@@ -369,8 +480,8 @@ private:
 //  - Provides non-blocking availability via acquire_pages() and a blocking drain via wait_all_pages().
 // Notes:
 //  - This class only accounts for pages locally; it does NOT release credits back to the producer.
-//    Use CBReaderWithReleasePolicy or CBReaderWithManualRelease when credits must be returned.
-//  - Credits are returned per-block, not per-page.
+//    Use CBReaderWithReleasePolicy for block-based credit release, or CBReaderWithManualRelease when the caller
+//    returns credits explicitly.
 template <
     uint32_t my_sem_id,
     uint32_t cb_log_page_size,
@@ -380,8 +491,8 @@ template <
 class CBReader {
 public:
     FORCE_INLINE void wait_all_pages() {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         uint32_t to_wait_for = upstream_count_;
 
@@ -398,7 +509,7 @@ public:
 
     // Return available space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
     // wrap around.
-    uint32_t available_bytes(uint32_t data_ptr) const { return cb_fence_ - data_ptr; }
+    uint32_t available_bytes(uintptr_t data_ptr) const { return static_cast<uint32_t>(cb_fence_ - data_ptr); }
 
 protected:
     FORCE_INLINE void init() {
@@ -421,12 +532,15 @@ protected:
 
     // Acquire pages from upstream. Updates the cb_fence and returns the number of pages acquired. May block waiting for
     // credits from upstream if we already acquired all the pages previously.
+    template <typename T = NoTelemetryBlockGuard>
     FORCE_INLINE uint32_t acquire_pages() {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+        static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");
+            T block_guard;
             uint32_t heartbeat = 0;
             do {
                 invalidate_l1_cache();
@@ -436,7 +550,7 @@ protected:
         }
 
         // Set a fence to limit how much is processed at once
-        uint32_t limit = (block_next_start_addr_[rd_block_idx_] - cb_fence_) >> cb_log_page_size;
+        uint32_t limit = static_cast<uint32_t>((block_next_start_addr_[rd_block_idx_] - cb_fence_) >> cb_log_page_size);
         uint32_t available = upstream_count_ - local_count_;
         uint32_t usable = (available > limit) ? limit : available;
 
@@ -447,9 +561,9 @@ protected:
     }
 
     // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
-    uint32_t cb_fence_{0};
+    uintptr_t cb_fence_{0};
     // Byte addresses of the start of the next block for each block index; used to cap processing per block and wrap.
-    uint32_t block_next_start_addr_[cb_blocks]{};
+    uintptr_t block_next_start_addr_[cb_blocks]{};
     // Current read block index within the circular buffer.
     uint32_t rd_block_idx_{0};
 
@@ -478,13 +592,16 @@ public:
         this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
     }
 
-    // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to
+    // Returns how much data is available. Will block until data is available. Tracks via blocked
+    // counter addresses if check_blocking is true.May release old pages before cmd_ptr to
     // writer. Updates cmd_ptr on wrap-around.
     // noc_increment_nonposted_writes_issued() must be called before calling this function.
     // If this function doesn't return sufficient data, there are two options:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
-    FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uint32_t& cmd_ptr) {
+    template <typename T = NoTelemetryBlockGuard>
+    FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uintptr_t& cmd_ptr) {
+        static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
         if (this->available_bytes(cmd_ptr) == 0) {
             if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
                 if (this->rd_block_idx_ == cb_blocks - 1) {
@@ -493,7 +610,7 @@ public:
                 }
                 move_rd_to_next_block_and_release_pages();
             }
-            this->acquire_pages();
+            this->template acquire_pages<T>();
         }
         return this->available_bytes(cmd_ptr);
     }
@@ -505,7 +622,7 @@ public:
     // cmd_ptr is set to the base address after on_boundary is called).
     // noc_increment_nonposted_writes_issued() must be called before on_boundary returns.
     template <typename OnBoundaryFn>
-    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
+    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uintptr_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
         if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
             const bool will_wrap = (this->rd_block_idx_ == cb_blocks - 1);
             on_boundary(will_wrap);
@@ -518,10 +635,10 @@ public:
         return this->acquire_pages();
     }
 
-    FORCE_INLINE void release_all_pages(uint32_t curr_ptr) {
+    FORCE_INLINE void release_all_pages(uintptr_t curr_ptr) {
         release_block_pages();
-        uint32_t pages_to_release =
-            cb_pages_per_block - ((this->block_next_start_addr_[this->rd_block_idx_] - curr_ptr) >> cb_log_page_size);
+        uint32_t pages_to_release = static_cast<uint32_t>(
+            cb_pages_per_block - ((this->block_next_start_addr_[this->rd_block_idx_] - curr_ptr) >> cb_log_page_size));
         if (pages_to_release != 0) {
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(pages_to_release);
         }
@@ -554,60 +671,88 @@ private:
     uint32_t block_noc_writes_to_clear_{0};
 };
 
-template <
-    uint32_t my_sem_id,
-    uint32_t cb_log_page_size,
-    uint32_t cb_blocks,
-    uint32_t cb_pages_per_block,
-    uint32_t cb_base,
-    uint32_t cb_end>
-class CBReaderWithManualRelease : public CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base> {
+template <uint32_t my_sem_id, uint32_t cb_log_page_size, uint32_t cb_base, uint32_t cb_end>
+class CBReaderWithManualRelease {
+    static_assert((cb_end - cb_base) % (1 << cb_log_page_size) == 0, "CB size must be a whole number of pages");
+
 public:
     FORCE_INLINE void init() {
-        this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
+        cb_fence_ = cb_base;
+        upstream_count_ = 0;
+        local_count_ = 0;
     }
+
+    // Return available space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
+    // wrap around.
+    uint32_t available_bytes(uintptr_t data_ptr) const { return static_cast<uint32_t>(cb_fence_ - data_ptr); }
 
     // Get a new CB page. Will update cmd_ptr on wrap-around. Returns the number of pages acquired. Will not release
     // pages to writer.
-    FORCE_INLINE uint32_t get_cb_page(uint32_t& cmd_ptr) {
-        // Strided past the data that has arrived, get the next page
-        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
-            if (this->rd_block_idx_ == cb_blocks - 1) {
-                cmd_ptr = cb_base;
-                this->cb_fence_ = cb_base;
-            }
-            this->move_rd_to_next_block();
+    FORCE_INLINE uint32_t get_cb_page(uintptr_t& cmd_ptr) {
+        if (cb_fence_ == cb_end) {
+            cmd_ptr = cb_base;
+            cb_fence_ = cb_base;
         }
 
-        return this->acquire_pages();
+        return acquire_pages();
     }
 
     // Returns how much data is available. Will block until data is available.
-    FORCE_INLINE uint32_t wait_for_available_data(uint32_t& cmd_ptr) {
-        if (this->available_bytes(cmd_ptr) == 0) {
+    FORCE_INLINE uint32_t wait_for_available_data(uintptr_t& cmd_ptr) {
+        if (available_bytes(cmd_ptr) == 0) {
             get_cb_page(cmd_ptr);
         }
-        return this->available_bytes(cmd_ptr);
+        return available_bytes(cmd_ptr);
     }
 
     // Advance cmd_ptr by length. If we wrap around, wrap the fence (should only happen if we hit the end exactly).
-    FORCE_INLINE void consumed_data(uint32_t& cmd_ptr, uint32_t length) {
+    FORCE_INLINE void consumed_data(uintptr_t& cmd_ptr, uint32_t length) {
         // This is ugly: get_cb_page code can wrap and this can wrap
         // They peacefully coexist because we won't wrap there and here at once
         if (cmd_ptr + length >= cb_end) {
-            length -= cb_end - cmd_ptr;
+            length -= static_cast<uint32_t>(cb_end - cmd_ptr);
             cmd_ptr = cb_base;
-            if (this->cb_fence_ == cb_end) {
+            if (cb_fence_ == cb_end) {
                 // We hit the nail on the head, wrap the fence
                 ASSERT(length == 0);
-                this->cb_fence_ = cb_base;
-                // TODO eliminate usage of block_next_start_addr_ in this CB reader. rd_block_idx_ will point to the
-                // last block, not the first block, so the limit calculation in acquire_pages will be incorrect. We
-                // don't really use blocks for anything, here, so we should get rid of them and simplify the code.
+                cb_fence_ = cb_base;
             }
         }
         cmd_ptr += length;
     }
+
+private:
+    // Acquire pages from upstream up to the end of the ring. Pages are released manually by the caller.
+    FORCE_INLINE uint32_t acquire_pages() {
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+
+        if (local_count_ == upstream_count_) {
+            WAYPOINT("UAPW");
+            uint32_t heartbeat = 0;
+            do {
+                invalidate_l1_cache();
+                IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
+            } while ((upstream_count_ = *sem_addr) == local_count_);
+            WAYPOINT("UAPD");
+        }
+
+        uint32_t limit = static_cast<uint32_t>((cb_end - cb_fence_) >> cb_log_page_size);
+        uint32_t available = upstream_count_ - local_count_;
+        uint32_t usable = (available > limit) ? limit : available;
+
+        local_count_ += usable;
+        cb_fence_ += usable << cb_log_page_size;
+
+        return usable;
+    }
+
+    // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
+    uintptr_t cb_fence_{0};
+    // Last value read from the upstream semaphore (producer credits). Cached snapshot for availability checks.
+    uint32_t upstream_count_{0};
+    // Number of pages this reader has already accounted for (consumed) into the cb_fence_ region.
+    uint32_t local_count_{0};
 };
 
 constexpr uint32_t l1_to_local_cache_copy_chunk = 6;
@@ -615,9 +760,31 @@ constexpr uint32_t l1_to_local_cache_copy_chunk = 6;
 // NOTE: CAREFUL USING THIS FUNCTION
 // It is call "careful_copy" because you need to be careful...
 // It copies beyond count by up to 5 elements make sure src and dst addresses are safe
-template <uint32_t l1_to_local_cache_copy_chunk, uint32_t l1_cache_elements_rounded>
+// first_line_invalidated says the caller already invalidated the line holding l1_ptr, so this skips it. Set it
+// only when the source cannot have wrapped away from the command header whose invalidate covers that line.
+template <
+    uint32_t l1_to_local_cache_copy_chunk,
+    uint32_t l1_cache_elements_rounded,
+    bool invalidate_source = false,
+    bool first_line_invalidated = false>
 FORCE_INLINE void careful_copy_from_l1_to_local_cache(
     volatile uint32_t tt_l1_ptr* l1_ptr, uint32_t count, uint32_t* l1_cache) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    if constexpr (invalidate_source) {
+        // The source arrived over the NoC, which does not snoop, so a cached copy left over from an earlier
+        // ring wrap is stale. Range covers the up-to-chunk-1 elements this function reads past count.
+        uintptr_t start = reinterpret_cast<uintptr_t>(l1_ptr);
+        uint32_t size = sizeof(uint32_t) * (count + l1_to_local_cache_copy_chunk - 1);
+        if constexpr (first_line_invalidated) {
+            // Shrink by what is skipped, not just advance: keeping the size would push the range one line
+            // past the array and hand back the line just saved. A short array can skip past its own end.
+            const uint32_t skipped = round_up_pow2(start, L2_CACHE_LINE_SIZE) - start;
+            start += skipped;
+            size = skipped < size ? size - skipped : 0;
+        }
+        invalidate_l2_cache_range(start, size);
+    }
+#endif
     uint32_t n = 0;
     ASSERT(l1_to_local_cache_copy_chunk == 6);
     ASSERT(count <= l1_cache_elements_rounded);
@@ -636,4 +803,62 @@ FORCE_INLINE void careful_copy_from_l1_to_local_cache(
         l1_cache[n + 5] = v5;
         n += 6;
     }
+}
+
+template <bool telemetry_enabled, size_t max_num_worker_sems>
+FORCE_INLINE uint32_t set_sub_device_worker_counts(
+    uintptr_t cmd_ptr,
+    std::array<uint32_t, max_num_worker_sems>& workers_per_sub_device,
+    volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update,
+    uintptr_t dispatch_telemetry_base) {
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
+    uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
+    ASSERT(num_sub_devices <= max_num_worker_sems);
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Reaches past the header window invalidated at command entry.
+    invalidate_l2_cache_range(cmd_ptr + sizeof(CQDispatchCmd), num_sub_devices * sizeof(uint32_t));
+#endif
+    volatile tt_l1_ptr uint32_t* data_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
+
+    static uint32_t local_sub_device_worker_counts_update = 0;
+
+    for (uint32_t i = 0; i < num_sub_devices; ++i) {
+        uint32_t worker_count = *(data_ptr++);
+        workers_per_sub_device[i] = worker_count;
+        if constexpr (telemetry_enabled) {
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
+                ->workers_per_sub_device[i] = worker_count;
+        }
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        DPRINT("dispatch_s sub_device_idx={} num_workers={}\n", i, workers_per_sub_device[i]);
+#endif
+    }
+    for (uint32_t i = num_sub_devices; i < max_num_worker_sems; ++i) {
+        workers_per_sub_device[i] = 0;
+        if constexpr (telemetry_enabled) {
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
+                ->workers_per_sub_device[i] = 0;
+        }
+    }
+
+    *sub_device_worker_counts_update = ++local_sub_device_worker_counts_update;
+    uint32_t command_size = sizeof(CQDispatchCmd) + num_sub_devices * sizeof(uint32_t);
+    return round_up_pow2(command_size, L1_ALIGNMENT);
+}
+
+// Single wide load of a field in a `packed` struct, which the compiler would otherwise reassemble from
+// byte loads (packed sets struct alignment to 1).
+//
+// The `void*` parameter is required: taking the address of a packed member as `T*` trips
+// -Waddress-of-packed-member, which this build promotes to an error.
+//
+// Unchecked caller obligations: T must match the field's width (a narrower T silently truncates), and
+// the field must be naturally aligned.
+template <typename T>
+FORCE_INLINE T load_aligned(const volatile void* ptr) {
+    ASSERT((reinterpret_cast<uintptr_t>(ptr) & (alignof(T) - 1)) == 0);
+    return *reinterpret_cast<const volatile T*>(ptr);
 }

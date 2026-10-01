@@ -29,8 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.tensor_utils import TILE_SIZE, get_rot_transformation_mat
-from models.common.utility_functions import nearest_32
+from models.common.tensor_utils import TILE_SIZE, get_rot_transformation_mat, nearest_32
 
 # =============================================================================
 # Config dataclass
@@ -432,7 +431,7 @@ def _resolve_rope_config(config: Rope1DConfig) -> Rope1DConfig:
     )
 
     assert config._prefill_trans_mat is None, "_prefill_trans_mat is internal and should not be set by the user"
-    prefill_trans_mat_source = get_rot_transformation_mat(dhead=head_dim)
+    prefill_trans_mat_source = get_rot_transformation_mat(dhead=TILE_SIZE)
     to_set["_prefill_trans_mat"] = LazyWeight(
         source=prefill_trans_mat_source,
         device=device,

@@ -24,7 +24,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     skip_single_device_sharded,
 )
 from models.demos.deepseek_v3.tt.mlp.mlp import MLP
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
@@ -293,7 +293,15 @@ def _build_ff1_3_inputs(
             memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             buffer_type=ttnn.BufferType.L1,
             shard_spec=ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+                # One [32, 128] shard per 128 columns of the per-device slice (hidden_size split
+                # across the mesh columns by the mapper below). Derive the cores from the device
+                # grid: under COL dispatch the Galaxy compute grid is only 7 cores wide, so a
+                # hard-coded 8-wide range includes the dispatch column and fails buffer validation.
+                ttnn.num_cores_to_corerangeset(
+                    hf_config.hidden_size // mesh_device.shape[1] // 128,
+                    mesh_device.compute_with_storage_grid_size(),
+                    row_wise=True,
+                ),
                 [32, 128],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -382,8 +390,8 @@ def _build_ff1_3_inputs(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,
@@ -507,8 +515,8 @@ def test_ds_ff1_3(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,

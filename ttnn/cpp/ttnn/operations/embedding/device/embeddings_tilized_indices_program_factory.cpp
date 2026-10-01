@@ -4,22 +4,31 @@
 
 #include "embeddings_tilized_indices_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
+
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim {
 
-EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndicesProgramFactory::create(
+using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
+
+ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory::create_program_artifacts(
     const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     auto& output = tensor_return_value;
     const auto& embeddings_type = operation_attributes.embeddings_type;
-    const auto& pad_token = operation_attributes.pad_token;
 
-    using namespace tt::constants;
-    ////////////////////////////////////////////////////////////////////////////
-    //                 Buffer Setup
-    ////////////////////////////////////////////////////////////////////////////
+    const auto& input_mesh_tensor = a.mesh_tensor();
+    const auto& weights_mesh_tensor = weights.mesh_tensor();
+    const auto& output_mesh_tensor = output.mesh_tensor();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -30,14 +39,11 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
 
-    uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
     uint32_t output_element_size_bytes = output.element_size();
 
     // row major, page size is last dim
-    uint32_t input_page_size = a.logical_shape()[-1] * input_element_size_bytes;
     uint32_t weight_page_size = weights.padded_shape()[-1] * weights_element_size_bytes;
     uint32_t output_page_size = output.padded_shape()[-1] * output_element_size_bytes;
 
@@ -67,54 +73,115 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
 
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    // Create Buffers
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
+    tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
-    constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(2 * rounded_weight_page_size, {{src0_cb_index, weights_cb_data_format}})
-            .set_page_size(src0_cb_index, rounded_weight_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
-    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(FACE_HEIGHT * index_page_size, {{src1_cb_index, input_cb_data_format}})
-            .set_page_size(src1_cb_index, FACE_HEIGHT * index_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
+    // per token; the other embeddings types have no such rows, so the cache is absent for them.
+    const bool use_local_cache = embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY;
 
-    constexpr uint32_t src2_cb_index = tt::CBIndex::c_2;
-    if (embeddings_type == EmbeddingsType::PADDED) {
+    // -----------------------------------------------------------------------
+    // Resource names
+    // -----------------------------------------------------------------------
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+
+    const DFBSpecName OUTPUT{"output"};
+    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
+    const DFBSpecName WEIGHT_CACHE{"weight_cache"};
+
+    const TensorParamName INPUT_PARAM{"input"};
+    const TensorParamName WEIGHTS_PARAM{"weights"};
+    const TensorParamName OUTPUT_PARAM{"output"};
+
+    ProgramSpec spec;
+    spec.name = "embeddings_tilized_indices";
+
+    // -----------------------------------------------------------------------
+    // Dataflow buffers
+    //
+    // num_entries is the number of pages the legacy circular buffer held: its total size divided by
+    // its page size.
+    //
+    // One buffer serves as both the reader's weight-staging area and the writer's output buffer, which
+    // is what makes the two kernels a genuine producer/consumer pair over it.
+    // -----------------------------------------------------------------------
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OUTPUT,
+        .entry_size = rounded_weight_page_size,
+        .num_entries = 2,
+        .data_format_metadata = weights_data_format,
+    });
+
+    // The reader loads one full input page of indices (`input.get_aligned_page_size()`) into this scratch buffer,
+    // then decodes faces via face_offset. Size it to the input's aligned page size to avoid Watcher NOC sanitize overflows.
+    uint32_t index_tile_page_size = a.buffer()->aligned_page_size();
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = INDEX_SCRATCH,
+        .entry_size = index_tile_page_size,
+        .num_entries = 1,
+        .data_format_metadata = input_data_format,
+    });
+
+    if (use_local_cache) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt::tt_metal::CircularBufferConfig cb_src2_config =
-            tt::tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
-                .set_page_size(src2_cb_index, cache_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
-    } else if (embeddings_type == EmbeddingsType::BINARY) {
-        uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt::tt_metal::CircularBufferConfig cb_src2_config =
-            tt::tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
-                .set_page_size(src2_cb_index, cache_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        // PADDED caches the single pad row; BINARY caches rows 0 and 1.
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WEIGHT_CACHE,
+            .entry_size = cache_page_size,
+            .num_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u,
+            .data_format_metadata = weights_data_format,
+        });
     }
 
-    uint32_t output_cb_index = src0_cb_index;
+    // -----------------------------------------------------------------------
+    // Tensor parameters
+    // -----------------------------------------------------------------------
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = INPUT_PARAM, .spec = input_mesh_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = WEIGHTS_PARAM, .spec = weights_mesh_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = OUTPUT_PARAM, .spec = output_mesh_tensor.tensor_spec()});
 
-    // Create Kernels
-    // reader
-    std::vector<uint32_t> embedding_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)src2_cb_index,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)weight_page_size,
-        (std::uint32_t)a.logical_shape()[-1],  // width/length of a row
-        (std::uint32_t)FACE_HEIGHT};
-    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
+    // -----------------------------------------------------------------------
+    // Reader
+    // -----------------------------------------------------------------------
+    Group<DFBBinding> reader_dfb_bindings;
+    reader_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = OUTPUT,
+        .accessor_name = "in0",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
+    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
+    reader_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = INDEX_SCRATCH,
+        .accessor_name = "in1",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    reader_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = INDEX_SCRATCH,
+        .accessor_name = "in1",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    });
+    if (use_local_cache) {
+        // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
+        // hand-off to another kernel.
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WEIGHT_CACHE,
+            .accessor_name = "local_cache",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WEIGHT_CACHE,
+            .accessor_name = "local_cache",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -123,49 +190,81 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    std::map<std::string, std::string> embedding_defines = {
-        {enchantum::to_string(embeddings_type).data(), "1"}, {enchantum::to_string(embeddings_index_type).data(), "1"}};
+    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
+    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
+    // where the host binds it, so the reader's reference to it is compiled out under the same defines
+    // on the builds where it is not.
+    KernelSpec::CompilerOptions::Defines embedding_defines{
+        {enchantum::to_string(embeddings_type).data(), "1"},
+        {enchantum::to_string(embeddings_index_type).data(), "1"},
+    };
 
     if (a.logical_shape()[-1] <= FACE_HEIGHT) {
-        embedding_defines["ONLY_ONE_FACE_COLUMN"] = "1";
+        embedding_defines.insert({"ONLY_ONE_FACE_COLUMN", "1"});
     }
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
-    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
+        .compiler_options = {.defines = std::move(embedding_defines)},
+        .dfb_bindings = std::move(reader_dfb_bindings),
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
+                TensorBinding{.tensor_parameter_name = WEIGHTS_PARAM, .accessor_name = "weights"},
+            },
+        .compile_time_args =
+            {
+                {"weight_stick_size", weight_page_size},
+                // width/length of a row
+                {"row_length", num_cols},
+            },
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"tile_offset", "face_offset", "num_rows", "curr_col", "starting_index"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    });
 
+    // -----------------------------------------------------------------------
     // Tilized writer
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    // -----------------------------------------------------------------------
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id_metal2.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT,
+                    .accessor_name = "out0",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "dst"},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"stick_size", "num_sticks", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    });
 
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "main",
+        .kernels = {READER, WRITER},
+        .target_nodes = all_cores,
+    });
+
+    // -----------------------------------------------------------------------
+    // Run args
+    // -----------------------------------------------------------------------
     uint32_t col_offset = 0;
     uint32_t weight_offset = 0;
 
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
-    std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-    };
-    if (embeddings_type == EmbeddingsType::PADDED) {
-        reader_runtime_args.push_back(pad_token.value());
-    }
-    std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
 
     uint32_t row = 0;
     uint32_t tiles_per_tile_row = (num_cols + TILE_HEIGHT - 1) / TILE_HEIGHT;
+
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -180,60 +279,34 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
         uint32_t curr_tile = ((row / TILE_HEIGHT) * tiles_per_tile_row) + (col_offset / TILE_HEIGHT);
 
         // Reader
-        {
-            reader_runtime_args[2] = curr_tile;
-            reader_runtime_args[3] = face_offset;
-            reader_runtime_args[4] = local_num_blocks;
-            reader_runtime_args[5] = col_offset;
-            reader_runtime_args[6] = (col_offset % FACE_HEIGHT);  // starting col in the face row
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        }
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"tile_offset", curr_tile},
+             {"face_offset", face_offset},
+             {"num_rows", local_num_blocks},
+             {"curr_col", col_offset},
+             // starting col in the face row; under PADDED the reader also hands this value to its
+             // local weight cache as the pad token
+             {"starting_index", static_cast<uint32_t>(col_offset % FACE_HEIGHT)}});
 
         // Writer
-        {
-            writer_runtime_args[2] = local_num_blocks;
-            writer_runtime_args[3] = weight_offset;
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
-        }
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"stick_size", output_page_size}, {"num_sticks", local_num_blocks}, {"start_id", weight_offset}});
 
         weight_offset += local_num_blocks;
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = cores}};
-}
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.tensor_args.emplace(INPUT_PARAM, input_mesh_tensor);
+    run_args.tensor_args.emplace(WEIGHTS_PARAM, weights_mesh_tensor);
+    run_args.tensor_args.emplace(OUTPUT_PARAM, output_mesh_tensor);
 
-void EmbeddingsTilizedIndicesProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const EmbeddingParams& /*operation_attributes*/,
-    const EmbeddingInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared_variables = cached_program.shared_variables;
-    const auto& reader_kernel_id = shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = shared_variables.writer_kernel_id;
-    const auto& cores = shared_variables.cores;
-
-    auto output_buffer_address = tensor_return_value.buffer()->address();
-    auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
-    auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();
-
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-
-    for (const auto& core : cores) {
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[0] = input_buffer_address;
-            runtime_args[1] = weights_buffer_address;
-        }
-
-        {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[0] = output_buffer_address;
-        }
-    }
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

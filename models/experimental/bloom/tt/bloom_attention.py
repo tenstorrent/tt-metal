@@ -13,7 +13,7 @@ from tt_lib.fused_ops.softmax import softmax as tt_softmax
 
 import models.experimental.bloom.tt.baddbmm as baddbmm
 from typing import Tuple
-from models.common.utility_functions import pad_by_zero
+from models.common.utility_functions import torch2tt_tensor
 
 
 def split_heads(fused_qkv: torch.Tensor, num_heads, head_dim) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -214,11 +214,11 @@ class TtBloomAttention(torch.nn.Module):
                 f" {self.num_heads})."
             )
 
-        self.weight_q = pad_by_zero(state_dict[f"{base_address}.query_key_value.weight"], device)[0]
-        self.bias_q = pad_by_zero(state_dict[f"{base_address}.query_key_value.bias"], device)[0]
+        self.weight_q = torch2tt_tensor(state_dict[f"{base_address}.query_key_value.weight"], device)
+        self.bias_q = torch2tt_tensor(state_dict[f"{base_address}.query_key_value.bias"], device)
 
-        self.weight_d = pad_by_zero(state_dict[f"{base_address}.dense.weight"], device)[0]
-        self.bias_d = pad_by_zero(state_dict[f"{base_address}.dense.bias"], device)[0]
+        self.weight_d = torch2tt_tensor(state_dict[f"{base_address}.dense.weight"], device)
+        self.bias_d = torch2tt_tensor(state_dict[f"{base_address}.dense.bias"], device)
 
         # Transpose the weights
         self.weight_q = ttnn.transpose(self.weight_q, -2, -1)

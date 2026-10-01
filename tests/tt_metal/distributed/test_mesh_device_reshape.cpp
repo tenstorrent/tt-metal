@@ -34,7 +34,7 @@ using ::testing::ElementsAre;
 using ::testing::SizeIs;
 
 std::vector<MeshShape> get_mesh_shapes() {
-    static tt::stl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{
+    static ttsl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{
         MeshShape{1, 1}, MeshShape{1, 2}, MeshShape{1, 3}, MeshShape{1, 4}, MeshShape{1, 5}, MeshShape{1, 6},
         MeshShape{1, 7}, MeshShape{1, 8}, MeshShape{2, 1}, MeshShape{2, 2}, MeshShape{2, 3}, MeshShape{2, 4},
         MeshShape{3, 1}, MeshShape{3, 2}, MeshShape{4, 1}, MeshShape{4, 2}, MeshShape{8, 1}, MeshShape{7, 1},
@@ -118,13 +118,16 @@ public:
 
 TEST_F(MeshDevice1x8ReshapeTest, InvalidRequestedShape) {
     auto& system_mesh = tt::tt_metal::MetalContext::instance().get_system_mesh();
+    const auto& system_shape = system_mesh.shape();
+    ASSERT_EQ(system_shape.dims(), 2);
 
     // Shape too big.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(9)));
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 5)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(system_shape.mesh_size() + 1)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(system_shape[0] + 1, system_shape[1])));
 
     // Invalid offset.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1, 1)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(
+        MeshShape(2, 2), /*offset=*/MeshCoordinate(system_shape[0] - 1, system_shape[1] - 1)));
 
     // Offset dimensionality mismatch.
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1)));

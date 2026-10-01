@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <tt_metal_profiler.hpp>
+#include "tracy_debug_zones.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt_metal/impl/profiler/profiler_state.hpp>

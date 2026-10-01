@@ -11,13 +11,17 @@
 
 #include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 namespace tt::tt_metal {
+
+class MetalContext;
+
 class DeviceCommandCalculator {
 public:
+    explicit DeviceCommandCalculator(MetalContext& ctx);
+
     uint32_t write_offset_bytes() const { return this->cmd_write_offsetB; }
 
     void add_dispatch_wait() {
@@ -118,6 +122,18 @@ public:
     void add_dispatch_set_num_worker_sems() {
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_dispatch_rt_profiler_flush() {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_dispatch_set_sub_device_worker_counts(uint32_t num_sub_devices) {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd) + num_sub_devices * sizeof(uint32_t);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
@@ -335,8 +351,7 @@ public:
 private:
     void add_prefetch_relay_inline() { this->cmd_write_offsetB += sizeof(CQPrefetchCmd); }
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t pcie_alignment = 0;
+    uint32_t l1_alignment = 0;
 };
 }  // namespace tt::tt_metal

@@ -38,7 +38,8 @@ Hal::Hal(
     uint32_t profiler_dram_bank_size_per_risc_bytes,
     bool enable_dram_backed_cq,
     bool is_simulator,
-    bool enable_blackhole_dram_programmable_cores) :
+    bool enable_blackhole_dram_programmable_cores,
+    bool enable_aerisc_ptp_trace) :
     arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0:
@@ -53,7 +54,8 @@ Hal::Hal(
                 profiler_dram_bank_size_per_risc_bytes,
                 enable_dram_backed_cq,
                 is_simulator,
-                enable_blackhole_dram_programmable_cores);
+                enable_blackhole_dram_programmable_cores,
+                enable_aerisc_ptp_trace);
             break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;
@@ -63,6 +65,63 @@ Hal::Hal(
 uint64_t Hal::get_pcie_addr_lower_bound() const { return pcie_addr_lower_bound_; }
 
 uint64_t Hal::get_pcie_addr_upper_bound() const { return pcie_addr_upper_bound_; }
+
+HalCoreInfoType create_unregistered_programmable_core(
+    HalProgrammableCoreType programmable_core_type, const HalCoreInfoType& factory_source) {
+    std::vector<DeviceAddr> mem_map_bases(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
+    std::vector<uint32_t> mem_map_sizes(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
+    std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
+    return HalCoreInfoType(
+        programmable_core_type,
+        CoreType::WORKER,
+        {},
+        {},
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
+        std::move(fw_mailbox_addr),
+        {},
+        false,
+        false,
+        false,
+        factory_source.get_dev_msgs_factory(),
+        factory_source.get_fabric_telemetry_factory(),
+        factory_source.get_realtime_profiler_msgs_factory());
+}
+
+void ensure_hal_core_info_slots(std::vector<HalCoreInfoType>& core_info, const HalCoreInfoType& factory_source) {
+    while (core_info.size() < static_cast<std::size_t>(HalProgrammableCoreType::COUNT)) {
+        const auto slot = static_cast<HalProgrammableCoreType>(core_info.size());
+        core_info.push_back(create_unregistered_programmable_core(slot, factory_source));
+    }
+}
+
+void assert_kernel_config_no_overlap(
+    const std::vector<DeviceAddr>& mem_map_bases,
+    const std::vector<uint32_t>& mem_map_sizes,
+    HalL1MemAddrType free_region_type,
+    std::string_view core_name) {
+    assert_kernel_config_no_overlap(
+        mem_map_bases,
+        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)],
+        free_region_type,
+        core_name);
+}
+
+void assert_kernel_config_no_overlap(
+    const std::vector<DeviceAddr>& mem_map_bases,
+    uint32_t kernel_config_size,
+    HalL1MemAddrType free_region_type,
+    std::string_view core_name) {
+    const DeviceAddr kernel_config_base = mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)];
+    const DeviceAddr free_region_base = mem_map_bases[static_cast<std::size_t>(free_region_type)];
+    TT_FATAL(
+        free_region_base >= kernel_config_base + kernel_config_size,
+        "{} free region base {} overlaps KERNEL_CONFIG [{}, {})",
+        core_name,
+        free_region_base,
+        kernel_config_base,
+        kernel_config_base + kernel_config_size);
+}
 
 uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const {
     uint32_t index = static_cast<uint32_t>(programmable_core_type_index);

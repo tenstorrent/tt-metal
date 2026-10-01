@@ -9,6 +9,7 @@
 #include <optional>
 #include <vector>
 
+#include <tt_stl/optional_reference.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -56,7 +57,8 @@ void ReadShard(
     // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
     // Tracking removal of free function APIs in this file in this issue.
     auto* mesh_device = mesh_cq.device();
-    if (!mesh_device->is_local(coord)) {
+    auto devices = mesh_device->get_view().get_devices(MeshCoordinateRange(coord, coord));
+    if (devices.empty()) {
         return;
     }
 
@@ -104,10 +106,23 @@ void EventSynchronize(const MeshEvent& event);
 // Returns true if the CQ has completed recording the event, false otherwise.
 bool EventQuery(const MeshEvent& event);
 
+void Synchronize(
+    MeshDevice& device,
+    ttsl::optional_reference<MeshCommandQueue> mesh_cq,
+    ttsl::Span<const SubDeviceId> sub_device_ids = {});
+
+[[deprecated(
+    "Use MeshDevice::begin_mesh_trace(MeshCommandQueue&) instead. BeginTraceCapture(MeshDevice*, uint8_t) will be "
+    "removed after September 9th, 2026.")]]
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
-void Synchronize(
-    MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {});
+// Takes the device by pointer, so the reference-taking overload above is the only candidate for a MeshDevice lvalue
+// and this one the only candidate for a MeshDevice*. That keeps Synchronize(device, std::nullopt, ...) unambiguous
+// without any tie-breaking machinery.
+[[deprecated(
+    "Use Synchronize(MeshDevice&, ttsl::optional_reference<MeshCommandQueue>, ...) instead, passing std::nullopt for "
+    "all queues. Synchronize(MeshDevice*, std::optional<uint8_t>, ...) will be removed after September 9th, 2026.")]]
+void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 

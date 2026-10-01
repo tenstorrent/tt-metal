@@ -3,10 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 template <typename T>
 void read_mean_rstd(
-    uint32_t cb_id,
+    const Noc& noc,
+    DFBBindingToken dfb_token,
     uint32_t tile_offset,
     uint32_t normalized_dims,
     uint32_t outer_idx,
@@ -18,13 +24,14 @@ void read_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
-    const uint32_t cb_tile_bytes = get_tile_size(cb_id);
-    const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
+    DataflowBuffer dfb(dfb_token);
+    const uint32_t tile_bytes = dfb.get_tile_size();
+    const auto dtype_bytes = tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
-    cb_reserve_back(cb_id, onetile);
+    dfb.reserve_back(onetile);
 
-    uint32_t l1_write_addr = get_write_ptr(cb_id);
-    auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
+    uint32_t l1_write_addr = dfb.get_write_ptr();
+    CoreLocalMem<volatile uint16_t> l1_ptr(l1_write_addr);
     if (normalized_dims == 1) {
         for (uint32_t src_h = 0; src_h < 2; src_h++) {
             auto tile_idx = tile_offset + outer_idx;
@@ -43,14 +50,14 @@ void read_mean_rstd(
 
             auto src_idx = get_tilized_idx(0, src_h * FACE_WIDTH);
 
-            auto dst_noc_addr = get_noc_addr(noc_id, addrg);
+            noc.async_read(
+                addrg,
+                dfb,
+                dtype_bytes * FACE_HEIGHT,
+                {.page_id = noc_id, .offset_bytes = tilized_idx * dtype_bytes},
+                {.offset_bytes = src_idx * dtype_bytes});
 
-            noc_async_read(
-                dst_noc_addr + tilized_idx * cb_dtype_bytes,
-                l1_write_addr + src_idx * cb_dtype_bytes,
-                cb_dtype_bytes * FACE_HEIGHT);
-
-            noc_async_read_barrier();
+            noc.async_read_barrier();
         }
 
         // rotate data
@@ -73,74 +80,63 @@ void read_mean_rstd(
 
         auto noc_id = n * Ht * Wt + ht * Wt + wt;
 
-        auto dst_noc_addr = get_noc_addr(noc_id, addrg);
-        noc_async_read(
-            dst_noc_addr + tilized_idx * cb_dtype_bytes, l1_write_addr + tilized_idx * cb_dtype_bytes, cb_dtype_bytes);
+        noc.async_read(
+            addrg,
+            dfb,
+            dtype_bytes,
+            {.page_id = noc_id, .offset_bytes = tilized_idx * dtype_bytes},
+            {.offset_bytes = tilized_idx * dtype_bytes});
 
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         if (idx != 0) {
             l1_ptr[0] = l1_ptr[tilized_idx];
         }
     }
 
-    cb_push_back(cb_id, onetile);
+    dfb.push_back(onetile);
 }
 
 void kernel_main() {
     using namespace tt::constants;
-    const auto output_grad_addr = get_arg_val<uint32_t>(0);
-    const auto input_addr = get_arg_val<uint32_t>(1);
-    const auto mean_addr = get_arg_val<uint32_t>(2);
-    const auto rstd_addr = get_arg_val<uint32_t>(3);
-    const auto gamma_addr = get_arg_val<uint32_t>(4);
-    const auto num_rows_per_core = get_arg_val<uint32_t>(5);
-    const auto num_inner = get_arg_val<uint32_t>(6);
-    const auto tile_offset = get_arg_val<uint32_t>(7);
-    const auto n = get_arg_val<uint32_t>(8);
-    const auto recip_n = get_arg_val<uint32_t>(9);
-    const auto mask_h = get_arg_val<uint32_t>(10);
-    const auto mask_w = get_arg_val<uint32_t>(11);
-    const auto normalized_dims = get_arg_val<uint32_t>(12);
-    const auto mean_rstd_height = get_arg_val<uint32_t>(13);
-    const auto mean_rstd_width = get_arg_val<uint32_t>(14);
+    const auto num_rows_per_core = get_arg(args::num_rows_per_core);
+    const auto num_inner = get_arg(args::num_inner);
+    const auto tile_offset = get_arg(args::tile_offset);
+    const auto n = get_arg(args::n);
+    const auto recip_n = get_arg(args::recip_n);
+    const auto mask_h = get_arg(args::mask_h);
+    const auto mask_w = get_arg(args::mask_w);
+    const auto normalized_dims = get_arg(args::normalized_dims);
+    const auto mean_rstd_height = get_arg(args::mean_rstd_height);
+    const auto mean_rstd_width = get_arg(args::mean_rstd_width);
 
-    constexpr uint32_t cb_id_output_grad = 0;
-    constexpr uint32_t cb_id_input = 1;
-    constexpr uint32_t cb_id_mean = 2;
-    constexpr uint32_t cb_id_rstd = 3;
-    constexpr uint32_t cb_id_scaler = 4;
-    constexpr uint32_t cb_id_n_recip_n = 5;
-    constexpr uint32_t cb_id_gamma = 6;
-    constexpr uint32_t cb_id_mask_h_w = 7;
+    // GAMMA_HAS_VALUE / DO_MASK_H / DO_MASK_W arrive as preprocessor defines rather than as
+    // arguments, because each selects whether the host binds a resource; a name the host did not bind
+    // does not exist in this build, and even a discarded `if constexpr` branch would still look it up.
 
-    constexpr bool gamma_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr bool do_mask_h = get_compile_time_arg_val(1) == 1;
-    constexpr bool do_mask_w = get_compile_time_arg_val(2) == 1;
-    constexpr auto output_grad_args = TensorAccessorArgs<3>();
-    constexpr auto input_args = TensorAccessorArgs<output_grad_args.next_compile_time_args_offset()>();
-    constexpr auto mean_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
-    constexpr auto gamma_args = TensorAccessorArgs<rstd_args.next_compile_time_args_offset()>();
+    const auto output_grad_addrg = TensorAccessor(tensor::output_grad);
+    const auto input_addrg = TensorAccessor(tensor::input);
+    const auto mean_addrg = TensorAccessor(tensor::mean);
+    const auto rstd_addrg = TensorAccessor(tensor::rstd);
 
-    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
-    const auto input_addrg = TensorAccessor(input_args, input_addr);
-    const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
-    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
-
-    const auto gamma_addrg = TensorAccessor(gamma_args, gamma_addr);
+#ifdef GAMMA_HAS_VALUE
+    const auto gamma_addrg = TensorAccessor(tensor::gamma);
+#endif
 
     union {
         float f;
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    fill_cb_with_value(cb_id_scaler, scaler.u);
-    fill_cb_with_value(cb_id_n_recip_n, n);
-    fill_cb_with_value(cb_id_n_recip_n, recip_n);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+    DataflowBuffer dfb_n_recip_n(dfb::n_recip_n);
+    fill_cb_with_value(dfb_scaler, scaler.u);
+    fill_cb_with_value(dfb_n_recip_n, n);
+    fill_cb_with_value(dfb_n_recip_n, recip_n);
 
-    if (do_mask_h || do_mask_w) {
-        generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);
-    }
+#if defined(DO_MASK_H) || defined(DO_MASK_W)
+    DataflowBuffer dfb_mask_h_w(dfb::mask_h_w);
+    generate_mask_h_w(dfb_mask_h_w, mask_h, mask_w);
+#endif
 
     uint32_t offs = 0;
     constexpr uint32_t onetile = 1;
@@ -148,12 +144,23 @@ void kernel_main() {
     auto mean_rstd_Ht = (mean_rstd_height + TILE_HEIGHT - 1) / TILE_HEIGHT;
     auto mean_rstd_Wt = (mean_rstd_width + TILE_WIDTH - 1) / TILE_WIDTH;
 
+    Noc noc;
+    DataflowBuffer dfb_output_grad(dfb::output_grad);
+    DataflowBuffer dfb_input(dfb::input);
+    const auto output_grad_tile_bytes = dfb_output_grad.get_tile_size();
+    const auto input_tile_bytes = dfb_input.get_tile_size();
+#ifdef GAMMA_HAS_VALUE
+    DataflowBuffer dfb_gamma(dfb::gamma);
+    const auto gamma_tile_bytes = dfb_gamma.get_tile_size();
+#endif
+
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
         uint32_t mean_rstd_tile_offset = tile_offset / num_inner;
 
         // mean
         read_mean_rstd(
-            cb_id_mean,
+            noc,
+            dfb::mean,
             mean_rstd_tile_offset,
             normalized_dims,
             outer_idx,
@@ -165,7 +172,8 @@ void kernel_main() {
 
         // rstd
         read_mean_rstd(
-            cb_id_rstd,
+            noc,
+            dfb::rstd,
             mean_rstd_tile_offset,
             normalized_dims,
             outer_idx,
@@ -176,30 +184,37 @@ void kernel_main() {
             rstd_addrg);
 
         // input (N, C, H, W)
-        const uint32_t input_l1_write_ptr = get_write_ptr(cb_id_input);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
-            cb_reserve_back(cb_id_input, onetile);
-            noc_async_read_tile(offs + inner_idx + tile_offset, input_addrg, input_l1_write_ptr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_input, onetile);
+            dfb_input.reserve_back(onetile);
+            noc.async_read(
+                input_addrg,
+                dfb_input,
+                input_tile_bytes,
+                {.page_id = offs + inner_idx + tile_offset},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            dfb_input.push_back(onetile);
         }  // inner_idx loop
 
         // output_grad (N, C, H, W)
-        const uint32_t output_grad_l1_write_ptr = get_write_ptr(cb_id_output_grad);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
-            cb_reserve_back(cb_id_output_grad, onetile);
-            noc_async_read_tile(offs + inner_idx + tile_offset, output_grad_addrg, output_grad_l1_write_ptr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_output_grad, onetile);
+            dfb_output_grad.reserve_back(onetile);
+            noc.async_read(
+                output_grad_addrg,
+                dfb_output_grad,
+                output_grad_tile_bytes,
+                {.page_id = offs + inner_idx + tile_offset},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            dfb_output_grad.push_back(onetile);
 
-            if (gamma_has_value) {
-                // gamma (1, 1, 1, W)
-                const uint32_t gamma_l1_write_ptr = get_write_ptr(cb_id_gamma);
-                cb_reserve_back(cb_id_gamma, onetile);
-                noc_async_read_tile(inner_idx, gamma_addrg, gamma_l1_write_ptr);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_gamma, onetile);
-            }  // gamma_has_value
+#ifdef GAMMA_HAS_VALUE
+            // gamma (1, 1, 1, W)
+            dfb_gamma.reserve_back(onetile);
+            noc.async_read(gamma_addrg, dfb_gamma, gamma_tile_bytes, {.page_id = inner_idx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            dfb_gamma.push_back(onetile);
+#endif  // GAMMA_HAS_VALUE
 
         }  // num_inner loop
 

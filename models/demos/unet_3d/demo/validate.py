@@ -14,6 +14,7 @@ from models.demos.unet_3d.demo.utils import configure_logging
 from models.demos.unet_3d.runner.performant_runner import UNet3DRunner
 from models.demos.unet_3d.torch_impl.model import UNet3DTch
 from models.demos.unet_3d.ttnn_impl.model import UNet3D
+from models.demos.utils.trace_region_sizes import build_trace_device_params
 
 logger = configure_logging()
 
@@ -71,12 +72,13 @@ def print_metrics(metrics) -> None:
 
 def get_device():
     num_devices = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+    trace_params = build_trace_device_params("unet-3d")
     return ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, num_devices),
         dispatch_core_config=ttnn.device.DispatchCoreConfig(),
         l1_small_size=2048,
-        trace_region_size=679936,
         num_command_queues=2,
+        **trace_params,
     )
 
 

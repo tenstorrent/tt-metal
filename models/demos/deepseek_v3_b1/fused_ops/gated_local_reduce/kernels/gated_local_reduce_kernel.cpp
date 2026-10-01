@@ -73,9 +73,9 @@ void kernel_main() {
         cb_reserve_back(out_cb, 1);
 
         // Initialize and perform multiplication
-        binary_op_init_common(intermed_cb, intermed_cb, out_cb);
+        compute_kernel_hw_startup(intermed_cb, intermed_cb, out_cb);
         tile_regs_acquire();
-        mul_tiles_init(intermed_cb, intermed_cb);
+        mul_init(intermed_cb, intermed_cb);
         mul_tiles(intermed_cb, intermed_cb, 0, 1, 0);
 
         // Commit and wait

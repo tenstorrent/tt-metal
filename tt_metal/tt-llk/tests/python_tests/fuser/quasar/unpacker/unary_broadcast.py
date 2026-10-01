@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import List
+
+from fuser.base_unpacker import Unpacker
+from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
+from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.unary_broadcast import unpack_unary_broadcast_golden
+from fuser.indexing import InvocationGranularity
+from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource, bfd_current
+from helpers.llk_params import BroadcastType
+
+
+class UnaryBroadcastUnpacker(Unpacker):
+    granularity = InvocationGranularity.TILE
+
+    golden_fn = staticmethod(unpack_unary_broadcast_golden)
+
+    def _srcb_dvalids_per_tile(self, compute_unit: FpuNode) -> int:
+        if compute_unit.broadcast_type == BroadcastType.Scalar:
+            return 1
+        return compute_unit.src_a.tile_shape.total_num_faces()
+
+    def perf_set_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        count = self._srcb_dvalids_per_tile(compute_unit)
+        return f"_perf_unpack_loop_set_valid<false, true>({count});\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        count = self._srcb_dvalids_per_tile(compute_unit)
+        return f"_perf_math_loop_clear_valid<false, true>({count});\n"
+
+    def get_headers(self) -> List[str]:
+        return [
+            "llk_unpack_common.h",
+            "llk_unpack_unary_broadcast_operands.h",
+        ]
+
+    def init(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+        en_32bit_dest = config.dest_acc.cpp_enum_value
+        return (
+            compute_unit.src_a.bfd_alloc_and_program(BfdResource.UNP1)
+            + f"_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, {broadcast_type}, {en_32bit_dest}, false>"
+            f"({bfd_current(BfdResource.UNP1)}, 1);\n"
+        )
+
+    def unpack(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        return (
+            f"_llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B, false>"
+            f"({block.tile_id_src_a});\n"
+        )
+
+    def uninit(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        return ""

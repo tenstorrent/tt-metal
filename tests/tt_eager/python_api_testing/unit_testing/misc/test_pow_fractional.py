@@ -32,7 +32,7 @@ def test_pow_fractional_composite(device):
     y = 3 + torch.randn(1, 1, 1, 1).bfloat16().float()
     yt = y
     yt_floor = math.floor(yt)
-    yt_trunc = yt - yt_floor
+    yt_trunc = (yt - yt_floor).item()
     pow_trunc_log = ttnn.multiply(ttnn.log(xt, fast_and_approximate_mode=True), yt_trunc)
     pow_frac = ttnn.exp(pow_trunc_log)
     xtt = ttnn.mul(ttnn.pow(xt, yt_floor), pow_frac)

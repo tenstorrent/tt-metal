@@ -5,27 +5,13 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
 struct ReshapeViewRMProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id{};
-        tt::tt_metal::KernelHandle reader_kernel_id2{};
-        bool can_use_dual_kernel{};
-        uint32_t num_cores_x{};
-        uint32_t num_cores_y{};
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const ReshapeViewParams& operation_attributes,
-        const ReshapeViewInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ReshapeViewParams& operation_attributes,
         const ReshapeViewInputs& tensor_args,
         Tensor& tensor_return_value);

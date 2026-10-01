@@ -5,6 +5,8 @@
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 
+#include <utility>
+
 namespace tt::tt_metal {
 
 BufferType from_flatbuffer(flatbuffer::BufferType type) {
@@ -59,6 +61,19 @@ CircularBufferConfig from_flatbuffer(
         }
     }
 
+    std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS> unpack_face_geometry = {};
+    if (config_fb->unpack_face_geometry()) {
+        for (const auto* entry : *config_fb->unpack_face_geometry()) {
+            const auto index = entry->index();
+            TT_FATAL(
+                index < NUM_CIRCULAR_BUFFERS,
+                "Invalid unpack face geometry index {} from flatbuffer. Expected index < {}",
+                index,
+                NUM_CIRCULAR_BUFFERS);
+            unpack_face_geometry[index] = FaceGeometry{entry->face_r_dim(), entry->num_faces()};
+        }
+    }
+
     // Convert FlatBuffer vector to unordered_set of uint8_t
     auto create_uint8_set = [](auto* fb_vector) {
         std::unordered_set<uint8_t> result;
@@ -75,6 +90,7 @@ CircularBufferConfig from_flatbuffer(
         data_formats,
         page_sizes,
         tiles,
+        unpack_face_geometry,
         create_uint8_set(config_fb->buffer_indices()),
         create_uint8_set(config_fb->local_buffer_indices()),
         create_uint8_set(config_fb->remote_buffer_indices()),
@@ -127,9 +143,9 @@ std::optional<BufferDistributionSpec> from_flatbuffer(const flatbuffer::BufferDi
     }
 
     return BufferDistributionSpec(
-        Shape(tt::stl::SmallVector<uint32_t>(
+        Shape(ttsl::SmallVector<uint32_t>(
             fb_dist_spec->tensor_shape_in_pages()->cbegin(), fb_dist_spec->tensor_shape_in_pages()->cend())),
-        Shape(tt::stl::SmallVector<uint32_t>(
+        Shape(ttsl::SmallVector<uint32_t>(
             fb_dist_spec->shard_shape_in_pages()->cbegin(), fb_dist_spec->shard_shape_in_pages()->cend())),
         std::move(cores));
 }

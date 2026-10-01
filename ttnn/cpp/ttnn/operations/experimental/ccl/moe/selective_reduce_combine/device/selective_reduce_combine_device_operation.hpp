@@ -22,7 +22,7 @@ struct SelectiveReduceCombineDeviceOperation {
     using operation_attributes_t = SelectiveReduceCombineParams;
     using tensor_args_t = SelectiveReduceCombineTensors;
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     using tensor_return_value_t = ttnn::Tensor;
 
@@ -51,8 +51,7 @@ ttnn::Tensor selective_reduce_combine(
     uint32_t batch_size,
     uint32_t seq_size,
     uint32_t select_experts_k,
-    uint32_t experts,
-    const std::optional<uint32_t>& cluster_axis,
+    uint32_t cluster_axis,
     tt::tt_fabric::Topology topology,
     uint32_t num_links,
     uint32_t num_token_parallel_cores,

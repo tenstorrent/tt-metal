@@ -10,6 +10,7 @@
 #include <sub_device_types.hpp>
 #include <tt_align.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -24,11 +25,12 @@
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include "vector_aligned.hpp"
+#include "impl/dispatch/vector_aligned.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
@@ -46,8 +48,7 @@ static_assert(
 
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
-SubDeviceManager::SubDeviceManager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
+SubDeviceManager::SubDeviceManager(ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++), sub_devices_(sub_devices.begin(), sub_devices.end()), device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     context_id_ = extract_context_id(device);
@@ -61,7 +62,7 @@ SubDeviceManager::SubDeviceManager(
 }
 
 SubDeviceManager::SubDeviceManager(
-    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, ttsl::Span<const SubDevice> sub_devices) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     device_(device),
@@ -150,6 +151,15 @@ std::shared_ptr<MeshTraceBuffer> SubDeviceManager::get_trace(const MeshTraceId& 
     return nullptr;
 }
 
+DeviceAddr SubDeviceManager::get_max_trace_high_water_mark() const {
+    DeviceAddr max_high_water_mark = 0;
+    for (const auto& trace_entry : trace_buffer_pool_) {
+        const auto& trace_buffer = trace_entry.second;
+        max_high_water_mark = std::max(max_high_water_mark, trace_buffer->dram_high_water_mark);
+    }
+    return max_high_water_mark;
+}
+
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {
         if (allocator && allocator->get_num_allocated_buffers() > 0) {
@@ -161,9 +171,11 @@ bool SubDeviceManager::has_allocations() const {
 
 DeviceAddr SubDeviceManager::local_l1_size() const { return local_l1_size_; }
 
+DeviceAddr SubDeviceManager::global_l1_bottom_reservation_size() const { return global_l1_bottom_reservation_size_; }
+
 const std::vector<SubDeviceId>& SubDeviceManager::get_sub_device_stall_group() const { return sub_device_stall_group_; }
 
-void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void SubDeviceManager::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) {
     TT_FATAL(!sub_device_ids.empty(), "sub_device_ids to stall must not be empty");
     for (const auto& sub_device_id : sub_device_ids) {
         TT_FATAL(
@@ -196,10 +208,20 @@ void SubDeviceManager::validate_sub_devices() const {
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
+    const Hal& hal = MetalContext::instance(context_id_).hal();
 
     for (uint8_t sub_device_id = 0; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
         const auto& sub_device = this->sub_device(SubDeviceId(sub_device_id));
-        const auto& worker_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
+        // The HAL's core type slots can be sparse (e.g. Quasar has DISPATCH but a placeholder DRAM slot), so check
+        // each type rather than comparing against the slot count.
+        for (uint32_t i = 0; i < NumHalProgrammableCoreTypes; ++i) {
+            const auto core_type = static_cast<HalProgrammableCoreType>(i);
+            TT_FATAL(
+                sub_device.impl()->cores()[i].empty() || hal.has_programmable_core_type(core_type),
+                "CoreType {} is not allowed in SubDevice",
+                core_type);
+        }
+        const auto& worker_cores = sub_device.impl()->cores(HalProgrammableCoreType::TENSIX);
         TT_FATAL(
             device_worker_cores.contains(worker_cores),
             "Tensix cores {} specified in sub device must be within device grid {}",
@@ -207,7 +229,7 @@ void SubDeviceManager::validate_sub_devices() const {
             device_worker_cores);
 
         if (sub_device.impl()->has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
-            const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
+            const auto& eth_cores = sub_device.impl()->cores(HalProgrammableCoreType::ACTIVE_ETH);
             uint32_t num_eth_cores = 0;
             const auto& device_eth_cores = tt::tt_metal::MetalContext::instance(context_id_)
                                                .get_control_plane()
@@ -260,13 +282,14 @@ void SubDeviceManager::populate_sub_allocators() {
         return;
     }
     const auto& global_allocator_config = device_->allocator_impl()->get_config();
+    auto& persistent_l1 = device_->allocator_impl()->persistent_l1();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
     // PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     for (uint32_t i = 0; i < this->num_sub_devices(); ++i) {
-        const auto& compute_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX);
+        const auto& compute_cores = sub_devices_[i].impl()->cores(HalProgrammableCoreType::TENSIX);
         if (compute_cores.empty()) {
             continue;
         }
@@ -278,15 +301,31 @@ void SubDeviceManager::populate_sub_allocators() {
             // These are compute cores, so they should have a single bank
             l1_bank_remap.push_back(device_->allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0]);
         }
+        const DeviceAddr local_l1_base = tt::align(
+            persistent_l1.high_water_mark(compute_cores),
+            std::max(global_allocator_config.l1_alignment, global_allocator_config.dram_alignment));
+        global_l1_bottom_reservation_size_ = std::max(
+            global_l1_bottom_reservation_size_,
+            local_l1_base - global_allocator_config.l1_unreserved_base + local_l1_size_);
+        TT_FATAL(
+            local_l1_base + local_l1_size_ <=
+                global_allocator_config.worker_l1_size - global_allocator_config.l1_small_size,
+            "Sub-device {} local L1 region [{}, {}) exceeds allocatable worker L1 limit {} after persistent "
+            "allocations",
+            i,
+            local_l1_base,
+            local_l1_base + local_l1_size_,
+            global_allocator_config.worker_l1_size - global_allocator_config.l1_small_size);
+        persistent_l1_seals_.push_back(persistent_l1.seal(compute_cores));
         AllocatorConfig config(
             {.num_dram_channels = global_allocator_config.num_dram_channels,
              .dram_bank_size = 0,
              .dram_bank_offsets = global_allocator_config.dram_bank_offsets,
              .dram_unreserved_base = global_allocator_config.dram_unreserved_base,
              .dram_alignment = global_allocator_config.dram_alignment,
-             .l1_unreserved_base = global_allocator_config.l1_unreserved_base,
+             .l1_unreserved_base = static_cast<uint32_t>(local_l1_base),
              .worker_grid = compute_cores,
-             .worker_l1_size = global_allocator_config.l1_unreserved_base + local_l1_size_,
+             .worker_l1_size = static_cast<size_t>(local_l1_base + local_l1_size_),
              .l1_small_size = 0,
              .trace_region_size = 0,
              .core_type_from_noc_coord_table = {},  // Populated later
@@ -325,7 +364,7 @@ void SubDeviceManager::populate_noc_data() {
     NOC noc_index = MetalContext::instance(context_id_).get_dispatch_query_manager().go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        const auto& eth_cores = sub_devices_[i].cores(HalProgrammableCoreType::ACTIVE_ETH);
+        const auto& eth_cores = sub_devices_[i].impl()->cores(HalProgrammableCoreType::ACTIVE_ETH);
 
         has_noc_mcast_txns_[i] = sub_devices_[i].impl()->has_core_type(HalProgrammableCoreType::TENSIX);
 
@@ -355,7 +394,7 @@ void SubDeviceManager::populate_noc_data() {
     CoreRangeSet used_cores;
     for (size_t i = 0; i < num_sub_devices; ++i) {
         const auto& sub_device = sub_devices_[i];
-        const auto& tensix_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
+        const auto& tensix_cores = sub_device.impl()->cores(HalProgrammableCoreType::TENSIX);
         used_cores = used_cores.merge(tensix_cores);
         core_go_message_mapping_.emplace_back(tensix_cores, i);
     }

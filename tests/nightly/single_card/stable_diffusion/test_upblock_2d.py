@@ -1,1 +1,0 @@
-../../../../models/demos/vision/generative/stable_diffusion/wormhole/tests/test_upblock_2d.py

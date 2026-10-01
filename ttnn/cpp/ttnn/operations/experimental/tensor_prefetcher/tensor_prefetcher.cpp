@@ -1,0 +1,127 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "tensor_prefetcher.hpp"
+
+#include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/experimental/tensor_prefetcher.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh_device.hpp>
+
+namespace ttnn::operations::experimental {
+
+namespace metal_exp = tt::tt_metal::experimental;
+
+bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    return tt::tt_metal::experimental::IsTensorPrefetcherSupported(*mesh_device);
+}
+
+void start_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    std::optional<uint32_t> free_sender_mpfe_weight,
+    std::optional<uint32_t> noc1_sender_mpfe_weight,
+    std::optional<uint32_t> ordinary_mpfe_weight,
+    std::optional<bool> dynamic_mpfe_weighting) {
+    tt::tt_metal::experimental::TensorPrefetcherConfig config;
+    if (free_sender_mpfe_weight.has_value() || noc1_sender_mpfe_weight.has_value() ||
+        ordinary_mpfe_weight.has_value() || dynamic_mpfe_weighting.has_value()) {
+        tt::tt_metal::experimental::BlackholeTensorPrefetcherConfig blackhole_config;
+        blackhole_config.free_sender_mpfe_weight =
+            free_sender_mpfe_weight.value_or(blackhole_config.free_sender_mpfe_weight);
+        blackhole_config.noc1_sender_mpfe_weight =
+            noc1_sender_mpfe_weight.value_or(blackhole_config.noc1_sender_mpfe_weight);
+        blackhole_config.ordinary_mpfe_weight = ordinary_mpfe_weight.value_or(blackhole_config.ordinary_mpfe_weight);
+        blackhole_config.dynamic_mpfe_weighting =
+            dynamic_mpfe_weighting.value_or(blackhole_config.dynamic_mpfe_weighting);
+        config.blackhole = blackhole_config;
+    }
+    tt::tt_metal::experimental::StartTensorPrefetcher(*mesh_device, config);
+}
+
+void queue_tensor_prefetcher_request(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const std::vector<TensorPrefetcherQueueTensor>& tensors,
+    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>>& prefetcher_pipes,
+    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
+    bool capture_into_trace) {
+    const bool has_gcb = global_cb.has_value();
+    const bool has_pipes = !prefetcher_pipes.empty();
+    TT_FATAL(
+        has_gcb != has_pipes,
+        "queue_tensor_prefetcher_request needs exactly one delivery target: global_cb {} supplied, "
+        "prefetcher_pipes {} supplied",
+        has_gcb ? "was" : "was not",
+        has_pipes ? "was" : "was not");
+
+    std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
+    inputs.reserve(tensors.size());
+    for (const auto& item : tensors) {
+        // (tensor, block_count) defaults to batched (empty rotation); (tensor, block_count,
+        // rotation) supplies the per-receiver streaming rotation table for that tensor.
+        if (const auto* pair = std::get_if<std::pair<ttnn::Tensor, uint32_t>>(&item)) {
+            inputs.push_back({pair->first.mesh_tensor(), pair->second, /*rotation=*/{}});
+        } else {
+            const auto& [tensor, block_count, rotation] =
+                std::get<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>(item);
+            inputs.push_back({tensor.mesh_tensor(), block_count, rotation});
+        }
+    }
+    // There is no cq_id parameter to consult: a `cq_id`/`queue_id` keyword is consumed by
+    // ttnn's operation wrapper before this function runs, and applied by making that queue
+    // the thread's current one. So the knob left here is whether to consider a queue at all
+    // — with capture_into_trace false we hand metal no queue, and the request is sent
+    // immediately even mid trace-capture.
+    auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
+    if (has_pipes) {
+        tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
+            *mesh_device, prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
+    } else {
+        tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
+            *mesh_device, *global_cb, device_subset, inputs, trace_cq);
+    }
+}
+
+std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(
+    metal_exp::PrefetcherPipeSpace& space,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    bool support_multi_receiver_shards) {
+    std::vector<metal_exp::PrefetcherPipe> pipes =
+        metal_exp::CreatePrefetcherPipesForTensorPrefetcher(space, bank_to_receivers, support_multi_receiver_shards);
+    std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> shared;
+    shared.reserve(pipes.size());
+    for (auto& pipe : pipes) {
+        shared.push_back(std::make_shared<metal_exp::PrefetcherPipe>(std::move(pipe)));
+    }
+    return shared;
+}
+
+std::vector<std::reference_wrapper<const metal_exp::PrefetcherPipe>> prefetcher_pipe_refs(
+    const std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>>& prefetcher_pipes) {
+    std::vector<std::reference_wrapper<const metal_exp::PrefetcherPipe>> refs;
+    refs.reserve(prefetcher_pipes.size());
+    for (const auto& pipe : prefetcher_pipes) {
+        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", refs.size());
+        refs.emplace_back(*pipe);
+    }
+    return refs;
+}
+
+void wait_for_cq_on_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    std::optional<uint8_t> cq_id,
+    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
+    // cq_id must stay optional, not `uint8_t = 0`: only the positional form reaches here as a
+    // value, since a keyword cq_id= is consumed by the wrapper and applied by making that
+    // queue current. Resolving nullopt to the thread's current queue is what makes the two
+    // forms agree; defaulting to 0 would silently fence queue 0 for the keyword form.
+    tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(mesh_device->mesh_command_queue(cq_id), device_subset);
+}
+
+void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    tt::tt_metal::experimental::StopTensorPrefetcher(*mesh_device);
+}
+
+}  // namespace ttnn::operations::experimental

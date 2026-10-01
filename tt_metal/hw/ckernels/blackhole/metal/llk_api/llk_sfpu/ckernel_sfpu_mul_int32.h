@@ -24,9 +24,9 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, offset_in0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in0);
         TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, 5); // lreg[1] = lreg[0] >> 23
-        TT_SFPLOAD(p_sfpu::LREG2, INT32, ADDR_MOD_7, offset_in1);
+        TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in1);
         TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG3, 5); // lreg[3] = lreg[2] >> 23
         TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0); // lreg[4] = lreg[0] * lreg[2] (low 23 bits)
         TTI_SFPMUL24(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG5, 1); // lreg[5] = lreg[0] * lreg[2] (high 23 bits)
@@ -36,7 +36,7 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[5] += lreg[7]
         TTI_SFPSHFT(23, p_sfpu::LREG5, p_sfpu::LREG5, 5); // lreg[5] <<= 23
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[4] += lreg[5]
-        TT_SFPSTORE(p_sfpu::LREG4, INT32, ADDR_MOD_6, offset_out);
+        TT_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_6, offset_out);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 8 cycles per input row.
@@ -85,21 +85,21 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         // e.g. SFPLOADMACRO((m << 2) | VDLo, ..., offset | VDHi).
 
         // Load b0
-        TT_SFPLOAD(b0, INT32, ADDR_MOD_7, offset_in1);
+        TT_SFPLOAD(b0, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in1);
         // Macro 0, VD=a1
-        TT_SFPLOADMACRO((0 << 2) | (a1 & 3), INT32, ADDR_MOD_7, offset_in0 | (a1 >> 2));
+        TT_SFPLOADMACRO((0 << 2) | (a1 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset_in0 | (a1 >> 2));
         // Macro 1, VD=b1
-        TT_SFPLOADMACRO((1 << 2) | (b1 & 3), INT32, ADDR_MOD_7, offset_in1 | (b1 >> 2));
+        TT_SFPLOADMACRO((1 << 2) | (b1 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset_in1 | (b1 >> 2));
         // Load a0
-        TT_SFPLOAD(a0, INT32, ADDR_MOD_7, offset_in0);
+        TT_SFPLOAD(a0, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in0);
         // Macro 2, VD=b2
-        TT_SFPLOADMACRO((2 << 2) | (b2 & 3), INT32, ADDR_MOD_7, offset_in1 | (b2 >> 2));
+        TT_SFPLOADMACRO((2 << 2) | (b2 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset_in1 | (b2 >> 2));
         // c = mul24_hi(a0, b2)
         TTI_SFPMUL24(a0, b2, p_sfpu::LCONST_0, c, sfpi::SFPMUL24_MOD1_UPPER);
         // b1 = b1 + a1
         TTI_SFPIADD(0, a1, b1, sfpi::SFPIADD_MOD1_CC_NONE);
         // Macro 3, VD=c
-        TT_SFPLOADMACRO((3 << 2) | (c & 3), INT32, ADDR_MOD_6, offset_out | (c >> 2));
+        TT_SFPLOADMACRO((3 << 2) | (c & 3), InstrModLoadStore::INT32, ADDR_MOD_6, offset_out | (c >> 2));
     }
     TTI_SFPNOP;
     TTI_SFPNOP;

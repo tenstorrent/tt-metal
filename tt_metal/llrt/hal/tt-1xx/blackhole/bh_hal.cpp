@@ -56,12 +56,21 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+// dispatch_s aggregates device_print buffers from all cores into this DRAM region:
+// [DRAM_ALIGNMENT bytes for {dram_write_ptr, dram_read_ptr}][1 MiB ring buffer payload].
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE = 1 << 20;  // 1 MiB
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_SIZE =
+    DRAM_ALIGNMENT + DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE;
+constexpr static std::uint32_t get_dram_device_print_dispatch_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
 }
 
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+    return get_dram_device_print_dispatch_base(dram_profiler_size) + DRAM_DEVICE_PRINT_DISPATCH_SIZE;
+}
+
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 
@@ -82,15 +91,27 @@ namespace tt::tt_metal {
 class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 private:
     bool enable_2_erisc_mode_;
+    bool enable_aerisc_ptp_trace_;
 
 public:
-    HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode) :
-        HalJitBuildQueryBase(hal), enable_2_erisc_mode_(enable_2_erisc_mode) {}
+    HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode, bool enable_aerisc_ptp_trace) :
+        HalJitBuildQueryBase(hal),
+        enable_2_erisc_mode_(enable_2_erisc_mode),
+        enable_aerisc_ptp_trace_(enable_aerisc_ptp_trace) {}
 
-    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
+    std::string linker_flags([[maybe_unused]] const Params& params) const override {
+        // Suppress LTO false positive on the device-print lock's atomic exchange.
+        // GCC's -Wstringop-overflow object-size analysis treats the fixed L1
+        // mailbox address backing the atomic as a size-0 object. Source-level
+        // #pragma diagnostic doesn't apply to LTO-emitted warnings, so the
+        // suppression has to live on the link command.
+        return "-Wno-stringop-overflow ";
+    }
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        // Upper bound: tmu-crt0.o, noc.o and substitutes.o.
+        objs.reserve(3);
         if (params.is_fw) {
             // Needed to setup gp, sp, etc. for all processors which are launched with assert/deassert PC method
             // For 2 erisc, erisc0 is launched from base firmware so it's not needed
@@ -114,6 +135,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        // Upper bound: 9 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(12);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
@@ -124,6 +147,7 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/blackhole/noc");
         includes.push_back("tt_metal/tt-llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_blackhole/llk_lib");
+        includes.push_back("tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
@@ -159,6 +183,9 @@ public:
                 defines.push_back("PHYSICAL_AERISC_ID=" + std::to_string(params.processor_id));
             } else {
                 defines.push_back("PHYSICAL_AERISC_ID=1");
+            }
+            if (enable_aerisc_ptp_trace_) {
+                defines.push_back("AERISC_PTP_TRACE_SUPPORTED");
             }
         }
         return defines;
@@ -218,6 +245,31 @@ public:
             cflags += "-mno-tt-fix-whbhebreak ";
         }
         return cflags;
+    }
+
+    std::string rvv_compile_flags(const Params& params) const override {
+        // Only the pack TRISC (TRISC2) fronts the Tensix vector unit on Blackhole.
+        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
+              params.processor_class == HalProcessorClassType::COMPUTE && params.processor_id == 2)) {
+            return {};
+        }
+        // -march is the exact ISA string -mcpu=tt-bh-tensix resolves to (per
+        // `riscv-tt-elf-g++ -mcpu=tt-bh-tensix -v`), plus _zve32f. Passed after -mcpu (recipe
+        // cflags are appended after common_flags), so it overrides the arch while keeping the
+        // tt-bh-tensix tuning.
+        //
+        // -fno-lto: emit a plain (non-LTO) object for this TU. With -flto the RVV builtins are
+        // streamed as GIMPLE and re-expanded by the link-stage LTRANS units, which do not carry
+        // the vector -march, breaking code generation at link time (observed with sfpi 7.70.0).
+        // The link itself stays stock: a fat-free object simply opts out of LTO.
+        //
+        // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reachable through
+        // explicit intrinsics; keep the auto-vectorizers from touching scalar kernel/LLK code.
+        //
+        // -Wno-error=array-bounds: RVV intrinsic loads/stores through casted L1 pointers trip
+        // -Warray-bounds false positives at -O3 under -Werror.
+        return "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f -fno-lto "
+               "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
     }
 
     std::string linker_script(const Params& params) const override {
@@ -280,7 +332,8 @@ void Hal::initialize_bh(
     std::uint32_t profiler_dram_bank_size_per_risc_bytes,
     bool enable_dram_backed_cq,
     bool is_simulator,
-    bool enable_blackhole_dram_programmable_cores) {
+    bool enable_blackhole_dram_programmable_cores,
+    bool enable_aerisc_ptp_trace) {
     using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -309,6 +362,10 @@ void Hal::initialize_bh(
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        get_dram_device_print_dispatch_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        DRAM_DEVICE_PRINT_DISPATCH_SIZE;
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
         get_dram_backed_command_queues_base(dram_profiler_size);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
@@ -368,9 +425,16 @@ void Hal::initialize_bh(
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
+            (addr == RISCV_DEBUG_REG_WALL_CLOCK_L ||
+             addr == RISCV_DEBUG_REG_WALL_CLOCK_H) ||                // read by the streaming profiler's clock sync
             (addr == IERISC_RESET_PC ||
-             addr == SUBORDINATE_IERISC_RESET_PC) ||  // used to program start addr for eth FW
-            (addr == DRISC_RESET_PC));                // used to program start addr for DRAM FW
+             addr == SUBORDINATE_IERISC_RESET_PC) ||                // used to program start addr for eth FW
+            (addr == DRISC_RESET_PC) ||                             // used to program start addr for DRAM FW
+            (addr == ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR) ||  // read for active-eth timeout debug
+            // ERISC interrupt registers, written by host to disable base FW interrupts
+            // before switching to runtime FW (see RiscFirmwareInitializer::disable_eth_interrupts).
+            ((addr >= ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR) &&
+             (addr < ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + 4 * ETH_RISC_NUM_INTERRUPT_VECS)));
     };
     // NOLINTEND(misc-redundant-expression)
 
@@ -404,6 +468,7 @@ void Hal::initialize_bh(
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER: return false;
             default: TT_THROW("Invalid Blackhole dispatch feature {}", static_cast<int>(feature));
         }
     };
@@ -413,6 +478,7 @@ void Hal::initialize_bh(
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
@@ -424,16 +490,20 @@ void Hal::initialize_bh(
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
     this->operand_start_stream_ = OPERAND_START_STREAM;
     this->has_stream_registers_ = true;
+    this->supports_fds_ = false;
     this->noc_topology_ = NoCTopologyType::TORUS;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
+    this->eth_interrupt_mode_base_reg_ = ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR;
+    this->eth_interrupt_num_vecs_ = ETH_RISC_NUM_INTERRUPT_VECS;
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
+    this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = false;
     this->supports_implicit_dfb_sync_ = false;
@@ -465,7 +535,8 @@ void Hal::initialize_bh(
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
 
-    this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(*this, enable_2_erisc_mode);
+    this->jit_build_query_ =
+        std::make_unique<HalJitBuildQueryBlackHole>(*this, enable_2_erisc_mode, enable_aerisc_ptp_trace);
 
     this->max_pinned_memory_count_ = std::numeric_limits<size_t>::max();
     this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();

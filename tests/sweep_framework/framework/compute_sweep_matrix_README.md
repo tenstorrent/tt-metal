@@ -14,7 +14,7 @@ Run type is determined by `SWEEP_NAME` (authoritative in CI) or, when absent, by
 | --------------- | ------------------------------- | ----------------- | -------------- |
 | Lead Models     | `ALL SWEEPS (Lead Models)`      | `0 2 * * *`       | `model_traced` |
 | Model Traced    | `ALL SWEEPS (Model Traced)`     | `0 3 * * *`       | `model_traced` |
-| Comprehensive   | `ALL SWEEPS (Comprehensive)`    | `0 4 * * 3,6`     | All suites     |
+| Comprehensive   | `ALL SWEEPS (Comprehensive)`    | *(dispatch only)* | All suites     |
 | Nightly         | `ALL SWEEPS (Nightly)`          | *(default)*       | `nightly`      |
 
 **Batch size**: 10 modules per batch for most run types; 3 for comprehensive or when device perf measurement is enabled.
@@ -27,15 +27,29 @@ Run type is determined by `SWEEP_NAME` (authoritative in CI) or, when absent, by
 
 ## Routing Policy
 
-All runner assignment logic lives in `matrix_runner_config.py`:
+Routing logic lives in `matrix_runner_config.py`; the physical runner labels
+(`runs_on`) live in `.github/sku_config.yaml`:
 
 - `TEST_GROUPS` — logical lane names and their associated runner profiles
-- `RUNNER_PROFILES` — physical runner properties (`runs_on`, `runner_label`, `arch`, `tt_smi_cmd`)
+- `RUNNER_PROFILES` — runner properties (`runner_label`, `arch`, `tt_smi_cmd`) plus an `sku` name. Sweeps uses the **existing** logical SKUs already defined in `.github/sku_config.yaml` (infra's abstraction layer); the actual `runs_on` label set is resolved from there by that SKU name — it is **not** stored here.
 - `LEAD_MODELS_MESH_TEST_GROUPS` / `MODEL_TRACED_MESH_TEST_GROUPS` — mesh shape → test group mappings
 - `LEAD_MODELS_BATCH_POLICY` — per-lane batch overrides for lead models
 - `HW_GROUP_MATRIX_KEYS` — which test groups belong to each per-hardware output bucket
 
-To change runner assignment for any run type, update `matrix_runner_config.py`.
+Per-job **timeouts** come from `tests/pipeline_reorg/ttnn_sweep_tests.yaml` keyed by
+`(target, sku)` (checked against `.github/time_budget.yaml` by `verify_time_budget.py`);
+`compute_sweep_matrix.py` stamps each matrix entry's `timeout` from there and the
+workflow enforces it at the GitHub job level (`timeout-minutes`). Because the batch
+count is dynamic, `compute_sweep_matrix.py` also sums each SKU's per-batch timeouts for
+the run being dispatched and **fails** if that sum exceeds the SKU's declared per-run
+budget — raise `skus.<sku>.timeout` (and the matching `.github/time_budget.yaml`
+`ttnn.sweep` entry) or lower the per-op ceilings.
+
+To change **which runner pool / labels** a lane lands on, point the profile at a
+different existing SKU (or ask infra to adjust that SKU) in `.github/sku_config.yaml` —
+sweeps does not define its own SKUs. To change **which profile a logical test group
+selects** (or any other routing logic), edit `matrix_runner_config.py`. To change a
+lane's **timeout budget**, edit `tests/pipeline_reorg/ttnn_sweep_tests.yaml`.
 
 ## Artifacts: `generation_manifest.json`
 
@@ -56,7 +70,7 @@ t3k-matrix={"include":[...]}
 galaxy-matrix={"include":[...]}
 ```
 
-Each `include` entry contains: `test_group_name`, `arch`, `runs_on`, `runner_label`, `tt_smi_cmd`, `module_selector`, `suite_name`, `batch_display`.
+Each `include` entry contains: `test_group_name`, `arch`, `sku`, `runs_on`, `runner_label`, `tt_smi_cmd`, `timeout`, `module_selector`, `suite_name`, `batch_display`.
 
 The workflow reads the per-hardware outputs (`n150-matrix`, etc.) to fan work out to the correct runner pools.
 
@@ -93,6 +107,9 @@ python3 tests/sweep_framework/framework/compute_sweep_matrix.py | python3 -m jso
 ## Related Files
 
 - `.github/workflows/ttnn-run-sweeps.yaml` — workflow that calls this script
-- `tests/sweep_framework/framework/matrix_runner_config.py` — all routing and runner policy
+- `tests/sweep_framework/framework/matrix_runner_config.py` — routing and runner-profile policy (SKU selection)
+- `.github/sku_config.yaml` — physical runner labels (`runs_on`) for the existing logical SKUs sweeps runs on (infra-owned)
+- `tests/pipeline_reorg/ttnn_sweep_tests.yaml` — per-`(target, sku)` job timeouts + ownership (single source of truth for the budget)
+- `.github/scripts/utils/verify_time_budget.py` — checks those timeouts against `.github/time_budget.yaml`
 - `tests/sweep_framework/sweeps_parameter_generator.py` — generates vector files and manifest
 - `tests/sweep_framework/framework/vector_source.py` — loads and filters vectors at runtime

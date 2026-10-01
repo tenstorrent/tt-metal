@@ -4,9 +4,18 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/scratchpad.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 // Define the sentinel value for a page table entry that indicates a skip.
 constexpr uint32_t SKIP_PAGE_TABLE_ENTRY = (uint32_t)-1;
+
+// Tile height in rows (Blackhole/Wormhole tiles are 32x32).
+constexpr uint32_t TILE_H = 32;
 
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
@@ -29,89 +38,230 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_page_table = get_compile_time_arg_val(1);
-    constexpr uint32_t num_heads = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_of_work_per_head = get_compile_time_arg_val(3);
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(4);
-    constexpr uint32_t Wt = get_compile_time_arg_val(5);
-    constexpr uint32_t log2_page_table_stick_size = get_compile_time_arg_val(6);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(7);
+    Noc noc;
 
-    // New compile-time args for optional batch_idx_tensor
-    constexpr bool use_batch_idx_tensor = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t cb_id_batch_idx = get_compile_time_arg_val(9);  // CB for reading from batch_idx_tensor
-    constexpr uint32_t batch_idx_stick_size =
-        get_compile_time_arg_val(10);  // Expected to be small (e.g., 4 for uint32)
+    constexpr auto num_heads = get_arg(args::num_heads);
+    constexpr auto num_blocks_of_work_per_head = get_arg(args::num_blocks_of_work_per_head);
+    constexpr auto block_size_t = get_arg(args::block_size_t);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto log2_page_table_stick_size = get_arg(args::log2_page_table_stick_size);
+    constexpr auto page_table_stick_size = get_arg(args::page_table_stick_size);
 
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t page_table_addr = get_arg_val<uint32_t>(1);
-    uint32_t start_row_num = get_arg_val<uint32_t>(2);
-    uint32_t num_rows = get_arg_val<uint32_t>(3);
-    // Arg 4 is either batch_idx_tensor_addr or batch_idx_fallback scalar
-    uint32_t batch_arg = get_arg_val<uint32_t>(4);
-    uint32_t noop = get_arg_val<uint32_t>(5);
+    // The optional batch_idx tensor holds `batch_idx_num_elements` entries:
+    //   1            -> single-batch (legacy) path; input_tensor.shape[0] == 1.
+    //   input_batch  -> batched path; one batch_idx per input batch row,
+    //                   selected per row via `num_blocks_per_batch`.
+    constexpr auto batch_idx_stick_size = get_arg(args::batch_idx_stick_size);  // per-element size, e.g. 4 for uint32
+    constexpr auto batch_idx_num_elements = get_arg(args::batch_idx_num_elements);
+    constexpr auto num_blocks_per_batch = get_arg(args::num_blocks_per_batch);  // num_heads * input_seq_len_t
+    constexpr auto capacity_t = get_arg(args::capacity_t);
+    // The optional valid_seq_len tensor holds the block-aligned real fill length (in tokens). It
+    // restricts the bounded ring window to end at valid_seq_len rather than the padded input end
+    // (see below).
+    constexpr auto valid_seq_len_stick_size = get_arg(args::valid_seq_len_stick_size);
+    constexpr bool batched_fill = batch_idx_num_elements > 1;
+
+    const auto start_row_num = get_arg(args::start_row_num);
+    const auto num_rows = get_arg(args::num_rows);
+    const auto noop = get_arg(args::noop);
 
     if (noop == 1) {
         return;  // Early exit, no work done
     }
 
-    constexpr auto s0_args = TensorAccessorArgs<11>();
-    constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
-    constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+    DataflowBuffer dfb_in(dfb::in);
+    // On Quasar the metadata buffers are node-local scratchpads (Gen2 forbids self-loop DFBs on DM
+    // kernels — the writer NoC-reads each stick and reads it straight back, never pushing). Elsewhere
+    // they stay self-loop DFBs. Same accessor names, so this selects scratch::… vs dfb::….
+#ifdef ARCH_QUASAR
+    Scratchpad<uint32_t> page_table_scratch(scratch::page_table);
+#ifdef USE_BATCH_IDX_TENSOR
+    Scratchpad<uint32_t> batch_idx_scratch(scratch::batch_idx);
+#endif
+#ifdef USE_VALID_SEQ_LEN
+    Scratchpad<uint32_t> valid_seq_len_scratch(scratch::valid_seq_len);
+#endif
+#else
+    DataflowBuffer dfb_page_table(dfb::page_table);
+#ifdef USE_BATCH_IDX_TENSOR
+    DataflowBuffer dfb_batch_idx(dfb::batch_idx);
+#endif
+#ifdef USE_VALID_SEQ_LEN
+    DataflowBuffer dfb_valid_seq_len(dfb::valid_seq_len);
+#endif
+#endif
 
-    uint32_t batch_idx;
-    if constexpr (use_batch_idx_tensor) {
-        uint32_t batch_idx_tensor_addr = batch_arg;  // Arg 4 is the address
-
-        const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr);
-        cb_reserve_back(cb_id_batch_idx, 1);  // Expecting 1 element (the batch_idx)
-        uint32_t batch_idx_cb_wr_ptr = get_write_ptr(cb_id_batch_idx);
-        uint64_t batch_idx_noc_addr = batch_idx_gen.get_noc_addr(0);
-        noc_async_read(batch_idx_noc_addr, batch_idx_cb_wr_ptr, batch_idx_stick_size);
-        noc_async_read_barrier();
-        volatile tt_l1_ptr uint32_t* batch_idx_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_idx_cb_wr_ptr);
-        batch_idx = batch_idx_ptr[0];
-    } else {
-        batch_idx = batch_arg;  // Arg 4 is the scalar fallback value
+    // Resolve batch_idx source. With a batch_idx tensor we load the (small) 1D tensor into an SRAM
+    // buffer once so per-row lookups stay local. Without one the scalar fallback argument is used.
+#ifdef USE_BATCH_IDX_TENSOR
+    volatile tt_l1_ptr uint32_t* batch_idx_arr = nullptr;
+    {
+        const auto batch_idx_gen = TensorAccessor(tensor::batch_idx);
+        // The tensor is a contiguous 1D int (uint32/int32) tensor in DRAM with
+        // `batch_idx_num_elements` entries; one TensorAccessor stick covers it.
+#ifdef ARCH_QUASAR
+        // Quasar: read into the scratchpad (pass the object so the NoC uses the cached L1 address),
+        // then read back through its base address.
+        const uint32_t batch_idx_wr_ptr = batch_idx_scratch.get_base_address();
+        noc.async_read(
+            batch_idx_gen, batch_idx_scratch, batch_idx_stick_size * batch_idx_num_elements, {.page_id = 0}, {});
+#else
+        dfb_batch_idx.reserve_back(1);
+        const uint32_t batch_idx_wr_ptr = dfb_batch_idx.get_write_ptr();
+        noc.async_read(
+            batch_idx_gen,
+            CoreLocalMem<uint32_t>(batch_idx_wr_ptr),
+            batch_idx_stick_size * batch_idx_num_elements,
+            {.page_id = 0},
+            {});
+#endif
+        noc.async_read_barrier();
+        batch_idx_arr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_idx_wr_ptr);
     }
+#else
+    const uint32_t scalar_batch_idx = get_arg(args::batch_idx_fallback);
+#endif
 
-    const uint32_t tile_bytes = get_tile_size(cb_id_in);
-    const DataFormat data_format = get_dataformat(cb_id_in);
+    // Resolve the optional valid_seq_len. When present, `effective_end` (in tiles)
+    // caps the surviving window at the last real token instead of the padded end.
+    uint32_t effective_end = num_blocks_of_work_per_head;
+#ifdef USE_VALID_SEQ_LEN
+    {
+        const auto valid_gen = TensorAccessor(tensor::valid_seq_len);
+#ifdef ARCH_QUASAR
+        const uint32_t valid_wr_ptr = valid_seq_len_scratch.get_base_address();
+        noc.async_read(valid_gen, valid_seq_len_scratch, valid_seq_len_stick_size, {.page_id = 0}, {});
+#else
+        dfb_valid_seq_len.reserve_back(1);
+        const uint32_t valid_wr_ptr = dfb_valid_seq_len.get_write_ptr();
+        noc.async_read(valid_gen, CoreLocalMem<uint32_t>(valid_wr_ptr), valid_seq_len_stick_size, {.page_id = 0}, {});
+#endif
+        noc.async_read_barrier();
+        const uint32_t valid_seq_len_tokens = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_wr_ptr);
+        // Round the real length up to a whole tile (TILE_HEIGHT == 32, >> 5) and then
+        // up to a whole block_size_t: the surviving ring window [effective_end -
+        // capacity_t, effective_end) must be block-aligned so the wrapped page_table
+        // lookup preserves intra-block layout. This equals the host cap's
+        // ceil(valid/block)*block, so the kernel can take the raw valid length.
+        uint32_t valid_tiles = (valid_seq_len_tokens + (TILE_H - 1)) >> 5;
+        if (block_size_t > 0) {
+            valid_tiles = ((valid_tiles + block_size_t - 1) / block_size_t) * block_size_t;
+        }
+        if (valid_tiles > 0 && valid_tiles < num_blocks_of_work_per_head) {
+            effective_end = valid_tiles;
+        }
+    }
+#endif
 
-    const auto out_gen = TensorAccessor(s0_args, dst_addr);
+    const uint32_t tile_bytes = dfb_in.get_tile_size();
 
-    const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr);
-    cb_reserve_back(cb_id_page_table, 1);
-    uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-    uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(batch_idx);
-    noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-    noc_async_read_barrier();
+    const auto out_gen = TensorAccessor(tensor::cache);
+    const auto page_table_gen = TensorAccessor(tensor::page_table);
 
-    volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+#ifdef ARCH_QUASAR
+    const uint32_t page_table_wr_ptr = page_table_scratch.get_base_address();
+#else
+    dfb_page_table.reserve_back(1);
+    const uint32_t page_table_wr_ptr = dfb_page_table.get_write_ptr();
+#endif
+    volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_wr_ptr);
+
+    // Cache the last batch for which page_table was loaded. Legacy path loads
+    // once on the first row (cache miss) and then hits for all remaining rows;
+    // batched path re-loads on batch boundaries within this core's row range.
+    uint32_t cached_batch = (uint32_t)-1;
+    // Bounded sliding-window cache (capacity_t > 0): only the last capacity_t tiles
+    // of each head's input range will survive in the cache (earlier tiles would map
+    // to wrapped slots that get overwritten by later writes). Compute the skip
+    // count once so we can consume those earlier input tiles without committing
+    // them to DRAM — a strict bandwidth win for prefills longer than the bounded
+    // capacity. For prefills <= capacity_t this is 0 and the legacy path runs.
+    // With an optional valid_seq_len cap, the ring window ends at effective_end
+    // (== num_blocks_of_work_per_head when uncapped). skip_tiles drops the earliest
+    // tiles that a later wrapped write would overwrite anyway, so that exactly the
+    // last capacity_t tiles *ending at effective_end* survive — the last real tokens,
+    // not the padding tail. Tiles at/after effective_end are padding and are skipped
+    // in the loop below.
+    const uint32_t skip_tiles = (capacity_t > 0 && effective_end > capacity_t) ? (effective_end - capacity_t) : 0;
 
     for (uint32_t row_id = start_row_num; row_id < start_row_num + num_rows; ++row_id) {
-        uint32_t cur_head = row_id / num_blocks_of_work_per_head;
-        uint32_t seq_tile_id = row_id % num_blocks_of_work_per_head;
+        // Decode row_id → (cur_batch, cur_head, seq_tile_id).
+        // Input layout: [input_batch, num_heads, input_seq_len_t]
+        //   row_id = cur_batch * num_blocks_per_batch
+        //            + cur_head * num_blocks_of_work_per_head
+        //            + seq_tile_id
+        // On the legacy path (batched_fill == false) cur_batch is always 0
+        // and the per-batch arithmetic is elided.
+        uint32_t cur_batch;
+        uint32_t row_within_batch;
+        if constexpr (batched_fill) {
+            cur_batch = row_id / num_blocks_per_batch;
+            row_within_batch = row_id - cur_batch * num_blocks_per_batch;
+        } else {
+            cur_batch = 0;
+            row_within_batch = row_id;
+        }
+        const uint32_t cur_head = row_within_batch / num_blocks_of_work_per_head;
+        uint32_t seq_tile_id = row_within_batch % num_blocks_of_work_per_head;
+
+        // Drop the early-prefill tiles whose final slot would be overwritten by a
+        // later iteration anyway, and (with a valid_seq_len cap) the trailing padding
+        // tiles at/after effective_end that would otherwise wrap over the real recent
+        // window. The input buffer still has to be drained so the reader doesn't stall,
+        // but no NOC writes go out.
+        if (seq_tile_id < skip_tiles || seq_tile_id >= effective_end) {
+            dfb_in.wait_front(Wt);
+            dfb_in.pop_front(Wt);
+            continue;
+        }
+
+#ifdef USE_BATCH_IDX_TENSOR
+        const uint32_t batch_idx = batch_idx_arr[batched_fill ? cur_batch : 0];
+#else
+        const uint32_t batch_idx = scalar_batch_idx;
+#endif
+
+        // Reload page_table row only on batch boundary.
+        if (batch_idx != cached_batch) {
+#ifdef ARCH_QUASAR
+            noc.async_read(page_table_gen, page_table_scratch, page_table_stick_size, {.page_id = batch_idx}, {});
+#else
+            noc.async_read(
+                page_table_gen,
+                CoreLocalMem<uint32_t>(page_table_wr_ptr),
+                page_table_stick_size,
+                {.page_id = batch_idx},
+                {});
+#endif
+            noc.async_read_barrier();
+            cached_batch = batch_idx;
+        }
+
+        // Bounded sliding-window cache: wrap the virtual tile index into the bounded
+        // capacity before the page_table lookup. capacity_t is a multiple of
+        // block_size_t (validated), so the wrap preserves intra-block layout.
+        if constexpr (capacity_t > 0) {
+            seq_tile_id %= capacity_t;
+        }
         uint32_t physical_tile_id =
             virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(seq_tile_id, cur_head, page_table_ptr);
 
         if (physical_tile_id == SKIP_PAGE_TABLE_ENTRY) {
-            // Block should be skipped. Consume the input tiles from the CB and discard.
-            cb_wait_front(cb_id_in, Wt);
-            cb_pop_front(cb_id_in, Wt);
+            // Block should be skipped. Consume the input tiles from the buffer and discard.
+            dfb_in.wait_front(Wt);
+            dfb_in.pop_front(Wt);
         } else {
             // Valid block, proceed with writing.
-            cb_wait_front(cb_id_in, Wt);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_in);
+            dfb_in.wait_front(Wt);
+            uint32_t l1_read_addr = dfb_in.get_read_ptr();
             for (uint32_t w = 0; w < Wt; ++w) {
-                noc_async_write_tile(physical_tile_id, out_gen, l1_read_addr);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr), out_gen, tile_bytes, {}, {.page_id = physical_tile_id});
                 l1_read_addr += tile_bytes;
                 physical_tile_id += 1;
             }
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_in, Wt);
+            noc.async_write_barrier();
+            dfb_in.pop_front(Wt);
         }
     }
 }

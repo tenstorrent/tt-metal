@@ -4,6 +4,11 @@
 
 #pragma once
 
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+
 // choose the right C++ POD type at compile-time
 template <DataFormat df>
 struct df_to_std {
@@ -46,14 +51,13 @@ using std_type_t = typename df_to_std<df>::std_type;
 constexpr uint32_t ONE_PAGE = 1;
 constexpr uint32_t FIRST_STICK = 0;
 
+// Compile-time args 0-2 are unused placeholders. Buffer addresses are runtime args,
+// and the empty slots keep TensorAccessorArgs at index 11.
 template <
     typename elements_accessor_args_type,
     typename test_elements_accessor_args_type,
     typename output_accessor_args_type>
 struct IsInCTAs {
-    const uint32_t elements_tensor_addr;
-    const uint32_t test_elements_tensor_addr;
-    const uint32_t output_tensor_addr;
     const uint32_t elements_cb;
     const uint32_t test_elements_cb;
     const uint32_t output_cb;
@@ -73,9 +77,6 @@ FORCE_INLINE constexpr auto get_ctas() {
     constexpr auto test_elements_args = TensorAccessorArgs<elements_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<test_elements_args.next_compile_time_args_offset()>();
     return IsInCTAs<decltype(elements_args), decltype(test_elements_args), decltype(output_args)>{
-        get_compile_time_arg_val(0),
-        get_compile_time_arg_val(1),
-        get_compile_time_arg_val(2),
         get_compile_time_arg_val(3),
         get_compile_time_arg_val(4),
         get_compile_time_arg_val(5),
@@ -97,16 +98,21 @@ FORCE_INLINE void load_to_cb(
     const uint32_t& offset,
     const uint32_t& subchunk_size,
     const uint32_t& datum_size) {
-    cb_reserve_back(cb, ONE_PAGE);
+    Noc noc;
+    CircularBuffer cb_obj(cb);
+    cb_obj.reserve_back(ONE_PAGE);
 
-    const uint64_t source_noc_address = get_noc_addr(FIRST_STICK, addr_gtor);
-    const uint32_t l1_write_address = get_write_ptr(cb);
     const uint32_t subchunk_size_bytes = subchunk_size * datum_size;
     const uint32_t offset_bytes = offset * datum_size;
-    noc_async_read(source_noc_address + offset_bytes, l1_write_address, subchunk_size_bytes);
-    noc_async_read_barrier();
+    noc.async_read(
+        addr_gtor,
+        cb_obj,
+        subchunk_size_bytes,
+        {.page_id = FIRST_STICK, .offset_bytes = offset_bytes},
+        {.offset_bytes = 0});
+    noc.async_read_barrier();
 
-    cb_push_back(cb, ONE_PAGE);
+    cb_obj.push_back(ONE_PAGE);
 }
 
 // write from L1 to DRAM
@@ -117,14 +123,19 @@ FORCE_INLINE void write_to_dram(
     const uint32_t& offset,
     const uint32_t& subchunk_size,
     const uint32_t& datum_size) {
-    cb_wait_front(cb, ONE_PAGE);
+    Noc noc;
+    CircularBuffer cb_obj(cb);
+    cb_obj.wait_front(ONE_PAGE);
 
-    const uint64_t destination_noc_address = get_noc_addr(FIRST_STICK, addr_gtor);
-    const uint32_t l1_read_address = get_read_ptr(cb);
     const uint32_t subchunk_size_bytes = subchunk_size * datum_size;
     const uint32_t offset_bytes = offset * datum_size;
-    noc_async_write(l1_read_address, destination_noc_address + offset_bytes, subchunk_size_bytes);
-    noc_async_write_barrier();
+    noc.async_write(
+        cb_obj,
+        addr_gtor,
+        subchunk_size_bytes,
+        {.offset_bytes = 0},
+        {.page_id = FIRST_STICK, .offset_bytes = offset_bytes});
+    noc.async_write_barrier();
 
-    cb_pop_front(cb, ONE_PAGE);
+    cb_obj.pop_front(ONE_PAGE);
 }

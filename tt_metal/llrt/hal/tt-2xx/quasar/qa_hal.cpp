@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <enchantum/enchantum.hpp>
 #include <numeric>
 #include <string>
@@ -15,9 +16,9 @@
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
+#include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
-#include "overlay/meta/registers/overlay_reg_defines_core.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -54,12 +55,21 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+// dispatch_s aggregates device_print buffers from all cores into this DRAM region:
+// [DRAM_ALIGNMENT bytes for {dram_write_ptr, dram_read_ptr}][1 MiB ring buffer payload].
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE = 1 << 20;  // 1 MiB
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_SIZE =
+    DRAM_ALIGNMENT + DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE;
+constexpr static std::uint32_t get_dram_device_print_dispatch_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
 }
 
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+    return get_dram_device_print_dispatch_base(dram_profiler_size) + DRAM_DEVICE_PRINT_DISPATCH_SIZE;
+}
+
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 
@@ -82,28 +92,65 @@ public:
     using HalJitBuildQueryBase::HalJitBuildQueryBase;
     std::string linker_flags(const Params& params) const override {
         std::string flags;
+        // Quasar XIP (QuasarDataMovementKernel::read_binaries -> ElfFile::Impl::XIPify) pairs each
+        // R_RISCV_HI20 with its R_RISCV_LO12 and throws "HI20 has no matching LO12" if it can't.
+        // Linker relaxation can orphan a crt0 TLS-init __tdata_lma HI20 (its LO12 lands past a JAL in a
+        // different basic block), which trips that check on essentially every kernel. Disable linker
+        // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
+        // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
+        flags += "-Wl,--no-relax ";
         if (params.processor_class == HalProcessorClassType::DM) {
+            const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
+                                                  ? MEM_DISPATCH_DM_GLOBAL_BASE
+                                                  : MEM_DM_GLOBAL_BASE;
+            const DeviceAddr dm_local_base =
+                params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_BASE : MEM_DM_LOCAL_BASE;
+            const DeviceAddr dm_local_size =
+                params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_SIZE : MEM_DM_LOCAL_SIZE;
             if (params.is_fw) {
-                flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_DM_FIRMWARE_BASE);
+                const DeviceAddr dm_firmware_base = params.core_type == HalProgrammableCoreType::DISPATCH
+                                                        ? MEM_DISPATCH_DM_FIRMWARE_BASE
+                                                        : MEM_DM_FIRMWARE_BASE;
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", dm_firmware_base);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_FIRMWARE_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", dm_global_base);
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE * NUM_DM_CORES);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", dm_local_size);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", dm_local_size);
             } else {
-                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_DM_KERNEL_BASE);
+                DeviceAddr kn_text = MEM_KERNEL_BASE;
+                if (params.core_type == HalProgrammableCoreType::DISPATCH) {
+                    static constexpr DeviceAddr dispatch_dm_kernel_bases[] = {
+                        MEM_DISPATCH_DM0_KERNEL_BASE,
+                        MEM_DISPATCH_DM1_KERNEL_BASE,
+                        MEM_DISPATCH_DM2_KERNEL_BASE,
+                        MEM_DISPATCH_DM3_KERNEL_BASE,
+                        MEM_DISPATCH_DM4_KERNEL_BASE,
+                        MEM_DISPATCH_DM5_KERNEL_BASE,
+                        MEM_DISPATCH_DM6_KERNEL_BASE,
+                        MEM_DISPATCH_DM7_KERNEL_BASE,
+                    };
+                    static_assert(std::size(dispatch_dm_kernel_bases) == NUM_DM_CORES);
+                    if (params.processor_id >= NUM_DM_CORES) {
+                        TT_THROW("Invalid dispatch DM processor id {}", params.processor_id);
+                    }
+                    kn_text = dispatch_dm_kernel_bases[params.processor_id];
+                }
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", dm_global_base);
+                flags += fmt::format(
+                    "-Wl,--defsym=__kn_data={} ",
+                    dm_global_base + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE * NUM_DM_CORES);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", dm_local_size);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", dm_local_size);
             }
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
             if (params.is_fw) {
@@ -113,7 +160,7 @@ public:
                     case 8:
                     case 12:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC0_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC0_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC0_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
@@ -123,7 +170,7 @@ public:
                     case 9:
                     case 13:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC1_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC1_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC1_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
@@ -133,7 +180,7 @@ public:
                     case 10:
                     case 14:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC2_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC2_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC2_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
@@ -143,7 +190,7 @@ public:
                     case 11:
                     case 15:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC3_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC3_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC3_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
@@ -165,49 +212,44 @@ public:
                     case 4:
                     case 8:
                     case 12:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC0_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC0_GLOBAL_BASE +
-                                MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));  // for legacy kernels
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC0_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC0_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                         break;
                     case 1:
                     case 5:
                     case 9:
                     case 13:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC1_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC1_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC1_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         break;
                     case 2:
                     case 6:
                     case 10:
                     case 14:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC2_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC2_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC2_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         break;
                     case 3:
                     case 7:
                     case 11:
                     case 15:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC3_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC3_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC3_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                         break;
                     default: TT_THROW("Invalid processor id {}", params.processor_id);
@@ -219,11 +261,19 @@ public:
                 flags += fmt::format(" -Wl,--defsym=__min_stack={} ", MEM_TRISC_STACK_MIN_SIZE);
             }
         }
+        // Suppress LTO false positive on the device-print lock's atomic exchange.
+        // GCC's -Wstringop-overflow object-size analysis treats Quasar's small
+        // fixed cached-L1 mailbox address as a size-0 object. Source-level
+        // #pragma diagnostic doesn't apply to LTO-emitted warnings, so the
+        // suppression has to live on the link command.
+        flags += "-Wno-stringop-overflow ";
         return flags;
     }
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        // Upper bound: crt0-tls.o, crt0.o, noc.o and substitutes.o.
+        objs.reserve(4);
         std::string_view cpu = params.processor_class == HalProcessorClassType::DM ? "tt-qsr64" : "tt-qsr32";
         std::string_view dir = "runtime/hw/lib/quasar";
         objs.push_back(fmt::format("{}/{}-crt0-tls.o", dir, cpu));
@@ -243,8 +293,14 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        // Upper bound: 11 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(14);
 
         // Common includes for all core types
+        // A Quasar IP variant goes first so its headers shadow the base ones under tt_llk_quasar.
+        if (const auto& variant = params.rtoptions.get_quasar_arch_variant(); !variant.empty()) {
+            includes.push_back("tt_metal/tt-llk/tt_llk_quasar/arch/" + variant);
+        }
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/inc/internal");
@@ -252,6 +308,19 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
+        // Snapshot the env once: includes() runs separately for firmware and
+        // kernel builds, and a mid-process env change must not compile them
+        // against different maps.
+        static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
+        // TODO: Use UMD supplied variant instead of env var
+        // defaults to Quasar if no variant is set
+        if (quasar_variant != nullptr && std::string(quasar_variant) == "horizon") {
+            log_info(LogMetal, "Using variant: Horizon");
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
+        } else {
+            log_info(LogMetal, "Using variant: Quasar");
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
+        }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
@@ -271,6 +340,12 @@ public:
                 break;
             }
             case HalProgrammableCoreType::IDLE_ETH: break;
+            case HalProgrammableCoreType::DISPATCH:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: break;
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
+                }
+                break;
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
@@ -282,6 +357,48 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
+        // emulation by the same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
+        // Snapshot the env once: defines() runs separately for firmware and
+        // kernel builds, and a mid-process env change must not compile them
+        // against different maps.
+        static const char* const att_map = std::getenv("TT_METAL_NOC_ATT");
+        if (att_map != nullptr) {
+            // ATT enabled => the ATT backend and the V3 API everywhere, one map
+            // per build. The defines reach the JIT build key through the
+            // define hash, so toggling can never reuse stale binaries.
+            const std::string_view map(att_map);
+            if (map == "grendel_qsr1") {
+                defines.push_back("NOC_ATT_CONFIG_GRENDEL_QSR1");
+            } else if (map == "quasar_aether_2x3") {
+                defines.push_back("NOC_ATT_CONFIG_QUASAR_AETHER_2X3");
+            } else {
+                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
+            }
+            // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
+            // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
+            // decodes XY operands and cannot run under ATT currently; the rest of the
+            // watcher never decodes an address, so allow it when the sanitizer
+            // is explicitly disabled.
+            TT_FATAL(
+                !params.rtoptions.get_watcher_enabled() || params.rtoptions.watcher_noc_sanitize_disabled(),
+                "TT_METAL_NOC_ATT supports the watcher only with the NoC sanitizer disabled "
+                "(TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1)");
+            defines.push_back("NOC_ATT_ENABLED");
+            defines.push_back("NOC_API_V3");
+            static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;
+            if (params.is_fw && att_program_for_test) {
+                // Firmware-only bring-up hook: replay the generated ATT image
+                // during noc_init on targets whose boot leaves the tables
+                // unprogrammed (the emulator).
+                defines.push_back("ATT_PROGRAM_FOR_TEST");
+            }
+        } else {
+            defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
+        }
         return defines;
     }
 
@@ -303,7 +420,6 @@ public:
             params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensix ";
         cflags += "-fno-extern-tls-init ";
         cflags += "-ftls-model=local-exec ";
-        cflags += "-mno-tt-tensix-optimize-replay "; // Disable replay buffer optimization for quasar due to HW bug
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -318,14 +434,11 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld",
-                            params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_trisc{}.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.is_fw ? "" : "_lgc");
+                            "runtime/hw/toolchain/quasar/{}_trisc.ld", params.is_fw ? "firmware" : "kernel");
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
@@ -340,6 +453,14 @@ public:
                         return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_subordinate_ierisc.ld"
                                             : "runtime/hw/toolchain/quasar/kernel_subordinate_ierisc.ld";
                     default: TT_THROW("Invalid processor id {}", params.processor_id);
+                }
+            case HalProgrammableCoreType::DISPATCH:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: {
+                        return fmt::format(
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
+                    }
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
                 }
             default:
                 TT_THROW(
@@ -371,15 +492,14 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::DISPATCH) == static_cast<int>(ProgrammableCoreType::DISPATCH));
 
-    HalCoreInfoType tensix_mem_map = quasar::create_tensix_mem_map();
-    this->core_info_.push_back(tensix_mem_map);
-
-    HalCoreInfoType active_eth_mem_map = quasar::create_active_eth_mem_map();
-    this->core_info_.push_back(active_eth_mem_map);
-
-    HalCoreInfoType idle_eth_mem_map = quasar::create_idle_eth_mem_map();
-    this->core_info_.push_back(idle_eth_mem_map);
+    this->core_info_.push_back(quasar::create_tensix_mem_map());
+    this->core_info_.push_back(quasar::create_active_eth_mem_map());
+    this->core_info_.push_back(quasar::create_idle_eth_mem_map());
+    ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
@@ -388,6 +508,10 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        get_dram_device_print_dispatch_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        DRAM_DEVICE_PRINT_DISPATCH_SIZE;
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
         get_dram_backed_command_queues_base(dram_profiler_size);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
@@ -441,9 +565,9 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         return true;  // used to program start addr for eth FW TODO: add correct value
     };
 
-    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ADDR(x, y, 0); };
+    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
-        return NOC_MULTICAST_ADDR(x_start, y_start, x_end, y_end, 0);
+        return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
     this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
     this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };
@@ -468,6 +592,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
             case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER: return false;
             default: TT_THROW("Invalid Quasar dispatch feature {}", static_cast<int>(feature));
         }
     };
@@ -477,6 +602,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = NOC_NODE_ID;                                   // TODO: add correct value
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;                      // TODO: add correct value
     this->noc_overlay_start_addr_ = 0;                                       // TODO: add correct value
@@ -486,6 +612,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
     this->has_stream_registers_ = false;
+    this->supports_fds_ = true;
     this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
@@ -496,6 +623,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         dev_msgs::AddressableCoreType::ETH,
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
+    this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = true;
     this->supports_implicit_dfb_sync_ = true;
@@ -510,6 +638,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         NEO_REGS_0__LOCAL_REGS_TILE_COUNTERS_MIRROR_COUNTERS_0__BUFFER_CAPACITY_REG_OFFSET;
 
     this->has_remapper_ = true;
+    this->noc_att_enabled_ = std::getenv("TT_METAL_NOC_ATT") != nullptr;
     this->remapper_global_control_addr_ = REMAP_GLOBAL_CONTROL_REG_ADDR32;
     this->remapper_client_l_config_base_addr_ = REMAP_CLIENT_L_CONFIG_REG_BASE_ADDR32;
     this->remapper_client_r_config_base_addr_ = REMAP_CLIENT_R_CONFIG_REG_BASE_ADDR32;
@@ -519,6 +648,11 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->eps_ = EPS_QA;
     this->nan_ = NAN_QA;
     this->inf_ = INF_QA;
+
+    // Values found in PCIe tile spec
+    this->pcie_addr_lower_bound_ = 0x0000'0000'0000'0000ULL;
+    this->pcie_addr_upper_bound_ = 0x1FFF'FFFF'FFFF'FFFFULL;
+    this->supports_64_bit_pcie_addressing_ = true;
 
     this->noc_x_id_translate_table_ = {};
 

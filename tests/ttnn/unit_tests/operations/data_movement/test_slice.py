@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.test_slice_write import offset_increment_tensor
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
 
@@ -24,7 +25,36 @@ def random_torch_tensor(dtype, shape):
     return torch.rand(shape).bfloat16().float()
 
 
-def run_slice_rm_sharded(device, n, c, h, w):
+def height_sharded_l1_mem_config(shard_grid, num_rows, row_width, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    """Height-shard num_rows rows of row_width elements over shard_grid. The shard height is num_rows
+    divided by the number of cores, rounded up, so the shards together can have room for more rows than
+    num_rows and the trailing cores of the grid can end up holding none."""
+    num_cores = shard_grid.num_cores()
+    shard_h = (num_rows + num_cores - 1) // num_cores
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, row_width), orientation)
+    return ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec)
+
+
+def full_grid_core_range_set(num_cores_x, num_cores_y):
+    """The single rectangle of cores from (0, 0) to (num_cores_x - 1, num_cores_y - 1)."""
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))])
+
+
+def run_slice_rm_sharded(
+    device,
+    n,
+    c,
+    h,
+    w,
+    input_shard_grid=None,
+    output_shard_grid=None,
+    input_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    output_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+):
+    if input_shard_grid is None:
+        input_shard_grid = full_grid_core_range_set(8, 7)
+    if output_shard_grid is None:
+        output_shard_grid = full_grid_core_range_set(8, 7)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     n_unpadded = n
     c_unpadded = 115
@@ -39,29 +69,13 @@ def run_slice_rm_sharded(device, n, c, h, w):
     )
 
     # shard config
-    num_cores_x = 8
-    num_cores_y = 7
-    shard_h = (n * c * h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
-    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
-    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
+    sharded_mem_config = height_sharded_l1_mem_config(input_shard_grid, n * c * h, w, input_shard_orientation)
     with device.cache_entries_counter.measure():
         tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
     # output shard config
-    num_cores_x = 8
-    num_cores_y = 7
-    shard_h = (n_unpadded * c_unpadded * h_unpadded + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
-    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
-    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
-    output_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    output_mem_config = height_sharded_l1_mem_config(
+        output_shard_grid, n_unpadded * c_unpadded * h_unpadded, w, output_shard_orientation
     )
 
     with device.cache_entries_counter.measure():
@@ -161,6 +175,140 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert device.cache_entries_counter.total == 3
+
+
+@pytest.mark.parametrize(
+    "shard_grid",
+    [
+        full_grid_core_range_set(8, 7),
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(5, 6))]),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            ]
+        ),
+    ],
+    ids=["origin_rectangle", "offset_rectangle", "two_rectangles"],
+)
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_slice_rm_sharded_shard_grid_placement(device, shard_grid, n, c, h, w):
+    """ttnn.slice must give the same result whichever cores the shards live on, for a row-major
+    input and output that are both height sharded. A shard grid may be several rectangles rather
+    than one, and it need not include core (0, 0). Each parameter here is the shard grid of both
+    the input and the output, and each is checked against the same PyTorch reference, which does
+    not depend on the shard grid."""
+    run_slice_rm_sharded(device, n, c, h, w, input_shard_grid=shard_grid, output_shard_grid=shard_grid)
+
+
+@pytest.mark.parametrize(
+    "shard_grid",
+    [
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 1)),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 1)),
+            ]
+        ),
+    ],
+    ids=["origin_with_gap", "origin_no_gap"],
+)
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_slice_rm_sharded_shard_grid_order(device, shard_grid, orientation, n, c, h, w):
+    """Checks that ttnn.slice matches the same slice taken in PyTorch exactly, for an input and output
+    sharing one height sharded layout: rows are cut into equal blocks (shards), one per core, and the
+    cores holding them form a shard grid of two rectangles, each given by two (x, y) corner cores.
+    Shards fill the grid in its own order: rectangle by rectangle, then row by row or column by column
+    inside a rectangle, as the shard orientation selects. The test runs two grids in both orientations.
+    Row-major on {(0,0)-(1,1), (2,0)-(3,1)} puts the third shard on core (0,1), not on (2,0), where a
+    row by row scan of the enclosing rectangle (0,0)-(3,1) would put the third shard. The grid
+    {(0,0)-(1,1), (3,0)-(4,1)} skips (2,0) and (2,1), so it holds 8 of the 10 cores of its enclosing
+    rectangle (0,0)-(4,1), and a scan of that rectangle reaches two cores that hold no shard."""
+    run_slice_rm_sharded(
+        device,
+        n,
+        c,
+        h,
+        w,
+        input_shard_grid=shard_grid,
+        output_shard_grid=shard_grid,
+        input_shard_orientation=orientation,
+        output_shard_orientation=orientation,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shard_grid, output_shard_grid",
+    [
+        (
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))]),
+        ),
+        (
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))]),
+        ),
+        (
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 1)),
+                ]
+            ),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))]),
+        ),
+    ],
+    ids=["disjoint_cores", "fewer_output_cores", "two_input_rectangles_one_output"],
+)
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_slice_rm_sharded_input_and_output_grids_differ(device, input_shard_grid, output_shard_grid, n, c, h, w):
+    """Checks that ttnn.slice matches the same slice taken in PyTorch exactly when the input and the
+    output are height sharded over different shard grids. The input's shard grid decides which core
+    holds each source row, and the output's shard grid decides which core each shard's work is sent to,
+    so ttnn.slice reads each core from the shard grid of its own tensor. The three cases make the
+    input's shard grid and the output's shard grid disagree in a different way: disjoint sets of cores,
+    an output on fewer cores than the input, and an input of two rectangles against an output of one."""
+    run_slice_rm_sharded(device, n, c, h, w, input_shard_grid=input_shard_grid, output_shard_grid=output_shard_grid)
+
+
+@pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("output_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_slice_rm_sharded_shard_orientation(device, input_shard_orientation, output_shard_orientation, n, c, h, w):
+    """A shard spec's orientation says which core holds which shard, and it belongs to one tensor.
+    The input tensor and the output tensor each carry their own orientation, so ttnn.slice must read
+    the input according to the input's orientation and write the output according to the output's
+    orientation, including when the input's orientation and the output's orientation differ. The
+    shard grid is the same origin-anchored rectangle in every case here, so which core holds which
+    shard is the only thing that varies."""
+    run_slice_rm_sharded(
+        device,
+        n,
+        c,
+        h,
+        w,
+        input_shard_orientation=input_shard_orientation,
+        output_shard_orientation=output_shard_orientation,
+    )
 
 
 @pytest.mark.parametrize("n", [16])
@@ -740,6 +888,58 @@ def test_slice_output_tensor_tile(device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.parametrize("steps", [(1, 1, 2, 2), (1, 1, 1, 1)], ids=["strided", "unaligned_begins"])
+def test_slice_output_tensor_tile_via_rm_path(device, steps):
+    # A step, or a begin that isn't tile-aligned, sends a TILE input down the rm_only path, which
+    # retilizes the input to ROW_MAJOR before the device op. The caller's output tensor stays
+    # tile-paged, so it cannot be the device op's destination — the row-major factories would page
+    # it by row. The result must still land in the caller's buffer, via the closing copy.
+    starts = (0, 0, 0, 0) if steps != (1, 1, 1, 1) else (0, 0, 16, 0)
+    ends = (1, 3, 640, 640)
+
+    torch_input = torch.rand(1, 3, 640, 640, dtype=torch.bfloat16)
+    torch_output = torch_input[
+        starts[0] : ends[0] : steps[0],
+        starts[1] : ends[1] : steps[1],
+        starts[2] : ends[2] : steps[2],
+        starts[3] : ends[3] : steps[3],
+    ]
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros_like(torch_output),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    ttnn.slice(ttnn_input, starts=starts, ends=ends, steps=steps, output_tensor=ttnn_output)
+
+    # Read back the caller's tensor, not slice's return value: the point is that the data landed
+    # in the preallocated buffer, in tile order.
+    assert_equal(torch_output, ttnn.to_torch(ttnn_output))
+
+
+def test_slice_output_tensor_rm_dtype_mismatch_rejected(device, expect_error):
+    # compute_output_specs pins the output's dtype to the input's, but that check used to sit in the
+    # TILE-only branch of validate_on_program_cache_miss. A row-major input therefore accepted a
+    # mismatched pre-allocated output and the writer filled it with input-dtype bytes. The layout
+    # comparison now runs for every input layout, so this is rejected rather than miswritten.
+    torch_input = torch.rand(1, 3, 64, 64, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros(1, 3, 32, 64),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    with expect_error(RuntimeError, "needs a layout of"):
+        ttnn.slice(ttnn_input, starts=(0, 0, 0, 0), ends=(1, 3, 32, 64), steps=(1, 1, 1, 1), output_tensor=ttnn_output)
+
+
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends",
     (
@@ -1189,6 +1389,70 @@ def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layou
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
+    entries = device.num_program_cache_entries()
+    # Keep the original controls alive while a cache hit binds fresh control buffers.
+    next_start = ttnn.from_torch(torch_start_tensor, device=device)
+    next_end = ttnn.from_torch(torch_end_tensor, device=device)
+    output = ttnn.slice(ttnn_tensor, next_start, next_end, slice_dim=dim, num_devices=num_devices_calc)
+    assert_with_pcc(torch_output_tensor, ttnn.to_torch(output), 0.999)
+    assert device.num_program_cache_entries() == entries
+
+    # Update these buffers in place; cached work assignments must still read the new bounds.
+    length = end[dim] - start[dim]
+    offset = (start[dim] + length) % input_shape[dim]
+    torch_start_tensor[dim], torch_end_tensor[dim] = offset, offset + length
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch_start_tensor), next_start)
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch_end_tensor), next_end)
+    updated_output = ttnn.slice(ttnn_tensor, next_start, next_end, slice_dim=dim, num_devices=num_devices_calc)
+    assert_with_pcc(torch_input.narrow(dim, offset, length), ttnn.to_torch(updated_output), 0.999)
+    assert device.num_program_cache_entries() == entries
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, end",
+    (
+        # Rank 3: single upper dim — forward/reverse Horner coincide (CI miss explanation)
+        ([4, 64, 64], 0, [2, 0, 0], [4, 64, 64]),
+        # Rank 4: non-zero start on dim 0 (minimal repro for Horner loop fix)
+        ([2, 3, 64, 64], 0, [1, 0, 0, 0], [2, 3, 64, 64]),
+        # Rank 4: different upper-dim sizes to distinguish forward vs reverse Horner
+        ([4, 2, 32, 32], 0, [2, 0, 0, 0], [4, 2, 32, 32]),
+        # Rank 4: asymmetric upper dims (6 vs 4) to maximise Horner ordering difference
+        ([6, 4, 32, 32], 0, [3, 0, 0, 0], [6, 4, 32, 32]),
+        # Rank 5: non-zero start on outermost dim
+        ([3, 2, 4, 64, 64], 0, [1, 0, 0, 0, 0], [2, 2, 4, 64, 64]),
+        # Rank 5: non-zero start on dim 0 with larger slice
+        ([6, 3, 2, 32, 32], 0, [3, 0, 0, 0, 0], [6, 3, 2, 32, 32]),
+    ),
+)
+def test_slice_tensor_args_upper_dim_offset(input_shape, dim, start, end, device):
+    """Regression test for issue #52901: the TILE tensor-args reader kernel
+    used a reverse Horner loop to compute the upper-dimension start offset,
+    producing wrong tile-page IDs for rank >= 4 tensors with non-zero start on
+    upper dimensions."""
+    # Distinct row-major values so a wrong tile-page offset is an exact mismatch.
+    torch_input = offset_increment_tensor(input_shape, dtype=torch.float32)
+
+    torch_start_tensor = torch.tensor(start)
+    torch_end_tensor = torch.tensor(end)
+
+    slices = tuple(slice(start[i], end[i]) for i in range(len(start)))
+    torch_output_tensor = torch_input[slices]
+
+    ttnn_start_tensor = ttnn.from_torch(torch_start_tensor, device=device)
+    ttnn_end_tensor = ttnn.from_torch(torch_end_tensor, device=device)
+
+    ttnn_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, device=device)
+
+    num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
+    ttnn_output = ttnn.slice(
+        ttnn_tensor, ttnn_start_tensor, ttnn_end_tensor, slice_dim=dim, num_devices=num_devices_calc
+    )
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output)
+
+    assert_equal(torch_output_tensor, ttnn_output_tensor)
+
 
 @pytest.mark.parametrize(
     "input_shape, dim, start, end",
@@ -1505,6 +1769,318 @@ def test_issue_42753_regression(device, input_shape, begins, ends, step):
     assert_with_pcc(torch_output, tt_output_torch, 0.99)
 
 
+def test_issue_47602_program_cache_collision_on_shape_change(device):
+    """Back-to-back slice calls with different input shapes must produce correct
+    outputs for both ROW_MAJOR and TILE layouts when the program cache is enabled.
+    """
+    torch.manual_seed(47602)
+
+    def _to_tt(t, layout, device):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # ── ROW_MAJOR path ──────────────────────────────────────────────────────
+    small_rm = torch.rand(1, 1, 32, 64, dtype=torch.bfloat16)
+    large_rm = torch.rand(1, 4, 512, 512, dtype=torch.bfloat16)
+
+    tt_small_rm = _to_tt(small_rm, ttnn.ROW_MAJOR_LAYOUT, device)
+    tt_large_rm = _to_tt(large_rm, ttnn.ROW_MAJOR_LAYOUT, device)
+
+    tt_out_small_rm = ttnn.slice(tt_small_rm, [0, 0, 0, 0], [1, 1, 32, 32], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_small_rm = device.num_program_cache_entries()
+
+    tt_out_large_rm = ttnn.slice(tt_large_rm, [0, 0, 0, 0], [1, 4, 256, 256], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_large_rm = device.num_program_cache_entries()
+
+    assert entries_after_large_rm > entries_after_small_rm, "large RM slice must be a cache-miss, not a hit"
+    assert_with_pcc(small_rm[:, :, :, :32], ttnn.to_torch(tt_out_small_rm), 0.9999)
+    assert_with_pcc(large_rm[:, :, :256, :256], ttnn.to_torch(tt_out_large_rm), 0.9999)
+
+    # ── TILE path ───────────────────────────────────────────────────────────
+    small_tile = torch.rand(1, 1, 32, 64, dtype=torch.bfloat16)
+    large_tile = torch.rand(1, 4, 512, 512, dtype=torch.bfloat16)
+
+    tt_small_tile = _to_tt(small_tile, ttnn.TILE_LAYOUT, device)
+    tt_large_tile = _to_tt(large_tile, ttnn.TILE_LAYOUT, device)
+
+    tt_out_small_tile = ttnn.slice(tt_small_tile, [0, 0, 0, 0], [1, 1, 32, 32], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_small_tile = device.num_program_cache_entries()
+
+    tt_out_large_tile = ttnn.slice(tt_large_tile, [0, 0, 0, 0], [1, 4, 256, 256], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_large_tile = device.num_program_cache_entries()
+
+    assert entries_after_large_tile > entries_after_small_tile, "large TILE slice must be a cache-miss, not a hit"
+    assert_with_pcc(small_tile[:, :, :, :32], ttnn.to_torch(tt_out_small_tile), 0.9999)
+    assert_with_pcc(large_tile[:, :, :256, :256], ttnn.to_torch(tt_out_large_tile), 0.9999)
+
+
+def test_issue_47602_same_shape_reuses_cache_entry(device):
+    """Same shape called twice must be a cache hit (entry count must not grow).
+
+    Verifies the hash is not over-aggressive: repeated slices with identical
+    inputs, shapes, and slice params reuse the same program rather than
+    compiling a new one each time.
+    """
+    torch.manual_seed(47602)
+
+    torch_input = torch.rand(1, 4, 128, 128, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn.slice(tt_input, [0, 0, 0, 0], [1, 4, 64, 64], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_first = device.num_program_cache_entries()
+
+    ttnn.slice(tt_input, [0, 0, 0, 0], [1, 4, 64, 64], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_second = device.num_program_cache_entries()
+
+    assert entries_after_second == entries_after_first, "identical slice must be a cache hit, not a miss"
+
+
+def _run_slice_override_addr_change(device, layout, in_mem_config, out_mem_config, shape, slice_start, slice_end):
+    """Cache-hit hook (override_runtime_arguments) correctness: buffer addresses are excluded from the
+    slice hash, so a second identical-shape slice at a DIFFERENT input address must hit the cache and
+    still produce correct output (re-derived addresses / re-patched sharded CB bases), not stale data."""
+    torch.manual_seed(47828)
+
+    def _make():
+        t = torch.rand(shape, dtype=torch.bfloat16)
+        return t, ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=in_mem_config)
+
+    def _ref(t):
+        return t[
+            slice_start[0] : slice_end[0],
+            slice_start[1] : slice_end[1],
+            slice_start[2] : slice_end[2],
+            slice_start[3] : slice_end[3],
+        ]
+
+    torch_a, tt_a = _make()
+    tt_out_a = ttnn.slice(tt_a, slice_start, slice_end, memory_config=out_mem_config)
+    entries_after_first = device.num_program_cache_entries()
+    assert_with_pcc(_ref(torch_a), ttnn.to_torch(tt_out_a), 0.9999)
+
+    # Keep A alive so B is forced to a different buffer address; the second slice must be a cache HIT.
+    torch_b, tt_b = _make()
+    assert tt_b.buffer_address() != tt_a.buffer_address(), "second input must land at a different address"
+    tt_out_b = ttnn.slice(tt_b, slice_start, slice_end, memory_config=out_mem_config)
+    assert device.num_program_cache_entries() == entries_after_first, "identical-shape slice must be a cache hit"
+    assert_with_pcc(_ref(torch_b), ttnn.to_torch(tt_out_b), 0.9999)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    ids=["rm", "tile"],
+)
+def test_slice_override_addr_change_interleaved(device, layout):
+    """override_runtime_arguments re-derives input/output buffer addresses on a cache hit (RM + TILE)."""
+    _run_slice_override_addr_change(
+        device,
+        layout,
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+        (1, 4, 128, 128),
+        [0, 0, 0, 0],
+        [1, 4, 64, 64],
+    )
+
+
+def test_slice_override_addr_change_rm_height_sharded(device):
+    """override_runtime_arguments re-patches the sharded CB base addresses on a cache hit for the
+    CB-bound height-sharded RM factory (the factory the removed get_dynamic_runtime_args special-cased)."""
+    n, c, h, w = 16, 128, 128, 16
+    num_cores_x, num_cores_y = 8, 7
+    ncores = num_cores_x * num_cores_y
+    grid_coord = ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    c_out, h_out = 115, 115
+
+    def _make():
+        t = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+        in_shard = ttnn.ShardSpec(shard_grid, ((n * c * h + ncores - 1) // ncores, w), ttnn.ShardOrientation.ROW_MAJOR)
+        in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in_shard)
+        tt = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg)
+        return t, tt
+
+    out_shard = ttnn.ShardSpec(
+        shard_grid, ((n * c_out * h_out + ncores - 1) // ncores, w), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    out_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard)
+
+    torch_a, tt_a = _make()
+    tt_out_a = ttnn.slice(tt_a, (0, 0, 0, 0), (n, c_out, h_out, w), memory_config=out_cfg)
+    entries_after_first = device.num_program_cache_entries()
+    assert_equal(torch_a[:n, :c_out, :h_out, :], ttnn.to_torch(ttnn.to_memory_config(tt_out_a, ttnn.L1_MEMORY_CONFIG)))
+
+    torch_b, tt_b = _make()  # A kept alive → B at a different L1 address
+    assert tt_b.buffer_address() != tt_a.buffer_address(), "second input must land at a different address"
+    tt_out_b = ttnn.slice(tt_b, (0, 0, 0, 0), (n, c_out, h_out, w), memory_config=out_cfg)
+    # Correctness on the re-allocated (different-address) input is what matters here. The RM
+    # height-sharded factory may re-key on the new address (pre-existing over-keying, unrelated to this
+    # migration, which does not change compute_program_hash); allow bounded growth rather than assert a hit.
+    assert (
+        device.num_program_cache_entries() <= entries_after_first + 1
+    ), "sharded slice cache entries grew unexpectedly"
+    assert_equal(torch_b[:n, :c_out, :h_out, :], ttnn.to_torch(ttnn.to_memory_config(tt_out_b, ttnn.L1_MEMORY_CONFIG)))
+
+
+@pytest.mark.skip_post_commit  # host-timing perf regression guard; run in perf/nightly, not fast post-commit
+def test_slice_rm_height_sharded_override_cache_hit_is_o1(device):
+    """The height-sharded slice cache-hit must patch CB addresses in O(1), not rebuild all per-core
+    args. A rebuild-on-hit is still a cache hit (entry count unchanged), so host dispatch time is the
+    only signal: assert it does not scale with the core grid (~15x rebuild vs ~1x patch, min-of-N)."""
+    import time
+
+    def _hit_host_us(num_cores_x, num_cores_y, reps=200):
+        ncores = num_cores_x * num_cores_y
+        grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+        )
+        n, c, w = 1, 1, 16
+        # Totals scale with the grid, but the per-core shard height is held constant (10 in / 8 out
+        # sticks per core) so the only thing that varies across grids is the core count -- that is what
+        # isolates the O(num_cores) rebuild signal. Per-core height = total // ncores (matches the
+        # _rm_height_sharded_slice helper below).
+        h_out = ncores * 8  # total out height (8 sticks/core after slice)
+        h_in = ncores * 10  # total in height (10 sticks/core; extra rows so the slice trims padding)
+        in_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, (h_in // ncores, w), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        out_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, (h_out // ncores, w), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        t = torch.rand((n, c, h_in, w), dtype=torch.bfloat16)
+        tt = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg)
+        ttnn.slice(tt, (0, 0, 0, 0), (n, c, h_out, w), memory_config=out_cfg)  # warm (cache miss)
+        entries = device.num_program_cache_entries()
+        samples = []
+        for _ in range(reps):
+            t0 = time.perf_counter_ns()
+            ttnn.slice(tt, (0, 0, 0, 0), (n, c, h_out, w), memory_config=out_cfg)  # host enqueue (cache hit)
+            samples.append(time.perf_counter_ns() - t0)
+        ttnn.synchronize_device(device)
+        assert device.num_program_cache_entries() == entries, "timed calls must be pure cache hits"
+        return min(samples) / 1000.0  # microseconds
+
+    small_grid_us = _hit_host_us(1, 1)
+    large_grid_us = _hit_host_us(8, 7)  # 56 cores, resnet-fold-scale grid
+    assert large_grid_us < small_grid_us * 4.0, (
+        f"height-sharded slice cache-hit host dispatch scales with the core grid "
+        f"({small_grid_us:.0f}us @1 core -> {large_grid_us:.0f}us @56 cores): override_runtime_arguments "
+        f"is rebuilding the full per-core descriptor on every hit instead of patching the 2 CB addresses in O(1)"
+    )
+
+
+def _rm_height_sharded_slice(device, dtype, orientation, ncx, ncy, c, h_in, h_out, w_in, w_out):
+    """Build one height-sharded RM slice case; return (make_input, out_cfg, slice_end, reference_fn).
+    make_input() returns a fresh (torch, ttnn) pair so the caller can force new allocations."""
+    ncores = ncx * ncy
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ncx - 1, ncy - 1))})
+    n = 1
+    torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[dtype]
+    in_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, ((n * c * h_in + ncores - 1) // ncores, w_in), orientation),
+    )
+    out_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, ((n * c * h_out + ncores - 1) // ncores, w_out), orientation),
+    )
+
+    def make():
+        t = torch.rand((n, c, h_in, w_in)).to(torch_dtype)
+        tt = ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg)
+        return t, tt
+
+    return make, out_cfg, (n, c, h_out, w_out), lambda t: t[:, :c, :h_out, :w_out]
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR], ids=["rm_shard", "cm_shard"]
+)
+# (channels, grid_x, grid_y): single- and multi-channel over 1/4/56-core grids. Height-sharded slice
+# recomputes the output shard spec on padded configs (see test_slice_sharded_auto_shard_spec_recomputation),
+# which re-keys the cache; these combos divide evenly so the repeat is a deterministic cache hit.
+@pytest.mark.parametrize(
+    "c, ncx, ncy",
+    [(1, 1, 1), (1, 2, 2), (1, 8, 7), (4, 1, 1), (4, 2, 2)],
+    ids=["c1_1", "c1_4", "c1_56", "c4_1", "c4_4"],
+)
+def test_slice_rm_height_sharded_cache_hit_correctness(device, dtype, orientation, c, ncx, ncy):
+    """override_runtime_arguments patches only the two sharded CB addresses on a cache hit; its output
+    must stay correct across dtype / shard orientation / core grid / channels. Re-runs the slice on
+    re-addressed inputs and again on the same tensor (a guaranteed hit), asserting output each time.
+    (Entry count is not asserted: height-sharded output shard-spec auto-recompute makes hit-vs-rekey
+    allocation-dependent -- orthogonal to the address patch under test; correctness holds either way.)"""
+    ncores = ncx * ncy
+
+    def torch_out(out):
+        return ttnn.to_torch(ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG))
+
+    make, out_cfg, end, ref = _rm_height_sharded_slice(
+        device, dtype, orientation, ncx, ncy, c, 10 * ncores, 8 * ncores, 16, 16
+    )
+    keep = []
+    tt = None
+    for _ in range(3):
+        t, tt = make()
+        keep.append(tt)  # keep alive so the next input lands at a different address
+        out = ttnn.slice(tt, (0, 0, 0, 0), end, memory_config=out_cfg)
+        assert_equal(ref(t), torch_out(out))
+    # Same tensor again -> a cache hit, so this dispatch goes through the override CB-address patch.
+    t_last = ttnn.to_torch(ttnn.to_memory_config(tt, ttnn.L1_MEMORY_CONFIG))
+    out_hit = ttnn.slice(tt, (0, 0, 0, 0), end, memory_config=out_cfg)
+    assert_equal(ref(t_last), torch_out(out_hit))
+
+
+def test_slice_override_alternating_factories_cache_hit(device):
+    """Different dispatches of the same op can select different program factories. factory.index() is in
+    compute_program_hash, so each factory is its own cache entry and the override re-selects the matching
+    factory on every hit. Alternate cache hits on a height-sharded slice (SliceRmShardedProgramFactory ->
+    cheap 2-CB-address patch) and an interleaved slice (SliceRmProgramFactory -> full re-derive) and
+    assert both stay correct: the override must route each hit to its own program, never cross-patch."""
+
+    def torch_out_l1(out):
+        return ttnn.to_torch(ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG))
+
+    make_s, cfg_s, end_s, ref_s = _rm_height_sharded_slice(
+        device, ttnn.bfloat16, ttnn.ShardOrientation.ROW_MAJOR, 2, 2, 1, 40, 32, 16, 16
+    )
+    ts, tts = make_s()  # -> SliceRmShardedProgramFactory (my patched cheap path)
+
+    shape_i, end_i = (1, 2, 64, 32), (1, 2, 40, 20)
+    ti = torch.rand(shape_i, dtype=torch.bfloat16)
+    tti = ttnn.from_torch(
+        ti, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ref_i = ti[:1, :2, :40, :20]  # -> SliceRmProgramFactory (interleaved, full re-derive path)
+
+    ttnn.slice(tts, (0, 0, 0, 0), end_s, memory_config=cfg_s)  # warm sharded entry
+    ttnn.slice(tti, (0, 0, 0, 0), end_i, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # warm interleaved entry
+    for _ in range(3):  # both are cache hits; each re-selects its own factory in the override
+        out_s = ttnn.slice(tts, (0, 0, 0, 0), end_s, memory_config=cfg_s)
+        out_i = ttnn.slice(tti, (0, 0, 0, 0), end_i, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        assert_equal(ref_s(ts), torch_out_l1(out_s))
+        assert_with_pcc(ref_i, ttnn.to_torch(out_i), 0.9999)
+
+
 @pytest.mark.parametrize(
     "shape, slice_start, slice_end",
     [
@@ -1534,3 +2110,26 @@ def test_slice_rm_nd_misaligned_last_dim(device, shape, slice_start, slice_end):
         slice_start[4] : slice_end[4],
     ]
     assert_with_pcc(torch_expected, ttnn.to_torch(tt_output), 0.9999)
+
+
+# 258112 exercises last_chunk_size < chunk_size (256 B tail); 262144 exercises the exact-divisor branch (last_chunk_size == chunk_size).
+@pytest.mark.parametrize("last_dim", [258112, 262144])
+def test_slice_rm_wide_row_chunking(device, last_dim):
+    """RM slice with a last-dim row wider than the double-buffered CB L1 budget."""
+    begins = [0, 2, 0]
+    ends = [6, 3, last_dim]
+    step = [1, 1, 1]
+
+    torch_input = torch.rand([6, 3, last_dim], dtype=torch.float32)
+    torch_output = torch_input[0:6, 2:3, 0:last_dim]
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.float32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert torch.equal(torch_output, ttnn.to_torch(ttnn_output))

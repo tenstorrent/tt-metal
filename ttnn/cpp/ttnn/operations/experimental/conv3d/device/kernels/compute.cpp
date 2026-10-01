@@ -3,15 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include <algorithm>
 #include <tt-metalium/constants.hpp>
 
-#include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
@@ -33,14 +38,17 @@ void matmul_blocks(
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
-    mm_block_init_short(
+    // Restore matmul formats before init validates them; the fp32 tail may have changed them.
+    // Matmul maps input 0 to SrcB and input 1 to SrcA.
+    reconfig_data_format(in1_cb, in0_cb);
+    matmul_block_init(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
 
-    reconfig_data_format(in1_cb, in0_cb);
+    CircularBuffer out_cb_obj(out_cb);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
@@ -59,70 +67,364 @@ void matmul_blocks(
             }
             tile_regs_commit();
 
-            cb_reserve_back(out_cb, out_subblock_num_tiles);
+            out_cb_obj.reserve_back(out_subblock_num_tiles);
             tile_regs_wait();
             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                 pack_tile(i, out_cb);
             }
+            out_cb_obj.push_back(out_subblock_num_tiles);
             tile_regs_release();
-            cb_push_back(out_cb, out_subblock_num_tiles);
             in1_index_offset += subblock_w;
         }
         in0_index_offset += subblock_h * in0_block_w;
     }
 }
 
-template <uint32_t rows, uint32_t cols>
-void add_bias_inplace(uint32_t in0_cb, uint32_t in1_cb) {
-    // Precondition: in0_cb has rows*cols produced
-    // Precondition: in1_cb has rows produced
-    // Postcondition: in0_cb has rows*cols produced
-    // Postcondition: in1_cb has rows produced
+ALWI void pack_tile_with_wh_destination_wait(uint32_t tile, uint32_t out_cb, uint32_t pack_sequence_idx) {
+#if defined(ARCH_WORMHOLE)
+    if (pack_sequence_idx != 0) {
+        // Workaround for https://github.com/tenstorrent/tt-metal/issues/44077:
+        // WH pack_tile reprograms the packer L1 destination. Wait before the
+        // next tile rewrites that address while the previous pack is in flight.
+        PACK(TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK));
+    }
+#endif
+    pack_tile(tile, out_cb);
+}
 
-    constexpr uint32_t num_tiles = rows * cols;
-    constexpr uint32_t dst_tiles = 1;
+// Split-operand matmul: hi*hi + hi*lo + lo*hi, fp32 DST.
+void matmul_blocks_split(
+    const uint32_t in0_hi_cb,
+    const uint32_t in0_lo_cb,
+    const uint32_t in1_hi_cb,
+    const uint32_t in1_lo_cb,
+    const uint32_t out_cb,
+    const uint32_t M,
+    const uint32_t N,
+    const uint32_t K,
+    const uint32_t in0_num_subblocks,
+    const uint32_t in1_num_subblocks,
+    const uint32_t in0_block_w,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w,
+    const bool transpose) {
+    reconfig_data_format(in1_hi_cb, in0_hi_cb);
+    matmul_block_init(
+        in0_hi_cb,
+        in1_hi_cb,
+        transpose /*transpose*/,
+        subblock_w /*ct_dim*/,
+        subblock_h /*rt_dim*/,
+        in0_block_w /*kt_dim*/);
 
-    add_bcast_rows_init_short(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, cols);
-    for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t j = 0; j < cols; ++j) {
+    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+    uint32_t in0_index_offset = 0;
+
+    CircularBuffer out_cb_obj(out_cb);
+
+    const uint32_t in0_cbs[3] = {in0_hi_cb, in0_hi_cb, in0_lo_cb};
+    const uint32_t in1_cbs[3] = {in1_hi_cb, in1_lo_cb, in1_hi_cb};
+
+    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+        uint32_t in1_index_offset = 0;
+        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
             tile_regs_acquire();
-            // Add jth tile of bias to each column j of in0_cb
-            add_tiles_bcast_rows(in0_cb, in1_cb, 0, j, 0);
+
+            for (uint32_t pass = 0; pass < 3; ++pass) {
+                uint32_t dst_index = 0;
+                uint32_t in0_index = in0_index_offset;
+                uint32_t in1_index = in1_index_offset;
+                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                    matmul_block(
+                        in0_cbs[pass],
+                        in1_cbs[pass],
+                        in0_index,
+                        in1_index,
+                        dst_index,
+                        transpose,
+                        subblock_w,
+                        subblock_h,
+                        in0_block_w);
+                    in0_index++;
+                    in1_index += N;
+                }
+            }
             tile_regs_commit();
-            cb_pop_front(in0_cb, dst_tiles);
-            cb_reserve_back(in0_cb, dst_tiles);
+
+            out_cb_obj.reserve_back(out_subblock_num_tiles);
             tile_regs_wait();
-            pack_tile(0, in0_cb);
-            cb_push_back(in0_cb, dst_tiles);
+            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                pack_tile(i, out_cb);
+            }
+            out_cb_obj.push_back(out_subblock_num_tiles);
+            tile_regs_release();
+            in1_index_offset += subblock_w;
+        }
+        in0_index_offset += subblock_h * in0_block_w;
+    }
+}
+
+// Split fp32 tiles: hi = bf16(x), lo = x - hi; in_cb fp32.
+template <uint32_t num_tiles>
+void split_operand_block(uint32_t in_cb, uint32_t hi_cb, uint32_t lo_cb) {
+    CircularBuffer in_cb_obj(in_cb);
+    CircularBuffer hi_cb_obj(hi_cb);
+    CircularBuffer lo_cb_obj(lo_cb);
+    constexpr uint32_t DST_LO = 0;
+    constexpr uint32_t DST_HI = 1;
+    in_cb_obj.wait_front(num_tiles);
+    hi_cb_obj.reserve_back(num_tiles);
+    lo_cb_obj.reserve_back(num_tiles);
+    reconfig_data_format_srca(in_cb);
+    copy_init(in_cb);
+    pack_reconfig_data_format(hi_cb);
+    typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Float16_b>();
+    sub_binary_tile_init();
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        copy_tile(in_cb, i, DST_LO);
+        copy_tile(in_cb, i, DST_HI);
+        typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Float16_b>(DST_HI);
+        sub_binary_tile(DST_LO, DST_HI, DST_LO);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile_with_wh_destination_wait(DST_HI, hi_cb, 2 * i);
+        pack_tile_with_wh_destination_wait(DST_LO, lo_cb, 2 * i + 1);
+        tile_regs_release();
+    }
+    hi_cb_obj.push_back(num_tiles);
+    lo_cb_obj.push_back(num_tiles);
+    in_cb_obj.pop_front(num_tiles);
+}
+
+template <uint32_t rows, uint32_t cols, uint32_t add_dst_tiles>
+void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
+    constexpr uint32_t num_tiles = rows * cols;
+
+    CircularBuffer inout_cb_obj(inout_cb);
+    CircularBuffer bias_cb_obj(bias_cb);
+
+    add_bcast_rows_init(inout_cb, bias_cb);
+    inout_cb_obj.wait_front(num_tiles);
+    bias_cb_obj.wait_front(cols);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t col_start = 0; col_start < cols; col_start += add_dst_tiles) {
+            const uint32_t cols_cur = std::min(add_dst_tiles, cols - col_start);
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < cols_cur; ++j) {
+                add_tiles_bcast_rows(inout_cb, bias_cb, j, col_start + j, j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            inout_cb_obj.pop_front(cols_cur);
+            inout_cb_obj.reserve_back(cols_cur);
+            for (uint32_t j = 0; j < cols_cur; ++j) {
+                pack_tile_with_wh_destination_wait(j, inout_cb, i * cols + col_start + j);
+            }
+            inout_cb_obj.push_back(cols_cur);
             tile_regs_release();
         }
     }
 }
 
-template <uint32_t num_tiles>
-void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb) {
-    // Precondition: in0_cb has num_tiles produced
-    // Precondition: in1_cb has num_tiles produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_cb has num_tiles consumed
+template <uint32_t num_tiles, uint32_t add_dst_tiles>
+void add_block_inplace_math(uint32_t inout_cb, uint32_t add_cb) {
+    CircularBuffer inout_cb_obj(inout_cb);
+    CircularBuffer add_cb_obj(add_cb);
 
-    constexpr uint32_t dst_tiles = 1;
-
-    add_tiles_init(in0_cb, in1_cb);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
+    add_init(inout_cb, add_cb);
+    for (uint32_t i = 0; i < num_tiles; i += add_dst_tiles) {
+        const uint32_t tiles_cur = std::min(add_dst_tiles, num_tiles - i);
         tile_regs_acquire();
-        add_tiles(in0_cb, in1_cb, 0, 0, 0);
+        for (uint32_t tile = 0; tile < tiles_cur; ++tile) {
+            add_tiles(inout_cb, add_cb, tile, tile, tile);
+        }
         tile_regs_commit();
-        cb_pop_front(in0_cb, dst_tiles);
-        cb_pop_front(in1_cb, dst_tiles);
-        cb_reserve_back(in0_cb, dst_tiles);
         tile_regs_wait();
-        pack_tile(0, in0_cb);
-        cb_push_back(in0_cb, dst_tiles);
+        inout_cb_obj.pop_front(tiles_cur);
+        add_cb_obj.pop_front(tiles_cur);
+        inout_cb_obj.reserve_back(tiles_cur);
+        for (uint32_t tile = 0; tile < tiles_cur; ++tile) {
+            pack_tile_with_wh_destination_wait(tile, inout_cb, i + tile);
+        }
+        inout_cb_obj.push_back(tiles_cur);
         tile_regs_release();
     }
+}
+
+// fp32-exact reduction of worker partials. The FPU `add_tiles` form re-rounds the running
+// partial to ~TF32 through SrcA/SrcB on every add, even though the CBs store fp32. Here the
+// running partial lives in `acc_cb` between iterations, remote partials arrive in `remote_cb`,
+// and all three CBs (local/remote/acc) are `UnpackToDestFp32`, so `copy_tile` +
+// `add_binary_tile` keep the sum exact end to end. The last iteration packs back into
+// `local_cb` for the bias/untilize tail. DST: 2 tiles. Blackhole remap stays enabled: these
+// LLKs and the packer all use logical DST tile indices and observe the same row-address remap.
+template <uint32_t num_tiles>
+void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_cb, uint32_t num_workers) {
+    CircularBuffer local_cb_obj(local_cb);
+    CircularBuffer remote_cb_obj(remote_cb);
+    CircularBuffer acc_cb_obj(acc_cb);
+    constexpr uint32_t DST_ACC = 0;
+    constexpr uint32_t DST_OPERAND = 1;
+    for (uint32_t w = 0; w < num_workers; ++w) {
+        const bool from_local = (w == 0);
+        const bool to_local = (w + 1 == num_workers);
+        const uint32_t src_cb = from_local ? local_cb : acc_cb;
+        CircularBuffer& src_obj = from_local ? local_cb_obj : acc_cb_obj;
+        const uint32_t dst_cb = to_local ? local_cb : acc_cb;
+        CircularBuffer& dst_obj = to_local ? local_cb_obj : acc_cb_obj;
+        remote_cb_obj.wait_front(num_tiles);
+        if (!from_local) {
+            src_obj.wait_front(num_tiles);
+        }
+        for (uint32_t i = 0; i < num_tiles; ++i) {
+            tile_regs_acquire();
+            copy_init(src_cb);
+            copy_tile(src_cb, 0, DST_ACC);
+            copy_init(remote_cb);
+            copy_tile(remote_cb, 0, DST_OPERAND);
+            add_binary_tile_init();
+            add_binary_tile(DST_ACC, DST_OPERAND, DST_ACC);
+            tile_regs_commit();
+            tile_regs_wait();
+            src_obj.pop_front(1);
+            remote_cb_obj.pop_front(1);
+            dst_obj.reserve_back(1);
+            pack_tile_with_wh_destination_wait(DST_ACC, dst_cb, i);
+            dst_obj.push_back(1);
+            tile_regs_release();
+        }
+    }
+}
+
+// fp32-exact bias add. `add_tiles_bcast_rows` would unpack the finished output through
+// SrcA/SrcB (rounding it to ~TF32) and cannot read an UnpackToDestFp32 CB at all; here the
+// output tile reaches DST exactly via `copy_tile`, and the bias row is materialized by a
+// ROW-broadcast datacopy. Both CBs must be flagged UnpackToDestFp32 by the host -- an unflagged
+// fp32 bias CB would steer `unary_bcast` onto the SrcB/B2D route, which is broken with fp32
+// dest (tt-llk#1338) and returns garbage on Wormhole. DST: 2 tiles.
+template <uint32_t rows, uint32_t cols>
+void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
+    CircularBuffer inout_cb_obj(inout_cb);
+    CircularBuffer bias_cb_obj(bias_cb);
+    constexpr uint32_t DST_ACC = 0;
+    constexpr uint32_t DST_OPERAND = 1;
+    inout_cb_obj.wait_front(rows * cols);
+    bias_cb_obj.wait_front(cols);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t j = 0; j < cols; ++j) {
+            tile_regs_acquire();
+            copy_init(inout_cb);
+            copy_tile(inout_cb, 0, DST_ACC);
+            unary_bcast_init<BroadcastType::ROW>(bias_cb);
+            unary_bcast<BroadcastType::ROW>(bias_cb, j, DST_OPERAND);
+            add_binary_tile_init();
+            add_binary_tile(DST_ACC, DST_OPERAND, DST_ACC);
+            tile_regs_commit();
+            tile_regs_wait();
+            inout_cb_obj.pop_front(1);
+            inout_cb_obj.reserve_back(1);
+            pack_tile_with_wh_destination_wait(DST_ACC, inout_cb, i * cols + j);
+            inout_cb_obj.push_back(1);
+            tile_regs_release();
+        }
+    }
+    // Deliberately no bias pop: the caller pops it once per C_out block, matching add_bias_inplace.
+}
+
+template <uint32_t rows, uint32_t cols, bool fp32_interm, uint32_t in_cb, uint32_t out_cb>
+void untilize_block() {
+    constexpr auto untilize_reconfig_mode =
+        fp32_interm ? compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure
+                    : compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
+    compute_kernel_lib::untilize<
+        cols,
+        in_cb,
+        out_cb,
+        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+        untilize_reconfig_mode,
+        compute_kernel_lib::untilize_config::RemapMode::AssumeConfigured>(rows);
+}
+
+template <
+    uint32_t rows,
+    uint32_t cols,
+    bool use_fp32_partials,
+    bool use_fp32_exact,
+    bool use_bias,
+    uint32_t inout_cb,
+    uint32_t bias_cb,
+    uint32_t out_cb>
+void bias_untilize_fullblock_math() {
+    CircularBuffer inout_cb_obj(inout_cb);
+    inout_cb_obj.wait_front(rows * cols);
+    if constexpr (use_bias) {
+        if constexpr (use_fp32_exact) {
+            // The interm CB is UnpackToDestFp32 on this path; the FPU bcast add cannot read it.
+            reconfig_data_format(inout_cb, bias_cb);
+            add_bias_inplace_sfpu<rows, cols>(inout_cb, bias_cb);
+        } else {
+            if constexpr (use_fp32_partials) {
+                reconfig_data_format(inout_cb, bias_cb);
+            }
+            add_bias_inplace<rows, cols, compute_kernel_lib::DEST_AUTO_LIMIT>(inout_cb, bias_cb);
+        }
+    }
+    untilize_block<rows, cols, use_fp32_partials || use_fp32_exact, inout_cb, out_cb>();
+}
+
+template <
+    uint32_t rows,
+    uint32_t cols,
+    bool use_fp32_partials,
+    bool use_fp32_exact,
+    uint32_t local_cb,
+    uint32_t remote_cb,
+    uint32_t acc_cb>
+void reduce_fullblock_inplace_math(uint32_t num_workers) {
+    constexpr uint32_t num_tiles = rows * cols;
+
+    CircularBuffer local_cb_obj(local_cb);
+    CircularBuffer remote_cb_obj(remote_cb);
+
+    local_cb_obj.wait_front(num_tiles);
+
+    if constexpr (use_fp32_exact) {
+        reconfig_data_format(local_cb, remote_cb);
+        pack_reconfig_data_format(local_cb);
+        reduce_block_fp32_sfpu<num_tiles>(local_cb, remote_cb, acc_cb, num_workers);
+    } else {
+        if constexpr (use_fp32_partials) {
+            // fp32-FORMAT partial CBs under a non-fp32 output: the FPU adds are fine (the CBs are
+            // not UnpackToDestFp32 here) but unpack/pack must be reconfigured for the wider format.
+            reconfig_data_format(local_cb, remote_cb);
+            pack_reconfig_data_format(local_cb);
+        }
+        for (uint32_t i = 0; i < num_workers; i++) {
+            remote_cb_obj.wait_front(num_tiles);
+            add_block_inplace_math<num_tiles, compute_kernel_lib::DEST_AUTO_LIMIT>(local_cb, remote_cb);
+        }
+    }
+}
+
+template <
+    uint32_t rows,
+    uint32_t cols,
+    bool use_fp32_partials,
+    bool use_fp32_exact,
+    bool use_bias,
+    uint32_t local_cb,
+    uint32_t remote_cb,
+    uint32_t bias_cb,
+    uint32_t out_cb,
+    uint32_t acc_cb>
+void reduce_bias_untilize_fullblock(uint32_t num_workers) {
+    if (num_workers > 0) {
+        reduce_fullblock_inplace_math<rows, cols, use_fp32_partials, use_fp32_exact, local_cb, remote_cb, acc_cb>(
+            num_workers);
+    }
+    bias_untilize_fullblock_math<rows, cols, use_fp32_partials, use_fp32_exact, use_bias, local_cb, bias_cb, out_cb>();
 }
 
 void kernel_main() {
@@ -158,14 +460,41 @@ void kernel_main() {
     constexpr uint32_t subblock_w = get_compile_time_arg_val(25);
 
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(26);
+    // fp32-FORMAT partial CBs (multi-C_in-block with fp32 dest): format reconfigs required around
+    // the interm reads even when the data dtype is bf16.
     constexpr bool use_fp32_partials = get_compile_time_arg_val(27) == 1;
-    constexpr uint32_t cb_zero_tiled = get_compile_time_arg_val(28);
+    // Stream final single-tile C_out rows through bias/untilize when the writer can overlap the compute tail.
+    constexpr bool enable_streaming_output = get_compile_time_arg_val(28) == 1;
+    // fp32 running-partial accumulator for the exact reduction; 32 (invalid) when unused.
+    constexpr uint32_t cb_reduction_acc_tiled = get_compile_time_arg_val(29);
+    // fp32-exact output path: SFPU reduction/bias + UnpackToDestFp32 CB reads (fp32 dtype + fp32 dest).
+    constexpr bool use_fp32_exact = get_compile_time_arg_val(30) == 1;
+    constexpr uint32_t cb_x_hi_tiled = get_compile_time_arg_val(31);
+    constexpr uint32_t cb_x_lo_tiled = get_compile_time_arg_val(32);
+    constexpr uint32_t cb_weight_lo_tiled = get_compile_time_arg_val(33);
+    constexpr bool operand_split = get_compile_time_arg_val(34) == 1;
+    constexpr uint32_t cb_matmul_in0 = operand_split ? cb_x_hi_tiled : cb_vol2col_tiled;
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t batch_tiles = subblock_h * matmul_K_t;
+    constexpr uint32_t subblock_tiles = subblock_h * matmul_N_t;
 
-    mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
+    CircularBuffer cb_vol2col_rm_cb(cb_vol2col_rm);
+    CircularBuffer cb_vol2col_tiled_cb(cb_vol2col_tiled);
+    CircularBuffer cb_weight_tiled_cb(cb_weight_tiled);
+    CircularBuffer cb_bias_tiled_cb(cb_bias_tiled);
+    CircularBuffer cb_matmul_interm_tiled_cb(cb_matmul_interm_tiled);
+    CircularBuffer cb_matmul_result_rm_cb(cb_matmul_result_rm);
+    CircularBuffer cb_reduction_tiled_cb(cb_reduction_tiled);
+    CircularBuffer cb_worker_ack_back_cb(cb_worker_ack_back);
+    CircularBuffer cb_weight_lo_tiled_cb(operand_split ? cb_weight_lo_tiled : cb_weight_tiled);
+    CircularBuffer cb_x_hi_tiled_cb(operand_split ? cb_x_hi_tiled : cb_vol2col_tiled);
+    CircularBuffer cb_x_lo_tiled_cb(operand_split ? cb_x_lo_tiled : cb_vol2col_tiled);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_matmul_in0, cb_weight_tiled, cb_matmul_interm_tiled);
+    matmul_init(cb_matmul_in0, cb_weight_tiled);
+    MATH((llk_math_reconfig_remap(true)));
 
     // Load range parameters
     uint32_t argidx = 0;
@@ -192,7 +521,7 @@ void kernel_main() {
                 // tilize overlaps with BRISC's DRAM weight read.
                 if constexpr (use_bias) {
                     if (is_reducer) {
-                        cb_wait_front(cb_bias_tiled, matmul_N_t);
+                        cb_bias_tiled_cb.wait_front(matmul_N_t);
                     }
                 }
 
@@ -211,7 +540,7 @@ void kernel_main() {
                                         const uint32_t patches_this_row = (patches_left >= tt::constants::TILE_HEIGHT)
                                                                               ? tt::constants::TILE_HEIGHT
                                                                               : patches_left;
-                                        if constexpr (use_fp32_partials) {
+                                        if constexpr (use_fp32_partials || use_fp32_exact) {
                                             pack_reconfig_data_format(cb_vol2col_tiled);
                                             reconfig_data_format_srca(cb_vol2col_rm);
                                         }
@@ -222,118 +551,147 @@ void kernel_main() {
                                             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                                             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                                             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::
-                                                NoReconfigure>(1, patches_this_row);
+                                                NoReconfigure,
+                                            compute_kernel_lib::tilize_config::Fp32Mode::Fast,
+                                            compute_kernel_lib::tilize_config::RemapMode::AssumeConfigured>(
+                                            1, patches_this_row);
                                         patches_left -= patches_this_row;
                                     }
 
-                                    if constexpr (use_fp32_partials) {
+                                    if constexpr (use_fp32_partials || use_fp32_exact) {
                                         pack_reconfig_data_format(cb_matmul_interm_tiled);
                                     }
 
                                     // Wait for weights — deferred so tilize overlaps with BRISC's DRAM read.
-                                    cb_wait_front(cb_weight_tiled, weight_tiles);
+                                    cb_weight_tiled_cb.wait_front(weight_tiles);
 
                                     // Phase 2: matmul the batch
-                                    cb_wait_front(cb_vol2col_tiled, batch_tiles);
-                                    matmul_blocks(
-                                        cb_vol2col_tiled,
-                                        cb_weight_tiled,
-                                        cb_matmul_interm_tiled,
-                                        subblock_h,
-                                        matmul_N_t,
-                                        matmul_K_t,
-                                        in0_num_subblocks,
-                                        in1_num_subblocks,
-                                        in0_block_w,
-                                        subblock_h,
-                                        subblock_w,
-                                        false /* transpose */);
-                                    cb_pop_front(cb_vol2col_tiled, batch_tiles);
-                                }
-                            }
-
-                            // Stall on matmul/bias to finish
-                            cb_wait_front(cb_matmul_interm_tiled, output_tiles);
-
-                            if (!is_reducer) {
-                                // not reducer implies that we are a worker and there are multiple workers in this
-                                // reduction group
-
-                                // Signal to writer that we have partial results
-                                cb_reserve_back(cb_reduction_tiled, output_tiles);
-                                cb_push_back(cb_reduction_tiled, output_tiles);
-
-                                // Wait for writer to ack that our data has been used
-                                cb_wait_front(cb_worker_ack_back, 1);
-                                cb_pop_front(cb_worker_ack_back, 1);
-
-                                // Clear our partial results and continue
-                                cb_pop_front(cb_matmul_interm_tiled, output_tiles);
-                            } else {
-                                // We are a reducer core.
-                                if constexpr (use_fp32_partials) {
-                                    cb_wait_front(cb_zero_tiled, 1);
-                                    reconfig_data_format_srca(cb_matmul_interm_tiled);
-                                    // pack_reconfig not needed — packer already fp32 from pre-matmul reconfig
-                                }
-                                for (uint32_t i = 0; i < num_workers; i++) {
-                                    cb_wait_front(cb_reduction_tiled, output_tiles);
-
-                                    if constexpr (use_fp32_partials) {
-                                        for (uint32_t t = 0; t < output_tiles; t++) {
-                                            tile_regs_acquire();
-                                            // Re-init before each op: copy_tile and add_tiles
-                                            // share the MATH unit config, so each needs its own
-                                            // init per tile iteration.
-                                            copy_tile_init(cb_matmul_interm_tiled);
-                                            copy_tile(cb_matmul_interm_tiled, 0, 0);
-                                            add_tiles_init(cb_reduction_tiled, cb_zero_tiled, true);
-                                            add_tiles(cb_reduction_tiled, cb_zero_tiled, 0, 0, 0);
-                                            tile_regs_commit();
-
-                                            cb_pop_front(cb_matmul_interm_tiled, 1);
-                                            cb_pop_front(cb_reduction_tiled, 1);
-                                            cb_reserve_back(cb_matmul_interm_tiled, 1);
-                                            tile_regs_wait();
-                                            pack_tile(0, cb_matmul_interm_tiled);
-                                            cb_push_back(cb_matmul_interm_tiled, 1);
-                                            tile_regs_release();
-                                        }
+                                    if constexpr (operand_split) {
+                                        cb_weight_lo_tiled_cb.wait_front(weight_tiles);
+                                        split_operand_block<batch_tiles>(
+                                            cb_vol2col_tiled, cb_x_hi_tiled, cb_x_lo_tiled);
+                                        pack_reconfig_data_format(cb_matmul_interm_tiled);
+                                        cb_x_hi_tiled_cb.wait_front(batch_tiles);
+                                        cb_x_lo_tiled_cb.wait_front(batch_tiles);
+                                        matmul_blocks_split(
+                                            cb_x_hi_tiled,
+                                            cb_x_lo_tiled,
+                                            cb_weight_tiled,
+                                            cb_weight_lo_tiled,
+                                            cb_matmul_interm_tiled,
+                                            subblock_h,
+                                            matmul_N_t,
+                                            matmul_K_t,
+                                            in0_num_subblocks,
+                                            in1_num_subblocks,
+                                            in0_block_w,
+                                            subblock_h,
+                                            subblock_w,
+                                            false /* transpose */);
+                                        cb_x_hi_tiled_cb.pop_front(batch_tiles);
+                                        cb_x_lo_tiled_cb.pop_front(batch_tiles);
                                     } else {
-                                        add_block_inplace<output_tiles>(cb_matmul_interm_tiled, cb_reduction_tiled);
+                                        cb_vol2col_tiled_cb.wait_front(batch_tiles);
+                                        matmul_blocks(
+                                            cb_vol2col_tiled,
+                                            cb_weight_tiled,
+                                            cb_matmul_interm_tiled,
+                                            subblock_h,
+                                            matmul_N_t,
+                                            matmul_K_t,
+                                            in0_num_subblocks,
+                                            in1_num_subblocks,
+                                            in0_block_w,
+                                            subblock_h,
+                                            subblock_w,
+                                            false /* transpose */);
+                                        cb_vol2col_tiled_cb.pop_front(batch_tiles);
                                     }
-                                }
-                                // Apply bias only if we are a reducer, and do it after reduction
-                                if constexpr (use_bias) {
-                                    if constexpr (use_fp32_partials) {
-                                        reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
+
+                                    if constexpr (enable_streaming_output) {
+                                        // Streaming emits subblocks before cb_matmul_interm_tiled is physically full,
+                                        // so bias uses math add and untilizes immediately.
+                                        cb_matmul_interm_tiled_cb.wait_front(subblock_tiles);
+
+                                        if constexpr (use_bias) {
+                                            if constexpr (use_fp32_exact) {
+                                                reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
+                                                add_bias_inplace_sfpu<subblock_h, matmul_N_t>(
+                                                    cb_matmul_interm_tiled, cb_bias_tiled);
+                                            } else {
+                                                if constexpr (use_fp32_partials) {
+                                                    reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
+                                                }
+                                                add_bias_inplace<
+                                                    subblock_h,
+                                                    matmul_N_t,
+                                                    compute_kernel_lib::DEST_AUTO_LIMIT>(
+                                                    cb_matmul_interm_tiled, cb_bias_tiled);
+                                            }
+                                        }
+
+                                        constexpr auto untilize_reconfig_mode_sb =
+                                            use_fp32_exact ? compute_kernel_lib::untilize_config::
+                                                                 ReconfigureRegisterDatatypeMode::UnpackReconfigure
+                                                           : compute_kernel_lib::untilize_config::
+                                                                 ReconfigureRegisterDatatypeMode::NoReconfigure;
+                                        compute_kernel_lib::untilize<
+                                            matmul_N_t,
+                                            cb_matmul_interm_tiled,
+                                            cb_matmul_result_rm,
+                                            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                                            compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+                                            untilize_reconfig_mode_sb,
+                                            compute_kernel_lib::untilize_config::RemapMode::AssumeConfigured>(
+                                            subblock_h);
                                     }
-                                    add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
-                                }
-                                // Untilize result
-                                {
-                                    constexpr auto untilize_reconfig_mode =
-                                        use_fp32_partials ? compute_kernel_lib::untilize_config::
-                                                                ReconfigureRegisterDatatypeMode::UnpackReconfigure
-                                                          : compute_kernel_lib::untilize_config::
-                                                                ReconfigureRegisterDatatypeMode::NoReconfigure;
-                                    compute_kernel_lib::untilize<
-                                        matmul_N_t,
-                                        cb_matmul_interm_tiled,
-                                        cb_matmul_result_rm,
-                                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                                        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                                        untilize_reconfig_mode>(matmul_M_t);
                                 }
                             }
+
+                            if constexpr (!enable_streaming_output) {
+                                // Stall on matmul/bias to finish
+                                cb_matmul_interm_tiled_cb.wait_front(output_tiles);
+
+                                if (!is_reducer) {
+                                    // not reducer implies that we are a worker and there are multiple workers in this
+                                    // reduction group
+
+                                    // Signal to writer that we have partial results
+                                    cb_reduction_tiled_cb.reserve_back(output_tiles);
+                                    cb_reduction_tiled_cb.push_back(output_tiles);
+
+                                    // Wait for writer to ack that our data has been used
+                                    cb_worker_ack_back_cb.wait_front(1);
+                                    cb_worker_ack_back_cb.pop_front(1);
+
+                                    // Clear our partial results and continue
+                                    cb_matmul_interm_tiled_cb.pop_front(output_tiles);
+                                } else {
+                                    // We are a reducer core.
+                                    reduce_bias_untilize_fullblock<
+                                        matmul_M_t,
+                                        matmul_N_t,
+                                        use_fp32_partials,
+                                        use_fp32_exact,
+                                        use_bias,
+                                        cb_matmul_interm_tiled,
+                                        cb_reduction_tiled,
+                                        cb_bias_tiled,
+                                        cb_matmul_result_rm,
+                                        cb_reduction_acc_tiled>(num_workers);
+                                }
+                            }  // end if constexpr (!enable_streaming_output)
                         }
                     }
                 }
                 // Free space for next block of weights
-                cb_pop_front(cb_weight_tiled, weight_tiles);
+                cb_weight_tiled_cb.pop_front(weight_tiles);
+                if constexpr (operand_split) {
+                    cb_weight_lo_tiled_cb.pop_front(weight_tiles);
+                }
                 if constexpr (use_bias) {
                     if (is_reducer) {
-                        cb_pop_front(cb_bias_tiled, matmul_N_t);
+                        cb_bias_tiled_cb.pop_front(matmul_N_t);
                     }
                 }
             }

@@ -35,16 +35,16 @@ TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBuffers) {
 
     {
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{CoreCoord(0, 0), cores}};
-        auto global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-            mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+        auto global_cb = tt::tt_metal::experimental::GlobalCircularBuffer(
+            *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
     }
     {
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {
             {CoreCoord(0, 0), cores}, {CoreCoord(1, 1), cores3}};
         // sender receiver cores overlap
         EXPECT_THROW(
-            tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-                mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1),
+            tt::tt_metal::experimental::GlobalCircularBuffer(
+                *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1),
             std::exception);
     }
     {
@@ -52,8 +52,8 @@ TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBuffers) {
             {CoreCoord(0, 0), cores}, {CoreCoord(0, 1), cores2}};
         // receiver cores overlap
         EXPECT_THROW(
-            tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-                mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1),
+            tt::tt_metal::experimental::GlobalCircularBuffer(
+                *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1),
             std::exception);
     }
 }
@@ -70,12 +70,12 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
     auto mesh_device = devices_[0];
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
-    auto global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-        mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+    auto global_cb = tt::tt_metal::experimental::GlobalCircularBuffer(
+        *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
     std::vector<std::pair<CoreCoord, CoreRangeSet>> dummy_sender_receiver_core_mapping = {
         {CoreCoord(0, 0), dummy_receiver_cores}};
-    auto dummy_global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-        mesh_device.get(), dummy_sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+    auto dummy_global_cb = tt::tt_metal::experimental::GlobalCircularBuffer(
+        *mesh_device, dummy_sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
     {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -84,7 +84,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
 
         tt::tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             all_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
@@ -100,7 +100,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
             std::exception);
         auto remote_cb =
             tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
-        tt::tt_metal::detail::CompileProgram(mesh_device.get(), program);
+        program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
         tt::tt_metal::experimental::UpdateDynamicCircularBufferAddress(program, remote_cb, global_cb);
         EXPECT_THROW(UpdateDynamicCircularBufferAddress(program, remote_cb, dummy_global_cb), std::exception);
@@ -113,7 +113,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
 
         tt::tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             all_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});

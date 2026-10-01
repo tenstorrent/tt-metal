@@ -11,9 +11,17 @@
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include "distributed/mesh_socket_utils.hpp"
 #include "program.hpp"
+#include <map>
 #include <memory>
+#include <optional>
+#include <tuple>
 #include <tt-metalium/experimental/inspector.hpp>
 #include "impl/kernels/kernel.hpp"
 
@@ -42,13 +50,13 @@ bool Inspector::is_enabled() {
     return false;
 }
 
-std::unique_ptr<inspector::Data> Inspector::initialize(std::optional<int> rank) {
+std::unique_ptr<inspector::Data> Inspector::initialize(std::optional<int> rank, ContextId context_id) {
     if (!is_enabled()) {
         // Inspector is not enabled, skipping initialization.
         return nullptr;
     }
     try {
-        auto* data = new inspector::Data(rank);
+        auto* data = new inspector::Data(rank, context_id);
 
         return std::unique_ptr<inspector::Data>(data);
     } catch (const std::exception& e) {
@@ -156,9 +164,10 @@ void Inspector::program_compile_already_exists(
 
 void Inspector::program_kernel_compile_finished(
     const detail::ProgramImpl* program,
-    const IDevice* /*device*/,
+    const IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
-    const tt::tt_metal::JitBuildOptions& build_options) noexcept {
+    const tt::tt_metal::JitBuildOptions& build_options,
+    const std::string& binary_root) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -168,6 +177,10 @@ void Inspector::program_kernel_compile_finished(
         return;
     }
     try {
+        std::vector<std::string> processor_elf_paths;
+        if (device != nullptr) {
+            processor_elf_paths = kernel->elf_paths_by_processor_index(*device, binary_root);
+        }
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         auto& kernel_data = program_data.kernels[kernel->get_watcher_kernel_id()];
@@ -175,9 +188,12 @@ void Inspector::program_kernel_compile_finished(
         kernel_data.watcher_kernel_id = kernel->get_watcher_kernel_id();
         kernel_data.name = kernel->name();
         kernel_data.path = build_options.path;
-        if (data->kernel_path_collection_enabled) {
-            std::lock_guard<std::mutex> path_lock(data->kernel_path_mutex);
-            data->kernel_id_to_path[kernel->get_watcher_kernel_id()] = build_options.path;
+        if (!processor_elf_paths.empty()) {
+            if (data->kernel_path_collection_enabled) {
+                std::lock_guard<std::mutex> path_lock(data->kernel_path_mutex);
+                data->kernel_id_to_processor_elf_paths[kernel->get_watcher_kernel_id()] = processor_elf_paths;
+            }
+            kernel_data.processor_elf_paths = std::move(processor_elf_paths);
         }
         kernel_data.source = kernel->kernel_source().source_;
         data->kernel_id_to_program_id[kernel->get_watcher_kernel_id()] = program->get_id();
@@ -287,6 +303,131 @@ void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_
     }
 }
 
+void Inspector::mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
+    try {
+        if (data->mesh_buffer_logging_enabled) {
+            data->logger.log_mesh_buffer_allocated(mesh_buffer);
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_buffers_data.insert(mesh_buffer);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer allocated: {}", e.what());
+    }
+}
+
+void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        if (data->mesh_buffer_logging_enabled) {
+            data->logger.log_mesh_buffer_deallocated(mesh_buffer);
+        }
+        std::optional<inspector::MeshSocketData> destroyed_socket;
+        {
+            std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+            data->mesh_buffers_data.erase(mesh_buffer);
+            if (auto it = data->mesh_sockets_data.find(mesh_buffer); it != data->mesh_sockets_data.end()) {
+                destroyed_socket = std::move(it->second);
+                data->mesh_sockets_data.erase(it);
+            }
+        }
+        if (destroyed_socket.has_value() && data->mesh_socket_logging_enabled) {
+            data->logger.log_mesh_socket_destroyed(mesh_buffer, *destroyed_socket);
+        }
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer deallocated: {}", e.what());
+    }
+}
+
+void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        auto* mesh_device = socket->get_mesh_device();
+        const distributed::SocketSenderSize sender_size(
+            mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
+        auto config_buffer = socket->get_config_buffer();
+        const bool is_sender = socket->get_socket_endpoint_type() == distributed::SocketEndpoint::SENDER;
+
+        inspector::MeshSocketData socket_data;
+        socket_data.is_sender = is_sender;
+        socket_data.config_buffer_address = config_buffer->address();
+        socket_data.data_buffer_address = is_sender ? 0 : socket->get_data_buffer()->address();
+        socket_data.fifo_size = socket->get_config().socket_mem_config.fifo_size;
+        socket_data.bytes_acked_offset_bytes = sender_size.md_size_bytes;
+        socket_data.bytes_acked_stride_bytes = sender_size.ack_size_bytes;
+
+        const auto local_ep = socket->get_socket_endpoint_type();
+        const auto peer_ep = is_sender ? distributed::SocketEndpoint::RECEIVER : distributed::SocketEndpoint::SENDER;
+        // One entry per local core; a sender core feeding several downstreams collects several peers.
+        std::map<std::tuple<uint32_t, uint32_t, uint32_t>, inspector::MeshSocketLocalCoreData> by_core;
+        for (const auto& conn : socket->get_config().socket_connection_config) {
+            const auto& local_core = is_sender ? conn.sender_core : conn.receiver_core;
+            if (!mesh_device->is_local(local_core.device_coord)) {
+                continue;  // Another rank owns this core and reports it itself.
+            }
+            auto* local_device = mesh_device->get_device(local_core.device_coord);
+            if (local_device == nullptr) {
+                continue;
+            }
+            const auto& peer_core = is_sender ? conn.receiver_core : conn.sender_core;
+            auto local_node = socket->get_fabric_node_id(local_ep, local_core.device_coord);
+            auto peer_node = socket->get_fabric_node_id(peer_ep, peer_core.device_coord);
+
+            // One mesh id per side, so every connection agrees.
+            socket_data.local_mesh_id = *local_node.mesh_id;
+            socket_data.peer_mesh_id = *peer_node.mesh_id;
+
+            const auto core_key = std::tuple(
+                static_cast<uint32_t>(local_device->id()),
+                static_cast<uint32_t>(local_core.core_coord.x),
+                static_cast<uint32_t>(local_core.core_coord.y));
+            // Every connection on this core agrees on these.
+            auto& core_data = by_core[core_key];
+            core_data.chip_id = local_device->id();
+            core_data.core.core_x = local_core.core_coord.x;
+            core_data.core.core_y = local_core.core_coord.y;
+            core_data.core.fabric_chip_id = local_node.chip_id;
+            auto& peer = core_data.peers.emplace_back();
+            peer.fabric_chip_id = peer_node.chip_id;
+            peer.core_x = peer_core.core_coord.x;
+            peer.core_y = peer_core.core_coord.y;
+        }
+        if (by_core.empty()) {
+            return;  // this rank owns no core of this socket
+        }
+        socket_data.local_cores.reserve(by_core.size());
+        for (auto& [key, core_data] : by_core) {
+            socket_data.local_cores.push_back(std::move(core_data));
+        }
+        if (data->mesh_socket_logging_enabled) {
+            data->logger.log_mesh_socket_created(config_buffer.get(), socket_data);
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_sockets_data.insert_or_assign(config_buffer.get(), std::move(socket_data));
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh socket created: {}", e.what());
+    }
+}
+
 void Inspector::mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
     if (!is_enabled()) {
         return;
@@ -392,7 +533,7 @@ void Inspector::emit_debug_entry(
             slot.operation_name = operation_name;
             slot.tensor_specs = std::move(tensor_specs);
             slot.trace_id = trace_id;
-            if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
+            if (data->runtime_entries_logging_enabled) {
                 data->logger.log_runtime_entry(slot);
             }
         } else {
@@ -409,7 +550,7 @@ void Inspector::emit_debug_entry(
             } else {
                 data->runtime_entries_write_pos++;
             }
-            if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
+            if (data->runtime_entries_logging_enabled) {
                 data->logger.log_runtime_entry(slot);
             }
         }
@@ -572,7 +713,7 @@ void Inspector::enable_kernel_path_collection() {
     }
 }
 
-std::string Inspector::get_kernel_path_from_watcher_kernel_id(int watcher_kernel_id) {
+std::string Inspector::get_kernel_elf_path(int watcher_kernel_id, uint32_t processor_index) {
     std::string elf_path;
 
     if (!is_enabled()) {
@@ -584,29 +725,17 @@ std::string Inspector::get_kernel_path_from_watcher_kernel_id(int watcher_kernel
         return elf_path;
     }
     try {
-        if (data->kernel_path_collection_enabled) {
-            std::lock_guard<std::mutex> lock(data->kernel_path_mutex);
-            auto kernel_path_it = data->kernel_id_to_path.find(watcher_kernel_id);
-            if (kernel_path_it != data->kernel_id_to_path.end()) {
-                elf_path = kernel_path_it->second;
-            }
-        } else {
-            std::lock_guard<std::mutex> lock(data->programs_mutex);
-            auto program_id_it = data->kernel_id_to_program_id.find(watcher_kernel_id);
-            if (program_id_it != data->kernel_id_to_program_id.end()) {
-                auto program_id = data->kernel_id_to_program_id.at(watcher_kernel_id);
-                auto program_data_it = data->programs_data.find(program_id);
-                if (program_data_it != data->programs_data.end()) {
-                    auto& program_data = program_data_it->second;
-                    auto kernel_data_it = program_data.kernels.find(watcher_kernel_id);
-                    if (kernel_data_it != program_data.kernels.end()) {
-                        elf_path = kernel_data_it->second.path;
-                    }
-                }
-            }
+        std::lock_guard<std::mutex> lock(data->kernel_path_mutex);
+        auto kernel_it = data->kernel_id_to_processor_elf_paths.find(watcher_kernel_id);
+        if (kernel_it != data->kernel_id_to_processor_elf_paths.end() && processor_index < kernel_it->second.size()) {
+            elf_path = kernel_it->second[processor_index];
         }
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to get ELF path from watcher kernel ID {}: {}", watcher_kernel_id, e.what());
+        TT_INSPECTOR_LOG(
+            "Failed to get ELF path for watcher kernel ID {} processor index {}: {}",
+            watcher_kernel_id,
+            processor_index,
+            e.what());
     }
     return elf_path;
 }

@@ -8,104 +8,168 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+namespace ckl = compute_kernel_lib;
+
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
 
-    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
-    constexpr uint32_t Wt = get_compile_time_arg_val(8);
-    constexpr uint32_t Ht = get_compile_time_arg_val(9);  // How many rows (tiles) in n_heads dimension
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto Ht = get_arg(args::Ht);  // How many rows (tiles) in n_heads dimension
+    constexpr auto bulk_block_input = [](auto dfb_id) {
+        return ckl::input(
+            dfb_id,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::AtEnd,
+            ckl::InputTileMapping::Block,
+            ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto held_block_input = [](auto dfb_id) {
+        return ckl::input(
+            dfb_id,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::None,
+            ckl::InputTileMapping::Block,
+            ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto bulk_output = [](auto dfb_id) {
+        return ckl::output(dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
+    };
 
-    mm_init(in_cb, trans_mat_cb, out_cb);
-    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+    DataflowBuffer in_dfb_obj(dfb::input);
+    DataflowBuffer cos_dfb_obj(dfb::cos);
+    DataflowBuffer sin_dfb_obj(dfb::sin);
+    DataflowBuffer trans_mat_dfb_obj(dfb::trans_mat);
+    DataflowBuffer rotated_in_interm_dfb_obj(dfb::rotated_interm);
+    DataflowBuffer cos_interm_dfb_obj(dfb::cos_interm);
+    DataflowBuffer sin_interm_dfb_obj(dfb::sin_interm);
+    DataflowBuffer out_dfb_obj(dfb::out);
 
-    // Get the trans_mat
-    cb_reserve_back(trans_mat_cb, onetile);
-    cb_push_back(trans_mat_cb, onetile);
-    cb_wait_front(trans_mat_cb, onetile);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::input, dfb::trans_mat, dfb::out);
+    matmul_init(dfb::input, dfb::trans_mat);
+    compute_kernel_hw_startup(dfb::rotated_interm, dfb::sin, dfb::sin_interm);  // General Init for all binary ops
 
-    // Get the sin/cos matrices
+    // Get the trans_mat. The resident/borrowed shard is already in L1; this kernel advances the DFB
+    // (reserve_back/push_back) to signal it available, then consumes it. On Quasar a push with no
+    // intervening pack trips the TEN-4746 guard (llk_io_pack.h) — there is nothing to pack (the data
+    // is resident), so dummy_pack emits the required no-write PACR that orders the push after the wait
+    // and disarms the guard. WH/BH have no such guard.
+    trans_mat_dfb_obj.reserve_back(onetile);
+#ifdef ARCH_QUASAR
+    dummy_pack(dfb::trans_mat);
+#endif
+    trans_mat_dfb_obj.push_back(onetile);
+    trans_mat_dfb_obj.wait_front(onetile);
+
+    // Get the sin/cos matrices (resident shards; see the dummy_pack note above).
     // TODO: To parallelize across multiple batch, this should be in a batch loop
-    cb_reserve_back(sin_cb, Wt);
-    cb_reserve_back(cos_cb, Wt);
-
-    cb_push_back(sin_cb, Wt);
-    cb_push_back(cos_cb, Wt);
+    sin_dfb_obj.reserve_back(Wt);
+    cos_dfb_obj.reserve_back(Wt);
+#ifdef ARCH_QUASAR
+    dummy_pack(dfb::sin);
+    dummy_pack(dfb::cos);
+#endif
+    sin_dfb_obj.push_back(Wt);
+    cos_dfb_obj.push_back(Wt);
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
-        cb_reserve_back(rotated_in_interm_cb, Wt);
-        cb_reserve_back(sin_interm_cb, Wt);
-        cb_reserve_back(cos_interm_cb, Wt);
-        cb_reserve_back(out_cb, Wt);
+        rotated_in_interm_dfb_obj.reserve_back(Wt);
+        sin_interm_dfb_obj.reserve_back(Wt);
+        cos_interm_dfb_obj.reserve_back(Wt);
+        out_dfb_obj.reserve_back(Wt);
 
-        // Get the input
-        cb_reserve_back(in_cb, Wt);
-        cb_push_back(in_cb, Wt);
-        cb_wait_front(in_cb, Wt);
+        // Get the input (resident shard; see the dummy_pack note above).
+        in_dfb_obj.reserve_back(Wt);
+#ifdef ARCH_QUASAR
+        dummy_pack(dfb::input);
+#endif
+        in_dfb_obj.push_back(Wt);
+        in_dfb_obj.wait_front(Wt);
 
         // Do the computation
 
         // rotated = x @ trans_mat
-        mm_init_short(in_cb, trans_mat_cb);
+        matmul_init(dfb::input, dfb::trans_mat);
+#ifdef ARCH_QUASAR
+        // Quasar: the packer BFD must be programmed for the exact output DFB before pack_tile (quirk #1,
+        // re-init per DFB-id change). The last pack config was the binary-phase hw_startup (dfb::sin_interm),
+        // so retarget it to rotated_interm here or pack_tile trips the pack re-init guard (llk_pack_tile_api.h).
+        pack_init(dfb::rotated_interm);
+#endif
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
-            matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
-            pack_tile(j, rotated_in_interm_cb, j);
+            matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
+            pack_tile(j, dfb::rotated_interm, j);
         }
         REL();
-        cb_push_back(rotated_in_interm_cb, Wt);
-        cb_wait_front(rotated_in_interm_cb, Wt);
+        rotated_in_interm_dfb_obj.push_back(Wt);
+        mul_bcast_rows_init(dfb::rotated_interm, dfb::sin);
+#ifdef ARCH_QUASAR
+        // Quasar (quirk #1, re-init per DFB-id change): this InitReconfigOwner::Caller chain emits no setup,
+        // so the caller owns the pack BFD. The packer was last programmed for rotated_interm (pack_init above),
+        // so retarget it to sin_interm or the chain's PackTile trips the pack re-init guard (llk_pack_tile_api.h).
+        pack_init(dfb::sin_interm);
+#endif
+        // sin_interim = rotated * sin
+        ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+            ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                bulk_block_input(dfb::rotated_interm),
+                ckl::input(held_block_input(dfb::sin), ckl::BroadcastDim::Row)>{},
+            ckl::PackTile<bulk_output(dfb::sin_interm)>{});
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
-            pack_tile(j, sin_interm_cb, j);
-        }
-        REL();
-        cb_push_back(sin_interm_cb, Wt);
-        cb_pop_front(rotated_in_interm_cb, Wt);
+#ifdef ARCH_QUASAR
+        // Quasar (quirk #1): another InitReconfigOwner::Caller chain, but with DIFFERENT operands (input, cos)
+        // than the sin chain (rotated_interm, sin). WH/BH reuse the one op-level init above (operands are just
+        // execute args); Quasar bakes the operand BFDs into the init, so re-init BOTH the unpack side (input,
+        // cos -> llk_unpack_AB_api.h reinit guard) and the pack side (cos_interm) for this chain.
+        mul_bcast_rows_init(dfb::input, dfb::cos);
+        pack_init(dfb::cos_interm);
+#endif
+        // cos_interim = x * cos
+        ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+            ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(
+                    dfb::input,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::InputTileMapping::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(held_block_input(dfb::cos), ckl::BroadcastDim::Row)>{},
+            ckl::PackTile<bulk_output(dfb::cos_interm)>{});
 
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // cos_interim = x * cos
-            mul_tiles_bcast<BroadcastType::ROW>(in_cb, cos_cb, j, j, j);
-            pack_tile(j, cos_interm_cb, j);
-        }
-        REL();
-        cb_push_back(cos_interm_cb, Wt);
-        cb_pop_front(in_cb, Wt);  // Done with input
-
-        cb_wait_front(sin_interm_cb, Wt);
-        cb_wait_front(cos_interm_cb, Wt);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // out = cos_interim + sin_interim
-            add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
-            pack_tile(j, out_cb, j);
-        }
-        REL();
-        cb_push_back(out_cb, Wt);
-        cb_pop_front(sin_interm_cb, Wt);
-        cb_pop_front(cos_interm_cb, Wt);
+#ifdef ARCH_QUASAR
+        // Quasar (quirk #1): ckl::add uses the default InitReconfigOwner::Chain, so it re-inits the UNPACK
+        // side (add_tiles_init for cos_interm/sin_interm) itself -- but the chain does reconfig, not pack_init,
+        // so it does NOT re-program the pack BFD. Retarget the packer to `out` before its PackTile.
+        pack_init(dfb::out);
+#endif
+        // out = cos_interim + sin_interim
+        ckl::add<bulk_block_input(dfb::cos_interm), bulk_block_input(dfb::sin_interm), bulk_output(dfb::out)>(
+            ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
     }
 
-    // Done with the sin/cos matrices, so remove from CB
-    cb_pop_front(sin_cb, Wt);
-    cb_pop_front(cos_cb, Wt);
+    // Done with the sin/cos matrices, so remove from DFB
+    sin_dfb_obj.pop_front(Wt);
+    cos_dfb_obj.pop_front(Wt);
 
-    // Done with the transformation matrix, so remove from CB
-    cb_pop_front(trans_mat_cb, onetile);
+    // Done with the transformation matrix, so remove from DFB
+    trans_mat_dfb_obj.pop_front(onetile);
 }

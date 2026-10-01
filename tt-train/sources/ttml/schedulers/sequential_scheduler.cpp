@@ -4,24 +4,36 @@
 
 #include "sequential_scheduler.hpp"
 
+#include <fmt/format.h>
+
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
+
 namespace {
-const std::string kCurrentScheduler = "current_scheduler/";
+
+// Per-child key prefix used to namespace each wrapped scheduler's state in the
+// flat ``StateDict``.
+std::string scheduler_prefix(size_t index) {
+    return fmt::format("scheduler_{}/", index);
 }
+
+}  // namespace
+
 namespace ttml::schedulers {
 SequentialScheduler::SequentialScheduler(
     optimizers::OptimizerBase *optimizer,
     std::vector<std::unique_ptr<LRSchedulerBase>> schedulers,
     std::vector<size_t> milestones) :
-    LRSchedulerBase(optimizer),
-    m_schedulers(std::move(schedulers)),
-    m_milestones(std::move(milestones)),
-    m_current_scheduler_index(0),
-    m_current_step_in_scheduler(0),
-    m_last_lr(optimizer->get_lr()) {
+    LRSchedulerBase(optimizer), m_schedulers(std::move(schedulers)), m_milestones(std::move(milestones)) {
     if (m_schedulers.empty()) {
         throw std::invalid_argument("SequentialScheduler requires at least one scheduler.");
+    }
+
+    if (m_milestones.size() != m_schedulers.size()) {
+        throw std::invalid_argument(fmt::format(
+            "SequentialScheduler: milestones.size() ({}) must equal schedulers.size() ({}).",
+            m_milestones.size(),
+            m_schedulers.size()));
     }
 
     // Validate that each scheduler is non-null
@@ -30,6 +42,13 @@ SequentialScheduler::SequentialScheduler(
             throw std::invalid_argument("Null scheduler provided to SequentialScheduler.");
         }
     }
+
+    // The children were constructed back-to-back on the same optimizer, so the
+    // optimizer currently holds the LAST child's construction-time LR. Only the
+    // first child is active; restore its initial LR. Mirrors PyTorch's
+    // SequentialLR, which resets the LR to initial_lr and redoes the initial
+    // step of the first scheduler only.
+    update_lr(m_schedulers.front()->get_last_lr());
 }
 void SequentialScheduler::step() {
     if (m_current_scheduler_index >= m_schedulers.size()) {
@@ -57,30 +76,48 @@ float SequentialScheduler::get_last_lr() const {
     }
     return m_last_lr;
 }
-float SequentialScheduler::get_current_lr() const {
-    // The current LR of the optimizer should reflect the last scheduler's step
-    return get_optimizer()->get_lr();
-}
 
 void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
     m_current_step_in_scheduler = serialization::get_value_type<int>(dict, "m_current_step_in_scheduler");
-    m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
+    const float restored_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
     m_current_scheduler_index = serialization::get_value_type<size_t>(dict, "m_current_scheduler_index");
-    serialization::StateDict current_scheduler_dict;
-    for (auto &[key, value] : dict) {
-        if (key.find(kCurrentScheduler) == 0) {
-            current_scheduler_dict[key.substr(kCurrentScheduler.length())] = value;
+
+    // Restore every wrapped child scheduler's state. Each child ``i`` reads
+    // back its keys from the flat dict under the ``scheduler_{i}/`` prefix.
+    //
+    // NOTE: This assumes the destination ``SequentialScheduler`` was
+    // constructed with the same number of children as the source. A
+    // size mismatch will cause the child's ``set_state_dict`` to throw
+    // because expected keys won't be present.
+    for (size_t i = 0; i < m_schedulers.size(); ++i) {
+        const auto prefix = scheduler_prefix(i);
+        serialization::StateDict child_dict;
+        for (const auto &[key, value] : dict) {
+            if (key.compare(0, prefix.size(), prefix) == 0) {
+                child_dict[key.substr(prefix.size())] = value;
+            }
         }
+        m_schedulers[i]->set_state_dict(child_dict);
     }
-    m_schedulers[m_current_scheduler_index]->set_state_dict(current_scheduler_dict);
+
+    // Each child's set_state_dict pushed ITS saved live LR to the optimizer,
+    // so the optimizer now holds the last child's — re-apply this chain's own
+    // live LR (the active child's).
+    update_lr(restored_last_lr);
 }
 serialization::StateDict SequentialScheduler::get_state_dict() const {
     serialization::StateDict res;
     res["m_current_step_in_scheduler"] = m_current_step_in_scheduler;
     res["m_last_lr"] = m_last_lr;
     res["m_current_scheduler_index"] = m_current_scheduler_index;
-    for (auto &[key, value] : m_schedulers[m_current_scheduler_index]->get_state_dict()) {
-        res[kCurrentScheduler + key] = value;
+
+    // Save every wrapped child scheduler's state under the ``scheduler_{i}/``
+    // key prefix to avoid name collisions in the flat StateDict layout.
+    for (size_t i = 0; i < m_schedulers.size(); ++i) {
+        const auto prefix = scheduler_prefix(i);
+        for (const auto &[key, value] : m_schedulers[i]->get_state_dict()) {
+            res[prefix + key] = value;
+        }
     }
     return res;
 };

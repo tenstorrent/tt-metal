@@ -13,7 +13,8 @@ namespace ttnn::experimental::prim {
 struct NlpCreateQkvHeadsRopeDeviceOperation {
     using operation_attributes_t = NlpCreateQkvHeadsRopeParams;
     using tensor_args_t = NlpCreateQkvHeadsRopeInputs;
-    using spec_return_value_t = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
+    using spec_return_value_t =
+        std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
     using program_factory_t = std::variant<NlpCreateQkvHeadsRopeProgramFactory>;
     using shared_variables_t = NlpCreateQkvHeadsRopeProgramFactory::shared_variables_t;

@@ -52,8 +52,9 @@ uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::Mes
     for (int i = 0; i < *distributed_context->size(); i++) {
         rank_translation_table[Rank{i}] = Rank{i};
     }
-    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(sender_mesh_id, rank_translation_table);
-    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(recv_mesh_id, rank_translation_table);
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(control_plane, sender_mesh_id, rank_translation_table);
+    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(control_plane, recv_mesh_id, rank_translation_table);
     Rank controller_rank = *std::min_element(sender_ranks.begin(), sender_ranks.end());
     if (distributed_context->rank() == controller_rank) {
         seed = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -62,19 +63,19 @@ uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::Mes
                 continue;
             }
             distributed_context->send(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 rank,
                 tt::tt_metal::distributed::multihost::Tag{0});
         }
         for (const auto& rank : recv_ranks) {
             distributed_context->send(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 rank,
                 tt::tt_metal::distributed::multihost::Tag{0});
         }
     } else {
         distributed_context->recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
             controller_rank,
             tt::tt_metal::distributed::multihost::Tag{0});
     }
@@ -285,7 +286,8 @@ std::vector<tt::tt_fabric::MeshId> get_neighbor_mesh_ids(SystemConfig system_con
     std::vector<tt::tt_fabric::MeshId> recv_mesh_ids;
 
     if (system_config == SystemConfig::NANO_EXABOX || system_config == SystemConfig::EXABOX) {
-        // Exabox and Nano-Exabox currently have 5 hosts. Sender ranks assignment is customized for a particular Rank File.
+        // Exabox and Nano-Exabox currently have 5 hosts. Sender ranks assignment is customized for a particular Rank
+        // File.
         recv_mesh_ids = {
             tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{2}, tt::tt_fabric::MeshId{3}, tt::tt_fabric::MeshId{4}};
     } else if (

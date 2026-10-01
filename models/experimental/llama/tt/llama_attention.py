@@ -14,7 +14,7 @@ from models.common.helper_funcs import Linear as TTLinear
 from models.common.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
-    pad_by_zero,
+    torch2tt_tensor,
 )
 
 
@@ -171,7 +171,7 @@ class TtLlamaAttention(nn.Module):
         self.value_linear = TTLinear(self.v_weights.padded_shape[-1], self.v_weights.padded_shape[-2], self.v_weights)
         self.attn_linear = TTLinear(self.o_weights.padded_shape[-1], self.o_weights.padded_shape[-2], self.o_weights)
 
-        self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
+        self.scalar = torch2tt_tensor(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -261,7 +261,7 @@ class TtLlamaAttention(nn.Module):
             attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
 
         if not isinstance(attn_weights, ttnn.Tensor):
-            attn_weights = pad_by_zero(attn_weights, self.device)[0]
+            attn_weights = torch2tt_tensor(attn_weights, self.device)
         value_states = torch_to_tt_tensor_rm(value_states, self.device)
 
         attn_weights = ttnn.softmax_in_place(attn_weights)

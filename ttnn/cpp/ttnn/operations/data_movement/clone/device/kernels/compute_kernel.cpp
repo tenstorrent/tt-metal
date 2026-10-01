@@ -2,29 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/tile_move_copy.h"
-#include "experimental/circular_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 void kernel_main() {
-    uint32_t src_cb_id = get_compile_time_arg_val(0);
-    uint32_t dst_cb_id = get_compile_time_arg_val(1);
-    uint32_t num_tiles = get_compile_time_arg_val(2);
-    experimental::CircularBuffer src_cb(src_cb_id);
-    experimental::CircularBuffer dst_cb(dst_cb_id);
-    unary_op_init_common(src_cb_id, dst_cb_id);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        src_cb.wait_front(1);
-        tile_regs_acquire();
-        copy_tile(src_cb_id, 0, 0);
-        tile_regs_commit();
-        src_cb.pop_front(1);
+    constexpr auto num_tiles = get_arg(args::num_tiles);
 
-        dst_cb.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, dst_cb_id, 0);
-        tile_regs_release();
-        dst_cb.push_back(1);
-    }
+    compute_kernel_hw_startup(dfb::src, dfb::dst);
+
+    compute_kernel_lib::copy<
+        compute_kernel_lib::input(
+            dfb::src,
+            compute_kernel_lib::WaitPolicy::PerTile,
+            compute_kernel_lib::PopPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled),
+        compute_kernel_lib::output(
+            dfb::dst,
+            compute_kernel_lib::ReservePolicy::PerTile,
+            compute_kernel_lib::PushPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::IterationShape::tiles(num_tiles));
 }

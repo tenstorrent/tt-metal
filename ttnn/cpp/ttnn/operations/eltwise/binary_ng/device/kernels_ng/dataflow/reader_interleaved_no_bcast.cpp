@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -31,30 +31,35 @@ void kernel_main() {
     const uint32_t n_stride_b = get_arg_val<uint32_t>(18);
     const uint32_t c_stride_b = get_arg_val<uint32_t>(19);
     const uint32_t src_num_tiles_b = get_arg_val<uint32_t>(20);
+    // Each operand's own tile-row width. An operand may be padded wider than the output (e.g. a caller
+    // over-pads via tilize_with_val_padding), so its per-row page-id advance must use its own Wt, not the
+    // output's Wt (arg 13, used below only to derive per-core start/end tile coordinates in output space).
+    const uint32_t a_row_wt = get_arg_val<uint32_t>(21);
+    const uint32_t b_row_wt = get_arg_val<uint32_t>(22);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
 
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
-    constexpr auto src_b_args =
+    [[maybe_unused]] constexpr auto src_b_args =
         TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(cb_id_src);
-    experimental::CircularBuffer cb_src_b(cb_id_src_b);
+    Noc noc;
+    DataflowBuffer dfb_src(cb_id_src);
+    DataflowBuffer dfb_src_b(cb_id_src_b);
 
 #if SRC_SHARDED
-    cb_src.reserve_back(src_num_tiles);
-    cb_src.push_back(src_num_tiles);
+    dfb_src.reserve_back(src_num_tiles);
+    dfb_src.push_back(src_num_tiles);
 #else
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
+    const uint32_t src_tile_bytes = dfb_src.get_entry_size();
     const auto src = TensorAccessor(src_args, src_addr);
 #endif
 #if SRC_SHARDED_B
-    cb_src_b.reserve_back(src_num_tiles_b);
-    cb_src_b.push_back(src_num_tiles_b);
+    dfb_src_b.reserve_back(src_num_tiles_b);
+    dfb_src_b.push_back(src_num_tiles_b);
 #else
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
+    const uint32_t src_tile_bytes_b = dfb_src_b.get_entry_size();
     const auto src_b = TensorAccessor(src_b_args, src_addr_b);
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B
@@ -79,15 +84,16 @@ void kernel_main() {
 
     // this is the INPUT tile offset
     uint32_t tile_offset =
-        start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride + start_th * Wt;
-    uint32_t next_c_shift = c_stride - HtWt;
+        start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride + start_th * a_row_wt;
+    uint32_t next_c_shift = c_stride - Ht * a_row_wt;
     uint32_t next_n_shift = n_stride - c_stride * C;
     uint32_t next_d_shift = d_stride - n_stride * N;
     uint32_t next_nd_shift = nD_stride - d_stride * D;
 
     uint32_t tile_offset_b =
-        start_nd * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b + start_th * Wt;
-    uint32_t next_c_shift_b = c_stride_b - HtWt;
+        start_nd * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b +
+        start_th * b_row_wt;
+    uint32_t next_c_shift_b = c_stride_b - Ht * b_row_wt;
     uint32_t next_n_shift_b = n_stride_b - c_stride_b * C;
     uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
     uint32_t next_nd_shift_b = nD_stride_b - d_stride_b * D;
@@ -101,16 +107,16 @@ void kernel_main() {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_SHARDED
-                            cb_src.reserve_back(onetile);
+                            dfb_src.reserve_back(onetile);
                             noc.async_read(
-                                src, cb_src, src_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+                                src, dfb_src, src_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
 #endif
 #if !SRC_SHARDED_B
                             // read a tile from src_b
-                            cb_src_b.reserve_back(onetile);
+                            dfb_src_b.reserve_back(onetile);
                             noc.async_read(
                                 src_b,
-                                cb_src_b,
+                                dfb_src_b,
                                 src_tile_bytes_b,
                                 {.page_id = tile_offset_b + tw},
                                 {.offset_bytes = 0});
@@ -119,18 +125,18 @@ void kernel_main() {
                             noc.async_read_barrier();
 #endif
 #if !SRC_SHARDED
-                            cb_src.push_back(onetile);
+                            dfb_src.push_back(onetile);
 #endif
 #if !SRC_SHARDED_B
-                            cb_src_b.push_back(onetile);
+                            dfb_src_b.push_back(onetile);
 #endif
                         }
                         if constexpr (!has_sharding) {
                             // next row of tiles should start at the first column
                             start_tw = 0;
                         }
-                        tile_offset += Wt;
-                        tile_offset_b += Wt;
+                        tile_offset += a_row_wt;
+                        tile_offset_b += b_row_wt;
                     }
                     tile_offset += next_c_shift;
                     tile_offset_b += next_c_shift_b;

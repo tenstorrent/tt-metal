@@ -5,10 +5,17 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
+
+// BCAST_LLK is only emitted by the host for the TTT variant; TTS/TST always take the
+// software fill path. Default it here so the guards below do not rely on an undefined
+// macro evaluating to 0.
+#ifndef BCAST_LLK
+#define BCAST_LLK 0
+#endif
 
 void kernel_main() {
     // Standard first 5 arguments
@@ -45,13 +52,13 @@ void kernel_main() {
     constexpr auto src1_args =
         TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(cb_id_src);
-    experimental::CircularBuffer cb_src_b(cb_id_src_b);
+    Noc noc;
+    CircularBuffer cb_src(cb_id_src);
+    CircularBuffer cb_src_b(cb_id_src_b);
 
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
     const auto src = TensorAccessor(src0_args, src0_addr);
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
+    const uint32_t src_tile_bytes_b = cb_src_b.get_tile_size();
     const auto src_b = TensorAccessor(src1_args, src1_addr);
 
     constexpr uint32_t onetile = 1;
@@ -122,10 +129,10 @@ void kernel_main() {
                             noc.async_read_barrier();
 #endif
 #if SRC_BCAST_A && !BCAST_LLK  // no sharding support for row bcast yet
-                            FILL_TILE_WITH_FIRST_ROW(cb_id_src);
+                            FILL_TILE_WITH_FIRST_ROW(cb_src.get_write_ptr());
 #endif
 #if SRC_BCAST_B && !BCAST_LLK  // no sharding support for row bcast yet
-                            FILL_TILE_WITH_FIRST_ROW_B(cb_id_src_b);
+                            FILL_TILE_WITH_FIRST_ROW_B(cb_src_b.get_write_ptr());
 #endif
 #if !SRC_SHARDED_A
                             cb_src.push_back(onetile);

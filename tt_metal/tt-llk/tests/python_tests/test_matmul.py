@@ -7,20 +7,31 @@ import torch
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    MathFidelity,
+    PerfRunType,
+    Transpose,
+    format_dict,
+)
 from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
+    DEST_SYNC,
+    LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
+    PERF_RUN_TYPE,
+    THROTTLE_LEVEL,
     TILE_COUNT,
+    UNPACK_TRANS_FACES,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
@@ -87,12 +98,14 @@ def test_matmul(
     input_A_dimensions = format_dest_acc_and_dims[2][0]
     input_B_dimensions = format_dest_acc_and_dims[2][1]
 
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_A_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_B_dimensions,
-        sfpu=False,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
     )
 
     # Calculate all matmul dimensions using helper function
@@ -127,11 +140,18 @@ def test_matmul(
     configuration = TestConfig(
         "sources/matmul_test.cpp",
         formats,
-        templates=[MATH_FIDELITY(math_fidelity)],
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            DEST_SYNC(),
+            THROTTLE_LEVEL(),
+        ],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
+            LOOP_FACTOR(1),
+            UNPACK_TRANS_FACES(Transpose.No),
         ],
         variant_stimuli=StimuliConfig(
             tilized_A.flatten(),

@@ -8,7 +8,7 @@
 namespace ttnn::experimental {
 
 std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
-    const ttnn::Tensor& input_tensor,
+    const std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>>& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -32,16 +32,35 @@ std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<Tensor>& optional_rs_output_tensor,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
-    const std::optional<const Tensor>& addcmul_input_tensor2) {
+    const std::optional<const Tensor>& addcmul_input_tensor2,
+    std::optional<tt::tt_metal::DataType> dtype,
+    const std::optional<const Tensor>& mm_progress_counters,
+    std::optional<uint32_t> mm_window_blocks,
+    const std::optional<const Tensor>& mm_credit_counters) {
+    // Unpack: single Tensor, or [prefix, suffix] virtually concatenated over K (concat-free).
+    ttnn::Tensor main_input;
+    std::optional<ttnn::Tensor> second_input;
+    if (const auto* inputs = std::get_if<std::vector<ttnn::Tensor>>(&input_tensor)) {
+        TT_FATAL(
+            inputs->size() == 2,
+            "minimal_matmul_strided_reduce_scatter_async: list input must be exactly 2 tensors "
+            "[prefix, suffix] for fused concat over K, got {}",
+            inputs->size());
+        main_input = (*inputs)[0];
+        second_input = (*inputs)[1];
+    } else {
+        main_input = std::get<ttnn::Tensor>(input_tensor);
+    }
+
     auto all_outputs = ttnn::prim::minimal_matmul_strided_reduce_scatter_async(
-        input_tensor,
+        main_input,
         weight_tensor,
         dim,
         multi_device_global_semaphore,
         reduce_scatter_core_grid_offset,
         num_links,
         memory_config_mm,
-        rs_output_mem_config.value_or(input_tensor.memory_config()),
+        rs_output_mem_config.value_or(main_input.memory_config()),
         rs_intermediate_mem_config,
         topology,
         cluster_axis,
@@ -59,7 +78,12 @@ std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
         optional_rs_output_tensor,
         fused_ternary_scalar,
         addcmul_input_tensor1,
-        addcmul_input_tensor2);
+        addcmul_input_tensor2,
+        dtype,
+        mm_progress_counters,
+        mm_window_blocks,
+        mm_credit_counters,
+        second_input);
 
     return {std::move(all_outputs[0]), std::move(all_outputs[2])};
 }

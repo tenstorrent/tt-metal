@@ -56,7 +56,7 @@ enum class ConvT2dExecutionPath {
 // Helper function to determine which conv2d execution path to take based on
 // slice configuration and input tensor properties
 ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
-    const tt::tt_metal::StorageType& storage_type,
+    const ttnn::StorageType& storage_type,
     const MemoryConfig& memory_config,
     const std::optional<const op_slicing::Op2DSliceConfig>& slice_config);
 
@@ -86,6 +86,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     bool has_bias,
     uint32_t groups,

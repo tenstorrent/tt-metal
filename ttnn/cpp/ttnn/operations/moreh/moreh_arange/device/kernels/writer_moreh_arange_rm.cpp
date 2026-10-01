@@ -5,6 +5,10 @@
 #include <cstdlib>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 #define TILE_WIDTH 32
 
@@ -15,10 +19,12 @@ void kernel_main() {
     uint32_t start = get_arg_val<uint32_t>(3);
     uint32_t step = get_arg_val<uint32_t>(4);
     uint32_t element_size = get_arg_val<uint32_t>(5);
+    // Width (in bytes) of this core's final chunk, computed by the program factory from
+    // the logical width of the output: a ROW_MAJOR buffer is exactly as long as its data,
+    // so the last chunk must not write a full TILE_WIDTH worth of elements past its end.
+    uint32_t last_chunk_bytes = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-
-    uint32_t num_bytes_per_tile = TILE_WIDTH * element_size;
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
     const auto s0 = TensorAccessor(dst_args, dst_addr);
@@ -32,17 +38,23 @@ void kernel_main() {
     start_u.u = start;
     step_u.u = step;
 
+    Noc noc;
+    CircularBuffer cb_out_obj(cb_out);
+
     for (uint32_t t = 0; t < num_tiles; t++) {
-        cb_reserve_back(cb_out, 1);
+        cb_out_obj.reserve_back(1);
 
         uint32_t tile_idx = tile_offset + t;
+        // Only the final chunk of the final core can be narrower than a full tile.
+        const uint32_t chunk_width =
+            (t + 1 == num_tiles) ? (last_chunk_bytes / element_size) : TILE_WIDTH;
 
-        uint32_t w_addr = get_write_ptr(cb_out);
+        uint32_t w_addr = cb_out_obj.get_write_ptr();
 
 #ifdef OUTPUT_DTYPE_BFLOAT16
-        auto ptr = reinterpret_cast<uint16_t*>(w_addr);
+        CoreLocalMem<uint16_t> ptr(w_addr);
 
-        for (uint32_t w = 0; w < TILE_WIDTH; w++) {
+        for (uint32_t w = 0; w < chunk_width; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
             value val;
             val.f = start_u.f + step_u.f * idx;
@@ -50,9 +62,9 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
-        auto ptr = reinterpret_cast<uint32_t*>(w_addr);
+        CoreLocalMem<uint32_t> ptr(w_addr);
 
-        for (uint32_t w = 0; w < TILE_WIDTH; w++) {
+        for (uint32_t w = 0; w < chunk_width; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
             int32_t val;
             val = start_u.f + step_u.f * idx;
@@ -60,9 +72,9 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
-        auto ptr = reinterpret_cast<uint32_t*>(w_addr);
+        CoreLocalMem<uint32_t> ptr(w_addr);
 
-        for (uint32_t w = 0; w < TILE_WIDTH; w++) {
+        for (uint32_t w = 0; w < chunk_width; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
             value val;
             val.f = start_u.f + step_u.f * idx;
@@ -71,8 +83,12 @@ void kernel_main() {
 #endif
 
         uint32_t noc_offfset = tile_idx * TILE_WIDTH * element_size;
-        uint64_t dst_noc_addr = get_noc_addr(0, s0, noc_offfset);
-        noc_async_write(w_addr, dst_noc_addr, num_bytes_per_tile);
-        noc_async_write_barrier();
+        noc.async_write(
+            use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out_obj),
+            s0,
+            chunk_width * element_size,
+            {.offset_bytes = 0},
+            {.page_id = 0, .offset_bytes = noc_offfset});
+        noc.async_write_barrier();
     }
 }

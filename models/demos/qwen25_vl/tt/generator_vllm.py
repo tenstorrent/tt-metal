@@ -20,7 +20,13 @@ from vllm.model_executor.models.qwen2_5_vl import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
-from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
+from models.common.utility_functions import is_wormhole_b0
+from models.demos.qwen25_vl.tt.common import (
+    get_hf_visual,
+    merge_vision_tokens,
+    multimodal_rope_from_hf,
+    preprocess_inputs_prefill,
+)
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
@@ -108,10 +114,12 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
     dummy_inputs=Qwen2_5_VLDummyInputsBuilder,
 )
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
+        "supports_async_decode": False,
     }
 
     def __init__(self, *args, **kwargs):
@@ -122,6 +130,25 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         ), "Reference model and visual model must be provided for vLLM"
 
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific all-user KV-cache token capacity."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        if "Qwen2.5-VL-72B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
+            return 65_536
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     @classmethod
     def initialize_vllm_model(
@@ -159,7 +186,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
+        visual_model = DropInVisionTransformer(get_hf_visual(reference_model), vision_model_args)
 
         return cls(
             model,
@@ -280,7 +307,19 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         rope_deltas_list: list = kwargs.pop(
             "rope_deltas_all_users", None
         )  # [INFO] update the cos/sin matrices for the current users in the batch
+        slot_remap = kwargs.pop("slot_remap", None)
         if rope_deltas_list is not None:
+            # This is an authoritative list in the new compacted layout, so a
+            # further remap would apply the move twice.
             super().update_rope_deltas(rope_deltas_list)
+        elif slot_remap is not None:
+            # With no new request, vLLM may only provide the old->new layout
+            # mapping. RoPE deltas are persistent per-slot model state and must
+            # move before decode uses them, including during host sampling.
+            super().remap_rope_deltas(slot_remap)
+        if slot_remap is not None:
+            # RoPE consumes the mapping above, while the shared generator must
+            # independently move dormant/on-device sampling RNG state.
+            kwargs["slot_remap"] = slot_remap
 
         return super().decode_forward(*args, **kwargs)

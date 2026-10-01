@@ -1,11 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "send_direct_async_op_device_operation_types.hpp"
 #include "send_direct_async_op_device_operation.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
@@ -16,15 +19,31 @@ void SendDirectAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& mesh_socket = args.mesh_socket;
     const auto& input_tensor = tensor_args;
 
-    std::vector<Tensor> input_tensors = {input_tensor};
+    // Only the handshake page goes through the FIFO; the payload is written straight into the
+    // receiver's output tensor.
     send_recv_utils::validate<tt::tt_metal::distributed::SocketEndpoint::SENDER>(
-        input_tensors, mesh_socket, "send_direct_async");
+        {input_tensor},
+        mesh_socket,
+        "send_direct_async",
+        send_recv_utils::handshake_page_size(send_recv_utils::socket_max_alignment(input_tensor, mesh_socket)));
 
-    // The handshake reads the advertised sender-buffer address back out of the socket FIFO on the
-    // receiver core, which requires the FIFO to live in L1.
+    // The receiver core reads the advertised sender-buffer address back out of the socket FIFO,
+    // which requires the FIFO to live in L1.
     TT_FATAL(
         mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::L1,
         "send_direct_async requires an L1 socket storage type");
+
+    // The program factory builds per mesh coordinate and emits an empty descriptor (no program) for
+    // devices that hold no sender core. Catch a socket that misses the tensor's mesh entirely here,
+    // otherwise it would dispatch an empty workload instead of reporting the mismatch.
+    const ttnn::MeshCoordinateRange tensor_mesh_range(input_tensor.device()->shape());
+    const auto& connections = mesh_socket.get_config().socket_connection_config;
+    TT_FATAL(
+        std::any_of(
+            connections.begin(),
+            connections.end(),
+            [&](const auto& connection) { return tensor_mesh_range.contains(connection.sender_core.device_coord); }),
+        "send_direct_async: no socket sender core lies on the input tensor's mesh");
 }
 
 SendDirectAsyncDeviceOperation::spec_return_value_t SendDirectAsyncDeviceOperation::compute_output_specs(

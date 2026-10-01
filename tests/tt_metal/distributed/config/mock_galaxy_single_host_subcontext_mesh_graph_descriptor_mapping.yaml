@@ -1,0 +1,9 @@
+# Sub-context id -> mesh graph descriptor (same MGDs as sub-contexts in
+# mock_galaxy_single_host_subcontext_a_rank_bindings.yaml and
+# mock_galaxy_single_host_subcontext_b_rank_bindings.yaml, for
+# `generate_rank_bindings` / `load_subcontext_id_to_mesh_graph_descriptor_mapping`).
+# Paths are relative to TT_METAL_HOME (repo root). If a path is not found next to this
+# file, the loader resolves it under TT_METAL_HOME when that env is set.
+subcontext_id_to_mesh_graph_descriptor:
+  0: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_single_4x4_mesh.textproto
+  1: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_dual_2x4_intermesh.textproto

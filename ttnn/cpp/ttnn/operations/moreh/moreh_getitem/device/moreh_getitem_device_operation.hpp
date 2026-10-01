@@ -10,12 +10,13 @@
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_getitem {
 struct MorehGetItemOperation {
     struct operation_attributes_t {
-        const ttnn::SmallVector<uint32_t> index_dims;
+        const ttsl::SmallVector<uint32_t> index_dims;
         // const CoreRange core_range;
         const MemoryConfig memory_config;
     };
@@ -26,55 +27,21 @@ struct MorehGetItemOperation {
         const std::optional<Tensor>& output;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct MorehGetItemRmFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            std::size_t num_cores{};
-            uint32_t core_h{};
-            ttnn::SmallVector<uint32_t> index_dims;
-            uint32_t input_dim_offset{};
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensor);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
     };
 
     struct MorehGetItemTilizedFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            std::size_t num_cores{};
-            uint32_t core_h{};
-            ttnn::SmallVector<uint32_t> index_dims;
-            uint32_t input_dim_offset{};
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensor);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<MorehGetItemRmFactory, MorehGetItemTilizedFactory>;
@@ -92,7 +59,7 @@ namespace ttnn::prim {
 ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation::tensor_return_value_t moreh_getitem(
     const Tensor& input,
     const std::vector<Tensor>& index_tensors,
-    const ttnn::SmallVector<uint32_t>& index_dims,
+    const ttsl::SmallVector<uint32_t>& index_dims,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config);
 }

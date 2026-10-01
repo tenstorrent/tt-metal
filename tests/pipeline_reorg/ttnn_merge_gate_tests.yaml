@@ -1,0 +1,189 @@
+# TTNN merge-gate smoke matrix (subset of former ttnn_sanity_tests.yaml merge_gate entries).
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+#
+# sim_wh_n150 / sim_bh_p150 SKUs run the same cmd under the ttsim simulator
+# on ubuntu-latest; ttnn-smoke-tests-impl.yaml invokes setup-ttsim for these.
+# See .github/actions/setup-ttsim/action.yml.
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
+
+- name: "ttnn example tests"
+  cmd: "./tests/scripts/run_ttnn_examples.sh"
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+    sim_wh_n150:
+      timeout: 15
+    sim_bh_p150:
+      timeout: 15
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+
+# Codegen-path coverage for every op that has one (untilize, repeat, repeat_interleave and gather
+# today). `-k codegen` selects each op's tests that pin the codegen kernels, so a newly covered op
+# joins this entry by appending its unit-test file rather than by adding another job. All four pin
+# them through the verification-only entries in ttnn._ttnn.operations.data_movement -- none of the
+# four public APIs takes an implementation argument.
+#
+# Those pinned tests are the ones worth gating a merge on: they run the codegen kernels and
+# compare against native on the same input. The generated routing matrices under
+# tests/ttnn/nightly only assert that out-of-scope shapes fall BACK to native, so nothing in
+# them fails when a codegen kernel itself breaks -- and they cost 1-5 minutes per op, which is
+# why they stay in nightly. This selection is 58 tests against the job's 5-minute budget. The last
+# recorded timing -- roughly 35s of wall-clock pytest on an N300, device bring-up and kernel
+# compiles included -- was taken over a smaller selection, so treat it as a floor.
+#
+# Hardware only, to keep the gate cheap. Codegen kernels are not blocked from ttsim -- untilize's
+# codegen tests pass on both sim SKUs and sanity runs them there -- but the simulator would
+# cost minutes here to cover a path hardware already covers in seconds.
+- name: "ttnn codegen ops"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize.py
+    tests/ttnn/unit_tests/operations/data_movement/test_repeat.py
+    tests/ttnn/unit_tests/operations/data_movement/test_repeat_interleave.py
+    tests/ttnn/unit_tests/operations/data_movement/test_gather.py
+    -k codegen
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U07M7QZ0BQA # Camilo Vega -- Slack member ID
+
+# Eltwise infra coverage: broadcast classes, tensor-scalar variants and op-dispatch liveness.
+# This gates infrastructure, not accuracy.
+#
+# Eltwise accuracy lives in the sanity and L2-nightly eltwise groups, and neither runs on a PR
+# (pr-gate and merge-gate only invoke smoke-level workflows, and sanity-tests-pr.yaml is gated
+# to forks). So an eltwise infrastructure break currently lands on main and is first seen when
+# nightly sanity goes red. This entry gates the machinery itself -- a broadcast class that stops
+# dispatching, a reader stride that goes wrong, a scalar path that stops being taken, an op that
+# stops being registered at all.
+#
+# Selection is by test name rather than by whole file, so it stays small as those files grow.
+# Two things are being covered:
+#
+# 1. Broadcast and scalar machinery, in depth:
+#   subtile ......................... the test_binary_subtile_*_bcast cases: no bcast, row, col,
+#                                     scalar, and row_b_col_a
+#   where_bcast ..................... ternary broadcast over independent H and W per operand
+#   program_cache_..._shapes ........ the broadcast-vs-cache-key interaction, where a wrong key
+#                                     silently reuses a program built for different strides
+#   test_where_tss / tst / tts ...... the tensor-scalar where variants, which are the ones that
+#   test_binary_scalar (whole file) . get missed when only the all-tensor form is exercised
+#
+# 2. One basic case per op, across the op families, so that an op dropping out of dispatch is
+#    caught here rather than in nightly sanity:
+#   unary ........................... relu, relu6, sigmoid, tanh, gelu, silu, neg, log2, log1p,
+#                                     sin, mish, tril, triu
+#   binary .......................... relational (t-t and t-s), left/right shift, atan2,
+#                                     nextafter, ldexp, logaddexp, logaddexp2, xlogy, bias_gelu,
+#                                     arithmetic operator overloads (logical and/or/xor moved to
+#                                     item 3)
+#   div family (whole file) ......... fp32 remainder/fmod, div_no_nan scalar memory-config
+#                                     plumbing, int32 div paths, output-dtype and mixed-dtype
+#                                     paths (bf16 fmod/remainder moved out, see item 3)
+#   ternary ......................... mac, lerp, addcmul, addcdiv
+#
+# 3. Checks from the two category test files, standing in for basic-case coverage this gate used
+#    to get for free from tests since deleted upstream:
+#   test_floor_div (category5) ...... replaces the deleted test_binary_floor_div_ttnn; a full
+#                                     2048x2048 sweep
+#   test_modulo_ops (+ scalar/shapes,
+#     category5) .................... replaces the deleted test_binary_fmod_bf16,
+#                                     test_remainder_scalar, test_fmod_scalar; runs a (64, 32)
+#                                     tile plus a handful of fixed shapes, not a full sweep
+#   test_logical_ops (+ scalar,
+#     category3) .................... logical_and/or/xor (and their inplace variants), t-t and
+#                                     t-s; replaces the test_binary_logical_and__ttnn /
+#                                     _or__ttnn / _xor_ttnn selectors, all three dead here since
+#                                     #57637 moved this coverage to test_binary_category3_bfloat16.py
+#   test_floor_div/test_modulo_ops together add ~2s of test time on top of this job's own device
+#   bring-up (measured in isolation), since the divide/remainder/fmod kernels are already warm
+#   from the rest of this selection; test_logical_ops (+ scalar) adds ~7s on its own (60 cases,
+#   full pairwise/broadcast bf16 grids) -- more than the other two but still a rounding error
+#   against the ~50s this job runs at locally, and it restores dispatch-liveness coverage for
+#   three ops the gate had silently lost.
+#
+# Deliberately excluded: the heavy sweeps inside those same files (isclose, celu, inverse trig,
+# fill, div-scalar dtype matrices, clamp/clip) -- they are accuracy and dtype coverage, they cost
+# minutes even with warm kernels, and they belong in the nightly eltwise groups where they already
+# run.
+#
+# 1252 tests selected locally on an N300 with a warm kernel cache -- 1225 pass, 19 skip, 8 xfail,
+# 57s of pytest (this entry is merge-queue-gated, so it hasn't run in CI on this branch; treat this
+# as a floor, not the real number, until it has). An older, smaller selection measured 45-47s of
+# pytest / 52-55s of wall-clock warm and 230s / 237s on a total ccache miss; the whole spread is
+# kernel compilation, and this job runs with enable-kernel-ccache against the shared Redis backend,
+# so it sits at the warm end. One pytest invocation on purpose: device bring-up is ~7s, so
+# splitting this into per-file entries would cost more than the tests do.
+# Hardware only. Blackhole eltwise coverage in the merge gate comes from the tt-nn-validation-basic
+# gtest suite (tests/ttnn/unit_tests/gtests/test_eltwise.cpp), which runs on bh_p150b_civ2_viommu
+# as well as wh_n150_civ2.
+- name: "ttnn eltwise infra"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_scalar.py
+    tests/ttnn/unit_tests/operations/eltwise/test_ternary.py
+    tests/ttnn/unit_tests/operations/eltwise/test_where.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary.py
+    tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py
+    tests/ttnn/unit_tests/operations/eltwise/test_relational.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py
+    tests/ttnn/unit_tests/operations/eltwise/test_ternary_composite.py
+    tests/ttnn/unit_tests/operations/eltwise/test_composite.py
+    tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category5_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category3_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category1_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category2_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py
+    -k "(subtile or where_bcast or program_cache_different_broadcast_shapes
+    or test_where_tss or test_where_tst or test_where_tts
+    or test_gelu or test_silu or test_01_volume_sin
+    or test_div_ops or test_binary_scalar
+    or test_binary_relational_ttnn or test_binary_relational_scalar_ttnn
+    or test_binary_atan2_ttnn or test_floor_div or test_modulo_ops
+    or test_logical_ops or test_binary_nextafter_ttnn
+    or test_binary_left_shift or test_binary_right_shift
+    or test_mac_ttnn or test_lerp_ttnn
+    or test_ternary_addcmul_ttnn or test_ternary_addcdiv_ttnn
+    or test_unary_composite_mish_ttnn or test_unary_composite_tril_ttnn
+    or test_unary_composite_triu_ttnn
+    or test_bias_gelu
+    or test_arithmetic_operators
+    or test_binary_category1_bfloat16 or test_binary_category2_bfloat16 or test_binary_category4_bfloat16
+    or test_unary_relu_ttnn or test_unary_relu6_ttnn or test_unary_sigmoid_ttnn
+    or test_unary_tanh_ttnn or test_unary_neg_ttnn
+    or test_unary_log2_ttnn or test_unary_log1p_ttnn)
+    and not fused_relu_with_broadcast"
+    -m "not disable_fast_runtime_mode"
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+
+# Matmul, fused and reduction coverage, reusing the Sanity op groups.
+#
+# The selection lives in the test files, as @pytest.mark.merge_gate (registered in pytest.ini),
+# not as a list of node IDs here.
+- name: "ttnn matmul fused reduction ops"
+  cmd: >-
+    pytest --timeout 60 -xv -m merge_gate
+    tests/ttnn/unit_tests/operations/matmul
+    tests/ttnn/unit_tests/operations/fused
+    tests/ttnn/unit_tests/operations/reduce
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    bh_p150b_civ2_viommu:
+      timeout: 10
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U084B1CES7M # Borys Bradel

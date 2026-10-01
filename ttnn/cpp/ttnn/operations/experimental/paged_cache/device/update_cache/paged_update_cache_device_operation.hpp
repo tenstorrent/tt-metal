@@ -6,17 +6,21 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
+
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "paged_update_cache_device_operation_types.hpp"
 #include "paged_update_cache_program_factory.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct PagedUpdateCacheDeviceOperation {
     using operation_attributes_t = PagedUpdateCacheParams;
     using tensor_args_t = PagedUpdateCacheInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<PagedUpdateCacheProgramFactory, PagedUpdateCacheMeshWorkloadFactory>;
 
@@ -49,6 +53,9 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
     const std::optional<const Tensor>& page_table,
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> num_kv_heads_override = std::nullopt,
+    std::optional<uint32_t> cache_position_modulo = std::nullopt);
 
 }  // namespace ttnn::prim

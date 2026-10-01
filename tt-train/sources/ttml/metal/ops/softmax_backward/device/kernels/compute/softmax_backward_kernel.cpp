@@ -4,6 +4,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
@@ -14,12 +15,12 @@ namespace ckernel {
 // When fp32_dest_acc_en is set, unpack/math must be explicitly reconfigured between ops (see FP32_DEST_ACC_EN).
 ALWI void mul_tiles_init_with_dt(uint32_t icb0, uint32_t icb1) {
     reconfig_data_format(icb0, icb1);
-    mul_tiles_init(icb0, icb1);
+    mul_init(icb0, icb1);
 }
 
-ALWI void sub_bcast_cols_init_short_with_dt(uint32_t icb0, uint32_t icb1) {
+ALWI void sub_bcast_cols_init_with_dt(uint32_t icb0, uint32_t icb1) {
     reconfig_data_format(icb0, icb1);
-    sub_bcast_cols_init_short(icb0, icb1);
+    sub_bcast_cols_init(icb0, icb1);
 }
 
 }  // namespace ckernel
@@ -28,7 +29,7 @@ constexpr uint32_t DST_REG_ID = 0;
 constexpr uint32_t ONE_TILE = 1;
 
 // Stream y * grad through the row, mul-accumulating elementwise into DST[0].
-// `mul_tiles_init` programs ELWMUL with acc_to_dest=true, so within a single
+// `mul_init` programs ELWMUL with acc_to_dest=true, so within a single
 // tile_regs_acquire/commit window each `mul_tiles(y, grad, i, i, 0)` performs
 //   DST[0] += y[i] * grad[i]
 // (FP32 in DST when fp32_dest_acc_en). After all tiles, DST[0] holds 32 column
@@ -66,10 +67,8 @@ ALWI void mul_accumulate_row_to_dst(
 // scalar in `sum_cb_id` via one matmul with the ones tile.
 ALWI void reduce_partial_to_scalar(uint32_t partial_cb_id, uint32_t ones_cb_id, uint32_t sum_cb_id) {
     tile_regs_acquire();
-#if defined(FP32_DEST_ACC_EN)
-    ckernel::reconfig_data_format(partial_cb_id, ones_cb_id);
-#endif
-    mm_init(partial_cb_id, ones_cb_id, sum_cb_id, /*transpose*/ 0);
+    ckernel::reconfig_data_format(ones_cb_id, partial_cb_id);
+    matmul_init(partial_cb_id, ones_cb_id, /*transpose*/ 0);
 
     cb_wait_front(partial_cb_id, ONE_TILE);
     matmul_tiles(partial_cb_id, ones_cb_id, 0, 0, DST_REG_ID);
@@ -91,15 +90,16 @@ ALWI void fused_sub_mul(
     tile_regs_acquire();
 
     // Step 1: Compute grad - sum(y * grad) and store in DST[0]
-    ckernel::sub_bcast_cols_init_short_with_dt(grad_cb_id, sum_reduce_cb_id);
+    ckernel::sub_bcast_cols_init_with_dt(grad_cb_id, sum_reduce_cb_id);
     sub_tiles_bcast<BROADCAST_TYPE>(grad_cb_id, sum_reduce_cb_id, grad_tile_idx, 0, DST_REG_ID);
 
     // Step 2: Multiply y * DST[0], reusing the DST register
 #if defined(FP32_DEST_ACC_EN)
     ckernel::reconfig_data_format_srca(y_cb_id);
 #endif
-    binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id);
-    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id, y_tile_idx, DST_REG_ID);
+    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id);
+    mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+        y_cb_id, y_tile_idx, DST_REG_ID);
 
     tile_regs_commit();
     pack_and_push(DST_REG_ID, out_cb_id);
@@ -121,7 +121,7 @@ void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // Number of rows to process
 
     // Initialize compute operations
-    binary_op_init_common(y_cb_id, grad_cb_id, out_cb_id);
+    compute_kernel_hw_startup(y_cb_id, grad_cb_id, out_cb_id);
     cb_wait_front(ones_cb_id, ONE_TILE);
 
     // Two-pass streaming algorithm for minimal L1 memory

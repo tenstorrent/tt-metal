@@ -7,17 +7,16 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "dev_mem_map.h"
+#include "experimental/kernel_args.h"
 #include "risc_common.h"
 
 void kernel_main() {
-    // Runtime args
-    uint32_t base_addr = get_arg_val<uint32_t>(0);
+    uint32_t base_addr = get_arg(args::base_addr);
     // 0=flush_line, 1=flush_full, 2=invalidate_line, 3=invalidate_full, 4=invalidate_fresh_read
-    uint32_t test_mode = get_arg_val<uint32_t>(1);
+    uint32_t test_mode = get_arg(args::test_mode);
 
-    // Common args
-    uint32_t value = get_common_arg_val<uint32_t>(0);
-    uint32_t num_words = get_common_arg_val<uint32_t>(1);
+    uint32_t value = get_arg(args::value);
+    uint32_t num_words = get_arg(args::num_words);
 
     // Write values to cacheable addresses (goes through L1 D$ -> L2)
     volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)base_addr;

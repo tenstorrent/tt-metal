@@ -3,6 +3,21 @@
 
 import pytest
 
+from .test_factory import skip_if_config_only_checkpoint
+
+_MARKERS_REQUIRING_REAL_CHECKPOINT = frozenset(
+    {
+        "gemma4_prefill_trace",
+        "gemma4_batched_prefill",
+        "gemma4_hf_direct_parity",
+    }
+)
+
+
+# Marker registration for these lives in models/demos/gemma4/conftest.py (the parent
+# conftest), since demo/text_demo.py also uses gemma4_batched_prefill and is outside
+# this tests/ directory's collection scope.
+
 
 def pytest_addoption(parser):
     """Add custom command line options for pytest"""
@@ -18,6 +33,12 @@ def pytest_addoption(parser):
 def test_modules(request):
     """Fixture to get the test_modules value from command line or use default 'all'"""
     return request.config.getoption("--test-modules")
+
+
+def pytest_runtest_setup(item):
+    """Skip PR integration tests when CI uses config-only HF_MODEL (no weights/tokenizer)."""
+    if _MARKERS_REQUIRING_REAL_CHECKPOINT.intersection(m.name for m in item.iter_markers()):
+        skip_if_config_only_checkpoint()
 
 
 @pytest.fixture(autouse=True)

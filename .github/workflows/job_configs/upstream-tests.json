@@ -8,14 +8,6 @@
       "test_job": "test-wh-6u-image",
       "image_outputs": ["wh-6u-image-tag", "wh-6u-profiler-image-tag"]
     },
-    "bh-llmbox": {
-      "test_job": "test-bh-multicard-image",
-      "image_outputs": ["bh-llmbox-image-tag"]
-    },
-    "bh-deskbox": {
-      "test_job": "test-bh-multicard-image",
-      "image_outputs": ["bh-deskbox-image-tag"]
-    },
     "bh-loudbox": {
       "test_job": "test-bh-multicard-image",
       "image_outputs": ["bh-loudbox-image-tag"]

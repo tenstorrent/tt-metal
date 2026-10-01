@@ -13,7 +13,7 @@ rules:
   reshape-dim-check:
     file: reshape-dim-check.md
     severity: warning
-    suggest_fix: false
+    suggest_fix: true
     model: null
     paths:
       - "ttnn/cpp/ttnn/operations/data_movement/**"

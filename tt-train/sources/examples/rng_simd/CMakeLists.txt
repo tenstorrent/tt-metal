@@ -8,3 +8,5 @@ target_link_libraries(
         ttml
         Threads::Threads
 )
+
+tt_reuse_precompile_headers(rng_simd ttml_pch)

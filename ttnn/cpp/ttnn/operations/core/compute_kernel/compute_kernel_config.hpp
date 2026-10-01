@@ -10,6 +10,7 @@
 #include <optional>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn {
@@ -58,7 +59,16 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
 std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH arch, DeviceComputeKernelConfig compute_kernel_config);
+    tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config);
+
+// Maps the four hardware settings (math_fidelity, math_approx_mode, fp32_dest_acc_en,
+// dst_full_sync_en) of a ComputeKernelConfig onto a Metal 2.0 ComputeHardwareConfig. Those
+// settings are common to both generations and are written on the outer struct.
+// packer_l1_acc and throttle_level are op-side concerns, not translated.
+//
+// The result's per-DFB unpack_modes table is left default for the program factory to set.
+//
+tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config);
 
 uint32_t get_dest_reg_count(
     const DeviceComputeKernelConfig& compute_kernel_config,

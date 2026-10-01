@@ -29,7 +29,7 @@ from models.tt_transformers.tt.multimodal.mistral_24b.mistral_vision_tower impor
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "num_command_queues": 1}],
     indirect=True,
 )
 def test_mistral_vision_tower(mesh_device, reset_seeds):

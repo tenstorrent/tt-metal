@@ -73,6 +73,12 @@ def test_wrapped_vision_model_inference(
 
     # Run reference model
     reference_output = reference_model(pt_pixel_values, image_grid_thw)
+    # transformers 5.x returns a BaseModelOutputWithPooling instead of a bare merged tensor:
+    # last_hidden_state is the PRE-merger vision hidden (dim=hidden_size), pooler_output is the
+    # POST-merger output (dim=out_hidden_size, reverse_indices applied) — which is what the tt
+    # wrapped model produces. 4.x returned that merged tensor directly.
+    if getattr(reference_output, "pooler_output", None) is not None:
+        reference_output = reference_output.pooler_output
     tt_output_torch = torch_model(pt_pixel_values, image_grid_thw)
 
     # Compare outputs

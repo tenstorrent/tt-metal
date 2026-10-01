@@ -62,4 +62,42 @@ Tensor lerp(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt);
 
+Tensor snake_beta(
+    const Tensor& input_tensor,
+    const Tensor& alpha,
+    const Tensor& beta,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+Tensor mac(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& input_tensor_c,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& output = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+// TTS: a * b + scalar
+// TODO: Add sub_core_grids parameter — both binary and ternary infra support worker grids.
+Tensor mac(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    float value,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+// TST: a * scalar + c
+// TODO: Add sub_core_grids parameter — both binary and ternary infra support worker grids.
+Tensor mac(
+    const Tensor& input_tensor_a,
+    float value,
+    const Tensor& input_tensor_c,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+// TSS: a * scalar1 + scalar2
+Tensor mac(
+    const Tensor& input_tensor_a,
+    float value1,
+    float value2,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
 }  // namespace ttnn

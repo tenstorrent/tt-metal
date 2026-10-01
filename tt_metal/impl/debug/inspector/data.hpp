@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "impl/context/context_types.hpp"
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include <tt-metalium/mesh_trace_id.hpp>
@@ -11,6 +12,8 @@
 #include <atomic>
 #include <cstddef>
 #include <optional>
+#include <unordered_set>
+#include <vector>
 
 namespace tt::tt_metal::inspector {
 
@@ -19,12 +22,15 @@ public:
     ~Data();
 
 private:
-    Data(std::optional<int> rank);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
+    Data(
+        std::optional<int> rank,
+        ContextId context_id);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
 
     void serialize_rpc();
     RpcServer& get_rpc_server();
     void rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results);
     void rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& results);
+    void rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results);
     void rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results);
     void rpc_get_mesh_workload_runtime_entries(rpc::Inspector::GetMeshWorkloadRuntimeEntriesResults::Builder& results);
     void rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results);
@@ -35,6 +41,7 @@ private:
     void rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results);
     void rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results);
     void rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results);
+    void rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
     static void populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id);
@@ -48,9 +55,12 @@ private:
         const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info,
         const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device);
 
+    ContextId context_id;  // Owning MetalContext's id
+
     inspector::Logger logger;
     RpcServerController rpc_server_controller;
     std::mutex programs_mutex;
+    std::mutex mesh_buffers_mutex;
     std::mutex mesh_devices_mutex;
     std::mutex mesh_workloads_mutex;
     std::mutex runtime_entries_mutex;
@@ -62,11 +72,16 @@ private:
     std::mutex prefetcher_core_info_mutex;
     std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
     std::unordered_map<int, uint64_t> kernel_id_to_program_id;
+    std::unordered_set<const distributed::MeshBuffer*> mesh_buffers_data;
+    bool mesh_buffer_logging_enabled{false};
+    bool mesh_socket_logging_enabled{false};
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
+    std::unordered_map<const distributed::MeshBuffer*, inspector::MeshSocketData> mesh_sockets_data;
     std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
     static constexpr size_t kRuntimeEntriesCapacity = 8192;
     std::array<inspector::MeshWorkloadRuntimeEntry, kRuntimeEntriesCapacity> runtime_entries{};
     size_t runtime_entries_write_pos{0};
+    bool runtime_entries_logging_enabled{false};
     std::mutex trace_runtime_entries_mutex;
     std::unordered_map<tt::tt_metal::distributed::MeshTraceId, std::vector<inspector::MeshWorkloadRuntimeEntry>>
         trace_runtime_entries;
@@ -79,7 +94,7 @@ private:
 
     std::atomic<bool> kernel_path_collection_enabled{false};
     std::mutex kernel_path_mutex;
-    std::unordered_map<int, std::string> kernel_id_to_path;
+    std::unordered_map<int, std::vector<std::string>> kernel_id_to_processor_elf_paths;
 
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
     std::atomic<uint64_t> fw_compile_hash;

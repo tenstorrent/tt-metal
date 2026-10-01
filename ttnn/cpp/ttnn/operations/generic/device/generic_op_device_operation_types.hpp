@@ -11,7 +11,7 @@ namespace ttnn::operations::generic {
 
 using operation_attributes_t = tt::tt_metal::experimental::MeshProgramDescriptor;
 using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 // NOTE: output tensor is the last element in the vector io_tensors
 struct tensor_args_t {

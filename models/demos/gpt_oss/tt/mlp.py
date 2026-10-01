@@ -46,6 +46,11 @@ class MLP:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "router"),
         )
 
+        # Throughput experts rely on all_to_all_dispatch/combine across a mesh axis,
+        # which has no meaning on a single device and would require fabric.
+        if use_throughput_experts and mesh_device.get_num_devices() == 1:
+            use_throughput_experts = False
+
         self.use_throughput_experts = use_throughput_experts
         if self.use_throughput_experts:
             # Create TT config
@@ -59,12 +64,15 @@ class MLP:
 
             # Create fused MoE config if requested
             fused_config = None
-            if use_throughput_experts:
+            # moe_gpt and its packed weights require twelve DRAM-aligned cores.
+            # Blackhole uses the generic gather/matmul/reduce decode path.
+            if not ttnn.device.is_blackhole(mesh_device):
                 fused_config = create_fused_moe_gpt_config(
                     mesh_device=mesh_device,
                     config=throughput_expert_config,
                     state_dict=experts_state_dict,
                     tokens_per_device=tokens_per_device,
+                    num_links=ccl_manager.num_links,
                     tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 )
 
@@ -85,7 +93,7 @@ class MLP:
                     num_dispatch_groups=mesh_device.shape[1],
                     capacity_factor=2.0,
                     seq_len_per_chip=1024,
-                    num_links=4,
+                    num_links=ccl_manager.num_links,
                 )
                 # Permute expert state_dict to GROUP-BASED ordering before loading
                 perm = _compute_weight_permutation(

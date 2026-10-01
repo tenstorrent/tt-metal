@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from shutil import copyfile
 
 from tracy import *
+from tracy.perf_counter_multipass import plan_perf_counter_capture, run_perf_counter_passes
+from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
 
 
 def main():
@@ -34,6 +37,23 @@ def main():
     )
     parser.add_option(
         "-t", "--port", action="store", help="Internal port used by the script", type="string", dest="port"
+    )
+    parser.add_option(
+        "--web-app-port",
+        action="store",
+        type="int",
+        dest="web_app_port",
+        default=None,
+        help="HTTP port for the Tracy WASM web UI after capture (default: 8080, or TRACY_WASM_HTTP_PORT if set). WebSocket uses this port + 1.",
+    )
+    parser.add_option(
+        "--no-web-server",
+        dest="web_server",
+        action="store_false",
+        default=None,
+        help="Do not start the Tracy WASM web UI after capture. The server is a daemon and outlives the run that "
+        "started it, so headless CI and measurement loops that only want the numbers should turn it off. "
+        "Same effect as setting TRACY_NO_WEB_SERVER=1.",
     )
     parser.add_option(
         "--no-op-info-cache",
@@ -75,6 +95,13 @@ def main():
         dest="do_sum",
         action="store_true",
         help="Enable sum profiling",
+        default=False,
+    )
+    parser.add_option(
+        "--enable-accumulate-profiling",
+        dest="do_accumulate",
+        action="store_true",
+        help="Accumulate multiple kernel invocations in the L1 profiler buffer and only push to DRAM when full (worker cores only)",
         default=False,
     )
     parser.add_option(
@@ -154,10 +181,22 @@ def main():
     parser.add_option(
         "--profiler-capture-perf-counters",
         type="string",
-        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1, instrn, all",
+        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_5, instrn, all",
         action="callback",
         callback=split_comma_list,
         dest="perf_counter_groups",
+    )
+    parser.add_option(
+        "--perf-counter-multipass",
+        dest="perf_counter_multipass",
+        action="store_true",
+        default=False,
+        help="When the requested counter groups don't fit one pass (>1 L1 bank, or too many groups for "
+        "BRISC firmware), replay the workload once per scheduled pass and merge results. Without this, "
+        "such a request errors with the required pass plan.",
+    )
+    parser.add_option(
+        "--no-capture-tool", dest="noCapture", action="store_true", help="Do not run Tracy capture tool", default=False
     )
 
     if not sys.argv[1:]:
@@ -168,6 +207,13 @@ def main():
 
     (options, args) = parser.parse_args()
     sys.argv[:] = args
+
+    # Accumulate mode stores no per-op IDs, so an ops report is meaningless: disallow -r with --enable-accumulate-profiling.
+    if options.report and options.do_accumulate:
+        parser.error(
+            "-r (ops report) cannot be used with --enable-accumulate-profiling: "
+            "accumulate mode does not store per-op IDs, so no ops report can be generated"
+        )
 
     outputFolderEnvStr = "TT_METAL_PROFILER_DIR"
     outputFolder = PROFILER_ARTIFACTS_DIR
@@ -186,7 +232,7 @@ def main():
             sys.exit(1)
 
     if options.processLogsOnly:
-        generate_report(generate_logs_folder(outputFolder), binaryFolder, "", None, options.collect_noc_traces)
+        generate_report(outputFolder, binaryFolder, "", None, options.collect_noc_traces)
         sys.exit(0)
 
     if options.port:
@@ -215,6 +261,9 @@ def main():
     if options.do_sum:
         os.environ["TT_METAL_PROFILER_SUM"] = "1"
 
+    if options.do_accumulate:
+        os.environ["TT_METAL_PROFILER_ACCUMULATE"] = "1"
+
     if options.mid_run_device_data:
         os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
 
@@ -236,70 +285,13 @@ def main():
             generate_logs_folder(os.path.abspath(outputFolder))
         )
 
-    if options.perf_counter_groups:
-        # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2/3/4 are BH-only.
-        counter_group_bits = {
-            "fpu": 0,
-            "pack": 1,
-            "unpack": 2,
-            "l1_0": 3,
-            "l1_1": 4,
-            "instrn": 5,
-            "l1_2": 6,
-            "l1_3": 7,
-            "l1_4": 8,
-        }
-
-        bitfield = 0
-        for group in options.perf_counter_groups:
-            group_lower = group.lower()
-            if group_lower == "all":
-                # fpu | pack | unpack | l1_0 | instrn (L1 bank 1 requires a separate run).
-                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)
-                break
-            elif group_lower in counter_group_bits:
-                bitfield |= 1 << counter_group_bits[group_lower]
-            else:
-                logger.warning(
-                    f"Unknown counter group '{group}'. "
-                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
-                )
-
-        # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
-
-        # Reject BH-only groups on non-BH architectures.
-        bh_only_groups = {"l1_2", "l1_3", "l1_4"}
-        requested_groups = {group.lower() for group in options.perf_counter_groups}
-        requested_bh_only = sorted(requested_groups & bh_only_groups)
-        if requested_bh_only:
-            declared_arch = next(
-                (
-                    os.environ.get(env_var)
-                    for env_var in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME")
-                    if os.environ.get(env_var)
-                ),
-                None,
-            )
-            if declared_arch is None:
-                try:
-                    import ttnn
-
-                    device = ttnn.open_device(device_id=0)
-                    declared_arch = str(device.arch()).split(".")[-1]
-                    ttnn.close_device(device)
-                except Exception:
-                    logger.debug("Failed to detect device arch via ttnn")
-            is_blackhole = declared_arch is not None and declared_arch.strip().lower() in ("blackhole",)
-            if not is_blackhole:
-                arch_desc = declared_arch if declared_arch is not None else "undeclared"
-                raise ValueError(
-                    f"Performance counter groups {', '.join(requested_bh_only)} are supported only on Blackhole, "
-                    f"but device arch is {arch_desc}."
-                )
-
-        if bitfield > 0:
-            os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
-            logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
+    # Schedule and validate once, in the outer capture process; the inner --no-capture-tool run
+    # only honors the TT_METAL_PROFILE_PERF_COUNTERS mask it inherits via env.
+    inherited_mask = options.noCapture and "TT_METAL_PROFILE_PERF_COUNTERS" in os.environ
+    if options.perf_counter_groups and not inherited_mask:
+        options.perf_counter_pass_bitfields = plan_perf_counter_capture(
+            options.perf_counter_groups, options.perf_counter_multipass, can_replay=not options.noCapture
+        )
 
     if not (
         options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
@@ -328,18 +320,11 @@ def main():
         os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(options.op_support_count)
 
     if len(args) > 0:
-        doReport = False
-        if options.report:
-            if not port:
-                logger.error("No available port found")
-                sys.exit(1)
-            logger.info(f"Using port {port}")
-            os.environ["TTNN_OP_PROFILER"] = "1"
-            os.environ["TT_METAL_PROFILER_TRACE_TRACKING"] = "1"
-            doReport, captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
-
-        if not doReport:
+        if options.noCapture:
             code = None
+            if options.report:
+                os.environ["TTNN_OP_PROFILER"] = "1"
+                os.environ["TT_METAL_PROFILER_TRACE_TRACKING"] = "1"
             if options.module:
                 import runpy
 
@@ -382,8 +367,14 @@ def main():
                 sys.stdout = None
                 sys.exit(exc.errno)
         else:
-            originalArgs.remove("-r")
-            osCmd = " ".join(originalArgs[1:])
+            if not port:
+                logger.error("No available port found")
+                sys.exit(1)
+            logger.info(f"Using port {port}")
+            captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
+
+            originalArgs = ["--no-capture-tool"] + originalArgs[1:]
+            osCmd = " ".join(originalArgs)
 
             testCommand = f"{sys.executable} -m tracy {osCmd}"
 
@@ -396,11 +387,14 @@ def main():
             if port:
                 envVars["TRACY_PORT"] = port
 
-            testProcess = subprocess.Popen([testCommand], shell=True, env=envVars, preexec_fn=os.setsid)
-            logger.info(f"Test process started")
+            # Multi-pass perf-counter capture replays the workload once per scheduled pass (each with
+            # its own group mask) and merges the per-pass device logs. Single pass runs once as before.
+            pass_bitfields = getattr(options, "perf_counter_pass_bitfields", None)
+            proc_holder = {"p": None}
 
             def signal_handler(sig, frame):
-                os.killpg(os.getpgid(testProcess.pid), signal.SIGTERM)
+                if proc_holder["p"] is not None:
+                    os.killpg(os.getpgid(proc_holder["p"].pid), signal.SIGTERM)
                 captureProcess.terminate()
                 captureProcess.communicate()
                 sys.exit(3)
@@ -408,26 +402,117 @@ def main():
             signal.signal(signal.SIGINT, signal_handler)
             signal.signal(signal.SIGTERM, signal_handler)
 
-            testProcess.communicate()
-            if options.check_exit_code and testProcess.returncode != 0:
-                logger.error(f"{testCommand} exited with a non-zero return code")
-                sys.exit(4)
+            def run_workload(env):
+                proc = subprocess.Popen([testCommand], shell=True, env=env, preexec_fn=os.setsid)
+                proc_holder["p"] = proc
+                logger.info("Test process started")
+                try:
+                    proc.communicate()
+                except BaseException:
+                    # The SIGINT/SIGTERM handler above cannot run when an exception propagates
+                    # through this wait; kill the workload's process group so nothing outlives the
+                    # wrapper.
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    raise
+                if options.check_exit_code and proc.returncode != 0:
+                    logger.error(f"{testCommand} exited with a non-zero return code")
+                    sys.exit(4)
 
+            if pass_bitfields and len(pass_bitfields) > 1:
+                if not run_perf_counter_passes(run_workload, envVars, pass_bitfields, outputFolder):
+                    sys.exit(4)
+            else:
+                run_workload(envVars)
+
+            # Large model traces can take over 15 seconds to save after the test exits.
+            capture_timeout = 120
             try:
-                captureProcess.communicate(timeout=15)
-                generate_report(
-                    outputFolder,
-                    binaryFolder,
-                    options.name_append,
-                    options.child_functions,
-                    options.collect_noc_traces,
-                    options.device_analysis_types,
-                )
+                captureProcess.communicate(timeout=capture_timeout)
+                # A crashed capture tool returns from communicate() normally with a nonzero returncode
+                # rather than raising TimeoutExpired; without this check the copy below only warns that
+                # the .tracy it never wrote is missing.
+                capRc = captureProcess.returncode
+                if capRc != 0:
+                    # A signal death shows up as a negative returncode for a direct child, or as
+                    # 128+signo when launched via a shell.
+                    sigNo = None
+                    if capRc is not None and capRc < 0:
+                        sigNo = -capRc
+                    elif capRc is not None and capRc > 128:
+                        sigNo = capRc - 128
+                    if sigNo is not None:
+                        try:
+                            sigName = signal.Signals(sigNo).name
+                        except ValueError:
+                            sigName = f"signal {sigNo}"
+                        detail = f"was killed by {sigName} (signal {sigNo}, exit code {capRc})"
+                    else:
+                        detail = f"exited with code {capRc}"
+                    logger.error(
+                        f"Tracy capture tool (tracy-capture) {detail} before writing a trace. "
+                        f"The profiling stream crashed the capture tool, so NO .tracy was produced. "
+                        f"This is a capture-side failure -- the test itself may have passed. "
+                        f"Re-run under a debugger/ASan build of tracy-capture to root-cause."
+                    )
+                    sys.exit(70)  # EX_SOFTWARE: internal capture-tool failure
+                # Copy the generated .tracy file to the server's traces folder with a unique name
+                import datetime
+
+                tracy_src = PROFILER_LOGS_DIR / TRACY_FILE_NAME
+                traces_dir = PROFILER_WASM_TRACES_DIR
+                # Use timestamp, optional name_append, and a short form of the tested command for uniqueness
+                timestamp = datetime.datetime.now().strftime("_%Y_%m_%d_%H_%M_%S")
+                name_part = f"_{options.name_append}" if options.name_append else ""
+                # Short form of the command being tested (first arg, basename, no extension)
+                cmd_short = ""
+                if len(args) > 0:
+                    if os.path.basename(args[0]) == "pytest" and len(args) > 1:
+                        # Use the next argument after pytest for the name
+                        cmd_base = os.path.basename(args[-1])
+                    else:
+                        cmd_base = os.path.basename(args[0])
+                    cmd_short = os.path.splitext(cmd_base)[0]
+                    # Sanitize for filename
+                    cmd_short = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in cmd_short)
+                    cmd_short = f"{cmd_short}"
+                tracy_dst = traces_dir / f"{cmd_short}{name_part}{timestamp}.tracy"
+                logger.info(f"Copying {tracy_src} to {tracy_dst}")
+                try:
+                    copyfile(tracy_src, tracy_dst)
+                    logger.info(f"Copied {tracy_src} to {tracy_dst}")
+                except Exception as e:
+                    logger.warning(f"Could not copy {tracy_src} to {tracy_dst}: {e}")
+                # Point embed.tracy (always a relative symlink into traces/) at the new capture so
+                # the GUI loads it by default. Symlink-only: the live-reload watcher follows it and
+                # DELETE relies on it to detect/advance the active trace. On the rare FS without
+                # symlink support this warns and skips; the trace is still reachable via ?trace=.
+                try:
+                    point_embed_at_trace(tracy_dst.name)
+                    logger.info(f"embed.tracy -> traces/{tracy_dst.name}")
+                except Exception as e:
+                    logger.warning(f"Could not update embed.tracy: {e}")
+                # Start the WASM server as a daemon with defaults, unless it was switched off
+                # (--no-web-server / TRACY_NO_WEB_SERVER=1) -- it outlives this process, so a
+                # headless run must be able to avoid leaving one listening.
+                launch_server_subprocess(port=options.web_app_port, enabled=options.web_server)
+                if options.report:
+                    generate_report(
+                        outputFolder,
+                        binaryFolder,
+                        options.name_append,
+                        options.child_functions,
+                        options.collect_noc_traces,
+                        options.device_analysis_types,
+                    )
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
                 captureProcess.communicate()
                 logger.error(
-                    f"No profiling data could be captured. Please make sure you are on a Tracy-enabled build (default)."
+                    f"Tracy capture did not finish within {capture_timeout} seconds after the test exited. "
+                    "Run with -v to see capture output."
                 )
                 sys.exit(1)
 

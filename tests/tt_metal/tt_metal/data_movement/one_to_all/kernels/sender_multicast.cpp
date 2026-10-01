@@ -7,25 +7,22 @@
 
 // L1 to L1 send
 void kernel_main() {
-    // Compile-time arguments
-    uint32_t mst_base_addr = get_compile_time_arg_val(0);
-    uint32_t sub_base_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
-    constexpr uint32_t pages_per_transaction = get_compile_time_arg_val(3);
-    constexpr uint32_t bytes_per_page = get_compile_time_arg_val(4);
-    constexpr uint32_t test_id = get_compile_time_arg_val(5);
-    constexpr uint32_t num_subordinates = get_compile_time_arg_val(6);
-    constexpr bool is_linked = get_compile_time_arg_val(7);
-    constexpr bool loopback = get_compile_time_arg_val(8);
-    constexpr uint32_t start_x = get_compile_time_arg_val(9);
-    constexpr uint32_t start_y = get_compile_time_arg_val(10);
-    constexpr uint32_t end_x = get_compile_time_arg_val(11);
-    constexpr uint32_t end_y = get_compile_time_arg_val(12);
-
-    // Specific for Multicast Schemes
-    constexpr uint32_t multicast_scheme_type = get_compile_time_arg_val(13);
-    constexpr uint32_t sub_grid_size_x = get_compile_time_arg_val(14);
-    constexpr uint32_t sub_grid_size_y = get_compile_time_arg_val(15);
+    uint32_t mst_base_addr = get_named_compile_time_arg_val("mst_base_addr");
+    uint32_t sub_base_addr = get_named_compile_time_arg_val("sub_base_addr");
+    constexpr uint32_t num_of_transactions = get_named_compile_time_arg_val("num_transactions");
+    constexpr uint32_t pages_per_transaction = get_named_compile_time_arg_val("pages_per_tx");
+    constexpr uint32_t bytes_per_page = get_named_compile_time_arg_val("bytes_per_page");
+    constexpr uint32_t test_id = get_named_compile_time_arg_val("test_id");
+    constexpr uint32_t num_subordinates = get_named_compile_time_arg_val("num_subordinates");
+    constexpr bool is_linked = get_named_compile_time_arg_val("is_linked");
+    constexpr bool loopback = get_named_compile_time_arg_val("loopback");
+    constexpr uint32_t start_x = get_named_compile_time_arg_val("start_x");
+    constexpr uint32_t start_y = get_named_compile_time_arg_val("start_y");
+    constexpr uint32_t end_x = get_named_compile_time_arg_val("end_x");
+    constexpr uint32_t end_y = get_named_compile_time_arg_val("end_y");
+    constexpr uint32_t multicast_scheme_type = get_named_compile_time_arg_val("mcast_scheme_type");
+    constexpr uint32_t sub_grid_size_x = get_named_compile_time_arg_val("sub_grid_size_x");
+    constexpr uint32_t sub_grid_size_y = get_named_compile_time_arg_val("sub_grid_size_y");
 
     // Derivative values
     constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
@@ -71,4 +68,5 @@ void kernel_main() {
         DeviceTimestampedData("Subordinate Grid Size Y", sub_grid_size_y);
     }
     DeviceTimestampedData("Number of subordinates", num_subordinates);
+    DeviceTimestampedData("Loopback", loopback ? 1 : 0);
 }

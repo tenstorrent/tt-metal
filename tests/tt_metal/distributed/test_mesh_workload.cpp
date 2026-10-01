@@ -11,6 +11,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <map>
@@ -18,6 +20,7 @@
 #include <optional>
 #include <random>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -40,18 +43,20 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include "impl/program/dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/worker_config_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <distributed/mesh_device_impl.hpp>
-#include <tt-metalium/experimental/dispatch_context.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -86,17 +91,17 @@ std::vector<CBHandle> initialize_dummy_circular_buffers(
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
 std::shared_ptr<Program> initialize_dummy_program(CoreCoord worker_grid_size) {
@@ -120,9 +125,9 @@ void verify_cb_config(
     MeshWorkload& workload,
     std::vector<CBConfig>& golden_cb_config,
     CoreRangeSet& crs) {
-    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
-    std::vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t max_dfbs = MetalContext::instance().hal().get_num_dataflow_buffers();
+    std::vector<uint32_t> dfb_config_vector;
+    uint32_t dfb_config_buffer_size = max_dfbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& [device_range, _] : workload.get_programs()) {
         for (const auto& coord : device_range) {
@@ -137,22 +142,58 @@ void verify_cb_config(
                         device,
                         core_coord,
                         workload.get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
-                        cb_config_buffer_size,
-                        cb_config_vector);
+                        dfb_config_buffer_size,
+                        dfb_config_vector);
 
                     uint32_t cb_addr = l1_unreserved_base;
                     for (const auto& config : golden_cb_config) {
                         const uint32_t index = config.cb_id * sizeof(uint32_t);
                         const uint32_t cb_num_pages = config.num_pages;
                         const uint32_t cb_size = cb_num_pages * config.page_size;
-                        const bool addr_match = cb_config_vector.at(index) == cb_addr;
-                        const bool size_match = cb_config_vector.at(index + 1) == cb_size;
-                        const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
+                        const bool addr_match = dfb_config_vector.at(index) == cb_addr;
+                        const bool size_match = dfb_config_vector.at(index + 1) == cb_size;
+                        const bool num_pages_match = dfb_config_vector.at(index + 2) == cb_num_pages;
+                        const bool page_size_match = dfb_config_vector.at(index + 3) == config.page_size;
                         EXPECT_TRUE(addr_match);
                         EXPECT_TRUE(size_match);
                         EXPECT_TRUE(num_pages_match);
+                        EXPECT_TRUE(page_size_match);
                         cb_addr += cb_size;
                     }
+                }
+            }
+        }
+    }
+}
+
+void clear_cb_config_report(
+    const std::shared_ptr<MeshDevice>& mesh_device, const CoreRangeSet& crs, uint32_t report_addr) {
+    std::vector<uint32_t> cleared_report = {0, 0, 0};
+    for (auto* device : mesh_device->get_devices()) {
+        for (const auto& core_range : crs.ranges()) {
+            for (const auto& core : core_range) {
+                ::tt::tt_metal::detail::WriteToDeviceL1(device, core, report_addr, cleared_report);
+            }
+        }
+    }
+}
+
+void verify_cb_config_report(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const CoreRangeSet& crs,
+    uint32_t report_addr,
+    const CBConfig& expected_config,
+    std::optional<uint32_t> expected_address = std::nullopt) {
+    for (auto* device : mesh_device->get_devices()) {
+        for (const auto& core_range : crs.ranges()) {
+            for (const auto& core : core_range) {
+                std::vector<uint32_t> report;
+                ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, report_addr, 3 * sizeof(uint32_t), report);
+                ASSERT_EQ(report.size(), 3);
+                EXPECT_EQ(report[0], expected_config.page_size);
+                EXPECT_EQ(report[1], expected_config.num_pages);
+                if (expected_address.has_value()) {
+                    EXPECT_EQ(report[2], *expected_address);
                 }
             }
         }
@@ -182,6 +223,242 @@ void validate_sems(
 using MeshWorkloadTest2x4 = MeshDevice2x4Fixture;
 using MeshWorkloadTest4x8 = MeshDevice4x8Fixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
+
+TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsEmptyWorkload) {
+    MeshWorkload workload;
+
+    EXPECT_THAT(
+        [&] { experimental::program_preparation::prepare(*mesh_device_, workload); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Cannot prepare a MeshWorkload that has no programs")));
+
+    // The rejected call must leave the workload open, so the caller can add a program and retry.
+    Program program = CreateProgram();
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", CoreCoord{0, 0}, ComputeConfig{});
+    EXPECT_NO_THROW(workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program)));
+    EXPECT_NO_THROW(experimental::program_preparation::prepare(*mesh_device_, workload));
+}
+
+TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsReuseOnAnotherMeshDevice) {
+    const MeshShape parent_shape = mesh_device_->shape();
+    std::optional<MeshShape> sub_shape;
+    if (parent_shape.dims() == 2 && parent_shape[1] % 2 == 0) {
+        sub_shape = MeshShape(parent_shape[0], parent_shape[1] / 2);
+    } else if (parent_shape.dims() == 2 && parent_shape[0] % 2 == 0) {
+        sub_shape = MeshShape(parent_shape[0] / 2, parent_shape[1]);
+    }
+    if (!sub_shape.has_value()) {
+        GTEST_SKIP() << "Mesh shape is not evenly splittable into two submeshes";
+    }
+    auto submeshes = mesh_device_->create_submeshes(*sub_shape);
+    ASSERT_EQ(submeshes.size(), 2u);
+
+    Program program = CreateProgram();
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", CoreCoord{0, 0}, ComputeConfig{});
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(*sub_shape), std::move(program));
+
+    experimental::program_preparation::prepare(*submeshes[0], workload);
+
+    // Finalized offsets and binary sizes belong to the first submesh; reusing them elsewhere must fail.
+    EXPECT_THAT(
+        [&] { experimental::program_preparation::prepare(*submeshes[1], workload); },
+        ThrowsMessage<std::runtime_error>(
+            HasSubstr("Reusing MeshWorkloads across MeshDevices is currently not supported")));
+    EXPECT_NO_THROW(experimental::program_preparation::prepare(*submeshes[0], workload));
+}
+
+// A worker still reading its kernel config must not have that config overwritten, including on devices left out of the
+// workloads that follow. The host holds one device's worker while other devices run enough workloads to wrap the
+// mesh-wide config ring back onto the held worker's region.
+TEST_F(MeshWorkloadTest4x8, UnusedDeviceKernelConfigNotOverwritten) {
+    if (mesh_device_->arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Host-to-L1 release handshake is not supported on Quasar data movement cores";
+    }
+
+    // Fillers stop as soon as the ring frees the held slot. Extra ones use up the launch-message slots, which would
+    // fence the probe on its own account and hide any overwrite.
+    constexpr uint32_t max_fillers = 5;
+    constexpr uint32_t release_value = 0x67216721;
+    constexpr uint32_t started_value = 0x5a5a5a5a;
+    constexpr CoreCoord core = {0, 0};
+    const CoreRangeSet core_set(CoreRange(core, core));
+    const std::string blank_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
+
+    // The victim is the last device in the mesh; the fillers take every device outside its column.
+    const uint32_t last_row = mesh_device_->num_rows() - 1;
+    const uint32_t last_col = mesh_device_->num_cols() - 1;
+    const MeshCoordinate victim_coord(last_row, last_col);
+    const MeshCoordinateRange victim_range(victim_coord, victim_coord);
+    const MeshCoordinateRange other_devices(MeshCoordinate(0, 0), MeshCoordinate(last_row, last_col - 1));
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto* victim = mesh_device_->impl().get_device(victim_coord);
+
+    // Program circular buffers start at the unreserved base and grow up, so the flags go just past the probe's.
+    constexpr uint32_t cb_num_pages = 3;
+    constexpr uint32_t cb_page_size = tile_size(tt::DataFormat::Float16_b);
+    const uint32_t l1_unreserved_base = victim->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t release_addr = l1_unreserved_base + cb_num_pages * cb_page_size;
+    const uint32_t started_addr = release_addr + sizeof(uint32_t);
+
+    const uint32_t kernel_config_base =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    const uint32_t ring_size = l1_unreserved_base - kernel_config_base;
+    // Kernel::validate_runtime_args_size caps a Tensix kernel at max_runtime_args_tensix minus two watcher words.
+    constexpr uint32_t max_rt_args_per_kernel = 4096 - 2;
+    // Runtime args are the cheapest way to take up ring space, and a quarter of the ring per kernel makes the ring,
+    // rather than the launch-message slots, run out first.
+    const uint32_t rt_args_per_kernel = std::min<uint32_t>(ring_size / 4 / sizeof(uint32_t), max_rt_args_per_kernel);
+
+    auto write_word = [&](uint32_t addr, uint32_t value) {
+        std::vector<uint32_t> word = {value};
+        ::tt::tt_metal::detail::WriteToDeviceL1(victim, core, addr, word);
+    };
+    // Kernels on one core store their runtime args back to back, so each one added here claims another quarter ring.
+    auto add_padded_kernel =
+        [&](Program& program, const std::string& path, DataMovementProcessor processor, std::vector<uint32_t> args) {
+            args.resize(rt_args_per_kernel, 0);
+            const auto kernel = CreateKernel(
+                program,
+                path,
+                core_set,
+                DataMovementConfig{
+                    .processor = processor,
+                    .noc = processor == DataMovementProcessor::RISCV_0 ? NOC::RISCV_0_default : NOC::RISCV_1_default});
+            SetRuntimeArgs(program, kernel, core_set, args);
+        };
+    auto poll_until = [](std::chrono::seconds timeout, auto&& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (predicate()) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    };
+    // Which ring slots the host still considers in use; the checks below use it to confirm the setup worked.
+    auto queued_slots = [&]() {
+        return cq.get_config_buffer_mgr(0).get_queued_entry_indices(
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+    };
+
+    // Holds the victim's worker until the host releases it. Two kernels make it half the ring, so the filler that later
+    // reuses that space covers only half of it and leaves room for the probe.
+    Program wait_program;
+    add_padded_kernel(
+        wait_program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/wait_for_host_l1_write.cpp",
+        DataMovementProcessor::RISCV_0,
+        {release_addr, release_value, started_addr, started_value});
+    add_padded_kernel(wait_program, blank_kernel, DataMovementProcessor::RISCV_1, {});
+    MeshWorkload waiting_workload;
+    waiting_workload.add_program(victim_range, std::move(wait_program));
+
+    // The probe is the workload whose config would land on the held worker's region: small enough to fit the freed
+    // space without a wait of its own, and its circular buffer is the pattern the host looks for in L1.
+    Program probe_program;
+    initialize_dummy_circular_buffers(
+        probe_program,
+        core_set,
+        {CBConfig{
+            .cb_id = 0,
+            .num_pages = cb_num_pages,
+            .page_size = cb_page_size,
+            .data_format = tt::DataFormat::Float16_b}});
+    CreateKernel(
+        probe_program,
+        blank_kernel,
+        core_set,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    MeshWorkload probe_workload;
+    probe_workload.add_program(victim_range, std::move(probe_program));
+
+    // Fillers skip the victim and are half the held workload's size, so a few of them use up the ring.
+    std::vector<MeshWorkload> fillers(max_fillers);
+    for (uint32_t i = 0; i < max_fillers; i++) {
+        Program filler_program;
+        add_padded_kernel(filler_program, blank_kernel, DataMovementProcessor::RISCV_0, {i + 1});
+        fillers[i].add_program(other_devices, std::move(filler_program));
+    }
+
+    // First pass compiles and caches everything, so the real run below is pure dispatch. The release flag is set up
+    // front, so the waiting kernel exits right away here.
+    write_word(release_addr, release_value);
+    EnqueueMeshWorkload(cq, waiting_workload, false);
+    for (auto& filler : fillers) {
+        EnqueueMeshWorkload(cq, filler, false);
+    }
+    EnqueueMeshWorkload(cq, probe_workload, false);
+    Finish(cq);
+
+    // Slots are only freed once the ring runs out of room, so the first pass leaves its own marked as in use. They
+    // would sit ahead of the held workload and soak up the fillers instead.
+    cq.get_config_buffer_mgr(0).mark_completely_full(0);
+
+    // Zero the ring so any circular buffer pattern seen later must come from a new write.
+    std::vector<uint32_t> ring_zeros(ring_size / sizeof(uint32_t), 0);
+    ::tt::tt_metal::detail::WriteToDeviceL1(victim, core, kernel_config_base, ring_zeros);
+
+    // A failed check must still release the worker, or the mesh stays stuck. Running the release twice is harmless.
+    auto release = [&]() {
+        write_word(release_addr, release_value);
+        Finish(cq);
+    };
+    struct ReleaseOnExit {
+        decltype(release)& fn;
+        ~ReleaseOnExit() { fn(); }
+    } release_on_exit{release};
+
+    write_word(release_addr, 0);
+    write_word(started_addr, 0);
+    EnqueueMeshWorkload(cq, waiting_workload, false);
+    // The reset above leaves the held workload as the ring's only slot in use.
+    const auto held_slots = queued_slots();
+    ASSERT_EQ(held_slots.size(), 1u) << "Held workload does not own the only ring slot";
+    ASSERT_TRUE(poll_until(std::chrono::seconds(30), [&]() {
+        std::vector<uint32_t> started;
+        ::tt::tt_metal::detail::ReadFromDeviceL1(victim, core, started_addr, sizeof(uint32_t), started);
+        return started.at(0) == started_value;
+    })) << "Victim worker never started";
+
+    // Enqueue fillers until the ring reuses the held slot. From here on the ring considers the victim's region free
+    // even though its worker is still reading that region.
+    bool held_slot_reused = false;
+    for (auto& filler : fillers) {
+        EnqueueMeshWorkload(cq, filler, false);
+        const auto slots = queued_slots();
+        held_slot_reused = std::find(slots.begin(), slots.end(), held_slots.front()) == slots.end();
+        if (held_slot_reused) {
+            break;
+        }
+    }
+    ASSERT_TRUE(held_slot_reused) << "Ring never reused the held slot after " << max_fillers << " fillers; ring is "
+                                  << ring_size << " bytes from " << kernel_config_base << " and reached "
+                                  << cq.get_config_buffer_mgr(0).get_last_slot_addr(HalProgrammableCoreType::TENSIX);
+
+    // The probe must fit the freed space without a wait of its own, since such a wait would hold its write back for
+    // reasons of its own. A wait frees slots, so only the probe's slot may appear.
+    const size_t slots_before_probe = queued_slots().size();
+    EnqueueMeshWorkload(cq, probe_workload, false);
+    ASSERT_EQ(queued_slots().size(), slots_before_probe + 1)
+        << "Probe reserved with a wait of its own, so this run cannot show the missing wait";
+
+    const uint32_t probe_cb_base = probe_workload.get_cb_base_addr(mesh_device_, core, CoreType::WORKER);
+    auto probe_config_written = [&]() {
+        std::vector<uint32_t> cb_config;
+        ::tt::tt_metal::detail::ReadFromDeviceL1(
+            victim, core, probe_cb_base, UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), cb_config);
+        return cb_config.at(1) == cb_num_pages * cb_page_size && cb_config.at(2) == cb_num_pages;
+    };
+
+    // The held worker is still reading this region, so nothing may write kernel config over it.
+    const bool written_while_held = poll_until(std::chrono::seconds(2), probe_config_written);
+    release();
+
+    EXPECT_FALSE(written_while_held) << "Kernel config overwrote a region a busy worker was still reading";
+    // The config does land once the worker is released, so the check above read the right address.
+    EXPECT_TRUE(probe_config_written());
+}
 
 // Parameterized: runs once with either submesh (index 0 or 1) executing the program.
 class MeshWorkloadTestSuiteSubmeshFixture : public MeshWorkloadTestSuite, public ::testing::WithParamInterface<int> {};
@@ -215,13 +492,15 @@ TEST_P(MeshWorkloadTestSuiteSubmeshFixture, QuiesceSubmeshesAllowsAlternatingWor
     // Single-core no-op program for submesh
     Program submesh_program = CreateProgram();
     CoreCoord single_core = {0, 0};
-    CreateKernel(submesh_program, "tt_metal/kernels/compute/blank.cpp", single_core, ComputeConfig{});
+    CreateKernel(
+        submesh_program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", single_core, ComputeConfig{});
     MeshWorkload submesh_workload;
     submesh_workload.add_program(MeshCoordinateRange(submesh->shape()), std::move(submesh_program));
 
     // Single-core no-op program for parent mesh
     Program parent_program = CreateProgram();
-    CreateKernel(parent_program, "tt_metal/kernels/compute/blank.cpp", single_core, ComputeConfig{});
+    CreateKernel(
+        parent_program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", single_core, ComputeConfig{});
     MeshWorkload parent_workload;
     parent_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(parent_program));
 
@@ -723,6 +1002,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     CoreRange cr = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
+    constexpr uint8_t updated_cb_index = 1;
 
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
@@ -731,7 +1011,21 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     std::vector<CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
 
     const std::vector<CBHandle>& cb_handles = initialize_dummy_circular_buffers(*program, cr_set, cb_config_vector);
-    initialize_dummy_kernels(*program, cr_set);
+    const KernelHandle report_kernel = CreateKernel(
+        *program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/report_cb_config.cpp",
+        cr_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = {updated_cb_index}});
+    uint32_t max_cb_region_size = 0;
+    for (const auto& cb_config : cb_config_vector) {
+        max_cb_region_size += 2 * cb_config.num_pages * cb_config.page_size;
+    }
+    const uint32_t report_addr =
+        mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1) + max_cb_region_size;
+    SetRuntimeArgs(*program, report_kernel, cr_set, {report_addr});
 
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(mesh_device_->shape());
@@ -740,6 +1034,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
     verify_cb_config(mesh_device_, mesh_workload, cb_config_vector, cr_set);
+    verify_cb_config_report(mesh_device_, cr_set, report_addr, cb_config_vector[updated_cb_index]);
 
     std::vector<CBConfig> updated_cb_config_vector = cb_config_vector;
     for (uint32_t cb_id = 0; cb_id < cb_config_vector.size(); cb_id++) {
@@ -751,6 +1046,121 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
     verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
+    verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config_vector[updated_cb_index]);
+
+    // Populate the trace command cache before updating page size so the update must refresh both command caches.
+    const MeshTraceId initial_trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(), initial_trace_id);
+    mesh_device_->release_mesh_trace(initial_trace_id);
+
+    CBConfig& updated_cb_config = updated_cb_config_vector[updated_cb_index];
+    updated_cb_config.page_size /= 2;
+    updated_cb_config.num_pages *= 2;
+    Program& workload_program = mesh_workload.get_programs().at(devices);
+    UpdateCircularBufferPageSize(
+        workload_program, cb_handles[updated_cb_index], updated_cb_config.cb_id, updated_cb_config.page_size);
+
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
+    verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
+    verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config);
+
+    const MeshTraceId updated_trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(), updated_trace_id);
+    clear_cb_config_report(mesh_device_, cr_set, report_addr);
+    mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(), updated_trace_id, false);
+    Finish(mesh_device_->mesh_command_queue());
+    verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config);
+    mesh_device_->release_mesh_trace(updated_trace_id);
+
+    // Keep both buffers live so cached dynamic address updates cannot accidentally reuse an address.
+    constexpr uint32_t backing_bytes_per_core = 65536;
+    auto make_backing = [&] {
+        return MeshBuffer::create(
+            ReplicatedBufferConfig{.size = backing_bytes_per_core * cr_set.num_cores()},
+            {.page_size = 2048, .buffer_type = BufferType::L1},
+            mesh_device_.get());
+    };
+    auto backing_a = make_backing();
+    auto backing_b = make_backing();
+    ASSERT_NE(backing_a->address(), backing_b->address());
+    const auto updated_handle = cb_handles[updated_cb_index];
+    auto enqueue_and_check = [&](uint32_t expected_address) {
+        // First dispatch refreshes the payload; the second reuses the unchanged generation.
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            clear_cb_config_report(mesh_device_, cr_set, report_addr);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+            Finish(mesh_device_->mesh_command_queue());
+            verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config, expected_address);
+        }
+    };
+    UpdateDynamicCircularBufferAddress(workload_program, updated_handle, *backing_a->get_reference_buffer());
+    enqueue_and_check(backing_a->address());
+    EXPECT_THAT(
+        [&] {
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                workload_program, updated_handle, *backing_b->get_reference_buffer(), backing_bytes_per_core + 2048);
+        },
+        ThrowsMessage<std::exception>(HasSubstr("larger than")));
+    EXPECT_EQ(
+        GetCircularBufferConfig(workload_program, updated_handle).globally_allocated_address(), backing_a->address());
+    enqueue_and_check(backing_a->address());
+    updated_cb_config.num_pages /= 2;
+    const uint32_t updated_size = updated_cb_config.num_pages * updated_cb_config.page_size;
+    UpdateDynamicCircularBufferAddressAndTotalSize(
+        workload_program, updated_handle, *backing_b->get_reference_buffer(), updated_size);
+    enqueue_and_check(backing_b->address());
+    UpdateDynamicCircularBufferAddress(
+        workload_program, updated_handle, *backing_a->get_reference_buffer(), updated_cb_config.page_size);
+    enqueue_and_check(backing_a->address() + updated_cb_config.page_size);
+
+    // Offset updates must reject invalid ranges without changing the backing buffer or cached payload.
+    const uint32_t bank_size = backing_b->get_reference_buffer()->aligned_size_per_bank();
+    for (const uint32_t invalid_offset : {bank_size, bank_size + updated_cb_config.page_size}) {
+        EXPECT_ANY_THROW(UpdateDynamicCircularBufferAddress(
+            workload_program, updated_handle, *backing_b->get_reference_buffer(), invalid_offset));
+        const auto& config = GetCircularBufferConfig(workload_program, updated_handle);
+        EXPECT_EQ(config.shadow_global_buffer, backing_a->get_reference_buffer());
+        EXPECT_EQ(config.address_offset(), updated_cb_config.page_size);
+        EXPECT_EQ(config.total_size(), updated_size);
+        EXPECT_EQ(config.max_size(), bank_size - updated_cb_config.page_size);
+        EXPECT_EQ(config.globally_allocated_address(), backing_a->address() + updated_cb_config.page_size);
+        enqueue_and_check(backing_a->address() + updated_cb_config.page_size);
+    }
+    EXPECT_ANY_THROW(UpdateCircularBufferTotalSize(workload_program, updated_handle, bank_size));
+    EXPECT_ANY_THROW(UpdateDynamicCircularBufferAddressAndTotalSize(
+        workload_program, updated_handle, *backing_b->get_reference_buffer(), bank_size));
+    enqueue_and_check(backing_a->address() + updated_cb_config.page_size);
+
+    // A range ending exactly at the bank boundary is valid, including subsequent resizing.
+    const uint32_t boundary_offset = bank_size - updated_size;
+    UpdateDynamicCircularBufferAddress(
+        workload_program, updated_handle, *backing_b->get_reference_buffer(), boundary_offset);
+    UpdateCircularBufferTotalSize(workload_program, updated_handle, updated_size);
+    enqueue_and_check(backing_b->address() + boundary_offset);
+
+    // A failed cached-payload update must remain dirty and recover on the next valid update.
+    UpdateDynamicCircularBufferAddress(workload_program, updated_handle, *backing_a->get_reference_buffer(), 0);
+    UpdateCircularBufferTotalSize(workload_program, updated_handle, backing_bytes_per_core);
+    UpdateCircularBufferPageSize(workload_program, updated_handle, updated_cb_index, 1);
+    // Check the payload updater directly: an enqueue exception after queue reservations
+    // does not support retrying that queue. No device commands are issued for this invalid config.
+    auto& command_sequences = workload_program.impl().get_cached_program_command_sequences();
+    ASSERT_FALSE(command_sequences.empty());
+    for (auto& [key, sequence] : command_sequences) {
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            EXPECT_THAT(
+                [&] { program_dispatch::update_circular_buffer_configs(sequence); },
+                ThrowsMessage<std::exception>(HasSubstr("number of CB pages")));
+        }
+    }
+    UpdateCircularBufferPageSize(workload_program, updated_handle, updated_cb_index, updated_cb_config.page_size);
+    UpdateCircularBufferTotalSize(workload_program, updated_handle, updated_size);
+    UpdateDynamicCircularBufferAddress(
+        workload_program, updated_handle, *backing_a->get_reference_buffer(), updated_cb_config.page_size);
+    enqueue_and_check(backing_a->address() + updated_cb_config.page_size);
 }
 
 TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {

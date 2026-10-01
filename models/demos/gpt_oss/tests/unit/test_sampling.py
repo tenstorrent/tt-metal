@@ -13,6 +13,7 @@ vocab dimensions (201088, TP=8) to verify:
 - Sampled token IDs are always < vocab_size (no padding tokens leak through)
 """
 
+import os
 from collections import Counter
 
 import pytest
@@ -23,6 +24,17 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.gpt_oss.tt.model import compute_per_device_vocab
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
+
+# Every test in this module is pinned to a 4×8 Galaxy mesh with FABRIC_1D_RING
+# (see GPT_OSS_DEVICE_PARAMS below). On systems with fewer devices — e.g. the
+# 1×1 Blackhole P150 dev box — pytest's mesh_device fixture would TT_FATAL when
+# trying to open a 4×8 mesh; skip the whole module instead so the rest of the
+# unit-test suite still runs.
+pytestmark = pytest.mark.skipif(
+    ttnn.get_num_devices() < 32,
+    reason="GPT-OSS sampling tests require a 4×8 Galaxy mesh (32 devices)",
+)
 
 # --- Reference implementation ---
 
@@ -78,11 +90,17 @@ VOCAB_SIZE = 201088
 MAX_TOP_K = 32
 BATCH_SIZE = 32
 
+
+def _gpt_oss_trace_model_key() -> str:
+    hf = os.getenv("HF_MODEL", "").lower()
+    return "gpt-oss-120b" if "120b" in hf else "gpt-oss-20b"
+
+
 # GPT-OSS device params: FABRIC_1D_RING + large trace region.
 # NOT Llama Galaxy's dispatch_core_axis/worker_l1_size/small trace.
 GPT_OSS_DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-    "trace_region_size": 30000000,
+    TRACE_MODEL_KEY_PARAM: _gpt_oss_trace_model_key(),
 }
 
 
@@ -284,12 +302,21 @@ def test_gpt_oss_stochastic_sampling(sampling_params, batch_size, mesh_device, d
     # SamplingGenerator manages seeds between iterations (TTSampling re-seeds
     # from seeds_tt_tensor each forward call, so seeds must be updated via
     # SeedManager.get_new_values() to get different random samples).
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
     params = format_sampling_params(
         SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p, seed=seed),
         batch_size,
     )
     sg.reset_sampling_params(params)
+    # ``reset_sampling_params`` does not propagate the seed to ``SeedManager``
+    # (only top-k/top-p/temperature/penalties/log-probs flow through), so
+    # without this explicit reset the manager stays in its
+    # ``_seed_active=False, _reseted=False`` initial state and
+    # ``get_new_values()`` early-returns every iteration. The device's
+    # ``seeds_tt_tensor`` would then keep its constructor default
+    # (``arange(0..31)``, none ``MAX_UINT32``) and ``rand_tile_init`` would
+    # re-seed user 0 to ``seed=0`` every step → 1 unique token in 100 samples.
+    sg.seed_manager.reset_seed([seed] * batch_size, list(range(batch_size)))
 
     # Run device sampling
     sampled_tokens = []
@@ -367,7 +394,7 @@ def test_gpt_oss_penalties(penalty_params, mesh_device, device_params, reset_see
     # Shard and create SamplingGenerator with penalties
     tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
 
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
 
     params = format_sampling_params(
         SamplingParams(
@@ -418,23 +445,37 @@ def test_gpt_oss_logprobs(mesh_device, device_params, reset_seeds):
     args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
 
     torch_input = torch.randn(1, 1, BATCH_SIZE, args.padded_vocab_size)
-    torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
+    # Use a very-negative finite value (not ``-inf``) for padding. The old
+    # logprobs path masks gathered logits via ``ttnn.multiply(logit, mask)``
+    # at ``tt_log_probs.py:454``: ``-inf * 0`` produces NaN (or ``-inf`` on
+    # Wormhole bf16) which then poisons the sum-across-devices and yields
+    # ``-inf`` for every user. ``-1e9`` is far enough below the random-init
+    # logits (~bounded in [-5, 5]) that the sampler never picks padding,
+    # without breaking the multiply-mask arithmetic.
+    torch_input[:, :, :, VOCAB_SIZE:] = -1e9
 
     tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
 
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
 
+    seed = 42
     params = format_sampling_params(
         SamplingParams(
             temperature=1.0,
             top_k=32,
             top_p=0.95,
             enable_log_probs=True,
-            seed=42,
+            seed=seed,
         ),
         BATCH_SIZE,
     )
     sg.reset_sampling_params(params)
+    # See ``test_gpt_oss_stochastic_sampling`` — ``reset_sampling_params`` doesn't
+    # propagate ``seed`` into the ``SeedManager``, so we have to seed it
+    # explicitly. Without this, ``get_new_values()`` early-returns and the
+    # device runs ``rand_tile_init`` from the constructor's default
+    # ``arange(0..31)`` seeds tensor on every call.
+    sg.seed_manager.reset_seed([seed] * BATCH_SIZE, list(range(BATCH_SIZE)))
     sg.seed_manager.get_new_values()
 
     tokens, log_probs = sg.sample(tt_input, enable_trace=False)
@@ -482,7 +523,7 @@ def test_gpt_oss_topk_logprobs(mesh_device, device_params, reset_seeds):
     tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
 
     # Create SamplingGenerator with use_topk_logprobs enabled
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
 
     num_logprobs = 5
     params = format_sampling_params(
@@ -555,7 +596,7 @@ def _make_seeded_generator(args, mesh_device, batch_size, per_user_seeds):
     caller is responsible for calling it before each sample() to advance the
     RNG state and copy fresh seeds to the device.
     """
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
     params = format_sampling_params(
         SamplingParams(temperature=1.0, top_k=32, top_p=0.95, seed=0),
         batch_size,

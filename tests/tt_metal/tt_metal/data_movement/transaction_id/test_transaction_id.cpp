@@ -2,14 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <distributed/mesh_device_impl.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace tt::tt_metal {
 
@@ -33,23 +38,20 @@ struct TransactionIdConfig {
     bool one_packet = false;
     bool stateful = false;
     bool read_after_write = true;
-
     // TODO: Add the following parameters
     //  1. Posted flag
 };
+
+inline bool three_distinct_cores(const CoreCoord& master, const CoreCoord& sub0, const CoreCoord& sub1) {
+    return master != sub0 && master != sub1 && sub0 != sub1;
+}
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core or L1 Receiver Core --> L1 Sender Core
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const TransactionIdConfig& test_config) {
-    // Get the actual device for this single-device test
-    IDevice* device = mesh_device->impl().get_device(0);
-
+bool run_dm(distributed::MeshDevice& mesh_device, const TransactionIdConfig& test_config) {
     /* ================ SETUP ================ */
-
-    // Program
-    Program program = CreateProgram();
 
     // Buffer Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
@@ -81,21 +83,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
     uint32_t l1_base_address = master_l1_info.base_address;
 
     // Physical Core Coordinates
-    CoreCoord physical_sub0_core = device->worker_core_from_logical_core(test_config.sub0_core_coord);
+    CoreCoord physical_sub0_core = mesh_device.worker_core_from_logical_core(test_config.sub0_core_coord);
     uint32_t packed_sub0_core_coordinates = physical_sub0_core.x << 16 | (physical_sub0_core.y & 0xFFFF);
-    CoreCoord physical_sub1_core = device->worker_core_from_logical_core(test_config.sub1_core_coord);
+    CoreCoord physical_sub1_core = mesh_device.worker_core_from_logical_core(test_config.sub1_core_coord);
     uint32_t packed_sub1_core_coordinates = physical_sub1_core.x << 16 | (physical_sub1_core.y & 0xFFFF);
 
-    // Compile-time arguments for kernels
-    vector<uint32_t> compile_args = {
-        (uint32_t)l1_base_address,
-        (uint32_t)test_config.num_of_trids,
-        (uint32_t)bytes_per_transaction,
-        (uint32_t)test_config.test_id,
-        (uint32_t)packed_sub0_core_coordinates,
-        (uint32_t)packed_sub1_core_coordinates};
-
-    // Kernels
     string kernel_path = "tests/tt_metal/tt_metal/data_movement/transaction_id/kernels/";
     if (test_config.read_after_write) {
         kernel_path += "writer_reader";
@@ -108,14 +100,63 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
             kernel_path += "_stateful";
         }
     }
-    kernel_path += ".cpp";
+    kernel_path += "_2_0.cpp";
 
-    CreateKernel(
-        program,
-        kernel_path,
+    using namespace tt::tt_metal::experimental;
+
+    KernelSpec::CompileTimeArgs cta_bindings = {
+        {"l1_addr", l1_base_address},
+        {"test_id", test_config.test_id},
+        {"sub0_coords", packed_sub0_core_coordinates},
+        {"sub1_coords", packed_sub1_core_coordinates}};
+
+    DataMovementHardwareConfig sender_hw_config;
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+        sender_hw_config = DataMovementHardwareConfig{};
+    } else {
+        sender_hw_config = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = test_config.noc_id,
+                },
+        };
+    }
+    KernelSpec sender_spec{
+        .unique_id = KernelSpecName{"trid_sender"},
+        .source = kernel_path,
+        .num_threads = 1,
+        .compile_time_args = cta_bindings,
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"num_transactions", "bytes_per_transaction"},
+            },
+        .hw_config = sender_hw_config,
+    };
+
+    ProgramSpec spec{
+        .name = "transaction_id_test",
+        .kernels = {sender_spec},
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit",
+            .kernels = {sender_spec.unique_id},
+            .target_nodes = master_core_set,
+        }},
+    };
+
+    Program program = MakeProgramFromSpec(mesh_device, spec);
+
+    ProgramRunArgs run_params;
+    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
+    AddRuntimeArgsForNode(
+        sender_run_params.runtime_arg_values,
         test_config.master_core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = test_config.noc_id, .compile_args = compile_args});
+        {
+            {"num_transactions", (uint32_t)test_config.num_of_trids},
+            {"bytes_per_transaction", (uint32_t)bytes_per_transaction},
+        });
+    run_params.kernel_run_args.push_back(sender_run_params);
+    SetProgramRunArgs(program, run_params);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -144,9 +185,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
     vector<uint32_t> packed_golden_sub1 = packed_input_sub1;
 
     // Write Input to Master and Sub1 L1
-    detail::WriteToDeviceL1(device, test_config.master_core_coord, l1_base_address, packed_input_master);
-    detail::WriteToDeviceL1(device, test_config.sub1_core_coord, l1_base_address, packed_input_sub1);
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    slow_dispatch::WriteToL1(mesh_device, test_config.master_core_coord, l1_base_address, packed_input_master);
+    slow_dispatch::WriteToL1(mesh_device, test_config.sub1_core_coord, l1_base_address, packed_input_sub1);
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     // LAUNCH THE PROGRAM - Use mesh workload approach
     auto mesh_workload = distributed::MeshWorkload();
@@ -155,18 +196,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
     // Record Output from Master and Sub0 L1
     vector<uint32_t> packed_output_master;
-    detail::ReadFromDeviceL1(
-        device, test_config.sub0_core_coord, l1_base_address, bytes_per_transaction, packed_output_master);
+    slow_dispatch::ReadFromL1(
+        mesh_device, test_config.sub0_core_coord, l1_base_address, bytes_per_transaction, packed_output_master);
 
     vector<uint32_t> packed_output_sub1;
-    detail::ReadFromDeviceL1(
-        device, test_config.master_core_coord, l1_base_address, bytes_per_transaction, packed_output_sub1);
+    slow_dispatch::ReadFromL1(
+        mesh_device, test_config.master_core_coord, l1_base_address, bytes_per_transaction, packed_output_sub1);
 
     // Compare output with golden vector
     bool is_equal = (packed_output_master == packed_golden_master);
@@ -190,28 +231,44 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
 
 /* ========== TEST CASES ========== */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWrite) {
+    // Physical Constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(this->device());
+
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+
+    // Furthest cores from master
+    CoreCoord sub0_core_coord = {0, this->device().compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {this->device().compute_with_storage_grid_size().x - 1, 0};
+
+    if (!unit_tests::dm::transaction_id::three_distinct_cores(master_core_coord, sub0_core_coord, sub1_core_coord)) {
+        auto grid = this->device().compute_with_storage_grid_size();
+        GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid.x << "x" << grid.y;
+    }
+
+    if (this->device().arch() == ARCH::QUASAR) {
+        unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+            .test_id = 600,
+            .master_core_coord = master_core_coord,
+            .sub0_core_coord = sub0_core_coord,
+            .sub1_core_coord = sub1_core_coord,
+            .num_of_trids = 4,
+            .pages_per_transaction = 1,
+            .bytes_per_page = bytes_per_page,
+            .l1_data_format = DataFormat::Float16_b,
+        };
+        EXPECT_TRUE(run_dm(this->device(), test_config));
+        return;
+    }
+
     // Test ID
     uint32_t test_id = 600;
 
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
-    // Physical Constraints
-    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        unit_tests::dm::compute_physical_constraints(mesh_device);
-
-    // Cores
-    CoreCoord master_core_coord = {0, 0};
-
-    // Furthest cores from master
-    CoreCoord sub0_core_coord = {0, device->compute_with_storage_grid_size().y - 1};
-    CoreCoord sub1_core_coord = {device->compute_with_storage_grid_size().x - 1, 0};
-
     // Parameters
-    uint32_t max_pages_per_transaction = mesh_device->impl().get_device(0)->arch() == ARCH::BLACKHOLE
-                                             ? 1024
-                                             : 2048;  // Max total transaction size == 64 KB
+    uint32_t max_pages_per_transaction =
+        this->device().arch() == ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
 
     for (uint32_t num_of_trids = 1; num_of_trids <= 16; num_of_trids *= 2) {  // Up to 0xF (16) transaction ids
         for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
@@ -233,28 +290,30 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite) 
             };
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacket) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacket) {
     // Test ID
     uint32_t test_id = 601;
 
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        unit_tests::dm::compute_physical_constraints(mesh_device);
+        unit_tests::dm::compute_physical_constraints(this->device());
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
 
     // Furthest cores from master
-    CoreCoord sub0_core_coord = {0, device->compute_with_storage_grid_size().y - 1};
-    CoreCoord sub1_core_coord = {device->compute_with_storage_grid_size().x - 1, 0};
+    CoreCoord sub0_core_coord = {0, this->device().compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {this->device().compute_with_storage_grid_size().x - 1, 0};
+
+    if (!unit_tests::dm::transaction_id::three_distinct_cores(master_core_coord, sub0_core_coord, sub1_core_coord)) {
+        auto grid = this->device().compute_with_storage_grid_size();
+        GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid.x << "x" << grid.y;
+    }
 
     // Parameters
     uint32_t max_pages_per_transaction = 256;  // NOC_MAX_BURST_WORDS
@@ -280,28 +339,30 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
             };
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacketStateful) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacketStateful) {
     // Test ID
     uint32_t test_id = 602;
 
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        unit_tests::dm::compute_physical_constraints(mesh_device);
+        unit_tests::dm::compute_physical_constraints(this->device());
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
 
     // Furthest cores from master
-    CoreCoord sub0_core_coord = {0, device->compute_with_storage_grid_size().y - 1};
-    CoreCoord sub1_core_coord = {device->compute_with_storage_grid_size().x - 1, 0};
+    CoreCoord sub0_core_coord = {0, this->device().compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {this->device().compute_with_storage_grid_size().x - 1, 0};
+
+    if (!unit_tests::dm::transaction_id::three_distinct_cores(master_core_coord, sub0_core_coord, sub1_core_coord)) {
+        auto grid = this->device().compute_with_storage_grid_size();
+        GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid.x << "x" << grid.y;
+    }
 
     // Parameters
     uint32_t max_pages_per_transaction = 256;  // NOC_MAX_BURST_WORDS
@@ -328,33 +389,34 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
             };
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterRead) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdWriteAfterRead) {
     // Test ID
     uint32_t test_id = 610;
 
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        unit_tests::dm::compute_physical_constraints(mesh_device);
+        unit_tests::dm::compute_physical_constraints(this->device());
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
 
     // Furthest cores from master
-    CoreCoord sub0_core_coord = {0, device->compute_with_storage_grid_size().y - 1};
-    CoreCoord sub1_core_coord = {device->compute_with_storage_grid_size().x - 1, 0};
+    CoreCoord sub0_core_coord = {0, this->device().compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {this->device().compute_with_storage_grid_size().x - 1, 0};
+
+    if (!unit_tests::dm::transaction_id::three_distinct_cores(master_core_coord, sub0_core_coord, sub1_core_coord)) {
+        auto grid = this->device().compute_with_storage_grid_size();
+        GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid.x << "x" << grid.y;
+    }
 
     // Parameters
-    uint32_t max_pages_per_transaction = mesh_device->impl().get_device(0)->arch() == ARCH::BLACKHOLE
-                                             ? 1024
-                                             : 2048;  // Max total transaction size == 64 KB
+    uint32_t max_pages_per_transaction =
+        this->device().arch() == ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
 
     for (uint32_t num_of_trids = 1; num_of_trids <= 16; num_of_trids *= 2) {  // Up to 0xF (16) transaction ids
         for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
@@ -377,28 +439,30 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterRead) 
             };
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterReadOnePacketStateful) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdWriteAfterReadOnePacketStateful) {
     // Test ID
     uint32_t test_id = 611;
 
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        unit_tests::dm::compute_physical_constraints(mesh_device);
+        unit_tests::dm::compute_physical_constraints(this->device());
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
 
     // Furthest cores from master
-    CoreCoord sub0_core_coord = {0, device->compute_with_storage_grid_size().y - 1};
-    CoreCoord sub1_core_coord = {device->compute_with_storage_grid_size().x - 1, 0};
+    CoreCoord sub0_core_coord = {0, this->device().compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {this->device().compute_with_storage_grid_size().x - 1, 0};
+
+    if (!unit_tests::dm::transaction_id::three_distinct_cores(master_core_coord, sub0_core_coord, sub1_core_coord)) {
+        auto grid = this->device().compute_with_storage_grid_size();
+        GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid.x << "x" << grid.y;
+    }
 
     // Parameters
     uint32_t max_pages_per_transaction = 256;  // NOC_MAX_BURST_WORDS
@@ -426,7 +490,284 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterReadOn
             };
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
+        }
+    }
+}
+
+/* ========== Metal 2.0 variants ========== */
+
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWrite_2_0) {
+    auto arch_ = this->device().arch();
+
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(this->device());
+
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord sub0_core_coord = {0, this->device().compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {this->device().compute_with_storage_grid_size().x - 1, 0};
+
+    if (!unit_tests::dm::transaction_id::three_distinct_cores(master_core_coord, sub0_core_coord, sub1_core_coord)) {
+        auto grid = this->device().compute_with_storage_grid_size();
+        GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid.x << "x" << grid.y;
+    }
+
+    if (arch_ == ARCH::QUASAR) {
+        unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+            .test_id = 620,
+            .master_core_coord = master_core_coord,
+            .sub0_core_coord = sub0_core_coord,
+            .sub1_core_coord = sub1_core_coord,
+            .num_of_trids = 4,
+            .pages_per_transaction = 1,
+            .bytes_per_page = bytes_per_page,
+            .l1_data_format = DataFormat::Float16_b,
+        };
+        EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm(this->device(), test_config));
+        return;
+    }
+
+    // WH/BH full sweep
+    uint32_t max_pages_per_transaction = arch_ == ARCH::BLACKHOLE ? 1024 : 2048;
+    for (uint32_t num_of_trids = 1; num_of_trids <= 16; num_of_trids *= 2) {
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
+             pages_per_transaction *= 2) {
+            if (pages_per_transaction * num_of_trids > max_transmittable_pages) {
+                continue;
+            }
+            unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+                .test_id = 620,
+                .master_core_coord = master_core_coord,
+                .sub0_core_coord = sub0_core_coord,
+                .sub1_core_coord = sub1_core_coord,
+                .num_of_trids = num_of_trids,
+                .pages_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+            };
+            EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm(this->device(), test_config));
+        }
+    }
+}
+
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacket_2_0) {
+    auto arch_ = this->device().arch();
+
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(this->device());
+
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord sub0_core_coord = {0, this->device().compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {this->device().compute_with_storage_grid_size().x - 1, 0};
+
+    if (!unit_tests::dm::transaction_id::three_distinct_cores(master_core_coord, sub0_core_coord, sub1_core_coord)) {
+        auto grid = this->device().compute_with_storage_grid_size();
+        GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid.x << "x" << grid.y;
+    }
+
+    if (arch_ == ARCH::QUASAR) {
+        unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+            .test_id = 621,
+            .master_core_coord = master_core_coord,
+            .sub0_core_coord = sub0_core_coord,
+            .sub1_core_coord = sub1_core_coord,
+            .num_of_trids = 4,
+            .pages_per_transaction = 1,
+            .bytes_per_page = bytes_per_page,
+            .l1_data_format = DataFormat::Float16_b,
+            .one_packet = true,
+        };
+        EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm(this->device(), test_config));
+        return;
+    }
+
+    uint32_t max_pages_per_transaction = 256;
+    for (uint32_t num_of_trids = 1; num_of_trids <= 16; num_of_trids *= 2) {
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
+             pages_per_transaction *= 2) {
+            if (pages_per_transaction * num_of_trids > max_transmittable_pages) {
+                continue;
+            }
+            unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+                .test_id = 621,
+                .master_core_coord = master_core_coord,
+                .sub0_core_coord = sub0_core_coord,
+                .sub1_core_coord = sub1_core_coord,
+                .num_of_trids = num_of_trids,
+                .pages_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .one_packet = true,
+            };
+            EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm(this->device(), test_config));
+        }
+    }
+}
+
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacketStateful_2_0) {
+    auto arch_ = this->device().arch();
+
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(this->device());
+
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord sub0_core_coord = {0, this->device().compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {this->device().compute_with_storage_grid_size().x - 1, 0};
+
+    if (!unit_tests::dm::transaction_id::three_distinct_cores(master_core_coord, sub0_core_coord, sub1_core_coord)) {
+        auto grid = this->device().compute_with_storage_grid_size();
+        GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid.x << "x" << grid.y;
+    }
+
+    if (arch_ == ARCH::QUASAR) {
+        unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+            .test_id = 622,
+            .master_core_coord = master_core_coord,
+            .sub0_core_coord = sub0_core_coord,
+            .sub1_core_coord = sub1_core_coord,
+            .num_of_trids = 4,
+            .pages_per_transaction = 1,
+            .bytes_per_page = bytes_per_page,
+            .l1_data_format = DataFormat::Float16_b,
+            .one_packet = true,
+            .stateful = true,
+        };
+        EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm(this->device(), test_config));
+        return;
+    }
+
+    uint32_t max_pages_per_transaction = 256;
+    for (uint32_t num_of_trids = 1; num_of_trids <= 16; num_of_trids *= 2) {
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
+             pages_per_transaction *= 2) {
+            if (pages_per_transaction * num_of_trids > max_transmittable_pages) {
+                continue;
+            }
+            unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+                .test_id = 622,
+                .master_core_coord = master_core_coord,
+                .sub0_core_coord = sub0_core_coord,
+                .sub1_core_coord = sub1_core_coord,
+                .num_of_trids = num_of_trids,
+                .pages_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .one_packet = true,
+                .stateful = true,
+            };
+            EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm(this->device(), test_config));
+        }
+    }
+}
+
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdWriteAfterRead_2_0) {
+    auto arch_ = this->device().arch();
+
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(this->device());
+
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord sub0_core_coord = {0, this->device().compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {this->device().compute_with_storage_grid_size().x - 1, 0};
+
+    if (!unit_tests::dm::transaction_id::three_distinct_cores(master_core_coord, sub0_core_coord, sub1_core_coord)) {
+        auto grid = this->device().compute_with_storage_grid_size();
+        GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid.x << "x" << grid.y;
+    }
+
+    if (arch_ == ARCH::QUASAR) {
+        unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+            .test_id = 630,
+            .master_core_coord = master_core_coord,
+            .sub0_core_coord = sub0_core_coord,
+            .sub1_core_coord = sub1_core_coord,
+            .num_of_trids = 4,
+            .pages_per_transaction = 1,
+            .bytes_per_page = bytes_per_page,
+            .l1_data_format = DataFormat::Float16_b,
+            .read_after_write = false,
+        };
+        EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm(this->device(), test_config));
+        return;
+    }
+
+    uint32_t max_pages_per_transaction = arch_ == ARCH::BLACKHOLE ? 1024 : 2048;
+    for (uint32_t num_of_trids = 1; num_of_trids <= 16; num_of_trids *= 2) {
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
+             pages_per_transaction *= 2) {
+            if (pages_per_transaction * num_of_trids > max_transmittable_pages) {
+                continue;
+            }
+            unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+                .test_id = 630,
+                .master_core_coord = master_core_coord,
+                .sub0_core_coord = sub0_core_coord,
+                .sub1_core_coord = sub1_core_coord,
+                .num_of_trids = num_of_trids,
+                .pages_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .read_after_write = false,
+            };
+            EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm(this->device(), test_config));
+        }
+    }
+}
+
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdWriteAfterReadOnePacketStateful_2_0) {
+    auto arch_ = this->device().arch();
+
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(this->device());
+
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord sub0_core_coord = {0, this->device().compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {this->device().compute_with_storage_grid_size().x - 1, 0};
+
+    if (!unit_tests::dm::transaction_id::three_distinct_cores(master_core_coord, sub0_core_coord, sub1_core_coord)) {
+        auto grid = this->device().compute_with_storage_grid_size();
+        GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid.x << "x" << grid.y;
+    }
+
+    if (arch_ == ARCH::QUASAR) {
+        unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+            .test_id = 631,
+            .master_core_coord = master_core_coord,
+            .sub0_core_coord = sub0_core_coord,
+            .sub1_core_coord = sub1_core_coord,
+            .num_of_trids = 4,
+            .pages_per_transaction = 1,
+            .bytes_per_page = bytes_per_page,
+            .l1_data_format = DataFormat::Float16_b,
+            .one_packet = true,
+            .stateful = true,
+            .read_after_write = false,
+        };
+        EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm(this->device(), test_config));
+        return;
+    }
+
+    uint32_t max_pages_per_transaction = 256;
+    for (uint32_t num_of_trids = 1; num_of_trids <= 16; num_of_trids *= 2) {
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
+             pages_per_transaction *= 2) {
+            if (pages_per_transaction * num_of_trids > max_transmittable_pages) {
+                continue;
+            }
+            unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+                .test_id = 631,
+                .master_core_coord = master_core_coord,
+                .sub0_core_coord = sub0_core_coord,
+                .sub1_core_coord = sub1_core_coord,
+                .num_of_trids = num_of_trids,
+                .pages_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .one_packet = true,
+                .stateful = true,
+                .read_after_write = false,
+            };
+            EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm(this->device(), test_config));
         }
     }
 }

@@ -2,13 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <optional>
+
 #include <tt-logger/tt-logger.hpp>
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "dm_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
-#include <distributed/mesh_device_impl.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace tt::tt_metal {
 
@@ -39,14 +46,7 @@ struct DirectWriteConfig {
 /// @param mesh_device MeshDevice to run on
 /// @param test_config Test configuration
 /// @return Success status
-bool run_dm(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, const DirectWriteConfig& test_config) {
-    // Get the actual device for this single-device test
-    IDevice* device = mesh_device->impl().get_device(0);
-
-    // Program
-    Program program = CreateProgram();
-
+bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_config) {
     // Get Sender L1 Address info
     L1AddressInfo sender_l1_info =
         tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.sender_core_coord);
@@ -73,45 +73,46 @@ bool run_dm(
     uint32_t l1_base_address = sender_l1_info.base_address;
 
     // Compile-time arguments for sender kernel
-    vector<uint32_t> sender_compile_args;
+    std::unordered_map<std::string, uint32_t> sender_compile_args;
 
     if (test_config.use_multicast) {
-        CoreCoord sub_worker_start_coord = device->worker_core_from_logical_core(test_config.receiver_core_coords[0]);
-        CoreCoord sub_worker_end_coord =
-            device->worker_core_from_logical_core(test_config.receiver_core_coords[test_config.num_subordinates - 1]);
+        CoreCoord sub_worker_start_coord =
+            mesh_device.worker_core_from_logical_core(test_config.receiver_core_coords[0]);
+        CoreCoord sub_worker_end_coord = mesh_device.worker_core_from_logical_core(
+            test_config.receiver_core_coords[test_config.num_subordinates - 1]);
 
         sender_compile_args = {
-            test_config.test_id,
-            test_config.num_writes,
-            l1_base_address,
-            test_config.write_value_base,
-            test_config.same_destination ? 1u : 0u,
-            test_config.addr_stride,
-            static_cast<uint32_t>(test_config.noc_id),
-            test_config.num_subordinates,
-            (uint32_t)sub_worker_start_coord.x,  // start_x
-            (uint32_t)sub_worker_start_coord.y,  // start_y
-            (uint32_t)sub_worker_end_coord.x,    // end_x
-            (uint32_t)sub_worker_end_coord.y     // end_y
-        };
+            {"test_id", test_config.test_id},
+            {"num_writes", test_config.num_writes},
+            {"sub_base_addr", l1_base_address},
+            {"write_val_base", test_config.write_value_base},
+            {"same_dest", test_config.same_destination ? 1u : 0u},
+            {"addr_stride", test_config.addr_stride},
+            {"noc_id", static_cast<uint32_t>(test_config.noc_id)},
+            {"num_subordinates", test_config.num_subordinates},
+            {"start_x", (uint32_t)sub_worker_start_coord.x},
+            {"start_y", (uint32_t)sub_worker_start_coord.y},
+            {"end_x", (uint32_t)sub_worker_end_coord.x},
+            {"end_y", (uint32_t)sub_worker_end_coord.y}};
 
     } else {
         // Physical Core Coordinates
-        CoreCoord physical_receiver_core = device->worker_core_from_logical_core(test_config.receiver_core_coords[0]);
+        CoreCoord physical_receiver_core =
+            mesh_device.worker_core_from_logical_core(test_config.receiver_core_coords[0]);
         uint32_t packed_receiver_core_coordinates =
             physical_receiver_core.x << 16 | (physical_receiver_core.y & 0xFFFF);
 
         sender_compile_args = {
-            test_config.test_id,
-            test_config.num_writes,
-            test_config.write_value_base,
-            test_config.use_posted_writes ? 1u : 0u,
-            test_config.same_destination ? 1u : 0u,
-            test_config.same_value ? 1u : 0u,
-            l1_base_address,
-            test_config.addr_stride,
-            packed_receiver_core_coordinates,
-            static_cast<uint32_t>(test_config.noc_id)};
+            {"test_id", test_config.test_id},
+            {"num_writes", test_config.num_writes},
+            {"write_val_base", test_config.write_value_base},
+            {"use_posted", test_config.use_posted_writes ? 1u : 0u},
+            {"same_dest", test_config.same_destination ? 1u : 0u},
+            {"same_value", test_config.same_value ? 1u : 0u},
+            {"dest_l1_addr", l1_base_address},
+            {"addr_stride", test_config.addr_stride},
+            {"receiver_coords", packed_receiver_core_coordinates},
+            {"noc_id", static_cast<uint32_t>(test_config.noc_id)}};
     }
 
     // Choose kernel based on approach
@@ -130,26 +131,40 @@ bool run_dm(
 
     std::string sender_kernel_path = kernels_dir + sender_kernel_filename;
 
-    // Create kernel on sender core - branch by architecture
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        // Quasar path: Use experimental API
-        experimental::quasar::CreateKernel(
-            program,
-            sender_kernel_path,
-            test_config.sender_core_coord,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = sender_compile_args});
+    using namespace tt::tt_metal::experimental;
+
+    DataMovementHardwareConfig sender_hw_config;
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+        sender_hw_config = DataMovementHardwareConfig{};
     } else {
-        // WH/BH path: Use legacy API with processor selection
-        CreateKernel(
-            program,
-            sender_kernel_path,
-            test_config.sender_core_coord,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = test_config.noc_id,
-                .compile_args = sender_compile_args});
+        sender_hw_config = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = test_config.noc_id,
+                },
+        };
     }
+
+    KernelSpec sender_spec{
+        .unique_id = KernelSpecName{"sender"},
+        .source = sender_kernel_path,
+        .num_threads = 1,
+        .compile_time_args = KernelSpec::CompileTimeArgs(sender_compile_args),
+        .hw_config = sender_hw_config,
+    };
+
+    ProgramSpec spec{
+        .name = "direct_write_test",
+        .kernels = {sender_spec},
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit",
+            .kernels = {sender_spec.unique_id},
+            .target_nodes = CoreRangeSet(CoreRange(test_config.sender_core_coord)),
+        }},
+    };
+
+    Program program = MakeProgramFromSpec(mesh_device, spec);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -159,9 +174,9 @@ bool run_dm(
     uint32_t init_words = test_config.same_destination ? 1 : test_config.num_writes;
     std::vector<uint32_t> init_data(init_words, 0x00000000);  // Initialize to zero
     for (int i = 0; i < test_config.num_subordinates; i++) {
-        tt_metal::detail::WriteToDeviceL1(device, test_config.receiver_core_coords[i], l1_base_address, init_data);
+        slow_dispatch::WriteToL1(mesh_device, test_config.receiver_core_coords[i], l1_base_address, init_data);
     }
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     // Launch the program - Use mesh workload approach
     auto mesh_workload = distributed::MeshWorkload();
@@ -169,7 +184,7 @@ bool run_dm(
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));  // Single device at (0,0)
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
@@ -179,8 +194,8 @@ bool run_dm(
         // Read back and validate results
         std::vector<uint32_t> output_data;
         uint32_t read_bytes = init_words * sizeof(uint32_t);
-        tt_metal::detail::ReadFromDeviceL1(
-            device, test_config.receiver_core_coords[i], l1_base_address, read_bytes, output_data);
+        slow_dispatch::ReadFromL1(
+            mesh_device, test_config.receiver_core_coords[i], l1_base_address, read_bytes, output_data);
 
         if (test_config.same_destination) {
             // All writes went to same location
@@ -241,14 +256,21 @@ bool run_dm(
     return pass;
 }
 
+std::optional<CoreCoord> select_receiver_core(const CoreCoord& grid, const CoreCoord& sender_core) {
+    if (grid.x >= 2 && sender_core != CoreCoord{1, 0}) {
+        return CoreCoord{1, 0};
+    }
+    if (grid.y >= 2 && sender_core != CoreCoord{0, 1}) {
+        return CoreCoord{0, 1};
+    }
+    return std::nullopt;
+}
+
 void performance_comparison_test(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    uint32_t test_id,
-    CoreCoord sender_core = {0, 0},
-    CoreCoord receiver_core = {1, 1}) {
-    uint32_t max_transactions = 1024;                 // Show scaling advantage
-    vector<bool> stateful_options = {false, true};    // Non-stateful vs stateful
-    vector<bool> posted_options = {false, true};      // Non-posted vs posted
+    distributed::MeshDevice& mesh_device, uint32_t test_id, CoreCoord sender_core, CoreCoord receiver_core) {
+    uint32_t max_transactions = 1024;               // Show scaling advantage
+    vector<bool> stateful_options = {false, true};  // Non-stateful vs stateful
+    vector<bool> posted_options = {false, true};    // Non-posted vs posted
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         for (bool posted : posted_options) {
@@ -269,10 +291,7 @@ void performance_comparison_test(
 }
 
 void address_pattern_test(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    uint32_t test_id,
-    CoreCoord sender_core = {0, 0},
-    CoreCoord receiver_core = {1, 1}) {
+    distributed::MeshDevice& mesh_device, uint32_t test_id, CoreCoord sender_core, CoreCoord receiver_core) {
     uint32_t max_transactions = 1024;                   // Show scaling advantage
     vector<bool> destination_patterns = {true, false};  // Same vs different destinations
     vector<bool> stateful_options = {false, true};
@@ -298,24 +317,26 @@ void address_pattern_test(
     }
 }
 
-void multicast_test(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    uint32_t test_id,
-    CoreCoord sender_core = {0, 0}) {
-    IDevice* device = mesh_device->impl().get_device(0);
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+void multicast_test(distributed::MeshDevice& mesh_device, uint32_t test_id, CoreCoord sender_core = {0, 0}) {
+    auto compute_with_storage_grid_size = mesh_device.compute_with_storage_grid_size();
     uint32_t max_x = compute_with_storage_grid_size.x;
     uint32_t max_y = compute_with_storage_grid_size.y;
 
+    // run_dm derives the multicast corners from the first and last receiver, so the list must hold
+    // exactly the cores in the rectangle. Offset past the sender only on axes that have room.
+    const uint32_t start_x = max_x >= 2 ? 1 : 0;
+    const uint32_t start_y = max_y >= 2 ? 1 : 0;
+
     std::vector<CoreCoord> max_rect;
-    for (uint32_t y = 1; y < max_y; y++) {
-        for (uint32_t x = 1; x < max_x; x++) {
-            CoreCoord coord{x, y};
-            if (coord != sender_core) {
-                max_rect.push_back(coord);
-            }
+    for (uint32_t y = start_y; y < max_y; y++) {
+        for (uint32_t x = start_x; x < max_x; x++) {
+            max_rect.push_back(CoreCoord{x, y});
         }
+    }
+
+    if (max_rect.empty() || std::find(max_rect.begin(), max_rect.end(), sender_core) != max_rect.end()) {
+        GTEST_SKIP() << "Skipping: multicast needs a receiver rectangle that excludes the sender at (" << sender_core.x
+                     << ", " << sender_core.y << "), but the " << max_x << "x" << max_y << " grid provides none";
     }
 
     for (bool same_dest : {true, false}) {
@@ -336,19 +357,31 @@ void multicast_test(
 
 }  // namespace unit_tests::dm::direct_write
 
-TEST_F(GenericMeshDeviceFixture, TensixDirectWritePerformanceComparison) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDirectWritePerformanceComparison) {
+    const CoreCoord sender_core = {0, 0};
+    const CoreCoord grid = this->device().compute_with_storage_grid_size();
+    const auto receiver_core = unit_tests::dm::direct_write::select_receiver_core(grid, sender_core);
+    if (!receiver_core.has_value()) {
+        GTEST_SKIP() << "Skipping: needs >= 2 cores, but the grid is " << grid.x << "x" << grid.y;
+    }
     uint32_t test_id = 500;
-    unit_tests::dm::direct_write::performance_comparison_test(get_mesh_device(), test_id);
+    unit_tests::dm::direct_write::performance_comparison_test(this->device(), test_id, sender_core, *receiver_core);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDirectWriteAddressPatterns) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteAddressPatterns) {
+    const CoreCoord sender_core = {0, 0};
+    const CoreCoord grid = this->device().compute_with_storage_grid_size();
+    const auto receiver_core = unit_tests::dm::direct_write::select_receiver_core(grid, sender_core);
+    if (!receiver_core.has_value()) {
+        GTEST_SKIP() << "Skipping: needs >= 2 cores, but the grid is " << grid.x << "x" << grid.y;
+    }
     uint32_t test_id = 501;
-    unit_tests::dm::direct_write::address_pattern_test(get_mesh_device(), test_id);
+    unit_tests::dm::direct_write::address_pattern_test(this->device(), test_id, sender_core, *receiver_core);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDirectWriteMulticast) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteMulticast) {
     uint32_t test_id = 507;
-    unit_tests::dm::direct_write::multicast_test(get_mesh_device(), test_id);
+    unit_tests::dm::direct_write::multicast_test(this->device(), test_id);
 }
 
 }  // namespace tt::tt_metal

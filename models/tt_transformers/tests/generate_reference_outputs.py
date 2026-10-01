@@ -24,7 +24,16 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
         # https://huggingface.co/Qwen/Qwen2.5-7B-Instruct#processing-long-texts
         if "Qwen" in hf_model_name:
             config.rope_scaling = {"factor": 4.0, "original_max_position_embeddings": 32768, "type": "yarn"}
-        model = AutoModelForCausalLM.from_pretrained(
+        # Text-only ports of multimodal checkpoints (e.g. EXAONE-4.5): the composite
+        # config class only maps to an image-text-to-text model.
+        from transformers import AutoModelForImageTextToText
+
+        model_cls = AutoModelForCausalLM
+        if type(config) not in AutoModelForCausalLM._model_mapping and type(config) in (
+            AutoModelForImageTextToText._model_mapping
+        ):
+            model_cls = AutoModelForImageTextToText
+        model = model_cls.from_pretrained(
             hf_model_name, config=config, torch_dtype=torch.float32 if device == "cpu" else None, device_map="auto"
         )
         model.eval()

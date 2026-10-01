@@ -16,7 +16,11 @@ Speed strategy:
     ``utils.llama_completer`` to no-ops; the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
-    ``num_iterations=1``, ``prompts_to_train=2``, ``batch_size=2``).
+    ``num_iterations=1``, ``prompts_to_train=2``). On this single device
+    ``per_device_train_batch_size=4`` and ``num_generations=2`` give a
+    per-micro-batch prompt count of ``4 * 1 / 2 = 2``, and with
+    ``gradient_accumulation_steps=1`` the generation batch is also 2 prompts
+    (one micro-batch per optimizer step).
   * ``num_generations=2`` is the minimum that yields a non-zero advantage
     (group of 1 -> mean == reward -> advantage == 0 -> loss == 0).
 
@@ -45,17 +49,16 @@ from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
 # The ``LlamaGRPOCompleter`` reference implementation lives under the
 # examples tree, not under ``ttml`` proper. Surface its package on the
 # import path so this test can use it without copy-pasting the completer.
-_GRPO_EXAMPLES_DIR = os.path.join(
+_EXAMPLES_DIR = os.path.join(
     os.environ.get("TT_METAL_HOME", os.path.join(os.path.dirname(__file__), "..", "..", "..")),
     "tt-train",
     "sources",
     "examples",
-    "grpo",
 )
-if _GRPO_EXAMPLES_DIR not in sys.path:
-    sys.path.insert(0, _GRPO_EXAMPLES_DIR)
+if _EXAMPLES_DIR not in sys.path:
+    sys.path.insert(0, _EXAMPLES_DIR)
 
-from utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
+from grpo.utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
 
 
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
@@ -156,6 +159,7 @@ class _RecordingCallback(TrainerCallback):
         self.step_end = 0
         self.train_end = 0
         self.last_step_metrics: dict | None = None
+        self.final_step_time_s: float | None = None
 
     def on_train_begin(self, trainer):
         self.train_begin += 1
@@ -169,12 +173,15 @@ class _RecordingCallback(TrainerCallback):
 
     def on_train_end(self, trainer):
         self.train_end += 1
+        # `step_time_s` is the full per-step wall time that is computed
+        # after all non-monitor `on_step_end` callbacks. Record this here.
+        self.final_step_time_s = trainer.metrics.get("step_time_s")
 
 
 @pytest.fixture
 def patch_llama_weight_loading(monkeypatch):
     """Skip the HF download / safetensors load so the tiny model keeps random init."""
-    from utils import llama_completer
+    from grpo.utils import llama_completer
 
     monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
     monkeypatch.setattr(llama_completer, "load_from_safetensors", lambda *args, **kwargs: None)
@@ -208,8 +215,7 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
 
     grpo_cfg = GRPOConfig(
         epsilon=0.2,
-        batch_size=2,
-        micro_batch_size=4,
+        per_device_train_batch_size=4,
         num_iterations=1,
         gradient_accumulation_steps=1,
         logging_steps=1,
@@ -275,16 +281,25 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     assert recorder.train_end == 1, "on_train_end should fire exactly once"
 
     assert reward_calls, "reward_func was never invoked"
-    expected_completions = grpo_cfg.batch_size * grpo_cfg.num_generations
+    # reward_func runs once per generation (effective) batch, which spans
+    # gradient_accumulation_steps micro-batches of per_device_train_batch_size *
+    # num_devices completions each. Query num_devices the same way
+    # GRPOTrainer.train does so this holds for single- and multi-device meshes.
+    num_devices = ttml.autograd.AutoContext.get_instance().get_device().get_num_devices()
+    expected_completions = grpo_cfg.per_device_train_batch_size * num_devices * grpo_cfg.gradient_accumulation_steps
     assert (
         len(reward_calls[0]) == expected_completions
     ), f"expected {expected_completions} completions per batch, got {len(reward_calls[0])}"
 
     metrics = recorder.last_step_metrics
     assert metrics is not None
-    for key in ("reward_mean", "reward_std", "mean_completion_len", "step_time_s", "generation_time_s"):
+    for key in ("reward_mean", "reward_std", "mean_completion_len", "generation_time_s"):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"metric {key} is not finite: {metrics[key]}"
+
+    step_time_s = recorder.final_step_time_s
+    assert step_time_s is not None, "missing metric step_time_s"
+    assert np.isfinite(step_time_s) and step_time_s > 0.0, f"step_time_s is not a positive duration: {step_time_s}"
 
     after = completer.model.parameters()[snapshot_name].to_numpy(ttnn.DataType.FLOAT32)
     assert before.shape == after.shape

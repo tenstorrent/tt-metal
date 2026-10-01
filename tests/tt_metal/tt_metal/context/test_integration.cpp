@@ -13,6 +13,10 @@
 // test as we are testing end to end functionality
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -21,16 +25,34 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include "impl/program/program_impl.hpp"
 
 #include <umd/device/types/arch.hpp>
 
 // Internal access
+#include "llrt/hal_types.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include "impl/context/context_types.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device/mock_device_util.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/profiler/profiler_state.hpp"
+#include "impl/profiler/profiler_state_manager.hpp"
+
+#include <ttnn/graph/graph_query_op_constraints.hpp>
+#include <ttnn/operations/ccl/all_gather/all_gather.hpp>
+#include <ttnn/tensor/layout/page_config.hpp>
+#include <ttnn/tensor/layout/tensor_layout.hpp>
+#include <ttnn/tensor/tensor_ops.hpp>
+#include <ttnn/tensor/tensor_spec.hpp>
+#include <ttnn/tensor/types.hpp>
+#include <ttnn/types.hpp>
+
+#include <limits>
+#include <optional>
+#include <string>
 
 namespace tt::tt_metal {
 
@@ -82,8 +104,10 @@ void PerformDeviceWork(
 
     auto program = CreateProgram();
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    auto core_grid = mesh_device->compute_with_storage_grid_size();
-    auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+    // A no-op kernel only validates the create / JIT / dispatch pipeline,
+    // so a single worker core is sufficient. (0, 0) is always a logical
+    // compute core regardless of dispatch-core configuration.
+    auto core_range = CoreRange({0, 0}, {0, 0});
 
     std::string kernel_src = "void kernel_main() {\n    // " + kernel_identifier + "\n}";
 
@@ -142,6 +166,255 @@ void PerformDeviceWork(
     _exit(0);
 }
 
+tt::tt_metal::TensorSpec MakeAllGatherInputSpec() {
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{4, 2, 5 * 32, 7 * 32}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+}
+
+ttnn::graph::ConstraintQueryResponse RunAllGatherConstraintQuery(distributed::MeshDevice* device) {
+    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(device->shape(), /*shard_dim=*/0);
+    ttnn::graph::DistributedTensorSpec dist_input{MakeAllGatherInputSpec(), sharded_topology};
+
+    return ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::all_gather(std::forward<decltype(args)>(args)...); },
+        device,
+        dist_input,
+        /*dim=*/3,
+        /*cluster_axis=*/std::optional<uint32_t>(1));
+}
+
+struct LegacyMockFabricCleanup {
+    bool active = false;
+    ~LegacyMockFabricCleanup() {
+        if (active) {
+            tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
+            experimental::disable_mock_mode();
+        }
+    }
+};
+
+std::optional<std::string> SaveEnv(const char* name) {
+    const char* value = getenv(name);
+    if (value == nullptr) {
+        return std::nullopt;
+    }
+    return std::string(value);
+}
+
+void RestoreEnv(const char* name, const std::optional<std::string>& value) {
+    if (value.has_value()) {
+        setenv(name, value->c_str(), /*overwrite=*/1);
+    } else {
+        unsetenv(name);
+    }
+}
+
+// Enables the device profiler + host-device sync env flags for the object's lifetime, restoring
+// them on destruction. The flags are read when a context's RunTimeOptions is constructed, so drop
+// any existing context here and on teardown.
+struct ScopedProfilerSyncEnv {
+    ScopedProfilerSyncEnv() {
+        prev_device_profiler_ = SaveEnv("TT_METAL_DEVICE_PROFILER");
+        prev_profiler_sync_ = SaveEnv("TT_METAL_PROFILER_SYNC");
+        setenv("TT_METAL_DEVICE_PROFILER", "1", /*overwrite=*/1);
+        setenv("TT_METAL_PROFILER_SYNC", "1", /*overwrite=*/1);
+        if (MetalContext::instance_exists()) {
+            tt::tt_metal::detail::ReleaseOwnership();
+        }
+    }
+    ~ScopedProfilerSyncEnv() {
+        RestoreEnv("TT_METAL_PROFILER_SYNC", prev_profiler_sync_);
+        RestoreEnv("TT_METAL_DEVICE_PROFILER", prev_device_profiler_);
+        if (MetalContext::instance_exists()) {
+            tt::tt_metal::detail::ReleaseOwnership();
+        }
+    }
+
+    std::optional<std::string> prev_device_profiler_;
+    std::optional<std::string> prev_profiler_sync_;
+};
+
+// Enqueues a single no-op kernel on one worker core of `target`, exercising the full
+// create-program / create-kernel / JIT-compile / enqueue-workload pipeline for that context.
+void RunNoOpProgram(distributed::MeshDevice& target, const std::string& label) {
+    auto program = CreateProgram();
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
+    // Single worker core; see comment in PerformDeviceWork.
+    auto core_range = CoreRange({0, 0}, {0, 0});
+
+    CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(target.mesh_command_queue(), workload, true);
+    log_info(tt::LogTest, "Successfully enqueued no-op program on {}", label);
+}
+
+// Minimal Gen1 Metal 2.0 ProgramSpec: one no-op DM kernel on node (0, 0).
+experimental::ProgramSpec MakeMinimalNoOpProgramSpec() {
+    using experimental::DataMovementHardwareConfig;
+    using experimental::KernelSpec;
+    using experimental::KernelSpecName;
+    using experimental::NodeCoord;
+    using experimental::ProgramSpec;
+    using experimental::WorkUnitSpec;
+
+    const KernelSpecName kernel_id{"dm_kernel"};
+    KernelSpec dm_kernel{
+        .unique_id = kernel_id,
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
+        .num_threads = 1,
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::NOC_0,
+                    },
+            },
+    };
+
+    return ProgramSpec{
+        .name = "context_noop",
+        .kernels = {std::move(dm_kernel)},
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit_0",
+            .kernels = {kernel_id},
+            .target_nodes = NodeCoord{0, 0},
+        }},
+    };
+}
+
+// The real (silicon) device takes DEFAULT_CONTEXT_ID and must keep the device profiler active when
+// profiling + host-device sync were requested.
+void ExpectDeviceProfilerActiveOnSilicon(distributed::MeshDevice& silicon_mesh_device) {
+    const ContextId silicon_context_id = silicon_mesh_device.impl().get_context_id();
+    EXPECT_EQ(silicon_context_id, DEFAULT_CONTEXT_ID);
+    EXPECT_TRUE(MetalContext::instance(silicon_context_id).rtoptions().get_profiler_enabled())
+        << "Test expects device profiler option to be enabled.";
+    EXPECT_TRUE(MetalContext::instance(silicon_context_id).rtoptions().get_profiler_sync_enabled())
+        << "Test expects profiler host-device sync to be enabled.";
+    EXPECT_TRUE(getDeviceProfilerState(silicon_context_id)) << "Device profiler must remain enabled on the real device";
+}
+
+// Even though profiling + sync were requested, the device profiler must never be started on a
+// mock/emulated context.
+void ExpectDeviceProfilerSkippedOnMock(distributed::MeshDevice& mock_mesh_device) {
+    const ContextId mock_context_id = mock_mesh_device.impl().get_context_id();
+    ASSERT_NE(mock_context_id, DEFAULT_CONTEXT_ID);
+    ASSERT_TRUE(MetalContext::instance(mock_context_id).get_cluster().is_mock_or_emulated());
+    EXPECT_FALSE(getDeviceProfilerState(mock_context_id))
+        << "getDeviceProfilerState() must be false for a mock context even when profiling is requested";
+    const auto& profiler_state_manager = MetalContext::instance(mock_context_id).profiler_state_manager();
+    ASSERT_NE(profiler_state_manager, nullptr);
+    for (auto* dev : mock_mesh_device.get_devices()) {
+        EXPECT_FALSE(profiler_state_manager->device_profiler_map.contains(dev->id()))
+            << "Device profiler was started on mock device " << dev->id()
+            << " -- it must be skipped for mock/emulated clusters";
+    }
+}
+
+// Shared body: open a real silicon mesh first, then two mock meshes on the same arch. When
+// `expect_profiler` is set, also check the profiler stays on for silicon but is skipped for mock.
+void RunCoexistingMockAndSiliconDevice(bool expect_profiler) {
+    // Create silicon mesh
+    MetalEnv silicon_env;
+    const tt::ARCH silicon_arch = silicon_env.get_arch();
+
+    auto mesh_shape = silicon_env.get_system_mesh().shape();
+    auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = silicon_env.create_mesh_device(mesh_device_config);
+    log_info(tt::LogTest, "Created silicon mesh device with shape {}", mesh_device->shape().dims());
+
+    if (expect_profiler) {
+        ExpectDeviceProfilerActiveOnSilicon(*mesh_device);
+    }
+
+    // Create mock mesh device with 1 chip on the silicon arch
+    MetalEnv mock_env_1({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 1)});
+    auto mock_mesh_shape_1 = mock_env_1.get_system_mesh().shape();
+    auto mock_mesh_device_config_1 = distributed::MeshDeviceConfig(mock_mesh_shape_1);
+    auto mock_mesh_device_1 = mock_env_1.create_mesh_device(mock_mesh_device_config_1);
+    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_1->shape().dims());
+
+    // Create mock mesh device with 2 chips on the silicon arch
+    MetalEnv mock_env_2({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 2)});
+    auto mock_mesh_shape_2 = mock_env_2.get_system_mesh().shape();
+    auto mock_mesh_device_config_2 = distributed::MeshDeviceConfig(mock_mesh_shape_2);
+    auto mock_mesh_device_2 = mock_env_2.create_mesh_device(mock_mesh_device_config_2);
+    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_2->shape().dims());
+
+    ASSERT_EQ(mock_mesh_device_1->get_devices().size(), 1);
+    ASSERT_EQ(mock_mesh_device_2->get_devices().size(), 2);
+
+    if (expect_profiler) {
+        ExpectDeviceProfilerSkippedOnMock(*mock_mesh_device_1);
+        ExpectDeviceProfilerSkippedOnMock(*mock_mesh_device_2);
+    }
+
+    // Run a no-op program on both the silicon and mock devices in this reversed-creation-order
+    // case to confirm the JIT/compile/enqueue pipeline does not depend on which context was
+    // opened first.
+    RunNoOpProgram(*mesh_device, "silicon_mesh_device");
+    RunNoOpProgram(*mock_mesh_device_1, "mock_mesh_device_1");
+}
+
+// Shared body: open two mock meshes first, then the real silicon mesh last. When `expect_profiler`
+// is set, also check the profiler stays on for silicon but is skipped for mock.
+void RunCoexistingSiliconAndMockDevice(bool expect_profiler) {
+    // BuildEnvManager is a process-global singleton whose kernel/firmware build-state index tables
+    // are sized once from the HAL of whichever context first triggers add_build_env(). When the
+    // mock arch differs from the silicon arch (e.g. mock-BH on a WH runner), the second context
+    // ends up indexing a wrong-sized table and JIT'd kernels reference incorrect dispatch
+    // addresses, causing silicon dispatch to hang. Forge's real flow is same-arch coexistence
+    // (mock used as a compile-time stand-in for the live silicon), so probe the silicon arch and
+    // create the mock to match. Cross-arch coexistence is a separate `BuildEnvManager`-singleton
+    // limitation tracked outside #38445.
+    tt::ARCH silicon_arch;
+    {
+        MetalEnv probe;
+        silicon_arch = probe.get_arch();
+    }
+
+    // Create mock mesh device with 1 chip on the silicon arch
+    MetalEnv mock_env_1({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 1)});
+    auto mock_mesh_shape_1 = mock_env_1.get_system_mesh().shape();
+    auto mock_mesh_device_config_1 = distributed::MeshDeviceConfig(mock_mesh_shape_1);
+    std::shared_ptr<distributed::MeshDevice> mock_mesh_device_1 =
+        mock_env_1.create_mesh_device(mock_mesh_device_config_1);
+    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_1->shape().dims());
+
+    // Create mock mesh device with 2 chips on the silicon arch
+    MetalEnv mock_env_2({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 2)});
+    auto mock_mesh_shape_2 = mock_env_2.get_system_mesh().shape();
+    auto mock_mesh_device_config_2 = distributed::MeshDeviceConfig(mock_mesh_shape_2);
+    auto mock_mesh_device_2 = mock_env_2.create_mesh_device(mock_mesh_device_config_2);
+    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_2->shape().dims());
+
+    // Create silicon mesh
+    MetalEnv env;
+    auto mesh_shape = env.get_system_mesh().shape();
+    auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = env.create_mesh_device(mesh_device_config);
+    log_info(tt::LogTest, "Created silicon mesh device with shape {}", mesh_device->shape().dims());
+
+    ASSERT_EQ(mock_mesh_device_1->get_devices().size(), 1);
+    ASSERT_EQ(mock_mesh_device_2->get_devices().size(), 2);
+
+    if (expect_profiler) {
+        ExpectDeviceProfilerActiveOnSilicon(*mesh_device);
+        ExpectDeviceProfilerSkippedOnMock(*mock_mesh_device_1);
+        ExpectDeviceProfilerSkippedOnMock(*mock_mesh_device_2);
+    }
+
+    // Run a no-op program on both the mock and silicon devices side-by-side. This exercises the
+    // full create-program / create-kernel / JIT-compile / enqueue-workload pipeline through both
+    // contexts in the same process to validate mock+silicon coexistence (issue #38445).
+    RunNoOpProgram(*mock_mesh_device_1, "mock_mesh_device_1");
+    RunNoOpProgram(*mesh_device, "silicon_mesh_device");
+}
+
 }  // namespace
 
 TEST(MetalContextIntegrationTest, Legacy) {
@@ -180,7 +453,8 @@ TEST(MetalContextIntegrationTest, HelloWorldQueryThenCreate) {
 
         auto mesh_shape = env.get_system_mesh().shape();
         auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
-        auto mesh_device = env.create_mesh_device(mesh_device_config, trace_region_size, l1_small_region_size);
+        auto mesh_device = env.create_mesh_device(
+            mesh_device_config, {.l1_small_size = l1_small_region_size, .trace_region_size = trace_region_size});
         context_id = mesh_device->impl().get_context_id();
     }
 
@@ -201,7 +475,8 @@ TEST(MetalContextIntegrationTest, HelloWorldQueryThenCreate) {
 TEST(MetalContextIntegrationTest, MockDeviceOnly) {
     ContextId context_id;
     {
-        MetalEnv mock_env_bh_1{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
+        MetalEnv mock_env_bh_1(
+            {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
 
         auto mesh_config_mock = distributed::MeshDeviceConfig(distributed::MeshShape(1));
         auto mock_device = mock_env_bh_1.create_mesh_device(mesh_config_mock);
@@ -218,33 +493,29 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         buffer->deallocate();
         ASSERT_FALSE(buffer->is_allocated());
 
-        // Test command queue operations
+        // Test command queue operations. Source vector is sized to fill the entire buffer so
+        // EnqueueWriteMeshBuffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
+        // is satisfied; the prior 16-element vector was a pre-#43429 leftover.
         auto& cq = mock_device->mesh_command_queue();
-        constexpr size_t num_elements = 16;
+        constexpr size_t num_elements = buffer_size / sizeof(uint32_t);
         std::vector<uint32_t> write_data(num_elements);
-        std::iota(write_data.begin(), write_data.end(), 0xDEADBEEF);
+        std::iota(write_data.begin(), write_data.end(), 0xDEADBEEFu);
 
         distributed::EnqueueWriteMeshBuffer(cq, buffer, write_data, true);
 
         std::vector<uint32_t> read_data;
         distributed::EnqueueReadMeshBuffer(cq, read_data, buffer, true);
 
-        // TODO: Uncomment this once CreateProgram and CreateKernel stop implicitly creating the physical metal context
-        // https://github.com/tenstorrent/tt-metal/issues/39849
-        // auto program = CreateProgram();
-        // distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());
-        // auto core_grid = mock_device->compute_with_storage_grid_size();
-        // auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+        auto program = CreateProgram();
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());
+        // Single worker core; see comment in PerformDeviceWork.
+        auto core_range = CoreRange({0, 0}, {0, 0});
 
-        // CreateKernelFromString(
-        //     program,
-        //     "void kernel_main() {}",
-        //     core_range,
-        //     DataMovementConfig{});
+        CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
 
-        // distributed::MeshWorkload workload;
-        // workload.add_program(device_range, std::move(program));
-        // distributed::EnqueueMeshWorkload(cq, workload, true);
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, true);
     }
 
     // Assert that we didn't implicitly create the physical metal context
@@ -254,61 +525,131 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
     ASSERT_FALSE(MetalContext::instance_exists(context_id));
 }
 
+// SubDevice construction must not reach any MetalContext; it is validated against the device it is applied to.
+TEST(MetalContextIntegrationTest, MockDeviceSubDevice) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+
+    const SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {1, 1}))});
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+    std::array<CoreRangeSet, NumHalProgrammableCoreTypes> unsupported_cores{};
+    unsupported_cores[static_cast<uint32_t>(HalProgrammableCoreType::TENSIX)] = CoreRangeSet(CoreRange({2, 2}, {2, 2}));
+    unsupported_cores[static_cast<uint32_t>(HalProgrammableCoreType::DISPATCH)] =
+        CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    const SubDevice unsupported_sub_device(unsupported_cores);
+
+    auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    const auto manager_id = mesh_device->create_sub_device_manager({sub_device}, /*local_l1_size=*/0);
+    mesh_device->remove_sub_device_manager(manager_id);
+
+    // Blackhole never registers the DISPATCH core type.
+    EXPECT_THROW(mesh_device->create_sub_device_manager({unsupported_sub_device}, 0), std::runtime_error);
+
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+}
+
+// Quasar's HAL registers DISPATCH but leaves the lower DRAM slot as an unregistered placeholder.
+TEST(MetalContextIntegrationTest, MockQuasarSubDeviceRejectsPlaceholderCoreType) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::QUASAR, 1)});
+    auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+
+    const SubDevice tensix_sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
+    const auto manager_id = mesh_device->create_sub_device_manager({tensix_sub_device}, /*local_l1_size=*/0);
+    mesh_device->remove_sub_device_manager(manager_id);
+
+    std::array<CoreRangeSet, NumHalProgrammableCoreTypes> dram_cores{};
+    dram_cores[static_cast<uint32_t>(HalProgrammableCoreType::TENSIX)] = CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    dram_cores[static_cast<uint32_t>(HalProgrammableCoreType::DRAM)] = CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    const SubDevice dram_sub_device(dram_cores);
+    EXPECT_THROW(mesh_device->create_sub_device_manager({dram_sub_device}, 0), std::runtime_error);
+}
+
+TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
+
+    const std::array<ChipId, 2> device_ids{0, 1};
+    auto meshes = mock_env.create_unit_meshes(device_ids, {.l1_small_size = 1 << 15});
+    ASSERT_EQ(meshes.size(), device_ids.size());
+    for (ChipId device_id : device_ids) {
+        ASSERT_TRUE(meshes.contains(device_id));
+        EXPECT_EQ(meshes.at(device_id)->num_devices(), 1u);
+    }
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+    // The parent mesh owns the context. Its devices must be closed before the context is destroyed; a failure
+    // there is caught in ~ScopedDevices and only logged.
+    testing::internal::CaptureStdout();
+    meshes.clear();
+    const std::string teardown_log = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(teardown_log.find("Exception during device close"), std::string::npos) << teardown_log;
+}
+
+// Changing env-wide options while a MeshDevice is open must fail rather than tear down the context underneath it.
+TEST(MetalContextIntegrationTest, MockDeviceRejectsEnvWideOptionChangeWhileOpen) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
+    // Querying the system mesh first makes the env own one context shared by every create_* call.
+    mock_env.get_system_mesh();
+
+    auto mesh_0 = mock_env.create_unit_mesh(0);
+    EXPECT_THROW(mock_env.create_unit_mesh(1, {.num_command_queues = 2}), std::runtime_error);
+}
+
+// A Metal 2.0 program built from a mock MeshDevice can be enqueued on that same mesh.
+TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    const auto context_id = mesh_device->impl().get_context_id();
+
+    EXPECT_EQ(
+        MetalContext::instance(context_id).get_dispatch_core_config().get_dispatch_core_axis(), DispatchCoreAxis::COL);
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+    experimental::ProgramSpec spec = MakeMinimalNoOpProgramSpec();
+    distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
+}
+
+// A Metal 2.0 program built on one MeshDevice must not compile on a MeshDevice from a different
+// MetalEnv.
+TEST(MetalContextIntegrationTest, MockMetal2ProgramCompileOnForeignMeshFails) {
+    MetalEnv env_a({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    MetalEnv env_b({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+
+    auto mesh_a = env_a.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    auto mesh_b = env_b.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+
+    Program program = experimental::MakeProgramFromSpec(*mesh_a, MakeMinimalNoOpProgramSpec());
+    EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
+}
+
 TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {
-    // Create mock mesh device with 1 blackhole chip
-    MetalEnv mock_env_bh_1{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
-    auto mock_mesh_shape_bh_1 = mock_env_bh_1.get_system_mesh().shape();
-    auto mock_mesh_device_config_bh_1 = distributed::MeshDeviceConfig(mock_mesh_shape_bh_1);
-    std::shared_ptr<distributed::MeshDevice> mock_mesh_device_bh_1 =
-        mock_env_bh_1.create_mesh_device(mock_mesh_device_config_bh_1);
-    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_bh_1->shape().dims());
+    RunCoexistingSiliconAndMockDevice(/*expect_profiler=*/false);
+}
 
-    // Create mock mesh device with 2 blackhole chips
-    MetalEnv mock_env_bh_2{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2))};
-    auto mock_mesh_shape_bh_2 = mock_env_bh_2.get_system_mesh().shape();
-    auto mock_mesh_device_config_bh_2 = distributed::MeshDeviceConfig(mock_mesh_shape_bh_2);
-    auto mock_mesh_device_bh_2 = mock_env_bh_2.create_mesh_device(mock_mesh_device_config_bh_2);
-    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_bh_2->shape().dims());
-
-    // Create silicon mesh
-    MetalEnv env;
-    auto mesh_shape = env.get_system_mesh().shape();
-    auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
-    std::shared_ptr<distributed::MeshDevice> mesh_device = env.create_mesh_device(mesh_device_config);
-    log_info(tt::LogTest, "Created silicon mesh device with shape {}", mesh_device->shape().dims());
-
-    ASSERT_EQ(mock_mesh_device_bh_1->get_devices().size(), 1);
-    ASSERT_EQ(mock_mesh_device_bh_2->get_devices().size(), 2);
+// Same as CoexistingSiliconAndMockDevice, with the device profiler + host-device sync enabled
+// (regression for #48564).
+TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDeviceWithProfilerSync) {
+#if !defined(TRACY_ENABLE)
+    GTEST_SKIP() << "Requires a Tracy-enabled build (ENABLE_TRACY=ON).";
+#endif
+    ScopedProfilerSyncEnv profiler_env;
+    RunCoexistingSiliconAndMockDevice(/*expect_profiler=*/true);
 }
 
 // Same test as above but reverse the order to ensure no hangs due to unexpected internal objects created for the
-// incorrect context id
+// incorrect context id. See `CoexistingSiliconAndMockDevice` for why mock arch is matched to silicon arch.
 TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDevice) {
-    // Create silicon mesh
-    MetalEnv silicon_env;
+    RunCoexistingMockAndSiliconDevice(/*expect_profiler=*/false);
+}
 
-    auto mesh_shape = silicon_env.get_system_mesh().shape();
-    auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
-    std::shared_ptr<distributed::MeshDevice> mesh_device = silicon_env.create_mesh_device(mesh_device_config);
-    log_info(tt::LogTest, "Created silicon mesh device with shape {}", mesh_device->shape().dims());
-
-    // Create mock mesh device with 1 blackhole chip
-    MetalEnv mock_env_bh_1{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
-    auto mock_mesh_shape_bh_1 = mock_env_bh_1.get_system_mesh().shape();
-    auto mock_mesh_device_config_bh_1 = distributed::MeshDeviceConfig(mock_mesh_shape_bh_1);
-    auto mock_mesh_device_bh_1 = mock_env_bh_1.create_mesh_device(mock_mesh_device_config_bh_1);
-    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_bh_1->shape().dims());
-
-    // Create mock mesh device with 2 blackhole chips
-    MetalEnv mock_env_bh_2{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2))};
-
-    auto mock_mesh_shape_bh_2 = mock_env_bh_2.get_system_mesh().shape();
-    auto mock_mesh_device_config_bh_2 = distributed::MeshDeviceConfig(mock_mesh_shape_bh_2);
-    auto mock_mesh_device_bh_2 = mock_env_bh_2.create_mesh_device(mock_mesh_device_config_bh_2);
-    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_bh_2->shape().dims());
-
-    ASSERT_EQ(mock_mesh_device_bh_1->get_devices().size(), 1);
-    ASSERT_EQ(mock_mesh_device_bh_2->get_devices().size(), 2);
+// Same as CoexistingMockAndSiliconDevice, with the device profiler + host-device sync enabled
+// (regression for #48564).
+TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDeviceWithProfilerSync) {
+#if !defined(TRACY_ENABLE)
+    GTEST_SKIP() << "Requires a Tracy-enabled build (ENABLE_TRACY=ON).";
+#endif
+    ScopedProfilerSyncEnv profiler_env;
+    RunCoexistingMockAndSiliconDevice(/*expect_profiler=*/true);
 }
 
 TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
@@ -337,7 +678,7 @@ TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
     if (pid == 0) {
         close(pipe_fd[1]);
 
-        MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value())};
+        MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
 
         if (!MetalEnvAccessor(mock_env).impl().get_rtoptions().get_mock_enabled()) {
             _exit(1);
@@ -458,8 +799,7 @@ TEST(MetalContextIntegrationTest, ForkWithDisjointDevices) {
 }
 
 TEST(MetalContextIntegrationTest, MeshDevicePropagatesContextId) {
-    MetalEnvDescriptor desc(experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 8));
-    MetalEnv env(desc);
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 8)});
     auto mesh_shape = env.get_system_mesh().shape();
     auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
     auto mesh_device = env.create_mesh_device(mesh_device_config);
@@ -476,6 +816,59 @@ TEST(MetalContextIntegrationTest, MeshDevicePropagatesContextId) {
 
     SystemMemoryManager& sysmem_manager = mesh_device->impl().get_devices()[0]->sysmem_manager();
     EXPECT_EQ(sysmem_manager.get_context_id(), context_id);
+}
+
+TEST(MetalEnvMockCCL, FabricInDescriptor_CreatesMeshAndQuerySucceeds) {
+    MetalEnv env({
+        .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2),
+        .fabric =
+            {
+                .fabric_config = tt_fabric::FabricConfig::FABRIC_1D,
+                .reliability_mode = tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+                .num_routing_planes = std::numeric_limits<uint8_t>::max(),
+            },
+    });
+
+    auto device = env.create_mesh_device(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
+    ASSERT_NE(device, nullptr);
+    auto response = RunAllGatherConstraintQuery(device.get());
+    EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Success)
+        << "query failed: " << response.error_message.value_or("(no message)");
+}
+
+TEST(MetalEnvMockCCL, FabricAfterDeviceCreation_QuerySucceeds) {
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
+    auto device = env.create_mesh_device(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
+    ASSERT_NE(device, nullptr);
+
+    ASSERT_TRUE(MetalEnvAccessor{env}.impl().set_fabric_config(
+        tt_fabric::FabricConfig::FABRIC_1D, tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE));
+
+    auto response = RunAllGatherConstraintQuery(device.get());
+    EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Success)
+        << "query failed: " << response.error_message.value_or("(no message)");
+}
+
+TEST(MetalEnvMockCCL, LegacyConfigureMockMode_QueryPasses) {
+    LegacyMockFabricCleanup cleanup;
+    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, /*num_chips=*/2);
+    cleanup.active = true;
+
+    // Fabric must be configured before opening devices; set_fabric_config rejects
+    // non-DISABLED changes while devices are still open.
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_1D, tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    MetalContext::instance().initialize_fabric_config();
+
+    ttnn::graph::ConstraintQueryResponse response;
+    {
+        auto device = distributed::MeshDevice::create(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
+        ASSERT_NE(device, nullptr);
+        response = RunAllGatherConstraintQuery(device.get());
+    }
+
+    EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Success)
+        << "query failed: " << response.error_message.value_or("(no message)");
 }
 
 }  // namespace tt::tt_metal

@@ -2,17 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import threading, torch, ttnn
+import torch, ttnn
 
 
 def main():
-    records, lock = [], threading.Lock()
+    records = []
 
-    def collect(r):
-        with lock:
+    def collect_records(batch):
+        for r in batch.records:
             records.append(
                 {
-                    "pid": r.program_id,
+                    "runtime_id": r.runtime_id,
                     "start": r.start_timestamp,
                     "end": r.end_timestamp,
                     "freq": r.frequency,
@@ -25,7 +25,7 @@ def main():
         l1_small_size=24576,
         dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
     )
-    h = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect)
+    h = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
     try:
         torch.manual_seed(0)
         a = ttnn.to_layout(
@@ -54,28 +54,31 @@ def main():
         ttnn.close_mesh_device(dev)
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(h)
 
-    with lock:
-        snap = list(records)
+    snap = list(records)
     print(f"Total records from callback: {len(snap)}")
     short_list = []
     for i, r in enumerate(snap):
-        if r["pid"] == 0 or r["freq"] <= 0:
+        if r["runtime_id"] == 0 or r["freq"] <= 0:
             continue
         dur_us = (r["end"] - r["start"]) / r["freq"] / 1000
         if dur_us < 10:
-            short_list.append((i, r["pid"], dur_us))
-    total = len([r for r in snap if r["pid"] != 0 and r["freq"] > 0])
-    print(f"Total valid (pid!=0): {total}, SHORT (<10us): {len(short_list)}")
+            short_list.append((i, r["runtime_id"], dur_us))
+    total = len([r for r in snap if r["runtime_id"] != 0 and r["freq"] > 0])
+    print(f"Total valid (runtime_id!=0): {total}, SHORT (<10us): {len(short_list)}")
     if short_list:
         print("SHORT records:")
-        for idx, pid, dur in short_list:
+        for idx, runtime_id, dur in short_list:
             r = snap[idx]
-            print(f"  [{idx}] pid={pid} dur_us={dur:.3f} start={r['start']} end={r['end']} delta={r['end']-r['start']}")
+            print(
+                f"  [{idx}] runtime_id={runtime_id} dur_us={dur:.3f} "
+                f"start={r['start']} end={r['end']} delta={r['end']-r['start']}"
+            )
             if idx > 0:
                 prev = snap[idx - 1]
                 prev_dur = (prev["end"] - prev["start"]) / prev["freq"] / 1000
                 print(
-                    f"    prev[{idx-1}] pid={prev['pid']} dur_us={prev_dur:.3f} start={prev['start']} end={prev['end']}"
+                    f"    prev[{idx-1}] runtime_id={prev['runtime_id']} dur_us={prev_dur:.3f} "
+                    f"start={prev['start']} end={prev['end']}"
                 )
 
 

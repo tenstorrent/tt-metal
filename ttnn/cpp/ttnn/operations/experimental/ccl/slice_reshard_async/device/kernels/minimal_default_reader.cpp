@@ -3,6 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -20,20 +26,12 @@ constexpr bool direction = get_compile_time_arg_val(3);
 const uint32_t stick_size = get_compile_time_arg_val(4);
 
 template <uint32_t stick_size_bytes>
-inline void zeroPad(uint32_t cb_output_id) {
-    //  Zero-fill from MEM_ZEROS
-    constexpr uint32_t num_full_reads = stick_size_bytes / MEM_ZEROS_SIZE;
-    constexpr uint32_t partial_read_size = stick_size_bytes % MEM_ZEROS_SIZE;
-    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t cb_write_addr = get_write_ptr(cb_output_id);
-
-    for (uint32_t i = 0; i < num_full_reads; ++i) {
-        noc_async_read(zeros_noc_addr, cb_write_addr, MEM_ZEROS_SIZE);
-        cb_write_addr += MEM_ZEROS_SIZE;
-    }
-    if (partial_read_size > 0) {
-        noc_async_read(zeros_noc_addr, cb_write_addr, partial_read_size);
-    }
+inline void zeroPad(const Noc& noc, uint32_t cb_output_id) {
+    // Zero-fill the CB's current write entry via the device-side zero API. Self-contained:
+    // it waits for the zero (write_zeros_l1_barrier), so the caller needs no separate barrier.
+    CircularBuffer cb(cb_output_id);
+    noc.async_write_zeros(cb, stick_size_bytes);
+    noc.write_zeros_l1_barrier();
 }
 
 void kernel_main() {
@@ -57,6 +55,9 @@ void kernel_main() {
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
 
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
+
     if (!is_last_chip) {
         // Read the "end" of each slice into the CB to write to the neighbor
         for (uint32_t outer_dim_id = outer_dims_to_forward; outer_dim_id > 0; outer_dim_id--) {
@@ -67,26 +68,22 @@ void kernel_main() {
                 src_stick_id = (outer_dims_to_forward - outer_dim_id) * num_sticks_per_outer_dim + stick_start_id;
             }
             for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                cb_reserve_back(cb_output_id, 1);
-                uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
-
-                uint64_t src_noc_addr = src_accessor.get_noc_addr(src_stick_id);
-                noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
+                cb_output.reserve_back(1);
+                noc_obj.async_read(src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {});
 
                 src_stick_id++;
 
-                noc_async_read_barrier();
-                cb_push_back(cb_output_id, 1);
+                noc_obj.async_read_barrier();
+                cb_output.push_back(1);
             }
         }
     } else {
         // If we need extend beyond the original input tensor, pad
         if (direction) {
             if (outer_dims_from_forward) {
-                cb_reserve_back(cb_output_id, 1);
-                zeroPad<stick_size>(cb_output_id);
-                noc_async_read_barrier();
-                cb_push_back(cb_output_id, 1);
+                cb_output.reserve_back(1);
+                zeroPad<stick_size>(noc_obj, cb_output_id);
+                cb_output.push_back(1);
             }
         }
     }
@@ -95,21 +92,19 @@ void kernel_main() {
         for (uint32_t outer_dim_id = outer_dims_to_keep_start; outer_dim_id <= outer_dims_to_keep_end; outer_dim_id++) {
             uint32_t src_stick_id = outer_dim_id * num_sticks_per_outer_dim + stick_start_id;
             for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                cb_reserve_back(cb_output_id, 1);
-                uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
-
-                uint64_t src_noc_addr = src_accessor.get_noc_addr(src_stick_id);
-                noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
+                cb_output.reserve_back(1);
+                noc_obj.async_read(src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {});
 
                 src_stick_id++;
 
-                noc_async_read_barrier();
-                cb_push_back(cb_output_id, 1);
+                noc_obj.async_read_barrier();
+                cb_output.push_back(1);
             }
         }
     }
 
     // Check that the semaphore is received
+    // Device 2.0 migration: legacy primitive retained, out_ready_sem is the address of a GlobalSemaphore.
     if (!is_first_chip) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 1);
     }

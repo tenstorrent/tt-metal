@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_examples ${LIB_TYPE})
 add_library(TTNN::Ops::Examples ALIAS ttnn_op_examples)
 
-tt_reuse_precompile_headers(ttnn_op_examples TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_examples TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_examples)
 
 set_target_properties(
@@ -13,8 +15,8 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    example/device/kernels/*
-    example_multiple_return/device/kernels/*
+    example/device/kernels/*.cpp
+    example_multiple_return/device/kernels/*.cpp
 )
 
 target_sources(
@@ -29,13 +31,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        example/example.cpp
-        example/device/example_device_operation.cpp
-        example/device/multi_core_program_factory.cpp
-        example/device/single_core_program_factory.cpp
-        example_multiple_return/device/example_multiple_return_device_operation.cpp
-        example_multiple_return/device/single_core_program_factory.cpp
-        example_multiple_return/example_multiple_return.cpp
+        ${TTNN_OP_EXAMPLES_SRCS}
 )
 
 target_include_directories(ttnn_op_examples PRIVATE ${FixmeOpIncDirs})
@@ -56,3 +52,19 @@ install(
 )
 
 install(TARGETS ttnn_op_examples LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_EXAMPLES_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_EXAMPLES_NANOBIND_SRCS})
+endif()

@@ -2,16 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/mock_device.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
-#include <unordered_map>
 #include "llrt/get_platform_architecture.hpp"
-#include "llrt/tt_cluster.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/device/mock_device_util.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -65,15 +62,8 @@ std::optional<std::string> get_mock_cluster_desc() {
         return std::nullopt;
     }
 
-    auto name = get_mock_cluster_desc_name(g_registered_mock_config->arch, g_registered_mock_config->num_chips);
-    if (!name.has_value()) {
-        TT_THROW(
-            "Unsupported mock device configuration: arch={}, num_chips={}",
-            static_cast<int>(g_registered_mock_config->arch),
-            g_registered_mock_config->num_chips);
-    }
-
-    return name;
+    // Throws if the registered (arch, num_chips) pair has no cluster descriptor.
+    return get_mock_cluster_desc_name(g_registered_mock_config->arch, g_registered_mock_config->num_chips);
 }
 
 }  // namespace tt::tt_metal::experimental

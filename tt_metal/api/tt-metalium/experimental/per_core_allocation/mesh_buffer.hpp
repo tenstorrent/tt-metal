@@ -12,9 +12,10 @@
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 
-DeviceAddr get_per_core_address(const distributed::MeshBuffer& mesh_buffer, const CoreCoord& core);
-
-// Multi-device per-core address: get the address for a specific core on a specific device.
+// Per-core address for a core on a specific device. A per-core-allocated MeshBuffer allocates
+// each device independently, so the address is only defined once a device is named: there is
+// deliberately no (mesh_buffer, core) overload, which could only answer for the reference
+// (first-local) device and would silently be wrong on every other one.
 DeviceAddr get_per_core_address(
     const distributed::MeshBuffer& mesh_buffer, const distributed::MeshCoordinate& device_coord, const CoreCoord& core);
 

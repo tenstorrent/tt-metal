@@ -14,19 +14,23 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers.hpp"
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 namespace {
 
-using test_helpers::MakeMinimalDMKernel;
-using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen2ComputeKernel;
+using test_helpers::MakeMinimalGen2DMKernel;
+using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeMinimalWriterDMKernel;
 
 constexpr CoreCoord kCore{0, 0};
 constexpr const char* kKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/kernel_thread_barrier.cpp";
@@ -50,28 +54,29 @@ ScratchLayout make_layout(uint32_t base_addr, uint32_t rounds) {
     return layout;
 }
 
-ProgramRunParams::KernelRunParams make_run_params(
-    const KernelSpecName& kernel_name, const NodeCoord& node, const ScratchLayout& layout, uint32_t rounds, uint32_t skew_iters) {
-    return ProgramRunParams::KernelRunParams{
-        .kernel_spec_name = kernel_name,
-        .runtime_varargs =
-            {{node,
-              {
-                  layout.arrivals_addr,
-                  layout.observed_addr,
-                  layout.post_addr,
-                  rounds,
-                  skew_iters,
-                  layout.total_words,
-              }}},
+ProgramRunArgs::KernelRunArgs make_run_params(
+    KernelSpecName kernel, const NodeCoord& node, const ScratchLayout& layout, uint32_t rounds, uint32_t skew_iters) {
+    return ProgramRunArgs::KernelRunArgs{
+        .kernel = std::move(kernel),
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs =
+                    {{node,
+                      {
+                          layout.arrivals_addr,
+                          layout.observed_addr,
+                          layout.post_addr,
+                          rounds,
+                          skew_iters,
+                          layout.total_words,
+                      }}},
+            },
     };
 }
 
-class KernelThreadSyncTest : public tt::tt_metal::MeshDeviceFixture {};
+class KernelThreadSyncTest : public tt::tt_metal::UnitMeshFixture {};
 
 TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
-    auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
     NodeCoord node{0, 0};
 
     // Arch-specific config: kernels to launch, one scratch layout per kernel,
@@ -85,69 +90,384 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     const bool is_quasar = (this->arch_ == tt::ARCH::QUASAR);
     const uint32_t expected_num_threads = is_quasar ? 6u : 1u;
 
-    uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
 
     std::vector<KernelConfig> kernel_configs;
     std::vector<std::string> work_unit_kernel_names;
 
     if (is_quasar) {
-        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", static_cast<uint8_t>(expected_num_threads));
-        spec.source = KernelSpec::SourceFilePath{kKernelPath};
-        spec.runtime_arguments_schema.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+        auto spec = MakeMinimalGen2DMKernel("dm_barrier_kernel", expected_num_threads);
+        spec.source = kKernelPath;
+        spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});
         work_unit_kernel_names = {"dm_barrier_kernel"};
     } else {
-        auto make_gen1 = [&](const std::string& name, tt::tt_metal::DataMovementProcessor proc, uint32_t layout_base) {
-            auto spec = MakeMinimalGen1DMKernel(name, proc);
-            spec.source = KernelSpec::SourceFilePath{kKernelPath};
-            spec.runtime_arguments_schema.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
-            return KernelConfig{name, spec, make_layout(layout_base, kRounds)};
+        auto make_gen1 = [&](KernelSpec spec, uint32_t layout_base) {
+            spec.source = kKernelPath;
+            spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+            return KernelConfig{*spec.unique_id, std::move(spec), make_layout(layout_base, kRounds)};
         };
-        kernel_configs.push_back(make_gen1("brisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0, l1_base));
+        // BRISC uses the writer role (RISCV_0/NOC_1); NCRISC uses the reader helper (RISCV_1/NOC_0).
+        // The two DM kernels thus land on distinct processors AND distinct NOCs, as spec validation
+        // requires for dedicated-NOC data movement kernels sharing a node.
+        kernel_configs.push_back(make_gen1(MakeMinimalWriterDMKernel("brisc_barrier_kernel"), l1_base));
         uint32_t ncrisc_base = l1_base + kernel_configs[0].layout.total_words * sizeof(uint32_t);
-        kernel_configs.push_back(make_gen1("ncrisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_1, ncrisc_base));
+        kernel_configs.push_back(make_gen1(MakeMinimalReaderDMKernel("ncrisc_barrier_kernel"), ncrisc_base));
         work_unit_kernel_names = {"brisc_barrier_kernel", "ncrisc_barrier_kernel"};
     }
 
     ProgramSpec spec;
-    spec.program_id = "kernel_thread_barrier";
-    for (const auto& cfg : kernel_configs) { spec.kernels.push_back(cfg.spec); }
+    spec.name = "kernel_thread_barrier";
+    for (const auto& cfg : kernel_configs) {
+        spec.kernels.push_back(cfg.spec);
+    }
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, work_unit_kernel_names)};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program = MakeProgramFromSpec(this->device(), spec);
 
     uint32_t total_zeros = 0;
-    for (const auto& cfg : kernel_configs) { total_zeros += cfg.layout.total_words; }
-    std::vector<uint32_t> zeros(total_zeros, 0);
-    detail::WriteToDeviceL1(device, kCore, l1_base, zeros);
-
-    ProgramRunParams params;
     for (const auto& cfg : kernel_configs) {
-        params.kernel_run_params.push_back(make_run_params(cfg.name, node, cfg.layout, kRounds, kSkewIters));
+        total_zeros += cfg.layout.total_words;
     }
-    SetProgramRunParameters(program, params);
-    detail::LaunchProgram(device, program);
+    std::vector<uint32_t> zeros(total_zeros, 0);
+    slow_dispatch::WriteToL1(this->device(), kCore, l1_base, zeros);
+
+    ProgramRunArgs params;
+    for (const auto& cfg : kernel_configs) {
+        params.kernel_run_args.push_back(
+            make_run_params(KernelSpecName{cfg.name}, node, cfg.layout, kRounds, kSkewIters));
+    }
+    SetProgramRunArgs(program, params);
+    LaunchProgram(this->device(), std::move(program));
 
     for (const auto& cfg : kernel_configs) {
         std::vector<uint32_t> observed;
-        detail::ReadFromDeviceL1(device, kCore, cfg.layout.observed_addr, (kRounds + 1) * sizeof(uint32_t), observed);
+        slow_dispatch::ReadFromL1(
+            this->device(), kCore, cfg.layout.observed_addr, (kRounds + 1) * sizeof(uint32_t), observed);
         ASSERT_EQ(observed.size(), kRounds + 1);
         EXPECT_EQ(observed[kRounds], expected_num_threads) << cfg.name << ": get_num_threads() mismatch";
 
         if (is_quasar) {
             std::vector<uint32_t> arrivals, post;
-            detail::ReadFromDeviceL1(device, kCore, cfg.layout.arrivals_addr, kRounds * sizeof(uint32_t), arrivals);
-            detail::ReadFromDeviceL1(device, kCore, cfg.layout.post_addr, kRounds * sizeof(uint32_t), post);
+            slow_dispatch::ReadFromL1(
+                this->device(), kCore, cfg.layout.arrivals_addr, kRounds * sizeof(uint32_t), arrivals);
+            slow_dispatch::ReadFromL1(this->device(), kCore, cfg.layout.post_addr, kRounds * sizeof(uint32_t), post);
             ASSERT_EQ(arrivals.size(), kRounds);
             ASSERT_EQ(post.size(), kRounds);
             for (uint32_t r = 0; r < kRounds; r++) {
-                EXPECT_EQ(arrivals[r], expected_num_threads) << cfg.name << " round " << r << ": not all threads arrived before barrier release";
-                EXPECT_EQ(observed[r], expected_num_threads) << cfg.name << " round " << r << ": thread 0 observed wrong count after barrier";
-                EXPECT_EQ(post[r], expected_num_threads) << cfg.name << " round " << r << ": not all threads completed post-barrier phase";
+                EXPECT_EQ(arrivals[r], expected_num_threads)
+                    << cfg.name << " round " << r << ": not all threads arrived before barrier release";
+                EXPECT_EQ(observed[r], expected_num_threads)
+                    << cfg.name << " round " << r << ": thread 0 observed wrong count after barrier";
+                EXPECT_EQ(post[r], expected_num_threads)
+                    << cfg.name << " round " << r << ": not all threads completed post-barrier phase";
             }
         }
     }
 }
 
+TEST_F(KernelThreadSyncTest, ComputeBarrierSynchronizesAllTriscs) {
+    if (this->arch_ != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Compute sync_threads across TRISCs is Quasar-only";
+    }
+
+    NodeCoord node{0, 0};
+    constexpr uint32_t kNumNeos = 4;
+    constexpr uint32_t kTriscCoresPerNeo = 4;
+    constexpr uint32_t kNumParticipants = kNumNeos * kTriscCoresPerNeo;
+    constexpr const char* kComputeKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/kernel_thread_barrier.cpp";
+
+    uint32_t l1_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t arrivals_words = kRounds * kNumParticipants;
+    const uint32_t observed_words = kRounds + 1;
+    const uint32_t post_words = kRounds * kNumParticipants;
+    const uint32_t arrivals_addr = l1_base;
+    const uint32_t observed_addr = arrivals_addr + arrivals_words * sizeof(uint32_t);
+    const uint32_t post_addr = observed_addr + observed_words * sizeof(uint32_t);
+    const uint32_t total_words = arrivals_words + observed_words + post_words;
+
+    auto kernel_spec = MakeMinimalGen2ComputeKernel("compute_barrier_kernel", kNumNeos);
+    kernel_spec.source = kComputeKernelPath;
+    kernel_spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+
+    ProgramSpec spec;
+    spec.name = "compute_kernel_thread_barrier";
+    spec.kernels = {kernel_spec};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"compute_barrier_kernel"})};
+
+    Program program = MakeProgramFromSpec(this->device(), spec);
+
+    std::vector<uint32_t> zeros(total_words, 0);
+    slow_dispatch::WriteToL1(this->device(), kCore, l1_base, zeros);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute_barrier_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs =
+                    {{node,
+                      {
+                          arrivals_addr,
+                          observed_addr,
+                          post_addr,
+                          kRounds,
+                          kSkewIters,
+                          kNumParticipants,
+                      }}},
+            },
+    });
+    SetProgramRunArgs(program, params);
+    LaunchProgram(this->device(), std::move(program));
+
+    std::vector<uint32_t> observed;
+    slow_dispatch::ReadFromL1(this->device(), kCore, observed_addr, observed_words * sizeof(uint32_t), observed);
+    ASSERT_EQ(observed.size(), observed_words);
+    EXPECT_EQ(observed[kRounds], kNumNeos) << "get_num_threads() mismatch";
+
+    std::vector<uint32_t> arrivals, post;
+    slow_dispatch::ReadFromL1(this->device(), kCore, arrivals_addr, arrivals_words * sizeof(uint32_t), arrivals);
+    slow_dispatch::ReadFromL1(this->device(), kCore, post_addr, post_words * sizeof(uint32_t), post);
+    ASSERT_EQ(arrivals.size(), arrivals_words);
+    ASSERT_EQ(post.size(), post_words);
+
+    for (uint32_t r = 0; r < kRounds; r++) {
+        uint32_t arrived = 0;
+        uint32_t posted = 0;
+        for (uint32_t p = 0; p < kNumParticipants; p++) {
+            arrived += arrivals[r * kNumParticipants + p];
+            posted += post[r * kNumParticipants + p];
+        }
+        EXPECT_EQ(arrived, kNumParticipants) << "round " << r << ": not all TRISCs arrived before barrier release";
+        EXPECT_EQ(observed[r], kNumParticipants)
+            << "round " << r << ": observer counted wrong number of TRISCs after barrier";
+        EXPECT_EQ(posted, kNumParticipants) << "round " << r << ": not all TRISCs completed post-barrier phase";
+    }
+}
+
+// Three DM kernels, each parallelized 2 ways, co-resident with a compute kernel spread over 4
+// NEOs. Each kernel calls sync_threads() with no argument, so the barrier it lands on is the slot
+// firmware derived for it. If two kernels ended up on the same slot they would share an arrival
+// counter, and since sync_threads() releases on the arriving thread's own participant count, the
+// mismatched groups would either release early (a short observed count below) or hang.
+TEST_F(KernelThreadSyncTest, PerKernelBarriersAreIndependentAcrossDmAndCompute) {
+    if (this->arch_ != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Per-kernel barrier slots are Quasar-only";
+    }
+
+    NodeCoord node{0, 0};
+    constexpr uint32_t kNumDmKernels = 3;
+    constexpr uint32_t kDmThreadsPerKernel = 2;
+    constexpr uint32_t kNumNeos = 4;
+    constexpr uint32_t kTriscCoresPerNeo = 4;
+    constexpr uint32_t kComputeParticipants = kNumNeos * kTriscCoresPerNeo;
+    constexpr const char* kComputeKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/kernel_thread_barrier.cpp";
+
+    uint32_t l1_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
+
+    // Each kernel gets a private scratch region, so a wrong observed count can only come from
+    // barrier slots colliding rather than from two kernels writing the same words.
+    std::vector<std::string> dm_names;
+    std::vector<ScratchLayout> dm_layouts;
+    std::vector<KernelSpec> specs;
+    std::vector<std::string> kernel_names;
+    uint32_t next_addr = l1_base;
+    for (uint32_t i = 0; i < kNumDmKernels; i++) {
+        std::string name = "dm_barrier_kernel_" + std::to_string(i);
+        auto spec = MakeMinimalGen2DMKernel(name, kDmThreadsPerKernel);
+        spec.source = kKernelPath;
+        spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+        specs.push_back(spec);
+        dm_layouts.push_back(make_layout(next_addr, kRounds));
+        next_addr += dm_layouts.back().total_words * sizeof(uint32_t);
+        dm_names.push_back(name);
+        kernel_names.push_back(name);
+    }
+
+    // The compute kernel indexes arrivals/post by participant, so its rows are wider.
+    const uint32_t compute_arrivals_words = kRounds * kComputeParticipants;
+    const uint32_t compute_observed_words = kRounds + 1;
+    const uint32_t compute_post_words = kRounds * kComputeParticipants;
+    const uint32_t compute_arrivals_addr = next_addr;
+    const uint32_t compute_observed_addr = compute_arrivals_addr + compute_arrivals_words * sizeof(uint32_t);
+    const uint32_t compute_post_addr = compute_observed_addr + compute_observed_words * sizeof(uint32_t);
+    const uint32_t compute_total_words = compute_arrivals_words + compute_observed_words + compute_post_words;
+
+    auto compute_spec = MakeMinimalGen2ComputeKernel("compute_barrier_kernel", kNumNeos);
+    compute_spec.source = kComputeKernelPath;
+    compute_spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+    specs.push_back(compute_spec);
+    kernel_names.push_back("compute_barrier_kernel");
+
+    ProgramSpec spec;
+    spec.name = "multi_kernel_thread_barrier";
+    spec.kernels = specs;
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, kernel_names)};
+
+    Program program = MakeProgramFromSpec(this->device(), spec);
+
+    uint32_t total_words = compute_total_words;
+    for (const auto& layout : dm_layouts) {
+        total_words += layout.total_words;
+    }
+    std::vector<uint32_t> zeros(total_words, 0);
+    slow_dispatch::WriteToL1(this->device(), kCore, l1_base, zeros);
+
+    ProgramRunArgs params;
+    for (uint32_t i = 0; i < kNumDmKernels; i++) {
+        params.kernel_run_args.push_back(
+            make_run_params(KernelSpecName{dm_names[i]}, node, dm_layouts[i], kRounds, kSkewIters));
+    }
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute_barrier_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs =
+                    {{node,
+                      {
+                          compute_arrivals_addr,
+                          compute_observed_addr,
+                          compute_post_addr,
+                          kRounds,
+                          kSkewIters,
+                          kComputeParticipants,
+                      }}},
+            },
+    });
+    SetProgramRunArgs(program, params);
+    LaunchProgram(this->device(), std::move(program));
+
+    // Every DM kernel must see exactly its own two threads, never another kernel's.
+    for (uint32_t i = 0; i < kNumDmKernels; i++) {
+        std::vector<uint32_t> observed, arrivals, post;
+        slow_dispatch::ReadFromL1(
+            this->device(), kCore, dm_layouts[i].observed_addr, (kRounds + 1) * sizeof(uint32_t), observed);
+        slow_dispatch::ReadFromL1(
+            this->device(), kCore, dm_layouts[i].arrivals_addr, kRounds * sizeof(uint32_t), arrivals);
+        slow_dispatch::ReadFromL1(this->device(), kCore, dm_layouts[i].post_addr, kRounds * sizeof(uint32_t), post);
+        ASSERT_EQ(observed.size(), kRounds + 1);
+        ASSERT_EQ(arrivals.size(), kRounds);
+        ASSERT_EQ(post.size(), kRounds);
+        EXPECT_EQ(observed[kRounds], kDmThreadsPerKernel) << dm_names[i] << ": get_num_threads() mismatch";
+        for (uint32_t r = 0; r < kRounds; r++) {
+            EXPECT_EQ(arrivals[r], kDmThreadsPerKernel)
+                << dm_names[i] << " round " << r << ": not all of this kernel's threads arrived before release";
+            EXPECT_EQ(observed[r], kDmThreadsPerKernel)
+                << dm_names[i] << " round " << r << ": observed a count from outside this kernel";
+            EXPECT_EQ(post[r], kDmThreadsPerKernel)
+                << dm_names[i] << " round " << r << ": not all threads completed post-barrier phase";
+        }
+    }
+
+    // The compute kernel's own barrier still covers all TRISCs of all its NEOs.
+    std::vector<uint32_t> compute_observed, compute_arrivals;
+    slow_dispatch::ReadFromL1(
+        this->device(), kCore, compute_observed_addr, compute_observed_words * sizeof(uint32_t), compute_observed);
+    slow_dispatch::ReadFromL1(
+        this->device(), kCore, compute_arrivals_addr, compute_arrivals_words * sizeof(uint32_t), compute_arrivals);
+    ASSERT_EQ(compute_observed.size(), compute_observed_words);
+    ASSERT_EQ(compute_arrivals.size(), compute_arrivals_words);
+    EXPECT_EQ(compute_observed[kRounds], kNumNeos) << "compute get_num_threads() mismatch";
+    for (uint32_t r = 0; r < kRounds; r++) {
+        uint32_t arrived = 0;
+        for (uint32_t p = 0; p < kComputeParticipants; p++) {
+            arrived += compute_arrivals[r * kComputeParticipants + p];
+        }
+        EXPECT_EQ(arrived, kComputeParticipants) << "round " << r << ": not all TRISCs arrived before release";
+        EXPECT_EQ(compute_observed[r], kComputeParticipants)
+            << "round " << r << ": compute observer counted wrong number of TRISCs";
+    }
+}
+
+TEST_F(KernelThreadSyncTest, DmComputeBarrierSynchronizesDmAndTriscs) {
+    if (this->arch_ != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "sync_dm_compute_threads across DMs and TRISCs is Quasar-only";
+    }
+
+    NodeCoord node{0, 0};
+    constexpr uint32_t kNumDmThreads = 6;
+    constexpr uint32_t kNumNeos = 4;
+    constexpr uint32_t kTriscCoresPerNeo = 4;
+    constexpr uint32_t kNumParticipants = kNumDmThreads + kNumNeos * kTriscCoresPerNeo;
+    constexpr uint32_t kDmComputeArgsCount = 8;
+    constexpr const char* kDmKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/kernel_dm_compute_barrier.cpp";
+    constexpr const char* kComputeKernelPath =
+        "tests/tt_metal/tt_metal/test_kernels/compute/kernel_dm_compute_barrier.cpp";
+
+    uint32_t l1_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t arrivals_words = kRounds * kNumParticipants;
+    const uint32_t observed_words = kRounds + 1;
+    const uint32_t post_words = kRounds * kNumParticipants;
+    const uint32_t arrivals_addr = l1_base;
+    const uint32_t observed_addr = arrivals_addr + arrivals_words * sizeof(uint32_t);
+    const uint32_t post_addr = observed_addr + observed_words * sizeof(uint32_t);
+    const uint32_t total_words = arrivals_words + observed_words + post_words;
+
+    auto dm_spec = MakeMinimalGen2DMKernel("dm_barrier_kernel", kNumDmThreads);
+    dm_spec.source = kDmKernelPath;
+    dm_spec.advanced_options.num_runtime_varargs_per_node = {{node, kDmComputeArgsCount}};
+
+    auto compute_spec = MakeMinimalGen2ComputeKernel("compute_barrier_kernel", kNumNeos);
+    compute_spec.source = kComputeKernelPath;
+    compute_spec.advanced_options.num_runtime_varargs_per_node = {{node, kDmComputeArgsCount}};
+
+    ProgramSpec spec;
+    spec.name = "dm_compute_kernel_thread_barrier";
+    spec.kernels = {dm_spec, compute_spec};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"dm_barrier_kernel", "compute_barrier_kernel"})};
+
+    Program program = MakeProgramFromSpec(this->device(), spec);
+
+    std::vector<uint32_t> zeros(total_words, 0);
+    slow_dispatch::WriteToL1(this->device(), kCore, l1_base, zeros);
+
+    const std::vector<uint32_t> runtime_args = {
+        arrivals_addr,
+        observed_addr,
+        post_addr,
+        kRounds,
+        kSkewIters,
+        kNumParticipants,
+        kNumDmThreads,
+        kNumNeos,
+    };
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_barrier_kernel"},
+        .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, runtime_args}}},
+    });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute_barrier_kernel"},
+        .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, runtime_args}}},
+    });
+    SetProgramRunArgs(program, params);
+    LaunchProgram(this->device(), std::move(program));
+
+    std::vector<uint32_t> observed;
+    slow_dispatch::ReadFromL1(this->device(), kCore, observed_addr, observed_words * sizeof(uint32_t), observed);
+    ASSERT_EQ(observed.size(), observed_words);
+    EXPECT_EQ(observed[kRounds], kNumParticipants) << "observer participant count mismatch";
+
+    std::vector<uint32_t> arrivals, post;
+    slow_dispatch::ReadFromL1(this->device(), kCore, arrivals_addr, arrivals_words * sizeof(uint32_t), arrivals);
+    slow_dispatch::ReadFromL1(this->device(), kCore, post_addr, post_words * sizeof(uint32_t), post);
+    ASSERT_EQ(arrivals.size(), arrivals_words);
+    ASSERT_EQ(post.size(), post_words);
+
+    for (uint32_t r = 0; r < kRounds; r++) {
+        uint32_t arrived = 0;
+        uint32_t posted = 0;
+        for (uint32_t p = 0; p < kNumParticipants; p++) {
+            arrived += arrivals[r * kNumParticipants + p];
+            posted += post[r * kNumParticipants + p];
+        }
+        EXPECT_EQ(arrived, kNumParticipants) << "round " << r << ": not all DMs and TRISCs arrived before release";
+        EXPECT_EQ(observed[r], kNumParticipants)
+            << "round " << r << ": observer counted wrong number of cores after barrier";
+        EXPECT_EQ(posted, kNumParticipants) << "round " << r << ": not all DMs and TRISCs completed post-barrier phase";
+    }
+}
+
 }  // namespace
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

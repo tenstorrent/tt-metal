@@ -6,10 +6,8 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
 from models.common.utility_functions import torch_random
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from functools import reduce
+from tests.ttnn.utils_for_testing import assert_equal
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
@@ -94,11 +92,8 @@ def test_broadcast_to(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memo
 
     if dtype_pt == torch.int32 or dtype_pt == torch.uint32 or dtype_pt == torch.uint16:
         assert torch.equal(torch_result.to(output.dtype), output), "Integer tensors not equal"
-    elif dtype_pt == torch.float32:
-        assert_with_pcc(torch_result, output, 0.9999)
-        assert_with_ulp(torch_result, output, 0)
     else:
-        assert_with_pcc(torch_result, output, 0.9999)
+        assert_equal(torch_result, output)
 
 
 input_bcast_shape_pairs = [
@@ -149,7 +144,7 @@ def test_broadcast_to_out(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, 
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
 
 
 profile_input_bcast_shape_pairs = [
@@ -199,21 +194,23 @@ def test_broadcast_to_profile(device, dtype_pt, dtype_tt, shape_and_broadcast_sp
             output.shape == torch_result.shape
         ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-        assert_with_pcc(torch_result, output, 0.9999)
+        assert_equal(torch_result, output)
         ttnn.synchronize_device(device)
 
 
-input_bcast_shape_pairs = [
-    ((1, 1, 1, 1), (1, 1, 1)),
-    ((1, 1, 1, 1), (1, 1, 1, 1, 1)),
-    ((1, 1, 1, 1, 1), (1, 1, 1, 1, 1)),
-    ((2, 1), (3, 1)),
+# Each shape pair provokes a distinct TT_FATAL, so the expected message travels
+# with it — one shared pattern would let any case pass on another's error.
+input_bcast_shape_pairs_and_errors = [
+    ((1, 1, 1, 1), (1, 1, 1), "must be at least as large as the broadcast shape"),
+    ((1, 1, 1, 1), (1, 1, 1, 1, 1), "must be at most 4D"),
+    ((1, 1, 1, 1, 1), (1, 1, 1, 1, 1), "must be at most 4D"),
+    ((2, 1), (3, 1), "cannot be broadcast to output dimension"),
 ]
 
 
 @pytest.mark.parametrize("dtype_pt, dtype_tt", ((torch.bfloat16, ttnn.bfloat16),))
-@pytest.mark.parametrize("input, bcast", input_bcast_shape_pairs)
-def test_broadcast_to_invalid(input, bcast, dtype_pt, dtype_tt, device):
+@pytest.mark.parametrize("input, bcast, error", input_bcast_shape_pairs_and_errors)
+def test_broadcast_to_invalid(input, bcast, error, dtype_pt, dtype_tt, device, expect_error):
     torch.manual_seed(0)
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(input)
@@ -224,7 +221,7 @@ def test_broadcast_to_invalid(input, bcast, dtype_pt, dtype_tt, device):
         layout=ttnn.TILE_LAYOUT,
     )
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, error):
         _ = ttnn.experimental.broadcast_to(a_tt, bcast)
 
 
@@ -234,7 +231,7 @@ input_bcast_shape_pairs = [
 
 
 @pytest.mark.parametrize("input, bcast", input_bcast_shape_pairs)
-def test_invalid_broadcast_to_sharding(input, bcast, device):
+def test_invalid_broadcast_to_sharding(input, bcast, device, expect_error):
     torch.manual_seed(0)
     dtype_pt, dtype_tt = [torch.bfloat16, ttnn.bfloat16]
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype_tt)(input)
@@ -253,7 +250,7 @@ def test_invalid_broadcast_to_sharding(input, bcast, device):
         memory_config=sharded_config,
     )
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "bcast_to: Invalid input memory config"):
         _ = ttnn.experimental.broadcast_to(a_tt, bcast, memory_config=sharded_config)
 
 
@@ -284,4 +281,4 @@ def test_broadcast_to_bf8_b(device, shape_and_broadcast_spec):
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)

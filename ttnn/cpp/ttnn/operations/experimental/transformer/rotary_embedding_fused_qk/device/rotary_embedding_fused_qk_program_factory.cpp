@@ -188,7 +188,8 @@ RotaryEmbeddingFusedQKProgramFactory::cached_program_t RotaryEmbeddingFusedQKPro
         output_cb_index,
         1u,  // num_rows_per_core (1 row per core)
         Wt,
-        half_Wt};
+        half_Wt,
+        0u};  // kDecodeMode: shared rotary_embedding compute kernel, prefill (non-decode) path
     CreateKernel(
         program,
         kComputeKernel,

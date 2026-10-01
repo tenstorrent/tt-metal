@@ -1,0 +1,1338 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Generator-based Gemma4 text demo — structured after the Gemma3 text demo
+(``models/demos/multimodal/gemma3/demo/text_demo.py``).
+
+Unlike the original hand-rolled ``text_demo.py`` loop, this demo drives the
+model through the shared ``Generator`` interface (via ``Gemma4Generator``),
+mirroring how Gemma3 / tt_transformers models are run:
+
+  from_pretrained → warmup_model_prefill → prefill_forward_text → decode_forward
+
+Differences from the Gemma3 demo (Gemma4-specific):
+  * Single model instance, no data-parallel submeshes (Gemma4 runs batch=1 per
+    submesh today, so the demo focuses on the latency / long-context configs).
+  * On-device sampling by default (``GEMMA4_HOST_SAMPLE=0``) — matches product
+    ``decode_only`` (force-argmax AG). Set ``GEMMA4_HOST_SAMPLE=1`` for the
+    slower host path (full 262k vocab AG each step; useful if device-sample +
+    decode-trace misbehaves).
+  * No decode warmup (``warmup_model_decode`` is Gemma3-generator specific); the
+    first decode iteration serves as the compile step and is excluded from the
+    reported steady-state perf (matching the benchmark warmup convention).
+
+All model-level optimizations (BFP8 weights via precision_overrides.json,
+width-sharded RMSNorm, row-major RoPE caches, nlp_concat_heads_decode) are
+applied automatically because they live in the shared model code that
+``Gemma4Generator.from_pretrained`` builds.
+
+Usage:
+    HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=P150x8 pytest \
+        models/demos/gemma4/demo/text_demo_v2.py -k "batch-1" -sv
+
+    # Long-context (defaults pick bounded/chunk for coherency; device sample):
+    MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-12B-it pytest \
+        models/demos/gemma4/demo/text_demo_v2.py -k "long-context-128k" -s --timeout 1800
+
+    # Override prompts / lengths from the CLI:
+    HF_MODEL=google/gemma-4-31B-it pytest \
+        models/demos/gemma4/demo/text_demo_v2.py -k "batch-1" -sv \
+        --max_generated_tokens 64
+"""
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import pytest
+import requests
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.demo.sampling_utils import (
+    build_device_sampling_params,
+    log_sampling_mode,
+    model_can_sample_on_device,
+)
+from models.demos.gemma4.tt.generator import Gemma4Generator
+from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
+from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+from models.tt_transformers.tt.model_config import determine_device_name
+
+_CONTEXT_CACHE_DIR = Path("models/tt_transformers/demo/context_cache")
+
+_MESH_DEVICE_SHAPES = {
+    # Logical SKU names (same mapping as tt_transformers / gemma3 demos).
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+    "TG": (8, 4),
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "P150x4": (1, 4),
+    "P300x2": (1, 4),
+    "P300X2": (1, 4),
+    "P150x8": (1, 8),
+    "BHGLX": (8, 4),
+}
+
+
+def _mesh_device_param():
+    """Resolve mesh shape from ``MESH_DEVICE`` as a hardcoded (rows, cols) tuple.
+
+    Named SKUs map explicitly (so ``2x4`` / ``BHGLX`` stay DP layouts). Unset /
+    unknown → ``(1, N)`` over all visible devices so a LoudBox opens full 1×8
+    TP instead of a 4-chip subset. Set ``MESH_DEVICE`` for non-line meshes.
+    """
+    env = os.environ.get("MESH_DEVICE")
+    if env in _MESH_DEVICE_SHAPES:
+        return _MESH_DEVICE_SHAPES[env]
+    if env and "x" in env.lower():
+        try:
+            rows, cols = env.lower().split("x", 1)
+            return (int(rows), int(cols))
+        except ValueError:
+            pass
+    try:
+        n = len(ttnn.get_device_ids())
+    except Exception:
+        n = 4
+    return (1, max(1, n))
+
+
+def _model_path():
+    return os.getenv("HF_MODEL") or os.getenv(
+        "GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
+    )
+
+
+def load_and_cache_context(context_url, cache_dir, max_length=None):
+    """Fetch a long-context source from a URL with on-disk caching (mirrors gemma3)."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
+    if cache_file.exists():
+        context_text = cache_file.read_text()
+        logger.info(f"Loaded context from cache: {context_url}")
+    else:
+        try:
+            response = requests.get(context_url, timeout=60)
+            if response.status_code == 200:
+                context_text = response.text
+                cache_file.write_text(context_text)
+                logger.info(f"Downloaded and cached context: {context_url}")
+            else:
+                logger.warning(f"Failed to fetch context from {context_url}: {response.status_code}")
+                context_text = ""
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error fetching context from {context_url}: {e}")
+            context_text = ""
+    if max_length:
+        context_text = context_text[:max_length]
+        logger.info(f"Clipped context to {max_length} chars")
+    return context_text
+
+
+def load_inputs(user_input, batch, instruct):
+    """Load prompts from a json file (optionally fetching a gutenberg context), repeated to `batch`."""
+    if isinstance(user_input, str):
+        with open(user_input, "r") as f:
+            user_input = json.load(f)
+    if len(user_input) < batch:
+        logger.warning(f"Fewer prompts ({len(user_input)}) than batch ({batch}); repeating to fill the batch.")
+        user_input = user_input * batch
+
+    in_prompt = []
+    for i in range(batch):
+        prompt = user_input[i]["prompt"]
+        if "context" in user_input[i]:
+            max_length = user_input[i].get("max_length")
+            context_text = load_and_cache_context(user_input[i]["context"], _CONTEXT_CACHE_DIR, max_length=max_length)
+            repeat_context = int(user_input[i].get("repeat_context", 1))
+            if repeat_context > 1:
+                context_text = "\n\n".join([context_text] * repeat_context)
+                logger.info(f"Repeated context {repeat_context}x ({len(context_text)} chars)")
+            prompt = ("```" + context_text + "```\n\n" + prompt) if instruct else context_text
+        in_prompt.append(prompt)
+    return in_prompt
+
+
+def create_tt_page_table(batch_size, paged_attention_config: PagedAttentionConfig):
+    """Identity logical→physical page table [batch, n_blocks/batch] (single-DP)."""
+    if paged_attention_config is None:
+        return None
+    n_blocks = paged_attention_config.max_num_blocks
+    cols = n_blocks // batch_size
+    return torch.arange(n_blocks, dtype=torch.int32)[: batch_size * cols].reshape(batch_size, cols)
+
+
+def _host_sample(logits, temperature, top_p):
+    """Sample next tokens on host. Greedy argmax for temperature==0, else top-p.
+
+    logits: torch.Tensor shaped [B, vocab] or [B, 1, vocab].
+    Returns: torch.LongTensor [B, 1].
+    """
+    if logits.dim() == 3:
+        logits = logits[:, -1, :]
+    if not temperature or temperature <= 0:
+        return logits.argmax(dim=-1, keepdim=True)
+    probs = torch.softmax(logits.float() / temperature, dim=-1)
+    sorted_probs, sorted_idx = torch.sort(probs, descending=True, dim=-1)
+    cumulative = torch.cumsum(sorted_probs, dim=-1)
+    mask = cumulative - sorted_probs > top_p
+    sorted_probs[mask] = 0.0
+    sorted_probs /= sorted_probs.sum(dim=-1, keepdim=True)
+    choice = torch.multinomial(sorted_probs, num_samples=1)
+    return torch.gather(sorted_idx, -1, choice)
+
+
+def _default_ccl_packet_bytes():
+    """Leave Fabric's default packet size.
+
+    This used to return 4x the CCL page width (5376 for 31B, 3840 for 12B) to
+    satisfy the ``validate_packet_size`` "suboptimal packet size" warning. That
+    warning optimises single-op page packing, but measured end-to-end it costs
+    both TTFT and decode on P150x8 -- the tuned values are *slower* than the
+    Fabric default:
+
+        12B / P150x8 / long-context-4k, batch-1
+          packet 3840 (old default) : TTFT 543.7 ms, 44.62 tok/s/user
+          Fabric default (4352)     : TTFT 461.6 ms, 46.86 tok/s/user
+
+    Gains hold across ISLs (4k/32k/128k) on 12B and 31B. Blackhole-only path;
+    Wormhole already used the Fabric default and is unaffected. Set
+    ``GEMMA4_CCL_PACKET_BYTES`` to pin a value (e.g. to reproduce the old
+    behaviour or re-sweep).
+    """
+    return None
+
+
+def _device_params():
+    """Blackhole needs a larger trace region; CQ count is env-tunable.
+
+    Default ``num_command_queues=1`` (safe with host or on-device sampling).
+    Set ``GEMMA4_NUM_CQS=2`` for serving/H2D-bound workloads once sampling stays
+    on-device (Phase D3); measure batched users, not single-stream 128k TTFT.
+    ``GEMMA4_TRACE_REGION_SIZE`` overrides the BH trace budget.
+
+    CCL residual knobs (set before pytest collection):
+      ``GEMMA4_FABRIC=ring`` → ``FABRIC_1D_RING`` (default ``1d``; ring
+        regressed TTFT ~28.8s→~30.9s on 31B/P150x8 — leave off).
+      ``GEMMA4_CCL_PACKET_BYTES`` → FabricRouterConfig max payload.
+        BH defaults: 5376 (31B) / 3840 (12B) to match CCL page packing.
+        Set ``0`` / ``none`` / ``default`` to keep Fabric's default.
+    ``l1_small_size`` is set so all_gather semaphores land in L1_SMALL (avoids
+    fragmenting the main L1 pool).
+    """
+    num_cqs = max(1, int(os.environ.get("GEMMA4_NUM_CQS", "1")))
+    fabric_env = os.environ.get("GEMMA4_FABRIC", "1d").strip().lower()
+    if fabric_env in ("ring", "1d_ring", "fabric_1d_ring"):
+        fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
+    else:
+        fabric_config = ttnn.FabricConfig.FABRIC_1D
+
+    params = {
+        "fabric_config": fabric_config,
+        "num_command_queues": num_cqs,
+        # CCL all_gather allocates semaphores in L1_SMALL when this is > 0.
+        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
+    }
+    # Wormhole has 12 GB/ASIC vs Blackhole's 32 GB, so the trace budget is much
+    # tighter, but 30 MB is not enough for the 31B/26B decode+prefill traces on
+    # T3K (WH-T3K nightly EngineCore OOM). Honour GEMMA4_TRACE_REGION_SIZE on
+    # both arches; only the default differs.
+    default_trace_region = 256_000_000 if is_blackhole() else 90_000_000
+    params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
+
+    pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
+    if pkt_env is None:
+        pkt_bytes = _default_ccl_packet_bytes() if is_blackhole() else None
+    elif pkt_env.strip().lower() in ("0", "none", "default", ""):
+        pkt_bytes = None
+    else:
+        pkt_bytes = max(4352, int(pkt_env))
+    if pkt_bytes is not None:
+        router = ttnn.FabricRouterConfig()
+        router.max_packet_payload_size_bytes = pkt_bytes
+        params["fabric_router_config"] = router
+    return params
+
+
+# Parameters mirror the Gemma3 demo layout (subset): a latency config, a long-context
+# config, and a CI config. Gemma4 runs batch=1, so throughput/DP rows are omitted.
+@pytest.mark.parametrize(
+    "input_prompts, instruct, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, "
+    "sampling_params, stop_at_eos, ci_only, enable_trace",
+    [
+        (  # batch-1 (latency) — single user, short prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
+            True,
+            1024,
+            1,
+            200,
+            True,
+            {"page_block_size": 32, "page_max_num_blocks": 1024},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        (  # batch-8 (throughput) — 8 concurrent users, short prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
+            True,
+            1024,
+            8,
+            200,
+            True,
+            {"page_block_size": 32, "page_max_num_blocks": 1024},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        (  # batch-32 (max throughput) — 32 concurrent users (decode batch ceiling).
+            # max_seq_len=4096 (short prompts). True-batched B≥8 wedges on P150x8
+            # after the first all_gather — Gemma4Generator microbatches at ≤4
+            # users. Hetero actual lengths in one pad bucket are OK: per-slot
+            # valid_seq_lens cap KV fill so pad rows are not written (see
+            # attention/prefill.py).
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
+            True,
+            4096,
+            32,
+            200,
+            True,
+            {"page_block_size": 32, "page_max_num_blocks": 1024},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        (  # long-context-4k — single user, long prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
+            True,
+            4096,
+            1,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        # NOTE on long-context-32k/64k/128k/256k (see GEMMA4_LONG_CONTEXT_POLICY):
+        #   Coherence target: 4k–128k on QB2 + LoudBox (12B/31B) and P150 (≤12B).
+        #   Defaults (MESH_DEVICE + HF_MODEL) — no extra env needed:
+        #     QB2: 31B bounded @ 64k, chunk=2048 @ ≥128k; 12B/26B unbound→128k
+        #     P150x8: 31B/26B unbound→64k, bounded+chunk=2048 @ ≥128k
+        #             (unbounded 128k → "lapped…"); 12B/E2B/E4B unbound→256k
+        #     P150: E2B/E4B unbound→256k; 12B bounded+chunked @ ≥64k →256k
+        #   Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
+        #   GEMMA4_DEMO_SINGLE_CHUNK (avoid for quality).
+        (  # long-context-32k
+            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
+            True,
+            32 * 1024,
+            1,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 512},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        (  # long-context-64k
+            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
+            True,
+            64 * 1024,
+            1,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 1024},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        (  # long-context-128k
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            True,
+            128 * 1024,
+            1,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        (  # long-context-256k — 31B policy auto multi-chunk (DRAM)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_256k.json",
+            True,
+            256 * 1024,
+            1,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        (  # ci-1 — single user, fixed iteration count for perf tracking
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
+            True,
+            8192,
+            1,
+            512,
+            True,
+            {"page_block_size": 32, "page_max_num_blocks": 1024},
+            {"temperature": 0, "top_p": 0.08},
+            False,
+            True,
+            True,
+        ),
+    ],
+    ids=[
+        "batch-1",
+        "batch-8",
+        "batch-32",
+        "long-context-4k",
+        "long-context-32k",
+        "long-context-64k",
+        "long-context-128k",
+        "long-context-256k",
+        "ci-1",
+    ],
+)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        # MESH_DEVICE → (rows, cols); unset → (1, N) over all visible devices.
+        _mesh_device_param()
+    ],
+    indirect=True,
+)
+def test_demo_text(
+    input_prompts,
+    instruct,
+    max_seq_len,
+    batch_size,
+    max_generated_tokens,
+    paged_attention,
+    page_params,
+    sampling_params,
+    stop_at_eos,
+    mesh_device,
+    is_ci_env,
+    ci_only,
+    enable_trace,
+    reset_seeds,
+    request,
+):
+    """Gemma4 text generation through the Generator interface, modeled on the Gemma3 demo."""
+    if is_ci_env and not ci_only:
+        pytest.skip("CI only runs the CI-only configs")
+
+    # Env overrides (Gemma4's conftest doesn't register the tt_transformers CLI
+    # flags, so we keep overrides env-based). GEMMA4_NUM_LAYERS is a smoke-test
+    # hook to build a few-layer model for a fast end-to-end wiring check.
+    import math
+
+    max_generated_tokens = int(os.environ.get("GEMMA4_MAX_NEW_TOKENS", max_generated_tokens))
+    max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", max_seq_len))
+    num_layers = os.environ.get("GEMMA4_NUM_LAYERS")
+    num_layers = int(num_layers) if num_layers else None
+    # Batch sweep hook: GEMMA4_BATCH overrides the config's batch_size so the
+    # same config can probe batch-1 / 8 / 32 to find the QB2 ceiling.
+    batch_size = int(os.environ.get("GEMMA4_BATCH", batch_size))
+    # Prefetcher bring-up: GEMMA4_DECODE_TRACE=0 disables Metal Trace capture.
+    _decode_trace = os.environ.get("GEMMA4_DECODE_TRACE")
+    if _decode_trace is not None:
+        enable_trace = _decode_trace.lower() in ("1", "true", "yes")
+        logger.info(f"GEMMA4_DECODE_TRACE override: enable_trace={enable_trace}")
+
+    # ── Speculative-decoding dispatch ────────────────────────────────────────
+    # `--speculative` reroutes the demo through the it-assistant drafter +
+    # target verifier path. Delegated to _run_spec_decode, which builds its own
+    # target+drafter, so we return before this test loads a model.
+    if request.config.getoption("--speculative"):
+        draft_len = request.config.getoption("--spec-draft-len")
+        if draft_len is None:
+            # auto-K: the optimum depends on available context (see
+            # spec_decode.auto_draft_len). Prompt length is known below, so
+            # defer to the resolver at call time.
+            draft_len = None
+        if batch_size != 1:
+            # Batched (B>1) spec-decode: drafts each user at batch=1 and runs ONE
+            # batched packed verify over all users (KV-amortization win). Greedy,
+            # ragged per-user acceptance. Currently UNTRACED (host-dispatch bound).
+            prompts = load_inputs(input_prompts, batch_size, instruct)
+            _run_spec_decode_batched(
+                prompts=prompts,
+                instruct=instruct,
+                max_seq_len=max_seq_len,
+                max_generated_tokens=max_generated_tokens,
+                page_params=page_params,
+                sampling_params=sampling_params,
+                mesh_device=mesh_device,
+                enable_trace=enable_trace,
+                draft_len=draft_len,
+                num_layers=num_layers,
+            )
+            return
+        prompt = load_inputs(input_prompts, 1, instruct)[0]
+        _run_spec_decode(
+            prompt=prompt,
+            instruct=instruct,
+            max_seq_len=max_seq_len,
+            max_generated_tokens=max_generated_tokens,
+            page_params=page_params,
+            sampling_params=sampling_params,
+            mesh_device=mesh_device,
+            enable_trace=enable_trace,
+            draft_len=draft_len,
+            num_layers=num_layers,
+        )
+        return
+
+    model_path = _model_path()
+    temperature = sampling_params.get("temperature", 0)
+    top_p = sampling_params.get("top_p", 1.0)
+
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+
+    # ── Inputs ────────────────────────────────────────────────────────────
+    profiler.start("loading_inputs")
+    prompts = load_inputs(input_prompts, batch_size, instruct)
+    profiler.end("loading_inputs")
+
+    # Right-size the paged KV pool.
+    #   * batch=1 long-context: configs sometimes over-allocate (e.g. 2048 blocks
+    #     for a 64k run); shrink to exactly batch * ceil(max_seq_len / block).
+    #   * batch>1 throughput: the row's page_max_num_blocks is the tuned shared
+    #     pool (short prompts). Using B*max_seq_len here over-provisions and OOMs
+    #     (batch-32 @ 4096 → 4096 blocks vs config 1024).
+    block_size = page_params["page_block_size"]
+    needed_blocks = batch_size * math.ceil(max_seq_len / block_size)
+    configured_blocks = page_params.get("page_max_num_blocks")
+
+    # Sliding-cache + prefill chunk from GEMMA4_LONG_CONTEXT_POLICY (model × device).
+    # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
+    lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
+    bounded_sliding = lc["bounded_sliding"]
+
+    if batch_size <= 1 or configured_blocks is None:
+        page_max_num_blocks = needed_blocks
+    elif bounded_sliding:
+        # ``build_hybrid_page_tables`` gives each user its own full-attention
+        # range [u*ceil(max_seq_len/block), (u+1)*...), so the pool must hold
+        # batch * ceil(max_seq_len/block). The tuned value is a *shared* pool
+        # that the non-hybrid ``create_tt_page_table`` partitions across users;
+        # using it with hybrid tables puts users 1..B-1 past the end of the pool.
+        page_max_num_blocks = max(int(configured_blocks), needed_blocks)
+    else:
+        page_max_num_blocks = configured_blocks
+    paged_attention_config = (
+        PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
+    )
+
+    # ── Model (all optimizations applied inside create_tt_model) ───────────
+    logger.info(
+        f"Loading Gemma4 from {model_path} (layers={num_layers or 'all'}, max_seq_len={max_seq_len}, "
+        f"bounded_sliding={bounded_sliding}, prefill_chunk={lc['prefill_chunk']}, "
+        f"policy={lc['policy_source']})..."
+    )
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        num_layers=num_layers,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=bounded_sliding,
+    )
+    model_args_list = generator.model_args  # preprocess_inputs_prefill iterates this
+    model_args = model_args_list[0]
+
+    page_table = create_tt_page_table(batch_size, paged_attention_config)
+
+    # Bounded sliding needs per-layer page tables (sliding layers index their
+    # small bounded pool, full layers the full pool). Build them once and stash
+    # on the model so prefill/decode pick them up via _active_page_tables_per_layer.
+    if bounded_sliding:
+        from models.demos.gemma4.tt.attention.kv_cache_hybrid import build_hybrid_page_tables
+
+        n_layers = num_layers or model_args.num_hidden_layers
+        sliding_mask = [model_args.layer_types[i] == "sliding_attention" for i in range(n_layers)]
+        # The page table MUST match the allocation: a layer the model exempted
+        # from bounding (Gemma4Model._spec_unbounded_layer) owns a full-length
+        # cache, so marking it sliding here hands it a 16-block table whose
+        # zero-padded tail clobbers block 0 past the window. Normally None here
+        # (the exemption is spec-decode opt-in) -- this keeps the two in sync if
+        # it is ever enabled on the plain path.
+        _exempt = getattr(generator.model[0], "_spec_unbounded_layer", None)
+        if _exempt is not None and 0 <= _exempt < n_layers:
+            sliding_mask[_exempt] = False
+            logger.info(f"Hybrid page tables: layer {_exempt} on the full pool (model exempted it from bounding)")
+        per_layer_pts = build_hybrid_page_tables(
+            n_layers,
+            sliding_mask,
+            num_users=batch_size,
+            block_size=block_size,
+            max_seq_len=max_seq_len,
+            sliding_window=model_args.sliding_window,
+        )
+        generator.model[0]._active_page_tables_per_layer = per_layer_pts
+        # Sequential prefill forces ``user_id=0``, so the generator recovers each
+        # user's row by matching the legacy ``page_table`` against the per-layer
+        # stash. ``create_tt_page_table`` builds block IDs independently of
+        # ``build_hybrid_page_tables``, so that match always failed and every
+        # user fell through to row 0. Point the legacy table at a
+        # *full-attention* per-layer table: it is the table full-attn layers
+        # already address, so semantics are unchanged and the match succeeds.
+        # (Using a sliding table here instead breaks full-attn addressing.)
+        full_idxs = [i for i, is_sliding in enumerate(sliding_mask) if not is_sliding]
+        if full_idxs:
+            page_table = per_layer_pts[full_idxs[0]]
+        else:
+            # Reduced all-sliding models (GEMMA4_NUM_LAYERS <= 5) have no
+            # full-attention table; match against the first sliding table —
+            # with no full layers there is nothing it can mis-address.
+            page_table = per_layer_pts[0]
+        logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
+
+    # ── Warmup (prefill compile + optional trace) ──────────────────────────
+    # Prefill tracing buys ~nothing for single full-ISL runs (trace buffers
+    # scale with chunk×batch). Gate off above GEMMA4_PREFILL_TRACE_MAX_SEQ
+    # unless traced multi-chunk is on (GEMMA4_CHUNKED_PREFILL_TRACE=1): then
+    # we still capture the 4k sp0/sp1 buckets used by long-ISL chunk replay.
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
+    prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    if enable_trace and not prefill_enable_trace:
+        logger.info(
+            f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
+            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
+            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
+        )
+    # Default on-device sample (product decode_only parity). Opt into host with
+    # GEMMA4_HOST_SAMPLE=1 if device-sample + decode-trace misbehaves.
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
+    can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
+    device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
+    greedy_only = temperature <= 0
+    log_sampling_mode(can_sample, sampling_params)
+
+    logger.info("Warming up prefill...")
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=prefill_enable_trace,
+        can_sample_on_device=can_sample,
+        greedy_only=greedy_only,
+        decode_page_table=page_table,
+    )
+    logger.info("Warmup complete")
+
+    # ── Prefill ────────────────────────────────────────────────────────────
+    input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+        prompts, tokenizer, model_args_list, instruct, max_generated_tokens, max_prefill_len=max_seq_len
+    )
+    max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
+    assert max_generated_tokens + max_encoded_prompt_len <= max_seq_len, (
+        f"prompt ({max_encoded_prompt_len}) + max_generated_tokens ({max_generated_tokens}) "
+        f"must be <= max_seq_len ({max_seq_len})"
+    )
+    input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+
+    logger.info("Starting prefill...")
+    profiler.start("inference_prefill")
+    prefill_out = generator.prefill_forward_text(
+        input_tokens_prefill_pt,
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=False,
+        enable_trace=prefill_enable_trace,
+        sampling_params=device_sampling_params,
+    )
+    if device_sampling_params is not None:
+        prefill_tokens, _ = prefill_out
+        prefilled_token = prefill_tokens.long()
+    else:
+        prefilled_token = _host_sample(prefill_out, temperature, top_p)
+    profiler.end("inference_prefill")
+    logger.info("Prefill finished")
+
+    prefilled_flat = prefilled_token.view(batch_size, -1).squeeze(-1)
+    all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
+    for user in range(batch_size):
+        all_outputs[user].append(int(prefilled_flat[user].item()))
+
+    # ── Decode loop ─────────────────────────────────────────────────────────
+    current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+    out_tok = prefilled_flat.reshape(batch_size, 1)
+    user_done = [False] * batch_size
+    iteration = 0
+    users_decoding = True
+
+    logger.info("Starting decode loop...")
+    profiler.start("inference_decode")
+    while users_decoding:
+        profiler.start(f"inference_decode_time_{iteration}")
+        decode_out, _ = generator.decode_forward(
+            out_tok,
+            current_pos,
+            enable_trace=enable_trace,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            sampling_params=device_sampling_params,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+        if device_sampling_params is not None:
+            out_tok = decode_out.long().view(batch_size, 1)
+        else:
+            out_tok = _host_sample(decode_out, temperature, top_p)
+        profiler.end(f"inference_decode_time_{iteration}")
+
+        current_pos += 1
+        for user in range(batch_size):
+            tok = int(out_tok[user, 0].item())
+            if tok not in tokenizer.stop_tokens and not user_done[user]:
+                all_outputs[user].append(tok)
+            elif stop_at_eos:
+                user_done[user] = True
+                if all(user_done):
+                    users_decoding = False
+
+        if not is_ci_env:
+            for user in range(batch_size):
+                text = "".join(tokenizer.decode(all_outputs[user]))
+                text = ("..." + text[-97:]) if len(text) > 100 else text
+                logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
+
+        iteration += 1
+        if iteration >= max_generated_tokens:
+            users_decoding = False
+    profiler.end("inference_decode")
+    profiler.end("run")
+
+    # ── Final outputs ────────────────────────────────────────────────────────
+    # Print the GENERATED tokens separately from the prompt: all_outputs holds
+    # the full prompt followed by generated tokens, so decoding the whole thing
+    # is dominated by the prompt (misleading for long context — the model may be
+    # echoing the prompt). Slice off the prompt to judge generation quality.
+    logger.info("Finished decoding. Final outputs:")
+    for i, (output, prompt) in enumerate(zip(all_outputs, prompts)):
+        gen_text = tokenizer.decode(output[prefill_lens[i] :])
+        short_prompt = (prompt[:100] + "\n<...>\n" + prompt[-100:]) if len(prompt) > 200 else prompt
+        logger.info(f"\n==USER {i} - PROMPT\n{short_prompt}\n==USER {i} - GENERATION ONLY\n{gen_text.strip()}\n")
+
+    # ── Performance metrics ───────────────────────────────────────────────────
+    total_prefill = profiler.get_duration("inference_prefill")
+    # Iteration 0 is the decode compile step — exclude from the steady-state average.
+    steady_iters = max(iteration - 1, 1)
+    total_decode = sum(profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, iteration))
+    ttft_ms = total_prefill * 1000
+    amortized_prefill_ms = total_prefill / batch_size * 1000
+    decode_tps_u = steady_iters / total_decode if total_decode > 0 else 0
+    decode_tps = decode_tps_u * batch_size
+
+    logger.info("")
+    logger.info("=== Performance metrics ===")
+    logger.info(f"Prompt tokens: {prefill_lens[0]}, generated tokens: {iteration}")
+    logger.info(f"Time to First Token (TTFT): {ttft_ms:.1f} ms")
+    if batch_size > 1:
+        logger.info(f"Amortized prefill/user: {amortized_prefill_ms:.1f} ms")
+    if decode_tps_u > 0:
+        logger.info(
+            f"Decode: {1000 / decode_tps_u:.2f} ms/token @ {decode_tps_u:.2f} tok/s/user "
+            f"({decode_tps:.2f} tok/s throughput)"
+        )
+    else:
+        # No steady-state decode timing (e.g. EoS hit on the first token, so only
+        # the compile iteration ran) — avoid dividing by zero.
+        logger.info("Decode: n/a (no steady-state decode iterations recorded)")
+    logger.info(f"Full demo runtime: {profiler.get_duration('run'):.1f} s")
+
+    if is_ci_env:
+        measurements = {
+            "inference_prefill": total_prefill,
+            "inference_decode": total_decode,
+            "prefill_time_to_token": total_prefill,
+            "prefill_time_to_token_per_user_amortized": total_prefill / batch_size,
+            "decode_t/s/u": decode_tps_u,
+            "decode_t/s": decode_tps,
+            "Full demo runtime": profiler.get_duration("run"),
+        }
+        benchmark_data = create_benchmark_data(
+            profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, {}
+        )
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo",
+            ml_model_name=Path(model_path).name,
+            ml_model_type="llm",
+            device_name=determine_device_name(mesh_device),
+            num_layers=num_layers or model_args.num_hidden_layers,
+            batch_size=batch_size,
+            config_params={},
+            input_sequence_length=prefill_lens[0],
+            output_sequence_length=iteration,
+        )
+
+    assert iteration > 0, "decode produced no tokens"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Speculative decoding (Gemma4 it-assistant drafter), batch=1
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _spec_install_hybrid_page_tables(
+    generator, model_args, num_layers, batch_size, block_size, max_seq_len, page_table
+):
+    """Bounded sliding needs PER-LAYER page tables; mirrors the plain demo path.
+
+    Sliding layers index a small bounded pool (sliding_window/block_size blocks),
+    full-attention layers the full pool. Without these the paged ops see a table
+    sized for the full context and reject the ring
+    ("cache_position_modulo must fit in max_num_blocks_per_seq * block_size").
+
+    Returns the legacy page table to keep using (a FULL-attention per-layer
+    table, so user-row matching succeeds and full-attn addressing is unchanged).
+    """
+    from models.demos.gemma4.tt.attention.kv_cache_hybrid import build_hybrid_page_tables
+
+    # generator.model_args is a LIST (one per DP model); accept either form.
+    margs = model_args[0] if isinstance(model_args, (list, tuple)) else model_args
+    n_layers = num_layers or margs.num_hidden_layers
+    sliding_mask = [margs.layer_types[i] == "sliding_attention" for i in range(n_layers)]
+    # Keep the drafter-visible sliding layer on the FULL pool: the model exempts it
+    # from bounding (Gemma4Model._spec_unbounded_layer) so the KV-shared drafter
+    # reads unbounded positions, and its page table has to match that allocation.
+    exempt = getattr(generator.model[0], "_spec_unbounded_layer", None)
+    if exempt is not None and 0 <= exempt < n_layers:
+        sliding_mask[exempt] = False
+        logger.info(f"Hybrid page tables: layer {exempt} on the full pool (spec-decode drafter layer)")
+    per_layer_pts = build_hybrid_page_tables(
+        n_layers,
+        sliding_mask,
+        num_users=batch_size,
+        block_size=block_size,
+        max_seq_len=max_seq_len,
+        sliding_window=margs.sliding_window,
+    )
+    generator.model[0]._active_page_tables_per_layer = per_layer_pts
+    full_idxs = [i for i, is_sliding in enumerate(sliding_mask) if not is_sliding]
+    if full_idxs:
+        page_table = per_layer_pts[full_idxs[0]]
+    logger.info(f"Spec-decode bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
+    return page_table
+
+
+def _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True):
+    """Bounded-vs-unbounded sliding KV for the spec-decode path.
+
+    Defers to the same GEMMA4_LONG_CONTEXT_POLICY resolver the plain demo uses,
+    so long-context spec decode gets the memory profile the model needs (31B at
+    >=128k does not fit unbounded).
+    """
+    # No silent fallback: at >=128k the 31B model does NOT fit unbounded, so
+    # continuing after a policy-resolution failure serves a broken memory
+    # profile. Fail fast instead (review finding on tt-metal#56048).
+    lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
+    return bool(lc["bounded_sliding"])
+
+
+def _run_spec_decode(
+    prompt,
+    instruct,
+    max_seq_len,
+    max_generated_tokens,
+    page_params,
+    sampling_params,
+    mesh_device,
+    enable_trace=False,
+    draft_len=None,
+    num_layers=None,
+):
+    """Single-user speculative decode: target verifies the it-assistant drafter.
+
+    The drafter defaults to ``<HF_MODEL>-assistant`` (e.g. HF_MODEL=
+    google/gemma-4-12B-it -> google/gemma-4-12B-it-assistant); override with
+    GEMMA4_ASSISTANT_MODEL. Greedy spec-decode is token-identical to greedy
+    decode; we report the acceptance rate and decode tok/s/u (throughput).
+    """
+    import math
+    import time
+
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+    model_path = _model_path()
+    assistant_path = os.getenv("GEMMA4_ASSISTANT_MODEL")
+    if not assistant_path:
+        # Default to the matching it-assistant drafter so the demo runs without
+        # an explicit env (e.g. google/gemma-4-12B-it -> ...-it-assistant).
+        assistant_path = f"{model_path}-assistant"
+        logger.info(f"GEMMA4_ASSISTANT_MODEL unset; defaulting drafter to {assistant_path}")
+    temperature = sampling_params.get("temperature", 0)
+    top_p = sampling_params.get("top_p", 1.0)
+    top_k = sampling_params.get("top_k", 0)
+    # auto-K resolved once the prompt is known (below, after tokenization);
+    # seed with the short-prompt default so anything reading it early is sane.
+    _draft_len_requested = draft_len
+    if draft_len is None:
+        draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", "3").replace("auto", "3"))
+    batch_size = 1
+
+    block_size = page_params["page_block_size"]
+    # KV mode for this ISL (policy-driven; the drafter inherits the ring modulo)
+    _spec_bounded = _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True)
+    paged_attention_config = PagedAttentionConfig(
+        block_size=block_size, max_num_blocks=batch_size * math.ceil(max_seq_len / block_size)
+    )
+    # Opt in to the last-sliding-layer exemption BEFORE the model is built: the
+    # KV-shared drafter cross-attends that layer, so it must hold unbounded
+    # positions. Off by default because it corrupts (and needlessly enlarges)
+    # plain bounded decode -- see Gemma4Model._spec_unbounded_layer.
+    if _spec_bounded:
+        # Ring headroom for the speculative writes at p+1..p+K: without it each
+        # draft evicts a still-in-window token (measured: K=5 corrupts from the
+        # first token at 32k, K=1 stays correct).
+        # 16 blocks (=1024) rather than the 1 block K needs: the ring must stay a
+        # POWER OF TWO. Chunk starts must be multiples of the ring (paged_fill_cache
+        # has no start offset) AND of SDPA's q_chunk_size; a 1088 ring (2^6*17)
+        # makes those mutually satisfiable only every 8704 tokens, and SDPA
+        # TT_FATALs on chunk_start_idx % q_chunk_size. 2048 satisfies both.
+        os.environ.setdefault("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", "16")
+        # NOTE: the last-sliding-layer exemption (GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER)
+        # is intentionally NOT enabled any more. The drafter inherits the ring
+        # modulo and reads the ring directly (measured equivalent: 1.86/5 vs
+        # 1.94/5 at 32k), and the PACKED verify requires uniform per-type pools:
+        # one sliding layer on the full pool would receive the ring-shaped mask
+        # and ring hot pages against an absolute cache. Uniform rings also save
+        # the exemption's 0.54 GB/device at 256k.
+
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        num_layers=num_layers,
+        paged_attention_config=paged_attention_config,
+        # Spec decode used to force UNBOUNDED sliding KV because the drafter
+        # cross-attends the target's caches with absolute positions. The drafter
+        # now inherits the target's ring modulo (assistant/model.py), so the
+        # normal long-context policy applies and >=128k (which requires bounded
+        # on 31B) is reachable. GEMMA4_BOUNDED_SLIDING still overrides.
+        bounded_sliding_kv_cache=_spec_bounded,
+    )
+    target = generator.model[0]
+    model_args = generator.model_args
+
+    page_table = create_tt_page_table(batch_size, paged_attention_config)
+    if _spec_bounded:
+        page_table = _spec_install_hybrid_page_tables(
+            generator, model_args, num_layers, batch_size, block_size, max_seq_len, page_table
+        )
+        # (The prefill-chunk floor for the bounded last-chunk expansion lives in
+        # resolve_gemma4_prefill_chunk_size: it must apply while model_args is
+        # built, not after -- setting the env here was too late to be read.)
+
+    # Prefill tracing has ~no perf gain and OOMs the trace region at long context
+    # (≥4K); gate it off above a threshold (decode/spec traces stay on), unless
+    # traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
+    prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
+    )
+
+    input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+        [prompt], tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
+    )
+    input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+
+    logger.info("Spec-decode prefill...")
+    prefill_t0 = time.perf_counter()
+    prefill_logits = generator.prefill_forward_text(
+        input_tokens_prefill_pt,
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=False,
+        enable_trace=prefill_enable_trace,
+    )
+    ttnn.synchronize_device(mesh_device)
+    prefill_elapsed = time.perf_counter() - prefill_t0
+    if hasattr(prefill_logits, "deallocate"):
+        prefill_logits.deallocate(True)
+
+    prompt_len = int(decoding_pos[0])
+    if _draft_len_requested is None:
+        from models.demos.gemma4.tt.spec_decode import auto_draft_len
+
+        draft_len = auto_draft_len(prompt_len)
+        logger.info(f"Spec-decode auto-K: prompt_len={prompt_len} -> draft_len={draft_len}")
+    anchor_pos = prompt_len - 1
+    anchor_token = int(encoded_prompts[0][anchor_pos])
+
+    # Spec-decode drafts `draft_len` positions AHEAD of the committed position, so
+    # the furthest position touched is (prompt_len-1) + generated + draft_len. The
+    # RoPE / paged-attention structures are sized to max_seq_len, so overshooting
+    # that bound indexes out of range and hangs the device (deterministically at
+    # cur_pos == max_seq_len - draft_len). Reserve the speculative lookahead margin
+    # by clamping generation to stay strictly within max_seq_len.
+    _safe_gen = max_seq_len - prompt_len - (draft_len + 1)
+    if max_generated_tokens > _safe_gen:
+        logger.warning(
+            f"Clamping max_generated_tokens {max_generated_tokens} -> {max(1, _safe_gen)} to keep "
+            f"spec lookahead (draft_len={draft_len}) within max_seq_len={max_seq_len} "
+            f"(prompt_len={prompt_len}); raise max_seq_len for more generated tokens."
+        )
+        max_generated_tokens = max(1, _safe_gen)
+
+    # Load the assistant only after target prefill warmup/prefill is complete.
+    # Loading it earlier makes the target prefill trace capture run with extra
+    # assistant tensors resident and has been observed to trigger runtime
+    # profiler sync timeouts in the speculative path while the plain path stays
+    # clean.
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=assistant_path,
+        max_seq_len=max_seq_len,
+    )
+
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=tokenizer.stop_tokens,
+        draft_len=draft_len,
+    )
+
+    # Greedy uses the fully on-device fused iteration (argmax + re-embed on
+    # device, only 2K+1 ids read back per iter). With GEMMA4_SPEC_TRACE=1 the
+    # whole iteration is ONE metal trace replayed per step (K draft steps +
+    # verify fused — avoids the distinct-CCL-trace interleave deadlock). Sampling
+    # (temp>0) falls back to the host-readback generate for batch=1.
+    # GEMMA4_SPEC_FUSED=0 forces the host generate() loop (draft + packed
+    # verify as separate calls) -- the validation vehicle for the packed
+    # verify's bounded-ring support before it is wired into the fused trace.
+    use_fused = (
+        batch_size == 1 and ((not temperature) or temperature <= 0) and os.environ.get("GEMMA4_SPEC_FUSED", "1") != "0"
+    )
+    # The fused greedy path is HOST-DISPATCH bound when untraced (~10 tok/s/u —
+    # SLOWER than plain decode); the single fused Metal trace removes that
+    # overhead (>3x, exceeding plain decode). Default tracing to the demo's
+    # `enable_trace` so spec-decode is fast out of the box; GEMMA4_SPEC_TRACE
+    # overrides explicitly (=1 force on, =0 force off — e.g. to A/B the cost).
+    if use_fused:
+        _trace_env = os.environ.get("GEMMA4_SPEC_TRACE")
+        spec._use_trace = enable_trace if _trace_env is None else (_trace_env == "1")
+    logger.info(
+        f"Spec-decode generate (draft_len={draft_len}, temp={temperature}, "
+        f"path={'fused' if use_fused else 'host'}, trace={spec._use_trace}, "
+        f"seed={'reseed' if spec._fused_reseed else 'shift'}, "
+        f"shift_seed={getattr(spec, '_fused_shift_seed', 'n/a')})..."
+    )
+    t0 = time.time()
+    if use_fused:
+        generated, accepts = spec.generate_fused(
+            anchor_token=anchor_token, anchor_pos=anchor_pos, max_new_tokens=max_generated_tokens
+        )
+    else:
+        generated, accepts = spec.generate(
+            anchor_token=anchor_token,
+            anchor_pos=anchor_pos,
+            max_new_tokens=max_generated_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+        )
+    elapsed = time.time() - t0
+
+    text = tokenizer.decode(generated)
+    n_tokens = len(generated)
+    n_iters = len(accepts)
+    mean_accept = (sum(accepts) / n_iters) if n_iters else 0.0
+    setup_elapsed = getattr(spec, "_last_fused_setup_s", 0.0) if use_fused else 0.0
+    steady_elapsed = getattr(spec, "_last_fused_replay_s", elapsed) if use_fused else elapsed
+    # batch=1 single-user: per-user rate == aggregate throughput (kept explicit
+    # so the line is coherent with the plain-decode demo's metric format). Match
+    # the plain demo's steady-state decode convention by excluding one-time spec
+    # setup/trace capture from the main Decode line; report wall throughput too.
+    tok_s_u = n_tokens / steady_elapsed if steady_elapsed > 0 else 0.0
+    tok_s = tok_s_u * batch_size
+    ms_per_token = (steady_elapsed * 1000.0 / n_tokens) if n_tokens else 0.0
+    ms_per_iter = (steady_elapsed * 1000.0 / n_iters) if n_iters else 0.0
+    wall_tok_s_u = n_tokens / elapsed if elapsed > 0 else 0.0
+
+    logger.info(f"\n== SPEC-DECODE GENERATION ==\n{text.strip()}\n")
+    logger.info("=== Speculative decoding metrics ===")
+    logger.info(f"Prompt tokens: {prompt_len}, generated tokens: {n_tokens}")
+    logger.info(f"Time to First Token (TTFT): {prefill_elapsed * 1000.0 / batch_size:.1f} ms")
+    logger.info(
+        f"Drafter: {draft_len} drafts/iter; mean accepted {mean_accept:.2f}/{draft_len} (tokens/iter: {mean_accept + 1:.2f})"
+    )
+    if setup_elapsed > 0:
+        logger.info(
+            f"Spec setup/trace capture: {setup_elapsed:.2f}s (wall decode incl. setup: {wall_tok_s_u:.2f} tok/s/user)"
+        )
+    logger.info(f"Verify iterations: {n_iters} ({ms_per_iter:.2f} ms/iter)")
+    logger.info(f"Decode: {ms_per_token:.2f} ms/token @ {tok_s_u:.2f} tok/s/user " f"({tok_s:.2f} tok/s throughput)")
+    assert n_tokens > 0, "speculative decode produced no tokens"
+    return generated, accepts
+
+
+def _run_spec_decode_batched(
+    prompts,
+    instruct,
+    max_seq_len,
+    max_generated_tokens,
+    page_params,
+    sampling_params,
+    mesh_device,
+    enable_trace,
+    draft_len=None,
+    num_layers=None,
+):
+    """Batched (B>1) greedy speculative decode: B independent users, one shared
+    batched packed verify per iteration (KV-amortization), ragged per-user
+    acceptance. Untraced (host-dispatch bound) — the device win is the batched
+    verify; tracing the ragged loop is a follow-up.
+    """
+    import math
+    import time
+
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+
+    B = len(prompts)
+    model_path = _model_path()
+    assistant_path = os.getenv("GEMMA4_ASSISTANT_MODEL")
+    if not assistant_path:
+        assistant_path = f"{model_path}-assistant"
+        logger.info(f"GEMMA4_ASSISTANT_MODEL unset; defaulting drafter to {assistant_path}")
+    temperature = sampling_params.get("temperature", 0)
+    if temperature and temperature > 0:
+        pytest.skip("batched spec-decode supports greedy only (set temperature=0)")
+    _env_k = os.environ.get("GEMMA4_SPEC_DRAFT_LEN")
+    _auto_requested = draft_len is None and (_env_k is None or _env_k.strip().lower() == "auto")
+    if draft_len is None:
+        # "auto" mirrors the solo path: seed the short-prompt default so
+        # anything reading draft_len early is sane, then defer to
+        # auto_draft_len_batched below (previously int("auto") raised here
+        # before the auto-override could run).
+        draft_len = 3 if _auto_requested else int(_env_k)
+
+    block_size = page_params["page_block_size"]
+    blocks_per_user = math.ceil(max_seq_len / block_size)
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=B * blocks_per_user)
+
+    _spec_bounded = _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True)
+    if _spec_bounded:
+        # Same opt-in the single-user spec path takes (see _run_spec_decode):
+        # the verify's speculative writes at p+1..p+K need ring headroom or they
+        # evict still-in-window tokens. Must be set BEFORE the model is built.
+        # (The drafter-layer exemption is deliberately NOT set: packed verify
+        # needs uniform per-type pools -- see the note in _run_spec_decode.)
+        os.environ.setdefault("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", "16")
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=B,
+        max_seq_len=max_seq_len,
+        num_layers=num_layers,
+        paged_attention_config=paged_attention_config,
+        # Spec decode used to force UNBOUNDED sliding KV because the drafter
+        # cross-attends the target's caches with absolute positions. The drafter
+        # now inherits the target's ring modulo (assistant/model.py), so the
+        # normal long-context policy applies and >=128k (which requires bounded
+        # on 31B) is reachable. GEMMA4_BOUNDED_SLIDING still overrides.
+        bounded_sliding_kv_cache=_spec_bounded,
+    )
+    target = generator.model[0]
+    model_args = generator.model_args
+
+    page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
+    if _spec_bounded:
+        # Bounded sliding needs PER-LAYER page tables (sliding layers index the
+        # small ring pool, full layers the full pool). Without them the flat
+        # table does not span the ring and prefill dies in paged_fill_cache with
+        # a TT_FATAL. build_hybrid_page_tables(num_users=B) gives every user its
+        # OWN ring, which is what B>1 requires.
+        page_table = _spec_install_hybrid_page_tables(
+            generator, model_args, num_layers, B, block_size, max_seq_len, page_table
+        )
+
+    # Prefill tracing has ~no perf gain and OOMs the trace region at long context
+    # (≥4K); gate it off above a threshold (the batched decode trace stays on),
+    # unless traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
+    prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
+    )
+
+    # Per-user prefill into each user's own KV blocks (prompts have distinct lengths).
+    logger.info(f"Spec-decode batched prefill for B={B} users...")
+    anchor_tokens, anchor_positions, prompt_lens = [], [], []
+    prefill_t0 = time.perf_counter()
+    for b in range(B):
+        in_pt, encoded, decoding_pos, p_lens = preprocess_inputs_prefill(
+            [prompts[b]], tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
+        )
+        in_pt = torch.stack(in_pt).view(1, -1)
+        prefill_logits = generator.prefill_forward_text(
+            in_pt,
+            page_table=page_table[b : b + 1],
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
+            warmup_prefill=False,
+            enable_trace=prefill_enable_trace,
+        )
+        if hasattr(prefill_logits, "deallocate"):
+            prefill_logits.deallocate(True)
+        prompt_lens.append(int(decoding_pos[0]))
+        anchor_positions.append(int(decoding_pos[0]) - 1)
+        anchor_tokens.append(int(encoded[0][int(decoding_pos[0]) - 1]))
+    ttnn.synchronize_device(mesh_device)
+    prefill_elapsed = time.perf_counter() - prefill_t0
+
+    # Clamp generation so the furthest spec position (pos + draft_len) stays in range.
+    max_prompt = max(prompt_lens)
+    _safe_gen = max_seq_len - max_prompt - (draft_len + 1)
+    if max_generated_tokens > _safe_gen:
+        logger.warning(
+            f"Clamping max_generated_tokens {max_generated_tokens} -> {max(1, _safe_gen)} to keep spec "
+            f"lookahead (draft_len={draft_len}) within max_seq_len={max_seq_len} (max prompt_len={max_prompt})."
+        )
+        max_generated_tokens = max(1, _safe_gen)
+
+    # Batch-aware K: the verify's B*(K+1) rows hit a hard 32-row cliff and past
+    # the compute knee no K wins (see auto_draft_len_batched for the measured
+    # table). K == 0 => speculation cannot beat plain batched decode here.
+    from models.demos.gemma4.tt.spec_decode import auto_draft_len_batched
+
+    _auto_k = auto_draft_len_batched(max(prompt_lens) if prompt_lens else None, B)
+    if _auto_requested and draft_len != _auto_k:
+        logger.info(f"Spec-decode batch-aware K: B={B} -> draft_len {draft_len} -> {_auto_k}")
+        draft_len = _auto_k
+    if draft_len < 1:
+        pytest.skip(
+            f"Speculative decode is a measured REGRESSION at B={B} (compute-bound; "
+            "aggregate 0.58-0.75x of plain batched decode at B=32 for every K). "
+            "Run plain batched decode instead, or force GEMMA4_SPEC_DRAFT_LEN."
+        )
+
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=assistant_path,
+        max_seq_len=max_seq_len,
+        max_local_batch_size=B,
+    )
+
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=tokenizer.stop_tokens,
+        draft_len=draft_len,
+    )
+    # The whole batched iteration (batched drafter chain + batched packed verify)
+    # is captured as ONE metal trace and replayed per step; the one-time capture
+    # (setup) is excluded from the steady decode rate. Prefill is NEVER traced.
+    # Default tracing to the demo's enable_trace; GEMMA4_SPEC_TRACE overrides.
+    _trace_env = os.environ.get("GEMMA4_SPEC_TRACE")
+    spec._use_trace = enable_trace if _trace_env is None else (_trace_env == "1")
+
+    logger.info(f"Spec-decode batched generate (B={B}, draft_len={draft_len}, greedy, trace={spec._use_trace})...")
+    t0 = time.time()
+    outs, accepts = spec.generate_batched(
+        anchor_tokens=anchor_tokens,
+        anchor_positions=anchor_positions,
+        max_new_tokens=max_generated_tokens,
+        max_seq_len=max_seq_len,
+        temperature=0.0,
+    )
+    ttnn.synchronize_device(mesh_device)
+    elapsed = time.time() - t0
+
+    total_tokens = sum(len(o) for o in outs)
+    all_accepts = [m for a in accepts for m in a]
+    mean_accept = (sum(all_accepts) / len(all_accepts)) if all_accepts else 0.0
+    # Steady decode excludes one-time trace capture (mirrors the single-user path).
+    setup_s = getattr(spec, "_last_fused_setup_s", 0.0) if spec._use_trace else 0.0
+    steady_s = getattr(spec, "_last_fused_replay_s", elapsed) if spec._use_trace else elapsed
+    tok_s = total_tokens / steady_s if steady_s > 0 else 0.0
+
+    logger.info("\n== BATCHED SPEC-DECODE GENERATION ==")
+    for b in range(B):
+        logger.info(f"[user {b}] {tokenizer.decode(outs[b]).strip()}")
+    logger.info("=== Batched speculative decoding metrics ===")
+    logger.info(f"Users (batch): {B}; prompt tokens (max): {max_prompt}; total generated tokens: {total_tokens}")
+    logger.info(f"Time to First Token (TTFT, mean prefill/user): {prefill_elapsed * 1000.0 / B:.1f} ms")
+    logger.info(
+        f"Drafter: {draft_len} drafts/iter; mean accepted {mean_accept:.2f}/{draft_len} "
+        f"(tokens/iter: {mean_accept + 1:.2f})"
+    )
+    if setup_s > 0:
+        logger.info(f"Spec setup/trace capture: {setup_s:.2f}s (excluded from steady rate)")
+    logger.info(
+        f"Decode: {steady_s:.2f}s steady @ {tok_s:.2f} tok/s aggregate, {tok_s / B:.2f} tok/s/user "
+        f"({'traced' if spec._use_trace else 'untraced'})"
+    )
+    assert total_tokens > 0, "batched speculative decode produced no tokens"
+    return outs, accepts
+
+
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [_mesh_device_param()],
+    indirect=True,
+)
+def test_demo_spec_decode(mesh_device, reset_seeds):
+    """Speculative-decode demo (target HF_MODEL + drafter GEMMA4_ASSISTANT_MODEL)."""
+    _run_spec_decode(
+        prompt=os.getenv("GEMMA4_SPEC_PROMPT", "Tell me about the history of computing in three sentences."),
+        instruct=True,
+        max_seq_len=int(os.environ.get("GEMMA4_MAX_SEQ_LEN", 4096)),
+        max_generated_tokens=int(os.environ.get("GEMMA4_MAX_NEW_TOKENS", 200)),
+        page_params={"page_block_size": 64, "page_max_num_blocks": 2048},
+        sampling_params={"temperature": float(os.environ.get("GEMMA4_TEMPERATURE", 0.0)), "top_p": 0.95, "top_k": 64},
+        mesh_device=mesh_device,
+    )

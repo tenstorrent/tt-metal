@@ -14,6 +14,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn {
 
@@ -69,11 +70,12 @@ Tensor div(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor div(
     const Tensor& input,
-    float value,
+    operations::unary::ScalarVariant value,
     bool fast_and_approximate_mode = false,
     const std::optional<std::string>& rounding_mode = std::nullopt,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -82,7 +84,25 @@ Tensor div(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+// value / input. The tensor still occupies operand slot a; the compute kernel is told to
+// read the scalar as the left operand, so this runs the same DIV / DIV_FLOOR / DIV_TRUNC
+// kernels as the tensor-scalar form and keeps their dtype and rounding-mode coverage.
+Tensor div(
+    operations::unary::ScalarVariant value,
+    const Tensor& input,
+    bool fast_and_approximate_mode = false,
+    const std::optional<std::string>& rounding_mode = std::nullopt,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor bias_gelu(
     const Tensor& input_tensor_a_arg,
@@ -93,40 +113,36 @@ Tensor bias_gelu(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
 
 Tensor bias_gelu(
     const ttnn::Tensor& input_tensor_a,
-    float bias,
+    operations::unary::ScalarVariant bias,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-Tensor bias_gelu(
-    const Tensor& input_tensor_a,
-    float scalar,
-    const std::optional<const DataType>& output_dtype = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {});
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
 
 Tensor fmod(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor fmod(
     const Tensor& input,
-    float scalar,
+    operations::unary::ScalarVariant scalar,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor remainder(
     const Tensor& input_a,
@@ -137,18 +153,20 @@ Tensor remainder(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor remainder(
     const Tensor& input,
-    float scalar,
+    operations::unary::ScalarVariant scalar,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor lcm(
     const Tensor& input_tensor_a,
@@ -218,7 +236,10 @@ Tensor prelu(
     const std::array<float, 1>& weight,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-Tensor prelu(const Tensor& input, float weight, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor prelu(
+    const Tensor& input,
+    operations::unary::ScalarVariant weight,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor rsub(
     const Tensor& input_tensor_a,
@@ -228,17 +249,19 @@ Tensor rsub(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
 
 Tensor rsub(
     const Tensor& input_tensor_a,
-    float input_b,
+    operations::unary::ScalarVariant input_b,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
 
 Tensor atan2(
     const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -246,25 +269,21 @@ Tensor atan2(
 Tensor nextafter(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-Tensor isclose(
+Tensor div_no_nan(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor div_no_nan(
     const Tensor& input_a,
-    const Tensor& input_b,
-    float rtol,
-    float atol,
-    bool equal_nan,
+    operations::unary::ScalarVariant value,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-Tensor div_no_nan(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
-Tensor div_no_nan(
-    const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
 Tensor floor_div(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor floor_div(
-    const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+    const Tensor& input_a,
+    operations::unary::ScalarVariant value,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor outer(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -273,5 +292,26 @@ Tensor polyval(
     const Tensor& input_a,
     const std::vector<float>& coeffs,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+// Moonshot's SiTU-GLU: (beta1 * tanh(gate / beta1) * sigmoid(gate)) * (beta2 * tanh(up / beta2)).
+// gate and up are supplied pre-split; the caller decides how to extract them.
+Tensor situ_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    float beta1,
+    float beta2,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+// DeepSeek-V4's clamped SiLU-GLU: silu(min(gate, limit)) * clamp(up, -limit, limit). The gate is
+// bounded from above only; the asymmetry is the model's. gate and up are supplied pre-split.
+Tensor clamped_silu_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    float limit,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 }  // namespace ttnn

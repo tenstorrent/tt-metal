@@ -6,7 +6,11 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#ifdef ARCH_QUASAR
+#include "ckernel_sfpu_rounding_ops.h"
+#else
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
@@ -15,7 +19,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unused, APPROX)); }
+ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
 
 // clang-format off
 /**
@@ -32,7 +36,8 @@ ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unused, APPROX))
  */
 // clang-format on
 ALWI void ceil_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_ceil_, APPROX, 8, idst, (int)VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_ceil_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -50,7 +55,8 @@ ALWI void ceil_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void floor_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_floor_, APPROX, 8, idst, (int)VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_floor_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -68,7 +74,8 @@ ALWI void floor_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void trunc_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_trunc_, APPROX, 8, idst, (int)VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_trunc_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -87,7 +94,8 @@ ALWI void trunc_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void round_tile(uint32_t idst, int32_t decimals) {
-    MATH(SFPU_TWO_PARAM_KERNEL_ONE_RUNTIME(_calculate_round_, APPROX, 8, idst, (int)VectorMode::RC, decimals));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_round_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, decimals));
 }
 
 // clang-format off
@@ -109,7 +117,8 @@ ALWI void round_tile(uint32_t idst, int32_t decimals) {
  */
 // clang-format on
 ALWI void stochastic_round_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_stochastic_round_, APPROX, 8, idst, (int)VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_stochastic_round_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -127,7 +136,8 @@ ALWI void stochastic_round_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void frac_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_frac_, APPROX, 8, idst, (int)VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_frac_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 }  // namespace ckernel

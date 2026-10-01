@@ -35,7 +35,7 @@ def test_pow(exponent, device):
     ttnn_output = ttnn.pow(ttnn_base, exponent)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_ulp(torch_output, ttnn_output, 1)
+    assert_with_ulp(expected_result=torch_output, actual_result=ttnn_output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("exponent", [0.0, 1.0, 2.0, 3.0, -1.0])
@@ -62,7 +62,7 @@ def test_pow_arange_masking(exponent, device):
     result = flush_subnormal_values_to_zero(result)
     golden = flush_subnormal_values_to_zero(golden)
 
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -93,4 +93,4 @@ def test_power_as_activation(device, op_type, exponent):
     z_tt = ttnn.add(x_tt, x_tt, activations=[ttnn.UnaryWithParam(op_type, exponent)])
     tt_out = ttnn.to_torch(z_tt)
 
-    assert_with_ulp(z_torch, tt_out, 1)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=1)

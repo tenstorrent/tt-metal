@@ -75,6 +75,10 @@ struct Broadcast {
         static constexpr uint32_t num_neighbors = numNeighbors;
         static constexpr uint32_t num_links = numLinks;
         static constexpr uint32_t num_connections = num_neighbors * num_links;
+        // A broadcast with fewer chunks than configured links can only exercise
+        // the first `num_chunks` links. Keep the RT-arg layout unchanged, but do
+        // not open or close links that can never carry traffic.
+        static constexpr uint32_t effective_num_links = numChunks < numLinks ? numChunks : numLinks;
         static constexpr bool is_root = isRoot != 0;
         static constexpr uint32_t chunk_size_bytes = chunkSizeBytes;
         static constexpr uint32_t last_chunk_size_bytes = lastChunkSizeBytes;
@@ -124,6 +128,7 @@ struct Broadcast {
     private:
 #if defined(COMPILE_FOR_NCRISC)
         static constexpr uint8_t worker_to_fabric_noc = 0;
+        static constexpr bool use_posted_transport_writes = true;
         static_assert(
             noc_mode == DM_DYNAMIC_NOC || worker_to_fabric_noc == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
         std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
@@ -154,7 +159,9 @@ struct Broadcast {
                         connections[connection_idx] =
                             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
                                 arg_idx);
-                        connections[connection_idx].open_start();
+                        if (link_idx < CTArgs::effective_num_links) {
+                            connections[connection_idx].open_start();
+                        }
                     }
                 }
 
@@ -162,7 +169,7 @@ struct Broadcast {
                     const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
                     const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
                     const auto connection_direction = get_next_hop_router_direction(dst_mesh_id, dst_chip_id);
-                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::effective_num_links; link_idx++) {
                         const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
                         headers[connection_idx] = PacketHeaderPool::allocate_header();
                         fabric_set_single_hop_unicast_route_from_direction(
@@ -174,8 +181,11 @@ struct Broadcast {
                     }
                 }
 
-                for (uint32_t connection_idx = 0; connection_idx < CTArgs::num_connections; connection_idx++) {
-                    connections[connection_idx].open_finish();
+                for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::effective_num_links; link_idx++) {
+                        const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
+                        connections[connection_idx].open_finish();
+                    }
                 }
             }
 #endif
@@ -233,10 +243,11 @@ struct Broadcast {
                 auto send_single_chunk = [&](uint32_t connection_idx,
                                              uint32_t src_base_addr) __attribute__((always_inline)) {
                     connections[connection_idx].wait_for_empty_write_slot();
-                    connections[connection_idx].send_current_slot_non_blocking(
+                    connections[connection_idx].template send_current_slot_non_blocking<use_posted_transport_writes>(
                         src_base_addr,
                         CTArgs::last_chunk_size_bytes,
-                        reinterpret_cast<uint32_t>(headers[connection_idx]));
+                        reinterpret_cast<uint32_t>(headers[connection_idx]),
+                        worker_to_fabric_noc);
                 };
 
                 auto send_multi_chunk = [&](uint32_t connection_idx,
@@ -254,8 +265,11 @@ struct Broadcast {
                     if (cached_free_write_slots[connection_idx] == 0) {
                         refill_free_write_slots(connection_idx);
                     }
-                    connections[connection_idx].send_current_slot_non_blocking(
-                        src_base_addr + chunk_offset, size, reinterpret_cast<uint32_t>(headers[connection_idx]));
+                    connections[connection_idx].template send_current_slot_non_blocking<use_posted_transport_writes>(
+                        src_base_addr + chunk_offset,
+                        size,
+                        reinterpret_cast<uint32_t>(headers[connection_idx]),
+                        worker_to_fabric_noc);
                     cached_free_write_slots[connection_idx]--;
                 };
 
@@ -288,12 +302,16 @@ struct Broadcast {
                             send_multi_chunk(connection_idx, src_base_addr, chunk_idx, chunk_size);
                         }
 
-                        if (++current_link == CTArgs::num_links) {
+                        if (++current_link == CTArgs::effective_num_links) {
                             current_link = 0;
                             // flush only when about to reuse a packet header
                             if constexpr (CTArgs::num_neighbors > 0) {
                                 if (chunk_idx + 1 < CTArgs::num_chunks) {
-                                    noc_async_writes_flushed(worker_to_fabric_noc);
+                                    if constexpr (use_posted_transport_writes) {
+                                        noc_async_posted_writes_flushed(worker_to_fabric_noc);
+                                    } else {
+                                        noc_async_writes_flushed(worker_to_fabric_noc);
+                                    }
                                 }
                             }
                         }
@@ -334,15 +352,18 @@ struct Broadcast {
                     if constexpr (CTArgs::out_num_tiles != 0) {
                         cb_push_back(CTArgs::cb_out_id, CTArgs::out_num_tiles);
                     }
-                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::effective_num_links; link_idx++) {
                         if (link_counters[link_idx] > 0) {
                             unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
                         }
                     }
                 }
 
-                for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
-                    connections[i].close();
+                for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::effective_num_links; link_idx++) {
+                        const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
+                        connections[connection_idx].template close<use_posted_transport_writes, worker_to_fabric_noc>();
+                    }
                 }
 
                 noc_async_full_barrier();

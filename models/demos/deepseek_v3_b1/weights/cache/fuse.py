@@ -2,11 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pack preprocessed torch tensors into fused device buffers and OverlappedTensor views.
+"""Pack preprocessed torch tensors into a fused device buffer and OverlappedTensor views.
 
-Reads the declarative :class:`FusionGroupSpec` regions to build
-:class:`OverlapEntry` objects, then delegates to :func:`overlap_tensors`.
-No per-group dispatch — the spec *is* the layout recipe.
+Reads the declarative :class:`FusionGroupSpec` to build :class:`OverlapEntry`
+objects, then delegates to :func:`overlap_tensors`.  The spec's
+:attr:`~FusionGroupSpec.per_core` flag is forwarded so a group that needs
+per-core (non-lockstep) allocation can opt in without authoring a custom
+pipeline.
 """
 
 from __future__ import annotations
@@ -25,10 +27,10 @@ if TYPE_CHECKING:
 
 
 def _validate_views_match_spec(spec: FusionGroupSpec, views: dict[str, "OverlappedTensor"]) -> None:
-    """Assert produced OverlappedTensor views are consistent with the FusionGroupSpec regions.
+    """Assert produced OverlappedTensor views are consistent with the FusionGroupSpec layout.
 
     Catches drift between the preprocessing output and the FusionGroupSpec used for fingerprinting.
-    Skipped when ``spec.regions`` is empty (e.g. test-only specs).
+    Skipped when the spec declares no regions (e.g. test-only specs).
 
     Note: ``raw_tensor_shape`` is NOT validated here because
     ``create_overlapped_tensor`` intentionally overrides it with the
@@ -64,27 +66,28 @@ def create_overlapped_tensor(
     *,
     move_to_device: bool = True,
 ) -> tuple[ttnn.Tensor, dict[str, "OverlappedTensor"]]:
-    """Pack preprocessed tensors into one fused buffer and logical views per ``spec``.
+    """Pack preprocessed tensors into one fused buffer and its logical views.
 
-    Reads ``spec.regions`` to build :class:`OverlapEntry` objects from the
-    ``preprocessed`` tensors, then calls :func:`overlap_tensors`.  The
-    subtensor's ``raw_tensor_shape`` is updated to match the actual tensor
-    shape (which may differ from the spec's default due to TP expansion).
+    ``spec.per_core`` controls whether the buffer is allocated with the
+    global/lockstep allocator or with
+    :meth:`ttnn.MemoryConfig.experimental_set_per_core_allocation`.
 
     Args:
-        spec: Fusion layout whose regions describe lanes, core ranges, dtypes,
-            and tile shapes.
+        spec: Fusion layout describing the regions of this group.
         preprocessed: Mapping from sub-tensor name to fully-preprocessed 2-D
             torch tensor (shuffled, TP-concatenated, block-resharded — ready
             for tilization).
         device: Mesh or single device for placement.
-        move_to_device: If True, fused tensor is placed on ``device``; if False,
-            host tensor with mesh metadata (for cache store).
+        move_to_device: If True, the fused tensor is placed on ``device``;
+            if False, a host tensor with mesh metadata (for cache store).
 
     Returns:
-        ``(fused_tensor, views)`` where ``views`` maps logical name to
-        :class:`OverlappedTensor`.
+        ``(fused, views)`` — the fused :class:`ttnn.Tensor` and a mapping
+        from logical sub-tensor name to :class:`~ttnn.OverlappedTensor`.
     """
+    if not spec.regions:
+        raise ValueError(f"FusionGroupSpec {spec.name!r} declares no regions")
+
     entries: list[OverlapEntry] = []
     for region in spec.regions:
         for st in region.subtensors:
@@ -102,7 +105,12 @@ def create_overlapped_tensor(
                 )
             )
 
-    views = overlap_tensors(entries, device, move_to_device=move_to_device)
-    _validate_views_match_spec(spec, views)
+    views = overlap_tensors(
+        entries,
+        device,
+        move_to_device=move_to_device,
+        per_core=spec.per_core,
+    )
     fused = next(iter(views.values())).fused_tensor
+    _validate_views_match_spec(spec, views)
     return fused, views

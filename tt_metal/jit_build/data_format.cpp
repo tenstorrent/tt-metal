@@ -19,8 +19,9 @@ static const std::set<DataFormat> ALL_VALID_FORMATS = {
     DataFormat::Bfp8,      DataFormat::Bfp8_b,   DataFormat::Bfp4,      DataFormat::Bfp4_b,  DataFormat::Bfp2,
     DataFormat::Bfp2_b,    DataFormat::Float16,  DataFormat::Float16_b, DataFormat::Float32, DataFormat::RawUInt32,
     DataFormat::RawUInt16, DataFormat::RawUInt8, DataFormat::Tf32,      DataFormat::Lf8,     DataFormat::Fp8_e4m3,
-    DataFormat::MxFp4,     DataFormat::Int8,     DataFormat::Int16,     DataFormat::Int32,   DataFormat::UInt8,
-    DataFormat::UInt32,    DataFormat::UInt16,
+    DataFormat::MxFp4,     DataFormat::MxFp6P,   DataFormat::MxFp6R,    DataFormat::MxFp8R,  DataFormat::MxFp8P,
+    DataFormat::MxInt8,    DataFormat::MxInt4,   DataFormat::MxInt2,    DataFormat::Int8,    DataFormat::Int16,
+    DataFormat::Int32,     DataFormat::UInt8,    DataFormat::UInt32,    DataFormat::UInt16,
 };
 
 static const std::unordered_map<DataFormat, DataFormat> CONVERT_EXP_WIDTH = {
@@ -41,13 +42,23 @@ bool is_bfp_format(DataFormat data_format) {
         (data_format == DataFormat::Bfp2_b) || (data_format == DataFormat::Bfp2));
 }
 
-bool is_mx_format(DataFormat data_format) { return (data_format == DataFormat::MxFp4); }
+bool is_mx_format(DataFormat data_format) {
+    return (
+        (data_format == DataFormat::MxFp4) || (data_format == DataFormat::MxFp6P) ||
+        (data_format == DataFormat::MxFp6R) || (data_format == DataFormat::MxFp8R) ||
+        (data_format == DataFormat::MxFp8P) || (data_format == DataFormat::MxInt8) ||
+        (data_format == DataFormat::MxInt4) || (data_format == DataFormat::MxInt2));
+}
 
 bool is_exp_b_format(DataFormat data_format) {
     return (
         (data_format == DataFormat::Tf32 || data_format == DataFormat::Float16_b) ||
         (data_format == DataFormat::Bfp8_b) || (data_format == DataFormat::Bfp4_b) ||
-        (data_format == DataFormat::Bfp2_b) || (data_format == DataFormat::MxFp4));
+        (data_format == DataFormat::Bfp2_b) || (data_format == DataFormat::MxFp4) ||
+        (data_format == DataFormat::MxFp6P) || (data_format == DataFormat::MxFp6R) ||
+        (data_format == DataFormat::MxFp8R) || (data_format == DataFormat::MxFp8P) ||
+        (data_format == DataFormat::MxInt8) || (data_format == DataFormat::MxInt4) ||
+        (data_format == DataFormat::MxInt2));
 }
 
 ExpPrecision get_exp_precision(DataFormat data_format) {
@@ -113,6 +124,7 @@ ExpPrecision get_data_exp_precision(std::span<const DataFormat> data_formats) {
 
 std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_formats) {
     std::vector<DataFormat> unpack_src_format;
+    unpack_src_format.reserve(data_formats.size());
     for (auto src_format : data_formats) {
         if (src_format == DataFormat::RawUInt32 || src_format == DataFormat::RawUInt16 ||
             src_format == DataFormat::RawUInt8) {
@@ -128,7 +140,13 @@ std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_
 }
 
 DataFormat get_single_unpack_dst_format(
-    const DataFormat src_format, const DataFormat /*pack_format*/, const DataFormat unpack_conditional_dst_format) {
+    const DataFormat src_format,
+    const DataFormat /*pack_format*/,
+    const DataFormat unpack_conditional_dst_format) {
+    // NOTE: DataFormat::UInt8 is intentionally not remapped to Int8 here. The unpacker's 4-bit
+    // OutDataFormat register field has no UInt8 encoding; the LLK applies masked_data_format()
+    // at the register-write site so UInt8 (=30) lands as INT8 (=14) in the bitfield. We preserve
+    // UInt8 in the dst format because downstream LLK paths (e.g. math-MOP selection) key off the original dtype value.
     DataFormat dst_format = src_format;
     if (src_format == DataFormat::Float32) {
         TT_FATAL(
@@ -141,7 +159,13 @@ DataFormat get_single_unpack_dst_format(
     }
 
     if (is_mx_format(src_format)) {
-        dst_format = DataFormat::Float16_b;  // Fixed unpack_dst format for mx formats.
+        // MX formats unpack-expand to Float16_b in src regs — the op-agnostic default. The 2x-packed
+        // MxFp4_2x_B src-register format is NOT decided here (this table can't see which op consumes
+        // the operand): matmul and column-reduce select it kernel-side in their LLK op init by
+        // overriding the unpacker OUT_DATA_FORMAT and the ALU src-format, then restore this default
+        // on exit via mm_uninit / reduce_uninit. Keeping Float16_b here means plain MxFp4 consumed by
+        // any other op (datacopy/SFPU/eltwise/pack) still gets the correct bf16 expansion.
+        dst_format = DataFormat::Float16_b;
     }
 
     return dst_format;
@@ -173,6 +197,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
     }
 
     std::vector<DataFormat> unpack_dst_format;
+    unpack_dst_format.reserve(buf_formats.size());
 
     for (size_t i = 0; i < buf_formats.size(); i++) {
         DataFormat src_format = buf_formats[i];
@@ -189,15 +214,24 @@ std::vector<DataFormat> get_unpack_dst_formats(
         } else {
             if (src_format == DataFormat::Float32 && !unpack_to_dest_mode.empty() &&
                 unpack_to_dest_mode[i] != tt::tt_metal::UnpackToDestMode::Default) {
-                unpack_dst_format.push_back(
-                    get_single_unpack_dst_format(src_format, DataFormat::Invalid, DataFormat::Float32));
+                unpack_dst_format.push_back(get_single_unpack_dst_format(
+                    src_format, DataFormat::Invalid, DataFormat::Float32));
             } else {
-                unpack_dst_format.push_back(
-                    get_single_unpack_dst_format(src_format, DataFormat::Invalid, unpack_conditional_dst_format));
+                unpack_dst_format.push_back(get_single_unpack_dst_format(
+                    src_format, DataFormat::Invalid, unpack_conditional_dst_format));
             }
         }
     }
     return unpack_dst_format;
+}
+
+bool any_unpack_to_dest(const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode) {
+    for (const auto mode : unpack_to_dest_mode) {
+        if (mode != tt::tt_metal::UnpackToDestMode::Default) {
+            return true;
+        }
+    }
+    return false;
 }
 
 DataFormat get_single_pack_src_format(
@@ -208,7 +242,10 @@ DataFormat get_single_pack_src_format(
     bool int_fpu_en,
     tt::ARCH arch) {
     if (data_format == DataFormat::Fp8_e4m3) {
-        TT_FATAL(arch == tt::ARCH::BLACKHOLE, "Fp8 E4M3 mode only available in Blackhole");
+        TT_FATAL(
+            tt::is_data_format_supported(DataFormat::Fp8_e4m3, arch),
+            "Fp8 E4M3 mode not supported on arch {}",
+            arch);
     }
 
     DataFormat pack_src_format;
@@ -344,6 +381,7 @@ std::vector<DataFormat> get_pack_src_formats(
     bool int_fpu_en,
     tt::ARCH arch) {
     std::vector<DataFormat> pack_src_formats;
+    pack_src_formats.reserve(data_formats.size());
     DataFormat pack_src_format;
     for (auto src_format : data_formats) {
         pack_src_format = get_single_pack_src_format(
@@ -356,6 +394,7 @@ std::vector<DataFormat> get_pack_src_formats(
 
 std::vector<DataFormat> get_pack_dst_formats(std::span<const DataFormat> buf_formats) {
     std::vector<DataFormat> pack_dst_format;
+    pack_dst_format.reserve(buf_formats.size());
     for (auto dst_format : buf_formats) {
         if (dst_format == DataFormat::RawUInt32 || dst_format == DataFormat::RawUInt16 ||
             dst_format == DataFormat::RawUInt8) {

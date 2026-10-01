@@ -21,7 +21,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.common.utility_functions import is_wormhole_b0, is_wormhole_b0, is_blackhole
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.common.utility_functions import torch2tt_tensor
 
 
 def rmsnorm(x, dim, gamma, beta, eps):

@@ -4,9 +4,12 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
+    Noc noc;
+
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
@@ -19,9 +22,8 @@ void kernel_main() {
     constexpr uint32_t padded_Nkt = get_compile_time_arg_val(9);
     constexpr uint32_t padded_Lqt = get_compile_time_arg_val(10);
     constexpr uint32_t padded_Lkt = get_compile_time_arg_val(11);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(12);
 
-    constexpr auto q_args = TensorAccessorArgs<13>();
+    constexpr auto q_args = TensorAccessorArgs<12>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto joint_q_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();

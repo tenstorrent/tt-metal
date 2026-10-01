@@ -4,7 +4,10 @@
 
 #include "ttnn/operations/experimental/transformer/concat_heads_matmul/concat_heads_matmul.hpp"
 
-#include "ttnn/operations/experimental/transformer/concat_heads_matmul/device/concat_heads_matmul_device_operation.hpp"
+#include <tt-metalium/constants.hpp>
+
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn::experimental {
 
@@ -18,37 +21,31 @@ ttnn::Tensor concat_heads_matmul(
     using namespace tt::constants;
 
     TT_FATAL(attn.storage_type() == StorageType::DEVICE, "attn must be on device");
-    uint32_t seq_len = attn.padded_shape()[2];
+    TT_FATAL(attn.padded_shape().rank() == 4, "attn must be rank-4 [1, nh, seq, hd]");
+    TT_FATAL(
+        attn.padded_shape()[2] == TILE_HEIGHT,
+        "concat_heads_matmul requires seq <= one tile; got padded seq {}",
+        attn.padded_shape()[2]);
 
-    auto arch = attn.device()->arch();
-    // Replicate ttnn.matmul's EXACT default config (matmul_device_operation.cpp L1513-1522/1561-67)
-    // so this op is numerically identical to the O-proj it replaces: with a program_config supplied,
-    // increase_fidelity is false -> LoFi, packer_l1_acc=true (bf16 inputs).
-    using tt::tt_metal::DataType;
-    bool low_prec = (attn.dtype() == DataType::BFLOAT8_B || attn.dtype() == DataType::BFLOAT4_B) &&
-                    (weight.dtype() == DataType::BFLOAT8_B || weight.dtype() == DataType::BFLOAT4_B);
-    bool inputs_32f = attn.dtype() == DataType::FLOAT32 && weight.dtype() == DataType::FLOAT32;
-    bool has_pc = program_config.has_value();
-    auto math_fidelity = (!has_pc && !low_prec) ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi;
-    math_fidelity = inputs_32f ? (arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3
-                                                                : tt::tt_metal::MathFidelity::HiFi4)
-                               : math_fidelity;
-    auto kernel_config_val = init_device_compute_kernel_config(
-        arch,
-        compute_kernel_config,
-        math_fidelity,
-        /*approx=*/false,
-        /*fp32_acc=*/inputs_32f,
-        /*l1_acc=*/!inputs_32f);
+    // Free concat-heads: for seq <= 1 tile, concat-heads is exactly attn's contiguous tile order, so
+    // reinterpreting its buffer as [1, 1, seq, nh * hd] is a metadata-only view (no device op). The
+    // O-projection is then a single ttnn::matmul dispatch with the caller's program config; the kernel
+    // config is ttnn::matmul's own default unless one is given, so this matches the unfused O-proj.
+    const uint32_t seq = attn.padded_shape()[2];
+    const uint32_t K = attn.padded_shape()[1] * attn.padded_shape()[3];  // nh * hd
+    ttnn::Shape in0_shape({1, 1, seq, K});
+    Tensor in0 = tt::tt_metal::view(attn, in0_shape, in0_shape);
 
-    return ttnn::prim::concat_heads_matmul(
-        attn,
+    return ttnn::matmul(
+        in0,
         weight,
-        seq_len,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
         memory_config.value_or(attn.memory_config()),
         output_dtype.value_or(tt::tt_metal::DataType::BFLOAT16),
-        kernel_config_val,
-        std::move(program_config));
+        program_config,
+        /*activation=*/std::nullopt,
+        compute_kernel_config);
 }
 
 }  // namespace ttnn::experimental

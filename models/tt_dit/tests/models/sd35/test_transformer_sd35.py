@@ -19,6 +19,7 @@ from ....utils import cache
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -41,7 +42,7 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
         (1, 4096, 333),  # SD3.5 large config
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_sd35_transformer_block(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
@@ -130,7 +131,7 @@ def test_sd35_transformer_block(
     )
 
     # Run TT model
-    tt_spatial_out, tt_prompt_out = tt_model(tt_spatial, tt_prompt, tt_time_embed, spatial_seq_len, prompt_seq_len)
+    tt_spatial_out, tt_prompt_out = tt_model(tt_spatial, tt_prompt, tt_time_embed, spatial_seq_len)
 
     # Convert outputs back to torch and compare
     spatial_shard_dims = [None, None]
@@ -184,8 +185,7 @@ def test_sd35_transformer_block(
         (1, 128, 128, 4096, 333),  # SD3.5 large config
     ],
 )
-@pytest.mark.parametrize("load_cache", [True, False], ids=["yes_load_cache", "no_load_cache"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_sd35_transformer2d_model(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
@@ -197,7 +197,6 @@ def test_sd35_transformer2d_model(
     W: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
-    load_cache: bool,
 ) -> None:
     """Test the full SD35Transformer2DModel against the reference implementation."""
     torch.manual_seed(0)
@@ -266,28 +265,10 @@ def test_sd35_transformer2d_model(
         parallel_config=parallel_config,
         padding_config=padding_config,
     )
-    if load_cache:
-        start = time.time()
-
-        try:
-            cache.load_model(
-                tt_model,
-                model_name="stable-diffusion-3.5-large",
-                subfolder="transformer",
-                parallel_config=parallel_config,
-                mesh_shape=tuple(mesh_device.shape),
-            )
-        except cache.MissingCacheError as err:
-            msg = "Cache path does not exist. Run test_sd35_transformer_model_caching first with the desired parallel config."
-            raise RuntimeError(msg) from err
-
-        end = time.time()
-        logger.info(f"Time taken to load cached state dict: {end - start} seconds")
-    else:
-        start = time.time()
-        tt_model.load_torch_state_dict(torch_model.state_dict())
-        end = time.time()
-        logger.info(f"Time taken to load state dict: {end - start} seconds")
+    start = time.time()
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+    end = time.time()
+    logger.info(f"Time taken to load state dict: {end - start} seconds")
 
     # Create input tensors
     torch.manual_seed(0)
@@ -333,10 +314,9 @@ def test_sd35_transformer2d_model(
 
     # Calculate sequence lengths
     N = spatial_seq_len  # H * W // (patch_size * patch_size)
-    L = prompt_seq_len
 
     # Run TT model
-    tt_output = tt_model(tt_spatial, tt_prompt, tt_pooled, tt_timestep, N, L)
+    tt_output = tt_model(tt_spatial, tt_prompt, tt_pooled, tt_timestep, N)
     logger.info(f"TT output shape: {tt_output.shape}")
 
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
@@ -369,7 +349,7 @@ def test_sd35_transformer2d_model(
     ],
     ids=["sd35_large"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_sd35_transformer_model_caching(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
@@ -433,6 +413,7 @@ def test_sd35_transformer_model_caching(
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
     )
 
     # Create padding config if needed for tensor parallelism

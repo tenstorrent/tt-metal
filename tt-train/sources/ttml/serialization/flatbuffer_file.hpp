@@ -81,7 +81,7 @@ public:
     void put(std::string_view key, const ValueType& value);
 
     // Tensor support
-    void put(std::string_view key, const tt::tt_metal::Tensor& tensor);
+    void put(std::string_view key, const ttnn::Tensor& tensor);
 
     // Serialization method
     void serialize(std::string_view filename);
@@ -104,7 +104,7 @@ public:
     [[nodiscard]] ValueType get_value_type(std::string_view key) const;
 
     // Tensor support
-    [[nodiscard]] tt::tt_metal::Tensor get_tensor(std::string_view key) const;
+    [[nodiscard]] ttnn::Tensor get_tensor(std::string_view key) const;
 
 private:
     void deserialize_flatbuffer(std::span<const uint8_t> buffer);
@@ -124,7 +124,7 @@ private:
     }
 
     std::unordered_map<std::string, ValueType> m_data;
-    std::unordered_map<std::string, tt::tt_metal::Tensor> m_tensors;
+    std::unordered_map<std::string, ttnn::Tensor> m_tensors;
 
     // FlatBufferBuilder for incremental building - scalars are built directly
     flatbuffers::FlatBufferBuilder m_builder;

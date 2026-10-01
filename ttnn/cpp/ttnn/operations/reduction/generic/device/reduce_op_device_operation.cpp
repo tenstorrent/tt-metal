@@ -35,12 +35,112 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
     TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
-    TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
+    // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W/H on 4D BF16/FLOAT32,
+    // interleaved I/O). It is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
     TT_FATAL(
-        tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-            tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
-        "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}",
-        tensor_args.dtype());
+        !(operation_attributes.row_major_w_dense_path && operation_attributes.row_major_h_dense_path),
+        "Only one of row_major_w_dense_path / row_major_h_dense_path may be set");
+    TT_FATAL(operation_attributes.num_h_slices >= 1, "num_h_slices must be >= 1");
+    TT_FATAL(
+        operation_attributes.output_layout == Layout::TILE || !is_block_float(operation_attributes.output_dtype),
+        "Block-float output is TILE-only, got output_layout {} with dtype {}",
+        operation_attributes.output_layout,
+        operation_attributes.output_dtype);
+    // TILE H-axis split stage 1: tiled compute, ROW_MAJOR SUM partials (one row per slice).
+    // dim must be H: compute_output_specs sizes H from num_h_slices. num_h_slices > 1 is what
+    // makes the factory pick the RM writer.
+    const bool tile_h_split = tensor_args.layout() == Layout::TILE && operation_attributes.num_h_slices > 1 &&
+                              operation_attributes.dim == tt::tt_metal::ReduceOpDim::H &&
+                              operation_attributes.output_layout == Layout::ROW_MAJOR &&
+                              operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM;
+    TT_FATAL(
+        operation_attributes.num_h_slices == 1 || operation_attributes.row_major_h_dense_path || tile_h_split,
+        "num_h_slices > 1 (H-axis split) requires the row-major H dense path, or a TILE H-reduce "
+        "emitting ROW_MAJOR SUM partials (got layout {}, dim {}, output_layout {}, math_op {})",
+        tensor_args.layout(),
+        operation_attributes.dim,
+        operation_attributes.output_layout,
+        operation_attributes.math_op);
+    if (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path) {
+        const auto expected_dim =
+            operation_attributes.row_major_w_dense_path ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
+        const char* path_name =
+            operation_attributes.row_major_w_dense_path ? "row_major_w_dense_path" : "row_major_h_dense_path";
+        TT_FATAL(
+            operation_attributes.dim == expected_dim,
+            "{} only supports {}-dim reduce, got dim {}",
+            path_name,
+            expected_dim,
+            operation_attributes.dim);
+        TT_FATAL(tensor_args.layout() == Layout::ROW_MAJOR, "{} requires ROW_MAJOR input", path_name);
+        TT_FATAL(
+            tensor_args.logical_shape().rank() == 4,
+            "{} requires 4D input, got rank {}",
+            path_name,
+            tensor_args.logical_shape().rank());
+        TT_FATAL(!operation_attributes.negate, "{} does not support negate (min-reduce) yet", path_name);
+        TT_FATAL(
+            tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32,
+            "{} only supports BFLOAT16 and FLOAT32, got {}",
+            path_name,
+            tensor_args.dtype());
+        // After dispatcher lowering, only SUM reaches the factory (mean=AVG → SUM + scaler).
+        // MAX/MIN are excluded from the RM path entirely; they take the tilize+tile-reduce path.
+        TT_FATAL(
+            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
+            "{}: math_op must be SUM (mean lowered from AVG), got {}",
+            path_name,
+            operation_attributes.math_op);
+        TT_FATAL(
+            tensor_args.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "{} requires interleaved input and output memory layouts (input {}, output {})",
+            path_name,
+            static_cast<int>(tensor_args.memory_config().memory_layout()),
+            static_cast<int>(operation_attributes.output_mem_config.memory_layout()));
+        // Only the H path can emit TILE: its compute output is already a whole output tile.
+        TT_FATAL(
+            operation_attributes.output_layout == Layout::ROW_MAJOR || operation_attributes.row_major_h_dense_path,
+            "row_major_w_dense_path cannot emit TILE output: its output tiles are shared by up to "
+            "TILE_HEIGHT logical rows at 1-datum stride. Use the tilize + tile-reduce path instead.");
+        // TILE output needs num_h_slices == 1 so each compute-packed tile is one destination page.
+        TT_FATAL(
+            operation_attributes.output_layout == Layout::ROW_MAJOR || operation_attributes.num_h_slices == 1,
+            "TILE output is not supported with an H-axis split (num_h_slices {}): split stage 1 must "
+            "emit ROW_MAJOR partials for the dense row-major stage 2.",
+            operation_attributes.num_h_slices);
+    } else {
+        TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
+        TT_FATAL(
+            operation_attributes.output_layout == Layout::TILE || tile_h_split,
+            "Tilized reduce paths only emit TILE output, got {}",
+            operation_attributes.output_layout);
+        if (tile_h_split) {
+            TT_FATAL(
+                tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
+                    is_block_float(tensor_args.dtype()),
+                "TILE H-axis split only supports BFLOAT16, FLOAT32 and block-float input, got {}",
+                tensor_args.dtype());
+            TT_FATAL(
+                tensor_args.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "TILE H-axis split requires interleaved input and output memory layouts (input {}, output {})",
+                static_cast<int>(tensor_args.memory_config().memory_layout()),
+                static_cast<int>(operation_attributes.output_mem_config.memory_layout()));
+            TT_FATAL(!operation_attributes.negate, "TILE H-axis split does not support negate (min-reduce)");
+        }
+        // INT32 MIN/MAX/SUM is supported via the SFPU reduce path (format deduced from the input CB
+        // in compute_kernel_lib::reduce). See common.hpp.
+        const bool is_int32_sfpu_reduce = tensor_args.dtype() == DataType::INT32 &&
+                                          use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
+        TT_FATAL(
+            tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
+                tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
+                is_int32_sfpu_reduce,
+            "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction "
+            "(INT32 is supported for MAX/MIN/SUM) - got {}.",
+            tensor_args.dtype());
+    }
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
     const auto device_grid_size = tensor_args.device()->compute_with_storage_grid_size();
     TT_FATAL(
@@ -60,13 +160,18 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         device_grid);
 
     if (tensor_args.shard_spec().has_value()) {
+        // Sharded inputs are not allowed on the RM path — the dispatcher only selects RM for
+        // interleaved I/O, and the program factories fatal on a sharded RM input. Anything that
+        // reaches here is on a tilized path.
         const auto& in_shard = tensor_args.shard_spec().value();
         const auto& input_shard_grid = in_shard.grid;
-        TT_FATAL(
-            program_grid.contains(input_shard_grid),
-            "Input shard grid {} must be contained in program core grid {}",
-            input_shard_grid,
-            program_grid);
+        if (tensor_args.memory_config().is_l1()) {
+            TT_FATAL(
+                program_grid.contains(input_shard_grid),
+                "Input shard grid {} must be contained in program core grid {}",
+                input_shard_grid,
+                program_grid);
+        }
         const uint32_t tile_height = tensor_args.tensor_spec().tile().get_height();
         const uint32_t tile_width = tensor_args.tensor_spec().tile().get_width();
         TT_FATAL(
@@ -87,20 +192,24 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        const auto& output_nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
+        const auto out_spec = compute_output_specs(operation_attributes, tensor_args);
+        const auto& output_nd_shard_spec = *out_spec.memory_config().nd_shard_spec();
         const auto& output_shard_grid = output_nd_shard_spec.grid;
-        const uint32_t output_tile_height = tensor_args.tensor_spec().tile().get_height();
-        const uint32_t output_tile_width = tensor_args.tensor_spec().tile().get_width();
-        TT_FATAL(
-            program_grid.contains(output_shard_grid),
-            "Output shard grid {} must be contained in program core grid {}",
-            output_shard_grid,
-            program_grid);
-        TT_FATAL(
-            device_grid.contains(output_shard_grid),
-            "Output shard grid {} must be contained in device grid {}",
-            output_shard_grid,
-            device_grid);
+        const uint32_t output_tile_height = out_spec.tile().get_height();
+        const uint32_t output_tile_width = out_spec.tile().get_width();
+
+        if (operation_attributes.output_mem_config.is_l1()) {
+            TT_FATAL(
+                program_grid.contains(output_shard_grid),
+                "Output shard grid {} must be contained in program core grid {}",
+                output_shard_grid,
+                program_grid);
+            TT_FATAL(
+                device_grid.contains(output_shard_grid),
+                "Output shard grid {} must be contained in device grid {}",
+                output_shard_grid,
+                device_grid);
+        }
         if (output_nd_shard_spec.shard_shape.rank() >= 2) {
             TT_FATAL(
                 output_nd_shard_spec.shard_shape[-2] > 0 && output_nd_shard_spec.shard_shape[-1] > 0,
@@ -122,11 +231,38 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Tripwire: adding a ReduceParams field must be a deliberate choice — hash it below, or
+    // exclude it like the two scalars, which the kernels read as runtime args.
+    static_assert(
+        reflect::size<operation_attributes_t>() == 15,
+        "ReduceParams gained or lost a field: add it to compute_program_hash or document why it is "
+        "excluded, then update this count.");
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<ReduceDeviceOperation>,
+        operation_attributes.math_op,
+        operation_attributes.dim,
+        operation_attributes.output_mem_config,
+        operation_attributes.output_dtype,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.sub_core_grids,
+        operation_attributes.negate,
+        operation_attributes.scaler_mode,
+        operation_attributes.row_major_w_dense_path,
+        operation_attributes.row_major_h_dense_path,
+        operation_attributes.use_sfpu_reduce,
+        operation_attributes.num_h_slices,
+        operation_attributes.output_layout,
+        tensor_args);
+}
+
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();
     switch (operation_attributes.dim) {
-        case tt::tt_metal::ReduceOpDim::H: output_shape[2] = 1; break;
+        // H-axis split emits one partial row per slice: output H = num_h_slices (1 = normal reduce).
+        case tt::tt_metal::ReduceOpDim::H: output_shape[2] = operation_attributes.num_h_slices; break;
         case tt::tt_metal::ReduceOpDim::W: output_shape[3] = 1; break;
         case tt::tt_metal::ReduceOpDim::HW:
             output_shape[2] = 1;
@@ -139,33 +275,13 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
         operation_attributes.output_dtype,
         operation_attributes.output_mem_config,
         tensor_args.memory_config(),
-        operation_attributes.dim);
+        operation_attributes.dim,
+        operation_attributes.output_layout);
 }
 
 ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
-}
-
-ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<ReduceDeviceOperation>(
-        operation_attributes.math_op,
-        operation_attributes.dim,
-        operation_attributes.scaler,
-        operation_attributes.output_mem_config,
-        operation_attributes.output_dtype,
-        operation_attributes.compute_kernel_config,
-        operation_attributes.sub_core_grids,
-        operation_attributes.negate,
-        operation_attributes.post_mul_scaler,
-        program_factory.index(),
-        tensor_args.dtype(),
-        tensor_args.memory_config(),
-        tensor_args.padded_shape(),
-        tensor_args.tensor_spec().tile());
 }
 
 ttnn::Tensor reduce(
@@ -178,7 +294,13 @@ ttnn::Tensor reduce(
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool negate,
-    float post_mul_scaler) {
+    float post_mul_scaler,
+    ScalerMode scaler_mode,
+    bool row_major_w_dense_path,
+    bool row_major_h_dense_path,
+    bool use_sfpu_reduce,
+    uint32_t num_h_slices,
+    tt::tt_metal::Layout output_layout) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -189,7 +311,13 @@ ttnn::Tensor reduce(
             compute_kernel_config,
             sub_core_grids,
             negate,
-            post_mul_scaler},
+            post_mul_scaler,
+            scaler_mode,
+            row_major_w_dense_path,
+            row_major_h_dense_path,
+            use_sfpu_reduce,
+            num_h_slices,
+            output_layout},
         input_tensor);
 }
 

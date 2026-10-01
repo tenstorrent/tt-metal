@@ -37,7 +37,7 @@
 > - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
 > - Performance numbers were collected using the tt-metal model demos (accessible via the model links). If running with a vLLM inference server, performance may be different.
 > - \* Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
-> - For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM repository](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
+> - For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM TT plugin README](https://github.com/tenstorrent/vllm-tt-plugin).
 
 ## Speech-to-Text
 
@@ -96,6 +96,7 @@
 | [Sentence-Bert (backbone: bert-base)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/sentence_bert)        | 8     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)  | 433     | 550      |         |
 | [Sentence-Bert (backbone: bert-base) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/sentence_bert) | 16    | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)  | 772     | 1100     |         |
 | [Sentence-Bert (backbone: bert-base)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/sentence_bert)       | 8     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 929     | 1100     |         |
+| [ModernBERT-base](https://github.com/tenstorrent/tt-metal/tree/main/models/experimental/modernbert)                                 | 8     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)  | 365     |          |         |
 
 ## Model Demos
 

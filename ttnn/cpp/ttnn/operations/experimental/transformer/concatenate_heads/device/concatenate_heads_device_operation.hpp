@@ -7,8 +7,9 @@
 #include <functional>
 #include <optional>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "concatenate_heads_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "concatenate_heads_device_operation_types.hpp"
 
@@ -17,17 +18,20 @@ namespace ttnn::experimental::prim {
 struct ConcatenateHeadsDeviceOperation {
     using operation_attributes_t = ConcatenateHeadsParams;
     using tensor_args_t = ConcatenateHeadsInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<ConcatenateHeadsProgramFactory>;
+
+    // The input and output buffer addresses are the only per-dispatch state; the core grid and
+    // every per-core tile id derive from the input's padded shape, which the program hash covers.
+    // Declaring both addresses as runtime-arg bindings is therefore the whole cache-hit refresh.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim

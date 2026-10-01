@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from tests.ttnn.utils_for_testing import assert_equal, maybe_trace
 
 DEEPSEEK_SHAPE_PERM_LAYOUT_MEM = [
@@ -27,7 +28,7 @@ DEEPSEEK_SHAPE_PERM_LAYOUT_MEM = [
 
 @pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 0}], indirect=True
 )
 @pytest.mark.parametrize("test_config", DEEPSEEK_SHAPE_PERM_LAYOUT_MEM)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])

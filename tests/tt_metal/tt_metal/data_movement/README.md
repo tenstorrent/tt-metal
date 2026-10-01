@@ -6,7 +6,7 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 This test suite includes tests using both fast dispatch (Mesh Device API) and slow dispatch modes:
 
 ### Fast Dispatch (Mesh Device API)
-Most test suites use the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. These tests use `GenericMeshDeviceFixture` and run on single-device unit meshes with fast dispatch mode for optimal performance.
+Most test suites use the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. These tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes with fast dispatch mode for optimal performance.
 
 ### Slow Dispatch
 Some test suites use slow dispatch mode for reliable program execution. These tests use `MeshDeviceFixture`. With TT-Mesh, APIs for executing programs in slow dispatch are the same as in fast dispatch, using `tt::tt_metal::distributed::EnqueueMeshWorkload`. Tests requiring slow dispatch include:
@@ -14,50 +14,53 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 - **Conv Hardcoded** (IDs 21-23)
 - **Reshard Hardcoded** (IDs 17-20)
 
+### Quasar Simulator
+Quasar data movement tests (IDs 912-927) use `UnitMeshFastDispatchFixture` with `arch == ARCH::QUASAR` branches inside each test. They require `TT_METAL_SLOW_DISPATCH_MODE=1` (fast dispatch is not yet supported on the Quasar emulator). The base fixture skips gracefully if fast dispatch is attempted. Tests that require `≥2 Tensix columns` (e.g. subordinate core `{1,0}`) also skip with an informative message when run on a 1-column emulator — use `emu-quasar-2x3` or larger for those tests.
+
 ## Device 2.0 API Support
-This test suite now includes tests using the new device 2.0 experimental NOC API alongside the original implementations. These tests provide validation and performance comparison for the updated API design:
+This test suite now includes tests using the new device 2.0 NOC API alongside the original implementations. These tests provide validation and performance comparison for the updated API design:
 
 ### Key Features of Device 2.0 API Tests:
-- **Experimental NOC API**: Uses `experimental::Noc`, `experimental::UnicastEndpoint`, and `experimental::noc_traits_t` for structured NOC operations
+- **NOC API**: Uses `Noc`, `UnicastEndpoint`, and `noc_traits_t` for structured NOC operations
 - **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
 
 ### Device 2.0 Test Suites:
-- **One to One** (ID: 158): Device 2.0 version of packet sizes tests using experimental write API
-- **One From One** (ID: 159): Device 2.0 version of packet sizes tests using experimental read API
+- **One to One** (ID: 158): Device 2.0 version of packet sizes tests using write API
+- **One From One** (ID: 159): Device 2.0 version of packet sizes tests using read API
 
-Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as validation and performance comparison for the new experimental API.
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as validation and performance comparison for the new API.
 
 ## Tests in the Test Suite
 
 | Name                        | ID(s)                           | Description                                                                             |
 | ----------                  | -----                           | ----------------------------------------------------                                    |
-| DRAM Unary                  | 0-3, 40                         | Transactions between DRAM and a single Tensix core.                                     |
-| One to One                  | 4, 50, 150-151, 158             | Write transactions between two Tensix cores.                                            |
-| One From One                | 5, 51, 152-153, 159             | Read transactions between two Tensix cores.                                             |
+| DRAM Unary                  | 0-3, 40-43                         | Transactions between DRAM and a single Tensix core.                                     |
+| One to One                  | 4, 50, 150-151, 158, 160             | Write transactions between two Tensix cores.                                            |
+| One From One                | 5, 51, 152-153, 159, 161             | Read transactions between two Tensix cores.                                             |
 | One to all                  | 6-8, 52, 154-155, 170-172       | Writes transaction from one core to all cores.                                          |
 | One to all Multicast        | 9-14, 24-26, 53-54, 56, 100-102, 173-180 | Writes transaction from one core to all cores using multicast.                   |
-| One From All                | 15, 30, 156-157                 | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
-| Loopback                    | 16, 55                          | Does a loopback operation where one cores writes to itself.                             |
+| One From All                | 15, 30, 156-157, 162-165                 | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
+| Loopback                    | 16, 44-45, 55                          | Does a loopback operation where one cores writes to itself.                             |
 | Reshard Hardcoded           | 17-20                           | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
 | Conv Hardcoded              | 21-23                           | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
 | Interleaved Page Read/Write | 61-69, 71-75                    | Reads and writes pages between interleaved buffers and a Tensix core.                   |
-| One Packet Read/Write       | 80-83                           | Reads or writes packets between two Tensix cores.                                       |
-| DRAM Sharded Read           | 84-87                           | Reads from sharded DRAM into one core.                                                  |
-| Multi Interleaved           | 110-127                         | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
+| One Packet Read/Write       | 80-83, 90-93                           | Reads or writes packets between two Tensix cores.                                       |
+| DRAM Sharded Read           | 84-87, 94-97                           | Reads from sharded DRAM into one core.                                                  |
+| Multi Interleaved           | 110-130                         | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
 | Core Bidrectional           | 140-148                         | Tensix core reads from and writes to another Tensix core simultaneously.                |
 | Deinterleave                | 200-201                         | Tests deinterleaving. **(Slow Dispatch)**                                               |
-| All to all                  | 300-308                         | Write transactions from multiple cores to multiple cores.                               |
-| All from all                | 310-318                         | Read transactions from multiple cores to multiple cores.                                |
-| Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.                          |
-| Multicast Atomic Semaphore  | 321-328                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
+| All to all                  | 300-316                         | Write transactions from multiple cores to multiple cores.                               |
+| All from all                | 320-336                         | Read transactions from multiple cores to multiple cores.                                |
+| Atomic Semaphore Increment  | 340-341                         | Atomic semaphore increment + atomic barrier performance tests.                          |
+| Multicast Atomic Semaphore  | 342-353                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
 | I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
 | Inline Direct Write         | 500-501, 507                    | Inline DW transactions between two (unicast) or multiple (multicast) Tensix cores.      |
 | DRAM Neighbour Tests        | 502-505, 508-509                | Each core reads from its closest DRAM.                                                  |
-| Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
+| Transaction ID              | 600-602, 610-611, 620-622, 630-631                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
 | PCIe Read Bandwidth         | 603, 605                        | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
 | PCIe Write Bandwidth        | 604                             | Measures PCIe write bandwidth from L1 to host memory on a single Tensix core.           |
 | Matmul                      | 1000-1231                       | 1D v1, 1D v2, and 2D matmul DM tests across grid shapes, subblock dims, K depths, non-origin starts, and DRAM banks. Per-variant offsets: 1D v1 +0 (1000-1031), 1D v2 +100 (1100-1131), 2D +200 (1200-1231). 1D: in0 row multicast + in1 column multicast (row 0 reads its DRAM slice once, then multicasts down the column). 2D: in0 row multicast + in1 column multicast (all L1, no DRAM). Perf-characterization sweeps: 1029 (4x4 K=1 sub_r {1..256}), 1030 (4x4 K=8 (sub_r, sub_c) 2D), 1031 (8x7 K=8 (sub_r, sub_c) 2D). |
-| NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using experimental dataflow 2.0 API.         |
+| NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using dataflow 2.0 API.         |
 | NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
 | Quasar Addrgen              | 900-909                         | Quasar-only: example kernels exercising the hardware address generator (1D/2D/face/interleaved). Requires Quasar simulator. |
 | Quasar IDMA                 | 910-911                         | Quasar-only: example kernels exercising the IDMA engine (basic linear copy and 1D strided). Requires Quasar simulator. |
@@ -96,8 +99,9 @@ An exhaustive list of options and their descriptions can be found in `./conftest
 Follow these steps to add new tests to this test suite.
 
 1. **Choose dispatch mode:** Decide whether your test should use fast dispatch (Mesh Device API) or slow dispatch:
-    - **Fast Dispatch (recommended)**: Use `GenericMeshDeviceFixture` for new performance tests
+    - **Fast Dispatch (recommended)**: Use `UnitMeshFastDispatchFixture` for new performance tests
     - **Slow Dispatch**: Use `MeshDeviceFixture` only if fast dispatch APIs don't work for your specific test case
+    - **Quasar Simulator**: Use `UnitMeshFastDispatchFixture` with an `arch == ARCH::QUASAR` branch inside the test; run with `TT_METAL_SLOW_DISPATCH_MODE=1`
 2. Create a new directory with a descriptive name for the test.
     - **Example:** `./dram_unary`
 3. In this directory, create the c++ test file with a filename that starts with "test_".
@@ -153,3 +157,87 @@ By default, per-core bandwidth is computed as `(Number of transactions × Transa
 DeviceTimestampedData("Per-core bytes", actual_bytes_pushed_by_this_core);
 ```
 When present, `gather_bw_per_core` uses this stamp as the numerator for that core, exposing sender-vs-receiver asymmetry on the heatmap. All five matmul multicast kernels (`in0_kernel.cpp`, `in0_kernel_v2.cpp`, `in0_kernel_2d.cpp`, `in1_kernel.cpp`, `in1_kernel_2d.cpp`) do this so the heatmaps correctly show which cores are doing the multicast work.
+
+## Data Movement Web Viewer
+
+The data movement web viewer is a static application that compiles the
+reported CSV files into interactive bandwidth and latency charts. It groups tests by
+directory, supports search and tags, lets the user select an architecture, and creates
+filters for sweep dimensions found in the CSV. It also displays the test-directory
+README, an optional communication-pattern diagram, and FAQ content. It is currently
+hosted in [tt-low-level-documentation](https://github.com/tenstorrent/tt-low-level-documentation).
+
+It is primarily meant to support generalizable performance sweep tests; it plots
+test results from most of our relevant tests, but not every single test. Some
+examples of what would not be present include Directed Ideal tests and hardcoded tests
+(e.g. reshard_hardcoded).
+
+Currently, only Blackhole and Wormhole test results are supported.
+
+The viewer reads its inputs from two repositories at runtime:
+
+- `tt-metal` supplies `python/test_mappings/test_information.yaml`,
+    `python/test_mappings/web_viewer_groups.yaml`, and the application files.
+- `tt-low-level-documentation` supplies the architecture-specific CSV files under
+    `data_movement_doc/perf_plots/<architecture>/csv/` and diagram images under
+    `data_movement_doc/web_images/`.
+
+### Adding a Test to the Viewer
+
+Adding a C++ test does not automatically make it visible in the viewer. Complete the
+following steps after adding the test and its test ID:
+
+1. Add the test to `python/test_mappings/test_information.yaml` with the correct
+     `name` and `directory`. Add `web_viewer_name` to expose it in the viewer. The
+     value of `name` must match the CSV basename produced by the reporter; the viewer
+     requests `<name>.csv`.
+2. If the test has a bandwidth convention, set `bandwidth_mode` (`per_core` or
+     `combined`) and `bandwidth_unit` (`bpc` or `gbps`) in the same entry. Add the
+     packet-test fields (`memory_type`, `mechanism`, and `pattern`) when applicable.
+     These metadata values are written into the CSV and become chart dimensions or
+     displayed constants.
+3. Add or update the matching directory entry in
+     `python/test_mappings/web_viewer_groups.yaml`. Set the sidebar `name` and useful
+     `tags`; optionally add an `image` path and group-specific `faq` entries. The group
+     key must be the same directory value used in `test_information.yaml`. Tag FAQ
+     entries belong under the top-level `tags` section, and general FAQ entries belong
+     under `universal`.
+4. Run the test with reporting enabled so that the CSV is generated through
+     `python/stats_reporter.py`. For example:
+     ```bash
+     pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py \
+             --gtest-filter="<test-filter>" --report
+     ```
+5. Publish the generated CSV for every supported architecture under the matching
+     `data_movement_doc/perf_plots/<architecture>/csv/` directory in `tt-low-level-documentation`.
+     Do not change the CSV filename, it should be identical to its `name` value
+     from the yaml.
+6. If adding an image, upload it to the `data_movement_doc/web_images/` directory
+    in `tt-low-level-documentation`.
+
+The chart code treats columns as follows: known internal and metric columns are
+reserved, columns with one value are shown as test information, and columns with
+multiple values become sweep dimensions. The preferred x-axis is transaction size,
+then grid dimensions, then master/subordinate grid dimensions. Consequently, a new
+CSV should have a header, numeric metric values, and stable dimension names. The
+reporter normally provides `Latency (cycles)` and either `Bandwidth (bytes/cycle)`,
+`Bandwidth (GB/s)`, or `Combined Bandwidth (bytes/cycle)`.
+
+### Maintaining the Viewer
+
+The app files are located on the `gh-pages` branch of `tt-low-level-documentation`;
+this branch must not be deleted.
+- Keep `test_information.yaml` and `web_viewer_groups.yaml` synchronized with test
+    directories and generated CSV names. Remove or rename published CSVs deliberately;
+    the viewer probes each known architecture and hides tests for which no CSV exists.
+- Update `KNOWN_ARCHITECTURES` and `ARCH_FREQ_GHZ` in `app.js` when adding
+    an architecture. Verify that its CSV directory and latency conversion frequency
+    are also available.
+- Update `METRIC_COLUMNS`, `INTERNAL_COLUMNS`, or `X_AXIS_EXCLUDED` when the CSV
+    schema gains a column that should not be plotted as a sweep dimension. Otherwise
+    the new column may become an unexpected filter or x-axis.
+- Keep the CDN dependency versions and Subresource Integrity hashes in
+    `index.html` together. The viewer currently uses Papa Parse for CSV,
+    js-yaml for mappings, and Plotly for charts.
+- If new useful information arises or there are consistent points of confusion regarding
+    any particular tests, they can be added as FAQs to `web_viewer_groups.yaml`.

@@ -23,66 +23,94 @@
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
+#include "api/compute/nextafter.h"
+#include "api/compute/logaddexp.h"
+#include "api/compute/logaddexp2.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/isclose.h"
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 FORCE_INLINE void process_sfpu_tiles(
-    uint32_t n, uint32_t cb_pre_lhs, uint32_t cb_post_lhs, uint32_t cb_pre_rhs, uint32_t cb_post_rhs, uint32_t cb_out) {
-    PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
-    cb_wait_front(cb_post_lhs, n);
+    uint32_t n,
+    uint32_t cb_pre_lhs_id,
+    uint32_t cb_post_lhs_id,
+    uint32_t cb_pre_rhs_id,
+    uint32_t cb_post_rhs_id,
+    uint32_t cb_out_id ISCLOSE_RT_ARG_PARAMS) {
+    CircularBuffer cb_post_lhs(cb_post_lhs_id);
+    CircularBuffer cb_post_rhs(cb_post_rhs_id);
+    CircularBuffer cb_out(cb_out_id);
 
-    PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, n);
-    cb_wait_front(cb_post_rhs, n);
+    PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+    cb_post_lhs.wait_front(n);
 
-    cb_reserve_back(cb_out, n);
+    PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, n);
+    cb_post_rhs.wait_front(n);
+
+    cb_out.reserve_back(n);
 
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT;
 #endif
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
+    // Startup and preprocessing preserve the LHS-format SrcA invariant.
+    copy_init(cb_post_lhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_lhs, i, i * 2);
+        copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
-    copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
+    reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+    copy_init(cb_post_rhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_rhs, i, i * 2 + 1);
+        copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif
+#ifdef ISCLOSE_OP
+        BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#else
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+#endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
+    reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
     tile_regs_commit();
 
     tile_regs_wait();
     for (uint32_t i = 0; i < n; ++i) {
-        pack_tile(i * 2, cb_out);
+        pack_tile(i * 2, cb_out.get_cb_id());
     }
     tile_regs_release();
 
-    cb_push_back(cb_out, n);
-    cb_pop_front(cb_post_lhs, n);
-    cb_pop_front(cb_post_rhs, n);
+    cb_out.push_back(n);
+    cb_post_lhs.pop_front(n);
+    cb_post_rhs.pop_front(n);
 }
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
+#ifdef ISCLOSE_OP
+    const uint32_t rtol_bits = get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX);
+    const uint32_t atol_bits = get_arg_val<uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX);
+#endif
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
-    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto cb_pre_lhs_id = tt::CBIndex::c_0;
+    constexpr auto cb_pre_rhs_id = tt::CBIndex::c_1;
+    constexpr auto cb_out_id = tt::CBIndex::c_2;
 
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
+    constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
+    static_assert(
+        cb_post_lhs_id == BINARY_PHYSICAL_LHS_FORMAT_CB,
+        "binary_ng: SFPU SrcA startup operand disagrees with the preprocessing restore reference");
+    constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
-    unary_op_init_common(cb_post_lhs, cb_out);
+    compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
+    copy_init(cb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
@@ -92,12 +120,19 @@ void kernel_main() {
     // Process full chunks
     uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
-        process_sfpu_tiles(num_tiles_per_cycle, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out);
+        process_sfpu_tiles(
+            num_tiles_per_cycle,
+            cb_pre_lhs_id,
+            cb_post_lhs_id,
+            cb_pre_rhs_id,
+            cb_post_rhs_id,
+            cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_tiles(remainder, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out);
+        process_sfpu_tiles(
+            remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_pre_rhs_id, cb_post_rhs_id, cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 }

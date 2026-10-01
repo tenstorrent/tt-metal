@@ -7,12 +7,16 @@
 #include <chrono>
 #include <climits>
 #include <cstddef>
+#include <cstdint>
 #include <algorithm>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -51,6 +55,16 @@ public:
      * @param mesh_graph The mesh graph to construct the adjacency graph from
      */
     explicit AdjacencyGraph(const AdjacencyMap& adjacency_map);
+
+    /**
+     * @brief Construct adjacency graph by taking ownership of an adjacency map
+     *
+     * Same as the const-reference constructor without deep-copying the map. Use when the caller built
+     * the map solely to hand it over, e.g. a derived graph rebuilt per search node.
+     *
+     * @param adjacency_map The adjacency map to move from
+     */
+    explicit AdjacencyGraph(AdjacencyMap&& adjacency_map);
 
     /**
      * @brief Get all nodes in the graph
@@ -110,10 +124,17 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_phy
 template <typename TargetNode, typename GlobalNode>
 class MappingConstraints {
 public:
-    /// A set of (target, global) node pairs used in one cardinality constraint.
+    /// A set of unique (target, global) pairs for the unweighted cardinality overload.
     using CardinalityPairSet = std::set<std::pair<TargetNode, GlobalNode>>;
-    /// One cardinality constraint: (pair_set, min_count).
-    using CardinalityConstraintEntry = std::pair<CardinalityPairSet, size_t>;
+    /// Input for the weighted overload: each fulfilled pair adds this weight toward min_count.
+    using CardinalityPairWeights = std::map<std::pair<TargetNode, GlobalNode>, size_t>;
+    /// Stored cardinality constraint. `mapping_pairs` lists each pair once per unit of weight, so
+    /// `mapping_pairs.size()` is the total weight and `min_count` is how many listings must match
+    /// the mapping. Unweighted constraints list each pair once.
+    struct CardinalityConstraintEntry {
+        std::vector<std::pair<TargetNode, GlobalNode>> mapping_pairs;
+        size_t min_count = 0;
+    };
     /// The full list of cardinality constraints stored by this object.
     using CardinalityConstraintList = std::vector<CardinalityConstraintEntry>;
 
@@ -200,15 +221,18 @@ public:
     bool add_required_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
 
     /**
-     * @brief Add explicit required constraint (many-to-many)
+     * @brief Add explicit required constraint (many-to-many pinning group)
      *
-     * Constrains multiple target nodes to map to any of the provided global nodes.
-     * This creates a many-to-many relationship: any target node from the set can map
-     * to any global node from the set. Intersects with existing constraints for each target.
+     * Each target in @p target_nodes may map only to globals in @p global_nodes. The solver still
+     * enforces a bijection, so distinct targets in the group land on distinct globals from that set.
+     * Globals in the set that are not used by the group remain available to other targets.
      *
-     * @param target_nodes The set of target nodes to constrain
-     * @param global_nodes The set of global nodes they can map to
-     * @return true if constraint was successfully added, false if constraint causes empty valid mappings
+     * Returns false when |target_nodes| > |global_nodes| (impossible to assign injectively).
+     * A single-target group is 1:many: that target may use any listed global; others stay eligible too.
+     *
+     * @param target_nodes The target nodes in the pinning group
+     * @param global_nodes The globals (ASICs) they may map to
+     * @return true if constraint was successfully added, false if unsatisfiable or overconstrained
      */
     bool add_required_constraint(const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes);
 
@@ -249,7 +273,7 @@ public:
      * @brief Add explicit forbidden constraint (one-to-one)
      *
      * Forbids a specific target node from mapping to a specific global node.
-     * Removes the mapping from valid mappings.
+     * Validates the result on a trial copy first; on failure this object is unchanged.
      *
      * @param target_node The target node to constrain
      * @param global_node The global node it cannot map to
@@ -314,6 +338,22 @@ public:
     bool add_cardinality_constraint(const CardinalityPairSet& mapping_pairs, size_t min_count = 1);
 
     /**
+     * @brief Add cardinality constraint with per-pair weights
+     *
+     * Same as the unweighted overload, except each fulfilled pair adds `pair_weights[pair]` toward
+     * `min_count` instead of 1. Stored as that many listings of the same pair (not as a parallel
+     * weight map). The mapping still uses each pair at most once.
+     *
+     * Every weight must be >= 1. `min_count` is the minimum total weight (not the minimum number of
+     * pairs). An unweighted call is equivalent to setting every weight to 1.
+     *
+     * @param pair_weights Map of (target, global) pairs to their weights
+     * @param min_count Minimum total weight that must be achieved
+     * @return true if constraint was successfully added, false if constraint is invalid or unsatisfiable
+     */
+    bool add_cardinality_constraint(const CardinalityPairWeights& pair_weights, size_t min_count);
+
+    /**
      * @brief Add many-to-many cardinality constraint (convenience method)
      *
      * Generates all possible (target, global) pairs from the Cartesian product of the two sets
@@ -333,6 +373,18 @@ public:
      */
     bool add_cardinality_constraint(
         const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes, size_t min_count = 1);
+
+    /**
+     * @brief Fold another constraint set into this one, as if each of its constraints had been added here.
+     *
+     * Required and preferred sets intersect per target; forbidden pairs and cardinality constraints
+     * accumulate; each same-rank partition is adopted from whichever side defines it (two different
+     * partitions of the same domain are rejected); group budgets take the tighter setting.
+     * All or nothing: on failure this object is unchanged.
+     *
+     * @return true on success; false if the result is unsatisfiable or the same-rank partitions conflict
+     */
+    bool merge(const MappingConstraints& other);
 
     /**
      * @brief Get valid mappings for a specific target node
@@ -376,7 +428,8 @@ public:
     /**
      * @brief Get all cardinality constraints (for solver access)
      *
-     * @return Vector of (mapping_pairs, min_count) tuples representing cardinality constraints
+     * @return Stored cardinality constraints. Each entry is (pair listings, min_count); a pair that
+     *         appears N times is worth N toward min_count.
      */
     const CardinalityConstraintList& get_cardinality_constraints() const;
 
@@ -397,6 +450,39 @@ public:
 
     const std::vector<std::set<TargetNode>>& get_same_rank_target_groups() const { return same_rank_target_groups_; }
     const std::vector<std::set<GlobalNode>>& get_same_rank_global_groups() const { return same_rank_global_groups_; }
+
+    /**
+     * @brief SOFT occupancy packing: prefer occupying as few same-rank global groups as the capacity
+     *        lower bound allows. Not a hard cap; if that packing is infeasible the solve continues
+     *        without it. Used by MultiMeshSolutionEnumerator after dropping an infeasible hard cap.
+     */
+    void set_minimize_same_rank_groups_used(bool enable) { minimize_same_rank_groups_used_ = enable; }
+    bool minimize_same_rank_groups_used() const { return minimize_same_rank_groups_used_; }
+
+    /**
+     * @brief HARD cap: the mapping may occupy at most @p k distinct same-rank global groups (host partitions).
+     *
+     * The solver chooses WHICH k groups. Register the global groups via set_same_rank_groups_constraint first.
+     * An infeasible cap makes the solve fail; callers (e.g. MultiMeshSolutionEnumerator) may drop the cap and
+     * restart the session. 0 = no cap.
+     */
+    void set_max_same_rank_groups_used(std::size_t k) { max_same_rank_groups_used_ = k; }
+    std::size_t max_same_rank_groups_used() const { return max_same_rank_groups_used_; }
+
+    /**
+     * @brief Footprint-disjointness: each Resource may be used by at most one chosen global.
+     *
+     * Densifies each distinct Resource to ResourceIndex 0..R-1 and stores only the dense bags.
+     * `uint32_t` resources identity-map (`R = max+1`). Bijection completeness is disabled when
+     * any resource constraint is set.
+     */
+    template <typename Resource>
+    bool add_resource_constraint(const std::map<GlobalNode, std::vector<Resource>>& global_to_resources);
+
+    uint32_t resource_count() const { return resource_count_; }
+    const std::map<GlobalNode, std::vector<uint32_t>>& get_global_to_resource_indices() const {
+        return global_to_resource_indices_;
+    }
 
     /**
      * @brief Get forbidden (target, global) pairs that are invalid even when no required constraints exist
@@ -450,16 +536,26 @@ private:
     // Allows add_forbidden_constraint to work without seeding valid_mappings_.
     std::set<std::pair<TargetNode, GlobalNode>> forbidden_pairs_;
 
-    // Cardinality constraints: each entry requires that at least min_count of its
-    // (target, global) node pairs must be satisfied by the mapping.
+    // Cardinality constraints: each listing of a (target, global) pair that matches the mapping
+    // counts as 1 toward min_count (repeat a pair to give it more weight).
     CardinalityConstraintList cardinality_constraints_;
 
     // Same-group constraint: targets in a target group map to at most one global group
     std::vector<std::set<TargetNode>> same_rank_target_groups_;
     std::vector<std::set<GlobalNode>> same_rank_global_groups_;
 
-    // Track which global nodes are exclusively reserved by many-to-many constraints
-    // Maps global node -> set of target nodes that are allowed to map to it via many-to-many constraints
+    // Opt-in objective: minimize number of distinct same-rank global groups (host partitions) used.
+    bool minimize_same_rank_groups_used_ = false;
+
+    // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
+    std::size_t max_same_rank_groups_used_ = 0;
+
+    // Footprint resources: each chosen global claims these ResourceIndex values; AMO per index.
+    std::map<GlobalNode, std::vector<uint32_t>> global_to_resource_indices_;
+    uint32_t resource_count_ = 0;
+
+    // Deprecated: many-to-many pinning no longer reserves globals exclusively for a target set.
+    // Kept for compatibility with older constraint merges that extended an existing reservation.
     std::map<GlobalNode, std::set<TargetNode>> reserved_global_nodes_;
 
     // Quiet mode flag - mutable so it can be set even on const objects
@@ -468,13 +564,17 @@ private:
     // Helper to intersect two sets
     static std::set<GlobalNode> intersect_sets(const std::set<GlobalNode>& set1, const std::set<GlobalNode>& set2);
 
+    // Apply a trial copy, validate it, and only then replace *this. On failure *this is untouched.
+    bool commit_trial(MappingConstraints&& trial);
+
     // Validate that all cardinality constraints are compatible with required constraints
     // and that they are satisfiable together
     bool validate_cardinality_constraints() const;
 
-    // Same-rank: there must exist an injective assignment of non-empty target groups to distinct
-    // non-empty global groups such that each target in a group has some allowed mapping into that
-    // group's assigned global partition (forbidden + valid_mappings / staged rules).
+    // Same-rank feasibility: every non-empty logical target group must have at least one physical
+    // host partition where all members still allow a mapping (forbidden + valid_mappings / staged
+    // rules). Multiple target groups may share the same partition (e.g. several mesh_host_ranks
+    // carved from one galaxy host); partitions are not required to be distinct.
     bool validate_same_rank_groups_feasible() const;
 };
 
@@ -485,8 +585,8 @@ enum class ConnectionValidationMode {
     /// Strict mode: require exact channel counts, fail if not met
     STRICT,
     /// Relaxed mode: allow insufficient channels (warnings) but prefer mappings with better-matched physical link
-    /// capacity. Current DFS biases search via candidate ordering; SAT/MaxSAT backend should add automatic weighted
-    /// soft objectives for channel alignment (see migration plan).
+    /// capacity. DFS biases search via candidate ordering; SAT honors caller preferred hits and encodes channel
+    /// threshold indicators. The caller's MappingConstraints are not modified.
     RELAXED
 };
 
@@ -539,10 +639,15 @@ struct MappingResult {
 
     /// Statistics about the solving process
     struct Stats {
-        size_t dfs_calls = 0;                      ///< Number of DFS calls made
-        size_t backtrack_count = 0;                ///< Number of backtracks performed
-        size_t memoization_hits = 0;               ///< Number of times memoization cache was hit
-        std::chrono::microseconds elapsed_time{};  ///< Time taken to solve (microsecond resolution)
+        size_t dfs_calls = 0;                         ///< Number of DFS recursive visits (0 for SAT)
+        size_t backtrack_count = 0;                   ///< Number of backtracks performed (0 for SAT)
+        size_t memoization_hits = 0;                  ///< Number of times memoization cache was hit (0 for SAT)
+        std::chrono::microseconds elapsed_time{};     ///< Wall-clock time for this solve / enumeration
+        bool used_sat = false;                        ///< True when the SAT backend ran this call
+        size_t sat_solve_calls = 0;                   ///< CaDiCaL solve() / solve_limited() calls (0 for DFS)
+        size_t sat_hard_constraint_encode_calls = 0;  ///< Successful hard-constraint CNF encodings (0 for DFS)
+        size_t n_target = 0;                          ///< Target graph node count
+        size_t n_global = 0;                          ///< Global graph node count
     } stats;
 };
 
@@ -598,13 +703,95 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     bool quiet_mode = false,
     TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
 
+/**
+ * @brief Find up to N distinct valid topology mappings.
+ *
+ * Runs the solver repeatedly (using blocking clauses for SAT, continued backtracking for DFS)
+ * collecting distinct solutions until either max_solutions mappings have been found or the
+ * problem space is exhausted. Each returned MappingResult is individually validated.
+ *
+ * When TopologyMappingSolverEngine::Sat (or Auto when it selects SAT) is in use, every enumeration — including
+ * max_solutions > 1 and solve_topology_mapping_all — uses CaDiCaL incrementally: hard constraints are encoded once,
+ * then blocking clauses are appended between solves (see TopologyMappingEnumerationSession). DFS is used only when the
+ * engine resolves to DFS.
+ *
+ * @param target_graph The target (sub-)graph pattern to embed
+ * @param global_graph The host graph to embed into
+ * @param constraints Mapping constraints
+ * @param max_solutions Maximum number of solutions to return (0 means enumerate up to the
+ *        implementation-defined safety limit; values above that limit are clamped the same way)
+ * @param connection_validation_mode STRICT or RELAXED channel validation
+ * @param quiet_mode Suppress verbose logging
+ * @param solver_engine Which backend to use
+ * @param unique_shapes If true, count solutions by the set of global nodes used (order-independent); permutations on
+ *        the same global set share one slot. For SAT enumeration this is enforced with extra CNF clauses so the
+ *        solver skips entire automorphism classes per model. For DFS, equivalent pruning is applied where possible.
+ * @return Vector of up to max_solutions valid MappingResults (may be empty if no solution exists)
+ */
+template <typename TargetNode, typename GlobalNode>
+std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    size_t max_solutions,
+    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false,
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
+    bool unique_shapes = false);
+
+/**
+ * @brief Find all distinct valid topology mappings up to the implementation enumeration limit.
+ *
+ * Equivalent to solve_topology_mapping_n(..., 0, ...) (see max_solutions semantics there).
+ *
+ * @param target_graph The target (sub-)graph pattern to embed
+ * @param global_graph The host graph to embed into
+ * @param constraints Mapping constraints
+ * @param connection_validation_mode STRICT or RELAXED channel validation
+ * @param quiet_mode Suppress verbose logging
+ * @param solver_engine Which backend to use
+ * @param unique_shapes See solve_topology_mapping_n
+ * @return Vector of all valid MappingResults found within that limit. If the result count equals the
+ *         implementation enumeration cap, a warning is logged: more solutions may exist.
+ */
+template <typename TargetNode, typename GlobalNode>
+std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false,
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
+    bool unique_shapes = false);
+
 namespace detail {
+inline std::vector<int> topology_mapping_shape_key(const std::vector<int>& mapping) {
+    std::vector<int> key;
+    key.reserve(mapping.size());
+    for (int g : mapping) {
+        if (g >= 0) {
+            key.push_back(g);
+        }
+    }
+    std::sort(key.begin(), key.end());
+    return key;
+}
 
 bool topology_mapping_should_use_sat_engine(
-    TopologyMappingSolverEngine engine, size_t n_target = 0, size_t n_global = 0);
+    TopologyMappingSolverEngine engine, size_t n_target = 0, size_t n_global = 0, size_t resource_count = 0);
 
 /** @see TT_TOPOLOGY_SOLVER_ENGINE in solve_topology_mapping documentation. */
 inline bool topology_mapping_use_sat_engine();
+
+// fmt cannot print non-void pointers; those nodes log as their converted dense id instead.
+template <typename T>
+auto format_graph_node(const T& node, std::size_t id) {
+    if constexpr (std::is_pointer_v<std::remove_cvref_t<T>>) {
+        return id;
+    } else {
+        return node;
+    }
+}
 
 /**
  * @brief Indexed graph representation for efficient lookups
@@ -637,6 +824,9 @@ struct GraphIndexData {
     size_t n_target = 0;
     size_t n_global = 0;
 
+    auto printable_target(std::size_t i) const { return format_graph_node(target_nodes[i], i); }
+    auto printable_global(std::size_t i) const { return format_graph_node(global_nodes[i], i); }
+
     /**
      * @brief Construct GraphIndexData from AdjacencyGraph inputs
      *
@@ -661,11 +851,11 @@ struct GraphIndexData {
     void print_adjacency_maps() const;
 };
 
-/// A cardinality constraint in index form: at least @c min_count of the
-/// (target_idx, global_idx) @c pairs must be satisfied by the final mapping.
+/// A cardinality constraint in index form: at least @c min_count listings in @c pairs must match
+/// the mapping. The same (target_idx, global_idx) may appear more than once (weight).
 struct IndexedCardinalityConstraint {
-    std::set<std::pair<size_t, size_t>> pairs;  ///< (target_idx, global_idx) index pairs
-    size_t min_count = 0;                        ///< Minimum number of pairs that must be mapped
+    std::vector<std::pair<size_t, size_t>> pairs;  ///< (target_idx, global_idx); repeats are weight
+    size_t min_count = 0;                          ///< Minimum number of listings that must match
 };
 
 /**
@@ -688,14 +878,24 @@ struct ConstraintIndexData {
     // Used for optimization, doesn't restrict valid mappings
     std::vector<std::vector<size_t>> preferred_global_indices;
 
-    // Cardinality constraints: each entry requires that at least min_count of its
-    // (target_idx, global_idx) pairs are satisfied by the mapping.
+    // Cardinality constraints: at least min_count listings in pairs must match (repeats = weight).
     std::vector<IndexedCardinalityConstraint> cardinality_constraints;
 
     // Same-group: target_idx/global_idx -> group_id (-1 or SIZE_MAX if not in any group)
     std::vector<int> global_to_same_rank_group;
     std::vector<std::set<size_t>> same_rank_groups;
     std::vector<size_t> target_to_group;
+
+    // Opt-in SOFT occupancy packing: SAT encodes at-most-k_floor as an optional stage and falls through
+    // if that packing is infeasible. Distinct from the HARD max_same_rank_groups_used cap.
+    bool minimize_same_rank_groups_used = false;
+
+    // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
+    std::size_t max_same_rank_groups_used = 0;
+
+    // Footprint resources, indexed by global_idx. Empty when no add_resource_constraint was set.
+    std::vector<std::vector<uint32_t>> global_to_resource_indices;
+    uint32_t resource_count = 0;
 
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
@@ -743,6 +943,9 @@ struct ConstraintIndexData {
     // Helper: check if mapping is valid
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const;
 
+    // True if `global_idx` shares a ResourceIndex with any already-mapped global.
+    bool resources_conflict_with_mapping(size_t global_idx, const std::vector<int>& mapping) const;
+
     /**
      * @brief Check if assigning (target_idx, global_idx) satisfies same-rank groups constraint
      *
@@ -774,7 +977,7 @@ struct ConstraintIndexData {
         bool quiet_mode = false) const;
 };
 
-/** SAT encoder state (no Kissat types). */
+/** SAT encoder state (no CaDiCaL types in the public header). */
 struct TopologySatHardEncoding {
     bool trivial_unsat = false;
     std::string trivial_reason;
@@ -783,7 +986,15 @@ struct TopologySatHardEncoding {
 };
 
 /**
- * Index-only view of GraphIndexData for the Kissat backend (implemented in topology_solver_sat.cpp).
+ * Index-only view of GraphIndexData for the SAT backend (implemented in topology_solver_sat.cpp).
+ *
+ * TODO: Remove TopologySatGraphView / TopologySatConstraintView when GraphIndexData and
+ * ConstraintIndexData have a non-template index base (or equivalent). The SAT encoder is a
+ * non-template .cpp, so it cannot take ConstraintIndexData<T,G> / GraphIndexData<T,G> directly;
+ * these views are type-erasure only. Their fields duplicate the already index-only members
+ * (ConstraintIndexData stores no TargetNode/GlobalNode). Prefer a non-template base that SAT
+ * can take, then delete both views and the duplicated is_valid_mapping. Do not template the
+ * SAT encoder (that would pull CaDiCaL into every instantiation).
  */
 struct TopologySatGraphView {
     size_t n_target = 0;
@@ -807,6 +1018,7 @@ struct TopologySatGraphView {
         global_deg(g.global_deg) {}
 };
 
+/** Type-erased ConstraintIndexData for SAT; see TopologySatGraphView TODO. */
 struct TopologySatConstraintView {
     const std::vector<std::vector<size_t>>& restricted_global_indices;
     const std::vector<std::vector<size_t>>& forbidden_global_indices;
@@ -815,6 +1027,10 @@ struct TopologySatConstraintView {
     const std::vector<int>& global_to_same_rank_group;
     const std::vector<std::set<size_t>>& same_rank_groups;
     const std::vector<size_t>& target_to_group;
+    bool minimize_same_rank_groups_used = false;
+    std::size_t max_same_rank_groups_used = 0;
+    const std::vector<std::vector<uint32_t>>& global_to_resource_indices;
+    uint32_t resource_count = 0;
 
     template <typename TargetNode, typename GlobalNode>
     explicit TopologySatConstraintView(const ConstraintIndexData<TargetNode, GlobalNode>& c) :
@@ -824,7 +1040,11 @@ struct TopologySatConstraintView {
         cardinality_constraints(c.cardinality_constraints),
         global_to_same_rank_group(c.global_to_same_rank_group),
         same_rank_groups(c.same_rank_groups),
-        target_to_group(c.target_to_group) {}
+        target_to_group(c.target_to_group),
+        minimize_same_rank_groups_used(c.minimize_same_rank_groups_used),
+        max_same_rank_groups_used(c.max_same_rank_groups_used),
+        global_to_resource_indices(c.global_to_resource_indices),
+        resource_count(c.resource_count) {}
 
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const {
         if (target_idx < forbidden_global_indices.size() && !forbidden_global_indices[target_idx].empty()) {
@@ -841,26 +1061,39 @@ struct TopologySatConstraintView {
     }
 };
 
-struct TopologySatSolver;
+// Non-template SAT backend. Session/CaDiCaL state lives in Impl (topology_solver_sat.cpp), not the public API.
+class SatSearchBackend {
+public:
+    SatSearchBackend();
+    ~SatSearchBackend();
+    SatSearchBackend(SatSearchBackend&&) noexcept;
+    SatSearchBackend& operator=(SatSearchBackend&&) noexcept;
+    SatSearchBackend(const SatSearchBackend&) = delete;
+    SatSearchBackend& operator=(const SatSearchBackend&) = delete;
 
-struct TopologySearchState;
+    void reset();
+    bool start(
+        const TopologySatGraphView& graph_data,
+        const TopologySatConstraintView& constraint_data,
+        ConnectionValidationMode validation_mode,
+        bool unique_shapes,
+        const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
+        std::string* error_out = nullptr);
+    bool next(std::vector<int>& mapping_out);
+    bool block(const std::vector<int>& mapping);
+    bool refresh_constraints(const TopologySatConstraintView& constraint_data);
+    int assignment_lit(size_t target_idx, size_t global_idx) const;
+    bool add_unit(int lit);
+    size_t solve_calls() const noexcept;
 
-bool topology_sat_encode_hard_constraints(
-    TopologySatSolver& solver,
-    const TopologySatGraphView& graph_data,
-    const TopologySatConstraintView& constraint_data,
-    TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED);
+    // Per-solve conflict budget applied to every solve() in this backend. Must be set before start().
+    void set_conflict_cap(int cap);
 
-bool topology_sat_decode_hard_solution(
-    TopologySatSolver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out);
-
-bool topology_sat_search(
-    const TopologySatGraphView& graph_data,
-    const TopologySatConstraintView& constraint_data,
-    ConnectionValidationMode validation_mode,
-    bool quiet_mode,
-    TopologySearchState& state);
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+    int conflict_cap_ = 300'000;  // mirrors kDefaultConflictCap; copied into Impl on start()
+};
 
 /**
  * @brief Unified heuristic for node selection and candidate generation
@@ -922,6 +1155,20 @@ public:
         const std::vector<int>& mapping,
         ConnectionValidationMode validation_mode);
 
+    /**
+     * @brief Generate and order candidates for a target node
+     *
+     * Filters by hard constraints first, then orders by cost (lower = better)
+     */
+    template <typename TargetNode, typename GlobalNode>
+    static std::vector<size_t> generate_ordered_candidates(
+        size_t target_idx,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        const std::vector<int>& mapping,
+        const std::vector<bool>& used,
+        ConnectionValidationMode validation_mode);
+
 private:
     /**
      * @brief Compute cost for selecting a target node (lower = better)
@@ -956,22 +1203,12 @@ private:
         const std::vector<int>& mapping,
         ConnectionValidationMode validation_mode);
 
-    /**
-     * @brief Generate and order candidates for a target node
-     *
-     * Filters by hard constraints first, then orders by cost (lower = better)
-     */
-    template <typename TargetNode, typename GlobalNode>
-    static std::vector<size_t> generate_ordered_candidates(
-        size_t target_idx,
-        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-        const std::vector<int>& mapping,
-        const std::vector<bool>& used,
-        ConnectionValidationMode validation_mode);
-
-    // Cost weights (ensure hard >> soft >> runtime)
+    // Cost weights (ensure hard >> host-affinity >> soft >> runtime)
     static constexpr int HARD_WEIGHT = 1000000;
+    // Host-affinity (packing) bias: must dominate the softer channel/preferred biases so connected targets
+    // consolidate onto the fewest host partitions, but stay well below HARD_WEIGHT so it never competes with
+    // hard feasibility. Applied per same-host already-mapped neighbor.
+    static constexpr int HOST_AFFINITY_WEIGHT = 10000;
     static constexpr int SOFT_WEIGHT = 1000;
     static constexpr int RUNTIME_WEIGHT = 1;
 };
@@ -1064,8 +1301,79 @@ struct TopologySearchState {
     size_t dfs_calls = 0;                        // DFS call count (0 for SAT)
     size_t backtrack_count = 0;                  // DFS backtracks (0 for SAT)
     size_t memoization_hits = 0;                 // DFS memoization hits (0 for SAT)
+    bool used_sat = false;                       // True when the SAT backend ran
+    size_t sat_solve_calls = 0;                  // CaDiCaL solve() calls (0 for DFS)
+    size_t sat_hard_constraint_encode_calls = 0;  // Successful hard CNF encodings (0 for DFS)
     std::string error_message;                   // Error message if search fails
 };
+
+/**
+ * @brief Incremental mapping engine: start once, then block exclusions and next() a mapping.
+ *
+ * DFSSearchEngine and SatSearchEngine implement this. The enumerator constructs one concrete
+ * engine, then calls only these methods.
+ */
+template <typename TargetNode, typename GlobalNode>
+class TopologySearchEngine {
+public:
+    virtual ~TopologySearchEngine() = default;
+
+    virtual bool start(
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        ConnectionValidationMode validation_mode,
+        bool unique_shapes = false,
+        const std::vector<std::vector<int>>& initial_forbidden_shape_keys = {},
+        bool quiet_mode = false) = 0;
+
+    virtual bool next(std::vector<int>& mapping_out) = 0;
+
+    virtual bool block(const std::vector<int>& mapping) = 0;
+
+    /**
+     * Re-read the ConstraintIndexData from start(). Session updates that object in place, then
+     * calls this with no arguments. SAT adds units for the new domains; DFS already reads through
+     * the same pointer.
+     */
+    virtual bool refresh_constraints() = 0;
+
+    virtual const TopologySearchState& get_state() const = 0;
+
+    /**
+     * Set the per-solve conflict budget for SAT engines. No-op for engines (e.g. DFS) that do not
+     * run a conflict-limited SAT solve. Must be called before start().
+     */
+    virtual void set_conflict_cap(int /*cap*/) {}
+
+    /**
+     * @brief One-shot search: start() then next().
+     *
+     * @return true if a complete mapping was found
+     */
+    bool search(
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        ConnectionValidationMode validation_mode,
+        bool quiet_mode = false);
+
+    /**
+     * @brief Collect up to max_solutions mappings via start() then repeated next().
+     *
+     * @return true if at least one solution was found
+     */
+    bool search_n(
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        ConnectionValidationMode validation_mode,
+        size_t max_solutions,
+        std::vector<std::vector<int>>& all_mappings_out,
+        bool quiet_mode = false,
+        bool unique_shapes = false,
+        const std::vector<std::vector<int>>& initial_forbidden_shape_keys = {});
+};
+
+template <typename TargetNode, typename GlobalNode>
+std::unique_ptr<TopologySearchEngine<TargetNode, GlobalNode>> make_topology_search_engine(bool use_sat);
 
 /**
  * @brief DFS search engine for topology mapping
@@ -1079,37 +1387,64 @@ struct TopologySearchState {
  * The MappingValidator will save this partial mapping in the result even if validation fails.
  */
 template <typename TargetNode, typename GlobalNode>
-class DFSSearchEngine {
+class DFSSearchEngine : public TopologySearchEngine<TargetNode, GlobalNode> {
 public:
     using SearchState = TopologySearchState;
 
     /**
-     * @brief Start DFS search
+     * @brief Incremental DFS session: same start / next / block shape as SatSearchEngine.
      *
-     * **Note**: Even if this returns false (search failed), the internal state's mapping will contain
-     * the best partial mapping found, which will be saved by MappingValidator for debugging.
-     *
-     * @param graph_data Indexed graph data
-     * @param constraint_data Indexed constraint data (includes all constraint information)
-     * @param validation_mode Connection validation mode
-     * @return true if complete valid mapping found, false otherwise (but state still has best found)
+     * start() snapshots graph/constraint pointers (must outlive next()/block()).
+     * refresh_constraints() re-reads the same ConstraintIndexData after the session updates it
+     * in place. next() yields one complete mapping. block() excludes a mapping from later next() calls.
      */
-    bool search(
+    bool start(
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        ConnectionValidationMode validation_mode,
+        bool unique_shapes = false,
+        const std::vector<std::vector<int>>& initial_forbidden_shape_keys = {},
+        bool quiet_mode = false) override;
+
+    bool next(std::vector<int>& mapping_out) override;
+
+    bool block(const std::vector<int>& mapping) override;
+
+    bool refresh_constraints() override;
+
+    const TopologySearchState& get_state() const override { return state_; }
+
+private:
+    TopologySearchState state_;  // Internal state for the search
+    bool quiet_mode_ = false;  // Quiet mode flag to suppress verbose debug messages
+    const GraphIndexData<TargetNode, GlobalNode>* graph_data_ = nullptr;
+    const ConstraintIndexData<TargetNode, GlobalNode>* constraint_data_ = nullptr;
+    ConnectionValidationMode validation_mode_ = ConnectionValidationMode::RELAXED;
+    bool unique_shapes_ = false;
+    bool started_ = false;
+    bool empty_mapping_yielded_ = false;
+    std::vector<std::vector<int>> initial_forbidden_shape_keys_;
+    std::vector<std::vector<int>> blocked_mappings_;
+    std::vector<std::vector<int>> yielded_mappings_;
+
+    bool mapping_is_excluded(const std::vector<int>& mapping) const;
+    void install_mapping(const std::vector<int>& mapping);
+
+    bool find_first_mapping(
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
         ConnectionValidationMode validation_mode,
         bool quiet_mode = false);
 
-    /**
-     * @brief Get the current search state
-     *
-     * @return const reference to the internal search state
-     */
-    const TopologySearchState& get_state() const { return state_; }
-
-private:
-    TopologySearchState state_;  // Internal state for the search
-    bool quiet_mode_ = false;  // Quiet mode flag to suppress verbose debug messages
+    bool enumerate_mappings(
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        ConnectionValidationMode validation_mode,
+        size_t max_solutions,
+        std::vector<std::vector<int>>& all_mappings_out,
+        bool quiet_mode = false,
+        bool unique_shapes = false,
+        const std::vector<std::vector<int>>& initial_forbidden_shape_keys = {});
     /**
      * @brief Hash state for memoization (FNV-1a hash)
      *
@@ -1135,38 +1470,48 @@ private:
 };
 
 /**
- * @brief SAT (Kissat) search engine using hard CNF encoding plus preferred-hit maximization
+ * @brief SAT (CaDiCaL) search engine: one incremental session.
  *
- * Encodes domain, degree, injectivity, edge preservation, same-rank groups, and cardinality, then searches for a
- * model that **maximizes the number of targets** whose chosen global lies in that target's preferred set (same notion
- * as `ConstraintIndexData::compute_constraint_stats` for `preferred_satisfied`). This uses auxiliary indicator
- * literals and repeated solves with an at-least-k cardinality over those indicators (small instance cap). When the
- * cap is exceeded or cardinality encoding is too large, falls back to a single satisfiability solve without that
- * objective. DFS still returns the **first** complete feasible mapping under its heuristic order, which can satisfy
- * strictly fewer preferred targets on the same instance.
- *
- * Channel/STRICT checks are still applied by MappingValidator after decode.
- *
- * In RELAXED mode, after locking the preferred-hit count (when that optimization runs), a second pass maximizes
- * auxiliary literals for per-edge channel thresholds so the embedding maximizes the same sum as DFS's relaxed
- * channel ordering objective (sum of min(required, actual) over target edges). When the number of threshold
- * literals exceeds a small cap, that k-descent pass is skipped (one final satisfiability solve still returns a valid
- * embedding). Other caps may also skip encoding or cardinality on very large instances.
+ * start() encodes once and keeps the ConstraintIndexData pointer. refresh_constraints() re-reads
+ * that same object and adds units. next() solves, decodes, and blocks that model so the following
+ * next() yields a different mapping. unique_shapes / forbidden keys belong on start().
  */
 template <typename TargetNode, typename GlobalNode>
-class SatSearchEngine {
+class SatSearchEngine : public TopologySearchEngine<TargetNode, GlobalNode> {
 public:
-    bool search(
+    bool start(
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
         ConnectionValidationMode validation_mode,
-        bool quiet_mode = false);
+        bool unique_shapes = false,
+        const std::vector<std::vector<int>>& initial_forbidden_shape_keys = {},
+        bool quiet_mode = false) override;
 
-    const TopologySearchState& get_state() const { return state_; }
+    bool next(std::vector<int>& mapping_out) override;
+
+    bool block(const std::vector<int>& mapping) override;
+
+    bool refresh_constraints() override;
+
+    const TopologySearchState& get_state() const override { return state_; }
+
+    void set_conflict_cap(int cap) override { backend_.set_conflict_cap(cap); }
 
 private:
     TopologySearchState state_;
     bool quiet_mode_ = false;
+    bool started_ = false;
+    bool empty_problem_ = false;
+    bool empty_mapping_yielded_ = false;
+    bool empty_blocked_ = false;
+    size_t n_target_ = 0;
+    size_t n_global_ = 0;
+    size_t max_same_rank_groups_used_ = 0;
+    const ConstraintIndexData<TargetNode, GlobalNode>* constraint_data_ = nullptr;
+    SatSearchBackend backend_;
+
+    bool fail(std::string message);
+    void install_mapping(const std::vector<int>& mapping);
 };
 
 /**
@@ -1184,7 +1529,6 @@ struct MappingValidator {
      * and checks cardinality constraints.
      * In STRICT mode: fails if channel counts insufficient.
      * In RELAXED mode: collects warnings for insufficient channel counts but doesn't fail.
-     * In NONE mode: skips channel count validation.
      *
      * @param mapping Complete mapping (mapping[i] = global_idx)
      * @param graph_data Indexed graph data
@@ -1260,6 +1604,81 @@ struct MappingValidator {
 };
 
 }  // namespace detail
+
+/**
+ * @brief Incremental enumeration session: the constructor snapshots the problem, next() yields one mapping.
+ *
+ * Graphs, constraints, validation mode, solver engine, and unique_shapes are constructor-only.
+ * Changing them means destroy this session and construct a new one. next() does not take those
+ * arguments and does not silently restart. The type is immovable: DFS holds pointers into this
+ * object's snapshots, so a move would dangle. Hold it in unique_ptr when it must be replaced.
+ *
+ * After construction, add_forbidden_constraint / add_required_constraint update the owned
+ * MappingConstraints snapshot, rebuild the constraint index in place, and tell the engine to
+ * refresh. exclude_mapping(s) block now. quiet_mode is live via set_quiet_mode.
+ */
+template <typename TargetNode, typename GlobalNode>
+class TopologyMappingEnumerationSession {
+public:
+    TopologyMappingEnumerationSession() = default;
+    TopologyMappingEnumerationSession(
+        const AdjacencyGraph<TargetNode>& target_graph,
+        const AdjacencyGraph<GlobalNode>& global_graph,
+        const MappingConstraints<TargetNode, GlobalNode>& constraints,
+        ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
+        bool quiet_mode = false,
+        TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
+        bool unique_shapes = false,
+        int conflict_cap = 0);  // 0 = leave the SAT backend's default; >0 overrides the per-solve conflict budget
+    TopologyMappingEnumerationSession(const TopologyMappingEnumerationSession&) = delete;
+    TopologyMappingEnumerationSession& operator=(const TopologyMappingEnumerationSession&) = delete;
+    TopologyMappingEnumerationSession(TopologyMappingEnumerationSession&&) = delete;
+    TopologyMappingEnumerationSession& operator=(TopologyMappingEnumerationSession&&) = delete;
+    ~TopologyMappingEnumerationSession();
+
+    bool started() const noexcept { return ready_; }
+
+    void set_quiet_mode(bool quiet_mode);
+
+    bool add_forbidden_constraint(TargetNode target, GlobalNode global);
+    bool add_forbidden_constraint(TargetNode target, const std::set<GlobalNode>& globals);
+    bool add_forbidden_constraint(const std::set<TargetNode>& targets, GlobalNode global);
+    bool add_forbidden_constraint(const std::set<TargetNode>& targets, const std::set<GlobalNode>& globals);
+    bool add_required_constraint(TargetNode target, GlobalNode global);
+    bool add_required_constraint(TargetNode target, const std::set<GlobalNode>& globals);
+
+    bool exclude_mappings(const std::vector<std::map<TargetNode, GlobalNode>>& additional_excluded);
+    bool exclude_mapping(const std::map<TargetNode, GlobalNode>& mapping);
+
+    MappingResult<TargetNode, GlobalNode> next();
+
+    size_t sat_solve_calls() const noexcept { return sat_solve_calls_; }
+
+    /** SAT only: number of successful hard-constraint CNF encodings in this session (0 if using DFS). */
+    size_t sat_hard_constraint_encode_calls() const noexcept { return sat_hard_constraint_encode_calls_; }
+
+private:
+    bool ready_{false};
+    bool quiet_{false};
+    bool unique_shapes_{false};
+    bool use_sat_{false};
+    int conflict_cap_{0};  // >0 overrides the SAT backend per-solve conflict budget (see ctor)
+    size_t sat_solve_calls_{0};
+    size_t sat_hard_constraint_encode_calls_{0};
+    AdjacencyGraph<TargetNode> snap_target_{};
+    AdjacencyGraph<GlobalNode> snap_global_{};
+    MappingConstraints<TargetNode, GlobalNode> snap_constraints_{};
+    TopologyMappingSolverEngine engine_{TopologyMappingSolverEngine::Auto};
+    ConnectionValidationMode mode_{ConnectionValidationMode::RELAXED};
+    std::string start_error_;
+    std::optional<detail::GraphIndexData<TargetNode, GlobalNode>> graph_data_;
+    std::optional<detail::ConstraintIndexData<TargetNode, GlobalNode>> constraint_data_;
+    std::unique_ptr<detail::TopologySearchEngine<TargetNode, GlobalNode>> search_engine_;
+
+    void reset() noexcept;
+    bool refresh_constraints();
+    std::vector<int> to_index_mapping(const std::map<TargetNode, GlobalNode>& node_map) const;
+};
 
 }  // namespace tt::tt_fabric
 

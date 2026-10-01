@@ -6,22 +6,29 @@
 
 #include "hw/inc/api/compile_time_args.h"
 #include "hw/inc/api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 #include "hw/inc/internal/tt-1xx/risc_common.h"
 
 template <bool use_legacy_api>
 void access_memory(uint32_t src_addr, uint32_t end_addr, uint32_t num_iterations, volatile uint64_t* results) {
     uint64_t start = c_tensix_core::read_wall_clock();
     for (uint32_t i = 0; i < num_iterations; i++) {
+        // Unroll both inner loops so per-byte loop overhead (pointer advance + branch) is
+        // amortized 8x. Without it, the legacy and new-API loops compile to byte-identical
+        // 4-instruction bodies, but I-cache warmup of the second loop biases speedup by
+        // ~0.05–0.1% — right at this test's tolerance, so it flakes. Unrolling drops
+        // overhead from ~50% to ~10% of the loop and brings the ratio inside tolerance.
         if constexpr (use_legacy_api) {
             volatile uint32_t* data = reinterpret_cast<volatile uint32_t*>(src_addr);
+#pragma GCC unroll 8
             while (data < reinterpret_cast<volatile uint32_t*>(end_addr)) {
                 [[maybe_unused]] volatile uint32_t word = data[0];
                 data++;
             }
         } else {
-            experimental::CoreLocalMem<std::uint32_t> mem(src_addr);
+            CoreLocalMem<std::uint32_t> mem(src_addr);
+#pragma GCC unroll 8
             while (mem.get_address() < end_addr) {
                 [[maybe_unused]] volatile uint32_t word = mem[0];
                 mem++;
@@ -54,7 +61,7 @@ void kernel_main() {
         uint64_t bar;
     };
 
-    experimental::CoreLocalMem<TestStruct> struct_mem(src_addr);
+    CoreLocalMem<TestStruct> struct_mem(src_addr);
     struct_mem->foo = pattern;
     struct_mem->bar = pattern + 1;
     while (struct_mem->foo != pattern) {
@@ -63,15 +70,15 @@ void kernel_main() {
     }
 
     // Try writing with operator[]
-    experimental::CoreLocalMem<std::uint32_t> mem(src_addr);
+    CoreLocalMem<std::uint32_t> mem(src_addr);
     for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
         mem[i] = pattern + i;
     }
 
     // Try sending with NoC API
-    experimental::Noc noc;
-    experimental::UnicastEndpoint unicast_endpoint;
-    noc.async_write(
+    Noc noc;
+    UnicastEndpoint unicast_endpoint;
+    noc.async_write<NocOptions::CUSTOM_VC>(
         mem,
         unicast_endpoint,
         num_bytes,
@@ -81,7 +88,7 @@ void kernel_main() {
             .noc_y = neighbor_worker_core_y,
             .addr = src_addr,
         },
-        0);
+        NocOptVals{.vc = 0});
     noc.async_write_barrier();
 
     // Try clear data here before reading from neighbor core

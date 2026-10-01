@@ -11,15 +11,15 @@
 #include <cstdint>
 #include <string>
 
-#include "impl/experimental/disaggregation/kv_chunk_address_table_protobuf.hpp"
+#include "impl/internal/disaggregation/kv_chunk_address_table_protobuf.hpp"
 
 namespace {
 
 using tt::tt_fabric::FabricNodeId;
 using tt::tt_fabric::MeshId;
-using tt::tt_metal::experimental::disaggregation::KvCacheLocation;
-using tt::tt_metal::experimental::disaggregation::KvChunkAddressTable;
-using tt::tt_metal::experimental::disaggregation::KvChunkAddressTableConfig;
+using tt::tt_metal::internal::disaggregation::KvCacheLocation;
+using tt::tt_metal::internal::disaggregation::KvChunkAddressTable;
+using tt::tt_metal::internal::disaggregation::KvChunkAddressTableConfig;
 
 constexpr uint32_t kPageSizeBytes = 1088 * 18;
 
@@ -68,7 +68,7 @@ void BM_ExportProtobuf(benchmark::State& state) {
 
     size_t bytes = 0;
     for ([[maybe_unused]] auto _ : state) {
-        std::string data = tt::tt_metal::experimental::disaggregation::export_to_protobuf(table);
+        std::string data = tt::tt_metal::internal::disaggregation::export_to_protobuf(table);
         bytes = data.size();
         benchmark::DoNotOptimize(data);
     }
@@ -83,10 +83,10 @@ void BM_ImportProtobuf(benchmark::State& state) {
         static_cast<uint32_t>(state.range(1)),
         static_cast<uint32_t>(state.range(2)));
 
-    std::string data = tt::tt_metal::experimental::disaggregation::export_to_protobuf(table);
+    std::string data = tt::tt_metal::internal::disaggregation::export_to_protobuf(table);
 
     for ([[maybe_unused]] auto _ : state) {
-        auto restored = tt::tt_metal::experimental::disaggregation::import_from_protobuf(data);
+        auto restored = tt::tt_metal::internal::disaggregation::import_from_protobuf(data);
         benchmark::DoNotOptimize(restored.total_entries());
     }
 
@@ -106,7 +106,7 @@ void BM_ExportProtobufText(benchmark::State& state) {
 
     size_t bytes = 0;
     for ([[maybe_unused]] auto _ : state) {
-        std::string text = tt::tt_metal::experimental::disaggregation::export_to_protobuf_text(table);
+        std::string text = tt::tt_metal::internal::disaggregation::export_to_protobuf_text(table);
         bytes = text.size();
         benchmark::DoNotOptimize(text);
     }
@@ -121,10 +121,10 @@ void BM_ImportProtobufText(benchmark::State& state) {
         static_cast<uint32_t>(state.range(1)),
         static_cast<uint32_t>(state.range(2)));
 
-    std::string text = tt::tt_metal::experimental::disaggregation::export_to_protobuf_text(table);
+    std::string text = tt::tt_metal::internal::disaggregation::export_to_protobuf_text(table);
 
     for ([[maybe_unused]] auto _ : state) {
-        auto restored = tt::tt_metal::experimental::disaggregation::import_from_protobuf_text(text);
+        auto restored = tt::tt_metal::internal::disaggregation::import_from_protobuf_text(text);
         benchmark::DoNotOptimize(restored.total_entries());
     }
 

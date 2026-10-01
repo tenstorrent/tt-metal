@@ -8,17 +8,20 @@
 
 namespace ttml::metal::ops::profiler_no_op::device {
 
-struct operation_attributes_t {
+struct ProfilerNoOpParams {
     std::string identifier = "profiler_no_op";
 };
 
-struct tensor_args_t {
+struct ProfilerNoOpInputs {
     const ttnn::Tensor& input;
 
     std::optional<ttnn::Tensor> preallocated_output;
 };
 
+using operation_attributes_t = ProfilerNoOpParams;
+using tensor_args_t = ProfilerNoOpInputs;
+
 using tensor_return_value_t = ttnn::Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttml::metal::ops::profiler_no_op::device

@@ -41,10 +41,16 @@ public:
     bool dispatch_s_enabled() const;
     bool distributed_dispatcher() const;
     NOC go_signal_noc() const;
+    // Quasar FDS query. When enabled, workers receive the go signal and signal completion over FDS
+    // instead of over the NOC.
+    bool fds_signalling_enabled() const;
     // General Dispatch related queries - configs and core placement
     const std::vector<CoreCoord>& get_logical_dispatch_cores(uint32_t device_id) const;
     const std::vector<CoreCoord>& get_logical_dispatch_cores_on_user_chips() const;
     tt_cxy_pair get_dispatch_core(uint8_t cq_id) const;
+
+    // How command queues share the dispatch core
+    const CommandQueueDispatchLayout& cq_dispatch_layout() const;
 
 private:
     void reset(DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
@@ -53,7 +59,10 @@ private:
     dispatch_core_manager& core_manager_;
     bool dispatch_s_enabled_ = false;
     bool distributed_dispatcher_ = false;
+    bool fds_signalling_enabled_ = false;
     NOC go_signal_noc_ = NOC::NOC_0;
+    CommandQueueDispatchLayout cq_dispatch_layout_;
+    CoreType resolved_dispatch_core_type_ = CoreType::WORKER;
     uint8_t num_hw_cqs_ = 0;
     DispatchCoreConfig dispatch_core_config_;  // The config this object was initialized with, need to store it so we
                                                // know when to reset if it changes.

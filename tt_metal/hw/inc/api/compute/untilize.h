@@ -17,6 +17,9 @@ namespace ckernel {
 
 // clang-format off
 /**
+ * @deprecated The unpack-based untilize op is deprecated in favor of `pack_untilize`, which is significantly
+ * faster (up to ~10x) and in line with our programming model. This API is scheduled for removal; see tt-metal#22904.
+ *
  * Initializes the hardware and internal state for the untilize operation. This function should be called before
  * performing any untilize operations in the compute kernel. The circular buffer (CB) ID provided must correspond
  * to the buffer containing the input data to be untilized. If the data format or properties of the input operand
@@ -30,9 +33,12 @@ namespace ckernel {
  * | Function   | icb  | The identifier of the circular buffer (CB) for input data | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+[[deprecated(
+    "unpack-based untilize is deprecated; use pack_untilize instead. Scheduled for removal, see tt-metal#22904.")]]
 ALWI void untilize_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb, call_line);
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
     UNPACK((llk_unpack_untilize_init(icb)));
 }
 
@@ -56,9 +62,14 @@ ALWI void untilize_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
  * | Function   | icb          | The identifier of the circular buffer (CB) for input | uint32_t | 0 to 31                   | True     |
  * | Function   | full_ct_dim  | Width of a full input in tiles                       | uint32_t | Divisible by block_ct_dim | True     |
  * | Function   | ocb          | The identifier of the circular buffer (CB) for output| uint32_t | 0 to 31                   | True     |
+ *
+ * @deprecated The unpack-based untilize op is deprecated in favor of `pack_untilize`. Scheduled for removal,
+ * see tt-metal#22904.
  */
 // clang-format on
-template <uint32_t block_ct_dim = 1>
+template <uint32_t block_ct_dim = 1, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+[[deprecated(
+    "unpack-based untilize is deprecated; use pack_untilize instead. Scheduled for removal, see tt-metal#22904.")]]
 ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
     UNPACK((llk_unpack_untilize(icb, full_ct_dim)));
 
@@ -68,20 +79,20 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
         // Datacopy
         for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
             MATH(
-                (llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(reg_id, icb)));
+                (llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(reg_id, icb)));
         }
 
-        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
 
         PACK((llk_packer_wait_for_math_done()));
 
         // Datacopy
         for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
-            PACK((llk_pack<DST_ACCUM_MODE, false, false>(reg_id, ocb)));
+            PACK((llk_pack<is_fp32_dest_acc_en, false, PackMode::Default>(reg_id, ocb)));
         }
 
         // Release dest
-        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+        PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
     }
 }
 
@@ -91,8 +102,8 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
  * untilize_block operation is finished. The circular buffer (CB) ID provided must correspond to the buffer that was
  * used for the untilize operation and it's initialization.
  *
- * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
- * as a part of tt-metal#22904.
+ * @deprecated The unpack-based untilize op is not in line with our programming model and is deprecated in favor
+ * of `pack_untilize`. Scheduled for removal, see tt-metal#22904.
  *
  * Return value: None
  *
@@ -101,6 +112,8 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
  * | Function   | icb  | The identifier of the circular buffer (CB) for input data | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
+[[deprecated(
+    "unpack-based untilize is deprecated; use pack_untilize instead. Scheduled for removal, see tt-metal#22904.")]]
 ALWI void untilize_uninit(uint32_t icb) {
 #ifdef ARCH_BLACKHOLE
     UNPACK((llk_unpack_untilize_uninit(icb)));

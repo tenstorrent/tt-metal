@@ -19,14 +19,14 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-// Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_cb_size
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -39,7 +39,7 @@ namespace basic_tests::circular_buffer {
 
 bool test_cb_config_written_to_core(
     distributed::MeshWorkload& workload,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& /*cr_set*/,
     const std::map<uint8_t, std::vector<uint32_t>>& cb_config_per_buffer_index) {
     bool pass = true;
@@ -47,7 +47,6 @@ bool test_cb_config_written_to_core(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     vector<uint32_t> cb_config_vector;
@@ -58,11 +57,11 @@ bool test_cb_config_written_to_core(
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
                     uint32_t cb_config_buffer_size =
-                        program.impl().get_cb_size(device, core_coord, tt::CoreType::WORKER);
+                        workload.get_cb_size(mesh_device, core_coord, tt::CoreType::WORKER);
 
-                    auto sem_base_addr = program.impl().get_sem_base_addr(device, core_coord, tt::CoreType::WORKER);
-                    tt::tt_metal::detail::ReadFromDeviceL1(
-                        device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
+                    auto sem_base_addr = workload.get_sem_base_addr(mesh_device, core_coord, tt::CoreType::WORKER);
+                    slow_dispatch::ReadFromL1(
+                        *mesh_device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
 
                     for (const auto& [buffer_index, golden_cb_config] : cb_config_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
@@ -119,16 +118,16 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
 
     CreateCircularBuffer(program_, cr_set, actual_config);
 
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        distributed::EnqueueMeshWorkload(this->devices_.at(id)->mesh_command_queue(), workload, false);
-        EXPECT_TRUE(test_cb_config_written_to_core(workload, this->devices_.at(id), cr_set, golden_cb_config));
+    for (auto& device : this->devices_) {
+        distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
+        EXPECT_TRUE(test_cb_config_written_to_core(workload, device, cr_set, golden_cb_config));
     }
 }
 
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
     CBConfig cb_config;
 
-    EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{max_cbs_, cb_config.data_format}}));
+    EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{max_dfbs_, cb_config.data_format}}));
 }
 
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
@@ -137,6 +136,33 @@ TEST_F(MeshDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
 
     EXPECT_ANY_THROW(
         CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}}).set_page_size(1, cb_config.page_size));
+}
+
+// Verifies that the DataType-based CircularBufferConfig constructor produces a config with identical state to the
+// tt::DataFormat-based constructor when the spec entries map to each other via datatype_to_dataformat_converter.
+// CircularBufferConfig::operator== covers total_size, globally_allocated_address, data_formats, page_sizes, tiles,
+// and shadow_global_buffer.
+TEST_F(MeshDeviceFixture, TestCircularBufferConfigConstructorWithDataTypeMatchesDataFormat) {
+    CBConfig cb_config;
+
+    const std::map<uint8_t, DataType> data_type_spec = {
+        {0, DataType::BFLOAT16},
+        {2, DataType::FLOAT32},
+        {16, DataType::UINT32},
+    };
+
+    std::map<uint8_t, tt::DataFormat> data_format_spec;
+    for (const auto& [idx, dtype] : data_type_spec) {
+        data_format_spec[idx] = datatype_to_dataformat_converter(dtype);
+    }
+
+    CircularBufferConfig config_via_data_format(cb_config.page_size, data_format_spec);
+    CircularBufferConfig config_via_data_type(cb_config.page_size, data_type_spec);
+
+    EXPECT_EQ(config_via_data_format, config_via_data_type);
+    EXPECT_EQ(config_via_data_format.total_size(), cb_config.page_size);
+    EXPECT_EQ(config_via_data_type.total_size(), cb_config.page_size);
+    EXPECT_EQ(config_via_data_format.data_formats(), config_via_data_type.data_formats());
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
@@ -177,8 +203,8 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferWithTooManyPages) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto& cq = devices_.at(id)->mesh_command_queue();
+    for (auto& device : this->devices_) {
+        auto& cq = device->mesh_command_queue();
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -186,7 +212,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        auto grid_size = devices_.at(id)->compute_with_storage_grid_size();
+        auto grid_size = device->compute_with_storage_grid_size();
         // Extend one column beyond the compute grid into dispatch core territory
         CoreRange cr({0, 0}, {grid_size.x, grid_size.y - 1});
         CoreRangeSet cr_set({cr});

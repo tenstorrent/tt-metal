@@ -12,12 +12,11 @@
 namespace tt::test_utils {
 
 //! Generic Library of templated stimulus generation + packing/unpacking functions.
-//! Custom type is supported as long as the custom type supports the following custom functions
-//! static SIZEOF - indicates byte size of custom type
-//! to_float() - get float value from custom type
-//! to_packed() - get packed (into an integral type that is of the bitwidth specified by SIZEOF)
-//! Constructor(float in) - constructor with a float as the initializer
-//! Constructor(uint32_t in) - constructor with a uint32_t as the initializer -- only lower bits needed
+//! Custom ValueType is supported as long as it is trivially copyable, has
+//! `Constructor(float)` (used by the random-fill path), and `operator float()`
+//! (used by min/max range conversion). The byte-shuffling layer (pack_vector /
+//! unpack_vector in packing.hpp) uses std::bit_cast through the matching
+//! unsigned integer, so no `to_packed`/`SIZEOF` boilerplate is needed.
 
 // Setup a vector as follows:
 // For the following offsets, corresponding values below

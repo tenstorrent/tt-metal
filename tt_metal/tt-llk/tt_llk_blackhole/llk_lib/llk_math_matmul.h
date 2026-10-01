@@ -19,6 +19,21 @@
 
 using namespace ckernel;
 
+/**
+ * @brief Program the matmul address-mod slots for the given tile shapes, transpose, and fidelity.
+ *
+ * Sets up the SrcA/SrcB/dest increments and the fidelity-phase reset mods (ADDR_MOD_5, plus ADDR_MOD_6 when
+ * throttling). The increment pattern branches on the in0/in1 face geometry (16x32, 32x16, full 32x32) and transpose.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam THROTTLE_LEVEL: Non-zero adds the extra fidelity-clear address mod used by the throttled MOP.
+ * @param transpose: True to transpose in1 faces during the multiply.
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of faces.
+ */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
 inline void matmul_configure_addrmod(
     const bool transpose,
@@ -143,16 +158,18 @@ inline void matmul_configure_addrmod(
             if (transpose)
             {
                 addr_mod_t {
-                    .srca = {.incr = 32, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 16, .clr = 0, .cr = 0},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 32, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 0, .clr = 0, .cr = 0},
+                    .dest = {.incr = 16, .clr = 0, .cr = 0},
                 }
                     .set(ADDR_MOD_2);
             }
             else
             {
                 addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 16, .clr = 0, .cr = 0},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 0, .clr = 0, .cr = 0},
+                    .dest = {.incr = 16, .clr = 0, .cr = 0},
                 }
                     .set(ADDR_MOD_2);
             }
@@ -199,15 +216,15 @@ inline void matmul_configure_addrmod(
                     .srca = {.incr = 16, .clr = 0, .cr = 1}, // srca=16
                     .srcb = {.incr = 16, .clr = 0, .cr = 0},
                     .dest = {.incr = 0, .clr = 1, .cr = 0},
-                    // .bias = {.incr = 1},
                 }
                     .set(ADDR_MOD_4);
             }
             else
             {
                 addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 16, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 1, .cr = 0},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 16, .clr = 0, .cr = 0},
+                    .dest = {.incr = 0, .clr = 1, .cr = 0},
                 }
                     .set(ADDR_MOD_4);
             }
@@ -220,15 +237,15 @@ inline void matmul_configure_addrmod(
                     .srca = {.incr = 16, .clr = 0, .cr = 1}, // srca=16
                     .srcb = {.incr = 16, .clr = 0, .cr = 1},
                     .dest = {.incr = 0, .clr = 0, .cr = 1},
-                    // .bias = {.incr = 1},
                 }
                     .set(ADDR_MOD_4);
             }
             else
             {
                 addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 16, .clr = 0, .cr = 1}, .dest = {.incr = 0, .clr = 0, .cr = 1},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 16, .clr = 0, .cr = 1},
+                    .dest = {.incr = 0, .clr = 0, .cr = 1},
                 }
                     .set(ADDR_MOD_4);
             }
@@ -237,16 +254,18 @@ inline void matmul_configure_addrmod(
     else if (is_in0_32x16)
     {
         addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 1}, .srcb = {.incr = 16, .clr = 0, .cr = 1}, .dest = {.incr = 8, .clr = 0, .cr = 0},
-            // .bias = {.incr = 1},
+            .srca = {.incr = 0, .clr = 0, .cr = 1},
+            .srcb = {.incr = 16, .clr = 0, .cr = 1},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_4);
     }
     else if (is_in1_32x16)
     {
         addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 1}, .srcb = {.incr = 8, .clr = 0, .cr = 0}, .dest = {.incr = 16, .clr = 0, .cr = 1},
-            // .bias = {.incr = 1},
+            .srca = {.incr = 0, .clr = 0, .cr = 1},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = 16, .clr = 0, .cr = 1},
         }
             .set(ADDR_MOD_4);
     }
@@ -258,7 +277,6 @@ inline void matmul_configure_addrmod(
                 .srca = {.incr = 16, .clr = 0, .cr = 1},
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
-                // .bias = {.incr = 1},
             }
                 .set(ADDR_MOD_4);
         }
@@ -269,13 +287,27 @@ inline void matmul_configure_addrmod(
                 //.srca = {.incr = srca_set, .clr = 0, .cr = 1},
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
-                // .bias = {.incr = 1},
             }
                 .set(ADDR_MOD_4);
         }
     }
 }
 
+/**
+ * @brief Build the matmul MOP: records the per-tile MVMUL sequence into the replay buffer and wraps it in a ckernel_template.
+ *
+ * The recorded MVMUL order depends on the in0/in1 face geometry; the inner loop count is the number of fidelity
+ * phases. For high fidelity the end op clears the reused source register (SrcA or SrcB).
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of faces.
+ */
 template <MathFidelity math_fidelity>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
@@ -415,6 +447,14 @@ inline void matmul_configure_mop(
     tmp.program();
 }
 
+/**
+ * @brief Emit one throttled MVMUL sequence for a full 32x32 tile, interleaving NOPs to cap matmul throughput.
+ *
+ * Each Level specialization (1..5) uses a different NOP-to-MVMUL ratio, yielding progressively lower throughput
+ * (Level 1 ~73% of max down to Level 5 ~33%).
+ *
+ * @tparam Level: Throttle level, values = <1/2/3/4/5>
+ */
 template <int Level>
 void run_throttled_sequence();
 
@@ -499,17 +539,22 @@ void run_throttled_sequence<5>()
     TTI_NOP;
 }
 
-/*
- * Programming of the MOP for the case we limit matmul compute throughput
- * Done by inserting NOP instructions between MVMUL instructions of matmul kernel
+/**
+ * @brief Build the throttled matmul MOP, inserting NOPs between MVMULs to cap compute throughput.
  *
- * Valid range of THROTTLE_LEVEL is {1,2,3,4,5}
- * Each value corresponds to level of throttling as:
- * Level 1: throttle to 73% of max
- * Level 2: throttle to 67% of max
- * Level 3: throttle to 50% of max
- * Level 4: throttle to 40% of max
- * Level 5: throttle to 33% of max
+ * Records a per-level @ref run_throttled_sequence into the replay buffer and wraps it in a ckernel_template.
+ * Each THROTTLE_LEVEL caps throughput at a fixed fraction of max: 1 -> 73%, 2 -> 67%, 3 -> 50%, 4 -> 40%, 5 -> 33%.
+ * Only supported for full 32x32 tiles (asserts on partial faces or smaller tiles).
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam THROTTLE_LEVEL: Throttle level, values = <1/2/3/4/5>
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of faces.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
 inline void matmul_configure_mop_throttled(
@@ -592,6 +637,28 @@ inline void matmul_configure_mop_throttled(
     tmp.program();
 }
 
+/**
+ * @brief Configure the math (FPU/matrix engine) thread for a matmul: programs address mods and the MVMUL MOP.
+ *
+ * Computes D = in0 * in1, where in0 is loaded to SrcB and in1 to SrcA. When THROTTLE_LEVEL > 0, builds the
+ * throttled MOP variant that inserts NOPs between MVMULs to cap matmul throughput.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; 0 disables throttling, valid throttled range is {1,2,3,4,5}.
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of faces.
+ * @param transpose: Non-zero to transpose in1 faces during the multiply.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
+ * @note @ref _llk_math_matmul_ runs the configured matmul with matching template args.
+ * @note Establishes the operand-driven DEFAULT Src zero-substitution state; @ref
+ *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
+ *       must be followed by this init (or a format-changing reconfig) before the matmul.
+ */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -618,16 +685,55 @@ inline void _llk_math_matmul_init_(
         matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // Matmul never sets the Src zero-substitution flag itself, so
+    // re-establish the operand-driven DEFAULT here. A preceding copy_init/datacopy op may have left the flag in
+    // PRESERVE. Relying on a reconfig_data_format to clear it is not enough: the metal wrapper
+    // llk_math_reconfig_data_format_srca(old, new) skips the LLK reconfig entirely when old == new format, so on a
+    // same-format reconfig the reset never runs. Without this line MVMUL would inherit a stale keep-denormals flag
+    // (denormal Src results differ). Mirrors what reduce/transpose/datacopy inits already do.
+    math::_configure_default_zero_flag_state_();
 }
 
+/**
+ * @brief Uninitialize/cleanup after matmul operations, restoring any modified state to defaults.
+ *
+ * @note Reverses @ref _llk_math_matmul_init_; currently a no-op since all state is transient.
+ */
 inline void _llk_math_matmul_uninit_()
 {
     // No state to restore - all states are transient or default
 }
 
+/**
+ * @brief Perform a matmul block, accumulating in0 * in1 into the destination register.
+ *
+ * Iterates over the output block reusing SrcA or SrcB (whichever dimension is larger) to minimize reloads,
+ * clearing the reused source register at the end of each reuse row.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; must match the value used at init.
+ * @param dst_index: Base tile index into the destination register for the output block.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @note Call @ref _llk_math_matmul_init_ with matching template args before this
+ *       function, and @ref _llk_math_matmul_uninit_ after it to restore modified state.
+ * @note On the unpack thread, @ref _llk_unpack_AB_matmul_ must feed the operand tiles into SrcA/SrcB.
+ */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
+    // Zero-flag leak guard. MVMUL reads ALU_ACC_CTRL_Zero_Flag_disabled_src, which for
+    // denormal Src operands changes the result (flush vs keep — measured on WH n150 / BH p150b). Matmul is
+    // a "runs-in-DEFAULT" op: it never sets the flag itself and relies on hw_configure / a format-changing
+    // reconfig having established the format-driven DEFAULT. If a prior copy_init/datacopy op left the flag in
+    // PRESERVE and no format-changing reconfig ran before this matmul, MVMUL silently
+    // keeps denormals. This assert catches exactly that leak (fires only under LLK asserts).
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
+        "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
+
     const bool reuse_a           = ct_dim >= rt_dim;
     const std::uint32_t t_dim    = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim  = reuse_a ? ct_dim : rt_dim; // reuse-dim

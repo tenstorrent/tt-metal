@@ -24,6 +24,7 @@ struct CombineParams {
     CoreRangeSet worker_core_range_set;
     bool init_zeros;
     bool use_l1_small_for_semaphores = false;
+    bool use_fp8_combine = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -36,7 +37,8 @@ struct CombineParams {
         "output_mem_config",
         "worker_core_range_set",
         "init_zeros",
-        "use_l1_small_for_semaphores");
+        "use_l1_small_for_semaphores",
+        "use_fp8_combine");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -50,7 +52,8 @@ struct CombineParams {
             output_mem_config,
             worker_core_range_set,
             init_zeros,
-            use_l1_small_for_semaphores);
+            use_l1_small_for_semaphores,
+            use_fp8_combine);
     };
 };
 

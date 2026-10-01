@@ -32,7 +32,7 @@ void kernel_main() {
                                      // other kernels cannot consume the tiles fast enough.
                                      // Deciding how large the buffer should be is a tradeoff.
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-        noc_async_read_tile(i, in0, cb_in0_addr);  // read the tile into the circular buffer
+        noc_async_read_page(i, in0, cb_in0_addr);  // read the tile into the circular buffer
                                                    // We can overlap async reads and writes
                                                    // to reduce the data movement overhead.
 

@@ -3,20 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "experimental/kernel_args.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
-    constexpr uint32_t l1_local_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t num_transactions = get_compile_time_arg_val(1);
-    constexpr uint32_t transaction_size = get_compile_time_arg_val(2);
-    constexpr uint32_t test_id = get_compile_time_arg_val(3);
-    constexpr uint32_t packed_dest_core_coordinates = get_compile_time_arg_val(4);
+    constexpr uint32_t l1_local_addr = get_arg(args::l1_addr);
+    constexpr uint32_t num_transactions = get_arg(args::num_tx);
+    constexpr uint32_t transaction_size = get_arg(args::tx_size);
+    constexpr uint32_t test_id = get_arg(args::test_id);
+    constexpr uint32_t packed_dest_core_coordinates = get_arg(args::dest_coords);
 
     uint32_t dst_x_coord = packed_dest_core_coordinates >> 16;
     uint32_t dst_y_coord = packed_dest_core_coordinates & 0xFFFF;
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
 
     noc.set_async_read_state(
         unicast_endpoint, transaction_size, {.noc_x = dst_x_coord, .noc_y = dst_y_coord, .addr = l1_local_addr});

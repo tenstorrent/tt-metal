@@ -6,8 +6,10 @@
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <flatbuffers/flatbuffers.h>
 
 #include "ttnn/tensor/types.hpp"
@@ -55,7 +57,7 @@ tt::tt_metal::distributed::MeshShape from_flatbuffer(const flatbuffer::MeshShape
 
 tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
     uint64_t size_bytes,
-    const TensorSpec& spec,
+    const tt::tt_metal::TensorSpec& spec,
     ttsl::Span<std::byte> data,
     const tt::tt_metal::MemoryPin& memory_pin) {
     switch (spec.data_type()) {
@@ -69,6 +71,12 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
             ttsl::Span<int32_t> typed_span(reinterpret_cast<int32_t*>(data.data()), size_bytes / sizeof(int32_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
+        case tt::tt_metal::DataType::INT8: {
+            ttsl::Span<int8_t> typed_span(reinterpret_cast<int8_t*>(data.data()), size_bytes / sizeof(int8_t));
+            return tt::tt_metal::HostBuffer(typed_span, memory_pin);
+        }
+        case tt::tt_metal::DataType::FP8_E4M3:
+            TT_THROW("Flatbuffer load for DataType::FP8_E4M3 is not supported during tensor deserialization.");
         case tt::tt_metal::DataType::UINT8: {
             ttsl::Span<uint8_t> typed_span(reinterpret_cast<uint8_t*>(data.data()), size_bytes / sizeof(uint8_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
@@ -123,10 +131,10 @@ flatbuffers::Offset<ttnn::flatbuffer::TensorTopology> to_flatbuffer(
 }
 
 tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopology* fb_topology) {
-    TT_FATAL(fb_topology != nullptr, "TensorTopology flatbuffer pointer must not be null");
+    TT_FATAL(fb_topology != nullptr, "tt::tt_metal::TensorTopology flatbuffer pointer must not be null");
 
     const auto* fb_dist_shape = fb_topology->distribution_shape();
-    TT_FATAL(fb_dist_shape != nullptr, "distribution_shape is required in TensorTopology");
+    TT_FATAL(fb_dist_shape != nullptr, "distribution_shape is required in tt::tt_metal::TensorTopology");
     auto dist_shape = from_flatbuffer(fb_dist_shape);
 
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements;
@@ -159,7 +167,7 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
 }  // namespace
 
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
-    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<tt::tt_metal::HostBuffer>& buffers) {
+    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<SerializedTensorBuffer>& buffers) {
     TT_FATAL(buffers.empty(), "Buffers vector must be empty");
     TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
 
@@ -181,6 +189,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     std::vector<uint64_t> dedup_key_to_offset(unique_keys, std::numeric_limits<uint64_t>::max());
 
     std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
+    shards_vector.reserve(mesh_shape.mesh_size());
     // Used to deduplicate buffer addresses for replicated tensor data.
     std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
 
@@ -201,8 +210,6 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
             const auto* buffer_address = buffer->view_bytes().data();
             const std::size_t buffer_size = buffer->view_bytes().size();
 
-            uint64_t shard_buffer_offset = next_buffer_offset;
-
             size_t key = 0;
             for (size_t dim = 0; dim < placements.size(); ++dim) {
                 if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
@@ -210,16 +217,22 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
                 }
             }
 
-            if (dedup_key_to_offset[key] != std::numeric_limits<uint64_t>::max()) {
-                // Shards whose coordinates differ only along replicated dimensions are identical.
-                shard_buffer_offset = dedup_key_to_offset[key];
-            } else if (auto it = buffer_to_offset.find(buffer_address); it != buffer_to_offset.end()) {
-                // If two shards share the same buffer, they are identical.
-                shard_buffer_offset = it->second;
-            } else {
-                next_buffer_offset += buffer_size;
-                buffers.push_back(*buffer);
-            }
+            const uint64_t shard_buffer_offset = [&]() -> uint64_t {
+                if (dedup_key_to_offset[key] != std::numeric_limits<uint64_t>::max()) {
+                    // Shards whose coordinates differ only along replicated dimensions are identical.
+                    return dedup_key_to_offset[key];
+                }
+                if (auto it = buffer_to_offset.find(buffer_address); it != buffer_to_offset.end()) {
+                    // If two shards share the same buffer, they are identical.
+                    return it->second;
+                }
+                // Start every distinct buffer on `kTensorDataAlignment` so a reader can DMA out of the mapped
+                // file directly. The padded position is what gets recorded, so readers never see the gap.
+                const uint64_t aligned_offset = tt::align(next_buffer_offset, kTensorDataAlignment);
+                next_buffer_offset = aligned_offset + buffer_size;
+                buffers.push_back(SerializedTensorBuffer{.buffer = *buffer, .offset = aligned_offset});
+                return aligned_offset;
+            }();
 
             buffer_to_offset.emplace(buffer_address, shard_buffer_offset);
             dedup_key_to_offset[key] = shard_buffer_offset;
@@ -258,7 +271,12 @@ Tensor from_flatbuffer(
     TT_FATAL(mesh_shape != nullptr, "Mesh shape is required for tensor");
     const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
 
-    auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(ttnn_mesh_shape);
+    // File shards are host-local. Loading them must not initialize MetalContext or acquire device locks.
+    auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(
+        ttnn_mesh_shape,
+        ttnn_mesh_shape,
+        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(ttnn_mesh_shape.dims()),
+        /*context=*/nullptr);
     for (size_t i = 0; i < fb_tensor->shards()->size(); ++i) {
         const auto* shard = fb_tensor->shards()->Get(i);
 
@@ -284,7 +302,8 @@ Tensor from_flatbuffer(
         fb_topology != nullptr ? from_flatbuffer(fb_topology)
                                : tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(ttnn_mesh_shape);
 
-    return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), spec, std::move(topology)));
+    return Tensor(
+        tt::tt_metal::host_tensor_from_buffer_with_topology(std::move(distributed_buffer), spec, std::move(topology)));
 }
 
 }  // namespace ttnn

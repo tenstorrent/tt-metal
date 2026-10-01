@@ -6,6 +6,7 @@
 // no mask/sink/chunking). Reuses the production fused online-softmax routine (sdpa_standard) from the
 // transformer SDPA compute_common.hpp so the attention math matches production speed by construction;
 // this op owns only the dataflow (one core per Q head; the single KV head is read per head).
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
 void kernel_main() {
@@ -43,12 +44,10 @@ void kernel_main() {
     constexpr uint32_t qk_subblock_h = 1;
     constexpr uint32_t qk_in0_num_subblocks = 1;
     constexpr uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_subblock_w;
-    constexpr uint32_t qk_num_blocks = DHt / qk_in0_block_w;
     constexpr uint32_t out_in0_block_w = Sk_chunk_t;
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_in0_num_subblocks = 1;
     constexpr uint32_t out_in1_num_subblocks = vDHt / out_subblock_w;
-    constexpr uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -56,7 +55,9 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    mm_init(cb_q_in, cb_k_in, cb_out);
+    // Same init as the production sdpa.cpp compute kernel.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_out);
+    matmul_init(cb_q_in, cb_k_in);
     LightweightMaskContext lw_mask;  // unused (non-causal; provided-mask path uses add_block_inplace, not lw)
 
     sdpa_standard<
@@ -81,13 +82,11 @@ void kernel_main() {
         qk_subblock_h,
         qk_in0_num_subblocks,
         qk_in1_num_subblocks,
-        qk_num_blocks,
         out_in0_block_w,
         out_subblock_w,
         out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        out_num_blocks,
         0,  // iter_q_start
         1,  // iter_q_end (one q chunk for this head)
         1,  // q_num_chunks

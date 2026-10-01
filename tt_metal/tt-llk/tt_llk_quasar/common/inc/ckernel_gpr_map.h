@@ -34,6 +34,7 @@ struct p_gpr_unpack
 struct p_gpr_math
 {
     constexpr static std::uint32_t TEMP0             = 4;  // dest rwc base (1st set)
+    constexpr static std::uint32_t TILE_SHAPE_IDX    = 5;  // used to pass tile-shape shift index calculation
     constexpr static std::uint32_t DEST_REGW_OFFSET  = 50; // dest rwc base (1st set)
     constexpr static std::uint32_t DEST_REGW_INCR    = 51; // dest rwc incr (1st set)
     constexpr static std::uint32_t DEST_REGW_OFFSET2 = 52; // dest rwc base (2nd set)

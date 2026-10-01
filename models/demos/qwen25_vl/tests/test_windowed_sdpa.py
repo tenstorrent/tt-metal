@@ -226,11 +226,11 @@ def test_windowed_sdpa_basic(
         cu_window_seqlens_tt = ttnn.from_torch(
             pt_cu_window_seqlens, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
         )
-        output_tt = ttnn.transformer.windowed_scaled_dot_product_attention(
+        output_tt = ttnn.transformer.scaled_dot_product_attention(
             q_tt,
             k_tt,
             v_tt,
-            cu_window_seqlens_tt,
+            is_causal=False,
             scale=0.1,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -244,6 +244,7 @@ def test_windowed_sdpa_basic(
                 q_chunk_size=qk_chunk_size,
                 k_chunk_size=qk_chunk_size,
             ),
+            cu_window_seqlens=cu_window_seqlens_tt,
         )
 
         # Convert back to torch for verification
@@ -266,9 +267,32 @@ def test_windowed_sdpa_basic(
     # compare_outputs(output, output_standard, seq_start=16, seq_end=32, head_start=0, head_end=16)
     # compare_outputs(output, output_standard, seq_start=16, seq_end=32, head_start=16, head_end=32)
 
-    # Assert that outputs are close
-    max_diff = torch.max(torch.abs(output - output_standard)).item()
-    assert max_diff < 1e-2, f"Max difference {max_diff} exceeds tolerance"
+    # Assert that outputs are close. Rows outside [cu[0], cu[-1]) belong to no window: they
+    # attend to an empty set, so their output is unspecified (see windowed_loop_geometry.hpp)
+    # and only bitwise-matched the masked reference while the windowed path still visited every
+    # K chunk. Compare only the covered rows.
+    covered_lo, covered_hi = int(pt_cu_window_seqlens[0].item()), int(pt_cu_window_seqlens[-1].item())
+    assert covered_lo < covered_hi <= output.shape[-2], f"No covered rows in [{covered_lo}, {covered_hi})"
+    covered = output[:, :, covered_lo:covered_hi, :]
+    covered_standard = output_standard[:, :, covered_lo:covered_hi, :]
+    max_diff = torch.max(torch.abs(covered - covered_standard)).item()
+    # The two runs are different device schedules of the same kernel: the masked reference visits
+    # every K chunk with a bfp4 mask, the windowed run narrows the K range and stamps its own mask,
+    # so their flash-attention rescaling sequences differ. Each output element is a sum of
+    # probability-weighted V rows, so its absolute error scales with the magnitude of the largest
+    # terms (about max |output|), not with the element's own magnitude: a 0.3 output can carry the
+    # rounding of 1.5-sized terms. Allow two bf16 ulps (one per schedule) of the largest reference
+    # value, floored at the old 1e-2 gate. With the accurate exponential (#57180) the plain 1e-2
+    # bound is below that noise for outputs above 1.
+    # A non-finite reference would make ref_scale and the tolerance infinite and let inf <= inf pass, so
+    # reject non-finite outputs first.
+    assert torch.isfinite(covered_standard).all(), "non-finite values in the masked reference output"
+    assert torch.isfinite(covered).all(), "non-finite values in the windowed output"
+    ref_scale = covered_standard.abs().max().item()
+    tolerance = max(1e-2, 2 * 2**-7 * ref_scale)
+    assert (
+        max_diff <= tolerance
+    ), f"Max difference {max_diff} exceeds {tolerance:.4g} (two bf16 ulps of the largest reference value {ref_scale:.4g})"
 
     # Assert shapes match
     assert output.shape == output_standard.shape, f"Shape mismatch: {output.shape} vs {output_standard.shape}"

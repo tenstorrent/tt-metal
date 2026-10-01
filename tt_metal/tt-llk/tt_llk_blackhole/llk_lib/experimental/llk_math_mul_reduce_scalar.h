@@ -12,7 +12,7 @@
 #include "cmath_common.h"
 #include "llk_defs.h"
 #include "llk_math_common.h"
-#include "llk_operands.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -89,6 +89,8 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         }
 
+        math::srca_bank_wait();
+
         switch (idst)
         {
             case 0:
@@ -121,6 +123,11 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
     }
     else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
     {
+        math::srcb_bank_wait();
+        // dst may have been written by the SFPU just before this move (e.g. a fill). The MATH bit in the
+        // bank wait only tracks FPU writes, so also drain the SFPU before the FPU copies dst into SrcB.
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
 
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
@@ -186,6 +193,7 @@ inline void _llk_math_mul_reduce_scalar_init_()
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -196,16 +204,19 @@ inline void _llk_math_mul_reduce_scalar_init_()
  *
  * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
  * @param dst_index Destination tile index to accumulate into (0-7)
- * @param narrow_tile If true, process only 2 row tiles instead of full tile
- * @param num_faces Number of faces (1, 2, or 4)
+ * @param tensor_shape Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)
  */
 template <MathFidelity math_fidelity>
-inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, bool narrow_tile = false, const std::uint32_t num_faces = 4)
+inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
-    const std::uint32_t num_row_tiles = narrow_tile ? 2 : ((num_faces > 1) ? num_faces / 2 : 1);
+    // A 32x16 narrow tile has fewer face-columns than face-rows; mirror generic llk_math_reduce.h.
+    const bool is_narrow_tile         = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
+    const std::uint32_t num_row_tiles = tensor_shape.num_faces_r_dim;
 
+    // dst[dst_index] may have just been zeroed through the SFPU; GAPOOL accumulates into it, so drain first.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
@@ -213,7 +224,7 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, bool nar
     {
         execute_high_fidelity_gapool<math_fidelity>();
 
-        if ((!narrow_tile) && (num_faces > 1))
+        if ((!is_narrow_tile) && (tensor_shape.total_num_faces() > 1))
         {
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
@@ -245,6 +256,8 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, bool nar
 template <MathFidelity math_fidelity>
 inline void _llk_math_mul_reduce_scalar_()
 {
+    math::srcb_bank_wait();
+
     // Copy row 0 from dest to srcB (rows 16-31 as scratch) and transpose
     TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
     TTI_GATESRCRST(0b1, 0b1);

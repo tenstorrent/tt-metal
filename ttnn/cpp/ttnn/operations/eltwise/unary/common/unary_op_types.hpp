@@ -21,6 +21,7 @@ enum class UnaryOpType {
     EXP,
     RECIP,
     GELU,
+    GELU_TANH,
     RELU,
     SQRT,
     SIGMOID,
@@ -122,6 +123,7 @@ enum class UnaryOpType {
     HARDSIGMOID,
     HARDSWISH,
     WHERE_TSS,
+    MAC_TSS,
     SOFTSIGN,
     CELU,
     CLAMP_TSS,
@@ -134,6 +136,7 @@ enum class UnaryOpType {
     LGAMMA,
     DIGAMMA,
     POLYGAMMA,
+    SOFTCAP,
 };
 
 enum class VecMode {

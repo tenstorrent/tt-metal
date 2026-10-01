@@ -28,14 +28,14 @@ WorkerMemoryLayout allocate_worker_memory();
 // FR-2: Launch worker kernel
 std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
-    const CoreCoord& logical_core,
+    const tt::tt_metal::CoreCoord& logical_core,
     const FabricNodeId& dest_fabric_node,
     const WorkerMemoryLayout& mem_layout);
 
 // FR-8: Signal teardown to worker kernel
 void signal_worker_teardown(
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
-    const CoreCoord& logical_core,
+    const tt::tt_metal::CoreCoord& logical_core,
     uint32_t teardown_signal_address);
 
 

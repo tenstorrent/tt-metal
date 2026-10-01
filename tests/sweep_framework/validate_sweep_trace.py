@@ -58,6 +58,11 @@ KWARG_ALIASES = {
     "ttnn.linear": {"input_tensor_b": 1},
     "ttnn.experimental.paged_fill_cache": {"page_table": 2},
     "ttnn.experimental.paged_update_cache": {"input_tensor": 0, "input_tensor_b": 1},
+    # Model traces sometimes record the gather input as the kwarg ``input_tensor``
+    # and the gather dim as the kwarg ``dim``; the sweep calls all_gather_async
+    # positionally so the tracer captures them as ``arg0``/``arg1``. Canonicalize
+    # both to the positional form before comparing.
+    "ttnn.experimental.all_gather_async": {"input_tensor": 0, "dim": 1},
 }
 
 
@@ -291,9 +296,18 @@ def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
         for k in all_keys:
             child_path = f"{prefix}.{k}" if prefix else k
             if k not in master:
+                # Skip extra keys with None value — the tracer captures function
+                # defaults (dtype=None, memory_config=None) that the master trace
+                # never had. These are not real diffs.
+                # Also skip known sweep-framework output kwargs that the model
+                # trace never captures (e.g. the output memory_config passed by
+                # the sweep module to control placement).
+                if sweep[k] is None or k in ("memory_config", "core_grid", "dtype"):
+                    continue
                 diffs.append(Diff(child_path, "<missing>", sweep[k], "extra_key"))
             elif k not in sweep:
-                diffs.append(Diff(child_path, master[k], "<missing>", "extra_key"))
+                if master[k] is not None:
+                    diffs.append(Diff(child_path, master[k], "<missing>", "extra_key"))
             else:
                 diffs.extend(deep_diff(master[k], sweep[k], child_path))
     elif isinstance(master, list) and isinstance(sweep, list):
@@ -423,6 +437,12 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
                 )
                 continue
 
+            # Skip if this master config was already matched by a previous
+            # sweep trace (e.g. same config exercised by both model_traced
+            # and lead_models scopes).
+            if source_hash in matched_hashes:
+                continue
+
             # Direct match by hash — now compare arguments
             matched_hashes.add(source_hash)
             sweep_args = cfg.get("arguments", {})
@@ -455,15 +475,67 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
                         op_name=op_name,
                         master_config_id=master_cid,
                         sweep_config_id=sweep_cid,
-                        status="diff",
+                        status="diff" if diffs else "match",
                         diffs=diffs,
                         sweep_config_hash=sweep_config_hash,
                     )
                 )
 
+    # Build a lookup of matched configs' normalized arguments by op_name
+    # to detect argument-level duplicates that the tracer collapsed.
+    matched_norm_args: dict[str, set[str]] = {}  # op_name -> set of normalized arg JSON
+    for ch in matched_hashes:
+        if ch in master_index:
+            m_op, _, m_args = master_index[ch]
+            norm = json.dumps(normalize(canonicalize_op_args(m_op, m_args)), sort_keys=True)
+            matched_norm_args.setdefault(m_op, set()).add(norm)
+
+    # Also collect normalized args from ALL sweep traces (including incidental).
+    # When a model makes N calls to the same op with identical args, the master
+    # has N configs (each with a unique config_hash from the trace context) but
+    # the sweep produces only 1 unique trace.  If the sweep trace's
+    # sweep_source_hash doesn't match any master config_hash, the hash-level
+    # match above won't fire and the dedup above only catches masters whose
+    # normalized args match an already-hash-matched master.  By also comparing
+    # against sweep trace args directly, we recover these "exercised but
+    # hash-mismatched" configs.
+    sweep_norm_args: dict[str, set[str]] = {}  # op_name -> set of normalized arg JSON
+    for op_name, op_info in sweep_data.get("operations", {}).items():
+        for cfg in op_info.get("configurations", []):
+            sweep_args = cfg.get("arguments", {})
+            norm = json.dumps(normalize(canonicalize_op_args(op_name, sweep_args)), sort_keys=True)
+            sweep_norm_args.setdefault(op_name, set()).add(norm)
+
     # Report master configs with no sweep execution
     for ch, (op_name, cid, _args) in master_index.items():
         if ch not in matched_hashes:
+            norm_args = json.dumps(normalize(canonicalize_op_args(op_name, _args)), sort_keys=True)
+            # Check if an identical config (same normalized args) was already matched
+            # via hash, or was exercised by any sweep trace with matching args.
+            if norm_args in matched_norm_args.get(op_name, set()):
+                matched_hashes.add(ch)
+                report.results.append(
+                    ConfigResult(
+                        config_hash=ch,
+                        op_name=op_name,
+                        master_config_id=cid,
+                        sweep_config_id=None,
+                        status="match",
+                    )
+                )
+                continue
+            if norm_args in sweep_norm_args.get(op_name, set()):
+                matched_hashes.add(ch)
+                report.results.append(
+                    ConfigResult(
+                        config_hash=ch,
+                        op_name=op_name,
+                        master_config_id=cid,
+                        sweep_config_id=None,
+                        status="match",
+                    )
+                )
+                continue
             report.results.append(
                 ConfigResult(
                     config_hash=ch,

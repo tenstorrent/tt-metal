@@ -49,7 +49,6 @@ public:
     HostBuffer& operator=(const HostBuffer& other);
     HostBuffer(HostBuffer&& other) noexcept;
     HostBuffer& operator=(HostBuffer&& other) noexcept;
-    void swap(HostBuffer& other) noexcept;
 
     ttsl::Span<std::byte> view_bytes() & noexcept;
     ttsl::Span<const std::byte> view_bytes() const& noexcept;
@@ -73,6 +72,9 @@ public:
 
 private:
     friend class experimental::HostBufferPinnedMemoryHelper;
+    void swap(HostBuffer& other) noexcept;
+    void register_pinned_memory_cache_release_callback();
+
     MemoryPin pin_;
     ttsl::Span<std::byte> view_;
     const std::type_info* type_info_ = nullptr;
@@ -84,6 +86,7 @@ HostBuffer::HostBuffer(const std::shared_ptr<std::vector<T>>& data) : type_info_
     const size_t size_bytes = data->size() * sizeof(T);
     view_ = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(data->data()), size_bytes);
     pin_ = MemoryPin(data);
+    register_pinned_memory_cache_release_callback();
 }
 
 template <typename T>
@@ -97,9 +100,10 @@ HostBuffer::HostBuffer(const std::vector<T>& data) :
 template <typename T>
 HostBuffer::HostBuffer(ttsl::Span<T> borrowed_data, MemoryPin pin) :
     pin_(std::move(pin)),
-    view_(
-        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(borrowed_data.data()), borrowed_data.size() * sizeof(T))),
-    type_info_(&typeid(T)) {}
+    view_(ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(borrowed_data.data()), borrowed_data.size() * sizeof(T))),
+    type_info_(&typeid(T)) {
+    register_pinned_memory_cache_release_callback();
+}
 
 template <typename T>
 ttsl::Span<T> HostBuffer::view_as() & {
@@ -116,7 +120,5 @@ ttsl::Span<const T> HostBuffer::view_as() const& {
 // Compares data buffers by their data.
 bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept;
 bool operator!=(const HostBuffer& buffer_a, const HostBuffer& buffer_b) noexcept;
-
-void swap(HostBuffer& lhs, HostBuffer& rhs) noexcept;
 
 }  // namespace tt::tt_metal

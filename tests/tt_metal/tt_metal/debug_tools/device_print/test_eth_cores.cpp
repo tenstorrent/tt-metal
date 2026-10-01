@@ -102,6 +102,7 @@ TEST_F(DevicePrintFixture, IdleEthTestPrint) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
+    this->RequestFreshDevicesAfterThisTest();
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device

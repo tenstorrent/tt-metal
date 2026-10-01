@@ -2,21 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded_metal2.cpp. Ops ported to Metal 2.0 bind the fork;
+// this file serves the consumers still on the legacy API. Until the last of them migrates and this file is retired,
+// changes here likely belong in the fork too.
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
-    constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
-    constexpr bool core_in_in0_receiver_mcast_grid = (bool)get_compile_time_arg_val(1);
+    constexpr bool core_has_output_block_work = static_cast<bool>(get_compile_time_arg_val(0));
+    constexpr bool core_in_in0_receiver_mcast_grid = static_cast<bool>(get_compile_time_arg_val(1));
 
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(3);
@@ -32,29 +37,31 @@ void kernel_main() {
     constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(12);
     constexpr uint32_t num_x = get_compile_time_arg_val(13);
     constexpr uint32_t num_y = get_compile_time_arg_val(14);
-    constexpr bool transpose_mcast = (bool)get_compile_time_arg_val(15);
+    constexpr bool transpose_mcast = static_cast<bool>(get_compile_time_arg_val(15));
     constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(16);
     constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(17);
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(18);
     constexpr uint32_t in0_block_h = get_compile_time_arg_val(19);
 
     constexpr uint32_t batch = get_compile_time_arg_val(20);
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(21);
+    constexpr bool fuse_op = static_cast<bool>(get_compile_time_arg_val(21));
 
     uint32_t rt_args_idx = 0;
-    const uint32_t sender_id = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_x)));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_y)));
+    const uint32_t sender_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    tt_l1_ptr uint32_t* in0_mcast_noc_x =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(increment_arg_idx(rt_args_idx, num_x))));
+    tt_l1_ptr uint32_t* in0_mcast_noc_y =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(increment_arg_idx(rt_args_idx, num_y))));
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t cb_id_in2 = get_named_compile_time_arg_val("cb_in0_sharded");  // Sharded cb
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t dfb_id_in2 = get_named_compile_time_arg_val("cb_in0_sharded");  // Sharded cb
 
-    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
+    constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
 
     constexpr uint32_t num_blocks_per_shard = shard_width_in_tiles / in0_block_w;
     // In case we need to send multiple blocks per shard, and shard height in tiles is greater than 1
@@ -65,20 +72,21 @@ void kernel_main() {
     constexpr uint32_t shard_read_width = in0_single_tile_size_bytes * in0_block_w;
     constexpr uint32_t in0_tensor_next_h_dim_block_stride = shard_read_stride * in0_block_h;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in2(cb_id_in2);
+    const Noc noc;
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in2(dfb_id_in2);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-    experimental::Semaphore<> sender_sem(get_compile_time_arg_val(9));
+    Semaphore<> sender_sem(get_compile_time_arg_val(9));
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(10));
+    Semaphore<> receiver_sem(get_compile_time_arg_val(10));
 
     constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
     uint32_t remote_sender_noc_x[num_remote_senders];
     uint32_t remote_sender_noc_y[num_remote_senders];
     if constexpr (transpose_mcast) {
-        uint32_t x = 0, y = 0;
+        uint32_t x = 0;
+        uint32_t y = 0;
         for (uint32_t i = 0; i < num_remote_senders; ++i) {
             remote_sender_noc_x[i] = in0_mcast_noc_x[x];
             remote_sender_noc_y[i] = in0_mcast_noc_y[y];
@@ -89,7 +97,8 @@ void kernel_main() {
             }
         }
     } else {
-        uint32_t x = 0, y = 0;
+        uint32_t x = 0;
+        uint32_t y = 0;
         for (uint32_t i = 0; i < num_remote_senders; ++i) {
             remote_sender_noc_x[i] = in0_mcast_noc_x[x];
             remote_sender_noc_y[i] = in0_mcast_noc_y[y];
@@ -102,9 +111,9 @@ void kernel_main() {
     }
     receiver_sem.set(VALID);
 
-    cb_in2.reserve_back(batch * in0_block_num_tiles);
+    dfb_in2.reserve_back(batch * in0_block_num_tiles);
 
-    uint32_t in0_tensor_shard_read_addr = cb_in2.get_read_ptr();
+    const uint32_t in0_tensor_shard_read_addr = dfb_in2.get_read_ptr();
     uint32_t in0_tensor_read_addr = 0;
 
     MatmulOpReceiver fused_op_receiver;
@@ -130,7 +139,7 @@ void kernel_main() {
                         block_id = fused_op_receiver.align_to_slice_and_sync(block, sender_id);
                     }
 
-                    cb_in0.reserve_back(in0_block_num_tiles);
+                    dfb_in0.reserve_back(in0_block_num_tiles);
 
                     // All cores in receiver grid need to participate in receiving regardless if they produce output
                     // work or not. Otherwise, data corruption since we mcast from and to the same CB (eg.
@@ -143,19 +152,19 @@ void kernel_main() {
 
                     if (block_id == sender_id) {
                         // Operand 0
-                        uint32_t in0_tensor_local_l1_write_addr = cb_in0.get_write_ptr();
+                        const uint32_t in0_tensor_local_l1_write_addr = dfb_in0.get_write_ptr();
 
                         if constexpr (extract_shard_sub_blocks) {
                             in0_tensor_read_addr = in0_tensor_local_l1_write_addr;
 
                             uint32_t l1_write_extract_shard_in0 = in0_tensor_local_l1_write_addr;
-                            experimental::UnicastEndpoint self_ep;
+                            const UnicastEndpoint self_ep;
                             uint32_t noc_shard_read_l1_addr = in0_tensor_current_inner_dim_block_start_addr;
 
                             for (uint32_t i = 0; i < out_block_h; i++) {
                                 noc.async_read(
                                     self_ep,
-                                    experimental::CoreLocalMem<uint32_t>(l1_write_extract_shard_in0),
+                                    CoreLocalMem<uint32_t>(l1_write_extract_shard_in0),
                                     shard_read_width,
                                     {.noc_x = my_x[0], .noc_y = my_y[0], .addr = noc_shard_read_l1_addr},
                                     {});
@@ -168,22 +177,22 @@ void kernel_main() {
                             noc.async_read_barrier();
 
                             if constexpr (in0_last_ktile_w > 0) {
-                                if ((block == num_blocks_inner_dim - 1)) {
+                                if (block == num_blocks_inner_dim - 1) {
                                     for (uint32_t h = 0; h < out_block_h; ++h) {
                                         auto in0_last_ktile_w_ptr =
                                             in0_tensor_read_addr +
-                                            (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                                            ((h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes);
                                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
                                     }
                                 }
                             }
                             if constexpr (in0_last_ktile_h > 0) {
-                                if ((block == num_blocks_inner_dim - 1)) {
+                                if (block == num_blocks_inner_dim - 1) {
                                     for (uint32_t w = 0; w < in0_block_w; ++w) {
                                         auto in0_last_ktile_h_ptr =
                                             in0_tensor_read_addr +
-                                            (out_block_h - 1) * in0_block_w * in0_single_tile_size_bytes +
-                                            w * in0_single_tile_size_bytes;
+                                            ((out_block_h - 1) * in0_block_w * in0_single_tile_size_bytes) +
+                                            (w * in0_single_tile_size_bytes);
                                         pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(
                                             in0_last_ktile_h_ptr);
                                     }
@@ -194,21 +203,21 @@ void kernel_main() {
                             in0_tensor_current_inner_dim_block_start_addr += in0_block_size_bytes;
 
                             if constexpr (in0_last_ktile_w > 0) {
-                                if ((block == num_blocks_inner_dim - 1)) {
+                                if (block == num_blocks_inner_dim - 1) {
                                     for (uint32_t h = 0; h < in0_block_h; ++h) {
                                         auto in0_last_ktile_w_ptr =
                                             in0_tensor_read_addr +
-                                            (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                                            ((h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes);
                                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
                                     }
                                 }
                             }
                             if constexpr (in0_last_ktile_h > 0) {
-                                if ((block == num_blocks_inner_dim - 1)) {
+                                if (block == num_blocks_inner_dim - 1) {
                                     for (uint32_t w = 0; w < in0_block_w; ++w) {
                                         auto in0_last_ktile_h_ptr =
                                             in0_tensor_read_addr +
-                                            ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                                            (((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes);
                                         pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(
                                             in0_last_ktile_h_ptr);
                                     }
@@ -236,9 +245,9 @@ void kernel_main() {
                                 // Skip if there are no other cores since this core already has the data.
                                 // Note: noc_async_write_multicast[_loopback_src] may hang if called with 0 cores.
                                 if constexpr (in0_mcast_num_cores > 1) {
-                                    experimental::MulticastEndpoint mcast_dst;
+                                    const MulticastEndpoint mcast_dst;
                                     noc.async_write_multicast(
-                                        experimental::CoreLocalMem<uint32_t>(in0_tensor_read_addr),
+                                        CoreLocalMem<uint32_t>(in0_tensor_read_addr),
                                         mcast_dst,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores - 1,
@@ -255,9 +264,9 @@ void kernel_main() {
                             else {
                                 if constexpr (in0_mcast_num_cores == 1) {
                                     // noc_async_write if we only want to copy data between CB locally
-                                    experimental::UnicastEndpoint ucast_dst;
+                                    const UnicastEndpoint ucast_dst;
                                     noc.async_write(
-                                        experimental::CoreLocalMem<uint32_t>(in0_tensor_read_addr),
+                                        CoreLocalMem<uint32_t>(in0_tensor_read_addr),
                                         ucast_dst,
                                         in0_block_size_bytes,
                                         {},
@@ -266,9 +275,9 @@ void kernel_main() {
                                          .addr = in0_tensor_local_l1_write_addr});
                                 } else {
                                     // multicast to every core in receiver grid
-                                    experimental::MulticastEndpoint mcast_dst;
-                                    noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
-                                        experimental::CoreLocalMem<uint32_t>(in0_tensor_read_addr),
+                                    const MulticastEndpoint mcast_dst;
+                                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                                        CoreLocalMem<uint32_t>(in0_tensor_read_addr),
                                         mcast_dst,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores,
@@ -285,7 +294,7 @@ void kernel_main() {
                             // We should also multicast the flag to destinations
                             receiver_sem.set(VALID);
                             if constexpr (in0_mcast_num_cores > 1) {
-                                receiver_sem.set_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                                receiver_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
                                     noc,
                                     in0_mcast_dest_noc_start_x,
                                     in0_mcast_dest_noc_start_y,
@@ -296,9 +305,9 @@ void kernel_main() {
                         } else {
                             // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all
                             // cores in receiver grid
-                            experimental::MulticastEndpoint mcast_dst;
+                            const MulticastEndpoint mcast_dst;
                             noc.async_write_multicast(
-                                experimental::CoreLocalMem<uint32_t>(in0_tensor_read_addr),
+                                CoreLocalMem<uint32_t>(in0_tensor_read_addr),
                                 mcast_dst,
                                 in0_block_size_bytes,
                                 in0_mcast_num_cores,
@@ -342,14 +351,14 @@ void kernel_main() {
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                         receiver_sem.wait(VALID);
                     }
-                    cb_in0.push_back(in0_block_num_tiles);
+                    dfb_in0.push_back(in0_block_num_tiles);
 
-                    // If core does not produce output block work, free cb_id_in0 immediately.
+                    // If core does not produce output block work, free dfb_id_in0 immediately.
                     // This is necessary since mcast is in lockstep; this ensures write ptr addresses are synced
                     // properly for cores that only send and have no compute / writer active. Technically, don't have to
-                    // do this if cb_id_in0 is not double buffered.
+                    // do this if dfb_id_in0 is not double buffered.
                     if constexpr (!core_has_output_block_work) {
-                        cb_in0.pop_front(in0_block_num_tiles);
+                        dfb_in0.pop_front(in0_block_num_tiles);
                     }
                 }
             }

@@ -68,7 +68,9 @@ NlpCreateQkvHeadsRopeDeviceOperation::spec_return_value_t NlpCreateQkvHeadsRopeD
     uint32_t seq = tt::round_up(args.seq_len, TILE_HEIGHT);
     auto layout =
         tt::tt_metal::TensorLayout(qkv.dtype(), tt::tt_metal::PageConfig(qkv.layout()), args.output_mem_config);
-    auto make = [&](uint32_t heads) { return TensorSpec(ttnn::Shape({1, heads, seq, args.head_dim}), layout); };
+    auto make = [&](uint32_t heads) {
+        return tt::tt_metal::TensorSpec(ttnn::Shape({1, heads, seq, args.head_dim}), layout);
+    };
     return {make(args.num_q_heads), make(args.num_kv_heads), make(args.num_kv_heads)};
 }
 

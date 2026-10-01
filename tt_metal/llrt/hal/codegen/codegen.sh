@@ -7,6 +7,9 @@ set -o nounset
 
 SRC_ROOT="$1"
 OUT_DIR="$2"
+# Optional 3rd arg: index (0, 1, 2) to regenerate only one file pair.
+# When omitted, all files are regenerated (backward compatible).
+SINGLE_INDEX="${3:-all}"
 
 PYTHON=python3
 SCRIPT="$(realpath --relative-to "$SRC_ROOT" "${BASH_SOURCE[0]}")"
@@ -15,7 +18,7 @@ YEAR=$(date +%Y)
 
 declare -a SRC_FILES=(
     "tt_metal/hw/inc/hostdev/dev_msgs.h"
-    "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+    "tt_metal/hostdevcommon/api/hostdevcommon/fabric_telemetry_msgs.h"
     "tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h"
 )
 declare -a OUT_BASENAMES=(
@@ -32,6 +35,10 @@ declare -a INTERFACE_NAMESPACES=(
 mkdir -p "${OUT_DIR}"
 
 for idx in "${!SRC_FILES[@]}"; do
+    # If a single index was requested, skip all others.
+    if [[ "${SINGLE_INDEX}" != "all" && "${idx}" != "${SINGLE_INDEX}" ]]; then
+        continue
+    fi
     SRC_FILE=${SRC_FILES[$idx]}
     BASENAME=${OUT_BASENAMES[$idx]}
     INTF_NS=${INTERFACE_NAMESPACES[$idx]}

@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tttv2_bh_required_capabilities.schema.json",
+  "title": "TTTv2 BlackHole required-capability contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schema_version",
+    "contract_id",
+    "model",
+    "authority",
+    "scope",
+    "geometries",
+    "demo_requirements",
+    "serving_requirements",
+    "cross_cutting_requirements",
+    "excluded_or_deferred"
+  ],
+  "properties": {
+    "$schema": {"type": "string"},
+    "schema_version": {"const": 1},
+    "contract_id": {"type": "string", "minLength": 1},
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package", "hf_model_id", "demo_entry_point"],
+      "properties": {
+        "package": {"type": "string"},
+        "hf_model_id": {"type": "string"},
+        "demo_entry_point": {"type": "string"}
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plan", "integration_contract", "source_files"],
+      "properties": {
+        "plan": {"type": "string"},
+        "integration_contract": {"type": "string"},
+        "source_files": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declaration_state", "immutability", "acceptance_rule"],
+      "properties": {
+        "declaration_state": {"const": "pre_acceptance"},
+        "immutability": {"type": "string", "minLength": 1},
+        "acceptance_rule": {"type": "string", "minLength": 1}
+      }
+    },
+    "geometries": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/geometry"}},
+    "demo_requirements": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/demoRequirement"}},
+    "serving_requirements": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/servingRequirement"}},
+    "cross_cutting_requirements": {"type": "array", "items": {"$ref": "#/$defs/crossCuttingRequirement"}},
+    "excluded_or_deferred": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}}
+  },
+  "$defs": {
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ci_sku", "mesh_name", "mesh_shape", "dies", "tp_per_lane", "dp", "fabric_config", "role"],
+      "properties": {
+        "id": {"type": "string"},
+        "ci_sku": {"type": "string"},
+        "mesh_name": {"type": "string"},
+        "mesh_shape": {"type": "array", "prefixItems": [{"type": "integer"}, {"type": "integer"}], "minItems": 2, "maxItems": 2},
+        "dies": {"type": "integer", "minimum": 1},
+        "tp_per_lane": {"type": "integer", "minimum": 1},
+        "dp": {"type": "integer", "minimum": 1},
+        "fabric_config": {"type": ["string", "null"]},
+        "role": {"enum": ["required", "additive_functional", "development_standin"]}
+      }
+    },
+    "demoRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "geometry_id", "profile", "demo_case", "source_parameter_id", "node_id", "batch_size", "decode_tokens", "repeat_batches", "report_perf", "dp", "trace_mode", "context_bucket", "cache_protocol", "capabilities", "required_resolution", "acceptance_condition"],
+      "properties": {
+        "id": {"type": "string"},
+        "geometry_id": {"type": "string"},
+        "profile": {"enum": ["performance", "accuracy"]},
+        "demo_case": {"type": "string"},
+        "source_parameter_id": {"type": "string"},
+        "node_id": {"type": "string", "minLength": 1},
+        "batch_size": {"type": "integer", "minimum": 1},
+        "decode_tokens": {"type": "integer", "minimum": 0},
+        "repeat_batches": {"type": "integer", "minimum": 1},
+        "report_perf": {"type": "boolean"},
+        "dp": {"type": "integer", "minimum": 1},
+        "trace_mode": {"enum": ["none", "decode_only", "all"]},
+        "context_bucket": {"type": "integer", "minimum": 1},
+        "cache_protocol": {
+          "type": "array",
+          "prefixItems": [{"const": "cold_write"}, {"const": "warm_read"}],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "capabilities": {"type": "array", "minItems": 1, "items": {"enum": ["functional", "token_accuracy", "determinism", "performance", "quality"]}},
+        "required_resolution": {"const": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY"},
+        "acceptance_condition": {"type": "string", "minLength": 1}
+      }
+    },
+    "contextRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bucket", "required_subcases", "required_resolution", "acceptance_condition"],
+      "properties": {
+        "bucket": {"type": ["integer", "null"], "minimum": 1},
+        "bucket_rule": {"type": "string"},
+        "required_subcases": {"type": "array", "minItems": 1, "items": {"enum": ["long_prefill", "chunked_prefill", "cached_prefill"]}},
+        "required_resolution": {"const": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY"},
+        "acceptance_condition": {"type": "string", "minLength": 1}
+      }
+    },
+    "servingRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row_id", "geometry_id", "profile", "model_optimization_profile", "dp", "trace_mode", "trace_prefill_buckets", "context_requirements", "cached_prefill", "chunked_prefill", "tier0_smoke", "tier1_performance", "tier2_quality", "required_resolution", "acceptance_condition"],
+      "properties": {
+        "row_id": {"type": "string"},
+        "geometry_id": {"type": "string"},
+        "profile": {"enum": ["decode_only", "all"]},
+        "model_optimization_profile": {"const": "performance"},
+        "dp": {"type": "integer", "minimum": 1},
+        "trace_mode": {"enum": ["decode_only", "all"]},
+        "trace_prefill_buckets": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+        "context_requirements": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/contextRequirement"}},
+        "cached_prefill": {"const": "required"},
+        "chunked_prefill": {"const": "required"},
+        "tier0_smoke": {"type": "boolean"},
+        "tier1_performance": {"const": "required"},
+        "tier2_quality": {"const": "required_human_review"},
+        "required_resolution": {"const": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY"},
+        "acceptance_condition": {"type": "string", "minLength": 1}
+      }
+    },
+    "crossCuttingRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "capability", "applies_to", "required_resolution", "acceptance_condition"],
+      "properties": {
+        "id": {"type": "string"},
+        "capability": {"type": "string"},
+        "applies_to": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "required_resolution": {"const": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY"},
+        "acceptance_condition": {"type": "string", "minLength": 1}
+      }
+    },
+    "exclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "classification", "reason", "acceptance_effect"],
+      "properties": {
+        "id": {"type": "string"},
+        "classification": {"enum": ["post_v1_stretch", "out_of_scope", "retained_tttv1", "development_only"]},
+        "reason": {"type": "string", "minLength": 1},
+        "acceptance_effect": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

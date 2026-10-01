@@ -7,6 +7,11 @@
 #include "tt-metalium/constants.hpp"
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
+#include "internal/scoped_lock_cache_ops.h"
 
 constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
 constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
@@ -30,7 +35,7 @@ struct InputContext {
     const uint32_t logical_width;
 
     const DataFormat data_format;
-    const uint32_t cb_addr;
+    const uint32_t dfb_addr;
 
     // Reminders for calculating padding offsets
     const uint32_t tile_h_rem;
@@ -57,7 +62,7 @@ struct InputContext {
         uint32_t f_h_rem,
         uint32_t f_w_rem,
         DataFormat format,
-        uint32_t l1_cb_addr) :
+        uint32_t l1_dfb_addr) :
         tile_height(tile_h),
         tile_width(tile_w),
         input_height(tiles_h),
@@ -65,7 +70,7 @@ struct InputContext {
         logical_height(data_h),
         logical_width(data_w),
         data_format(format),
-        cb_addr(l1_cb_addr),
+        dfb_addr(l1_dfb_addr),
         tile_h_rem(t_h_rem),
         tile_w_rem(t_w_rem),
         face_h_rem(f_h_rem),
@@ -83,18 +88,18 @@ struct OutputContext {
     uint32_t* const stack_ptr;
     const uint32_t stack_buffer_size;
 
-    const uint32_t output_cb_addr;
+    const uint32_t output_addr;
     const uint32_t write_out_count;
 
     OutputContext() = delete;
     OutputContext(const OutputContext&) = delete;
 
-    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_cb_addr, uint32_t out_count, bool keep_dim) :
+    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_addr, uint32_t out_count) :
         collected_count(0),
         output_page_id(0),
         stack_ptr(ptr),
         stack_buffer_size(size),
-        output_cb_addr(dst_cb_addr),
+        output_addr(dst_addr),
         write_out_count(out_count) {}
 };
 
@@ -110,13 +115,67 @@ struct OutputContext {
  * @param[in] ctx Parameters of the tensor
  *
  */
-void get_face_data_range(
+inline void get_face_data_range(
     uint32_t& data_rows,
     uint32_t& data_cols,
     uint32_t tile_x,
     uint32_t tile_y,
     uint32_t face_id,
-    const InputContext& ctx);
+    const InputContext& ctx) {
+    const bool is_bottom_tile = tile_y == (ctx.input_height - 1);
+    const bool is_right_most_tile = tile_x == (ctx.input_width - 1);
+
+    // Initialize the range as full face
+    data_rows = face_height;
+    data_cols = face_width;
+
+    if (!ctx.has_padding) {
+        return;
+    }
+
+    if (!is_bottom_tile && !is_right_most_tile) {
+        // Only marginal tiles may contain the padding
+        return;
+    }
+
+    const bool is_right_face = (face_id == 1 || face_id == 3);
+    const bool is_bottom_face = (face_id == 2 || face_id == 3);
+
+    const uint32_t height_rem = ctx.tile_h_rem;
+    if (is_bottom_tile && height_rem != 0) {
+        if (is_bottom_face) {
+            const bool skip_bottom_face = height_rem < face_height;
+            if (skip_bottom_face) {
+                data_rows = 0;
+                data_cols = 0;
+                return;
+            }
+            data_rows = ctx.face_h_rem;
+        } else {
+            // One of the upper faces
+            if (height_rem < face_height) {
+                data_rows = height_rem;
+            }
+        }
+    }
+
+    const uint32_t width_rem = ctx.tile_w_rem;
+    if (is_right_most_tile && width_rem != 0) {
+        if (is_right_face) {
+            const bool skip_right_face = width_rem < face_width;
+            if (skip_right_face) {
+                data_rows = 0;
+                data_cols = 0;
+                return;
+            }
+            data_cols = ctx.face_w_rem;
+        } else {
+            if (width_rem < face_width) {
+                data_cols = width_rem;
+            }
+        }
+    }
+}
 
 /**
  * @brief Searches for max values and their locations in one tile of the input tensor
@@ -152,7 +211,7 @@ void process_input_tile(
     uint32_t& rows_processed) {
     const bool has_padding = ctx.has_padding;
     const DataFormat src_data_format = ctx.data_format;
-    auto src_ptr = get_tt_l1_ptr_based_on_data_format<format>(ctx.cb_addr);
+    auto src_ptr = get_tt_l1_ptr_based_on_data_format<format>(ctx.dfb_addr);
 
     rows_processed = 0;
 
@@ -180,7 +239,7 @@ void process_input_tile(
         }
 
         // Offset to the face within the tile
-        uint32_t face_offset = face_id * face_size;
+        const uint32_t face_offset = face_id * face_size;
         volatile tt_l1_ptr DTYPE* face_ptr = src_ptr + face_offset;
 
         // Go over the rows of the face. Update the maximum values in each row.
@@ -196,20 +255,20 @@ void process_input_tile(
             // Go over elements in the current row, current face.
             for (uint32_t col = 0; col < cols_to_process; col++) {
                 // Index within the face
-                uint32_t index = row * face_width + col;
+                const uint32_t index = (row * face_width) + col;
 
                 DTYPE value = face_ptr[index];
 
                 bool new_max = false;
                 if constexpr (format == DataFormat::Float16_b) {
-                    new_max = bfloat16_greater(value, curr_max);
+                    new_max = argmax_bfloat16_greater(value, curr_max);
                 } else if constexpr (format == DataFormat::Float32) {
-                    new_max = float32_greater(value, curr_max);
+                    new_max = argmax_float32_greater(value, curr_max);
                 }
 
                 if (new_max) {
                     const bool is_left_side_face = (face_id == 0 || face_id == 2);
-                    const uint32_t new_arg_max = tile_x * ctx.tile_width + (is_left_side_face ? 0 : face_width) + col;
+                    const uint32_t new_arg_max = (tile_x * ctx.tile_width) + (is_left_side_face ? 0 : face_width) + col;
                     curr_max = value;
                     curr_arg_max = new_arg_max;
                 }
@@ -232,7 +291,7 @@ void process_input_tile(
  * @note The location of where values are stored is managed by the OutputContext object
  */
 template <bool keepdim>
-void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputContext& ctx) {
+void collect_row_major_output(const uint32_t new_values[], uint32_t count, OutputContext& ctx) {
     const uint32_t curr_collected = ctx.collected_count;
 
     if constexpr (keepdim) {
@@ -242,16 +301,16 @@ void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputConte
     }
 
     auto* stack_ptr = ctx.stack_ptr;
-    auto* cb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_cb_addr);
+    auto* out_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_addr);
 
     for (uint32_t idx = 0; idx < count; idx++) {
-        uint32_t write_index = curr_collected + idx;
+        const uint32_t write_index = curr_collected + idx;
         if constexpr (keepdim) {
             // Accumulate into the on stack array
             stack_ptr[write_index] = new_values[idx];
         } else {
-            // Write directly into the output CB
-            cb_ptr[write_index] = new_values[idx];
+            // Write directly into the output scratchpad
+            out_ptr[write_index] = new_values[idx];
         }
     }
 
@@ -268,35 +327,38 @@ void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputConte
  * @param[in] output_ctx Parameters related to the output tensor
  */
 template <typename AccessorType, bool keepdim>
-void write_to_output(AccessorType& output_accessor, OutputContext& output_ctx) {
+void write_to_output(const Noc& noc, AccessorType& output_accessor, OutputContext& output_ctx) {
     const uint32_t output_page_elements = output_ctx.write_out_count;
     uint32_t collected_count = output_ctx.collected_count;
     uint32_t output_page_id = output_ctx.output_page_id;
 
-    auto dst_cb_addr = output_ctx.output_cb_addr;
+    auto dst_addr = output_ctx.output_addr;
+    const CoreLocalMem<uint32_t> dst_mem(dst_addr);
 
     uint32_t sent_count = 0;
     while (collected_count > 0) {
         // When keepdim is true, argmax values are accumulated in an on-stack buffer.
-        // Otherwise, argmax values are accumulated directly in the output CB.
+        // Otherwise, argmax values are accumulated directly in the output scratchpad.
         if constexpr (keepdim) {
             auto* stack_ptr = output_ctx.stack_ptr;
-            auto* dst_cb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);
-            // Copy one page of output data into the output CB.
+            auto* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+            // Copy one page of output data into the output scratchpad.
             for (uint32_t idx = 0; idx < output_page_elements; idx++) {
-                dst_cb_ptr[idx] = stack_ptr[sent_count + idx];
+                dst_ptr[idx] = stack_ptr[sent_count + idx];
             }
         }
 
         const uint32_t write_size = output_page_elements * sizeof(uint32_t);
-        uint64_t dst_noc_addr = get_noc_addr(output_page_id, output_accessor);
-        noc_async_write(dst_cb_addr, dst_noc_addr, write_size);
+        // Quasar DM cores stage output through the cached view, so flush it to SRAM before this NoC
+        // read. No-op on WH/BH, where CPU stores are already coherent with the NoC.
+        scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_addr), write_size);
+        noc.async_write(dst_mem, output_accessor, write_size, {.offset_bytes = 0}, {.page_id = output_page_id});
 
         sent_count += output_page_elements;
         collected_count -= output_page_elements;
         output_page_id++;
 
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     }
 
     output_ctx.collected_count = 0;

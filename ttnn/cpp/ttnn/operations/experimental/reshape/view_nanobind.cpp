@@ -50,7 +50,7 @@ void bind_view(nb::module_& mod) {
             nb::arg("H"),
             nb::arg("W")),
         ttnn::overload_t(
-            static_cast<ttnn::Tensor (*)(const ttnn::Tensor&, const ttnn::SmallVector<int32_t>&)>(
+            static_cast<ttnn::Tensor (*)(const ttnn::Tensor&, const ttsl::SmallVector<int32_t>&)>(
                 &ttnn::experimental::view),
             nb::arg("input_tensor"),
             nb::arg("shape")));

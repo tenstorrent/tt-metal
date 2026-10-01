@@ -51,7 +51,8 @@ void reduce_scatter_common_validates(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
         "Unsupported input tensor memory layout");
 
     if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -67,7 +68,8 @@ void reduce_scatter_common_validates(
             output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
                 output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                 output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
             "Unsupported output tensor memory layout");
 
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor must be on device");

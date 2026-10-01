@@ -184,18 +184,48 @@ struct p_mov_src_to_dest
 struct p_stall
 {
     // What to stall on
-    constexpr static std::uint32_t NOTHING         = 0;
-    constexpr static std::uint32_t THCON           = 1;
-    constexpr static std::uint32_t UNPACK0         = 2;
-    constexpr static std::uint32_t UNPACK0_DONE_RD = 3;
-    constexpr static std::uint32_t UNPACK1         = 4;
-    constexpr static std::uint32_t UNPACK1_DONE_RD = 5;
-    constexpr static std::uint32_t UNPACK2         = 6;
-    constexpr static std::uint32_t UNPACK2_DONE_RD = 7;
-    constexpr static std::uint32_t PACK0           = 8;
-    constexpr static std::uint32_t PACK0_DONE_WR   = 9;
-    constexpr static std::uint32_t PACK1           = 10;
-    constexpr static std::uint32_t PACK1_DONE_WR   = 11;
+    constexpr static std::uint32_t NOTHING = 0;
+    constexpr static std::uint32_t THCON   = 1;
+    constexpr static std::uint32_t UNPACK0 = 2;
+
+    // index 3 - not implemented; see the note below
+    constexpr static struct
+    {
+        int not_implemented;
+    } UNPACK0_DONE_RD = {0};
+
+    constexpr static std::uint32_t UNPACK1 = 4;
+
+    // index 5 - not implemented; see the note below
+    constexpr static struct
+    {
+        int not_implemented;
+    } UNPACK1_DONE_RD = {0};
+
+    constexpr static std::uint32_t UNPACK2 = 6;
+
+    // index 7 - not implemented; see the note below
+    constexpr static struct
+    {
+        int not_implemented;
+    } UNPACK2_DONE_RD = {0};
+
+    constexpr static std::uint32_t PACK0 = 8;
+
+    // index 9 - not implemented; see the note below
+    constexpr static struct
+    {
+        int not_implemented;
+    } PACK0_DONE_WR = {0};
+
+    constexpr static std::uint32_t PACK1 = 10;
+
+    // index 11 - not implemented; see the note below
+    constexpr static struct
+    {
+        int not_implemented;
+    } PACK1_DONE_WR = {0};
+
     constexpr static std::uint32_t MATH            = 12;
     constexpr static std::uint32_t SRCA_CLR        = 13;
     constexpr static std::uint32_t SRCB_CLR        = 14;
@@ -204,10 +234,25 @@ struct p_stall
     constexpr static std::uint32_t SRCA_VLD        = 17;
     constexpr static std::uint32_t SRCB_VLD        = 18;
     constexpr static std::uint32_t SFPU_SRCS_RDY   = 19;
-    constexpr static std::uint32_t XMOV            = 20;
-    constexpr static std::uint32_t TRISC_CFG       = 21;
-    constexpr static std::uint32_t SFPU1           = 22; // lol name collisions
-    constexpr static std::uint32_t CFGEXU          = 23;
+
+    // index 20 - not implemented; see the note below
+    constexpr static struct
+    {
+        int not_implemented;
+    } XMOV = {0};
+
+    constexpr static std::uint32_t TRISC_CFG = 21;
+    constexpr static std::uint32_t SFPU1     = 22; // lol name collisions
+    constexpr static std::uint32_t CFGEXU    = 23;
+
+    // Wait resources 3, 5, 7, 9, 11 and 20 above are decoded by the instruction but do
+    // not reach the live wait condition. Passing one yields an empty wait mask, which
+    // means "wait for every data-movement engine on this thread": used alone the stall
+    // is far broader than it reads, and combined with any implemented index it
+    // contributes nothing. They are declared as non-integers so that any use is a
+    // compile error, and kept named so the index numbering stays documented.
+    // For "the packer has finished" use PACK0 / PACK1; for a full data-movement drain
+    // pass no wait index.
 
     constexpr static std::uint32_t WAIT_SFPU = SFPU1;
     constexpr static std::uint32_t PACK      = PACK0;
@@ -222,8 +267,14 @@ struct p_stall
     constexpr static std::uint32_t STALL_SYNC   = 0x2;
     constexpr static std::uint32_t STALL_PACK   = 0x4;
     constexpr static std::uint32_t STALL_UNPACK = 0x8;
+
     // constexpr static uint STALL_XSEARCH     = 0x10;
-    constexpr static std::uint32_t STALL_XMOV   = 0x10;
+    // 0x10 - not implemented; a mask naming only this bit stalls no class
+    constexpr static struct
+    {
+        int not_implemented;
+    } STALL_XMOV = {0};
+
     constexpr static std::uint32_t STALL_THCON  = 0x20;
     constexpr static std::uint32_t STALL_MATH   = 0x40;
     constexpr static std::uint32_t STALL_CFG    = 0x80;
@@ -334,17 +385,37 @@ struct p_sfpu
     constexpr static std::uint32_t LCONST_1    = 10;
     constexpr static std::uint32_t LCONST_neg1 = 11;
 
+    // LREG destination index 12-15 captures the instruction into Load Macro
+    // Instruction register 4-7 instead of executing it.
+    constexpr static std::uint32_t MACRO_CAPTURE_INSTR4 = 12;
+    constexpr static std::uint32_t MACRO_CAPTURE_INSTR5 = 13;
+    constexpr static std::uint32_t MACRO_CAPTURE_INSTR6 = 14;
+    constexpr static std::uint32_t MACRO_CAPTURE_INSTR7 = 15;
+
     struct sfpmem
     {
+        // SFPLOAD/SFPSTORE InstrMod format-select codes (Tensix SFPU ISA, SFPLOAD/SFPSTORE table).
+        // Signed integers are sign-magnitude in HW; the ISA names them SMAG<N> — those are the
+        // primary names here, with INT<N> kept as legacy LLK aliases.
         constexpr static std::uint32_t DEFAULT =
             0b0000; // format is determined by combination of SrcB exponent width of ALU_FORMAT_SPEC_REG and also ACC_CTRL_SFPU_Fp32
-        constexpr static std::uint32_t FP16A  = 0b0001; // stored data will be interpreted as fp16 (fp16_a) format
-        constexpr static std::uint32_t FP16B  = 0b0010; // stored data will be interpreted as bfloat (fp16_b) format
-        constexpr static std::uint32_t FP32   = 0b0011; // stored data will be interpreted as fp32 format
-        constexpr static std::uint32_t INT32  = 0b0100; // stored data will be interpreted as int32 (sign + magnitude) format
-        constexpr static std::uint32_t UINT8  = 0b0101; // stored data will be interpreted as unsigned int8 format
-        constexpr static std::uint32_t UINT16 = 0b0110; // stored data will be interpreted as unsigned int16 format
-                                                        // TODO - Luka: add the other formats
+        constexpr static std::uint32_t FP16A      = 0b0001; // fp16 (fp16_a)
+        constexpr static std::uint32_t FP16B      = 0b0010; // bfloat (fp16_b)
+        constexpr static std::uint32_t FP32       = 0b0011; // fp32 (MOD_FP32 in the register file)
+        constexpr static std::uint32_t SMAG32     = 0b0100; // signed int32, sign-magnitude (ISA SMAG32)
+        constexpr static std::uint32_t INT32      = SMAG32; // legacy LLK name for SMAG32
+        constexpr static std::uint32_t SMAG8      = 0b0101; // signed int8, sign-magnitude (ISA SMAG8)
+        constexpr static std::uint32_t INT8       = SMAG8;  // legacy LLK name for SMAG8
+        constexpr static std::uint32_t UINT16     = 0b0110; // unsigned int16
+        constexpr static std::uint32_t HI16       = 0b0111; // half-word access, value in the upper 16 bits
+        constexpr static std::uint32_t SMAG16     = 0b1000; // signed int16, sign-magnitude (ISA SMAG16)
+        constexpr static std::uint32_t INT16      = SMAG16; // legacy LLK name for SMAG16
+        constexpr static std::uint32_t LO16       = 0b1001; // half-word access, value in the lower 16 bits
+        constexpr static std::uint32_t STACK_MODE = 0b1010; // SMAG32 via the SFPU stack pointer
+        constexpr static std::uint32_t UINT8      = 0b1011; // unsigned int8
+        constexpr static std::uint32_t LO16_ONLY  = 0b1110; // write only LREG[15:0], preserve the MSBs
+        constexpr static std::uint32_t HI16_ONLY  = 0b1111; // write only LREG[31:16], preserve the LSBs
+        // 0b1100 / 0b1101 are reserved in the ISA.
     };
 
     struct mad_mode
@@ -362,10 +433,11 @@ struct p_sfpu
 
     struct cc
     {
-        constexpr static std::uint32_t SET_CC    = 0x2;
-        constexpr static std::uint32_t CLR_CC    = 0x1;
-        constexpr static std::uint32_t SET_CC_EN = 0x1;
-        constexpr static std::uint32_t CLR_CC_EN = 0x0;
+        constexpr static std::uint32_t SET_CC       = 0x2;
+        constexpr static std::uint32_t CLR_CC       = 0x1;
+        constexpr static std::uint32_t SET_CC_EN    = 0x1;
+        constexpr static std::uint32_t CLR_CC_EN    = 0x0;
+        constexpr static std::uint32_t FP32_SM32_EN = 0x800; // if src_c should be interpreted as a FP32/SMAG32 value
     };
 
     struct sfp_sfpcast_mod
@@ -397,6 +469,31 @@ struct p_sfpu
         constexpr static std::uint32_t Stochastic = 0x1;
         constexpr static std::uint32_t RoundZero  = 0x2;
     };
+
+    // bfloat16 encoding of 1.0. Used by the architecture-agnostic exp_tile() API;
+    // Quasar currently accepts only this unscaled value.
+    constexpr static std::uint32_t kCONST_1_FP16B = 0x3F80;
+};
+
+struct p_sfpconfig
+{
+    // SFPCONFIG config_dest register indices (Tensix SFPU ISA, SFPCONFIG table).
+    constexpr static std::uint32_t MACRO_INSTR0      = 0x0; // Load Macro Instruction 0
+    constexpr static std::uint32_t MACRO_INSTR1      = 0x1; // Load Macro Instruction 1
+    constexpr static std::uint32_t MACRO_INSTR2      = 0x2; // Load Macro Instruction 2
+    constexpr static std::uint32_t MACRO_INSTR3      = 0x3; // Load Macro Instruction 3
+    constexpr static std::uint32_t MACRO_SEQ0        = 0x4; // Load Macro Sequence 0
+    constexpr static std::uint32_t MACRO_SEQ1        = 0x5; // Load Macro Sequence 1
+    constexpr static std::uint32_t MACRO_SEQ2        = 0x6; // Load Macro Sequence 2
+    constexpr static std::uint32_t MACRO_SEQ3        = 0x7; // Load Macro Sequence 3
+    constexpr static std::uint32_t MACRO_CTRL        = 0x8; // Load Macro Control
+    constexpr static std::uint32_t LUT_CONST_LREG9   = 0x9; // LUT constant lreg[9]
+    constexpr static std::uint32_t LUT_CONST_LREG10  = 0xA; // LUT constant lreg[10]
+    constexpr static std::uint32_t PROG_CONST_LREG11 = 0xB; // Programmable constant lreg[11]
+    constexpr static std::uint32_t PROG_CONST_LREG12 = 0xC; // Programmable constant lreg[12]
+    constexpr static std::uint32_t PROG_CONST_LREG13 = 0xD; // Programmable constant lreg[13]
+    constexpr static std::uint32_t PROG_CONST_LREG14 = 0xE; // Programmable constant lreg[14]
+    constexpr static std::uint32_t SFPU_CTRL         = 0xF; // SFPU Control Register
 };
 
 struct p_cleardvalid
@@ -490,6 +587,48 @@ struct p_sfpnonlinear
     constexpr static std::uint32_t SQRT_MODE  = 0x3;
     constexpr static std::uint32_t EXP_MODE   = 0x4;
     constexpr static std::uint32_t TANH_MODE  = 0x5;
+};
+
+struct p_sfpgt
+{
+    constexpr static std::uint32_t IMM12_INT32 = 0x0;
+    constexpr static std::uint32_t IMM12_FP32  = 0x1;
+
+    constexpr static std::uint32_t MOD1_SET_CC = 0x1;
+};
+
+struct p_sfploadi
+{
+    constexpr static std::uint32_t MOD0_INT16 = 0x4;
+};
+
+struct p_sfpexexp
+{
+    constexpr static std::uint32_t MOD1_SET_CC_GE0 = 0xA;
+};
+
+struct p_sfpiadd
+{
+    constexpr static std::uint32_t MOD1_SUB_CC_GTE0 = 0xA;
+};
+
+struct p_sfpshft2
+{
+    constexpr static std::uint32_t MOD1_SHFT_LREG = 0x5;
+};
+
+// SFPSWAP instruction modes (mode-to-int mapping matches the Blackhole reference).
+struct p_sfpswap
+{
+    constexpr static std::uint32_t UNCONDITIONALLY = 0;
+    constexpr static std::uint32_t ALL_ROWS_MAX    = 1;
+    constexpr static std::uint32_t ROWS_01_MAX     = 2;
+    constexpr static std::uint32_t ROWS_02_MAX     = 3;
+    constexpr static std::uint32_t ROWS_03_MAX     = 4;
+    constexpr static std::uint32_t ROW_0_MAX       = 5;
+    constexpr static std::uint32_t ROW_1_MAX       = 6;
+    constexpr static std::uint32_t ROW_2_MAX       = 7;
+    constexpr static std::uint32_t ROW_3_MAX       = 8;
 };
 
 } // namespace ckernel

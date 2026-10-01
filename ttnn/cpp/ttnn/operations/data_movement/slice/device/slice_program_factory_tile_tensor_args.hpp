@@ -3,25 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "ttnn/operations/data_movement/slice/device/slice_device_operation_types.hpp"
+#include <optional>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/host_api.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
 struct SliceTileTensorArgsProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-        CoreCoord compute_with_storage_grid_size;
-        std::optional<CoreRangeSet> sub_core_grids;
-        std::vector<uint32_t> accumulated_total_per_dim;
-    };
+    // The writer binds the Metal 2.0 fork of eltwise/unary's shared interleaved writer, so its DFB
+    // accessor name, tensor accessor name and runtime-argument names come from that fork.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 
+    struct shared_variables_t {
+        tt::tt_metal::experimental::ProgramRunArgs run_args;
+    };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
-
     static void override_runtime_arguments(
         cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };

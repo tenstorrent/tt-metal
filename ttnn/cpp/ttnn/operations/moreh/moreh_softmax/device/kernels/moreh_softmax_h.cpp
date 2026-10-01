@@ -5,172 +5,190 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"  // Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Mask, Negative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+
+namespace ckl = compute_kernel_lib;
+
+#if defined(FP32_DEST_ACC_EN)
+constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Enabled;
+#else
+constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
+#endif
 
 void kernel_main() {
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_mask = tt::CBIndex::c_1;
-    constexpr auto cb_max_scaler = tt::CBIndex::c_2;
-    constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    constexpr auto cb_exps = tt::CBIndex::c_24;
-    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
-    constexpr auto cb_max = tt::CBIndex::c_26;
-    constexpr auto cb_x_m_max = tt::CBIndex::c_27;
-    constexpr auto cb_tmp = tt::CBIndex::c_28;
+    DataflowBuffer dfb_mask_obj(dfb::mask);
+    DataflowBuffer dfb_max_scaler_obj(dfb::max_scaler);
+    DataflowBuffer dfb_sum_scaler_obj(dfb::sum_scaler);
+    DataflowBuffer dfb_x_m_max_obj(dfb::x_minus_max);
 
-    constexpr int dst0 = 0;
-    constexpr int dst1 = 1;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
+    compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::out0);
 
-    uint32_t N = get_compile_time_arg_val(0);
-    uint32_t Ht = get_compile_time_arg_val(1);
+    // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing and avoid
+    // force-unrolling the per-Ht loops (see moreh_softmax_w_large.cpp for the LTO/addrmod rationale).
+    const std::uint32_t N = get_arg(args::N);
+    const std::uint32_t Ht = get_arg(args::Ht);
 
-    cb_wait_front(cb_mask, onetile);
-    cb_wait_front(cb_max_scaler, onetile);
-    cb_wait_front(cb_sum_scaler, onetile);
+    dfb_mask_obj.wait_front(onetile);
+    dfb_max_scaler_obj.wait_front(onetile);
+    dfb_sum_scaler_obj.wait_front(onetile);
 
-    for (uint32_t n = 0; n < N; ++n) {
+    for (std::uint32_t n = 0; n < N; ++n) {
         // find max value
         if (Ht == 1) {
-            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/0, /*popm=*/0);
+            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(0, 0, /*pop0=*/0, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
-                cb_tmp, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
+            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
+                ckl::ReduceInputBlockShape::single());
         } else {
-            compute_kernel_lib::
-                reduce<PoolType::MAX, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                    cb_in0, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+            ckl::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_COL,
+                dfb::in0,
+                dfb::max_scaler,
+                dfb::max,
+                compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+                compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
 
-            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
-                cb_tmp,
-                cb_max_scaler,
-                cb_max,
+            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
                 compute_kernel_lib::ReduceInputBlockShape::single(),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
+                compute_kernel_lib::Accumulate::at(dfb::max, 1));  // iteration=1, reload from dfb::max
         }
 
         // compute x - max(x)
-        cb_reserve_back(cb_x_m_max, Ht);
-        cb_wait_front(cb_in0, Ht);
-        cb_wait_front(cb_max, 1);
-
-        for (uint32_t h = 0; h < Ht; ++h) {
-            tile_regs_acquire();
-            sub_bcast_rows_init_short_with_dt(cb_in0, cb_max);
-            sub_tiles_bcast<BroadcastType::ROW>(cb_in0, cb_max, h, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_x_m_max);
-            tile_regs_release();
-        }
-        cb_pop_front(cb_max, 1);
-        cb_pop_front(cb_in0, Ht);
-        cb_push_back(cb_x_m_max, Ht);
+        ckl::sub<
+            ckl::input(
+                dfb::in0,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                ckl::InputTileMapping::Block,
+                kDataFormatReconfig),
+            ckl::input(
+                dfb::max, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
+            ckl::output(dfb::x_minus_max, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
+            ckl::IterationShape::tiles(Ht));
 
         // compute exp(x - max(x))
-        cb_reserve_back(cb_exps, Ht);
-        cb_wait_front(cb_x_m_max, Ht);
-        for (uint32_t h = 0; h < Ht; ++h) {
-            tile_regs_acquire();
-            copy_tile_init_with_dt(cb_x_m_max);
-            copy_tile(cb_x_m_max, h, dst0);
-
-#ifndef SOFTMAX
-            negative_tile_init();
-            negative_tile(dst0);
+        dfb_x_m_max_obj.wait_front(Ht);
+#ifdef SOFTMAX
+        constexpr bool is_softmax = true;
+#else
+        constexpr bool is_softmax = false;
 #endif
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(Ht - 1),
+            ckl::CopyTile<
+                ckl::input(
+                    dfb::x_minus_max,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Block,
+                    kDataFormatReconfig),
+                ckl::Dst::D0>{},
+            ckl::Optional<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
+            ckl::Exp<ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(
+                dfb::exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
-            exp_tile_init();
-            exp_tile(dst0);
-
-            if (h == Ht - 1) {
-                copy_tile_init_with_dt(cb_mask);
-                copy_tile(cb_mask, 0, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_exps);
-            tile_regs_release();
-        }
-        cb_push_back(cb_exps, Ht);
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::CopyTile<
+                ckl::input(
+                    dfb::x_minus_max,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Block,
+                    kDataFormatReconfig,
+                    ckl::TileAddressing::Offset),
+                ckl::Dst::D0>{Ht - 1},
+            ckl::Optional<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
+            ckl::Exp<ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::CopyTile<
+                ckl::input(dfb::mask, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::Dst::D1>{},
+            ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(
+                dfb::exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
-        compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-                cb_exps,
-                cb_sum_scaler,
-                cb_recipsumexps,
-                compute_kernel_lib::ReduceInputBlockShape::col(Ht),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                [](uint32_t dst_idx) {
-                    log_tile_init();
-                    log_tile(dst_idx);
-                });
+        ckl::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_COL,
+            dfb::exps,
+            dfb::sum_scaler,
+            dfb::recip_sum_exps,
+            ckl::ReduceInputPolicy::BulkWaitBulkPop>(
+            ckl::ReduceInputBlockShape::col(Ht),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::NoAccumulation{},
+            [](uint32_t dst_idx) {
+                log_tile_init();
+                log_tile(dst_idx);
+            });
 #else
         // 1/sum - keep tiles for subsequent multiplication
-        compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                cb_exps,
-                cb_sum_scaler,
-                cb_recipsumexps,
-                compute_kernel_lib::ReduceInputBlockShape::col(Ht),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                [](uint32_t dst_idx) {
-                    recip_tile_init();
-                    recip_tile(dst_idx);
-                });
+        ckl::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_COL,
+            dfb::exps,
+            dfb::sum_scaler,
+            dfb::recip_sum_exps,
+            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
+            ckl::ReduceInputBlockShape::col(Ht),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::NoAccumulation{},
+            [](uint32_t dst_idx) {
+                recip_tile_init();
+                recip_tile(dst_idx);
+            });
 #endif
 
         // compute final result
-        cb_reserve_back(cb_out0, Ht);
-        cb_wait_front(cb_x_m_max, Ht);
-        cb_wait_front(cb_recipsumexps, 1);
-#ifndef LOG
-        cb_wait_front(cb_exps, Ht);
-#endif
-
-        for (uint32_t h = 0; h < Ht; h += onetile) {
+        dfb_x_m_max_obj.wait_front(Ht);
 #ifdef LOG
-            // x - max - log(sum)
-            tile_regs_acquire();
-            sub_bcast_rows_init_short_with_dt(cb_x_m_max, cb_recipsumexps);
-            sub_tiles_bcast<BroadcastType::ROW>(cb_x_m_max, cb_recipsumexps, h, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
-            tile_regs_release();
+        ckl::sub<
+            ckl::input(
+                dfb::x_minus_max,
+                ckl::WaitPolicy::None,
+                ckl::PopPolicy::None,
+                ckl::InputTileMapping::Block,
+                kDataFormatReconfig),
+            ckl::input(
+                dfb::recip_sum_exps,
+                ckl::BroadcastDim::Row,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                kDataFormatReconfig),
+            ckl::output(dfb::out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
+            ckl::IterationShape::tiles(Ht));
 #else
-            // exp(x - max) / psum
-            tile_regs_acquire();
-            mul_bcast_rows_init_short_with_dt(cb_exps, cb_recipsumexps);
-            mul_tiles_bcast_rows(cb_exps, cb_recipsumexps, h, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
-            tile_regs_release();
+        ckl::mul<
+            ckl::input(
+                dfb::exps,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                ckl::InputTileMapping::Block,
+                kDataFormatReconfig),
+            ckl::input(
+                dfb::recip_sum_exps,
+                ckl::BroadcastDim::Row,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                kDataFormatReconfig),
+            ckl::output(dfb::out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
+            ckl::IterationShape::tiles(Ht));
 #endif
-        }
-
-        cb_pop_front(cb_recipsumexps, 1);
-        cb_pop_front(cb_x_m_max, Ht);
-        cb_push_back(cb_out0, Ht);
-#ifndef LOG
-        cb_pop_front(cb_exps, Ht);
-#endif
+        dfb_x_m_max_obj.pop_front(Ht);
     }
 }

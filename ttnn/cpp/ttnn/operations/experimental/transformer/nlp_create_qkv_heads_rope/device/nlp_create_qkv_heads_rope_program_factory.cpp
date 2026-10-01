@@ -135,7 +135,19 @@ NlpCreateQkvHeadsRopeProgramFactory::cached_program_t NlpCreateQkvHeadsRopeProgr
     KernelHandle qk_reader = CreateKernel(program, kRopeReader, qk_cores, ReaderDataMovementConfig(rope_reader_ct));
 
     std::vector<uint32_t> compute_ct = {
-        c_in, c_rot, c_cos, c_sin, c_scalar, c_rot_interm, c_cos_interm, c_sin_interm, c_out, 1u, Wt, half_Wt};
+        c_in,
+        c_rot,
+        c_cos,
+        c_sin,
+        c_scalar,
+        c_rot_interm,
+        c_cos_interm,
+        c_sin_interm,
+        c_out,
+        1u,
+        Wt,
+        half_Wt,
+        0u /*kDecodeMode: shared rotary_embedding compute kernel, prefill (non-decode) path*/};
     CreateKernel(
         program,
         kRopeCompute,

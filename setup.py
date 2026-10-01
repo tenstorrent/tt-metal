@@ -299,7 +299,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so*", "libtt_stl.so"]
+        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so*", "libtt_stl.so", "libtracy.so*"]
         runtime_patterns = [
             "hw/**/*",
         ]
@@ -335,13 +335,18 @@ class CMakeBuild(build_ext):
             "ttnn/kernel/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/**/kernels_ng/**/*",
+            "ttnn/operations/**/kernels_dfb/**/*",
             "ttnn/operations/**/shared_with_host/**/*",
+            "ttnn/operations/**/hostdevcommon/**/*",
             "ttnn/operations/kernel_helper_functions/*",
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
             "ttnn/kernel/*",
-            "ttnn/kernel_lib/*",
+            # Kernel-library JIT headers are organized into nested API domains (for example,
+            # eltwise/core and eltwise/unary). Keep this recursive so every migrated kernel sees
+            # the same header tree in an installed wheel as it does in a source checkout.
+            "ttnn/kernel_lib/**/*.{hpp,inl}",
             "ttnn/operations/normalization/kernel_util/**/*",
         ]
         tt_metal_patterns = [
@@ -359,9 +364,19 @@ class CMakeBuild(build_ext):
             "fabric/mesh_graph_descriptors/*.textproto",
             "fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
             "fabric/impl/kernels/tt_fabric_mux.cpp",
+            "fabric/impl/kernels/tt_fabric_mux_v2.cpp",
+            "fabric/impl/kernels/tt_fabric_mux_v2_forwarder.hpp",
+            "fabric/impl/kernels/tt_fabric_mux_v2_manager.hpp",
+            "fabric/impl/kernels/tt_fabric_mux_v2_kernel_common.hpp",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
+            # The DRISC tensor-prefetcher kernel and the two host/device shared headers it
+            # includes: a wheel run resolves kernel includes against the wheel, not TT_METAL_HOME.
+            "impl/buffers/kernels/**/*",
+            "impl/buffers/dram_sender_state_block.hpp",
+            "impl/buffers/tensor_prefetcher_request.hpp",
             "impl/dispatch/kernels/**/*",
+            "impl/streaming_profiler/kernels/**/*",
             "include/**/*",
             "kernels/**/*",
             "tt-llk/**/*",

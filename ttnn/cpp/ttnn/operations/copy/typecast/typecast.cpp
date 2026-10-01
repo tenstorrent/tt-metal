@@ -32,13 +32,13 @@ inline Tensor typecast_impl(
     DataType input_dtype = input_tensor.dtype();
     bool preserve_fp32_precision =
         (input_dtype == DataType::FLOAT32) or
-        (output_dtype == DataType::UINT8 and (input_dtype == DataType::BFLOAT16 or input_dtype == DataType::BFLOAT8_B or
-                                              input_dtype == DataType::BFLOAT4_B)) or
-        (input_dtype == DataType::UINT16 and output_dtype == DataType::UINT8) or
-        (input_dtype == DataType::UINT8 and output_dtype != DataType::BFLOAT16);
+        (is_8_bit_int(output_dtype) and (input_dtype == DataType::BFLOAT16 or input_dtype == DataType::BFLOAT8_B or
+                                         input_dtype == DataType::BFLOAT4_B)) or
+        (input_dtype == DataType::UINT16 and is_8_bit_int(output_dtype)) or is_8_bit_int(input_dtype);
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
-                            input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
+                            input_dtype == DataType::UINT32 or input_dtype == DataType::INT32 or
+                            output_dtype == DataType::FP8_E4M3 or input_dtype == DataType::FP8_E4M3;
     bool bfp8_pack_precise = (output_dtype == DataType::BFLOAT8_B);
     auto output_memory_config = optional_output_tensor.has_value()
                                     ? optional_output_tensor.value().memory_config()

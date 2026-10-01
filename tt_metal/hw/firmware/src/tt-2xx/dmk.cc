@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unistd.h>
 #include <cstdint>
 
 #include "risc_common.h"
@@ -17,7 +16,9 @@
 #include "hostdev/dev_msgs.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
+#include "internal/tt-2xx/quasar/semaphore_cached_pool.h"
 #include <kernel_includes.hpp>
 #include "api/kernel_thread_globals.h"
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
@@ -25,77 +26,100 @@
 #endif
 
 // Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
-thread_local uint32_t num_sw_threads __attribute__((used));
-thread_local uint32_t my_thread_id __attribute__((used));
+thread_local std::uint32_t num_sw_threads __attribute__((used));
+thread_local std::uint32_t my_thread_id __attribute__((used));
+thread_local std::uint32_t my_barrier_id __attribute__((used));
 
 extern "C" [[gnu::section(".start")]]
-uint32_t _start() {
+std::uint32_t _start() {
     // Enable GPREL optimizations.
     // asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     mark_stack_usage();
     wait_for_go_message();
 #ifdef KERNEL_RUN_TIME
-    uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
-    while (c_tensix_core::read_wall_clock() < end_time);
+    std::uint64_t end_time = get_timestamp() + KERNEL_RUN_TIME;
+    while (get_timestamp() < end_time);
 #endif
 #else
-    // TODO: initialize globals and bss
-    uint32_t hartid = internal_::get_hw_thread_idx();
+    // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
+    // it lives in, so caching it any earlier would just be discarded.
+    std::uint32_t hartid = internal_::read_hw_thread_idx();
 
     // Obtain launch message from mailbox and derive thread 0 (lowest hartid with same kernel).
-    uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+    std::uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
-    uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
-    uint32_t thread_0_hartid = hartid;
+    std::uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
+    std::uint32_t thread_0_hartid = hartid;
     if (launch_msg->kernel_config.enables & (1u << hartid)) {
-        for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
-            if (launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
+        for (std::uint32_t j = 2; j < MaxDMProcessorsPerCoreType; j++) {
+            if ((launch_msg->kernel_config.enables & (1u << j)) &&
+                launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
                 thread_0_hartid = j;
                 break;
             }
         }
     }
 
-    extern uint32_t __tdata_lma[];
-    extern uint32_t __ldm_tdata_start[];
-    extern uint32_t __ldm_tdata_end[];
+    extern std::uint32_t __tdata_lma[];
+    extern std::uint32_t __ldm_tdata_start[];
+    extern std::uint32_t __ldm_tdata_end[];
+
+    // Materialize __tdata_lma's address exactly once. The two references below (do_crt1 in the
+    // thread-0 branch and do_thread_crt1) otherwise emit two R_RISCV_HI20 relocations for
+    // __tdata_lma. On Quasar the XIP relocation pass (ElfFile::Impl::XIPify) pairs HI20<->LO12
+    // heuristically (each LO12 to the nearest preceding HI20); when the second HI20 lands in a loop
+    // tail with its LO12 reached via a back-edge it is left orphaned, throwing "R_RISCV_HI20
+    // relocation ... has no matching R_RISCV_LO12". The asm barrier makes the pointer opaque so the
+    // compiler keeps a single materialization (one HI20) and reuses the register/spill instead of
+    // re-emitting a lui/addi pair.
+    std::uint32_t* tdata_lma = __tdata_lma;
+    asm volatile("" : "+r"(tdata_lma));
 
     if (hartid == thread_0_hartid) {
-        do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+        do_crt1(&tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
         (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
 
-    do_thread_crt1(__tdata_lma);
+    do_thread_crt1(tdata_lma);
+    // .tbss has been zeroed: cache this thread's hw index.
+    internal_::init_hw_thread_idx();
 
     // Wait until first thread in the group has set its slot to GO.
     while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[thread_0_hartid] != SHARED_GLOBALS_READY_GO) {
     }
 
-    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-#if defined(NOC_API_V2)
-        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-#endif
-    }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
+
+    // Setup after the go signal so the previous kernel has completed.
+    num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
+    my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+    // Barrier slot for this kernel. thread_0_hartid is the lowest hart running this same kernel
+    // text, so every thread of a kernel derives the same slot and two co-resident kernels derive
+    // different ones, keeping their sync_threads() rendezvous separate.
+    my_barrier_id = thread_0_hartid;
+
+    // Paint stack after all thread_local writes and CRT init are done.
+    mark_stack_usage();
+
     {
-        DeviceZoneScopedMainChildN("BRISC-KERNEL");
-
-        // Setup after the go signal so the previous kernel has completed.
-        num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
-        my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
-
-        // Paint stack after all thread_local writes and CRT init are done.
-        mark_stack_usage();
-
+        DeviceZoneScopedMainChildN("DM-KERNEL");
         EARLY_RETURN_FOR_DEBUG
 
+        // Seed the pool rows of the kernel's DM_LOCAL_CACHED semaphores once per program, and
+        // restore them on the way out. No-op when the kernel binds none.
+        sem_internal::init_dm_local_cached<static_cast<ProgrammableCoreType>(PROGRAMMABLE_CORE_TYPE)>(
+            sem_internal::kCachedSemaphores);
         WAYPOINT("K");
         kernel_main();
         WAYPOINT("KD");
+        sem_internal::finish_dm_local_cached(sem_internal::kCachedSemaphores);
+        // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
+        // DFBs stays trivially copyable.
+        RECORD_DFB_REGION_CLEAR();
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // TODO enable once NOC is ready

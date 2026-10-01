@@ -3,16 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
-#include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
 using namespace tt::tt_metal::distributed::multihost;
 
 namespace tt::tt_metal::distributed {
 
 namespace {
+
+bool socket_uses_rank_scoped_semantics(const SocketConfig& config) {
+    // Public SocketConfig construction is currently split into two modes:
+    // 1. Explicit sender/receiver ranks, where endpoint device coordinates are
+    //    expressed in canonical logical mesh coordinates and the handshake is
+    //    scoped to the owning rank pair.
+    // 2. Explicit sender/receiver mesh IDs, where handshakes remain mesh-scoped.
+    return !config.sender_mesh_id.has_value();
+}
 
 void barrier_across_send_recv_ranks(
     const std::vector<Rank>& sender_ranks,
@@ -30,43 +43,72 @@ void barrier_across_send_recv_ranks(
     sub_context->barrier();
 }
 
-void validate_device_ownership(
-    multihost::Rank global_sender_rank, multihost::Rank global_receiver_rank, const SocketConfig& config) {
+[[maybe_unused]] void validate_device_ownership(
+    multihost::Rank global_sender_rank,
+    multihost::Rank global_receiver_rank,
+    const SocketConfig& config,
+    const tt_fabric::ControlPlane& control_plane) {
     const auto& global_distributed_context = DistributedContext::get_current_world();
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+    const auto& global_logical_bindings = control_plane.get_global_logical_bindings();
 
     bool is_sender = global_distributed_context->rank() == global_sender_rank;
     bool is_receiver = global_distributed_context->rank() == global_receiver_rank;
 
-    auto sender_coord_range = control_plane.get_coord_range(config.sender_mesh_id.value(), tt_fabric::MeshScope::LOCAL);
-    auto receiver_coord_range =
-        control_plane.get_coord_range(config.receiver_mesh_id.value(), tt_fabric::MeshScope::LOCAL);
+    if (!is_sender && !is_receiver) {
+        return;
+    }
 
-    if (is_sender || is_receiver) {
-        for (const auto& connection : config.socket_connection_config) {
-            if (is_sender) {
-                TT_FATAL(
-                    sender_coord_range.contains(connection.sender_core.device_coord),
-                    "Sender core coordinate {} is out of bounds for rank {} on mesh id {}",
-                    connection.sender_core.device_coord,
-                    *global_sender_rank,
-                    *config.sender_mesh_id);
-            } else {
-                TT_FATAL(is_receiver, "Internal Error: Expected receiver rank to be set when sender rank is not set.");
-                TT_FATAL(
-                    receiver_coord_range.contains(connection.receiver_core.device_coord),
-                    "Receiver core coordinate {} is out of bounds for rank {} on mesh id {}",
-                    connection.receiver_core.device_coord,
-                    *global_receiver_rank,
-                    *config.receiver_mesh_id);
-            }
+    TT_FATAL(
+        global_logical_bindings.contains(global_sender_rank) && global_logical_bindings.contains(global_receiver_rank),
+        "Invalid socket sender rank {} or receiver rank {} specified.",
+        *global_sender_rank,
+        *global_receiver_rank);
+
+    const auto expected_sender_host_rank = std::get<1>(global_logical_bindings.at(global_sender_rank));
+    const auto expected_receiver_host_rank = std::get<1>(global_logical_bindings.at(global_receiver_rank));
+
+    for (const auto& connection : config.socket_connection_config) {
+        if (is_sender) {
+            auto actual_sender_host_rank = topology_mapper.get_host_rank_for_coord(
+                config.sender_mesh_id.value(), connection.sender_core.device_coord);
+            TT_FATAL(
+                actual_sender_host_rank.has_value(),
+                "Sender core coordinate {} does not map to any host rank on mesh id {}",
+                connection.sender_core.device_coord,
+                *config.sender_mesh_id);
+            TT_FATAL(
+                actual_sender_host_rank.value() == expected_sender_host_rank,
+                "Sender core coordinate {} is owned by mesh host rank {}, expected {} for rank {} on mesh id {}",
+                connection.sender_core.device_coord,
+                *actual_sender_host_rank,
+                *expected_sender_host_rank,
+                *global_sender_rank,
+                *config.sender_mesh_id);
+        }
+        if (is_receiver) {
+            auto actual_receiver_host_rank = topology_mapper.get_host_rank_for_coord(
+                config.receiver_mesh_id.value(), connection.receiver_core.device_coord);
+            TT_FATAL(
+                actual_receiver_host_rank.has_value(),
+                "Receiver core coordinate {} does not map to any host rank on mesh id {}",
+                connection.receiver_core.device_coord,
+                *config.receiver_mesh_id);
+            TT_FATAL(
+                actual_receiver_host_rank.value() == expected_receiver_host_rank,
+                "Receiver core coordinate {} is owned by mesh host rank {}, expected {} for rank {} on mesh id {}",
+                connection.receiver_core.device_coord,
+                *actual_receiver_host_rank,
+                *expected_receiver_host_rank,
+                *global_receiver_rank,
+                *config.receiver_mesh_id);
         }
     }
 }
 
 }  // namespace
 
-void MeshSocket::process_host_ranks() {
+void MeshSocket::process_host_ranks(const tt_fabric::ControlPlane& control_plane) {
     multihost::Rank sender_rank = config_.sender_rank;
     multihost::Rank receiver_rank = config_.receiver_rank;
     if (config_.distributed_context) {
@@ -83,8 +125,7 @@ void MeshSocket::process_host_ranks() {
         rank_translation_table_[config_.sender_rank] = config_.sender_rank;
         rank_translation_table_[config_.receiver_rank] = config_.receiver_rank;
     }
-    const auto& global_logical_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+    const auto& global_logical_bindings = control_plane.get_global_logical_bindings();
     TT_FATAL(
         global_logical_bindings.contains(sender_rank) && global_logical_bindings.contains(receiver_rank),
         "Invalid socket sender rank {} or receiver rank {} specified.",
@@ -93,18 +134,15 @@ void MeshSocket::process_host_ranks() {
 
     config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
     config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
-    // Skip coordinate validation for same-mesh sockets: coordinates are in
-    // submesh-local space which doesn't match the parent-mesh coord range
-    // returned by get_coord_range.  Role correctness is enforced by the
-    // rank-based check in the constructor.
-    if (config_.sender_mesh_id.value() != config_.receiver_mesh_id.value()) {
-        validate_device_ownership(sender_rank, receiver_rank, config_);
-    }
+    // Skip coordinate validation for rank-addressed sockets (this path): the socket cores are
+    // expressed in submesh-local space, which doesn't match the parent-mesh coord range that
+    // validate_device_ownership / get_coord_range expect. This holds for cross-mesh rank-
+    // addressed sockets too — they use the same submesh-local cores. Role correctness is
+    // enforced by the rank-based check in the constructor.
 }
 
-void MeshSocket::process_mesh_ids() {
-    const auto& global_logical_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+void MeshSocket::process_mesh_ids(const tt_fabric::ControlPlane& control_plane) {
+    const auto& global_logical_bindings = control_plane.get_global_logical_bindings();
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
         if (std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value() ||
@@ -162,33 +200,38 @@ SocketConfig MeshSocket::populate_mesh_ids(
 
 MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
     auto context = config_.distributed_context ? config_.distributed_context : DistributedContext::get_current_world();
+    const auto& control_plane = device->impl().metal_env().get_control_plane();
 
     TT_FATAL(!config_.socket_connection_config.empty(), "Socket connection config cannot be empty.");
+    TT_FATAL(
+        config_.sender_mesh_id.has_value() == config_.receiver_mesh_id.has_value(),
+        "SocketConfig must specify both sender and receiver mesh IDs or neither.");
+    rank_scoped_socket_ = socket_uses_rank_scoped_semantics(config_);
 
     if (config_.sender_mesh_id.has_value()) {
         TT_FATAL(
             config.receiver_mesh_id.has_value(), "Expected receiver mesh id to be set when sender mesh id is set.");
-        this->process_mesh_ids();
+        this->process_mesh_ids(control_plane);
     } else {
-        this->process_host_ranks();
+        this->process_host_ranks(control_plane);
     }
     TT_FATAL(
         config_.sender_mesh_id.has_value() && config_.receiver_mesh_id.has_value(),
         "Unable to determine mesh ids for socket.");
-    auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
+    auto local_mesh_binding = control_plane.get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
     bool same_mesh = config_.sender_mesh_id.value() == config_.receiver_mesh_id.value();
     bool is_sender;
 
-    if (same_mesh) {
+    if (rank_scoped_socket_ || same_mesh) {
         auto current_rank = *context->rank();
         auto sender_rank_val = *config_.sender_rank;
         auto receiver_rank_val = *config_.receiver_rank;
         if (current_rank != sender_rank_val && current_rank != receiver_rank_val) {
             log_warning(
                 LogMetal,
-                "Creating a null same-mesh socket on rank {} (sender={}, receiver={}).",
+                "Creating a null rank-scoped socket on rank {} (sender={}, receiver={}).",
                 current_rank,
                 sender_rank_val,
                 receiver_rank_val);
@@ -209,6 +252,31 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         is_sender = local_mesh_binding[0] == config_.sender_mesh_id.value();
     }
 
+    // Ranks that are neither endpoint took the early return above and allocate nothing, including
+    // ranks co-owning this submesh. That is only safe when every socket buffer is per-core and so
+    // stays on the endpoint cores: a lockstep buffer is replicated across the submesh and would
+    // occupy L1 on co-owners that never reserved it, whose next allocation lands on top. Reject
+    // it before allocating rather than corrupting a peer's L1.
+    //
+    // create_socket_pair and mesh-scoped sockets are built by every co-owner, so lockstep buffers
+    // remain correct there and are not checked.
+    if ((rank_scoped_socket_ || same_mesh) && mesh_is_coowned(*device)) {
+        const auto sender_cores = socket_endpoint_cores(config_, SocketEndpoint::SENDER).size();
+        const auto receiver_cores = socket_endpoint_cores(config_, SocketEndpoint::RECEIVER).size();
+        TT_FATAL(
+            socket_is_fully_per_core(config_),
+            "A rank-scoped socket on a submesh co-owned by several ranks requires every socket buffer to be "
+            "per-core, so that it occupies L1 only on its two endpoint cores and the co-owners -- which build "
+            "nothing for this socket -- have nothing to reserve. Got per_core_allocation={} (needs "
+            "TT_METAL_ALLOCATOR_MODE_HYBRID=1 before the device is opened), storage={}, {} distinct sender "
+            "(device, core) pair(s) and {} receiver (needs exactly 1 each). Fix whichever of those is wrong, "
+            "or place the stage on a submesh a single rank drives.",
+            config_.socket_mem_config.per_core_allocation,
+            config_.socket_mem_config.socket_storage_type,
+            sender_cores,
+            receiver_cores);
+    }
+
     if (is_sender) {
         socket_endpoint_type_ = SocketEndpoint::SENDER;
         config_buffer_ = create_socket_config_buffer(device, config_, socket_endpoint_type_);
@@ -218,25 +286,49 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         data_buffer_ = create_socket_data_buffer(device, config_);
     }
     this->connect_with_peer(context);
+    Inspector::mesh_socket_created(this);
 }
 
 void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context) {
+    const auto& control_plane = get_mesh_device()->impl().metal_env().get_control_plane();
     bool same_mesh = config_.sender_mesh_id.value() == config_.receiver_mesh_id.value();
     auto local_endpoint_desc = generate_local_endpoint_descriptor(*this, context->id());
     SocketPeerDescriptor remote_endpoint_desc;
 
-    if (same_mesh) {
+    // Explicit sender/receiver ranks define a point-to-point socket between the
+    // owning ranks, even when the owners sit on different meshes.
+    if (rank_scoped_socket_ || same_mesh) {
         Rank peer_rank =
             (socket_endpoint_type_ == SocketEndpoint::SENDER) ? config_.receiver_rank : config_.sender_rank;
 
         if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
             forward_descriptor_to_peer(local_endpoint_desc, peer_rank, context);
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(local_endpoint_desc, peer_rank, context);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+            fabric_node_id_map_ = generate_fabric_node_id_map(
+                config_,
+                control_plane,
+                /*sender_device=*/nullptr,
+                /*receiver_device=*/nullptr,
+                /*peer_sender_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::RECEIVER ? remote_endpoint_desc.local_chip_ids
+                                                                  : std::vector<uint32_t>{},
+                /*peer_receiver_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::SENDER ? remote_endpoint_desc.local_chip_ids
+                                                                : std::vector<uint32_t>{});
         } else {
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(local_endpoint_desc, peer_rank, context);
             forward_descriptor_to_peer(local_endpoint_desc, peer_rank, context);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+            fabric_node_id_map_ = generate_fabric_node_id_map(
+                config_,
+                control_plane,
+                /*sender_device=*/nullptr,
+                /*receiver_device=*/nullptr,
+                /*peer_sender_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::RECEIVER ? remote_endpoint_desc.local_chip_ids
+                                                                  : std::vector<uint32_t>{},
+                /*peer_receiver_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::SENDER ? remote_endpoint_desc.local_chip_ids
+                                                                : std::vector<uint32_t>{});
         }
         write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
         execute_with_timeout(
@@ -244,20 +336,44 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
     } else {
         // Cross-mesh socket: use the existing multi-rank handshake protocol
         if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
-            forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
+            forward_descriptor_to_peer(
+                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, control_plane);
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
-                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, control_plane);
+            fabric_node_id_map_ = generate_fabric_node_id_map(
+                config_,
+                control_plane,
+                /*sender_device=*/nullptr,
+                /*receiver_device=*/nullptr,
+                /*peer_sender_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::RECEIVER ? remote_endpoint_desc.local_chip_ids
+                                                                  : std::vector<uint32_t>{},
+                /*peer_receiver_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::SENDER ? remote_endpoint_desc.local_chip_ids
+                                                                : std::vector<uint32_t>{});
         } else {
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
-                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-            forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, control_plane);
+            forward_descriptor_to_peer(
+                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, control_plane);
+            fabric_node_id_map_ = generate_fabric_node_id_map(
+                config_,
+                control_plane,
+                /*sender_device=*/nullptr,
+                /*receiver_device=*/nullptr,
+                /*peer_sender_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::RECEIVER ? remote_endpoint_desc.local_chip_ids
+                                                                  : std::vector<uint32_t>{},
+                /*peer_receiver_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::SENDER ? remote_endpoint_desc.local_chip_ids
+                                                                : std::vector<uint32_t>{});
         }
         write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
 
-        std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(config_.sender_mesh_id.value(), rank_translation_table_);
-        std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(config_.receiver_mesh_id.value(), rank_translation_table_);
+        std::vector<Rank> sender_ranks =
+            get_ranks_for_mesh_id(control_plane, config_.sender_mesh_id.value(), rank_translation_table_);
+        std::vector<Rank> recv_ranks =
+            get_ranks_for_mesh_id(control_plane, config_.receiver_mesh_id.value(), rank_translation_table_);
         execute_with_timeout([&]() { barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context); });
     }
 }
@@ -267,6 +383,10 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     const std::shared_ptr<MeshDevice>& receiver,
     const SocketConfig& base_config) {
     TT_FATAL(!base_config.socket_connection_config.empty(), "Socket connection config cannot be empty.");
+    TT_FATAL(
+        &sender->impl().metal_env() == &receiver->impl().metal_env(),
+        "create_socket_pair requires sender and receiver to share a MetalEnv; the pair is in-process and both "
+        "meshes must see the same control plane.");
 
     auto config = populate_mesh_ids(sender, receiver, base_config);
     auto sender_config_buffer = create_socket_config_buffer(sender, config, SocketEndpoint::SENDER);
@@ -288,10 +408,14 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     write_socket_configs(
         recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER, sender);
 
-    auto fabric_node_id_map = generate_fabric_node_id_map(config, sender, receiver);
+    auto fabric_node_id_map =
+        generate_fabric_node_id_map(config, sender->impl().metal_env().get_control_plane(), sender, receiver);
 
     sender_socket.fabric_node_id_map_ = fabric_node_id_map;
     receiver_socket.fabric_node_id_map_ = fabric_node_id_map;
+
+    Inspector::mesh_socket_created(&sender_socket);
+    Inspector::mesh_socket_created(&receiver_socket);
 
     return {sender_socket, receiver_socket};
 }
@@ -302,6 +426,18 @@ std::shared_ptr<MeshBuffer> MeshSocket::get_data_buffer() const {
 };
 
 std::shared_ptr<MeshBuffer> MeshSocket::get_config_buffer() const { return config_buffer_; }
+
+DeviceAddr MeshSocket::get_config_buffer_address() const {
+    TT_FATAL(config_buffer_, "Socket has no config buffer; it was never allocated on this rank.");
+    if (!socket_endpoint_uses_per_core_allocation(config_, socket_endpoint_type_)) {
+        return config_buffer_->address();
+    }
+    // A per-core buffer's address lives on each device's Buffer, one per core; the mesh-level
+    // scalar stays 0. Per-core requires a single (device, core) for the endpoint, so resolve there.
+    const auto cores = socket_endpoint_cores(config_, socket_endpoint_type_);
+    const auto& core = *cores.begin();
+    return experimental::per_core_allocation::get_per_core_address(*config_buffer_, core.device_coord, core.core_coord);
+}
 
 const SocketConfig& MeshSocket::get_config() const { return config_; }
 
@@ -330,12 +466,12 @@ namespace std {
 
 std::size_t hash<tt::tt_metal::distributed::SocketConnection>::operator()(
     const tt::tt_metal::distributed::SocketConnection& conn) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(conn.sender_core, conn.receiver_core);
+    return ttsl::hash::hash_objects_with_default_seed(conn.sender_core, conn.receiver_core);
 }
 
 std::size_t hash<tt::tt_metal::distributed::MeshCoreCoord>::operator()(
     const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(coord.device_coord, coord.core_coord);
+    return ttsl::hash::hash_objects_with_default_seed(coord.device_coord, coord.core_coord);
 }
 
 std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
@@ -346,7 +482,7 @@ std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
         distributed_context_rank = config.distributed_context->rank();
         distributed_context_size = config.distributed_context->size();
     }
-    return tt::stl::hash::hash_objects_with_default_seed(
+    return ttsl::hash::hash_objects_with_default_seed(
         config.socket_connection_config,
         config.socket_mem_config,
         config.sender_rank,
@@ -357,7 +493,7 @@ std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
 
 std::size_t hash<tt::tt_metal::distributed::MeshSocket>::operator()(
     const tt::tt_metal::distributed::MeshSocket& socket) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(socket.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(socket.attribute_values());
 }
 
 }  // namespace std

@@ -31,9 +31,13 @@ def run_test_FalconCausalLM_end_to_end(
 
     configuration = transformers.FalconConfig.from_pretrained(model_version)
     configuration.num_hidden_layers = num_layers
-    model = transformers.models.falcon.modeling_falcon.FalconForCausalLM.from_pretrained(
-        model_version, config=configuration
-    ).eval()
+    model = (
+        transformers.models.falcon.modeling_falcon.FalconForCausalLM.from_pretrained(
+            model_version, config=configuration
+        )
+        .eval()
+        .to(torch.float32)
+    )
 
     head_dim = configuration.hidden_size // configuration.num_attention_heads
     use_cache = True

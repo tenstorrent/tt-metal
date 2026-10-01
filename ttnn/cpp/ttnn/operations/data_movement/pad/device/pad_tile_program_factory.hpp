@@ -4,28 +4,14 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "pad_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
-struct PadTileCoreSharedVariables {
-    tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-    tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-};
-
 struct PadTileCoreProgramFactory {
-    using shared_variables_t = PadTileCoreSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const PadParams& operation_attributes,
-        const PadInputs& tensor_args,
-        Tensor& tensor_return_value);
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value);
 };
 }  // namespace ttnn::prim

@@ -75,6 +75,7 @@ class TimestepEmbedding(Module):
         time_embed_dim,
         act_fn="silu",
         dtype=ttnn.bfloat16,
+        bias: bool = True,
         mesh_device=None,
         tp_mesh_axis=None,
         ccl_manager=None,
@@ -85,15 +86,15 @@ class TimestepEmbedding(Module):
         self.time_embed_dim = time_embed_dim
         self.mesh_device = mesh_device
         self.act_fn = ACT2CLS[act_fn]  # TODO: Fuse with linear instead
-        self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
+        self.linear_1 = Linear(in_channels, time_embed_dim, bias=bias, mesh_device=mesh_device, dtype=dtype)
 
         if tp_mesh_axis is None:
-            self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
+            self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=bias, mesh_device=mesh_device, dtype=dtype)
         else:  # Specifically for Wan2.2
             self.linear_2 = ColParallelLinear(
                 time_embed_dim,
                 time_embed_dim,
-                bias=True,
+                bias=bias,
                 mesh_device=mesh_device,
                 dtype=dtype,
                 mesh_axis=tp_mesh_axis,
@@ -107,14 +108,14 @@ class TimestepEmbedding(Module):
 
 
 class PixArtAlphaTextProjection(Module):
-    def __init__(self, in_features, hidden_size, mesh_device=None, act_fn="silu"):
+    def __init__(self, in_features, hidden_size, bias: bool = True, mesh_device=None, act_fn="silu"):
         super().__init__()
 
         self.in_features = in_features
         self.hidden_size = hidden_size
         self.mesh_device = mesh_device
-        self.linear_1 = Linear(in_features, hidden_size, bias=True, mesh_device=mesh_device, activation_fn=act_fn)
-        self.linear_2 = Linear(hidden_size, hidden_size, bias=True, mesh_device=mesh_device)
+        self.linear_1 = Linear(in_features, hidden_size, bias=bias, mesh_device=mesh_device, activation_fn=act_fn)
+        self.linear_2 = Linear(hidden_size, hidden_size, bias=bias, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_1(x)
@@ -176,6 +177,7 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         embedding_dim: int,
         pooled_projection_dim: int,
         mesh_device: ttnn.MeshDevice | None = None,
+        bias: bool = True,
         with_guidance: bool = True,
     ) -> None:
         super().__init__()
@@ -183,13 +185,16 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         self.embedding_dim = embedding_dim
         self.pooled_projection_dim = pooled_projection_dim
         self.mesh_device = mesh_device
-        self.with_guidance = with_guidance
 
-        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device)
+        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, bias=bias, mesh_device=mesh_device)
         self.guidance_embedder = (
-            TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device) if with_guidance else None
+            TimestepEmbedding(256, embedding_dim, bias=bias, mesh_device=mesh_device) if with_guidance else None
         )
-        self.text_embedder = PixArtAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
+        self.text_embedder = (
+            PixArtAlphaTextProjection(pooled_projection_dim, embedding_dim, bias=bias, mesh_device=mesh_device)
+            if pooled_projection_dim != 0
+            else None
+        )
 
         self.time_proj_factor = self._create_time_proj_factor(256)
 
@@ -212,11 +217,10 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         *,
         timestep: ttnn.Tensor,
         guidance: ttnn.Tensor | None = None,
-        pooled_projection: ttnn.Tensor,
+        pooled_projection: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        batch_size = pooled_projection.shape[0]
+        batch_size = timestep.shape[0]
 
-        assert len(pooled_projection.shape) == 2
         assert timestep.shape == [batch_size, 1]
         assert timestep.dtype == ttnn.float32, "timesteps require float32 precision"
 
@@ -224,23 +228,26 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         c = ttnn.cos(emb)
         s = ttnn.sin(emb)
         timesteps_proj = ttnn.concat([c, s], dim=-1)
-        timesteps_emb = self.timestep_embedder(timesteps_proj)
+        output = self.timestep_embedder(timesteps_proj)
 
-        text_emb = self.text_embedder(pooled_projection)
+        if self.text_embedder is not None:
+            assert pooled_projection is not None
+            assert len(pooled_projection.shape) == 2
+            assert pooled_projection.shape[0] == batch_size
 
-        if not self.with_guidance:
-            return timesteps_emb + text_emb
+            output += self.text_embedder(pooled_projection)
 
-        assert guidance is not None
-        assert guidance.shape == [batch_size, 1]
+        if self.guidance_embedder is not None:
+            assert guidance is not None
+            assert guidance.shape == [batch_size, 1]
 
-        emb = guidance * self.time_proj_factor
-        c = ttnn.cos(emb)
-        s = ttnn.sin(emb)
-        guidances_proj = ttnn.concat([c, s], dim=-1)
-        guidance_emb = self.guidance_embedder(guidances_proj)
+            emb = guidance * self.time_proj_factor
+            c = ttnn.cos(emb)
+            s = ttnn.sin(emb)
+            guidances_proj = ttnn.concat([c, s], dim=-1)
+            output += self.guidance_embedder(guidances_proj)
 
-        return timesteps_emb + guidance_emb + text_emb
+        return output
 
 
 class PatchEmbed(Module):
@@ -574,7 +581,6 @@ class WanTimeTextImageEmbedding(Module):
             mesh_axis=tp_mesh_axis,
             ccl_manager=ccl_manager,
         )  # Output is fractured according to the older behaviour when sharding from torch. See _prepare_torch_state(...)
-        # NOTE: Reference cose uses gelu_tanh. We have gelu fused with matmul, and use this instead. Test indicates little to no difference in results.
         self.text_embedder = PixArtAlphaTextProjection(
             text_embed_dim, dim, act_fn="gelu_tanh", mesh_device=self.mesh_device
         )
@@ -639,3 +645,90 @@ class Embedding(Module):
 
     def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
         return ttnn.embedding(x, self.weight.data, layout=ttnn.TILE_LAYOUT)
+
+
+class LTXAdaLayerNormSingle(Module):
+    """
+    LTX-2 adaptive layer normalization for timestep conditioning.
+
+    Embeds a timestep via sinusoidal projection + MLP, then projects to
+    `embedding_coefficient * embedding_dim` modulation parameters (shift/scale/gate
+    groups for self-attn, cross-attn, and feedforward).
+
+    Reference: LTX-2 adaln.py AdaLayerNormSingle
+    """
+
+    def __init__(
+        self,
+        embedding_dim: int,
+        embedding_coefficient: int = 6,
+        mesh_device=None,
+        dtype=ttnn.float32,
+    ):
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.embedding_coefficient = embedding_coefficient
+        self.mesh_device = mesh_device
+
+        # Timestep embedding: sinusoidal(256) -> MLP(256 -> embedding_dim)
+        # Use fp32 for precision in sinusoidal projection
+        self.emb = _LTXTimestepEmbedding(embedding_dim, mesh_device=mesh_device, dtype=dtype)
+
+        # Project to modulation params: SiLU -> Linear(embedding_dim, coefficient * embedding_dim)
+        self.linear = Linear(
+            embedding_dim,
+            embedding_coefficient * embedding_dim,
+            bias=True,
+            mesh_device=mesh_device,
+            dtype=dtype,
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # Remove "silu" entries (no weights in SiLU activation)
+        keys_to_remove = [k for k in state if k.startswith("silu")]
+        for k in keys_to_remove:
+            del state[k]
+
+    def forward(self, timestep: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """
+        Args:
+            timestep: (B, 1, 1, 1) scalar timestep (already on device)
+
+        Returns:
+            (modulation_params, embedded_timestep) where:
+            - modulation_params: (1, 1, B, coefficient * embedding_dim)
+            - embedded_timestep: (1, 1, B, embedding_dim)
+        """
+        embedded_timestep = self.emb(timestep)
+        modulation_params = self.linear(ttnn.silu(embedded_timestep))
+        return modulation_params, embedded_timestep
+
+
+class _LTXTimestepEmbedding(Module):
+    """
+    Internal: PixArtAlphaCombinedTimestepSizeEmbeddings for LTX-2.
+
+    Timesteps(256, flip_sin_to_cos=True, downscale_freq_shift=0) + TimestepEmbedding(256, dim).
+    """
+
+    def __init__(self, embedding_dim: int, mesh_device=None, dtype=ttnn.bfloat16):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.timestep_embedder = TimestepEmbedding(
+            in_channels=256,
+            time_embed_dim=embedding_dim,
+            mesh_device=mesh_device,
+            dtype=dtype,
+        )
+        # Sinusoidal with cos first, no freq shift (matching LTX-2's flip_sin_to_cos=True)
+        self.time_proj = Timesteps(
+            num_channels=256,
+            cos_first=True,
+            downscale_freq_shift=0,
+            mesh_device=mesh_device,
+            dtype=dtype,
+        )
+
+    def forward(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
+        timesteps_proj = self.time_proj(timestep)
+        return self.timestep_embedder(timesteps_proj)

@@ -22,8 +22,9 @@ Layout mapping from the legacy rotary tests (``[W, Z, Y, X]`` with cos/sin ``[1,
   (different users at different cached steps) are what ``is_decode_mode=True`` and ``[1, batch, …]`` cos/sin fix
   relative to the legacy op (see ``test_rotary_embedding_hf_decode_per_batch_position``).
 
-The HF op requires TILE layout and ``head_dim`` divisible by ``2 * ttnn.TILE_SIZE``; ``test_rotary_embedding_hf_row_major`` skips
-because row-major inputs are rejected by validation.
+The HF op requires TILE layout and padded ``head_dim`` equal to ``ttnn.TILE_SIZE`` or divisible by
+``2 * ttnn.TILE_SIZE``; ``test_rotary_embedding_hf_row_major`` skips because row-major inputs are
+rejected by validation.
 
 See ``ttnn/cpp/.../rotary_embedding_hf/device/rotary_embedding_hf_device_operation.cpp`` for shape rules.
 """
@@ -183,7 +184,7 @@ def _decode_hf_cos_sin_sharded(device, batch: int, head_dim: int, cos_torch, sin
 
 @pytest.mark.parametrize(
     "W, Z, Y, X",
-    ([1, 1, 128, 64], [1, 71, 128, 64], [32, 1, 32, 64], [32, 71, 32, 64]),
+    ([1, 1, 128, 64], [1, 71, 128, 64], [32, 1, 32, 64], [32, 71, 32, 64], [1, 1, 128, 32], [1, 32, 32, 32]),
 )
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("in_sharded", [True, False])
@@ -264,7 +265,8 @@ def test_rotary_embedding_hf_prefill(
     assert p
 
 
-def test_rotary_embedding_hf_decode_per_batch_position(device):
+@pytest.mark.parametrize("head_dim", [32, 128])
+def test_rotary_embedding_hf_decode_per_batch_position(device, head_dim):
     """Decode mode: each batch row uses a different cached position (legacy op could not do this).
 
     ``cos_cache`` / ``sin_cache`` are ``[1, batch, 1, head_dim]`` with one row per user; positions are taken
@@ -276,7 +278,6 @@ def test_rotary_embedding_hf_decode_per_batch_position(device):
 
     batch = 32
     num_heads = 8
-    head_dim = 128
     cache_size = 2048
     dtype = ttnn.bfloat16
 
@@ -340,7 +341,8 @@ def test_rotary_embedding_hf_decode_per_batch_position(device):
     ttnn.deallocate(sin_tt)
 
 
-def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device):
+@pytest.mark.parametrize("head_dim", [32, 128])
+def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device, head_dim):
     """Decode mode regression: force ``batch_per_core > 1`` and verify per-batch cos/sin rows are honored."""
     torch.manual_seed(0)
 
@@ -348,7 +350,6 @@ def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device):
     num_cores = core_grid.x * core_grid.y
     batch = num_cores * 2  # Forces batch_per_core = 2 with exact height-shard packing.
     num_heads = 8
-    head_dim = 128
     cache_size = max(2048, batch * 4)
     dtype = ttnn.bfloat16
 
@@ -441,9 +442,96 @@ def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device):
     ttnn.deallocate(sin_tt)
 
 
+@pytest.mark.parametrize("head_dim", [64, 128])
+@pytest.mark.parametrize(
+    "input_dtype,sincos_dtype",
+    [
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.float32),
+    ],
+)
+def test_rotary_embedding_hf_decode_mixed_dtype(device, head_dim, input_dtype, sincos_dtype):
+    """Decode HEIGHT-sharded path with mixed input vs cos/sin dtypes (head_dim > 32)."""
+    torch.manual_seed(0)
+
+    batch = 8
+    num_heads = 8
+    cache_size = 2048
+    positions = [0, 57, 113, 179, 241, 307, 367, 431]
+
+    cos_full = torch.randn(1, 1, cache_size, head_dim, dtype=torch.float32)
+    sin_full = torch.randn(1, 1, cache_size, head_dim, dtype=torch.float32)
+    cos_1b1d = torch.stack([cos_full[0, 0, pos, :] for pos in positions], dim=0).unsqueeze(0).unsqueeze(2)
+    sin_1b1d = torch.stack([sin_full[0, 0, pos, :] for pos in positions], dim=0).unsqueeze(0).unsqueeze(2)
+
+    torch_input = torch.randn(1, batch, num_heads, head_dim, dtype=torch.float32)
+    torch_golden = _torch_hf_rope_decode_broadcast_heads(torch_input, cos_1b1d, sin_1b1d)
+
+    padded_heads = nearest_32(num_heads)
+    inp_for_dev = torch_input
+    if padded_heads != num_heads:
+        pad_h = padded_heads - num_heads
+        z = torch.zeros(1, batch, pad_h, head_dim, dtype=torch_input.dtype)
+        inp_for_dev = torch.cat([torch_input, z], dim=2)
+
+    input_host_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
+    sincos_host_dtype = torch.float32 if sincos_dtype == ttnn.float32 else torch.bfloat16
+
+    qk_mem = _decode_qk_heads_mem_config(device, batch, num_heads, head_dim)
+    input_tensor = ttnn.from_torch(
+        inp_for_dev.to(input_host_dtype),
+        dtype=input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=qk_mem,
+    )
+    cos_tt, sin_tt = _decode_hf_cos_sin_sharded(
+        device,
+        batch,
+        head_dim,
+        cos_1b1d.to(sincos_host_dtype),
+        sin_1b1d.to(sincos_host_dtype),
+        dtype=sincos_dtype,
+    )
+
+    rope_cfg = _hf_rope_compute_kernel_config()
+    out_tt = ttnn.experimental.rotary_embedding_hf(
+        input_tensor,
+        cos_tt,
+        sin_tt,
+        is_decode_mode=True,
+        compute_kernel_config=rope_cfg,
+    )
+    out_torch = ttnn.to_torch(out_tt).to(torch.float32)
+    if padded_heads != num_heads:
+        out_torch = out_torch[:, :, :num_heads, :]
+
+    p, o = comp_pcc(torch_golden, out_torch)
+    logger.info(o)
+    assert p
+
+    ttnn.deallocate(out_tt)
+    ttnn.deallocate(input_tensor)
+    ttnn.deallocate(cos_tt)
+    ttnn.deallocate(sin_tt)
+
+
 @pytest.mark.parametrize(
     "W, Z, Y, X",
-    ([1, 1, 32, 64], [1, 71, 32, 64], [1, 1, 64, 64], [1, 71, 64, 64], [1, 32, 32, 64], [1, 2, 32, 64]),
+    (
+        [1, 1, 32, 64],
+        [1, 71, 32, 64],
+        [1, 1, 64, 64],
+        [1, 71, 64, 64],
+        [1, 32, 32, 64],
+        [1, 2, 32, 64],
+        [1, 1, 32, 32],
+        [1, 2, 32, 32],
+    ),
 )
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("token_idx", [0, 128, 129, 1024, 1025])
@@ -528,7 +616,7 @@ def test_rotary_embedding_hf_decode(
     assert p
 
 
-@pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 128, 64)])
+@pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 128, 32), (1, 1, 128, 64)])
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("in_sharded", [True])
 @pytest.mark.parametrize("out_sharded", [True])
@@ -608,7 +696,7 @@ def test_rotary_embedding_hf_prefill_fp32(
     assert p
 
 
-@pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 32, 64)])
+@pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 32, 32), (1, 1, 32, 64)])
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("token_idx", [0, 128])
 @pytest.mark.parametrize("in_sharded", [True])
@@ -697,3 +785,33 @@ def test_rotary_embedding_hf_decode_fp32(
 def test_rotary_embedding_hf_row_major(W, Z, Y, X, cache_size, device):
     """``rotary_embedding_hf`` validates TILE layout; row-major inputs are unsupported."""
     pytest.skip("rotary_embedding_hf requires TILE layout inputs (see device op validate)")
+
+
+@pytest.mark.parametrize(
+    "input_seq, head_dim",
+    [
+        (32, 64),
+        (64, 64),
+        (128, 64),
+    ],
+)
+def test_rotary_embedding_hf_prefill_rejects_cos_seq_smaller_than_input_seq(input_seq, head_dim, device, expect_error):
+    torch.manual_seed(0)
+    num_heads = 8
+    x = torch.randn([1, num_heads, input_seq, head_dim]).bfloat16().float()
+    cos = torch.randn([1, 1, 1, head_dim]).bfloat16().float()
+    sin = torch.randn([1, 1, 1, head_dim]).bfloat16().float()
+
+    xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    cost = ttnn.Tensor(cos, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    rope_cfg = _hf_rope_compute_kernel_config()
+    with expect_error(RuntimeError, "Cos seq_len must be >= input seq_len"):
+        ttnn.experimental.rotary_embedding_hf(
+            xt,
+            cost,
+            sint,
+            is_decode_mode=False,
+            compute_kernel_config=rope_cfg,
+        )

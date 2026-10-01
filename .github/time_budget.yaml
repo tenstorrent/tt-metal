@@ -8,17 +8,21 @@
 
 # Team names are currently assigned to tests by best guess.
 #   Please message #tt-metal-infra if there are any concerns.
-# Sku names do not make the distinction between baremetal/vm, or viommu/non-viommu.
-#   This will be determined per pipeline based on need.
 
-# Example:
 metal_infra:
-  smoke: # intended category for PR gate and merge gate
-    CPU: 0
-    N150: 0
-    N300: 0
-    wh_llmbox: 0
-  sanity: # APC will be renamed to sanity
+  pr_gate:
+    wh_n150_civ2: 0
+    wh_n300_civ2: 0
+    wh_llmbox_civ2: 0
+    bh_p150b_civ2_viommu: 0
+    bh_p150b_civ2: 0
+  merge_gate:
+    wh_n150_civ2: 0
+    wh_n300_civ2: 0
+    wh_llmbox_civ2: 0
+    bh_p150b_civ2_viommu: 0
+    bh_p150b_civ2: 0
+  sanity:
     CPU: 0
     N150: 0
     N300: 0
@@ -28,7 +32,6 @@ metal_infra:
     P150b: 0
     P300: 0
     wh_llmbox: 0
-    bh_llmbox: 0
     bh_loudbox: 0
     bh_qb: 0
   unit:
@@ -64,33 +67,150 @@ metal_infra:
     wh_galaxy: 0
     bh_galaxy: 0
 
-# Current time budgets are based on sums of existing tests.
-# No official decision has been made yet for division of budgets per team.
 ttnn:
+  pr_gate:
+    wh_n150_civ2: 30
+  merge_gate:
+    wh_n150_civ2: 45
+    wh_n300_civ2: 55
+    wh_llmbox_civ2_viommu: 15
+    bh_p150b_civ2_viommu: 45
+    sim_wh_n150: 40
+    sim_bh_p150: 40
   sanity:
-    wh_n300_civ2: 545
+    wh_n300_civ2: 580
     bh_p100: 545
-    bh_p150b_civ2: 545
+    bh_p150b_civ2: 565
+    bh_quietbox_2: 65
+    bh_p300: 15
+    wh_llmbox_civ2: 40
+    sim_wh_n150: 695
+    sim_bh_p150: 680
   unit:
     wh_llmbox: 50
-    wh_galaxy: 35
+    wh_galaxy: 125
+    bh_galaxy: 40
+    bh_p100: 815
+    bh_p150b_civ2: 855
+    wh_n150_civ2: 1040
+    wh_n300_civ2: 1190
+    bh_p150b_civ2_viommu: 125
+    bh_p300: 60
+    bh_quietbox_2: 60
+  package_and_release:
+    wh_n150_civ2: 205
+    bh_p150b_civ2: 205
   e2e:
     wh_llmbox: 90
-    wh_galaxy: 70
-    bh_galaxy: 70
+    wh_galaxy: 0
+    bh_galaxy: 30
+    bh_p150b_civ2: 55
+    bh_loudbox: 85
+    bh_p300: 85
+    bh_quietbox_2: 85
+  e2e_tier1:
+    wh_n150: 8
+    wh_llmbox_perf: 6
+  unit_tier1:
+    wh_n150: 20
+    wh_llmbox: 8
+  e2e_tier3:
+    wh_n150: 21
+  unit_tier3:
+    wh_n150: 4
+  device_perf:
+    bh_p150b_civ2: 9
+    wh_n150: 10
+    wh_llmbox_perf: 8
   integration:
     wh_llmbox: 30
-    wh_galaxy: 350
+    wh_galaxy: 100
+    wh_n150_civ2: 60
+    bh_p100: 30
+    bh_p150b_civ2_viommu: 30
+  profiler:
+    wh_llmbox: 30
+    wh_n150_civ2: 8
+    wh_n300_civ2: 8
+    bh_p100a_civ2_viommu: 8
+    bh_p150b_civ2_viommu: 8
+  demo:
+    bh_sc1_high_power: 20
+  sweep:
+    wh_galaxy: 640
+    wh_n150_civ2: 1100
+    wh_n300_civ2: 990
+    wh_llmbox: 920
+    bh_p100a_civ2_viommu: 660
+    bh_p150b_civ2_viommu: 640
+    bh_p300_viommu: 720
+  sweep_validation:
+    wh_n150: 120
+    wh_n300: 120
+    bh_p150b_civ2: 120
+    wh_galaxy: 120
+
+train:
+  merge_gate:
+    bh_p150b_civ2: 60
+  unit:
+    bh_p100: 105
+    bh_p150b_civ2: 90
+  perf:
+    bh_p100: 160
+    bh_p150b_civ2: 400
+  e2e_tier3:
+    bh_sc1_high_power: 140
+
+ttsim:
+  merge_gate:
+    sim_quasar: 15
+  unit:
+    sim_wh_n150: 15
+    sim_bh_p150: 15
+  sanity:
+    sim_wh_n150: 30
+    sim_bh_p150: 30
+    sim_quasar: 30
 
 shield:
-  e2e:
-    wh_llmbox: 45
+  e2e_tier2:
+    wh_n150: 150
+    wh_n300: 30
+    bh_p150b_civ2: 120
+  e2e_tier3:
+    bh_p150b_civ2: 36
+  unit_tier2:
+    wh_n150: 220
+    wh_n300: 220
+    bh_p150: 100
+    bh_p150b_civ2: 90
+  unit_tier3:
+    bh_p150b_civ2: 50
+    bh_p150: 2
+  device_perf:
+    wh_n150: 100
+    wh_n300_civ2: 10
+    bh_p150: 60
+  demo:
+    bh_sc4: 60
+    bh_sc4_high_power: 300
+    bh_sc1: 120
+    bh_sc1_high_power: 210
 
-# Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
+  merge_gate:
+    cpu_medium: 10
+    wh_n300_civ2: 10
   unit:
+    cpu_medium: 275
     wh_llmbox: 60
-    wh_galaxy: 25
+    wh_galaxy: 75
+    wh_n300_civ2: 15
+    wh_llmbox_civ2: 65
+    bh_loudbox: 240
+    bh_p300: 195
+    bh_quietbox_2: 195
   stress:
     wh_galaxy_perf: 120
   integration:
@@ -100,78 +220,206 @@ scaleout:
     bh_galaxy: 10
   sanity:
     wh_galaxy: 20
+    wh_llmbox_civ2: 30
+    wh_n300_civ2: 15
+    bh_quietbox_2: 15
+    bh_p300: 15
+    wh_n300_perf: 5
+    bh_p150_perf: 5
+  perf:
+    wh_llmbox_perf: 185
+    bh_quietbox_2: 45
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
-    bh_galaxy: 60
-    bh_sp1: 90
-    bh_sp4: 150
+    bh_galaxy: 155
+    bh_sc1: 20
+    bh_sc4: 90
+    bh_sc16: 150
+    bh_loudbox: 80
+    bh_p300: 80
+    bh_quietbox_2: 80
+  e2e_tier1:
+    bh_sc1: 20
+    bh_sc4: 90
+    bh_sc16: 150
 
 runtime:
+  pr_gate:
+    wh_n150_civ2: 30
+    github_hosted_cpu: 15
+  merge_gate:
+    wh_n150_civ2: 45
+    wh_n300_civ2: 15
+    wh_llmbox_civ2_viommu: 15
+    bh_p150b_civ2_viommu: 45
+    github_hosted_cpu: 15
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
-    bh_quietbox: 5
     bh_loudbox: 5
+    wh_n150: 10
+    bh_p150: 10
+    sim_wh_n150: 30
+    sim_bh_p150: 30
+    sim_wh_galaxy: 10
+    sim_bh_galaxy: 10
   unit:
-    wh_n150_civ2: 217
-    wh_n300_civ2: 74
-    bh_p150b_civ2: 205
-    bh_p150b_civ2_viommu: 5
-    bh_p100a_civ2_viommu: 74
-    bh_quietbox: 20
-    wh_galaxy: 35
+    wh_n150_civ2: 232
+    wh_n300_civ2: 139
+    wh_llmbox: 20
+    bh_p150b_civ2: 214
+    bh_p300: 69
+    bh_p150b_civ2_viommu: 11
+    bh_p100a_civ2_viommu: 79
+    bh_loudbox: 20
+    wh_galaxy: 39
   integration:
     wh_n150_civ2: 360
     bh_p150b_civ2: 360
-    bh_quietbox: 25
+    bh_loudbox: 25
+    wh_galaxy: 15
+    bh_galaxy: 15
+  profiler:
+    wh_llmbox: 60
+    wh_galaxy: 50
+    wh_n150_civ2: 52
+    wh_n300_civ2: 52
+    bh_p100a_civ2_viommu: 60
+    bh_p150b_civ2_viommu: 60
   perf:
-    wh_n300_civ2: 55
-    bh_p150_perf: 40
+    wh_n300_civ2: 65
+    bh_p150_perf: 50
+    bh_p150b_civ2_viommu: 10
+  perf_profiler:
+    wh_n300_civ2: 5
+    wh_n300_perf: 20
+    bh_p150_perf: 25
+
+triage:
+  merge_gate:
+    wh_n150_civ2: 11
+    bh_p150b_civ2_viommu: 11
+  unit:
+    wh_n150_civ2: 16
+    bh_p150b_civ2_viommu: 16
 
 llk:
+  pr_gate:
+    wh_n150_civ2: 40
+    bh_p150b_civ2_viommu: 40
+  sanity:
+    wh_n150_civ2: 40
+    bh_p150b_civ2_viommu: 40
   unit:
-    wh_n150_civ2: 100
-    bh_p150b_civ2: 70
+    wh_n150_civ2: 40
+    wh_n300_civ2: 40
+    bh_p150: 40
+    bh_p150b_civ2_viommu: 110
+    bh_p100: 40
+  e2e:
+    wh_n150_civ2: 1800
+    bh_p150b_civ2: 1800
+  perf:
+    wh_n150_civ2: 1200
+    bh_p150b_civ2: 1200
+  bit_exact:
+    wh_n150_civ2: 90
+    bh_p150b_civ2: 180
+  ttnop:
+    wh_n150_civ2: 21600
+    bh_p150b_civ2: 21600
+  merge_gate:
+    wh_n150_civ2: 300
+    bh_p150b_civ2_viommu: 70
+  weekly:
+    sim_wh_n150_xl: 75
+    sim_bh_p150_xl: 240
+    sim_quasar_xl: 180
 
 models:
+  agentic_research_tier3:
+    bh_quietbox_2: 102
+  merge_gate:
+    wh_galaxy_merge_gate: 5
   sanity:
-    wh_galaxy_perf: 10
+    wh_galaxy_perf: 8
+    bh_p150b_civ2_viommu: 110
+    bh_p300: 10
   stress:
     wh_galaxy_perf: 500
   e2e:
-    wh_llmbox: 198
-    wh_llmbox_perf: 312
-    wh_n150: 100
-    wh_n300: 15
-    wh_galaxy_perf: 120
-  unit:
-    wh_llmbox: 175
-    wh_llmbox_perf: 230
-    wh_n150: 130
-    wh_n300: 15
-    wh_galaxy_perf: 45
+    bh_p150b_civ2: 8
+    bh_p300: 20
+    bh_loudbox: 200
+    bh_quietbox_2: 90
+    bh_sc1: 20
+  e2e_tier1:
+    wh_n150: 28
+    wh_galaxy_perf: 215
+    bh_p150: 27
+    bh_quietbox_2: 434
+    bh_galaxy: 78
+    bh_sc1: 335
+    bh_sc4: 160
+  e2e_tier2:
+    wh_llmbox_perf: 270
+    wh_n150: 45
+    wh_n300: 6
+    bh_p150: 26
+    bh_p300: 42
+    bh_quietbox_2: 186
+  e2e_tier3:
+    wh_llmbox_perf: 180
+    wh_galaxy_perf: 55
+    wh_n150: 108
+    wh_n300: 60
+    bh_p150: 36
+    bh_p150b_civ2: 30  # VibeVoice-1.5B (PR #51447)
+    bh_p300: 13
+    bh_quietbox_2: 62
+  unit_tier1:
+    wh_llmbox: 155
+    wh_n150: 133
+    wh_galaxy: 260
+    wh_galaxy_perf: 65
+    bh_p150: 20
+    bh_quietbox_2: 502
+    bh_galaxy: 75
+    bh_sc1: 370
+    bh_sc4: 50
+  unit_tier2:
+    wh_llmbox: 114
+    wh_llmbox_perf: 191
+    wh_n150: 87
+    wh_n300: 30
+    wh_galaxy_perf: 80
+    bh_p150: 20
+    bh_quietbox_2: 60
+  unit_tier3:
+    wh_llmbox: 90
+    wh_galaxy: 80
+    wh_llmbox_perf: 58
+    wh_n150: 75
+    wh_n150_civ2: 12
+    wh_n300: 43
+    bh_p150: 30
+    bh_p150b_civ2: 8  # VibeVoice-1.5B (PR #51447)
+    bh_p300: 30
+    bh_quietbox_2: 25
   integration:
-    wh_llmbox: 422
-  perf:
-    wh_llmbox_perf: 685
-    wh_galaxy: 280
-    wh_galaxy_perf: 150
-    # UF Galaxy perf pool (see sku_config wh_galaxy_perf_uf)
-    wh_galaxy_perf_uf: 75
+    wh_llmbox: 0
   device_perf:
-    wh_n150: 10
-    bh_p150: 10
-    bh_p300: 10
-
+    wh_n150: 20
+    wh_galaxy_perf: 70
+    bh_p150: 20
+    bh_p300: 20
+    bh_quietbox_2: 80
   demo:
-    wh_llmbox_perf: 200
-    wh_llmbox_perf_release: 1090
-    wh_galaxy: 0
-    wh_galaxy_perf: 150
-    wh_galaxy_perf_uf: 45
-    wh_galaxy_release: 345
-    bh_galaxy: 30
+    bh_galaxy: 470
+    bh_sc1: 1750
+    bh_sc1_high_power: 388
+    bh_sc4: 60
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -179,19 +427,51 @@ models:
     wh_n300_perf: 200
     bh_p150: 250
     bh_p150_perf: 420
-    bh_p150b_civ2: 250
+    bh_p150b_civ2: 92
     bh_p150b_civ2_viommu: 50
-    bh_deskbox: 250
-    bh_llmbox: 1200
     bh_loudbox: 1200
-
     bh_p300: 800
-    bh_quietbox_2: 280
-  sweep:
-    wh_n150: 10
-    wh_llmbox_perf: 30
-    wh_galaxy: 30
-
+  # Request-behavior additions reserve declared job timeouts, not measured usage.
+  # See tests/model_behavior/README.md#ci-runtime-accounting for each delta.
+  sweep_tier1:
+    wh_llmbox: 131
+    wh_n150: 30
+    wh_n150_civ2: 45
+    wh_galaxy: 40
+    wh_galaxy_perf: 205
+    bh_p150: 30
+    bh_p150b_civ2: 45
+    bh_quietbox_2: 405
+    bh_galaxy: 90
+  sweep_tier2:
+    wh_n150: 30
+    wh_llmbox_perf: 225
+    bh_quietbox_2: 75
+    bh_p150: 30
+  vllm:
+    wh_galaxy_perf: 430
+    bh_quietbox_2: 310
+    wh_llmbox: 342
+    bh_loudbox: 245
+    bh_galaxy: 65
+    wh_n150: 65
 umd:
   unit:
-    wh_galaxy_perf_uf: 35
+    wh_galaxy_perf: 35
+  sanity:
+    wh_n150_civ2: 15
+    wh_n300_civ2: 15
+    bh_p100a_civ2_viommu: 15
+    bh_p150b_civ2_viommu: 15
+
+syseng:
+  integration:
+    wh_n150_civ2: 34
+    wh_n300_civ2: 36
+    bh_p100: 20
+    bh_p150b_civ2: 20
+
+gtm:
+  e2e:
+    wh_galaxy: 135
+    bh_galaxy: 135

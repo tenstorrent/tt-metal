@@ -27,10 +27,10 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TT_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_7, offset0);
-        TT_SFPLOAD(p_sfpu::LREG1, LO16, ADDR_MOD_7, offset1);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, offset0);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_7, offset1);
         TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPMUL24_MOD1_LOWER);
-        TT_SFPSTORE(p_sfpu::LREG0, LO16, ADDR_MOD_6, offset_out);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_6, offset_out);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 1, 2, or 3 cycles per
@@ -74,7 +74,7 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
         {
-            TT_SFPLOADMACRO((0 << 2) | (a & 3), LO16, ADDR_MOD_6, offset1 | (a >> 2));
+            TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::LO16, ADDR_MOD_6, offset1 | (a >> 2));
         }
     }
     else if (dst_index_out == dst_index_in0)
@@ -82,8 +82,8 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
         {
-            TT_SFPLOAD(a, LO16, ADDR_MOD_7, offset1);
-            TT_SFPLOADMACRO((0 << 2) | (b & 3), LO16, ADDR_MOD_6, offset0 | (b >> 2));
+            TT_SFPLOAD(a, InstrModLoadStore::LO16, ADDR_MOD_7, offset1);
+            TT_SFPLOADMACRO((0 << 2) | (b & 3), InstrModLoadStore::LO16, ADDR_MOD_6, offset0 | (b >> 2));
         }
     }
     else if (dst_index_out == dst_index_in1)
@@ -91,8 +91,8 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
         {
-            TT_SFPLOAD(a, LO16, ADDR_MOD_7, offset0);
-            TT_SFPLOADMACRO((0 << 2) | (b & 3), LO16, ADDR_MOD_6, offset1 | (b >> 2));
+            TT_SFPLOAD(a, InstrModLoadStore::LO16, ADDR_MOD_7, offset0);
+            TT_SFPLOADMACRO((0 << 2) | (b & 3), InstrModLoadStore::LO16, ADDR_MOD_6, offset1 | (b >> 2));
         }
     }
     else
@@ -102,9 +102,9 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
         {
-            TT_SFPLOAD(a, LO16, ADDR_MOD_7, offset0);
-            TT_SFPLOADMACRO((1 << 2) | (b & 3), LO16, ADDR_MOD_7, offset2 | (b >> 2));
-            TT_SFPLOAD(b, LO16, ADDR_MOD_6, offset1);
+            TT_SFPLOAD(a, InstrModLoadStore::LO16, ADDR_MOD_7, offset0);
+            TT_SFPLOADMACRO((1 << 2) | (b & 3), InstrModLoadStore::LO16, ADDR_MOD_7, offset2 | (b >> 2));
+            TT_SFPLOAD(b, InstrModLoadStore::LO16, ADDR_MOD_6, offset1);
         }
     }
     TTI_SFPNOP;

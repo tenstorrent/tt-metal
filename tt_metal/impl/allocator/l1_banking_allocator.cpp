@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string_view>
 #include "l1_banking_allocator.hpp"
 
 #include <allocator.hpp>
@@ -13,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <numeric>
 #include <memory>
 #include <optional>
 #include <random>
@@ -66,6 +69,7 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
 
     // Define the bank assignment here.
     std::vector<uint32_t> shuffled_bank_id = {};
+    shuffled_bank_id.reserve(num_l1_banks);
     if (not config_->l1_bank_remap.empty()) {
         TT_ASSERT(
             num_l1_banks == config_->l1_bank_remap.size(),
@@ -211,7 +215,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
     const auto& hal = env.get_hal();
     const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device_id);
     const auto& dispatch_core_config = dispatch_core_manager.get_dispatch_core_config();
-    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+    CoreType dispatch_core_type = resolve_dispatch_core_type(env, device_id, dispatch_core_config);
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -219,9 +223,20 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
+    // The quasar_aether_2x3 map's DRAM endpoints are addressable within a 64 MiB
+    // local field while the DRAM view is larger. Clamp the bank size so top-down
+    // allocations (kernel binaries) never compose an out-of-window operand.
+    uint64_t att_dram_view_size = soc_desc.dram_view_size;
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        const char* att_map = std::getenv("TT_METAL_NOC_ATT");
+        if (att_map != nullptr && std::string_view(att_map) == "quasar_aether_2x3") {
+            constexpr uint64_t k_aether_dram_window_span = 1ull << 26;
+            att_dram_view_size = std::min<uint64_t>(att_dram_view_size, k_aether_dram_window_span);
+        }
+    }
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
-         .dram_bank_size = soc_desc.dram_view_size,
+         .dram_bank_size = att_dram_view_size,
          .dram_bank_offsets = {},
          .dram_unreserved_base = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::UNRESERVED)),
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),
@@ -270,6 +285,22 @@ AllocatorConfig L1BankingAllocator::generate_config(
         const auto noc_coord =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
+    }
+    // With NoC address translation tables a worker is reached by an endpoint selector, and the tables list the workers
+    // in logical row-major order; hardware that walks banks (the Quasar address generator's banking loop) needs bank i
+    // to be the i-th endpoint.
+    if (hal.noc_att_enabled()) {
+        const size_t num_l1_banks = std::count_if(
+            config.core_type_from_noc_coord_table.begin(),
+            config.core_type_from_noc_coord_table.end(),
+            [](const auto& entry) { return entry.second == AllocCoreType::ComputeAndStore; });
+        BankMapping identity(num_l1_banks);
+        std::iota(identity.begin(), identity.end(), 0u);
+        TT_FATAL(
+            config.l1_bank_remap.empty() || config.l1_bank_remap == identity,
+            "l1_bank_remap must be empty (or the identity) when the NoC address translation tables are enabled: they "
+            "require L1 bank i to be the i-th worker in row-major core order.");
+        config.l1_bank_remap = std::move(identity);
     }
     return config;
 }

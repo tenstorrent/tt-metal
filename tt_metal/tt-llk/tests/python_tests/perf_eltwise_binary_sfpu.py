@@ -4,16 +4,16 @@
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
-    PerfRunType,
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
@@ -31,7 +31,11 @@ from helpers.test_variant_parameters import (
 def get_dest_accum_modes(formats):
     if formats.input_format.is_32_bit() and formats.input_format.is_integer():
         return [DestAccumulation.No]
-    return [DestAccumulation.Yes, DestAccumulation.No]
+    # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
+    # for both would record two rows with an identical key (the same kernel twice).
+    return distinct_dest_accumulation_modes(
+        formats, [DestAccumulation.Yes, DestAccumulation.No]
+    )
 
 
 @pytest.mark.perf
@@ -55,11 +59,9 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuElwdiv,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
+        MathOperation.SfpuXlogy,
     ],
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
-    ],
+    dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
@@ -91,13 +93,7 @@ def test_perf_eltwise_binary_sfpu_float(
     configuration = PerfConfig(
         "sources/eltwise_binary_sfpu_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
@@ -122,6 +118,7 @@ def test_perf_eltwise_binary_sfpu_float(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
@@ -142,6 +139,8 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
@@ -175,13 +174,7 @@ def test_perf_eltwise_binary_sfpu_int(
     configuration = PerfConfig(
         "sources/eltwise_binary_sfpu_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
@@ -206,6 +199,7 @@ def test_perf_eltwise_binary_sfpu_int(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
@@ -257,6 +251,9 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
             "DestAccumulation.No is not supported for SfpuAddTopRow on Blackhole"
         )
 
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
+        pytest.skip("SfpuAddTopRow does not support Float32 with DestAccumulation.Yes")
+
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
@@ -268,13 +265,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
     configuration = PerfConfig(
         "sources/eltwise_binary_sfpu_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
@@ -299,6 +290,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)

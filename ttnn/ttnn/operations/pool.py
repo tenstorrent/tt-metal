@@ -49,11 +49,94 @@ def golden_maxpool2d(
 ttnn.attach_golden_function(ttnn.max_pool2d, golden_maxpool2d)
 
 
-def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
+def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
+    """Global average pooling. Wrapper around avg_pool2d.
+
+    Mirrors PyTorch where global pooling has no dedicated op — it always routes through
+    pool2d/adaptive_avg_pool2d. avg_pool2d's pool2d() entry point detects the global-pool
+    case (kernel == input spatial, no padding/dilation) and runs a single pool_sum reduction.
+
+    The caller does not need to flatten to (1, 1, N*H*W, C); the fast path inside pool2d()
+    handles rank-4 NHWC directly. Interleaved pad-to-tile padding (W padded on every H row)
+    is stripped before that fold so the reduce does not sum pad rows.
+
+    Args:
+        input_tensor: Input tensor in NHWC format. Rank 2 [H,W], 3 [H,W,C], or 4 [N,H,W,C] accepted.
+
+    Keyword Args:
+        memory_config: Optional output memory config.
+        dtype: Optional output data type.
+
+    Returns:
+        ttnn.Tensor of shape (N, 1, 1, C) in TILE layout.
+    """
+    shape = list(input_tensor.shape)
+    rank = len(shape)
+    if rank == 4:
+        N, H, W, C = shape
+    elif rank == 3:
+        H, W, C = shape
+        N = 1
+    elif rank == 2:
+        H, W = shape
+        N, C = 1, 1
+    else:
+        raise ValueError(f"global_avg_pool2d expects rank 2, 3, or 4 input, got rank {rank}")
+
+    # The avg_pool2d reduction fast path opts out for sharded inputs (it would force a
+    # sharded→interleaved round-trip that erases the win for direct MobileNetV2-style
+    # callers). For the global_avg_pool2d wrapper specifically, falling through to the
+    # sliding-window path is wrong: it goes through halo, which needs L1_SMALL, and the
+    # legacy C++ global_avg_pool2d device op called pool_sum directly with no halo —
+    # so callers don't reserve L1_SMALL. Convert sharded inputs to interleaved here to
+    # match legacy behavior. Buffer type is preserved.
+    if input_tensor.memory_config().is_sharded():
+        input_tensor = ttnn.to_memory_config(
+            input_tensor,
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, input_tensor.memory_config().buffer_type),
+        )
+
+    out_dtype = dtype if dtype is not None else ttnn.bfloat16
+    result = ttnn.avg_pool2d(
+        input_tensor=input_tensor,
+        batch_size=N,
+        input_h=H,
+        input_w=W,
+        channels=C,
+        kernel_size=(H, W),
+        stride=(1, 1),
+        padding=(0, 0),
+        memory_config=memory_config,
+        dtype=out_dtype,
+        output_layout=ttnn.TILE_LAYOUT,  # match the legacy global_avg_pool2d's TILE output
+    )
+    # avg_pool2d returns flat (1, 1, N, C); restore (N, 1, 1, C) for backward compatibility.
+    return ttnn.reshape(result, (N, 1, 1, C))
+
+
+ttnn.global_avg_pool2d = global_avg_pool2d
+
+
+def golden_global_avg_pool2d(input_tensor):
     import torch
 
-    output_size = (1, 1)
-    return torch.nn.functional.global_avg_pool2d(input_tensor, output_size)
+    # ttnn operates on NHWC. torch.nn.functional.adaptive_avg_pool2d expects NCHW.
+    # PyTorch has no dedicated global_avg_pool2d — it always routes through adaptive or pool2d.
+    rank = input_tensor.dim()
+    if rank == 2:
+        # [H, W] -> [1, 1, H, W] (NCHW with N=C=1)
+        input_nchw = input_tensor.unsqueeze(0).unsqueeze(0)
+        output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=(1, 1))
+        return output_nchw.squeeze(0).squeeze(0)
+    if rank == 3:
+        # [H, W, C] (NHWC with N=1) -> [1, C, H, W] (NCHW)
+        input_nchw = input_tensor.permute(2, 0, 1).unsqueeze(0)
+        output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=(1, 1))
+        return output_nchw.squeeze(0).permute(1, 2, 0)
+    # rank 4: [N, H, W, C] -> [N, C, H, W]
+    input_nchw = input_tensor.permute(0, 3, 1, 2)
+    output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=(1, 1))
+    return output_nchw.permute(0, 2, 3, 1)
 
 
 ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
@@ -274,18 +357,62 @@ def golden_upsample(
 ttnn.attach_golden_function(ttnn.upsample, golden_upsample)
 
 
+def _grid_sample_precomputed_reference(input_tensor, grid, mode, N, H_grid, total_W, C):
+    """Sample a packed precomputed grid with zero padding."""
+    import torch
+
+    if grid.dtype != torch.bfloat16:
+        raise ValueError(
+            f"A precomputed grid must be BFLOAT16 (its corner indices are int16 bit patterns), got {grid.dtype}."
+        )
+
+    H_in, W_in = input_tensor.shape[1], input_tensor.shape[2]
+    elements_per_point = 2 if mode == "nearest" else 6
+
+    # Unpack batched points from the last dimension into the width dimension.
+    packed = grid.reshape(N, H_grid, total_W, elements_per_point)
+
+    # Elements 0 and 1 are h0/w0 stored as int16 bit patterns bit_cast into bfloat16.
+    corner_indices = packed.view(torch.int16).to(torch.int64)
+    h0, w0 = corner_indices[..., 0], corner_indices[..., 1]
+
+    flat_input = input_tensor.reshape(N, H_in * W_in, C).float()
+
+    def gather(h, w):
+        """input[n, h, w, :], or zero where the point falls outside the image."""
+        valid = (h >= 0) & (h < H_in) & (w >= 0) & (w < W_in)
+        idx = (h.clamp(0, H_in - 1) * W_in + w.clamp(0, W_in - 1)).reshape(N, -1, 1).expand(-1, -1, C)
+        gathered = torch.gather(flat_input, 1, idx).reshape(N, H_grid, total_W, C)
+        return torch.where(valid.unsqueeze(-1), gathered, 0)
+
+    if mode == "nearest":
+        output_nhwc = gather(h0, w0)
+    else:
+        # Elements 2..5 are the four bilinear weights as real bfloat16, in nw/ne/sw/se order.
+        weights = packed[..., 2:6].float()
+        output_nhwc = (
+            weights[..., 0:1] * gather(h0, w0)
+            + weights[..., 1:2] * gather(h0, w0 + 1)
+            + weights[..., 2:3] * gather(h0 + 1, w0)
+            + weights[..., 3:4] * gather(h0 + 1, w0 + 1)
+        )
+
+    return output_nhwc.to(input_tensor.dtype)
+
+
 def golden_grid_sample(
     input_tensor: ttnn.Tensor,
     grid: ttnn.Tensor,
     mode: str = "bilinear",
     padding_mode: str = "zeros",
     align_corners: bool = False,
+    use_precomputed_grid: bool = False,
     batch_output_channels: bool = False,
     grid_batching_factor: int = None,
     **_,
 ):
     """
-    Golden function for grid_sample operation using torch.nn.functional.grid_sample.
+    Golden function for grid_sample with normalized or precomputed grids.
 
     Args:
         input_tensor: Input tensor in (N, H_in, W_in, C) format
@@ -295,6 +422,11 @@ def golden_grid_sample(
         mode: Interpolation mode ("bilinear" or "nearest")
         padding_mode: Padding mode ("zeros", "border", or "reflection")
         align_corners: Whether to align corners
+        use_precomputed_grid: Whether `grid` holds precomputed corner indices and interpolation
+            weights (as produced by ttnn.prepare_grid_sample_grid) instead of normalized
+            coordinates. Such a grid has 6*K elements per point for "bilinear" and 2*K for
+            "nearest", must be BFLOAT16, and already has align_corners and padding_mode baked in,
+            so those two arguments are ignored in this mode.
         batch_output_channels: Controls how grid batching factor K affects output dimensions.
             When False (default): extend W dimension - output shape (N, H_out, total_W // K, C).
             When True: batch output channels - output shape (N, H_out, total_W // K, C*K).
@@ -311,22 +443,33 @@ def golden_grid_sample(
     from tests.sweep_framework.sweep_utils.pool2d_common import prepare_grid_batching_expected_output
 
     N, H_grid, W_grid, last_dim = grid.shape
-    K_grid = last_dim // 2
 
-    input_nchw = input_tensor.permute(0, 3, 1, 2)
-    C = input_nchw.shape[1]
+    C = input_tensor.shape[3]
 
-    # Unpack K_grid coordinate sets from last dim into the W dimension:
-    # (N, H_grid, W_grid, 2*K_grid) -> (N, H_grid, W_grid*K_grid, 2)
-    total_W = W_grid * K_grid
-    grid_unpacked = grid.reshape(N, H_grid, total_W, 2)
+    if use_precomputed_grid:
+        K_grid = last_dim // (2 if mode == "nearest" else 6)
+        total_W = W_grid * K_grid
+        output_nhwc = _grid_sample_precomputed_reference(input_tensor, grid, mode, N, H_grid, total_W, C)
+    else:
+        K_grid = last_dim // 2
 
-    output_nchw = torch.nn.functional.grid_sample(
-        input_nchw.float(), grid_unpacked.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
-    )
+        input_nchw = input_tensor.permute(0, 3, 1, 2)
 
-    # Convert to NHWC: (N, C, H_grid, total_W) -> (N, H_grid, total_W, C)
-    output_nhwc = output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
+        # Unpack K_grid coordinate sets from last dim into the W dimension:
+        # (N, H_grid, W_grid, 2*K_grid) -> (N, H_grid, W_grid*K_grid, 2)
+        total_W = W_grid * K_grid
+        grid_unpacked = grid.reshape(N, H_grid, total_W, 2)
+
+        output_nchw = torch.nn.functional.grid_sample(
+            input_nchw.float(),
+            grid_unpacked.float(),
+            mode=mode,
+            padding_mode=padding_mode,
+            align_corners=align_corners,
+        )
+
+        # Convert to NHWC: (N, C, H_grid, total_W) -> (N, H_grid, total_W, C)
+        output_nhwc = output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
 
     # Use explicit grid_batching_factor if provided, otherwise use K_grid from grid shape
     effective_K = grid_batching_factor if grid_batching_factor is not None else K_grid

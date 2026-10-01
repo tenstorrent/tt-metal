@@ -51,3 +51,37 @@ def top_k_top_p_filtering(
         indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
         logits[indices_to_remove] = filter_value
     return logits
+
+
+def blockcyclic_positions(sp: int, chunk_size_global: int, seq_len_cache: int) -> torch.Tensor:
+    """Global natural position held by each block-cyclic shard row (device-major: an SP-contiguous
+    split of the cache's seq dim yields each chip's rows).
+
+    Shard row r -> chip c = r // seq_len_local, local row lr = r % seq_len_local, and that row holds
+    global position (lr // chunk_local) * chunk_size_global + c * chunk_local + (lr % chunk_local) --
+    the inverse of the update_padded_kv_cache writer. Returns a [seq_len_cache] index tensor.
+    """
+    seq_len_local = seq_len_cache // sp
+    chunk_local = chunk_size_global // sp
+    c = torch.arange(sp).repeat_interleave(seq_len_local)
+    lr = torch.arange(seq_len_local).repeat(sp)
+    slab, off = lr // chunk_local, lr % chunk_local
+    return slab * chunk_size_global + c * chunk_local + off
+
+
+def block_cyclic_reorder(matrix: torch.Tensor, chunk_local: int, sp_factor: int, seq_dim: int = 2) -> torch.Tensor:
+    """Reorder a [.., seq, ..] matrix into block-cyclic order keyed by `chunk_local`.
+
+    Splits the sequence into blocks of `chunk_local` rows and concatenates them so that device c's
+    contiguous shard (after a plain SP shard over `seq_dim`) holds blocks c, c+sp, c+2sp, ... — the
+    same block-cyclic layout the per-chip KV cache writes into. This makes the indexed-RoPE op's
+    contiguous, `update_idxt`-offset read of each device's cos/sin shard land on the right global
+    positions, including the boundary chip's older-then-wrap rows.
+    """
+    seq_len = matrix.shape[seq_dim]
+    assert seq_len % chunk_local == 0, f"seq_len {seq_len} must be a multiple of chunk_local {chunk_local}"
+    num_blocks = seq_len // chunk_local
+    assert num_blocks % sp_factor == 0, f"num_blocks {num_blocks} must be a multiple of sp_factor {sp_factor}"
+    blocks = list(torch.split(matrix, chunk_local, dim=seq_dim))
+    order = [b for c in range(sp_factor) for b in range(c, num_blocks, sp_factor)]
+    return torch.cat([blocks[b] for b in order], dim=seq_dim)

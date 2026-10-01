@@ -17,6 +17,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def make_torch_tensors(input_shape, dim, keepdim=False, *, dtype=torch.float32):
     """
@@ -59,6 +62,16 @@ def torch_norm(
     """
     if is_linalg_vector_norm:
         torch_output = torch.linalg.vector_norm(torch_input, ord=p, dim=dim, keepdim=keepdim)
+    elif not keepdim and dim is not None and dim != []:
+        # The deprecated torch.norm mishandles keepdim=False for some orders (e.g. p=0)
+        # when the reduction collapses to a scalar, raising
+        # "output with shape [] doesn't match the broadcast shape [1]". keepdim=True is
+        # unaffected, so reduce with keepdim and squeeze the reduced dims ourselves.
+        torch_output = torch.norm(torch_input, p=p, dim=dim, keepdim=True)
+        reduce_dims = [dim] if isinstance(dim, int) else list(dim)
+        rank = torch_input.dim()
+        for d in sorted((d % rank for d in reduce_dims), reverse=True):
+            torch_output = torch_output.squeeze(d)
     else:
         torch_output = torch.norm(torch_input, p=p, dim=dim, keepdim=keepdim)
     torch_input_grad = None
@@ -197,6 +210,79 @@ def run_moreh_norm(
     assert passing
 
 
+def run_moreh_norm_output_mode(
+    input_shape,
+    p,
+    dim,
+    rtol,
+    atol,
+    device,
+    *,
+    keepdim=False,
+    compute_kernel_options=None,
+    torch_dtype=torch.float32,
+    ttnn_dtype=ttnn.bfloat16,
+    is_linalg_vector_norm=False,
+    use_provided_output=True,
+):
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b is not supported in the kernel")
+
+    torch_input, torch_output_grad = make_torch_tensors(input_shape, dim, keepdim=keepdim, dtype=torch_dtype)
+    expected_output, _ = torch_norm(
+        torch_input,
+        torch_output_grad,
+        p=p,
+        dim=dim,
+        keepdim=keepdim,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+        do_backward=False,
+    )
+
+    ttnn_input = create_ttnn_tilized_tensor(torch_input, device, ttnn_dtype)
+    kwargs = {
+        "p": p,
+        "dim": dim,
+        "keepdim": keepdim,
+        "compute_kernel_config": get_compute_kernel_options(compute_kernel_options),
+    }
+
+    if use_provided_output:
+        _, ttnn_output_shape = compute_output_shape(torch_input.shape, dim, keepdim=keepdim)
+        kwargs["output"] = create_ttnn_tilized_tensor(torch.empty(ttnn_output_shape), device, ttnn_dtype)
+
+    actual_output = ttnn.operations.moreh.norm(ttnn_input, **kwargs)
+    actual_output = ttnn.to_torch(actual_output)
+
+    # For a rank-1 input reduced with keepdim=False the torch reference is rank-0 ([]) while
+    # the ttnn output keeps a trailing dim ([1]); they are the same scalar. Match shapes so the
+    # comparison doesn't trip torch's "shape [] doesn't match broadcast shape [1]" error.
+    expected_output = expected_output.reshape(actual_output.shape)
+
+    passing, out = comp_allclose(expected_output, actual_output, rtol=rtol, atol=atol)
+    logger.info(f"output's {out}")
+    assert passing
+
+
+@pytest.mark.parametrize("p", [0.0, float("inf"), float("-inf")])
+@pytest.mark.parametrize("use_provided_output", [True, False], ids=["provide-output", "allocate-output"])
+@pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
+def test_moreh_norm_rank_1_dim_0_keepdim_false_output_modes(p, use_provided_output, device, is_linalg_vector_norm):
+    torch.manual_seed(2024)
+    run_moreh_norm_output_mode(
+        [5],
+        p,
+        0,
+        0.06,
+        0.06,
+        device,
+        keepdim=False,
+        ttnn_dtype=ttnn.bfloat16,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+        use_provided_output=use_provided_output,
+    )
+
+
 def run_moreh_norm_backward(
     input_shape,
     p,
@@ -324,6 +410,200 @@ def test_moreh_norm(input_shape, p, dim_rtol_atol, keepdim, ttnn_dtype, device, 
     )
 
 
+@pytest.mark.parametrize("p", [2.0, 0.0, float("inf"), float("-inf")])
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
+def test_moreh_norm_rank_1_dim_0(p, keepdim, device, is_linalg_vector_norm):
+    torch.manual_seed(2024)
+    if not keepdim:
+        torch_input, torch_output_grad = make_torch_tensors([5], 0, keepdim=keepdim)
+        expected_output, _ = torch_norm(
+            torch_input,
+            torch_output_grad,
+            p=p,
+            dim=0,
+            keepdim=keepdim,
+            is_linalg_vector_norm=is_linalg_vector_norm,
+            do_backward=False,
+        )
+        actual_output, _ = ttnn_norm(
+            torch_input,
+            torch_output_grad,
+            p=p,
+            dim=0,
+            keepdim=keepdim,
+            device=device,
+            do_backward=False,
+            dtype=ttnn.bfloat16,
+            is_linalg_vector_norm=is_linalg_vector_norm,
+        )
+        passing, out = comp_allclose(expected_output.reshape(-1), actual_output.reshape(-1), rtol=0.06, atol=0.06)
+        logger.info(f"output's {out}")
+        assert passing
+        return
+
+    run_moreh_norm(
+        [5],
+        p,
+        0,
+        0.06,
+        0.06,
+        device,
+        keepdim=keepdim,
+        ttnn_dtype=ttnn.bfloat16,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+    )
+
+
+@pytest.mark.parametrize("p", [2.0, 3.0])
+@pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
+def test_moreh_norm_backward_rank_1_dim_0(p, device, is_linalg_vector_norm):
+    """Regression test for #57475 item 4: moreh_norm_backward's need_bcast_dim vector is sized
+    from input_grad's rank, so a rank-1 input_grad (this dim=0 norm over a 1-D tensor) made the
+    factory read ht_need_bcast one element past the end of that vector.
+
+    check_dim/run_moreh_norm_backward skip keepdim=False + dim=0 on a rank-1 shape (a rank-1
+    tensor's only dim is also its last dim), so this bypasses them and calls torch_norm/ttnn_norm
+    directly, mirroring test_moreh_norm_rank_1_dim_0's forward-only equivalent.
+    """
+    torch.manual_seed(2024)
+    torch_input, torch_output_grad = make_torch_tensors([5], 0, keepdim=False)
+    _, expected_input_grad = torch_norm(
+        torch_input,
+        torch_output_grad,
+        p=p,
+        dim=0,
+        keepdim=False,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+        do_backward=True,
+    )
+    _, actual_input_grad = ttnn_norm(
+        torch_input,
+        torch_output_grad,
+        p=p,
+        dim=0,
+        keepdim=False,
+        device=device,
+        do_backward=True,
+        dtype=ttnn.bfloat16,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+    )
+    passing, out = comp_allclose(expected_input_grad.reshape(-1), actual_input_grad.reshape(-1), rtol=0.06, atol=0.06)
+    logger.info(f"input_grad's {out}")
+    assert passing
+
+
+@pytest.mark.parametrize("p", [2.0, 0.0, float("inf"), float("-inf")])
+@pytest.mark.parametrize("dim", [[], None], ids=["global_norm(dim=[])", "global_norm(dim=None)"])
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
+def test_moreh_norm_rank_1_global_dim(p, dim, keepdim, device, is_linalg_vector_norm):
+    torch.manual_seed(2024)
+    if not keepdim:
+        torch_input, torch_output_grad = make_torch_tensors([5], dim, keepdim=keepdim)
+        expected_output, _ = torch_norm(
+            torch_input,
+            torch_output_grad,
+            p=p,
+            dim=dim,
+            keepdim=keepdim,
+            is_linalg_vector_norm=is_linalg_vector_norm,
+            do_backward=False,
+        )
+        actual_output, _ = ttnn_norm(
+            torch_input,
+            torch_output_grad,
+            p=p,
+            dim=dim,
+            keepdim=keepdim,
+            device=device,
+            do_backward=False,
+            dtype=ttnn.bfloat16,
+            is_linalg_vector_norm=is_linalg_vector_norm,
+        )
+        passing, out = comp_allclose(expected_output.reshape(-1), actual_output.reshape(-1), rtol=0.06, atol=0.06)
+        logger.info(f"output's {out}")
+        assert passing
+        return
+
+    run_moreh_norm(
+        [5],
+        p,
+        dim,
+        0.06,
+        0.06,
+        device,
+        keepdim=keepdim,
+        ttnn_dtype=ttnn.bfloat16,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+    )
+
+
+def make_no_tie_inf_input(input_shape, dim, *, dtype=torch.float32):
+    """Input whose |x| values are distinct within every group reduced by `dim` (exact in bf16).
+
+    Along the reduced dim the magnitudes run through odd/256 values — adjacent
+    magnitudes differ by 2/256, far above bfloat16's rounding step for values
+    below 1 — with alternating signs, so argmax(|x|) and argmin(|x|) along
+    `dim` are unique and torch's gradient is a non-degenerate single point.
+    Non-reduced positions get a per-group scale (group_id % 61)/64 so groups
+    hold different values.
+    """
+    shape = list(input_shape)
+    red = dim
+    red_numel = shape[red]
+    pos = torch.arange(red_numel, dtype=torch.float64)
+    odd = (2 * pos + 1) / 256.0
+    sign = torch.where(pos % 2 == 0, 1.0, -1.0)
+    v = (odd * sign).reshape([-1 if i == red else 1 for i in range(len(shape))]).expand(shape)
+    grid = torch.meshgrid(*[torch.arange(s) for s in shape], indexing="ij")
+    gid = torch.zeros(shape, dtype=torch.float64)
+    for i in range(len(shape)):
+        if i != red:
+            gid = gid * shape[i] + grid[i].double()
+    scale = 1.0 + (gid % 61.0) / 64.0
+    return (v.double() * scale).to(dtype).requires_grad_()
+
+
+@pytest.mark.parametrize("p", [float("inf"), float("-inf")])
+@pytest.mark.parametrize(
+    "dim_rtol_atol",
+    [
+        [0, 0.06, 0.06],
+        [1, 0.06, 0.06],
+        [2, 0.06, 0.06],
+        [3, 0.06, 0.06],
+    ],
+    ids=["N", "C", "H", "W"],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [5, 8, 78, 77],
+    ],
+)
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_moreh_norm_backward_p_inf(input_shape, p, dim_rtol_atol, keepdim, device):
+    """p = ±inf backward: dx = sign(x) * dy at argmax(|x|) (+inf) / argmin(|x|) (-inf).
+
+    Before the fix the kernel fed floor(±inf) into the uint32 exponent path of the
+    power ladder and produced garbage (#56248). The inputs are constructed so the
+    arg-extremum of |x| is unique per reduced group (torch would otherwise split the
+    gradient 1/T across a tie set, which the single-point sub-gradient does not model).
+    """
+    torch.manual_seed(2024)
+    dim, rtol, atol = dim_rtol_atol
+    check_dim(input_shape, dim, keepdim)
+    input = make_no_tie_inf_input(input_shape, dim)
+    output_grad_shape, _ = compute_output_shape(input_shape, dim, keepdim=keepdim)
+    output_grad = torch.empty(output_grad_shape, dtype=torch.float32).uniform_(-1, 1)
+    _, expected_input_grad = torch_norm(input, output_grad, p=p, dim=dim, keepdim=keepdim, do_backward=True)
+    _, actual_input_grad = ttnn_norm(input, output_grad, p=p, dim=dim, keepdim=keepdim, do_backward=True, device=device)
+    passing, out = comp_allclose(expected_input_grad, actual_input_grad, rtol=rtol, atol=atol)
+    logger.info(f"input_grad's {out}")
+    assert passing
+
+
 @pytest.mark.parametrize("p", [2.0, 2.5, -2.5])
 @pytest.mark.parametrize(
     "dim_rtol_atol",
@@ -380,6 +660,8 @@ def test_moreh_norm_callback(dim_rtol_atol, keepdim, device, is_linalg_vector_no
     """
     torch.manual_seed(2024)
     dim, rtol, atol = dim_rtol_atol
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_norm(
@@ -516,6 +798,8 @@ def test_moreh_norm_backward_callback(dim_rtol_atol, keepdim, device, is_linalg_
     """
     torch.manual_seed(2024)
     dim, rtol, atol = dim_rtol_atol
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_norm_backward(

@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_binary_remainder.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel::sfpu {
@@ -21,26 +21,24 @@ sfpi_inline void calculate_fmod_int32_body(
     constexpr uint dst_tile_size_sfpi = 32;
 
     // Load signed inputs
-    // Equivalent to: sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi] = a_signed;
-    sfpi::vInt a_signed = __builtin_rvtt_sfpload(
-        sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
-    // Equivalent to: sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi] = b_signed;
-    sfpi::vInt b_signed = __builtin_rvtt_sfpload(
-        sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
+    sfpi::vInt a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    sfpi::vInt b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
     // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
 
+    // Initialize a fresh value: assignment would retain a_signed for inactive
+    // lanes across the helper, increasing register pressure in full LTO builds.
+    sfpi::vInt a_reloaded = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+
     // FMOD sign handling (result has the same sign as a)
-    v_if(a_signed < 0) { r = -r; }
+    v_if(a_reloaded < 0) { r = -r; }
     v_endif;
 
-    // Equivalent to: sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-    __builtin_rvtt_sfpstore(
-        r.get(), sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
+    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) {
     // fmod(a, b) = a - trunc(a/b) * b
 
@@ -49,7 +47,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     sfpi::vFloat b_abs = sfpi::abs(b);
 
     // Compute reciprocal 1/b
-    sfpi::vFloat recip = ckernel::sfpu::_sfpu_reciprocal_<2>(b);
+    sfpi::vFloat recip = ckernel::sfpu::sfpu_reciprocal_iter<2>(b);
 
     // Compute a/b = a * (1/b)
     sfpi::vFloat div_result = a * recip;
@@ -106,14 +104,16 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
+        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
     }
 
     return result;
 }
 
+// Force inlining so the scheduled reciprocal callbacks do not make SFPI outline
+// this loop and lose constant tile indices at the caller.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_fmod_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
@@ -121,7 +121,7 @@ inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_fmod(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -143,7 +143,7 @@ inline void fmod_int32_init() {
 
 template <bool APPROXIMATION_MODE>
 inline void fmod_binary_init() {
-    _init_sfpu_reciprocal_<false>();
+    sfpu_reciprocal_init<false>();
 }
 
 }  // namespace ckernel::sfpu

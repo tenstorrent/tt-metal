@@ -105,6 +105,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             expert_mapping_tensor (ttnn.Tensor): The one-hot encoded expert to device mapping tensor containing the location of the experts among each device and each mesh. The tensor is expected to be [1, 1, E, D] per device, fully replicated across all devices. Each row corresponds to an expert, and the value in each corresponding column is 1 if the expert is on the device, 0 otherwise. The tensor is expected to be in Row Major, Interleaved format. This tensor is expected to be the same across all devices.
 
         Keyword Args:
+            shared_expert_ids (List[int], optional): the global expert ids designated as shared experts. Every token is dispatched to all of these experts in addition to its top-K routed experts. Defaults to `None` (no shared experts).
+                Note: the number of ids here (`num_shared_experts`) counts all *logical* shared experts. This differs from `num_shared_experts_per_device` in `ttnn.experimental.moe_compute`, which counts the *physical* shared experts resident per device, eg: 2x routed shared experts each residing on half of the devices would be num_shared_experts=2 here and num_shared_experts_per_device=1 there.
             cluster_axis (int, optional): the cluster axis to dispatch along. Defaults to `None` though we assert out when it is not specified.
             num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `None`, for which the number of links is determined automatically.
             output_tensors (Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor], optional): the optional output tensors to use for the dispatched tokens, indices, and scores. Defaults to `None`.
@@ -113,6 +115,7 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             dispatch_algorithm (ttnn.DispatchAlgorithm, optional): the algorithm for routing tokens to destination devices. Defaults to `ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH`.
             worker_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for dispatch workers. Defaults to cores (0,0) to (0,7) - 8 cores for 4 links.
             mux_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for mux workers when worker_mode uses mux. Defaults to cores (1,0) to (1,7) - 8 cores (2 per link × 4 links).
+            cross_device_semaphore (ttnn.GlobalSemaphore, optional): a persistent global semaphore that enables semaphore-free (persistent) mode. When provided, all three `output_tensors` must also be provided as persistent buffers so all fabric write targets are persistent and the per-call `init_semaphore` can be skipped. Defaults to `None`.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor, indices tensor, and scores tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The indices and scores tensors are all-gathered and L1 sharded to the drain_sync_tilizer_core.

@@ -137,9 +137,12 @@ class TTPenalties(LightweightModule):
         self._shard_dims_gathered = shard_dims_gathered
 
         self.prompt_mask = self._alloc_int_buffer(shard_dims=shard_dims)
+        # Host shadow of the per-slot prompt tokens, so a partial update keeps other rows' masks.
+        self._prompt_tokens_host = None
         self.output_mask = self._alloc_int_buffer(shard_dims=shard_dims)
         self.output_counts_gathered = self._alloc_int_buffer(shard_dims=shard_dims_gathered)
         self.output_counts = self._alloc_int_buffer(shard_dims=shard_dims)
+        self._shard_dims_mask = shard_dims
         self.decode_src = self._alloc_int_buffer(
             host=torch.ones(self._total_batch, 1), shard_dims=shard_dims_gathered, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -207,6 +210,18 @@ class TTPenalties(LightweightModule):
             src_tt = ttnn.from_torch(src, dtype=dst.dtype, layout=ttnn.TILE_LAYOUT, device=None)
         ttnn.copy_host_to_device_tensor(src_tt, dst)
 
+    def _copy_int_host_to_device(self, dst: ttnn.Tensor, src: torch.Tensor, shard_dims):
+        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=shard_dims, mesh_shape=self.cluster_shape)
+        src_tt = ttnn.from_torch(src, dtype=dst.dtype, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=mapper)
+        ttnn.copy_host_to_device_tensor(src_tt, dst)
+
+    def _token_counts_host(self, tokens_2d: torch.Tensor) -> torch.Tensor:
+        valid = (tokens_2d >= 0) & (tokens_2d < self.vocab_size)
+        token_ids = torch.where(valid, tokens_2d, torch.zeros_like(tokens_2d)).to(torch.int64)
+        counts = torch.zeros((self._total_batch, self.vocab_size), dtype=torch.int32)
+        counts.scatter_add_(1, token_ids, valid.to(torch.int32))
+        return counts
+
     def reset_params(self, presence: List[float], frequency: List[float], repetition: List[float]):
         presence_tensor = self._pad_params(presence)
         frequency_tensor = self._pad_params(frequency)
@@ -240,27 +255,96 @@ class TTPenalties(LightweightModule):
             return tokens_2d[: self._total_batch]
         return tokens_2d
 
-    def reset_prompt_tokens(self, prompt_tokens: torch.Tensor):
-        # Mask out padding positions (-1) instead of inventing a fake token id by expanding vocab_size.
+    def reset_prompt_tokens(self, prompt_tokens: torch.Tensor, slots: list[int] | None = None):
+        """Rebuild the prompt mask. With ``slots``, only those rows are taken from
+        ``prompt_tokens``; every other row keeps the prompt it was last given.
+
+        The device buffer covers all rows at once, so a caller that only knows about the requests it
+        is prefilling used to zero everyone else's mask: rows outside the call arrive as the -1
+        padding and hash to an empty mask. repetition_penalty is the only consumer of prompt_mask, so
+        a live request silently stopped penalising its own prompt until something refreshed it.
+        A later full sampling-state reset can hide this bug. A demo without that reset keeps the
+        wiped mask for the rest of the generation.
+        """
         prompt_tokens_2d = prompt_tokens.reshape(-1, prompt_tokens.shape[-1])
         prompt_tokens_2d = self._pad_batch_to_max(prompt_tokens_2d, pad_value=-1)
 
-        src_host = (prompt_tokens_2d != -1).to(torch.int32)
-        idx_host = torch.where(prompt_tokens_2d == -1, torch.zeros_like(prompt_tokens_2d), prompt_tokens_2d)
+        if slots is None:
+            self._prompt_tokens_host = prompt_tokens_2d.clone()
+        else:
+            shadow = getattr(self, "_prompt_tokens_host", None)
+            width = max(prompt_tokens_2d.shape[-1], shadow.shape[-1] if shadow is not None else 0)
+            merged = torch.full((self._total_batch, width), -1, dtype=prompt_tokens_2d.dtype)
+            if shadow is not None:
+                merged[:, : shadow.shape[-1]] = shadow
+            for slot in slots:
+                slot = int(slot)
+                if 0 <= slot < self._total_batch:
+                    merged[slot, :] = -1
+                    merged[slot, : prompt_tokens_2d.shape[-1]] = prompt_tokens_2d[slot]
+            self._prompt_tokens_host = merged
+            prompt_tokens_2d = merged
 
-        prompt_tokens_tt = self._alloc_int_buffer(
-            host=idx_host,
-            shard_dims=self._shard_dims_gathered,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        src_tt = self._alloc_int_buffer(
-            host=src_host,
-            shard_dims=self._shard_dims_gathered,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.token_bin_counts_and_mask(new_tokens=prompt_tokens_tt, src=src_tt, mask=self.prompt_mask)
+        # Build reset masks on host to avoid device scatter_add races on
+        # duplicate prompt token ids (common in penalty tests/prompts).
+        prompt_counts = self._token_counts_host(prompt_tokens_2d)
+        prompt_mask = (prompt_counts > 0).to(torch.int32)
+        self._copy_int_host_to_device(self.prompt_mask, prompt_mask, self._shard_dims_mask)
 
-    def reset_output_tokens(self, tokens=None):
+    def reset_output_tokens(self, tokens=None, slots: list[int] | None = None):
+        if slots is not None:
+            slots = sorted({int(slot) for slot in slots})
+            if any(slot < 0 or slot >= self._total_batch for slot in slots):
+                raise ValueError(f"Output reset slots must be in [0, {self._total_batch}), got {slots}")
+            if not slots:
+                return
+
+            # Clear only the admitted slots. A [batch, 1] device mask is
+            # replicated across mesh columns and broadcast across vocabulary,
+            # so continuing requests keep their accumulated device counts.
+            keep_rows = torch.ones((self._total_batch, 1), dtype=torch.int32)
+            keep_rows[slots] = 0
+            keep_rows_tt = self._alloc_int_buffer(
+                host=keep_rows,
+                shard_dims=self._shard_dims_gathered,
+            )
+            self.output_mask = ttnn.mul(
+                self.output_mask, keep_rows_tt, output_tensor=self.output_mask, **self._op_kwargs
+            )
+            self.output_counts = ttnn.mul(
+                self.output_counts, keep_rows_tt, output_tensor=self.output_counts, **self._op_kwargs
+            )
+            self.output_counts_gathered = ttnn.mul(
+                self.output_counts_gathered,
+                keep_rows_tt,
+                output_tensor=self.output_counts_gathered,
+                **self._op_kwargs,
+            )
+            keep_rows_tt.deallocate()
+
+            if tokens is None:
+                return
+
+            # Restore any supplied history for the reset slots. Rows outside
+            # ``slots`` are zero here, so adding cannot change live requests.
+            tokens_2d = tokens.reshape(-1, tokens.shape[-1])
+            tokens_2d = self._pad_batch_to_max(tokens_2d, pad_value=-1)
+            output_counts = self._token_counts_host(tokens_2d)
+            reset_rows = torch.zeros((self._total_batch, 1), dtype=torch.int32)
+            reset_rows[slots] = 1
+            output_counts *= reset_rows
+            output_mask = (output_counts > 0).to(torch.int32)
+            updates = (
+                (self.output_counts_gathered, output_counts, self._shard_dims_gathered),
+                (self.output_counts, output_counts, self._shard_dims_mask),
+                (self.output_mask, output_mask, self._shard_dims_mask),
+            )
+            for destination, host_update, shard_dims in updates:
+                update_tt = self._alloc_int_buffer(host=host_update, shard_dims=shard_dims)
+                ttnn.add(destination, update_tt, output_tensor=destination, **self._op_kwargs)
+                update_tt.deallocate()
+            return
+
         # ALWAYS reset output buffers to zero first (this is the core accuracy fix from issue #35731)
         # This ensures penalty statistics are cleared between prefill and decode phases
         self.output_mask = ttnn.mul(self.output_mask, 0, output_tensor=self.output_mask, **self._op_kwargs)
@@ -271,49 +355,23 @@ class TTPenalties(LightweightModule):
 
         # THEN optionally repopulate if tokens are provided
         if tokens is not None:
-            # Mask out padding positions (-1) instead of inventing a fake token id by expanding vocab_size.
             tokens_2d = tokens.reshape(-1, tokens.shape[-1])
             tokens_2d = self._pad_batch_to_max(tokens_2d, pad_value=-1)
-            src_host = (tokens_2d != -1).to(torch.int32)
-            idx_host = torch.where(tokens_2d == -1, torch.zeros_like(tokens_2d), tokens_2d)
-
-            mapper = (
-                ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._shard_dims_gathered, mesh_shape=self.cluster_shape)
-                if self._sampling_dp > 1
-                else None
-            )
-            tokens_tt = ttnn.from_torch(
-                idx_host,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
-            )
-            src_tt = ttnn.from_torch(
-                src_host,
-                device=self.mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
-            )
-            self.token_bin_counts_and_mask(
-                new_tokens=tokens_tt,
-                counts=self.output_counts_gathered,
-                src=src_tt,
-                counts_sliced=self.output_counts,
-                mask=self.output_mask,
-            )
-            tokens_tt.deallocate()
-            src_tt.deallocate()
+            output_counts = self._token_counts_host(tokens_2d)
+            output_mask = (output_counts > 0).to(torch.int32)
+            self._copy_int_host_to_device(self.output_counts_gathered, output_counts, self._shard_dims_gathered)
+            self._copy_int_host_to_device(self.output_counts, output_counts, self._shard_dims_mask)
+            self._copy_int_host_to_device(self.output_mask, output_mask, self._shard_dims_mask)
 
     def update_output_tokens(self, new_tokens):
         # Reshape decode token to [batch, 1] for scatter_add.
         # Non-row-sharded: token shape is [1,1,1,batch] → shape[-1]==batch, shape[-2]==1
         # Row-sharded:     token shape is [1,1,batch,1] → shape[-2]==batch, shape[-1]==1
         batch = self.per_row_batch_size
-        if (new_tokens.shape[-1] == batch and new_tokens.shape[-2] == 1) or (
+        fast_path = (new_tokens.shape[-1] == batch and new_tokens.shape[-2] == 1) or (
             new_tokens.shape[-2] == batch and new_tokens.shape[-1] == 1
-        ):
+        )
+        if fast_path:
             new_tokens = ttnn.reshape(new_tokens, [batch, 1], **self._op_kwargs)
             src = self.decode_src
         else:

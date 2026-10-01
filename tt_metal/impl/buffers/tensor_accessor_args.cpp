@@ -11,6 +11,8 @@
 namespace tt::tt_metal {
 
 namespace {
+constexpr size_t kMaxNumDimensions = 8;
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 void append_sharded_args(
     const Buffer& buffer, tensor_accessor::ArgsConfig args_config, std::vector<uint32_t>& args, bool is_runtime) {
@@ -29,10 +31,7 @@ void append_sharded_args(
 
     size_t rank = tensor_shape.size();
     size_t n_banks = bank_coords.size();
-    TT_FATAL(
-        rank <= TensorAccessorArgs::MAX_NUM_DIMENSIONS,
-        "Rank must be less than or equal to {}",
-        TensorAccessorArgs::MAX_NUM_DIMENSIONS);
+    TT_FATAL(rank <= kMaxNumDimensions, "Rank must be less than or equal to {}", kMaxNumDimensions);
 
     size_t n_args =
         add_rank + add_num_banks + (rank * add_tensor_shape) + (rank * add_shard_shape) + (n_banks * add_bank_coords);
@@ -56,7 +55,16 @@ void append_sharded_args(
         args.push_back(rank);
     }
     if (add_num_banks) {
-        args.push_back(n_banks);
+        // The num_banks word (compile-time or runtime) carries the shard-contiguous flag in its top bit, so the
+        // distribution strategy needs no extra arg/slot and no ArgConfig bit. pack/unpack (arg_config.hpp) are the
+        // single source of truth for this layout.
+        const bool pack_shard_contiguous =
+            buffer_distribution_spec.shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D;
+        TT_FATAL(
+            n_banks < tensor_accessor::ShardContiguousBit,
+            "num_banks {} is too large to pack the shard-contiguous flag",
+            n_banks);
+        args.push_back(tensor_accessor::pack_num_banks(static_cast<uint32_t>(n_banks), pack_shard_contiguous));
     }
     if (add_tensor_shape) {
         args.insert(args.end(), tensor_shape.cbegin(), tensor_shape.cend());
@@ -119,6 +127,12 @@ TensorAccessorArgs::TensorAccessorArgs(
 
 TensorAccessorArgs::TensorAccessorArgs(const MeshTensor& tensor, tensor_accessor::ArgsConfig args_config) :
     TensorAccessorArgs(tensor.mesh_buffer(), args_config) {}
+
+TensorAccessorArgs::TensorAccessorArgs(
+    ttsl::optional_reference<const MeshTensor> tensor, tensor_accessor::ArgsConfig args_config) :
+    buffer_(tensor ? tensor->mesh_buffer().get_reference_buffer() : nullptr), args_config_(args_config) {
+    update_args_config();
+}
 
 TensorAccessorArgs TensorAccessorArgs::create_dram_interleaved() {
     TensorAccessorArgs args;

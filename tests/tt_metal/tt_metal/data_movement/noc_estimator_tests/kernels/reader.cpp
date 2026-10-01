@@ -8,7 +8,7 @@
 // All modes use the experimental Noc API.
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 #include "log_helpers.hpp"
 
 void kernel_main() {
@@ -29,8 +29,8 @@ void kernel_main() {
     constexpr uint32_t same_axis = get_compile_time_arg_val(11);
     constexpr uint32_t loopback_meta = get_compile_time_arg_val(12);
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_ep;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_ep;
 
     // ============ MODE 0: READ SINGLE (one_from_one) ============
     if constexpr (mode == READER_MODE_SINGLE) {
@@ -58,13 +58,13 @@ void kernel_main() {
                 DeviceZoneScopedN("RISCV1");
                 for (uint32_t i = 0; i < num_of_transactions; i++) {
                     uint32_t vc = i % num_virtual_channels;
-                    noc.async_read(
+                    noc.async_read<NocOptions::CUSTOM_VC>(
                         unicast_ep,
                         unicast_ep,
                         bytes_per_transaction,
                         {.noc_x = src_x, .noc_y = src_y, .addr = local_addr},
                         {.addr = local_addr},
-                        vc);
+                        NocOptVals{.vc = vc});
                 }
                 noc.async_read_barrier();
             }
@@ -106,13 +106,13 @@ void kernel_main() {
                 } else {
                     for (uint32_t i = 0; i < num_of_transactions; i++) {
                         uint32_t vc = i % num_virtual_channels;
-                        noc.async_read(
+                        noc.async_read<NocOptions::CUSTOM_VC>(
                             unicast_ep,
                             unicast_ep,
                             bytes_per_transaction,
                             {.noc_x = src_x, .noc_y = src_y, .addr = local_addr},
                             {.addr = local_addr},
-                            vc);
+                            NocOptVals{.vc = vc});
                     }
                 }
             }

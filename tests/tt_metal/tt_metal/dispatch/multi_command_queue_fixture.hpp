@@ -36,7 +36,7 @@ protected:
         }
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+        init_max_dfbs();
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
@@ -73,8 +73,7 @@ protected:
     }
 
     void create_device(const ChipId device_id, const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         std::vector<ChipId> chip_id = {device_id};
 
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
@@ -105,7 +104,7 @@ protected:
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void CreateDevice(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
@@ -114,6 +113,9 @@ protected:
 };
 class UnitMeshMultiCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         this->slow_dispatch_ = false;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -129,8 +131,7 @@ protected:
             GTEST_SKIP();
         }
 
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
@@ -150,7 +151,7 @@ protected:
         for (const auto& [id, device] : reserved_devices) {
             this->devices_.push_back(device);
         }
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {

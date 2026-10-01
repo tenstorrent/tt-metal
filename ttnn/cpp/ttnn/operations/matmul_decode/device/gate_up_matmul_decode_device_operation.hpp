@@ -62,7 +62,7 @@ struct GateUpMatmulDecodeDeviceOperation {
     };
 
     // Single output: hid = gelu(A @ gate_w) * (A @ up_w), [..., M, N] width-sharded across N_blocks cores.
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     // Single program factory: the gate+up dual-weight partial-width-sharded matmul.

@@ -42,9 +42,13 @@ class TtnnConv2D:
             fp32_dest_acc_en = True
         else:
             fp32_dest_acc_en = False
+        # Blackhole's LoFi accumulation is less accurate than Wormhole's; UniAD's
+        # ResNet-101 backbone PCC drops to ~0.16 with LoFi on BH. Use HiFi2 on BH
+        # to recover PCC ≥ 0.99. Wormhole keeps LoFi for performance.
+        math_fidelity = ttnn.MathFidelity.HiFi2 if ttnn.get_arch_name() == "blackhole" else ttnn.MathFidelity.LoFi
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=math_fidelity,
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=False,
             math_approx_mode=True,

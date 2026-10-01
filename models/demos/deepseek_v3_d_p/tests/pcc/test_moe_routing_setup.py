@@ -15,12 +15,13 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 
 # from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
-    create_fabric_router_config,
     extract_mesh_config,
     get_ep_mesh_composer,
     get_gate_outputs,
@@ -36,6 +37,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_replication,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
@@ -44,60 +47,31 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
-        (3200, 7168, 64, 2, 2),
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, 7168, 64, 2, 2),
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
+            (2, 2),
+            fabric2d_device_params(fabric_payload_size=7 * 1024),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-mesh-2x2",
         ),
         pytest.param(
             (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
+            fabric2d_device_params(fabric_payload_size=7 * 1024),
+            2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
+            id="fabric2d-mesh-2x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 def test_prep_dispatch_combine(
     mesh_device,
     seq_len_per_chip,
@@ -106,8 +80,9 @@ def test_prep_dispatch_combine(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
+    device_params,
     use_predictable_data,
+    padded_percent,
 ):
     """
     Test TtMoERoutingSetup (masked_bincount + offset_cumsum pipeline) against the
@@ -134,6 +109,7 @@ def test_prep_dispatch_combine(
             dispatch_group_size dimension). Equals global_expert_offsets minus the
             per-source-device local offset.
     """
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     torch.manual_seed(42)
     num_devices = mesh_device.get_num_devices()
 
@@ -194,6 +170,15 @@ def test_prep_dispatch_combine(
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
+    # Padding awareness: right-pad by sentinel-marking the trailing rows (== num_routed_experts).
+    # TtMoERoutingSetup (masked_bincount) must drop those rows, so the reference is fed only the
+    # real (leading) rows — both must produce identical counts/offsets for the checks below to pass.
+    num_padded_rows = int(seq_len_per_chip * padded_percent / 100)
+    num_real_rows = seq_len_per_chip - num_padded_rows
+    if num_padded_rows > 0:
+        indices[:, -num_padded_rows:, :] = num_routed_experts
+    ref_indices = indices[:, :num_real_rows, :]
+
     # x and indices: replicated across EP ranks
     mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
         mesh_device,
@@ -201,8 +186,14 @@ def test_prep_dispatch_combine(
         dims=(sp_axis, None),
     )
 
+    # masked_bincount consumes the gate's UINT16, TILE, L1-interleaved indices directly (untiled in-kernel).
     tt_indices = ttnn.from_torch(
-        indices, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.uint16
+        indices,
+        mesh_mapper=mesh_mapper_replicated,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     # Create expert dispatch table
@@ -218,13 +209,14 @@ def test_prep_dispatch_combine(
         num_routed_experts=num_routed_experts,
     )
 
-    # Compute gate outputs (offsets and token counts) before dispatch
+    # Compute gate outputs (offsets and token counts) before dispatch.
+    # Reference sees only real rows (it cannot index the out-of-range sentinel expert).
     expert_offsets, expert_token_counts, expert_region_offsets, per_device_expert_counter = get_gate_outputs(
-        indices,
+        ref_indices,
         dispatch_group_size,
         num_routed_experts,
         experts_per_chip,
-        seq_len_per_chip,
+        num_real_rows,
         num_experts_per_tok,
         expert_dispatch_table=expert_dispatch_table,
     )
@@ -241,10 +233,10 @@ def test_prep_dispatch_combine(
         tt_expert_token_counts,
         tt_expert_region_offsets,
         tt_per_device_expert_counter,
+        tt_all_dispatch_offsets,
     ) = tt_gate_outputs(
         ttnn_top_k_experts_indices=tt_indices,
         num_routed_experts=num_routed_experts,
-        seq_len_per_chip=seq_len_per_chip,
         num_experts_per_tok=num_experts_per_tok,
     )
 
@@ -301,3 +293,11 @@ def test_prep_dispatch_combine(
 
     for r in [replication_result, region_replication_result, offsets_result, counts_result, region_offsets_result]:
         r.assert_passed(f"{r.name} validation failed")
+
+    # Every chip in dispatch group g holds group g's whole offsets table (groups run along mesh columns).
+    mesh_cols = mesh_device.shape[1]
+    for dev_idx, tensor in enumerate(ttnn.get_device_tensors(tt_all_dispatch_offsets)):
+        table = ttnn.to_torch(tensor).reshape(dispatch_group_size, num_routed_experts).int()
+        assert torch.equal(
+            table, expert_offsets[dev_idx % mesh_cols].int()
+        ), f"all_dispatch_offsets mismatch on device {dev_idx}"

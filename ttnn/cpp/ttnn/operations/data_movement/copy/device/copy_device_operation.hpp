@@ -5,25 +5,49 @@
 #pragma once
 
 #include <optional>
-#include "ttnn/tensor/tensor.hpp"
+#include <variant>
+
 #include "copy_device_operation_types.hpp"
-#include "copy_same_memory_config_program_factory.hpp"
-#include "copy_default_row_major_program_factory.hpp"
-#include "copy_default_tilized_program_factory.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
 struct CopyDeviceOperation {
     using operation_attributes_t = ttnn::prim::CopyParams;
     using tensor_args_t = ttnn::prim::CopyInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<
-        CopySameMemoryConfigProgramFactory,
-        CopyDefaultRowMajorProgramFactory,
-        CopyDefaultTilizedProgramFactory>;
+
+    // NOTE: SameMemoryConfig is NOT ported to Metal 2.0. The peer op `data_movement/move`
+    // (MoveProgramFactory) reuses this factory's create_descriptor() and depends on its
+    // ProgramDescriptor return type and positional runtime-arg layout, so porting it would break an
+    // op outside this port's scope. Left on the legacy descriptor concept; the framework dispatches
+    // the ported factories (DefaultRowMajor, DefaultTilized) and this one per-factory at runtime.
+    struct SameMemoryConfig {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct DefaultRowMajor {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct DefaultTilized {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    using program_factory_t = std::variant<SameMemoryConfig, DefaultRowMajor, DefaultTilized>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

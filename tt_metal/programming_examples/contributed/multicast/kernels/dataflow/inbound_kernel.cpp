@@ -2,21 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/debug/device_print.h"  // required in all kernels using DEVICE_PRINT
+#include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "api/dataflow/dataflow_api.h"
+#include "ckernel.h"  // ckernel::load_blocking
 
-// Helper function to copy a tile from one CB to another CB (eg. input CB to output CB) via L1.
+// Copy a tile from one CB to another via L1, blocking until the tile has landed in L1.
+// The caller's cb_push_back() writes a credit to a STREAM register (a different memory region, so no
+// store-ordering guarantee vs these L1 stores); without the drain the consumer could see that credit
+// and NoC-read stale L1. load_blocking on the last written word stalls until it lands, and since
+// same-region stores are processed in order, draining the last drains all.
 inline void copy_tile_between_cb(uint32_t src_addr, uint32_t dst_addr, uint32_t bytes) {
     volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
     volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
-    for (uint32_t i = 0; i < bytes / sizeof(uint32_t); i++) {
+    const uint32_t num_words = bytes / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; i++) {
         dst[i] = src[i];
     }
+    (void)ckernel::load_blocking(&dst[num_words - 1]);
 }
 
 // Ensure this is set: export TT_METAL_DPRINT_CORES='(0,0)-(3,0)'
 void kernel_main() {
-
     ////////// RUNTIME ARGS & VARS //////////
     uint32_t start_x = get_arg_val<uint32_t>(0);
     uint32_t start_y = get_arg_val<uint32_t>(1);
@@ -24,7 +30,7 @@ void kernel_main() {
     uint32_t receiver_addr = get_semaphore(get_arg_val<uint32_t>(3));
 
     ////////// BUFFER SETUP //////////
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0; // index=0
+    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;    // index=0
     constexpr uint32_t cb_id_out0 = tt::CB::c_out0;  // index=16
     uint32_t ublock_size_bytes = get_tile_size(cb_id_in0);
     uint32_t l1_addr_in = get_write_ptr(cb_id_in0);
@@ -46,19 +52,20 @@ void kernel_main() {
     // At this stage, the receiver cores should have now received the tile.
 
     ////////// PRINT TILE (8-ELEMENT-STRIDED TILE SLICE) //////////
-    SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(0), .h1 = static_cast<uint8_t>(32), .hs = 8, .w0 = 0, .w1 = 32, .ws = 8};
-    DEVICE_PRINT("Tile slice:\n{}\n", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
+    SliceRange sr =
+        SliceRange{.h0 = static_cast<uint8_t>(0), .h1 = static_cast<uint8_t>(32), .hs = 8, .w0 = 0, .w1 = 32, .ws = 8};
+    DPRINT("Tile slice:\n{}\n", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
 
     ////////// PRINT TILE (FULL TILE) //////////
     // for (uint8_t r = 0; r < 32; ++r) {
     //     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r+1), .hs = 1, .w0 = 0,
     //     .w1 = 32, .ws = 1};
-    //     DEVICE_PRINT_DATA0("{}\n", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
+    //     DPRINT_DATA0("{}\n", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
     // }
 
     cb_push_back(cb_id_in0, 1);
 
-    DEVICE_PRINT(
+    DPRINT(
         "CORE ({},{}): Inbound kernel has received and acknowledged its tile.\n\n",
         get_absolute_logical_x(),
         get_absolute_logical_y());

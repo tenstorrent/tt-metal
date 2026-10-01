@@ -131,8 +131,8 @@ public:
 
     const uint32_t update(
         const uint32_t layer_idx,
-        const tt::tt_metal::Tensor& key_states,
-        const tt::tt_metal::Tensor& value_states,
+        const ttnn::Tensor& key_states,
+        const ttnn::Tensor& value_states,
         const uint32_t new_tokens);
 
     /**
@@ -214,20 +214,20 @@ private:
      * @brief Update cache for prefill mode (writes entire sequence starting at position 0)
      */
     const uint32_t update_prefill(
-        const tt::tt_metal::Tensor& key_tensor,
-        const tt::tt_metal::Tensor& value_tensor,
-        tt::tt_metal::Tensor& k_cache,
-        tt::tt_metal::Tensor& v_cache,
+        const ttnn::Tensor& key_tensor,
+        const ttnn::Tensor& value_tensor,
+        ttnn::Tensor& k_cache,
+        ttnn::Tensor& v_cache,
         const uint32_t new_tokens);
 
     /**
      * @brief Update cache for decode mode (writes single token at cache_position)
      */
     const uint32_t update_decode(
-        const tt::tt_metal::Tensor& key_tensor,
-        const tt::tt_metal::Tensor& value_tensor,
-        tt::tt_metal::Tensor& k_cache,
-        tt::tt_metal::Tensor& v_cache,
+        const ttnn::Tensor& key_tensor,
+        const ttnn::Tensor& value_tensor,
+        ttnn::Tensor& k_cache,
+        ttnn::Tensor& v_cache,
         const uint32_t cache_position,
         const uint32_t new_tokens = 1);
 };

@@ -13,13 +13,17 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
+#include "internal/blitz_decode_pipeline.hpp"
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 
 namespace ttnn::pipeline_module {
 
 void bind_blitz_decode_pipeline(nb::module_& mod) {
-    using tt::tt_metal::experimental::blitz::BlitzDecodePipelineStage;
+    using tt::tt_metal::internal::blitz::BlitzDecodeEndpointPlacement;
+    using tt::tt_metal::internal::blitz::BlitzDecodePipelineStage;
+    using tt::tt_metal::internal::blitz::BlitzDecodeStageHostBinding;
+    using tt::tt_metal::internal::blitz::ResolvedBlitzDecodePipelineAllocation;
+    using tt::tt_metal::internal::blitz::ResolvedBlitzDecodeStageAllocation;
 
     nb::class_<BlitzDecodePipelineStage>(mod, "BlitzDecodePipelineStage")
         .def_ro("stage_index", &BlitzDecodePipelineStage::stage_index)
@@ -33,10 +37,66 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
             return repr.str();
         });
 
+    nb::class_<BlitzDecodeStageHostBinding>(mod, "BlitzDecodeStageHostBinding")
+        .def_ro("rank", &BlitzDecodeStageHostBinding::rank)
+        .def_ro("mesh_host_rank", &BlitzDecodeStageHostBinding::mesh_host_rank)
+        .def("__repr__", [](const BlitzDecodeStageHostBinding& host_binding) {
+            std::ostringstream repr;
+            repr << "BlitzDecodeStageHostBinding(rank=" << host_binding.rank
+                 << ", mesh_host_rank=" << host_binding.mesh_host_rank << ")";
+            return repr.str();
+        });
+
+    nb::class_<BlitzDecodeEndpointPlacement>(mod, "BlitzDecodeEndpointPlacement")
+        .def_ro("host_binding", &BlitzDecodeEndpointPlacement::host_binding)
+        .def_ro("mesh_coord", &BlitzDecodeEndpointPlacement::mesh_coord)
+        .def("__repr__", [](const BlitzDecodeEndpointPlacement& endpoint) {
+            std::ostringstream repr;
+            repr << "BlitzDecodeEndpointPlacement(host_binding=BlitzDecodeStageHostBinding(rank="
+                 << endpoint.host_binding.rank << ", mesh_host_rank=" << endpoint.host_binding.mesh_host_rank
+                 << "), mesh_coord=" << endpoint.mesh_coord << ")";
+            return repr.str();
+        });
+
+    nb::class_<ResolvedBlitzDecodeStageAllocation>(mod, "ResolvedBlitzDecodeStageAllocation")
+        .def_ro("logical_stage_index", &ResolvedBlitzDecodeStageAllocation::logical_stage_index)
+        .def_ro("mesh_id", &ResolvedBlitzDecodeStageAllocation::mesh_id)
+        .def_ro("host_bindings", &ResolvedBlitzDecodeStageAllocation::host_bindings)
+        .def_ro("entry_endpoint", &ResolvedBlitzDecodeStageAllocation::entry_endpoint)
+        .def_ro("exit_endpoint", &ResolvedBlitzDecodeStageAllocation::exit_endpoint)
+        .def("__repr__", [](const ResolvedBlitzDecodeStageAllocation& stage) {
+            std::ostringstream repr;
+            repr << "ResolvedBlitzDecodeStageAllocation(logical_stage_index=" << stage.logical_stage_index
+                 << ", mesh_id=" << stage.mesh_id << ", host_bindings=" << stage.host_bindings.size()
+                 << ", entry_endpoint_mesh_coord=" << stage.entry_endpoint.mesh_coord
+                 << ", exit_endpoint=" << (stage.exit_endpoint.has_value() ? "set" : "None") << ")";
+            return repr.str();
+        });
+
+    nb::class_<ResolvedBlitzDecodePipelineAllocation>(mod, "ResolvedBlitzDecodePipelineAllocation")
+        .def_ro("initialize_loopback", &ResolvedBlitzDecodePipelineAllocation::initialize_loopback)
+        .def_ro("stages", &ResolvedBlitzDecodePipelineAllocation::stages)
+        .def_ro("loopback_entry_stage_index", &ResolvedBlitzDecodePipelineAllocation::loopback_entry_stage_index)
+        .def_ro("loopback_entry_endpoint", &ResolvedBlitzDecodePipelineAllocation::loopback_entry_endpoint)
+        .def_ro("host_egress_stage_index", &ResolvedBlitzDecodePipelineAllocation::host_egress_stage_index)
+        .def_ro("host_egress_endpoint", &ResolvedBlitzDecodePipelineAllocation::host_egress_endpoint)
+        .def("__repr__", [](const ResolvedBlitzDecodePipelineAllocation& pipeline) {
+            std::ostringstream repr;
+            repr << "ResolvedBlitzDecodePipelineAllocation(initialize_loopback=" << pipeline.initialize_loopback
+                 << ", stages=" << pipeline.stages.size() << ", loopback_entry_stage_index=";
+            if (pipeline.loopback_entry_stage_index.has_value()) {
+                repr << *pipeline.loopback_entry_stage_index;
+            } else {
+                repr << "None";
+            }
+            repr << ", host_egress_stage_index=" << pipeline.host_egress_stage_index << ")";
+            return repr.str();
+        });
+
     mod.def(
         "generate_blitz_decode_pipeline",
         [](bool initialize_loopback) {
-            return tt::tt_metal::experimental::blitz::generate_blitz_decode_pipeline(initialize_loopback);
+            return tt::tt_metal::internal::blitz::generate_blitz_decode_pipeline(initialize_loopback);
         },
         nb::arg("initialize_loopback") = true,
         R"doc(
@@ -51,6 +111,29 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
 
             Returns:
                 List[BlitzDecodePipelineStage]: Ordered pipeline stages for Blitz decode.
+        )doc");
+
+    mod.def(
+        "resolve_blitz_decode_pipeline_allocation",
+        [](bool initialize_loopback) {
+            return tt::tt_metal::internal::blitz::resolve_blitz_decode_pipeline_allocation(initialize_loopback);
+        },
+        nb::arg("initialize_loopback") = true,
+        R"doc(
+            Resolve the Blitz decode pipeline allocation.
+
+            Returns the logical stage-to-host bindings plus the chosen entry/exit endpoint
+            placements for each stage. The legacy `generate_blitz_decode_pipeline()` API is a
+            projection of this richer resolved allocation.
+
+            Args:
+                initialize_loopback: When True (default), includes the loopback entry and host
+                    egress placements for the return path onto stage 0. When False, resolves a
+                    linear pipeline with host egress on the last stage.
+
+            Returns:
+                ResolvedBlitzDecodePipelineAllocation: Resolved stage allocations and pipeline-level
+                endpoint placements for Blitz decode.
         )doc");
 }
 
@@ -116,6 +199,8 @@ void bind_pipeline_builder(nb::module_& mod) {
             exit_col:   Column of the exit chip in *src*'s submesh.
             entry_row:  Row of the entry chip in *dst*'s submesh.
             entry_col:  Column of the entry chip in *dst*'s submesh.
+            exit_core_slot: Abstract pipeline-core slot on the exit chip, assigned by the resolver.
+            entry_core_slot: Abstract pipeline-core slot on the entry chip, assigned by the resolver.
     )")
         .def_ro("src", &tt::tt_fabric::ResolvedEdge::src)
         .def_ro("dst", &tt::tt_fabric::ResolvedEdge::dst)
@@ -124,6 +209,8 @@ void bind_pipeline_builder(nb::module_& mod) {
         .def_ro("exit_col", &tt::tt_fabric::ResolvedEdge::exit_col)
         .def_ro("entry_row", &tt::tt_fabric::ResolvedEdge::entry_row)
         .def_ro("entry_col", &tt::tt_fabric::ResolvedEdge::entry_col)
+        .def_ro("exit_core_slot", &tt::tt_fabric::ResolvedEdge::exit_core_slot)
+        .def_ro("entry_core_slot", &tt::tt_fabric::ResolvedEdge::entry_core_slot)
         .def("__repr__", [](const tt::tt_fabric::ResolvedEdge& e) {
             return std::string("ResolvedEdge(") + e.src + " -> " + e.dst + (e.is_loopback ? " [loopback]" : "") +
                    " exit=(" + std::to_string(e.exit_row) + "," + std::to_string(e.exit_col) + ")" + " entry=(" +
@@ -139,24 +226,38 @@ void bind_pipeline_builder(nb::module_& mod) {
             resolved_edges:  One ResolvedEdge per input edge, with discovered physical coords.
             h2d_entry_row:   Row of the H2D entry chip in stage-0's submesh.
             h2d_entry_col:   Column of the H2D entry chip in stage-0's submesh.
+            h2d_core_slot:   Abstract pipeline-core slot for H2D, assigned by the resolver.
             d2h_exit_row:    Row of the D2H exit chip in stage-0's submesh.
             d2h_exit_col:    Column of the D2H exit chip in stage-0's submesh.
+            d2h_core_slot:   Abstract pipeline-core slot for D2H, assigned by the resolver.
     )")
         .def_ro("stage_order", &tt::tt_fabric::GraphLayoutResult::stage_order)
         .def_ro("node_to_submesh", &tt::tt_fabric::GraphLayoutResult::node_to_submesh)
         .def_ro("resolved_edges", &tt::tt_fabric::GraphLayoutResult::resolved_edges)
         .def_ro("h2d_entry_row", &tt::tt_fabric::GraphLayoutResult::h2d_entry_row)
         .def_ro("h2d_entry_col", &tt::tt_fabric::GraphLayoutResult::h2d_entry_col)
+        .def_ro("h2d_core_slot", &tt::tt_fabric::GraphLayoutResult::h2d_core_slot)
         .def_ro("d2h_exit_row", &tt::tt_fabric::GraphLayoutResult::d2h_exit_row)
-        .def_ro("d2h_exit_col", &tt::tt_fabric::GraphLayoutResult::d2h_exit_col);
+        .def_ro("d2h_exit_col", &tt::tt_fabric::GraphLayoutResult::d2h_exit_col)
+        .def_ro("d2h_core_slot", &tt::tt_fabric::GraphLayoutResult::d2h_core_slot);
 
     mod.def(
         "resolve_graph_layout",
-        [](const std::vector<tt::tt_fabric::EdgeInputTuple>& edges,
-           const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips)
-            -> tt::tt_fabric::GraphLayoutResult { return tt::tt_fabric::resolve_graph_layout(edges, submesh_chips); },
+        [](const std::vector<std::string>& nodes,
+           const std::vector<tt::tt_fabric::EdgeInputTuple>& edges,
+           const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips,
+           const std::map<std::string, uint32_t>& node_chip_counts,
+           const std::map<std::string, uint32_t>& node_pipeline_core_counts,
+           std::optional<uint32_t> pipeline_core_count) -> tt::tt_fabric::GraphLayoutResult {
+            return tt::tt_fabric::resolve_graph_layout(
+                nodes, edges, submesh_chips, node_chip_counts, node_pipeline_core_counts, pipeline_core_count);
+        },
+        nb::arg("nodes") = std::vector<std::string>{},
         nb::arg("edges"),
         nb::arg("submesh_chips"),
+        nb::arg("node_chip_counts") = std::map<std::string, uint32_t>{},
+        nb::arg("node_pipeline_core_counts") = std::map<std::string, uint32_t>{},
+        nb::arg("pipeline_core_count") = nb::none(),
         R"(
             Auto-discover the physical layout of a pipeline graph.
 
@@ -165,15 +266,35 @@ void bind_pipeline_builder(nb::module_& mod) {
             topological sort and backtracking submesh assignment.
 
             Args:
+                nodes:         List of all node names in declaration order.  Authoritative
+                               node list, so graphs whose nodes are not all covered by
+                               edges (e.g. a single-stage pipeline with no edges) are
+                               handled.  Every endpoint referenced by ``edges`` must appear
+                               here or a RuntimeError is raised.
                 edges:         List of (src_name, dst_name, is_loopback) tuples describing
                                the pipeline graph.  Set is_loopback=True for the return
-                               edge from the last stage back to stage 0.
+                               edge from the last stage back to stage 0.  A self-loop
+                               (src == dst) is allowed and satisfied trivially.
                 submesh_chips: For each submesh, a list of (mesh_id, chip_id, row, col)
                                tuples (obtained from submesh.get_fabric_node_id()).
+                node_chip_counts: Optional {node_name: expected_chip_count} map. When a
+                               node is present, it may only be assigned to a submesh with
+                               exactly that many chips (rows*cols of its declared shape),
+                               so e.g. a 4x2 stage cannot land on a 1x2 submesh. Nodes
+                               absent from the map are unconstrained; an empty map (default)
+                               disables the shape filter.
+                node_pipeline_core_counts: Optional {node_name: cores_per_chip} map. When
+                               supplied, the resolver jointly assigns links and abstract
+                               endpoint slots while enforcing each node's per-chip capacity.
+                               Overrides pipeline_core_count for the listed nodes.
+                pipeline_core_count: Optional uniform available pipeline-core slots per chip.
+                               Unspecified capacities default to 1 slot per chip on the
+                               chosen submesh if it has at least 8 chips, or 2 otherwise.
+                               Core-slot results are always assigned.
 
             Returns:
-                GraphLayoutResult with physical coords for every edge and the H2D/D2H
-                chip coords in stage-0's submesh.
+                GraphLayoutResult with physical coordinates and
+                abstract core slots for every edge and H2D/D2H.
         )");
 
     mod.def(

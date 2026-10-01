@@ -92,12 +92,13 @@ class DecoderBlock2DBase(DecoderBlockBase):
         cfg: RunPrefillConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
+        chunk_start_idx: int = 0,
     ) -> ttnn.Tensor:
         # MLA norm
         mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
 
         # MLA
-        mla_out = MLA2D.forward_prefill(mla_norm_out, user_id, cfg["mla"], rope_tensors, page_table)
+        mla_out = MLA2D.forward_prefill(mla_norm_out, user_id, cfg["mla"], rope_tensors, page_table, chunk_start_idx)
         ttnn.deallocate(mla_norm_out)
 
         # MLA Residual

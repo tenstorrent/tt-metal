@@ -54,3 +54,28 @@ def test_read_write_cq_synchronize(device):
     output = ttnn.to_torch(output)
     eq = torch.equal(input, output)
     assert eq
+
+
+def test_cpu_blocking_false_discarded_return_no_uaf(device):
+    """Regression test for issue #43638.
+
+    Tensor.cpu(blocking=False) must keep the destination host buffer alive until
+    the async D2H read completes, even if the caller immediately discards the
+    returned tensor.  Without the fix, the DistributedHostBuffer is freed before
+    the NumaAwareExecutor reader thread finishes its memcpy → SIGSEGV in
+    libumd read_from_sysmem.
+
+    Use ~16 MB tensors so the async read is still in flight when CPython would
+    normally garbage-collect the unreferenced return value.
+    """
+    # 1024 x 8192 x bfloat16 = ~16 MB; large enough that the async D2H is
+    # likely still in flight when the discarded tensor goes out of scope.
+    host = torch.randn(1024, 8192, dtype=torch.bfloat16)
+    dev_tensor = ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+
+    for _ in range(20):
+        # Deliberately discard the return value — the host buffer must remain
+        # pinned internally until synchronize_device() completes.
+        dev_tensor.cpu(blocking=False)
+        ttnn.synchronize_device(device)
+    # If we reach here without crashing, the fix is working.

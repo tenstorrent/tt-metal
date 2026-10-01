@@ -529,3 +529,103 @@ def test_level2_polar(bs, memcfg, dtype, device, function_level_defaults):
     imag_passing, imag_output = comp_allclose(tt_cpu_imag, tt_dev_imag, 0.0125, 1)
     logger.info(imag_output)
     assert real_passing and imag_passing
+
+
+def _complex_tensor_in(shape, device, real_memcfg, imag_memcfg):
+    x = Complex(shape)
+    real = ttnn.Tensor(x.real, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device, real_memcfg)
+    imag = ttnn.Tensor(x.imag, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device, imag_memcfg)
+    return ttnn.complex_tensor(real, imag), real, imag
+
+
+@pytest.mark.parametrize("op, component", ((ttnn.real, "real"), (ttnn.imag, "imag")), ids=["real", "imag"])
+@pytest.mark.parametrize(
+    "request_tag", ("DRAM", "sharded", "matching"), ids=["explicit_DRAM", "explicit_sharded", "explicit_matching"]
+)
+def test_real_imag_honours_memory_config(op, component, request_tag, device):
+    """real and imag place the returned component where the caller asks.
+
+    Both used to accept `memory_config` and return the component untouched, so an explicit
+    request was dropped. The component is placed in L1 and a different config is requested;
+    with matching configs the requested and inherited values coincide and the defect is
+    invisible. `explicit_matching` pins the other half of the contract: a request the
+    component already satisfies must stay a view of it rather than become a copy.
+    """
+    shape = torch.Size([1, 1, 32, 64])
+    complex_tensor, real, imag = _complex_tensor_in(shape, device, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG)
+    expected_component = real if component == "real" else imag
+
+    if request_tag == "DRAM":
+        requested_memcfg = ttnn.DRAM_MEMORY_CONFIG
+    elif request_tag == "sharded":
+        # Complex() splits the last dim, so a component is half as wide as `shape`.
+        requested_memcfg = ttnn.create_sharded_memory_config(
+            expected_component.shape,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        requested_memcfg = ttnn.L1_MEMORY_CONFIG
+
+    output = op(complex_tensor, memory_config=requested_memcfg)
+
+    assert (
+        output.memory_config() == requested_memcfg
+    ), f"requested {request_tag}: expected {requested_memcfg} but landed in {output.memory_config()}"
+
+    # Placement is all this argument controls, so the data must be the component's own.
+    passing, message = comp_equal(ttnn.to_torch(expected_component), ttnn.to_torch(output))
+    logger.info(message)
+    assert passing
+
+    if request_tag == "matching":
+        assert (
+            output.buffer_address() == expected_component.buffer_address()
+        ), "a request the component already satisfies must stay a view, not copy"
+
+
+@pytest.mark.parametrize("op, component", ((ttnn.real, "real"), (ttnn.imag, "imag")), ids=["real", "imag"])
+def test_real_imag_unset_memory_config_follows_own_component(op, component, device):
+    """An unset memory_config leaves the component exactly where it is.
+
+    The two components are independent tensors and are placed in opposite spaces here, so a
+    default taken from the wrong one is visible: `imag` resolved its unset config from the
+    *real* component, which is harmless only while the config is ignored.
+    """
+    shape = torch.Size([1, 1, 32, 64])
+    complex_tensor, real, imag = _complex_tensor_in(shape, device, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG)
+    expected_component = real if component == "real" else imag
+
+    output = op(complex_tensor)
+
+    assert (
+        output.memory_config() == expected_component.memory_config()
+    ), f"{component} with no memory_config: expected {expected_component.memory_config()} but landed in {output.memory_config()}"
+    assert output.buffer_address() == expected_component.buffer_address(), "the default path must stay a view"
+
+
+@pytest.mark.parametrize("op, component", ((ttnn.real, "real"), (ttnn.imag, "imag")), ids=["real", "imag"])
+def test_real_imag_host_component_is_returned_as_is(op, component):
+    """A host component is handed back untouched whatever is requested.
+
+    Both ops accept a host ComplexTensor, and a host tensor has no memory config to satisfy;
+    relocating one would need a device op, which fails on `is_device_tensor`.
+
+    Both requests are covered: an explicit one, and an unset one, which resolves the default
+    from the component's own config and so runs that lookup on a host tensor too.
+    """
+    shape = torch.Size([1, 1, 32, 64])
+    x = Complex(shape)
+    real = ttnn.Tensor(x.real, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
+    imag = ttnn.Tensor(x.imag, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
+    expected_component = real if component == "real" else imag
+    complex_tensor = ttnn.complex_tensor(real, imag)
+
+    for requested_memcfg in (ttnn.DRAM_MEMORY_CONFIG, None):
+        output = op(complex_tensor) if requested_memcfg is None else op(complex_tensor, memory_config=requested_memcfg)
+
+        assert output.storage_type() == ttnn.StorageType.HOST, f"requested {requested_memcfg}"
+        passing, message = comp_equal(ttnn.to_torch(expected_component), ttnn.to_torch(output))
+        logger.info(message)
+        assert passing

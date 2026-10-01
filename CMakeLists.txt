@@ -36,11 +36,13 @@ project(
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+GenerateVersionHeader()
+AddVersionHeaderTarget()
 
 # Augment CMake's built-in per-config flags rather than replacing them wholesale.
 # Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently
 # discarding toolchain-file settings and CMake defaults.  add_compile_options() with
-# config generators appends cleanly and composes correctly with toolchain files.
+# config generators appends cleanly and composes correctly with toolchain files
 #
 # Flags already provided by CMake defaults and therefore omitted here:
 #   Debug:          -O0 -g
@@ -169,6 +171,13 @@ else()
     add_subdirectory(tt_metal/third_party SYSTEM)
 endif()
 
+option(TT_METAL_SKIP_LINKING "Replace the linker with a no-op touch for clang-tidy builds" OFF)
+if(TT_METAL_SKIP_LINKING)
+    set(CMAKE_CXX_LINK_EXECUTABLE "cmake -E touch <TARGET>")
+    set(CMAKE_C_LINK_EXECUTABLE "cmake -E touch <TARGET>")
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
+
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
@@ -184,13 +193,19 @@ target_link_libraries(
         numa
 )
 
+# Enable all warnings and treat them as errors by default
+if(NOT DEFINED CMAKE_COMPILE_WARNING_AS_ERROR)
+    set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
+endif()
+
+set(TT_X86_MARCH "x86-64-v3" CACHE STRING "x86_64 architecture passed to -march")
+
 add_compile_options(
-    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=${TT_X86_MARCH}>"
     -fPIC
     -pipe # use pipes instead of tmp files
     -fvisibility-inlines-hidden
     -Wall
-    -Werror
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
@@ -244,12 +259,18 @@ string(REPLACE ${PROJECT_NAME} ${PROJECT_NAME_LOWER} CMAKE_INSTALL_DOCDIR ${CMAK
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
-include(tracy)
 
-if(ENABLE_TRACY AND TARGET TracyClient)
-    message(STATUS "Adding -Wno-unused-variable to TracyClient")
-    target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
-endif()
+# Descriptor cache-hit fast-path parity check: on every fast-path hit, rebuild the descriptor and
+# assert the patched runtime args + CB addresses match a full rebuild. A debug/CI regression net for
+# incomplete in-place re-application (SDXL silu / MorehAdamW). OFF by default (per-hit rebuild cost).
+# The check is compiled only in ttnn (mesh_device_operation_adapter.hpp), so the
+# TT_DESCRIPTOR_PATCHING_PARITY_CHECK definition is scoped to the ttnn target in ttnn/CMakeLists.txt
+# rather than applied globally.
+option(
+    ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK
+    "Assert descriptor cache-hit fast-path parity against a full rebuild (debug/CI)."
+    OFF
+)
 
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)
@@ -263,13 +284,22 @@ target_precompile_headers(
         <fmt/format.h>
         <nlohmann/json.hpp>
         <algorithm>
+        <array>
+        <chrono>
         <cstddef>
         <cstdint>
+        <fstream>
         <functional>
         <map>
         <memory>
+        <mutex>
+        <optional>
+        <set>
+        <sstream>
+        <thread>
         <tuple>
         <unordered_map>
+        <unordered_set>
         <variant>
         <vector>
 )
@@ -280,8 +310,8 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(metal_common_pch)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(metal_common_pch)
 endif()
 
 ############################################################################################################################
@@ -300,7 +330,6 @@ endif()
 
 ############################################################################################################################
 # Install targets for build artifacts and nanobinds
-#   If built with Tracy, cannot install 'all' since it will pick up install targets from Tracy
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib

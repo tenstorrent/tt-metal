@@ -3,6 +3,7 @@
 
 #include "prod_nc_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 namespace ttnn::prim {
 void ProdNcDeviceOperation::validate_on_program_cache_miss(
@@ -30,11 +31,18 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
             output_shape[i]);
     }
 
-    // prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_nanobind.hpp
     TT_FATAL(
-        input.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",
+        input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "Error - unsupported data type for prod, expected BFLOAT16, FLOAT32 or BFLOAT8_B but got {}.",
         input.dtype());
+
+    const auto& out_memory_config = output.memory_config();
+    ReduceOpDeviceGridValidationOptions prod_nc_grid_opts;
+    prod_nc_grid_opts.shard_grid_contained_in_device_grid = &out_memory_config;
+    prod_nc_grid_opts.memory_config_label = "output";
+    validate_reduce_op_tensor(input, "Prod_nc", "input");
+    validate_reduce_op_tensor(output, "Prod_nc", "output", &prod_nc_grid_opts, compute_output_specs(args, tensor_args));
 }
 
 ProdNcDeviceOperation::spec_return_value_t ProdNcDeviceOperation::compute_output_specs(

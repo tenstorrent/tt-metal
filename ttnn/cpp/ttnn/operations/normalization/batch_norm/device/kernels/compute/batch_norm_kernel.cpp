@@ -2,204 +2,88 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/eltwise_binary.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
-
 #include <cstdint>
 
-#include "experimental/circular_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"      // BinaryFpu, DestReuseBinary, PackTile, eltwise_chain
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"     // Rsqrt
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
 
-ALWI void batchnorm_bcast_tiles(
-    uint32_t cb_bcast,
-    uint32_t cb_other,
-    uint32_t freq,
-    uint32_t tile_start,
-    uint32_t cb_batch_var,
-    uint32_t cb_eps,
-    uint32_t cb_den,
-    uint32_t cb_weight,
-    uint32_t cb_bias,
-    uint32_t cb_tmp_1,
-    uint32_t cb_output_0,
-    uint32_t weight_has,
-    uint32_t bias_has) {
-    constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
-    uint32_t weight_has_value = weight_has;
-    uint32_t bias_has_value = bias_has;
-    auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
-    auto cb_scaled_output = (bias_has_value) ? cb_tmp_1 : cb_output_0;
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
-    experimental::CircularBuffer cb_bcast_obj(cb_bcast);
-    experimental::CircularBuffer cb_other_obj(cb_other);
-    experimental::CircularBuffer cb_batch_var_obj(cb_batch_var);
-    experimental::CircularBuffer cb_den_obj(cb_den);
-    experimental::CircularBuffer cb_weight_obj(cb_weight);
-    experimental::CircularBuffer cb_bias_obj(cb_bias);
-    experimental::CircularBuffer cb_tmp_1_obj(cb_tmp_1);
-    experimental::CircularBuffer cb_output_0_obj(cb_output_0);
-    experimental::CircularBuffer cb_affine_or_out_obj(cb_affine_or_out);
-    experimental::CircularBuffer cb_scaled_output_obj(cb_scaled_output);
-
-    // 1/(sqrt(batch_var + eps))
-    cb_den_obj.reserve_back(onetile);
-    cb_batch_var_obj.wait_front(onetile);
-
-    tile_regs_acquire();
-    add_tiles_init_with_dt(cb_batch_var, cb_eps);
-    add_tiles(cb_batch_var, cb_eps, 0, 0, dst0);
-    rsqrt_tile_init();
-    rsqrt_tile(dst0);
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, cb_den);
-    tile_regs_release();
-
-    cb_batch_var_obj.pop_front(onetile);
-    cb_den_obj.push_back(onetile);
-
-    cb_bcast_obj.wait_front(onetile);
-    cb_den_obj.wait_front(onetile);
-    if (weight_has_value) {
-        cb_weight_obj.wait_front(onetile);
-    }
-    if (bias_has_value) {
-        cb_bias_obj.wait_front(onetile);
-    }
-    for (uint32_t j = tile_start; j < freq; ++j) {
-        // input - batch_mean
-        cb_other_obj.wait_front(onetile);
-        cb_affine_or_out_obj.reserve_back(onetile);
-
-        tile_regs_acquire();
-        sub_tiles_init(cb_other, cb_bcast);
-        sub_tiles(cb_other, cb_bcast, 0, 0, 0);
-
-        // (input - batch_mean)/(sqrt(batch_var + eps)) = result
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_den);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_den, 0, 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(0, cb_affine_or_out);
-        tile_regs_release();
-
-        cb_affine_or_out_obj.push_back(onetile);
-        cb_other_obj.pop_front(onetile);
-
-        // result = result * weight
-        if (weight_has_value) {
-            cb_scaled_output_obj.reserve_back(onetile);
-            cb_affine_or_out_obj.wait_front(1);
-
-            tile_regs_acquire();
-            mul_tiles_init_with_dt(cb_affine_or_out, cb_weight);
-            mul_tiles(cb_affine_or_out, cb_weight, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_scaled_output);
-            tile_regs_release();
-
-            cb_affine_or_out_obj.pop_front(1);
-            cb_scaled_output_obj.push_back(onetile);
-        }
-
-        // result = result + bias
-        if (bias_has_value) {
-            cb_output_0_obj.reserve_back(onetile);
-            cb_tmp_1_obj.wait_front(onetile);
-
-            tile_regs_acquire();
-            add_tiles_init_with_dt(cb_tmp_1, cb_bias);
-            add_tiles(cb_tmp_1, cb_bias, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_output_0);
-            tile_regs_release();
-
-            cb_tmp_1_obj.pop_front(onetile);
-            cb_output_0_obj.push_back(onetile);
-        }
-    }
-    cb_bcast_obj.pop_front(onetile);
-    cb_den_obj.pop_front(onetile);
-    if (weight_has_value) {
-        cb_weight_obj.pop_front(onetile);
-    }
-    if (bias_has_value) {
-        cb_bias_obj.pop_front(onetile);
-    }
-}
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t tile_freq = get_arg_val<uint32_t>(1);
-    uint32_t tile_start = get_arg_val<uint32_t>(2);
-    constexpr uint32_t weight_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t bias_has_value = get_compile_time_arg_val(1) == 1;
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    const uint32_t tile_freq = get_arg(args::tile_freq);
+    uint32_t tile_start = get_arg(args::tile_start);
+    constexpr bool weight_has_value = get_arg(args::weight_has_value) == 1;
+    constexpr bool bias_has_value = get_arg(args::bias_has_value) == 1;
 
     if (num_tiles == 0) {
         return;
     }
 
-    constexpr auto cb_input = get_compile_time_arg_val(2);       // input
-    constexpr auto cb_batch_mean = get_compile_time_arg_val(3);  // batch_mean
-    constexpr auto cb_output_0 =
-        get_compile_time_arg_val(4);  // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
-    constexpr auto cb_batch_var = get_compile_time_arg_val(5);  // batch_var
-    constexpr auto cb_eps = get_compile_time_arg_val(6);        // eps
-    constexpr auto cb_den = get_compile_time_arg_val(7);        // 1/(sqrt(batch_var + eps))
-    constexpr auto cb_weight = get_compile_time_arg_val(8);     // weight tensor
-    constexpr auto cb_tmp_1 = get_compile_time_arg_val(9);      // (input - batch_mean)/(sqrt(batch_var + eps))
-    constexpr auto cb_bias = get_compile_time_arg_val(10);      // bias tensor
+    compute_kernel_hw_startup(dfb::input, dfb::batch_mean, dfb::out);
 
-    auto cb_bcast = cb_batch_mean;
-    auto cb_other = cb_input;
+    const uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
+    const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
-    binary_op_init_common(cb_other, cb_bcast, cb_output_0);
+    DataflowBuffer dfb_eps_obj(dfb::eps);  // one tile of eps, filled by the reader
+    dfb_eps_obj.wait_front(1);
 
-    uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
-    uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
+    // out = ((input - batch_mean) / sqrt(batch_var + eps)) * optional(weight) + optional(bias).
+    const auto batchnorm_bcast_tiles = [](uint32_t freq, uint32_t tile_start) __attribute__((always_inline)) {
+        // 1/(sqrt(batch_var + eps))
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb::batch_var, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+                ckl::input(dfb::eps, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+            ckl::Rsqrt<>{},
+            ckl::PackTile<ckl::output(dfb::den)>{});
 
-    constexpr uint32_t onetile = 1;
-    experimental::CircularBuffer cb_eps_obj(cb_eps);
-    cb_eps_obj.wait_front(onetile);
+        const uint32_t inner_count = freq - tile_start;
+
+        // The batch mean is the broadcast operand of the subtraction; the input tiles are the other one.
+        constexpr auto sub_op = ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Sub,
+            ckl::input(dfb::input),
+            // batch_mean, broadcast against the input
+            ckl::input(dfb::batch_mean, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{};
+        // (input - batch_mean)/(sqrt(batch_var + eps)) = result
+        constexpr auto mul_den = ckl::DestReuseBinary<
+            ckl::BinaryFpuOp::Mul,
+            ckl::input(dfb::den, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::DestReuseType::DEST_TO_SRCA>{};
+        // result = result * weight
+        constexpr auto mul_weight = ckl::Optional<
+            weight_has_value,
+            ckl::DestReuseBinary<
+                ckl::BinaryFpuOp::Mul,
+                // weight tensor
+                ckl::input(dfb::weight, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+                ckl::DestReuseType::DEST_TO_SRCA>>{};
+        // result = result + bias
+        constexpr auto add_bias = ckl::Optional<
+            bias_has_value,
+            ckl::DestReuseBinary<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb::bias, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+                ckl::DestReuseType::DEST_TO_SRCA>>{};
+        constexpr auto pack_out = ckl::PackTile<ckl::output(dfb::out)>{};
+
+        ckl::eltwise_chain(ckl::IterationShape::tiles(inner_count), sub_op, mul_den, mul_weight, add_bias, pack_out);
+    };
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        batchnorm_bcast_tiles(
-            cb_bcast,
-            cb_other,
-            tile_freq,
-            tile_start,
-            cb_batch_var,
-            cb_eps,
-            cb_den,
-            cb_weight,
-            cb_bias,
-            cb_tmp_1,
-            cb_output_0,
-            weight_has_value,
-            bias_has_value);
+        batchnorm_bcast_tiles(tile_freq, tile_start);
     }
     if (remaining_iterations > 0) {
-        batchnorm_bcast_tiles(
-            cb_bcast,
-            cb_other,
-            remaining_iterations,
-            tile_start,
-            cb_batch_var,
-            cb_eps,
-            cb_den,
-            cb_weight,
-            cb_bias,
-            cb_tmp_1,
-            cb_output_0,
-            weight_has_value,
-            bias_has_value);
+        batchnorm_bcast_tiles(remaining_iterations, tile_start);
     }
 
-    cb_eps_obj.pop_front(onetile);
+    dfb_eps_obj.pop_front(1);
 }

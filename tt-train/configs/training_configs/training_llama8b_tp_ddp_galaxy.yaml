@@ -4,7 +4,6 @@ training_config:
   model_save_interval: 500
   batch_size: 8  # Total batch size across all DP groups
   gradient_accumulation_steps: 1
-  num_epochs: 1
   max_steps: 10
   use_clip_grad_norm: false # TODO: fix clip grad norm when TP is enabled
   clip_grad_norm_max_norm: 1.0

@@ -4,19 +4,18 @@
 
 from typing import List
 
-import torch
+from fuser.base_packer import Packer as BasePacker
 from fuser.block_data import BlockData
-from fuser.fused_loop import FusedLoop
-from fuser.fused_math import ComputeNode
-from fuser.fused_operation import FusedOperation
-from fuser.fused_packer import Packer as BasePacker
 from fuser.fuser_config import GlobalConfig
-from helpers.golden_generators import PackGolden
-from helpers.llk_params import PackerReluType
+from fuser.golden.pack.pack import pack_golden
+from fuser.indexing import InvocationGranularity
+from fuser.l1_operation import L1Operation
+from fuser.pack_node import PackNode
 
 
 class Packer(BasePacker):
-    loop: FusedLoop = FusedLoop()
+    granularity = InvocationGranularity.TILE
+    golden_fn = staticmethod(pack_golden)
 
     def get_headers(self) -> List[str]:
         return [
@@ -24,46 +23,29 @@ class Packer(BasePacker):
             "llk_pack_common.h",
         ]
 
-    def golden(
-        self,
-        tensor: torch.Tensor,
-        operation: FusedOperation,
-        config: GlobalConfig,
-    ) -> torch.Tensor:
-        if operation.pack_relu != PackerReluType.NoRelu:
-            intermediate_format = config.sentinel.golden_format.pack_src
-            relu_config = PackGolden.generate_relu_config(
-                operation.pack_relu, operation.relu_threshold, intermediate_format
-            )
-            tensor = PackGolden.apply_relu(tensor, relu_config, intermediate_format)
-        return tensor
-
     def init(
         self,
-        operation: FusedOperation,
+        pack_node: PackNode,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        dest_acc = config.dest_acc.cpp_enum_value
-        face_r_dim = operation.output.tile_shape.face_r_dim
-        num_faces = operation.output.tile_shape.total_num_faces()
-        dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
+        face_r_dim = pack_node.output.tile_shape.face_r_dim
+        num_faces = pack_node.output.tile_shape.total_num_faces()
         return (
-            f"    _llk_pack_init_<false, false>(\n"
+            f"    _llk_pack_init_<PackMode::Default, false /* zero_output */>(\n"
             f"        {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
             f"    );\n"
-            f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}, false>();\n"
         )
 
     def pack(
         self,
-        operation: FusedOperation,
+        pack_node: PackNode,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
         dest_acc = config.dest_acc.cpp_enum_value
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
-        buffer = operation.output.cpp_name
-        return f"_llk_pack_<{dest_sync}, {dest_acc}, false>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"
+        buffer = pack_node.output.cpp_name
+        return f"_llk_pack_<{dest_sync}, {dest_acc}, ckernel::PackMode::Default>({block.tile_id_dest}, L1_ADDRESS({buffer}[{block.tile_id_out}]));\n"

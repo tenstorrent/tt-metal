@@ -14,6 +14,8 @@
 #include <future>
 #include <chrono>
 #include <exception>
+#include <system_error>
+#include <tuple>
 #include <unordered_set>
 #include <thread>
 
@@ -31,6 +33,7 @@
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
+#include "umd/device/utils/semver.hpp"
 
 namespace tt::scaleout_tools {
 
@@ -586,13 +589,13 @@ void forward_link_metrics_to_controller(std::vector<EthernetLinkMetrics>& link_m
         serialized_link_metrics = tt::scaleout::validation::serialize_link_metrics_to_bytes(link_metrics);
         serialized_link_metrics_size = serialized_link_metrics.size();
         distributed_context.send(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_link_metrics_size), sizeof(serialized_link_metrics_size)),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         distributed_context.send(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
+            ttsl::as_writable_bytes(
+                ttsl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
     } else {
@@ -601,14 +604,14 @@ void forward_link_metrics_to_controller(std::vector<EthernetLinkMetrics>& link_m
                 continue;
             }
             distributed_context.recv(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_link_metrics_size), sizeof(serialized_link_metrics_size)),
                 tt::tt_metal::distributed::multihost::Rank{peer_rank},
                 tt::tt_metal::distributed::multihost::Tag{0});
             serialized_link_metrics.resize(serialized_link_metrics_size);
             distributed_context.recv(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
                 tt::tt_metal::distributed::multihost::Rank{peer_rank},
                 tt::tt_metal::distributed::multihost::Tag{0});
             std::vector<EthernetLinkMetrics> remote_link_metrics =
@@ -620,13 +623,29 @@ void forward_link_metrics_to_controller(std::vector<EthernetLinkMetrics>& link_m
 
 LinkMetricsResult process_link_statuses(
     const std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>>& statuses_per_link,
-    bool log_all_ethernet_metrics) {
+    bool log_all_ethernet_metrics,
+    const std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>>* baseline_per_link = nullptr) {
     LinkMetricsResult result;
 
     for (const auto& [channel_identifier, link_stats] : statuses_per_link) {
+        // Health uses only the traffic samples; the pre-traffic baseline (if any) is
+        // informational and must not influence the unhealthy determination.
         bool is_unhealthy = link_unhealthy(link_stats);
 
         if (log_all_ethernet_metrics) {
+            // Pre-traffic baseline first (sample 0, carries Data Size 0 B), then the
+            // per-iteration traffic samples.
+            if (baseline_per_link != nullptr) {
+                auto baseline_it = baseline_per_link->find(channel_identifier);
+                if (baseline_it != baseline_per_link->end()) {
+                    for (const auto& baseline_status : baseline_it->second) {
+                        result.all_link_metrics.push_back(EthernetLinkMetrics{
+                            .channel_identifier = channel_identifier,
+                            .link_status = baseline_status,
+                        });
+                    }
+                }
+            }
             // Log all iterations for all links
             for (const auto& link_status : link_stats) {
                 result.all_link_metrics.push_back(EthernetLinkMetrics{
@@ -714,7 +733,12 @@ void dump_link_stats(
             for (const auto& eth_connection : eth_connections) {
                 auto src_chan = eth_connection.src_chan;
                 auto logical_coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-                auto ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
+                // --log-ethernet-metrics without --send-traffic builds an empty device map; ethernet
+                // cores are only needed to read payload words when traffic was sent.
+                CoreCoord ethernet_core{};
+                if (data_size > 0) {
+                    ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
+                }
                 const auto& port_info = port_info_map.at(asic_id).at(src_chan);
                 links.push_back(
                     {chip_id,
@@ -1011,7 +1035,7 @@ void log_link_metrics(
 
     // Table header
     std::cout << std::left << std::setw(20) << "Host" << std::setw(6) << "Tray" << std::setw(6) << "ASIC"
-              << std::setw(5) << "Ch" << std::setw(9) << "Port ID" << std::setw(15) << "Port Type" << std::setw(14)
+              << std::setw(5) << "Ch" << std::setw(9) << "Port ID" << std::setw(17) << "Port Type" << std::setw(20)
               << "Unique ID" << std::setw(12) << "Retrains" << std::setw(14) << "CRC Err" << std::setw(18)
               << "Corrected CW" << std::setw(18) << "Uncorrected CW" << std::setw(16) << "Mismatch Words";
 
@@ -1021,7 +1045,7 @@ void log_link_metrics(
 
     std::cout << std::setw(12) << "Pkt Size" << std::setw(12) << "Data Size" << std::endl;
 
-    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << std::endl;
+    std::cout << std::string(log_ethernet_metrics ? 185 : 225, '-') << std::endl;
 
     // Table rows
     for (const auto& row : metric_rows) {
@@ -1034,12 +1058,13 @@ void log_link_metrics(
 
         // Print Port Type
         auto port_type = static_cast<tt::scaleout_tools::PortType>(row.channel_id.port_type);
-        std::cout << std::left << std::setw(15) << enchantum::to_string(port_type);
+        std::cout << std::left << std::setw(17) << enchantum::to_string(port_type);
 
-        // Print Unique ID in hex
+        // Print Unique ID in hex. ASIC IDs are 64-bit (up to 16 hex digits), so the value is
+        // ~18 chars;
         std::stringstream uid_stream;
-        uid_stream << "0x" << std::hex << std::setfill('0') << std::setw(10) << *row.channel_id.asic_id;
-        std::cout << std::left << std::setw(14) << uid_stream.str();
+        uid_stream << "0x" << std::hex << *row.channel_id.asic_id;
+        std::cout << std::left << std::setw(20) << uid_stream.str();
 
         // Retrains
         std::cout << std::dec << std::setfill(' ') << std::left << std::setw(12) << row.retrain_count;
@@ -1071,7 +1096,7 @@ void log_link_metrics(
                   << (std::to_string(row.traffic_params.data_size) + " B") << std::endl;
     }
 
-    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << std::endl << std::endl;
+    std::cout << std::string(log_ethernet_metrics ? 185 : 225, '-') << std::endl << std::endl;
 
     // Write CSV file
     std::filesystem::path csv_path =
@@ -1135,10 +1160,12 @@ void handle_workload_timeout(
     if (validation_config.cabling_descriptor_path.has_value() || validation_config.fsd_path.has_value()) {
         log_output_rank0("Re-running discovery to check for link failures");
         auto& context = tt::tt_metal::MetalContext::instance();
-        auto& driver_ref = const_cast<tt::umd::Cluster&>(*context.get_cluster().get_driver());
         ctx.physical_system_descriptor.clear();
         auto new_psd = tt::tt_metal::run_physical_system_discovery(
-            driver_ref, context.get_distributed_context_ptr(), context.rtoptions().get_target_device(), true, true);
+            *context.get_cluster().get_cluster_desc(),
+            context.get_distributed_context_ptr(),
+            context.rtoptions().get_target_device(),
+            true);
         ctx.physical_system_descriptor.merge(std::move(new_psd));
 
         log_output_rank0("Generating Global System Descriptor in-memory");
@@ -1202,7 +1229,7 @@ LinkMetricsResult send_traffic_and_validate_links(
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             1,
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+            tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config());
     } catch (const std::exception& e) {
         log_info(tt::LogDistributed, "Error starting devices to send traffic on rank: {}", *distributed_context.rank());
         log_output_rank0("Error details: " + std::string(e.what()));
@@ -1212,6 +1239,15 @@ LinkMetricsResult send_traffic_and_validate_links(
     distributed_context.barrier();
 
     ClusterContext ctx{physical_system_descriptor, asic_id_to_chip_id, devices};
+
+    // Pre-traffic baseline of cumulative link counters (read-only, no reset).
+    // Lets us separate pre-existing codeword counts from traffic-accumulated ones.
+    // data_size=0 makes dump_link_stats read counters only (skips payload/mismatch reads).
+    std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> baseline_statuses;
+    {
+        std::vector<uint32_t> no_inputs;
+        dump_link_stats(ctx, no_inputs, baseline_statuses, /*data_size=*/0, /*packet_size_bytes=*/0);
+    }
 
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
     bool fwd = true;
@@ -1233,8 +1269,8 @@ LinkMetricsResult send_traffic_and_validate_links(
             // Check if any rank experienced a hang/timeout
             bool any_rank_hung = false;
             distributed_context.all_reduce(
-                tt::stl::Span<bool>(&did_hang_locally, 1),
-                tt::stl::Span<bool>(&any_rank_hung, 1),
+                ttsl::Span<bool>(&did_hang_locally, 1),
+                ttsl::Span<bool>(&any_rank_hung, 1),
                 tt::tt_metal::distributed::multihost::ReduceOp::LOR);
 
             if (any_rank_hung) {
@@ -1247,7 +1283,7 @@ LinkMetricsResult send_traffic_and_validate_links(
         }
     }
 
-    return process_link_statuses(statuses_per_link, log_ethernet_metrics);
+    return process_link_statuses(statuses_per_link, log_ethernet_metrics, &baseline_statuses);
 }
 
 void forward_link_reset_metadata_from_controller(
@@ -1265,13 +1301,13 @@ void forward_link_reset_metadata_from_controller(
             auto serialized_exit_nodes_size = serialized_exit_nodes.size();
 
             distributed_context.send(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_exit_nodes_size), sizeof(serialized_exit_nodes_size)),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
             distributed_context.send(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
         }
@@ -1279,19 +1315,194 @@ void forward_link_reset_metadata_from_controller(
     } else {
         std::size_t serialized_exit_nodes_size = 0;
         distributed_context.recv(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_exit_nodes_size), sizeof(serialized_exit_nodes_size)),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         std::vector<uint8_t> serialized_exit_nodes(serialized_exit_nodes_size);
         distributed_context.recv(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
+            ttsl::as_writable_bytes(
+                ttsl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         exit_nodes_to_reset =
             tt::scaleout::validation::deserialize_eth_chan_identifiers_from_bytes(serialized_exit_nodes);
     }
+}
+
+std::vector<EthChannelIdentifier> collect_retrained_link_identifiers(
+    const tt::tt_metal::AsicTopology& missing_topology, const PhysicalSystemDescriptor& physical_system_descriptor) {
+    std::vector<EthChannelIdentifier> retrained_links;
+    const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
+
+    for (const auto& [asic_id, asic_connections] : missing_topology) {
+        if (!asic_descriptors.contains(asic_id)) {
+            continue;
+        }
+        const auto& asic_desc = asic_descriptors.at(asic_id);
+
+        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+            for (const auto& eth_connection : eth_connections) {
+                retrained_links.push_back(EthChannelIdentifier{
+                    .host = asic_desc.host_name,
+                    .asic_id = asic_desc.unique_id,
+                    .tray_id = asic_desc.tray_id,
+                    .asic_location = asic_desc.asic_location,
+                    .channel = eth_connection.src_chan,
+                });
+            }
+        }
+    }
+
+    return retrained_links;
+}
+
+void log_link_retrain_summary(
+    const std::unordered_map<EthChannelIdentifier, uint32_t>& link_retrain_counts,
+    uint32_t total_retrain_iterations,
+    const std::filesystem::path& output_path) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    if (*distributed_context.rank() != 0) {
+        return;
+    }
+
+    if (link_retrain_counts.empty()) {
+        return;
+    }
+
+    // Sort entries by (host, tray, asic_location, channel) for stable, diff-friendly output
+    // across runs. std::unordered_map iteration order is unspecified.
+    std::vector<std::pair<EthChannelIdentifier, uint32_t>> sorted_entries(
+        link_retrain_counts.begin(), link_retrain_counts.end());
+    std::sort(sorted_entries.begin(), sorted_entries.end(), [](const auto& lhs, const auto& rhs) {
+        return std::tie(lhs.first.host, *lhs.first.tray_id, *lhs.first.asic_location, lhs.first.channel) <
+               std::tie(rhs.first.host, *rhs.first.tray_id, *rhs.first.asic_location, rhs.first.channel);
+    });
+
+    auto format_unique_id = [](const auto& asic_id) {
+        std::stringstream ss;
+        ss << "0x" << std::hex << std::setfill('0') << std::setw(10) << *asic_id;
+        return ss.str();
+    };
+
+    uint32_t total_retrain_events = 0;
+    for (const auto& entry : sorted_entries) {
+        total_retrain_events += entry.second;
+    }
+
+    log_output_rank0(
+        "Link Retraining Summary: " + std::to_string(sorted_entries.size()) + " link endpoint(s) retrained over " +
+        std::to_string(total_retrain_iterations) + " retrain iteration(s)");
+
+    constexpr int kBannerWidth = 73;
+    const std::string banner_line(kBannerWidth, '=');
+    std::cout << '\n' << banner_line << '\n';
+    std::cout << "                       LINK RETRAINING REPORT" << '\n';
+    std::cout << banner_line << '\n';
+    std::cout << "Unique link endpoints retrained: " << sorted_entries.size() << '\n';
+    std::cout << "Retrain loop iterations:         " << total_retrain_iterations << '\n';
+    std::cout << "Total retrain events:            " << total_retrain_events << "\n\n";
+
+    std::cout << std::left << std::setw(20) << "Host" << std::setw(6) << "Tray" << std::setw(6) << "ASIC"
+              << std::setw(5) << "Ch" << std::setw(20) << "Unique ID" << std::setw(16) << "Retrain Count" << '\n';
+    std::cout << std::string(kBannerWidth, '-') << '\n';
+
+    for (const auto& [channel_id, retrain_count] : sorted_entries) {
+        std::cout << std::left << std::setw(20) << channel_id.host << std::setw(6) << *channel_id.tray_id
+                  << std::setw(6) << *channel_id.asic_location << std::setw(5) << static_cast<int>(channel_id.channel)
+                  << std::setw(20) << format_unique_id(channel_id.asic_id) << std::setw(16) << retrain_count << '\n';
+    }
+    std::cout << std::string(kBannerWidth, '-') << "\n\n";
+
+    // Best-effort CSV emission. Any filesystem failure is logged but must not throw,
+    // because this runs on the link-retrain early-exit path before TT_THROW.
+    std::error_code ec;
+    std::filesystem::create_directories(output_path, ec);
+    if (ec) {
+        log_output_rank0(
+            "[WARN] Could not create output directory for link retrain report: " + output_path.string() + " (" +
+            ec.message() + ")");
+        return;
+    }
+
+    const std::filesystem::path csv_path = output_path / "link_retrain_report.csv";
+    std::ofstream csv_file(csv_path);
+    if (!csv_file.is_open()) {
+        log_output_rank0("[WARN] Could not open CSV file for writing: " + csv_path.string());
+        return;
+    }
+
+    csv_file << "Host,Tray,ASIC,Channel,Unique_ID,Retrain_Count\n";
+    for (const auto& [channel_id, retrain_count] : sorted_entries) {
+        csv_file << channel_id.host << ',' << *channel_id.tray_id << ',' << *channel_id.asic_location << ','
+                 << static_cast<int>(channel_id.channel) << ',' << format_unique_id(channel_id.asic_id) << ','
+                 << retrain_count << '\n';
+    }
+    csv_file.close();
+    log_output_rank0("Link retrain report written to: " + csv_path.string());
+}
+
+void log_unretrainable_channels(
+    const tt::tt_metal::AsicTopology& missing_topology,
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    uint32_t total_retrain_iterations,
+    const std::filesystem::path& output_path) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    if (*distributed_context.rank() != 0) {
+        return;
+    }
+
+    auto channels = collect_retrained_link_identifiers(missing_topology, physical_system_descriptor);
+    if (channels.empty()) {
+        return;
+    }
+
+    std::sort(channels.begin(), channels.end(), [](const auto& lhs, const auto& rhs) {
+        return std::tie(lhs.host, *lhs.tray_id, *lhs.asic_location, lhs.channel) <
+               std::tie(rhs.host, *rhs.tray_id, *rhs.asic_location, rhs.channel);
+    });
+
+    auto format_unique_id = [](const auto& asic_id) {
+        std::stringstream ss;
+        ss << "0x" << std::hex << std::setfill('0') << std::setw(10) << *asic_id;
+        return ss.str();
+    };
+
+    // Best-effort filesystem; the caller is about to throw, so any failure here only loses
+    // diagnostic output, never propagates.
+    std::error_code ec;
+    std::filesystem::create_directories(output_path, ec);
+    if (ec) {
+        log_output_rank0(
+            "[WARN] Could not create output directory for unretrainable channels: " + output_path.string() + " (" +
+            ec.message() + ")");
+        return;
+    }
+
+    const std::filesystem::path yaml_path = output_path / "unretrainable_channels.yaml";
+    std::ofstream yaml_file(yaml_path);
+    if (!yaml_file.is_open()) {
+        log_output_rank0("[WARN] Could not open unretrainable channels file for writing: " + yaml_path.string());
+        return;
+    }
+
+    yaml_file << "# Channels that failed to retrain after " << total_retrain_iterations << " attempts.\n";
+    yaml_file << "# Each entry is one channel endpoint; both ends of an unretrainable cable\n";
+    yaml_file << "# typically appear as separate entries.\n";
+    yaml_file << "total_retrain_iterations: " << total_retrain_iterations << "\n";
+    yaml_file << "unretrainable_channels:\n";
+    for (const auto& channel_id : channels) {
+        yaml_file << "  - host: " << channel_id.host << "\n";
+        yaml_file << "    tray_id: " << *channel_id.tray_id << "\n";
+        yaml_file << "    asic_location: " << *channel_id.asic_location << "\n";
+        yaml_file << "    channel: " << static_cast<int>(channel_id.channel) << "\n";
+        yaml_file << "    asic_unique_id: " << format_unique_id(channel_id.asic_id) << "\n";
+    }
+    yaml_file.close();
+    log_output_rank0(
+        "Unretrainable channels (" + std::to_string(channels.size()) + " endpoints) written to: " + yaml_path.string());
 }
 
 void reset_local_ethernet_links(
@@ -1407,9 +1618,9 @@ void get_cross_node_ethernet_links_to_reset(
     forward_link_reset_metadata_from_controller(ordered_exit_nodes, cross_node_links_to_reset);
 }
 
-void reset_cross_node_ethernet_links(
+std::vector<ResetLink> build_cross_node_reset_links(
     const PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::vector<EthChannelIdentifier>& cross_node_links_to_reset) {
+    const std::vector<EthChannelIdentifier>& cross_node_links) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
 
@@ -1417,11 +1628,10 @@ void reset_cross_node_ethernet_links(
         asic_id_to_chip_id[asic_id] = chip_id;
     }
 
-    std::vector<ResetLink> links_to_reset;
-
-    // Collect all cross-node links to reset
-    for (const auto& link : cross_node_links_to_reset) {
-        auto chip_id = asic_id_to_chip_id[*link.asic_id];
+    std::vector<ResetLink> reset_links;
+    reset_links.reserve(cross_node_links.size());
+    for (const auto& link : cross_node_links) {
+        const auto chip_id = asic_id_to_chip_id.at(*link.asic_id);
         const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(link.asic_id);
 
         std::string log_message = "Cross-Node Link on Host: " + asic_descriptor.host_name +
@@ -1429,15 +1639,44 @@ void reset_cross_node_ethernet_links(
                                   " Tray: " + std::to_string(*asic_descriptor.tray_id) +
                                   " Location: " + std::to_string(*asic_descriptor.asic_location);
 
-        links_to_reset.push_back({chip_id, link.channel, log_message});
+        reset_links.push_back({chip_id, link.channel, std::move(log_message)});
     }
+    return reset_links;
+}
 
-    // Perform resets on all links in vector
-    send_reset_msg_to_links(links_to_reset);
+void reset_cross_node_ethernet_links(
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::vector<EthChannelIdentifier>& cross_node_links_to_reset) {
+    send_reset_msg_to_links(build_cross_node_reset_links(physical_system_descriptor, cross_node_links_to_reset));
 
     // Final barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     distributed_context.barrier();
+}
+
+void bring_down_cross_host_ethernet_ports(
+    const fsd::proto::FactorySystemDescriptor& fsd_proto, PhysicalSystemDescriptor& physical_system_descriptor) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    TT_FATAL(cluster.arch() == tt::ARCH::BLACKHOLE, "Cross-host port down is only supported on Blackhole");
+
+    // Determine cross-host links from the golden Factory System Descriptor rather than the discovered
+    // topology. Discovery only reports links that trained, so a cross-host link that failed to train
+    // would never be brought down. The golden connectivity lists every expected connection, which is
+    // exactly the set we want to quiesce before a reset cycle.
+    const auto golden_connections = tt::scaleout_tools::get_all_fsd_connections(fsd_proto);
+    tt::tt_metal::AsicTopology golden_topology =
+        generate_asic_topology_from_connections(golden_connections, physical_system_descriptor);
+
+    std::vector<EthChannelIdentifier> local_cross_host_endpoints;
+    get_cross_node_ethernet_links_to_reset(physical_system_descriptor, golden_topology, local_cross_host_endpoints);
+
+    log_warning(
+        tt::LogDistributed, "Bringing down {} local cross-host Ethernet endpoints", local_cross_host_endpoints.size());
+    send_port_down_msg_to_links(build_cross_node_reset_links(physical_system_descriptor, local_cross_host_endpoints));
+
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    distributed_context.barrier();
+    log_output_rank0("Cross-host Ethernet port down complete on all hosts");
 }
 
 void reset_ethernet_links(
@@ -1513,13 +1752,75 @@ tt::tt_metal::AsicTopology generate_asic_topology_from_connections(
     tt::tt_metal::AsicTopology asic_topology;
     std::unordered_map<tt_metal::AsicID, std::set<tt_metal::AsicID>> visited;
     std::unordered_map<tt_metal::AsicID, std::unordered_map<tt_metal::AsicID, uint32_t>> visited_idx;
+    // Build a non-throwing lookup (host -> tray -> asic-location -> AsicID) over the ASICs that were
+    // actually discovered in this run. When the golden descriptor covers a larger system than the hosts
+    // under recovery (e.g. running two hosts against the exabox-wide golden), the vast majority of golden
+    // connections reference ASICs we never discovered. The throwing get_asic_id() logs a
+    // `critical | Always` breadcrumb at every miss (independent of any catch), which floods the log with
+    // tens of thousands of lines. Resolving endpoints against this map instead means we never call the
+    // throwing path, so no breadcrumb is ever emitted here.
+    std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_map<uint32_t, tt_metal::AsicID>>>
+        discovered_asic_ids;
+    for (const auto& [asic_id, desc] : physical_system_descriptor.get_asic_descriptors()) {
+        discovered_asic_ids[desc.host_name][*desc.tray_id][*desc.asic_location] = asic_id;
+    }
+    auto resolve_asic_id =
+        [&](const std::string& host, uint32_t tray, uint32_t loc) -> std::optional<tt_metal::AsicID> {
+        auto h = discovered_asic_ids.find(host);
+        if (h == discovered_asic_ids.end()) {
+            return std::nullopt;
+        }
+        auto t = h->second.find(tray);
+        if (t == h->second.end()) {
+            return std::nullopt;
+        }
+        auto a = t->second.find(loc);
+        if (a == t->second.end()) {
+            return std::nullopt;
+        }
+        return a->second;
+    };
     for (const auto& connection : physical_connections) {
         auto src = connection.first;
         auto dst = connection.second;
-        auto src_asic_id = physical_system_descriptor.get_asic_id(
-            src.hostname, tt::tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
-        auto dst_asic_id = physical_system_descriptor.get_asic_id(
-            dst.hostname, tt::tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
+
+        const auto src_asic_id_opt = resolve_asic_id(src.hostname, *src.tray_id, src.asic_channel.asic_location);
+        const auto dst_asic_id_opt = resolve_asic_id(dst.hostname, *dst.tray_id, dst.asic_channel.asic_location);
+        if (!src_asic_id_opt.has_value() || !dst_asic_id_opt.has_value()) {
+            // At least one endpoint ASIC was not discovered. Only warn when both endpoint hosts were
+            // discovered: that means a specific board/ASIC on a host we are actively recovering is
+            // missing (e.g. a dead board), which is a genuine problem worth flagging and is rare.
+            // Everything else -- connections to hosts outside the recovery set, or fully external links
+            // in the golden -- is demoted to debug so the default log stays quiet. When the full system
+            // is under recovery every ASIC is discovered and nothing is skipped here.
+            const bool both_hosts_discovered =
+                discovered_asic_ids.contains(src.hostname) && discovered_asic_ids.contains(dst.hostname);
+            if (both_hosts_discovered) {
+                log_warning(
+                    tt::LogDistributed,
+                    "Skipping connection with undiscovered ASIC ({} tray {} asic {} <-> {} tray {} asic {})",
+                    src.hostname,
+                    *src.tray_id,
+                    src.asic_channel.asic_location,
+                    dst.hostname,
+                    *dst.tray_id,
+                    dst.asic_channel.asic_location);
+            } else {
+                log_debug(
+                    tt::LogDistributed,
+                    "Skipping golden connection outside discovered host set ({} tray {} asic {} <-> {} tray {} asic "
+                    "{})",
+                    src.hostname,
+                    *src.tray_id,
+                    src.asic_channel.asic_location,
+                    dst.hostname,
+                    *dst.tray_id,
+                    dst.asic_channel.asic_location);
+            }
+            continue;
+        }
+        const tt_metal::AsicID src_asic_id = *src_asic_id_opt;
+        const tt_metal::AsicID dst_asic_id = *dst_asic_id_opt;
         if (!visited[src_asic_id].contains(dst_asic_id)) {
             asic_topology[src_asic_id].push_back(
                 {dst_asic_id,
@@ -1610,8 +1911,13 @@ void perform_link_reset(
     uint32_t reset_asic_location,
     uint32_t reset_channel,
     PhysicalSystemDescriptor& physical_system_descriptor) {
-    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
-    TT_FATAL(link_retrain_supported, "Link reset is only supported on WORMHOLE_B0 architecture");
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto eth_fw = cluster.get_ethernet_firmware_version();
+    TT_FATAL(
+        cluster.supports_ethernet_link_retraining(),
+        "Link reset is only supported on WORMHOLE_B0 or BLACKHOLE with ETH FW >= 1.9.0 (detected arch: {}, FW: {})",
+        cluster.arch(),
+        eth_fw.has_value() ? eth_fw->to_string() : "unknown");
 
     tt::tt_metal::AsicTopology reset_topology =
         build_reset_topology(reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);

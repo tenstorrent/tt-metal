@@ -1388,11 +1388,11 @@ The above image from anyscale (https://www.anyscale.com/blog/continuous-batching
 Continuous batching improves TTFT by reducing wait times for incoming users. It also increases total throughput by keeping the decode batch full of useful work.
 
 Continuous batching is an LLM serving optimization but it requires some support in the model. The model has to support single user prefill so that when a slot is open, the model can prefill a new request into a specific slot of the batch. The model also has to support batched decode where position IDs can be different for each user in the batch, to avoid context contamination.
-Implementing continuous batching requires that the serving code track data for each slot of the batch. An example of our continuous batching demo can be found [here](../../models/demos/t3000/llama2_70b/demo/demo_continuous_batching.py). In production deployment, vLLM handles continuous batching for the LLM service.
+Implementing continuous batching requires that the serving code track data for each slot of the batch. In production deployment, vLLM handles continuous batching for the LLM service; see the [vLLM Integration Tech Report](./vLLM_integration.md).
 
 ### 3.5 vLLM Integration
 
-vLLM is an [open-source LLM serving library](https://github.com/vllm-project/vllm). Tenstorrent maintains a [fork of vLLM](https://github.com/tenstorrent/vllm/tree/dev) for serving models in production on Tenstorrent hardware. For more information about vLLM and the instructions on integrating Tenstorrent models into vLLM, please see the [vLLM Integration Tech Report](./vLLM_integration.md).
+vLLM is an [open-source LLM serving library](https://github.com/vllm-project/vllm). Tenstorrent integrates TT hardware through the standalone [vLLM TT plugin](https://github.com/tenstorrent/vllm-tt-plugin). For model integration instructions, see the [vLLM Integration Tech Report](./vLLM_integration.md).
 
 ## 4. Best Practices and Optimizations
 ### 4.1 Tracing
@@ -1692,7 +1692,7 @@ Take note where data is tilized and untilized. Do NOT tilize or untilize data on
 ```python
 tt_out_tiled = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
 tt_out_row_major = ttnn.untilize(tt_out_tiled, use_multicore=True)
-tt_tok = ttnn.argmax(tt_out_row_major, dim=3, use_multicore=True)
+tt_tok = ttnn.argmax(tt_out_row_major, dim=3)
 torch_tok = ttnn.to_torch(tt_tok)
 ```
 

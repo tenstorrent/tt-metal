@@ -11,11 +11,13 @@ from . import test_complex_unary_examples as complex_unary
 from . import test_backward_examples as backward
 from . import test_pointwise_binary_examples as pointwise_binary
 from . import test_pointwise_ternary_examples as pointwise_ternary
+from . import test_quantization_examples as quantization
 from . import test_losses_examples as losses
 from . import test_reduction_examples as reduction
 from . import test_normalization_examples as normalization
 from . import test_embedding_examples as embedding
 from . import test_pooling_examples as pooling
+from . import test_ccl_examples as ccl
 
 FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Core
@@ -352,6 +354,10 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.addcdiv_bw": pointwise_ternary.test_addcdiv_bw,
     "ttnn.where_bw": pointwise_ternary.test_where_bw,
     "ttnn.lerp_bw": pointwise_ternary.test_lerp_bw,
+    # Quantization
+    "ttnn.quantize": quantization.test_quantize,
+    "ttnn.requantize": quantization.test_requantize,
+    "ttnn.dequantize": quantization.test_dequantize,
     # Losses
     "ttnn.l1_loss": losses.test_l1_loss,
     "ttnn.mse_loss": losses.test_mse_loss,
@@ -418,9 +424,16 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # "ttnn.transformer.scaled_dot_product_attention": transformer.test_scaled_dot_product_attention, # Lack of example
     # "ttnn.transformer.scaled_dot_product_attention_decode": transformer.test_scaled_dot_product_attention_decode, # Lack of example
     # CCL
-    # "ttnn.all_gather": ccl.test_all_gather, # Non-working example
-    # "ttnn.reduce_scatter": ccl.test_reduce_scatter, # Non-working example
-    # "ttnn.all_reduce": ccl.test_all_reduce, # Non-working example
+    "ttnn.all_gather": ccl.test_all_gather,
+    "ttnn.all_broadcast": ccl.test_all_broadcast,
+    "ttnn.broadcast": ccl.test_broadcast,
+    "ttnn.all_reduce": ccl.test_all_reduce,
+    "ttnn.reduce_scatter": ccl.test_reduce_scatter,
+    "ttnn.reduce_to_root": ccl.test_reduce_to_root,
+    "ttnn.mesh_partition": ccl.test_mesh_partition,
+    "ttnn.point_to_point": ccl.test_point_to_point,
+    "ttnn.all_to_all_dispatch": ccl.test_all_to_all_dispatch,
+    "ttnn.all_to_all_combine": ccl.test_all_to_all_combine,
     # Embedding
     "ttnn.embedding": embedding.test_embedding,
     # Convolution

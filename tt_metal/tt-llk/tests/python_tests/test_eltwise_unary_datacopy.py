@@ -18,6 +18,7 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
+    PerfRunType,
     Tilize,
     format_dict,
 )
@@ -26,11 +27,12 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
+    LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -39,6 +41,11 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.utils import passed_test
+
+# Sub-byte block-float formats need extra handling: tilize is unsupported and
+# the golden must round-trip the input through the format's quantization to
+# match what the hardware actually sees after unpack from L1.
+SUB_BYTE_BFP_FORMATS = (DataFormat.Bfp4_b, DataFormat.Bfp2_b)
 
 
 def get_valid_tilize_datacopy(formats):
@@ -81,139 +88,68 @@ def get_valid_num_faces_datacopy(tilize):
     return [1, 2, 4]
 
 
-@parametrize(
-    formats=input_output_formats(
+DATACOPY_FORMATS = input_output_formats(
+    [
+        DataFormat.Float32,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Bfp8_b,
+        DataFormat.Fp8_e4m3,
+    ]
+)
+
+SUB_BYTE_DATACOPY_FORMATS = [
+    fmt
+    for fmt in input_output_formats(
         [
-            DataFormat.Float32,
-            DataFormat.Float16,
+            *SUB_BYTE_BFP_FORMATS,
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
-            DataFormat.Fp8_e4m3,
+            DataFormat.Float32,
         ]
-    ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
-    tilize=lambda formats: get_valid_tilize_datacopy(formats),
+    )
+    if fmt.input_format in SUB_BYTE_BFP_FORMATS
+    or fmt.output_format in SUB_BYTE_BFP_FORMATS
+]
+
+# Shared with perf_eltwise_unary_datacopy.py so the two sweeps stay aligned.
+DATACOPY_SWEEP = dict(
+    formats=DATACOPY_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    num_faces=get_valid_num_faces_datacopy,
+    tilize=get_valid_tilize_datacopy,
     input_dimensions=[[64, 64], [32, 256], [128, 256]],
 )
-def test_unary_datacopy(
-    formats,
-    dest_acc,
-    num_faces,
-    tilize,
-    input_dimensions,
-):
-
-    # skip if Fp8_e4m3 for wormhole
-    if get_chip_architecture() == ChipArchitecture.WORMHOLE and (
-        formats.input_format == DataFormat.Fp8_e4m3
-        or formats.output_format == DataFormat.Fp8_e4m3
-    ):
-        pytest.skip("Fp8_e4m3 not supported on wormhole")
-
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
-
-    if tilize == Tilize.No:
-        generate_golden = get_golden_generator(DataCopyGolden)
-        golden_tensor = generate_golden(
-            src_A, formats.output_format, num_faces, input_dimensions
-        )
-    else:
-        generate_golden = get_golden_generator(TilizeGolden)
-        golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
-
-    unpack_to_dest = (
-        False
-        if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
-        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
-
-    blocks_calculation_algorithm = (
-        BlocksCalculationAlgorithm.Standard
-        if tilize == Tilize.No
-        else BlocksCalculationAlgorithm.Tilize
-    )
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        blocks_calculation_algorithm,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_datacopy_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            TILIZE(tilize),
-        ],
-        runtimes=[
-            DEST_INDEX(0),
-            TILE_COUNT(tile_cnt_A),
-            NUM_FACES(num_faces),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
-    )
-
-    res_from_L1 = configuration.run().result
-
-    assert len(res_from_L1) == len(golden_tensor)
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
-
-
-@parametrize(
-    formats=[
-        fmt
-        for fmt in input_output_formats(
-            [
-                DataFormat.Bfp4_b,
-                DataFormat.Float16_b,
-                DataFormat.Bfp8_b,
-                DataFormat.Float32,
-            ]
-        )
-        if fmt.input_format == DataFormat.Bfp4_b
-        or fmt.output_format == DataFormat.Bfp4_b
-    ],
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
+DATACOPY_SUB_BYTE_SWEEP = dict(
+    formats=SUB_BYTE_DATACOPY_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    num_faces=get_valid_num_faces_datacopy,
     tilize=Tilize.No,
     input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
 )
-def test_unary_datacopy_bfp4_b(
+
+
+def _run_unary_datacopy_test(
     formats,
     dest_acc,
     num_faces,
     tilize,
     input_dimensions,
+    *,
+    quantize_golden_input: bool = False,
+    is_perf: bool = False,
+    perf_report=None,
+    run_types=None,
+    loop_factor: int = 1,
 ):
+    """Shared body for the unary datacopy tests.
 
-    # skip if Fp8_e4m3 for wormhole
+    When ``quantize_golden_input`` is True, the input is passed to
+    :class:`DataCopyGolden` so it can apply the format-specific round-trip
+    quantization (needed for sub-byte block-float inputs whose unpacked
+    values differ from the raw stimuli).
+    """
+
     if get_chip_architecture() == ChipArchitecture.WORMHOLE and (
         formats.input_format == DataFormat.Fp8_e4m3
         or formats.output_format == DataFormat.Fp8_e4m3
@@ -229,12 +165,15 @@ def test_unary_datacopy_bfp4_b(
 
     if tilize == Tilize.No:
         generate_golden = get_golden_generator(DataCopyGolden)
+        golden_kwargs = (
+            {"input_format": formats.input_format} if quantize_golden_input else {}
+        )
         golden_tensor = generate_golden(
             src_A,
             formats.output_format,
             num_faces,
             input_dimensions,
-            input_format=formats.input_format,
+            **golden_kwargs,
         )
     else:
         generate_golden = get_golden_generator(TilizeGolden)
@@ -260,21 +199,28 @@ def test_unary_datacopy_bfp4_b(
         blocks_calculation_algorithm,
     )
 
-    configuration = TestConfig(
-        "sources/eltwise_unary_datacopy_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
+    test_config_kwargs = {
+        "test_name": "sources/eltwise_unary_datacopy_test.cpp",
+        "formats": formats,
+        "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(tilize),
         ],
-        runtimes=[
+        "runtimes": [
             DEST_INDEX(0),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -285,9 +231,18 @@ def test_unary_datacopy_bfp4_b(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 
@@ -297,3 +252,32 @@ def test_unary_datacopy_bfp4_b(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
+
+
+@parametrize(**DATACOPY_SWEEP)
+def test_eltwise_unary_datacopy(
+    formats,
+    dest_acc,
+    num_faces,
+    tilize,
+    input_dimensions,
+):
+    _run_unary_datacopy_test(formats, dest_acc, num_faces, tilize, input_dimensions)
+
+
+@parametrize(**DATACOPY_SUB_BYTE_SWEEP)
+def test_eltwise_unary_datacopy_sub_byte_bfp(
+    formats,
+    dest_acc,
+    num_faces,
+    tilize,
+    input_dimensions,
+):
+    _run_unary_datacopy_test(
+        formats,
+        dest_acc,
+        num_faces,
+        tilize,
+        input_dimensions,
+        quantize_golden_input=True,
+    )

@@ -9,7 +9,7 @@
 
 #include "tt_metal/hw/inc/internal/bit_utils.h"
 
-TEST(Host, ExtractBitArray) {
+TEST(Host, CPU_ExtractBitArray) {
     uint32_t src[4] = {0x12345678, 0x9abcdef0, 0x13579bdf, 0x2468ace0};
     // 1. Extract the 20-bit elements from the 32-bit source array.
     uint32_t dest[4];
@@ -28,7 +28,7 @@ TEST(Host, ExtractBitArray) {
     EXPECT_EQ(dest[3], 0x9abc);
 }
 
-TEST(Host, PackBitArray) {
+TEST(Host, CPU_PackBitArray) {
     uint32_t src[8] = {1, 2, 3, 4, 5, 6, 7, 7};
     uint32_t dest[8];
 
@@ -57,7 +57,7 @@ TEST(Host, PackBitArray) {
     EXPECT_EQ(dest[0], expected);
 }
 
-TEST(Host, PackExtractBitArray) {
+TEST(Host, CPU_PackExtractBitArray) {
     uint32_t src[8] = {1, 2, 3, 4, 5, 6, 7, 7};
 
     for (uint num_pack_bits = 3; num_pack_bits <= 31; num_pack_bits++) {
@@ -71,7 +71,7 @@ TEST(Host, PackExtractBitArray) {
     }
 }
 
-TEST(Host, ExtractPackBitArray) {
+TEST(Host, CPU_ExtractPackBitArray) {
     uint32_t src[4] = {0x12345678, 0x9abcdef0, 0x13579bdf, 0x2468ace0};
 
     // Compute the number of 3-bit elements that can be packed into 4 x 32-bit elements

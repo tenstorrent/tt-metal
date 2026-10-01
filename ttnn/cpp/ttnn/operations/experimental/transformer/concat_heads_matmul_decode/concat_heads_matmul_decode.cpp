@@ -28,7 +28,6 @@ ttnn::Tensor concat_heads_matmul_decode(
     using tt::tt_metal::MemoryConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpec;
-    using tt::tt_metal::StorageType;
     using tt::tt_metal::TensorMemoryLayout;
 
     TT_FATAL(attn.storage_type() == StorageType::DEVICE, "attn must be on device");

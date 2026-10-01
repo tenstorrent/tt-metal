@@ -6,7 +6,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include "ring_distributed_sdpa_program_factory.hpp"
 #include "sdpa_perf_model.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -89,6 +88,16 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
     const auto k_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->k_chunk_size : 32;
+    TT_FATAL(
+        q_chunk_size > 0 && q_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "q_chunk_size must be a positive multiple of TILE_WIDTH. Got q_chunk_size: {}, TILE_WIDTH: {}",
+        q_chunk_size,
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        k_chunk_size > 0 && k_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "k_chunk_size must be a positive multiple of TILE_WIDTH. Got k_chunk_size: {}, TILE_WIDTH: {}",
+        k_chunk_size,
+        tt::constants::TILE_WIDTH);
 
     // Validate chunk_start_idx and page_table
     bool is_chunked = operation_attributes.chunk_start_idx.has_value();
@@ -199,8 +208,9 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
         k_shape[3],
         v_shape[3]);
     TT_FATAL(
-        nqh >= nkv && nqh % nkv == 0,
-        "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}",
+        nkv > 0 && nqh >= nkv && nqh % nkv == 0,
+        "Q num_heads must be >= K num_heads and divisible by K num_heads, and K num_heads must be greater than 0. Got "
+        "Q: {}, K: {}",
         nqh,
         nkv);
 
@@ -217,17 +227,6 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.ring_size);
 
     // Chunk size compatibility
-    TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_WIDTH. Got q_chunk_size: {}, TILE_WIDTH: {}",
-        q_chunk_size,
-        tt::constants::TILE_WIDTH);
-    TT_FATAL(
-        k_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "k_chunk_size must be divisible by TILE_WIDTH. Got k_chunk_size: {}, TILE_WIDTH: {}",
-        k_chunk_size,
-        tt::constants::TILE_WIDTH);
-
     TT_FATAL(
         q_chunk_size <= Sq / (2 * operation_attributes.ring_size),
         "q_chunk_size must be less than or equal to per-device sequence length. Got q_chunk_size: {}, per-device "
@@ -258,7 +257,7 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec RingDistributedSdpaDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec RingDistributedSdpaDeviceOperation::compute_output_specs(
     const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& q_shape = input_tensor_q.logical_shape();
@@ -272,7 +271,7 @@ TensorSpec RingDistributedSdpaDeviceOperation::compute_output_specs(
     auto local_output_shape = q_shape;
     local_output_shape[2] = local_seq_len;  // Update sequence length dimension
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         local_output_shape,
         TensorLayout(input_tensor_q.dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config));
 }

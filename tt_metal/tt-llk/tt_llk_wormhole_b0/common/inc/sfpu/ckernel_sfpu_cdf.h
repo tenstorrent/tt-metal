@@ -41,11 +41,13 @@ inline sfpi::vFloat _calculate_pos_cdf_appx_(sfpi::vFloat val)
     }
     v_endif;
 
-    v_if (result > 1.0f)
-    {
-        result = 1.0f;
-    }
-    v_endif;
+    // Branchless upper clamp equivalent to v_if(result > 1){result = 1} for the finite
+    // polynomial outputs produced above: it lowers to a single SFPSWAP-class op and drops
+    // the SFPSETCC/predicated store. Note sfpi::min is a bit-pattern (SFPSWAP) compare, not
+    // an IEEE min, so it differs from the predicated form on NaN (returns 1.0f rather than
+    // leaving NaN untouched); result here is a bounded polynomial of a finite val, so NaN
+    // cannot arise.
+    result = sfpi::min(result, 1.0f);
     return result;
 }
 

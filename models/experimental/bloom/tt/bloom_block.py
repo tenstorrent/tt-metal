@@ -10,7 +10,7 @@ from functools import partial
 import models.experimental.bloom.tt.bloom_attention as bloom_attention
 import models.experimental.bloom.tt.bloom_mlp as bloom_mlp
 from typing import Optional, Tuple
-from models.common.utility_functions import pad_by_zero
+from models.common.utility_functions import torch2tt_tensor
 
 
 class TtBloomBlock(torch.nn.Module):
@@ -22,8 +22,8 @@ class TtBloomBlock(torch.nn.Module):
         self.layer_norm_epsilon = config.layer_norm_epsilon
         self.apply_residual_connection_post_layernorm = config.apply_residual_connection_post_layernorm
 
-        self.beta = pad_by_zero(state_dict[f"{base_address}.input_layernorm.bias"], device)[0]
-        self.gamma = pad_by_zero(state_dict[f"{base_address}.input_layernorm.weight"], device)[0]
+        self.beta = torch2tt_tensor(state_dict[f"{base_address}.input_layernorm.bias"], device)
+        self.gamma = torch2tt_tensor(state_dict[f"{base_address}.input_layernorm.weight"], device)
         self.input_layernorm = partial(
             ttnn.layer_norm,
             weight=self.gamma,
@@ -35,8 +35,8 @@ class TtBloomBlock(torch.nn.Module):
             config, state_dict, f"{base_address}.self_attention", device
         )
 
-        self.beta_2 = pad_by_zero(state_dict[f"{base_address}.post_attention_layernorm.bias"], device)[0]
-        self.gamma_2 = pad_by_zero(state_dict[f"{base_address}.post_attention_layernorm.weight"], device)[0]
+        self.beta_2 = torch2tt_tensor(state_dict[f"{base_address}.post_attention_layernorm.bias"], device)
+        self.gamma_2 = torch2tt_tensor(state_dict[f"{base_address}.post_attention_layernorm.weight"], device)
         self.post_attention_layernorm = partial(
             ttnn.layer_norm,
             weight=self.gamma_2,

@@ -4,47 +4,62 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
 
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles_per_core = get_arg_val<uint32_t>(2);
-    const uint32_t tile_width_size = get_arg_val<uint32_t>(3);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(4);
-    uint32_t offset_within_stick = get_arg_val<uint32_t>(5);
+    const auto num_sticks = get_arg(args::num_sticks);
+    const auto num_tiles_per_core = get_arg(args::num_tiles_per_core);
+    const auto tile_width_size = get_arg(args::tile_width_size);
+    const auto start_stick_id = get_arg(args::start_stick_id);
+    const auto offset_within_stick = get_arg(args::offset_within_stick);
 
-    constexpr uint32_t stick_size = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    // stick_size is carried by the host but not used by this kernel; retained as a named arg to
+    // preserve the legacy schema faithfully.
+    constexpr auto stick_size = get_arg(args::stick_size);
+    (void)stick_size;
 
-    uint64_t base_dst_noc_addr[tile_height];
+    const auto s = TensorAccessor(tensor::dst);
 
-    auto write_tiles = [&](const uint32_t& num_tiles, const uint32_t& width_size, const uint32_t& stride_size) {
-        cb_wait_front(cb_id_out0, num_tiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+    Noc noc;
+    DataflowBuffer dfb_out(dfb::out);
+
+    uint32_t curr_stick_offset = 0;
+    uint32_t row_stick_ids[tile_height];
+
+    auto write_tiles = [&](const uint32_t& num_tiles, const uint32_t& width_size) {
+        dfb_out.wait_front(num_tiles);
+        uint32_t l1_read_addr = dfb_out.get_read_ptr();
         for (uint32_t k = 0; k < tile_height; k++) {
-            uint64_t dst_noc_addr = base_dst_noc_addr[k];
-            noc_async_write(l1_read_addr, dst_noc_addr, width_size);
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(
+                src,
+                s,
+                width_size,
+                {.offset_bytes = 0},
+                {.page_id = row_stick_ids[k], .offset_bytes = curr_stick_offset});
             l1_read_addr += width_size;
-            base_dst_noc_addr[k] += width_size + stride_size;
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles);
+        noc.async_write_barrier();
+        dfb_out.pop_front(num_tiles);
     };
 
     uint32_t stick_id = start_stick_id;
 
     uint32_t curr_offset = offset_within_stick;
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
+        for (uint32_t j = 0; j < tile_height; j++) {
+            row_stick_ids[j] = stick_id + j;
+        }
         for (uint32_t tile_id = 0; tile_id < num_tiles_per_core; tile_id++) {
-            for (uint32_t j = stick_id; j < (tile_height + stick_id); j++) {
-                base_dst_noc_addr[j] = get_noc_addr(j, s, curr_offset);
-            }
-            write_tiles(1, tile_width_size, stick_size - curr_offset - tile_width_size);
+            curr_stick_offset = curr_offset;
+            write_tiles(1, tile_width_size);
             curr_offset += tile_width_size;
         }
 

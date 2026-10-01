@@ -4,38 +4,20 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "rotary_embedding_llama_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingLlamaMultiCore {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-        tt::tt_metal::KernelHandle rotary_embedding_kernel_id{};
-        std::vector<CoreCoord> cores;
-        uint32_t num_active_cores{};
-
-        tt::tt_metal::CBHandle cb_input{};
-        tt::tt_metal::CBHandle cb_cos{};
-        tt::tt_metal::CBHandle cb_sin{};
-        tt::tt_metal::CBHandle cb_trans_mat{};
-        tt::tt_metal::CBHandle cb_output{};
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    // Metal 2.0 factory (MetalV2FactoryConcept) for the interleaved (non-sharded) prefill case.
+    // Placed on all cores; idle cores get zero-filled runtime args so they don't wait on cos/sin
+    // data that never arrives.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const RotaryEmbeddingLlamaParams& operation_attributes,
         const RotaryEmbeddingLlamaInputs& tensor_args,
-        tt::tt_metal::Tensor& output);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const RotaryEmbeddingLlamaParams& operation_attributes,
-        const RotaryEmbeddingLlamaInputs& tensor_args,
-        tt::tt_metal::Tensor& output);
+        ttnn::Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::experimental::prim

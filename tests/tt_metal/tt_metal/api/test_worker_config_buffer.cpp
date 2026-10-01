@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 
 namespace worker_config_buffer_tests {
 
-TEST(WorkerConfigBuffer, MarkCompletelyFull) {
+TEST(WorkerConfigBuffer, CPU_MarkCompletelyFull) {
     WorkerConfigBufferMgr mgr;
     mgr.init_add_buffer(1024, 1024);
     mgr.init_add_buffer(2, 1024);
@@ -47,7 +47,7 @@ TEST(WorkerConfigBuffer, MarkCompletelyFull) {
 }
 
 // Test that small-sized, tightly-packed ringbuffers work.
-TEST(WorkerConfigBuffer, SmallSize) {
+TEST(WorkerConfigBuffer, CPU_SmallSize) {
     WorkerConfigBufferMgr mgr;
     mgr.init_add_buffer(0, 5);
     for (size_t i = 0; i < 5; i++) {
@@ -66,7 +66,7 @@ TEST(WorkerConfigBuffer, SmallSize) {
 }
 
 // Test that allocating buffers of size 0 doesn't eventually cause some to be ignored.
-TEST(WorkerConfigBuffer, SizeOne) {
+TEST(WorkerConfigBuffer, CPU_SizeOne) {
     WorkerConfigBufferMgr mgr;
     mgr.init_add_buffer(0, 100);
     mgr.init_add_buffer(0, 100);
@@ -112,7 +112,7 @@ TEST(WorkerConfigBuffer, SizeOne) {
 
 // Test that we don't throw away the old sync counts when the number of outstanding buffers is >
 // kernel_config_entry_count.
-TEST(WorkerConfigBuffer, LoopAround) {
+TEST(WorkerConfigBuffer, CPU_LoopAround) {
     WorkerConfigBufferMgr mgr;
     mgr.init_add_buffer(0, 10);
 
@@ -129,7 +129,7 @@ TEST(WorkerConfigBuffer, LoopAround) {
     }
 }
 
-TEST(WorkerConfigBuffer, Randomized) {
+TEST(WorkerConfigBuffer, CPU_Randomized) {
     const uint32_t seed = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(time(nullptr)));
     log_info(tt::LogTest, "Using seed: {}", seed);
     srand(seed);
@@ -185,7 +185,7 @@ TEST(WorkerConfigBuffer, Randomized) {
 }
 
 // Test reserving when one buffer type is completely empty.
-TEST(WorkerConfigBuffer, VeryBasic) {
+TEST(WorkerConfigBuffer, CPU_VeryBasic) {
     WorkerConfigBufferMgr mgr;
     mgr.init_add_buffer(0, 1024);
     mgr.init_add_buffer(0, 10);
@@ -201,6 +201,29 @@ TEST(WorkerConfigBuffer, VeryBasic) {
 
     auto reservation3 = mgr.reserve({35, 7});
     EXPECT_FALSE(reservation3.first.need_sync);
+}
+
+// Regression for #48268: PrintStatus walked the ring buffer starting from alloc_index_ instead of
+// free_index_, so the `while (free_index != alloc_index_)` loop was immediately false and no queued
+// entries were ever visited. Exercise the walk (now factored into get_queued_entry_indices) and
+// confirm it returns the queued (freeable) entries. Prior to the fix this vector was always empty.
+TEST(WorkerConfigBuffer, CPU_PrintStatusWalksQueuedEntries) {
+    WorkerConfigBufferMgr mgr;
+    mgr.init_add_buffer(0, 1024);
+
+    // Allocate three entries without freeing any: free_index_ stays at 0 while alloc_index_
+    // advances to 3, leaving entries 0, 1, 2 queued.
+    for (uint32_t i = 0; i < 3; i++) {
+        auto reservation = mgr.reserve({10});
+        EXPECT_FALSE(reservation.first.need_sync);
+        mgr.alloc(i + 1);
+    }
+
+    EXPECT_EQ(mgr.get_queued_entry_indices(0), (std::vector<size_t>{0, 1, 2}));
+
+    // After freeing up to sync_count 2, entries 0 and 1 are reclaimed; only entry 2 remains queued.
+    mgr.free(2);
+    EXPECT_EQ(mgr.get_queued_entry_indices(0), (std::vector<size_t>{2}));
 }
 
 }  // namespace worker_config_buffer_tests

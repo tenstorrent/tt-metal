@@ -26,7 +26,7 @@ Tensor preprocess_input_tensor(
         int32_t final_rank = input_rank;
         int32_t final_cum_axis = cum_axis;
         if (input_rank < FOUR_DIMENSIONS) {
-            ttnn::SmallVector<uint32_t> new_dims = {};
+            ttsl::SmallVector<uint32_t> new_dims = {};
             for (int32_t i = input_rank; i < FOUR_DIMENSIONS; ++i) {
                 new_dims.push_back(1);
             }
@@ -88,7 +88,8 @@ Tensor accumulation_invoke(
     std::optional<Tensor> optional_out,
     const bool& reverse_order,
     const std::optional<MemoryConfig>& memory_config,
-    ttnn::prim::AccumulationOp op) {
+    ttnn::prim::AccumulationOp op,
+    bool disable_compensation) {
     const auto& input_shape = input_tensor.logical_shape();
     const int32_t& input_rank = input_shape.rank();
 
@@ -121,7 +122,7 @@ Tensor accumulation_invoke(
     const int32_t cum_axis = (dim < 0) ? (dim + input_rank) : dim;
 
     Tensor wip_tensor = input_tensor;
-    ttnn::SmallVector<int64_t> permutation;
+    ttsl::SmallVector<int64_t> permutation;
     int32_t accumulation_axis;
     wip_tensor = common::preprocess_input_tensor(wip_tensor, cum_axis, permutation, accumulation_axis, dtype);
     wip_tensor = ttnn::prim::accumulation(
@@ -131,7 +132,8 @@ Tensor accumulation_invoke(
         reverse_order,
         std::nullopt,
         memory_config.has_value() ? memory_config.value() : wip_tensor.memory_config(),
-        op);
+        op,
+        disable_compensation);
     wip_tensor = common::postprocess_output_tensor(wip_tensor, cum_axis, permutation, input_shape, input_rank);
     if (optional_out.has_value()) {
         // TODO(#37807):

@@ -10,7 +10,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.deepseek_v3.utils.config_dataclass import SliceConfig
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.ttnn.utils_for_testing import assert_equal
 
@@ -33,9 +33,9 @@ from tests.ttnn.utils_for_testing import assert_equal
     "device_params",
     [
         {
-            "trace_region_size": 6052000,
+            "trace_region_size": 0,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
         }
     ],
     indirect=True,

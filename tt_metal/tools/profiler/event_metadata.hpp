@@ -67,6 +67,8 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
     using NocVirtualChannel = int8_t;
     static constexpr uint32_t PAYLOAD_CHUNK_SIZE = 32;
+    static constexpr uint32_t PAYLOAD_CHUNKS_BITS = 12;
+    static constexpr uint32_t MAX_PAYLOAD_CHUNKS = (1u << PAYLOAD_CHUNKS_BITS) - 1;
 
     // New struct for local NOC events
     struct LocalNocEvent {
@@ -77,13 +79,13 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         int8_t mcast_end_dst_y;
         NocType noc_type : 4;
         NocVirtualChannel noc_vc : 4;
-        uint8_t payload_chunks;
+        uint16_t payload_chunks : PAYLOAD_CHUNKS_BITS;
         uint8_t posted : 1;
-        uint8_t reserved : 7;
+        uint8_t reserved : 3;
 
         void setAttributes(uint32_t num_bytes, bool p) {
             uint32_t bytes_rounded_up = (num_bytes + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE;
-            payload_chunks = std::min(uint32_t(std::numeric_limits<uint8_t>::max()), bytes_rounded_up);
+            payload_chunks = std::min(MAX_PAYLOAD_CHUNKS, bytes_rounded_up);
             posted = p;
         }
         uint32_t getNumBytes() const { return payload_chunks * PAYLOAD_CHUNK_SIZE; }
@@ -105,17 +107,17 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         explicit LocalNocEventDstTrailer(uint32_t) = delete;
         explicit LocalNocEventDstTrailer(int) = delete;
 
-        void setDstAddr(uint32_t addr) {
+        void setDstAddr(uint64_t addr) {
             dst_addr_4b = addr >> 2;
             dst_addr_offset = addr & 0x3;
         }
-        uint32_t getDstAddr() const { return (dst_addr_4b << 2) | (dst_addr_offset & 0x3); }
+        uint64_t getDstAddr() const { return (dst_addr_4b << 2) | (dst_addr_offset & 0x3); }
 
-        void setSrcAddr(uint32_t addr) {
+        void setSrcAddr(uint64_t addr) {
             src_addr_4b = addr >> 2;
             src_addr_offset = addr & 0x3;
         }
-        uint32_t getSrcAddr() const { return (src_addr_4b << 2) | (src_addr_offset & 0x3); }
+        uint64_t getSrcAddr() const { return (src_addr_4b << 2) | (src_addr_offset & 0x3); }
     };
 
     // represents a fabric NOC event
@@ -206,6 +208,27 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
 
     static bool isFabricScatterEventType(NocEventType event_type) {
         return event_type == NocEventType::FABRIC_UNICAST_SCATTER_WRITE;
+    }
+
+    static constexpr bool isDebugOnlyEventType(NocEventType event_type) {
+        switch (event_type) {
+            case NocEventType::READ_BARRIER_START:
+            case NocEventType::READ_BARRIER_END:
+            case NocEventType::READ_BARRIER_WITH_TRID:
+            case NocEventType::WRITE_BARRIER_START:
+            case NocEventType::WRITE_BARRIER_END:
+            case NocEventType::WRITE_BARRIER_WITH_TRID:
+            case NocEventType::WRITE_FLUSH:
+            case NocEventType::WRITE_FLUSH_WITH_TRID:
+            case NocEventType::FULL_BARRIER:
+            case NocEventType::ATOMIC_BARRIER:
+            case NocEventType::SEMAPHORE_WAIT:
+            case NocEventType::SEMAPHORE_SET:
+            case NocEventType::WRITE_INLINE:
+            case NocEventType::SEMAPHORE_INC:
+            case NocEventType::SEMAPHORE_INC_MULTICAST: return true;
+            default: return false;
+        }
     }
 
     // Getter to return the correct variant based on the tag (noc_xfer_type)

@@ -4,25 +4,31 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
+// QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1 writer: drains one (batch, h_tile, head group) work unit —
+// group_tiles contiguous output tiles — per iteration (pairs with the head-split reader).
 void kernel_main() {
+    Noc noc;
+
     // Runtime args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_work_units = get_arg_val<uint32_t>(1);
-    const uint32_t work_unit_start = get_arg_val<uint32_t>(2);
+    const uint32_t num_work_units = get_arg(args::num_work_units);
+    const uint32_t work_unit_start = get_arg(args::work_unit_start);
 
     // Compile-time args
-    constexpr uint32_t head_groups = get_compile_time_arg_val(0);
-    constexpr uint32_t heads_per_group = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_w_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t per_tensor_tiles = get_compile_time_arg_val(3);
-    constexpr auto out_args = TensorAccessorArgs<4>();
+    constexpr uint32_t head_groups = get_arg(args::head_groups);
+    constexpr uint32_t heads_per_group = get_arg(args::heads_per_group);
+    constexpr uint32_t in0_w_tiles = get_arg(args::in0_w_tiles);
+    constexpr uint32_t per_tensor_tiles = get_arg(args::per_tensor_tiles);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    DataflowBuffer dfb_in0(dfb::in0);
+    const uint32_t single_tile_size_bytes = dfb_in0.get_entry_size();
+    const auto s0 = TensorAccessor(tensor::dst);
+
     constexpr uint32_t onetile = 1;
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(out_args, out_tensor_addr, single_tile_size_bytes);
-
     constexpr uint32_t group_tiles = heads_per_group * in0_w_tiles;
 
     for (uint32_t work = 0; work < num_work_units; ++work) {
@@ -32,11 +38,10 @@ void kernel_main() {
         const uint32_t out_tile_base = block * per_tensor_tiles + group * group_tiles;
 
         for (uint32_t i = 0; i < group_tiles; ++i) {
-            cb_wait_front(cb_id_in0, onetile);
-            const uint32_t l1_read_addr = get_read_ptr(cb_id_in0);
-            noc_async_write_tile(out_tile_base + i, s0, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_in0, onetile);
+            dfb_in0.wait_front(onetile);
+            noc.async_write(dfb_in0, s0, single_tile_size_bytes, {}, {.page_id = out_tile_base + i});
+            noc.async_write_barrier();
+            dfb_in0.pop_front(onetile);
         }
     }
 }

@@ -36,7 +36,7 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
         // Finally, the result will be lo + ((hi0 + hi1) << 8).
 
         // a0
-        TT_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_3, offset0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_3, offset0);
 
         // a1
         TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, 5);
@@ -47,7 +47,7 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
 
         // b0
-        TT_SFPLOAD(p_sfpu::LREG1, LO16, ADDR_MOD_3, offset1);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_3, offset1);
 
         // b1
         TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, 5);
@@ -80,7 +80,7 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
         // lo += hi
         TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
 
-        TT_SFPSTORE(p_sfpu::LREG0, LO16, ADDR_MOD_2, offset_out);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_2, offset_out);
     }
 #else
     constexpr int a0  = p_sfpu::LREG0;

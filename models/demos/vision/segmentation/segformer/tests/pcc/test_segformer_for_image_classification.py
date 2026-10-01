@@ -58,7 +58,7 @@ def create_custom_mesh_preprocessor(mesh_mapper=None, device=None):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_image_classificaton(device, model_location_generator):
     dataset = load_dataset("huggingface/cats-image")
-    image = dataset["train"]["image"][0]
+    image = dataset["test"]["image"][0]
     _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     image_processor = AutoImageProcessor.from_pretrained("nvidia/mit-b0")
     inputs = image_processor(image, return_tensors="pt")

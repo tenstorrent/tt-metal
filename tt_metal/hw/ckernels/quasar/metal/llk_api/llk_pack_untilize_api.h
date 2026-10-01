@@ -3,47 +3,54 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "chlkc_list.h"
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "tensor_shape.h"
 #include "ckernel_template.h"
 #include "cpack_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE
  *************************************************************************/
 
 /**
- * @brief Initializes the packer MOP and hardware stride registers for pack untilize based on the tile shape and tensor
- * dimensions. Must be called before llk_pack_untilize.
+ * @brief Initializes the packer MOP and hardware stride registers for pack untilize based on the tensor shape and
+ * tensor dimensions. Must be called before llk_pack_untilize.
  *
  * @tparam block_ct_dim  Width of a single block in tiles.
  * @tparam full_ct_dim   Total width of the tensor row in tiles (default = block_ct_dim).
- * @param pack_output    Output DFB identifier.
+ * @param pack_output    Output DataFlow Buffer identifier.
  */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim>
 inline void llk_pack_untilize_init(std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    const TileShape output_tile_shape = {
-        .num_faces = get_output_num_faces(output_id),
-        .face_r_dim = get_output_face_r_dim(output_id),
-        .face_c_dim = FACE_C_DIM,
-        .narrow_tile = static_cast<bool>(get_output_narrow_tile(output_id)),
-    };
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
-    // TODO: Once narrow-tile is supported c_dim_faces will be variable.
-    // For now we set it to 2, instead of deducing a template parameter at runtime
-    constexpr std::uint32_t c_dim_faces = 2; //c_dim_faces is 2 (standard 32x32 tile) and 1 for narrow tile where y-dim is <32
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES ||
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
+        "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
 
-    _llk_pack_untilize_init_<full_ct_dim, block_ct_dim, c_dim_faces>(output_id, output_tile_shape);
+    if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
+        llk_pack_program_bfd(output_id);
+        _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(
+            ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
+    } else {
+        llk_pack_program_bfd<ckernel::trisc::L1AccessMode::Strided>(output_id);
+        _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(
+            ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
+    }
 }
 
 /**
@@ -59,7 +66,7 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
  * @tparam full_ct_dim        Total width of the tensor row in tiles, used to compute the
  *                            L1 row stride (default = block_ct_dim).
  * @param block_rt_dim        Number of tile-rows to pack.
- * @param pack_output         Output circular buffer identifier.
+ * @param pack_output         Output DataFlow Buffer identifier.
  * @param block_c_index       Column-block index within the full row, used to offset the L1
  *                            write address when full_ct_dim > block_ct_dim (default 0).
  */
@@ -69,23 +76,48 @@ inline void llk_pack_untilize(
     std::uint32_t pack_output,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
+    static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        pack_bfd_resource,
+        pack_output,
+        "pack_untilize pack_output DFB differs from the one llk_pack_untilize_init programmed");
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
-    const std::uint32_t R_DIM_FACES = (num_faces == 2 && !narrow_tile) ? 1 : 2;
-
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     // Each tile is packed in two 16x32 halves — top faces (0+1) then bottom faces (2+3)
-    // merging adjacent face-columns into a single output row. Hence we use R_DIM_FACES instead of num_faces for L1
+    // merging adjacent face-columns into a single output row. Hence we use num_faces_r_dim instead of num_faces for L1
     // strides
-    const std::uint32_t y_stride = full_ct_dim * R_DIM_FACES * face_r_dim;
+
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES ||
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
+        "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
+
+    const std::uint32_t y_stride = full_ct_dim * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
-    const std::uint32_t base_l1 = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx * R_DIM_FACES * face_r_dim;
+
+    // Compute how many l1_index units fit in one DFB entry
+    const std::uint32_t entry_size_16B = local_dfb_interface.entry_size;  // DFB entry size in 16B
+    const std::uint32_t face_row_16B =                                    // Buffer Descriptor granularity in 16B
+        SCALE_DATUM_SIZE(pack_dst_format[output_id], ckernel::trisc::FACE_C_DIM) >> 4;
+    const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
+        entry_size_16B / (face_row_16B * tensor_shape.num_faces_c_dim);
+    const std::uint32_t base_l1 =
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx * l1_index_per_entry;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;
         const std::uint32_t l1_tile_idx = base_l1 + block_rt * y_stride + block_c_index * block_ct_dim;
-        _llk_pack_untilize_(dest_idx, l1_tile_idx);
+        if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
+            _llk_pack_untilize_set_dst_offset_(tensor_shape, l1_tile_idx);
+            _llk_pack_untilize_(dest_idx, 0 /*l1_tile_idx*/);
+        } else {
+            // Strided PACR consumes buf_desc_id as an immediate; pass the id programmed by
+            // llk_pack_untilize_init (bfd_current), not the DFB output_id (which no longer doubles
+            // as the BFD id). The MOP branch already bakes in the correct id at init.
+            _llk_pack_untilize_strided_<full_ct_dim>(
+                ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape, l1_tile_idx, dest_idx);
+        }
     }
 }

@@ -26,13 +26,16 @@ namespace tt::tt_metal {
 // #22835: These Fixtures will be removed once tests are fully migrated, and replaced by UnitMeshCQFixtures
 class UnitMeshCQFixture : public MeshDispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -55,8 +58,7 @@ protected:
     void create_devices(
         std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
@@ -91,7 +93,7 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void CreateDevices(const size_t trace_region_size) { this->create_devices(trace_region_size); }
@@ -111,7 +113,7 @@ protected:
         if (devices_.empty()) {
             GTEST_SKIP() << "No local devices available for testing (all devices are remote-only)";
         }
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -132,8 +134,7 @@ protected:
     }
 
     void create_devices(std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
@@ -196,7 +197,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
-        init_max_cbs();
+        init_max_dfbs();
     }
 };
 
@@ -211,7 +212,7 @@ protected:
     inline static std::map<int, std::shared_ptr<distributed::MeshDevice>> shared_reserved_devices_;
     inline static bool devices_valid_ = false;
     inline static bool needs_recovery_ = false;
-    inline static uint32_t shared_max_cbs_ = 0;
+    inline static uint32_t shared_max_dfbs_ = 0;
 
     static void SetUpTestSuite() {
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -237,7 +238,7 @@ protected:
             GTEST_SKIP() << "No local devices available for testing (all devices are remote-only)";
         }
         devices_ = shared_devices_;
-        max_cbs_ = shared_max_cbs_;
+        max_dfbs_ = shared_max_dfbs_;
     }
 
     void TearDown() override {
@@ -262,8 +263,7 @@ private:
     }
 
     static void create_shared_devices() {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
@@ -305,7 +305,7 @@ private:
             }
         }
 
-        shared_max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+        shared_max_dfbs_ = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
         devices_valid_ = true;
         needs_recovery_ = false;
     }
@@ -321,6 +321,9 @@ using UnitMeshCQSingleCardSharedBufferFixture = UnitMeshCQSingleCardSharedFixtur
 
 class UnitMeshCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         this->slow_dispatch_ = false;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -342,13 +345,13 @@ protected:
             chip_ids.push_back(id);
         }
 
-        auto dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        auto dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
             chip_ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
         for (const auto& [id, device] : reserved_devices) {
             devices_.push_back(device);
         }
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ckernel.h"
 #include "ckernel_trisc_common.h"
@@ -18,8 +19,11 @@
  */
 inline void llk_wait_for_free_tiles(const std::int32_t dfb_id, const std::int32_t num_tiles) {
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(dfb_id);
-    uint32_t tc_id = dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
+    std::uint32_t tc_id =
+        dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
     TT_WAIT_FREE(ckernel::p_stall::STALL_PACK, num_tiles, tc_id);
+    // TEN-4746: arm this dfb; a real pack (PACR) on it must clear this before the matching push.
+    LLK_TDMA_GUARD_NOTE_WAIT(dfb_id);
 }
 
 /**
@@ -30,9 +34,13 @@ inline void llk_wait_for_free_tiles(const std::int32_t dfb_id, const std::int32_
 // Push N tiles to stream buffer (increment write pointer)
 template <std::uint8_t PACK_SEL = 0x1>
 inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_tiles) {
+    // TEN-4746: pushing a dfb that was reserved but never packed (no PACR since wait_for_free) is a HW
+    // hazard -- the free-space wait can resolve before space is actually available.
+    LLK_TDMA_GUARD_ASSERT_DISARMED(
+        dfb_id, "TEN-4746: llk_push_tiles on a dfb with no pack (PACR) since llk_wait_for_free_tiles");
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(dfb_id);
     auto& slot = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx];
-    uint32_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
+    std::uint32_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
     // Update the tile counters values
     TT_PUSH_TILES(PACK_SEL, num_tiles, tc_id);
 

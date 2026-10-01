@@ -60,6 +60,7 @@ def run(
     input_a_memory_config,
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
+    arg1=None,  # split_size — positional in the traced JSON
     *,
     device,
     **kwargs,
@@ -70,8 +71,11 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"dim"}, output_memory_config=output_memory_config)
 
-    # Extract split_size from op_kwargs (from traced config) or use default
-    split_size = op_kwargs.get("split_size", 32)
+    # split_size is POSITIONAL in ttnn.split, so a traced config carries it as arg1 and never as
+    # a "split_size" key; build_op_kwargs also strips argN by design. The positional value is
+    # therefore the authoritative source, and the keyword is only for the sample suite (and any
+    # caller that passes it by name). Same shape as concat_model_traced's positional dim.
+    split_size = arg1 if arg1 is not None else op_kwargs.get("split_size", 32)
     dim = kwargs.get("dim", 3)
 
     # Handle tuple input_a_shape for sample suite
@@ -110,11 +114,52 @@ def run(
     start_time = start_measuring_time()
     # Pop split_size from op_kwargs since ttnn.split takes it as a positional argument
     op_kwargs.pop("split_size", None)
-    output_tensors = ttnn.split(input_tensor_a, split_size, dim=dim, **op_kwargs)
-    output_tensors = [mesh_tensor_to_torch(t, device if is_mesh_device else None) for t in output_tensors]
+    try:
+        output_tensors = ttnn.split(input_tensor_a, split_size, dim=dim, **op_kwargs)
+    except Exception as e:
+        # Splitting a very wide tensor (e.g. a 128256/32064 vocab projection) with
+        # a traced sharded/L1 output config overflows L1 — the op's static CBs
+        # clash with the output buffers. Retry with a DRAM-interleaved output so
+        # the op sizes its footprint to DRAM (the result is layout-independent).
+        _m = str(e).lower()
+        if not any(s in _m for s in ("clash", "circular buffer", "out of memory", "l1 buffer")):
+            raise
+        _kw = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
+        _kw["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        output_tensors = ttnn.split(input_tensor_a, split_size, dim=dim, **_kw)
+    # Gather with the INPUT's placement: when the traced placement sent us down
+    # replicate_with_topology, every chip holds the same data under a stamped Shard topology, and
+    # the golden below is per-chip. Without this the gather asks whether the per-device bytes happen
+    # to be identical, so one chunk out of 32 can come back mesh-factor times wider than its golden
+    # (seen in CI: chunk 6/32 at [1,1,128,8192] vs [1,1,128,2048] on an 8x4 mesh, while the same
+    # vector passed on another box).
+    output_tensors = [
+        mesh_tensor_to_torch(
+            t,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
+        for t in output_tensors
+    ]
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC - compare first output
-    pcc = check_with_pcc(torch_output_tensors[0], output_tensors[0], 0.999)
+    # A split is correct only if the whole partition matches: the number of pieces AND each
+    # piece. Comparing output_tensors[0] alone accepts a wrong partition whenever the first
+    # chunk happens to coincide, so every chunk is checked. Failures carry split_size and dim
+    # because a module runs many traced configs and the chunk index alone does not identify
+    # which one produced the message.
+    params = f"split_size={split_size}, dim={dim}"
+    if len(output_tensors) != len(torch_output_tensors):
+        pcc = (
+            False,
+            f"split produced {len(output_tensors)} chunks, expected {len(torch_output_tensors)} ({params})",
+        )
+    else:
+        pcc = (True, "")
+        for i, (golden, actual) in enumerate(zip(torch_output_tensors, output_tensors)):
+            ok, msg = check_with_pcc(golden, actual, 0.999)
+            if not ok:
+                pcc = (False, f"chunk {i}/{len(output_tensors)} ({params}): {msg}")
+                break
 
     return [pcc, e2e_perf]

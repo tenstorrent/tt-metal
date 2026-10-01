@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,11 +8,9 @@
 #include <string>
 #include <variant>
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "gelu_bw_program_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
-
 #include "gelu_bw_device_operation_types.hpp"
 
 namespace ttnn::operations::unary_backward::gelu_bw {
@@ -20,7 +18,7 @@ namespace ttnn::operations::unary_backward::gelu_bw {
 struct GeluBwDeviceOperation {
     using operation_attributes_t = GeluBwParams;
     using tensor_args_t = GeluBwInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<GeluBwProgramFactory>;
 
@@ -28,15 +26,18 @@ struct GeluBwDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
-
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-Tensor launch_gelu_bw(
+}  // namespace ttnn::operations::unary_backward::gelu_bw
+
+namespace ttnn::prim {
+
+Tensor gelu_bw(
     const Tensor& grad_output,
     const Tensor& input,
+    operations::unary::GeluVariant variant,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output);
 
-}  // namespace ttnn::operations::unary_backward::gelu_bw
+}  // namespace ttnn::prim

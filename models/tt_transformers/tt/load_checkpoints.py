@@ -52,7 +52,27 @@ def load_hf_state_dict_filtered(ckpt_dir, key_prefixes, local_files_only=None):
     prefixes = tuple(key_prefixes)
     if not prefixes:
         return {}
+    return _load_hf_state_dict_matching(ckpt_dir, lambda key: key.startswith(prefixes), local_files_only)
 
+
+_HF_LAYER_KEY = re.compile(r"^model\.layers\.(\d+)\.")
+
+
+def load_hf_state_dict_for_layers(ckpt_dir, n_layers, local_files_only=None):
+    """
+    Load an HF text checkpoint keeping only decoder layers [0, n_layers) plus every non-layer weight
+    (embeddings, final norm, lm_head). Reads just the shards those keys live in through safetensors
+    safe_open, so a one-layer unit test does not materialise the whole checkpoint.
+    """
+
+    def keep(key):
+        m = _HF_LAYER_KEY.match(key)
+        return m is None or int(m.group(1)) < n_layers
+
+    return _load_hf_state_dict_matching(ckpt_dir, keep, local_files_only)
+
+
+def _load_hf_state_dict_matching(ckpt_dir, key_filter, local_files_only=None):
     if local_files_only is None:
         local_files_only = os.getenv("CI") == "true"
 
@@ -97,7 +117,7 @@ def load_hf_state_dict_filtered(ckpt_dir, key_prefixes, local_files_only=None):
         weight_map = index_data["weight_map"]
         file_to_keys = {}
         for key, file in weight_map.items():
-            if key.startswith(prefixes):
+            if key_filter(key):
                 file_to_keys.setdefault(file, []).append(key)
 
         for file, keys in file_to_keys.items():
@@ -109,7 +129,7 @@ def load_hf_state_dict_filtered(ckpt_dir, key_prefixes, local_files_only=None):
         safetensor_path = resolve_file("model.safetensors")
         with safetensors_safe_open(safetensor_path, framework="pt", device="cpu") as f:
             for key in f.keys():
-                if key.startswith(prefixes):
+                if key_filter(key):
                     loaded_weights[key] = f.get_tensor(key)
 
     return loaded_weights
@@ -157,7 +177,41 @@ def standardize_hf_keys_multimodal(state_dict):
     return output
 
 
+def expand_fused_moe_experts(state_dict):
+    """Split transformers 5.x fused Mixtral MoE expert params back to per-expert keys.
+
+    transformers 5.x replaced the per-expert ``...block_sparse_moe.experts.{i}.w{1,2,3}.weight``
+    tensors with 3D batched params under ``...mlp.experts.`` :
+      - ``gate_up_proj`` : ``[num_experts, 2*intermediate, hidden]`` (rows ``:I`` = w1/gate, ``I:`` = w3/up)
+      - ``down_proj``    : ``[num_experts, hidden, intermediate]`` (= w2)
+    and renamed the router ``block_sparse_moe.gate`` -> ``mlp.gate``. The tt Mixtral model loads the
+    per-expert / ``block_sparse_moe`` keys, so split them back here. Version- and model-tolerant:
+    a no-op unless the fused ``mlp.experts.gate_up_proj`` keys are present (i.e. Mixtral on >=5.x).
+    """
+    fused_keys = [k for k in state_dict if k.endswith("mlp.experts.gate_up_proj")]
+    if not fused_keys:
+        return state_dict
+    out = dict(state_dict)
+    for gup_key in fused_keys:
+        prefix = gup_key[: -len("mlp.experts.gate_up_proj")]  # e.g. "model.layers.0."
+        gate_up = out.pop(gup_key)  # [E, 2I, H]
+        down = out.pop(prefix + "mlp.experts.down_proj")  # [E, H, I]
+        num_experts = gate_up.shape[0]
+        inter = gate_up.shape[1] // 2
+        for i in range(num_experts):
+            base = f"{prefix}block_sparse_moe.experts.{i}."
+            out[base + "w1.weight"] = gate_up[i, :inter, :].contiguous()  # gate -> w1, [I, H]
+            out[base + "w3.weight"] = gate_up[i, inter:, :].contiguous()  # up   -> w3, [I, H]
+            out[base + "w2.weight"] = down[i].contiguous()  # down -> w2, [H, I]
+        # router gate: 5.x `...mlp.gate.weight` -> tt expects `...block_sparse_moe.gate.weight`
+        gate_key = prefix + "mlp.gate.weight"
+        if gate_key in out:
+            out[prefix + "block_sparse_moe.gate.weight"] = out.pop(gate_key)
+    return out
+
+
 def convert_hf_to_meta(state_dict, head_dim, n_heads=None, n_kv_heads=None):
+    state_dict = expand_fused_moe_experts(state_dict)
     state_dict = split_hf_keys(state_dict, n_heads, n_kv_heads)
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys(state_dict)
@@ -761,6 +815,12 @@ def flatten_conv_linear(state_dict):
     do_flatten = lambda key: (("conv" in key) and ("_linear.weight" in key))
     state_dict = {k: v.flatten(start_dim=1) if do_flatten(k) else v for k, v in state_dict.items()}
     return state_dict
+
+
+# HF name of each decoder-layer norm, keyed by the tt_transformers norm type. map_hf_to_meta_keys and
+# map_meta_to_hf_keys below carry the same two pairs; one-layer tests that read a single norm weight
+# straight from the checkpoint take the HF name from here instead of re-encoding it.
+HF_LAYER_NORM_KEYS = {"attention": "input_layernorm", "ffn": "post_attention_layernorm"}
 
 
 def map_hf_to_meta_keys(loaded_weights):

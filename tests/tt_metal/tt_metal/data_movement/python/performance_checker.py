@@ -65,11 +65,18 @@ class PerformanceChecker:
             logger.warning(f"Test id {test_id} not found in {self.arch} test bounds.")
             return
 
+        arch_bounds = self.test_bounds[self.arch][test_id]
+        if arch_bounds.get("skip_perf_check"):
+            test_name = self.test_id_to_name.get(test_id, "Unknown Test")
+            skip_reason = arch_bounds.get("skip_reason", "skip_perf_check is set in test bounds")
+            logger.warning(f"Skipping perf check for test {test_name} ({test_id}) on {self.arch}: {skip_reason}")
+            return
+
         for riscv, riscv_bounds in bounds.items():
-            if riscv not in self.test_bounds[self.arch][test_id]:
+            if riscv not in arch_bounds:
                 continue
 
-            expected_bw = self.test_bounds[self.arch][test_id][riscv]["bandwidth"]
+            expected_bw = arch_bounds[riscv]["bandwidth"]
             actual_bw = riscv_bounds["bandwidth"]
 
             # Calculate minimum acceptable bandwidth with variance

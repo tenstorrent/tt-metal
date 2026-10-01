@@ -6,57 +6,53 @@
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 #include <stdint.h>
 
 void kernel_main() {
     // Compile time args
     // -----------------
-    constexpr uint32_t src_cb_idx = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(1);
+    constexpr auto src_page_size = get_arg(args::src_page_size);
 
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
-
-    constexpr uint32_t tile_height = get_compile_time_arg_val(4);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(5);
+    constexpr auto tile_height = get_arg(args::tile_height);
+    constexpr auto tile_width = get_arg(args::tile_width);
 
     // Input padded size (last two dims) in tiles
-    constexpr uint32_t input_height = get_compile_time_arg_val(6);
-    constexpr uint32_t input_width = get_compile_time_arg_val(7);
+    constexpr auto input_height = get_arg(args::input_height);
+    constexpr auto input_width = get_arg(args::input_width);
 
     // Input logical size (last two dims) in data elements
-    constexpr uint32_t logical_height = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_width = get_compile_time_arg_val(9);
+    constexpr auto logical_height = get_arg(args::logical_height);
+    constexpr auto logical_width = get_arg(args::logical_width);
 
     // Size of all dims combined, excluding the last two dims.
-    constexpr uint32_t outer_dim_size = get_compile_time_arg_val(10);
+    constexpr auto outer_dim_size = get_arg(args::outer_dim_size);
 
-    constexpr bool reduce_all = (bool)get_compile_time_arg_val(11);
-    constexpr bool keepdim = (bool)get_compile_time_arg_val(12);
-
-    constexpr uint32_t num_c_time_args = 13;
-
-    // Runtime args
-    // ------------
-    const uint32_t src_base_addr = get_arg_val<uint32_t>(0);
-    const uint32_t dst_base_addr = get_arg_val<uint32_t>(1);
+    constexpr bool reduce_all = static_cast<bool>(get_arg(args::reduce_all));
+    constexpr bool keepdim = static_cast<bool>(get_arg(args::keepdim));
 
     // Tensor Accessors
     // ----------------
-    constexpr auto s_src_args = TensorAccessorArgs<num_c_time_args>();
-    constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
-
-    auto s_src = TensorAccessor(s_src_args, src_base_addr);
-    auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
+    auto s_src = TensorAccessor(tensor::src);
+    auto s_dst = TensorAccessor(tensor::dst);
 
     using dst_accessor_type = decltype(s_dst);
 
-    // CB for input data.
-    const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
-    constexpr DataFormat src_data_format = get_dataformat(src_cb_idx);
+    const Noc noc;
+    const DataflowBuffer src_dfb(dfb::src);
+    const Scratchpad<uint32_t> dst(scratch::dst);
 
-    // CB for output data.
-    const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx);
+    // DFB for input data.
+    const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
+    constexpr DataFormat src_data_format = get_dataformat(dfb::src);
+
+    // Scratchpad for output data.
+    const uint32_t dst_addr = dst.get_base_address();
 
     auto default_val = get_default_value<src_data_format>();
     // C++ type representation of the src/dst data formats
@@ -99,9 +95,10 @@ void kernel_main() {
         face_height_rem,
         face_width_rem,
         src_data_format,
-        src_cb_addr);
+        src_dfb_addr);
 
-    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_cb_addr, output_page_elements, keepdim);
+    OutputContext output_ctx(
+        reinterpret_cast<uint32_t*>(accumulated_arg_max), tile_height, dst_addr, output_page_elements);
 
     // Iterate over the initial dimensions combined together
     for (uint32_t outer_index = 0; outer_index < outer_dim_size; outer_index++) {
@@ -123,12 +120,11 @@ void kernel_main() {
             for (uint32_t j = 0; j < input_width; j++) {
                 // Number of input tiles in the last two dimensions.
                 constexpr uint32_t inner_size = input_height * input_width;
-                const int src_tile_id = outer_index * inner_size + i * input_width + j;
+                const uint32_t src_tile_id = (outer_index * inner_size) + (i * input_width) + j;
 
                 // Fetch the next tile
-                const uint64_t src_noc_addr = get_noc_addr(src_tile_id, s_src);
-                noc_async_read(src_noc_addr, src_cb_addr, src_page_size);
-                noc_async_read_barrier();
+                noc.async_read(s_src, src_dfb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+                noc.async_read_barrier();
 
                 uint32_t tile_rows_processed = 0;
                 process_input_tile<src_element_type, src_data_format>(
@@ -142,69 +138,7 @@ void kernel_main() {
             collect_row_major_output<keepdim>(arg_max, units_generated, output_ctx);
 
             if (output_ctx.collected_count >= output_page_elements) {
-                write_to_output<dst_accessor_type, keepdim>(s_dst, output_ctx);
-            }
-        }
-    }
-}
-
-void get_face_data_range(
-    uint32_t& data_rows,
-    uint32_t& data_cols,
-    uint32_t tile_x,
-    uint32_t tile_y,
-    uint32_t face_id,
-    const InputContext& ctx) {
-    const bool is_bottom_tile = tile_y == (ctx.input_height - 1);
-    const bool is_right_most_tile = tile_x == (ctx.input_width - 1);
-
-    // Initialize the range as full face
-    data_rows = face_height;
-    data_cols = face_width;
-
-    if (!ctx.has_padding) {
-        return;
-    }
-
-    if (!is_bottom_tile && !is_right_most_tile) {
-        // Only marginal tiles may contain the padding
-        return;
-    }
-
-    const bool is_right_face = (face_id == 1 || face_id == 3);
-    const bool is_bottom_face = (face_id == 2 || face_id == 3);
-
-    const uint32_t height_rem = ctx.tile_h_rem;
-    if (is_bottom_tile && height_rem != 0) {
-        if (is_bottom_face) {
-            const bool skip_bottom_face = height_rem < face_height;
-            if (skip_bottom_face) {
-                data_rows = 0;
-                data_cols = 0;
-                return;
-            }
-            data_rows = ctx.face_h_rem;
-        } else {
-            // One of the upper faces
-            if (height_rem < face_height) {
-                data_rows = height_rem;
-            }
-        }
-    }
-
-    const uint32_t width_rem = ctx.tile_w_rem;
-    if (is_right_most_tile && width_rem != 0) {
-        if (is_right_face) {
-            const bool skip_right_face = width_rem < face_width;
-            if (skip_right_face) {
-                data_rows = 0;
-                data_cols = 0;
-                return;
-            }
-            data_cols = ctx.face_w_rem;
-        } else {
-            if (width_rem < face_width) {
-                data_cols = width_rem;
+                write_to_output<dst_accessor_type, keepdim>(noc, s_dst, output_ctx);
             }
         }
     }

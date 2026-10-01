@@ -66,6 +66,8 @@ struct OpConfig {
         RSUB,
         GCD,
         LCM,
+        LOGADDEXP,
+        LOGADDEXP2,
         LEFT_SHIFT,
         RIGHT_SHIFT,
         LOGICAL_RIGHT_SHIFT,
@@ -79,6 +81,7 @@ struct OpConfig {
         MINIMUM,
         XLOGY,
         ATAN2,
+        NEXTAFTER,
         LT,
         GT,
         GE,
@@ -87,16 +90,23 @@ struct OpConfig {
         WHERE,
         EQ,
         NE,
+        ISCLOSE,
     };
 
     template <class EnumT>
-    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype = std::nullopt);
+    OpConfig(
+        BinaryOpType binary_op_type,
+        std::in_place_type_t<EnumT>,
+        std::optional<DataType> dtype = std::nullopt,
+        const std::optional<binary::BinaryOpParams>& op_params = std::nullopt);
 
     std::map<std::string, std::string> as_defines(DataType dtype) const;
 
     std::optional<unary::UnaryOpType> process_lhs;
     std::optional<unary::UnaryOpType> process_rhs;
-    std::optional<unary::UnaryOpType> postprocess;
+    // Carries a parameter: a bare UnaryOpType reaches get_op_init_and_func_default, which emits the
+    // paramless form and so inherits the compute API's default template argument.
+    std::optional<unary::EltwiseUnaryWithParam> postprocess;
     std::variant<FpuBinaryOp, SfpuBinaryOp> binary_op;
     bool is_sfpu_op() const;
 };
@@ -128,13 +138,16 @@ struct AllShardVolumes {
 };
 
 std::optional<AllShardVolumes> get_shard_volumes(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c);
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c);
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 
-bool is_uneven(const TensorSpec& t);
+bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c);
+bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c);
 
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
 

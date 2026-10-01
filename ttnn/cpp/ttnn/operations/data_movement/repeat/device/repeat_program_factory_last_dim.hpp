@@ -4,24 +4,15 @@
 
 #pragma once
 
-#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation_types.hpp"
-#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_common.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
 
 struct RepeatProgramFactoryLastDim {
-    using shared_variables_t = RepeatSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const RepeatParams& operation_attributes, const RepeatInputs& tensor_args, Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const RepeatParams& operation_attributes,
-        const RepeatInputs& tensor_args,
-        Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::prim

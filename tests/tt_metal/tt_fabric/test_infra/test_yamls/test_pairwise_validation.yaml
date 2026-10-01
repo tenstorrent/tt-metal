@@ -1,0 +1,54 @@
+allocation_policies:
+    receiver:
+      max_configs_per_core: 1
+
+Tests:
+  - name: "PairwiseValidation_Mesh"
+    fabric_setup:
+      topology: Mesh
+      num_links: 2
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 4096
+      num_packets: 1000
+
+    patterns:
+      - type: neighbor_exchange
+
+  - name: "PairwiseValidation_Mesh_FlowControl"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      fabric_tensix_config: Mux
+      num_links: 2
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 4096
+      num_packets: 1000
+
+    patterns:
+      - type: neighbor_exchange
+
+  # Heavy all-to-all traffic that runs long enough for the progress monitor
+  # to poll mid-flight. Use with aggressive hang detection thresholds to
+  # exercise report generation:
+  #   --show-progress --show-progress-detail \
+  #   --progress-interval 1 --hung-threshold 3 --hung-confirmation-rounds 1
+  - name: "PairwiseValidation_HeavyTraffic"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      num_links: 2
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 4096
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all

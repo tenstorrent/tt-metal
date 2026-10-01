@@ -6,9 +6,10 @@
 
 #include <string>
 #include <map>
+#include <memory>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_metal::tools::mem_bench {
@@ -40,7 +41,7 @@ struct L1MemoryMap {
 };
 
 struct Context {
-    std::map<ChipId, IDevice*> devices;
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> devices;
     L1MemoryMap device_address{};
     uint32_t total_size{0};
     uint32_t page_size{0};
@@ -51,7 +52,7 @@ struct Context {
     int iterations{0};
 
     Context(
-        const std::map<ChipId, IDevice*>& devices_,
+        const std::map<ChipId, std::shared_ptr<distributed::MeshDevice>>& devices_,
         uint32_t total_size_,
         uint32_t page_size_,
         int threads_,

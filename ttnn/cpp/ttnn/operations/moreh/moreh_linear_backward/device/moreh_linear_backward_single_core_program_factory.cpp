@@ -6,25 +6,27 @@
 #include <vector>
 
 #include "moreh_linear_backward_device_operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
 
-MorehBiasAddBackwardOperation::SingleCoreProgramFactory::cached_program_t
-MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
+ttnn::device_operation::ProgramArtifacts
+MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& bias_grad) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
 
     const auto& output_grad = tensor_args.output_grad;
+    const auto& output_grad_mesh = output_grad.mesh_tensor();
+    const auto& bias_grad_mesh = bias_grad.mesh_tensor();
 
     const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
-    auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
     const bool do_mask_h = (output_grad_shape_wo_padding[-2] % constants::TILE_HEIGHT) != 0;
@@ -48,107 +50,288 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     const uint32_t im0_t = 1;
     const uint32_t im1_t = 1;
 
+    // The mask buffer is allocated only when a mask is actually applied, so its DFB, both of its
+    // endpoint bindings, and the kernel-side references to it are all gated on this one condition.
+    const bool do_mask_h_w = in2_t > 0;
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
-    CoreCoord core = {0, 0};
-    const uint32_t core_num = 1;
+    const NodeCoord node = {0, 0};
 
-    IDevice* device = output_grad.device();
+    MeshDevice* device = output_grad.device();
     auto arch = device->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
-    //                         CircularBuffer Setup
+    //         Program-scope resource names (drive the generated dfb:: / tensor:: tokens)
     ////////////////////////////////////////////////////////////////////////////
-    auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    // Declared function-local: this factory and the multi-core one land in the same unity-build
+    // translation unit, so no anonymous-namespace constants are introduced.
+    // `out` / `dst` / `num_tiles` / `start_id` are the writer kernel's own vocabulary, and
+    // writer_moreh_bias_backward.cpp is bound by both factories — the two specs must agree on them.
+    const DFBSpecName IN0_DFB{"in0"};
+    const DFBSpecName SCALER_DFB{"scaler"};
+    const DFBSpecName MASK_H_W_DFB{"mask_h_w"};
+    const DFBSpecName OUT_DFB{"out"};
+    const DFBSpecName INTERMED0_DFB{"intermed0"};
+    const DFBSpecName INTERMED1_DFB{"intermed1"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName OUTPUT_GRAD_TENSOR{"output_grad"};
+    const TensorParamName BIAS_GRAD_TENSOR{"bias_grad"};
 
-    CreateCircularBuffer(
-        program,
-        std::set<CoreRange>{CoreRange(core, core)},
-        cb_data_format,
-        {{CBIndex::c_0, in0_t},    // output_grad
-         {CBIndex::c_1, in1_t},    // scaler
-         {CBIndex::c_2, in2_t},    // mask_h_w
-         {CBIndex::c_16, out0_t},  // bias_grad
-         {CBIndex::c_24, im0_t},
-         {CBIndex::c_25, im1_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format}});
+    ProgramSpec spec;
+    spec.name = "moreh_bias_add_backward_single_core";
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                         DataflowBuffer Setup
+    ////////////////////////////////////////////////////////////////////////////
+    auto dfb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : dfb_data_format;
+
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IN0_DFB,
+        .entry_size = tile_size(dfb_data_format),
+        .num_entries = in0_t,
+        .data_format_metadata = dfb_data_format,
+    });  // output_grad
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = SCALER_DFB,
+        .entry_size = tile_size(dfb_data_format),
+        .num_entries = in1_t,
+        .data_format_metadata = dfb_data_format,
+    });  // scaler
+    if (do_mask_h_w) {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = MASK_H_W_DFB,
+            .entry_size = tile_size(dfb_data_format),
+            .num_entries = in2_t,
+            .data_format_metadata = dfb_data_format,
+        });  // mask_h_w
+    }
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OUT_DFB,
+        .entry_size = tile_size(dfb_data_format),
+        .num_entries = out0_t,
+        .data_format_metadata = dfb_data_format,
+    });  // bias_grad
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = INTERMED0_DFB,
+        .entry_size = tile_size(dfb_data_format),
+        .num_entries = im0_t,
+        .data_format_metadata = dfb_data_format,
+    });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = INTERMED1_DFB,
+        .entry_size = tile_size(fp32_dest_acc_en_data_format),
+        .num_entries = im1_t,
+        .data_format_metadata = fp32_dest_acc_en_data_format,
+    });
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Tensor parameters
+    ////////////////////////////////////////////////////////////////////////////
+    // These replace the buffer-address runtime args and the host-side tensor-accessor argument plumbing.
+    // tensor_args.bias is deliberately absent: it is read on the host only, for the output spec.
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = OUTPUT_GRAD_TENSOR, .spec = output_grad_mesh.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = BIAS_GRAD_TENSOR, .spec = bias_grad_mesh.tensor_spec()});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
+    Group<DFBBinding> reader_dfb_bindings = {
+        DFBBinding{
+            .dfb_spec_name = IN0_DFB,
+            .accessor_name = "in0",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = SCALER_DFB,
+            .accessor_name = "scaler",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+    };
+    KernelSpec::CompilerOptions::Defines reader_defines;
+    if (do_mask_h_w) {
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = MASK_H_W_DFB,
+            .accessor_name = "mask_h_w",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader_defines.emplace("DO_MASK_H_W", "1");
+    }
 
-    std::vector<uint32_t> reader_compile_time_args = TensorAccessorArgs(output_grad.buffer()).get_compile_time_args();
-    std::vector<uint32_t> writer_compile_time_args = TensorAccessorArgs(bias_grad.buffer()).get_compile_time_args();
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_hw.cpp",
+        .compiler_options = {.defines = std::move(reader_defines)},
+        .dfb_bindings = std::move(reader_dfb_bindings),
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_GRAD_TENSOR, .accessor_name = "src"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"num_tiles", "start_id", "mask_h", "mask_w", "do_mask_h", "do_mask_w"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    });
 
-    const auto* const reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_hw.cpp";
-
-    const auto* const writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
-
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
-    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT_DFB,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = BIAS_GRAD_TENSOR, .accessor_name = "dst"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> compute_kernel_args = {};
-    std::map<std::string, std::string> compute_defines;
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
-    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
-
+    KernelSpec::CompilerOptions::Defines compute_defines = {
+        {"REDUCE_OP", "PoolType::SUM"},
+        {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"},
+    };
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
-    const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_single_core_hw.cpp";
 
-    const auto compute_kernel_id = CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core, core_num, compute_kernel_args},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    Group<DFBBinding> compute_dfb_bindings = {
+        DFBBinding{
+            .dfb_spec_name = IN0_DFB,
+            .accessor_name = "in0",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = SCALER_DFB,
+            .accessor_name = "scaler",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = OUT_DFB,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        // intermed0 stages the masked input tile: this kernel packs it and immediately re-reads it
+        // as the reduce input, so it binds both endpoints (self-loop).
+        DFBBinding{
+            .dfb_spec_name = INTERMED0_DFB,
+            .accessor_name = "intermed0",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = INTERMED0_DFB,
+            .accessor_name = "intermed0",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        // intermed1 holds the running reduction result: written as the reduce output and read back
+        // by the next iteration's accumulation. Also a self-loop.
+        DFBBinding{
+            .dfb_spec_name = INTERMED1_DFB,
+            .accessor_name = "intermed1",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = INTERMED1_DFB,
+            .accessor_name = "intermed1",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+    };
+    if (do_mask_h_w) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = MASK_H_W_DFB,
+            .accessor_name = "mask_h_w",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_defines.emplace("DO_MASK_H_W", "1");
+    }
+
+    // Style A: the op resolves a TTNN DeviceComputeKernelConfig, so the TTNN helper carries its
+    // values across (including the math_approx_mode bool -> Precision mapping and the
+    // dst_full_sync_en -> double_buffer_dest inversion).
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
+
+    // Legacy carried an unpack-to-dest-mode vector indexed by buffer index and left every entry at
+    // its default in this factory. Metal 2.0 keys the same information by DFB name and requires an
+    // explicit entry wherever a compute kernel consumes a Float32 DFB with a 32-bit Dest register,
+    // so the legacy default has to be stated for the DFBs this kernel consumes: intermed1 is Float32
+    // whenever fp32_dest_acc_en is set, and the rest are Float32 whenever output_grad is. The legacy
+    // default is UnpackToSrc, which is legal for any format, so transcribing the whole legacy row
+    // reproduces the legacy unpack vector byte-for-byte in every configuration.
+    //
+    // Note the divergence from the multi-core factory, which sets intermed1 to UnpackToDest under
+    // the same fp32_dest_acc_en while this factory leaves it at UnpackToSrc. That looks unintended
+    // rather than deliberate: intermed1 is the running reduction accumulator and is read back on
+    // every iteration, so unpacking it to SrcA/SrcB narrows a 32-bit partial to the source
+    // registers' 19 bits — the precision fp32_dest_acc_en was asked for. Reproduced as-is anyway,
+    // because a port makes no functional change; correcting it is the op owner's call.
+    ComputeHardwareConfig::ComputeUnpackModes dfb_unpack_modes = {
+        {IN0_DFB, UnpackMode::UnpackToSrc},
+        {SCALER_DFB, UnpackMode::UnpackToSrc},
+        {INTERMED0_DFB, UnpackMode::UnpackToSrc},
+        {INTERMED1_DFB, UnpackMode::UnpackToSrc},
+    };
+    if (do_mask_h_w) {
+        // An entry naming a DFB the kernel does not bind is rejected, so this one shares the
+        // binding's condition.
+        dfb_unpack_modes.emplace(MASK_H_W_DFB, UnpackMode::UnpackToSrc);
+    }
+    // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+    compute_hw.unpack_modes = std::move(dfb_unpack_modes);
+
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = COMPUTE,
+        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/"
+                  "moreh_bias_backward_single_core_hw.cpp",
+        // O3 is the legacy ComputeConfigDescriptor default; Metal 2.0's CompilerOptions defaults to
+        // O2, so the level has to be stated explicitly to keep the compute kernel where it was.
+        .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings = std::move(compute_dfb_bindings),
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_num", "Ht", "Wt", "do_mask_h", "do_mask_w"}},
+        .hw_config = compute_hw,
+    });
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Work units (placement)
+    ////////////////////////////////////////////////////////////////////////////
+    spec.work_units.push_back(WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    SetRuntimeArgs(
-        program,
-        reader_kernel_id,
-        core,
-        {output_grad.buffer()->address(), num_tiles, 0, mask_h, mask_w, do_mask_h, do_mask_w});
-    SetRuntimeArgs(program, writer_kernel_id, core, {bias_grad.buffer()->address(), 1, 0});
-    SetRuntimeArgs(program, compute_kernel_id, core, {batch_num, Ht, Wt, do_mask_h, do_mask_w});
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        {.kernel = READER,
+         .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+             node,
+             {{"num_tiles", num_tiles},
+              {"start_id", 0u},
+              {"mask_h", mask_h},
+              {"mask_w", mask_w},
+              {"do_mask_h", static_cast<uint32_t>(do_mask_h)},
+              {"do_mask_w", static_cast<uint32_t>(do_mask_w)}})},
+        {.kernel = WRITER,
+         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", 1u}, {"start_id", 0u}})},
+        {.kernel = COMPUTE,
+         .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+             node,
+             {{"batch_num", batch_num},
+              {"Ht", Ht},
+              {"Wt", Wt},
+              {"do_mask_h", static_cast<uint32_t>(do_mask_h)},
+              {"do_mask_w", static_cast<uint32_t>(do_mask_w)}})},
+    };
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id}};
+    run_args.tensor_args.emplace(OUTPUT_GRAD_TENSOR, TensorArgument{output_grad_mesh});
+    run_args.tensor_args.emplace(BIAS_GRAD_TENSOR, TensorArgument{bias_grad_mesh});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-void MorehBiasAddBackwardOperation::SingleCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-
-    auto* output_grad_buffer = tensor_args.output_grad.buffer();
-    auto* bias_grad_buffer = tensor_return_value.buffer();
-    CoreCoord core = {0, 0};
-    {
-        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        runtime_args[0] = output_grad_buffer->address();
-    }
-
-    {
-        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-        runtime_args[0] = bias_grad_buffer->address();
-    }
-}
 }  // namespace ttnn::operations::moreh::moreh_linear_backward

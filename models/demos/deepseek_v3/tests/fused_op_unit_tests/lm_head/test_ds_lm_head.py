@@ -40,7 +40,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     measure_perf_us,
 )
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, pad_or_trim_seq_len
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -417,8 +417,8 @@ def _build_lm_head_inputs(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 23740416,  # Large trace region for vocab projection
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,  # Use dynamic trace-region allocation for this workload
         }
     ],
     indirect=True,
@@ -438,7 +438,7 @@ def test_ds_lm_head(
     mesh_device,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
+    request,
 ):
     """Test lm_head fused op (vocabulary projection).
 
@@ -474,7 +474,7 @@ def test_ds_lm_head(
         use_real_weights,
         mode,
         seq_len,
-        state_dict if use_real_weights else None,
+        request.getfixturevalue("state_dict") if use_real_weights else None,
     )
 
     _run_ds_lm_head_test(
@@ -515,11 +515,14 @@ def test_ds_lm_head(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 23740416,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,
+)
+@pytest.mark.skip(
+    reason="Single-device lm_head produces only a per-device vocabulary shard; use the multi-device test."
 )
 def test_ds_lm_head_single_device(
     mode,
@@ -536,7 +539,6 @@ def test_ds_lm_head_single_device(
     mesh_device,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
 ):
     """Single device test for lm_head.
 

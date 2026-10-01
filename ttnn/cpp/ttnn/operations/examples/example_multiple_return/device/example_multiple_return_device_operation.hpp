@@ -5,8 +5,8 @@
 #pragma once
 
 #include <optional>
-#include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
@@ -52,44 +52,30 @@ struct ExampleMultipleReturnDeviceOperation {
     };
 
     // Define the return types for the spec(s) of the operation
-    // Can be a single ttnn::TensorSpec, std::optional<ttnn::TensorSpec>, std::vector<ttnn::TensorSpec>,
-    // std::tuple<ttnn::TensorSpec> etc.
-    using spec_return_value_t = std::tuple<std::optional<ttnn::TensorSpec>, std::optional<ttnn::TensorSpec>>;
+    // Can be a single tt::tt_metal::TensorSpec, std::optional<tt::tt_metal::TensorSpec>,
+    // std::vector<tt::tt_metal::TensorSpec>, std::tuple<tt::tt_metal::TensorSpec> etc.
+    using spec_return_value_t =
+        std::tuple<std::optional<tt::tt_metal::TensorSpec>, std::optional<tt::tt_metal::TensorSpec>>;
 
     // Define the return types for the tensor(s) of the operation
     // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
     // Note spec_return_value_t and tensor_return_value_t should follow the same pattern
-    // i.e. if spec_return_value_t is a std::vector<std::optional<ttnn::TensorSpec>> then tensor_return_value_t should
-    // be std::vector<std::optional<Tensor>>
+    // i.e. if spec_return_value_t is a std::vector<std::optional<tt::tt_metal::TensorSpec>> then tensor_return_value_t
+    // should be std::vector<std::optional<Tensor>>
 
-    struct SingleCore {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
-
-    using program_factory_t = std::variant<SingleCore>;
+    // Describe the program declaratively. A single-descriptor operation with no per-dispatch state
+    // beyond buffer addresses puts create_descriptor straight on the operation struct: no factory
+    // wrapper, no program_factory_t, no shared_variables_t. Buffer addresses are declared as
+    // bindings (see emplace_runtime_args in the .cpp) and the framework patches them on cache hits.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     // Mandatory methods
 
-    // Select the program factory based on the operation attributes and tensor args
     // Validate the operation when it creates a program. Usually will have more checks
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

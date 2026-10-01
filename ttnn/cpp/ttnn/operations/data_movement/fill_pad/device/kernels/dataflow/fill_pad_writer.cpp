@@ -2,99 +2,157 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * Phase 1 – Mask generation (before the main loop):
+ *   Builds a "right mask" tile (if the right mask is bound) and a "bottom mask"
+ *   tile (if the bottom mask is bound) in face layout and pushes them to their
+ *   respective dataflow buffers. The compute kernel holds these tiles
+ *   persistently (never pops them) and uses them with where_tile to apply the
+ *   fill.
+ *
+ *   Mask encoding (same DataFormat as the input tensor):
+ *     Float types  : 1.0 at padding positions, 0.0 elsewhere.
+ *     Integer types: integer 1 at padding positions, 0 elsewhere.
+ *
+ * Phase 2 – Write-back loop:
+ *   Reads masked tiles produced by the compute kernel from dfb::data_out and
+ *   writes them back to DRAM (or sharded L1). No masking is done here.
+ *
+ *   Three phase loops mirror fill_pad_reader.cpp's right / bottom / corner
+ *   phases, using the same per-phase (start, num) RT args so that reader,
+ *   compute and writer process tiles in lock-step.
+ *
+ * Metal 2.0 named resources:
+ *   CTAs:  W_tiles, H_tiles; W_mod32 (only when the right mask is bound),
+ *          H_mod32 (only when the bottom mask is bound).
+ *   Defines: HAS_RIGHT_PAD / HAS_BOTTOM_PAD gate the
+ *            conditionally-bound right / bottom mask DFBs (promoted from the
+ *            legacy has_right_pad / has_bottom_pad compile-time args).
+ *   DFBs:  dfb::right_mask (PRODUCER, conditional), dfb::bot_mask (PRODUCER,
+ *          conditional), dfb::data_out (this writer is its CONSUMER).
+ *   tensor: tensor::dst (in-place tensor; base address auto-injected).
+ *   RTAs:  start_right, num_right, start_bottom, num_bottom, start_corner, num_corner.
+ */
+
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+#include "fill_pad_dataflow_common.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_0 = get_compile_time_arg_val(0);
-    constexpr bool tensor_in_dram = get_compile_time_arg_val(1) == 1;
-    const uint32_t fill_value = get_compile_time_arg_val(2);
-    const uint32_t element_size_bytes = get_compile_time_arg_val(3);
-    uint32_t logical_height = get_compile_time_arg_val(4);
-    uint32_t logical_width = get_compile_time_arg_val(5);
-    uint32_t padded_height = get_compile_time_arg_val(6);
-    uint32_t padded_width = get_compile_time_arg_val(7);
-    uint32_t tiles_per_2d_tensor = get_compile_time_arg_val(8);
-    uint32_t tiles_per_tile_row = get_compile_time_arg_val(9);
-    // hardware constraints
-    constexpr uint32_t tile_size = get_compile_time_arg_val(10);
-    constexpr uint32_t tile_hw = tile_size * tile_size;
-    constexpr uint32_t face_size = get_compile_time_arg_val(11);
-    constexpr uint32_t face_hw = face_size * face_size;
-    constexpr uint32_t alignment_adjustor = 16;
+    constexpr auto W_tiles = get_arg(args::W_tiles);
+    constexpr auto H_tiles = get_arg(args::H_tiles);
 
-    uint32_t rt_arg_ind = 0;
-    uint32_t dst_addr = get_arg_val<uint32_t>(rt_arg_ind++);
-    uint32_t cb_page_size = get_arg_val<uint32_t>(rt_arg_ind++);
-    uint32_t starting_tile_offset = get_arg_val<uint32_t>(rt_arg_ind++);
-    uint32_t num_2d_tensors = get_arg_val<uint32_t>(rt_arg_ind++);
-
-#ifdef SHARDED
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(12),   // Memory layout
-        get_compile_time_arg_val(13),   // The number of sharding cores
-        get_compile_time_arg_val(14),   // The page size we offset each write to
-        get_compile_time_arg_val(15),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(16),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(17),   // pages_per_shard_x
-        get_compile_time_arg_val(18)>;  // pages_per_shard_y
-
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));
-    experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
+    // has_right_pad / has_bottom_pad are carried as preprocessor defines (not CTAs),
+    // because they gate references to the conditionally-bound right / bottom mask DFBs.
+#ifdef HAS_RIGHT_PAD
+    constexpr std::uint32_t has_right_pad = 1;
 #else
-    constexpr auto dst_args = TensorAccessorArgs<12>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    constexpr std::uint32_t has_right_pad = 0;
+#endif
+#ifdef HAS_BOTTOM_PAD
+    constexpr std::uint32_t has_bottom_pad = 1;
+#else
+    constexpr std::uint32_t has_bottom_pad = 0;
 #endif
 
-    // Reserve and push the fill value into the circular buffer
-    cb_reserve_back(cb_id_0, 1);
-    uint32_t l1_write_addr = get_write_ptr(cb_id_0);
-    volatile tt_l1_ptr uint32_t* l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
-    for (uint32_t i = 0; i < cb_page_size; i++) {
-        l1_ptr[i] = fill_value;
-    }
-    cb_push_back(cb_id_0, 1);
+    // Per-phase slice strides (meaningful only when the corresponding phase is active).
+    // Clamped to >= 1 so the compiler does not see a constexpr divide-by-zero in
+    // the dead-code branches (when H_tiles==1 or W_tiles==1 the host sets the
+    // matching num_* to 0 and the loop below never executes).
+    constexpr std::uint32_t right_slice_stride =
+        has_right_pad ? (has_bottom_pad ? ((H_tiles > 1u) ? (H_tiles - 1u) : 1u) : H_tiles) : 1u;
+    constexpr std::uint32_t bottom_slice_stride =
+        has_bottom_pad ? (has_right_pad ? ((W_tiles > 1u) ? (W_tiles - 1u) : 1u) : W_tiles) : 1u;
 
-    auto fill_pad_2d_tensor = [&](const uint32_t& tile_offset) {
-        uint32_t start_col;
-        for (uint32_t row = 0; row < padded_height; row++) {
-            if (row < logical_height) {
-                start_col = logical_width;
-            } else {
-                start_col = 0;
-            }
-            uint32_t curr_tile = (row / tile_size) * tiles_per_tile_row + (start_col / tile_size) + tile_offset;
-            uint32_t r_f_offset = ((row % tile_size) / face_size) * 2 * face_hw + (row % face_size) * face_size;
-            uint32_t c_f_offset = ((start_col % tile_size) / face_size) * face_hw + (start_col % face_size);
-            uint32_t face_offset = r_f_offset + c_f_offset;
+    const auto start_right = get_arg(args::start_right);
+    const auto num_right = get_arg(args::num_right);
+    const auto start_bottom = get_arg(args::start_bottom);
+    const auto num_bottom = get_arg(args::num_bottom);
+    const auto start_corner = get_arg(args::start_corner);
+    const auto num_corner = get_arg(args::num_corner);
 
-            for (uint32_t col = start_col; col < padded_width;) {
-                // so for each iteration of col, we will be writing at most 2 faces
-                uint64_t start_tile_noc_addr = s0.get_noc_addr(curr_tile);
-                uint32_t face = face_offset / (face_hw);
+    // Tensor base address and layout metadata are supplied by the tensor::dst binding.
+    const auto s = TensorAccessor(tensor::dst);
 
-                uint64_t dst_noc_addr = start_tile_noc_addr + face_offset * element_size_bytes;
-                uint32_t alignment_offset = dst_noc_addr % alignment_adjustor;
-                uint32_t elems_to_write = col % face_size == 0 ? face_size : face_size - (col % face_size);
-                uint32_t bytes_to_write = elems_to_write * element_size_bytes;
-                noc_async_write(l1_write_addr + alignment_offset, dst_noc_addr, bytes_to_write);
-                col += elems_to_write;
-                face_offset += elems_to_write;
+    Noc noc;
+#ifdef HAS_RIGHT_PAD
+    DataflowBuffer dfb_right_mask(dfb::right_mask);
+#endif
+#ifdef HAS_BOTTOM_PAD
+    DataflowBuffer dfb_bot_mask(dfb::bot_mask);
+#endif
+    DataflowBuffer dfb_data_out(dfb::data_out);
+    const std::uint32_t tile_bytes = dfb_data_out.get_entry_size();
 
-                if (face % 2 == 0) {
-                    face_offset += face_size * (face_size - 1);
-                } else {
-                    curr_tile++;
-                    face_offset -= face_size * (face_size + 1);
-                }
+    // ---- Phase 1: generate and push mask tile(s) ----
+#if defined(HAS_RIGHT_PAD) || defined(HAS_BOTTOM_PAD)
+    using mask_t = MASK_ELEM_UINT;
+    constexpr std::uint32_t TILE = 32;
+#endif
+#ifdef HAS_RIGHT_PAD
+    constexpr auto W_mod32 = get_arg(args::W_mod32);
+    push_right_mask_tile<mask_t, W_mod32, TILE>(dfb_right_mask, static_cast<mask_t>(MASK_VALUE));
+#endif
+#ifdef HAS_BOTTOM_PAD
+    constexpr auto H_mod32 = get_arg(args::H_mod32);
+    push_bottom_mask_tile<mask_t, H_mod32, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE));
+#endif
+
+    // ---- Phase 2: write-back loop ----
+    // Tiles arrive in the same order as the reader pushes them (right, bottom, corner).
+
+    // Right phase. Maintain (slice, row) incrementally instead of dividing every iteration
+    // — RV32IM division is slow. Startup division runs at most once per kernel invocation.
+    if constexpr (has_right_pad) {
+        std::uint32_t slice = num_right ? start_right / right_slice_stride : 0u;
+        std::uint32_t row = num_right ? start_right - slice * right_slice_stride : 0u;
+        for (std::uint32_t i = 0; i < num_right; ++i) {
+            const std::uint32_t tile_id = slice * H_tiles * W_tiles + row * W_tiles + (W_tiles - 1u);
+            dfb_data_out.wait_front(1);
+            noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+            noc.async_writes_flushed();
+            dfb_data_out.pop_front(1);
+            ++row;
+            if (row == right_slice_stride) {
+                row = 0;
+                ++slice;
             }
         }
-    };
-
-    for (uint32_t t = 0; t < num_2d_tensors; t++) {
-        fill_pad_2d_tensor(t * tiles_per_2d_tensor + starting_tile_offset);
     }
-    noc_async_write_barrier();
+
+    // Bottom phase. Same incremental pattern as the right phase.
+    if constexpr (has_bottom_pad) {
+        std::uint32_t slice = num_bottom ? start_bottom / bottom_slice_stride : 0u;
+        std::uint32_t col = num_bottom ? start_bottom - slice * bottom_slice_stride : 0u;
+        for (std::uint32_t j = 0; j < num_bottom; ++j) {
+            const std::uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + col;
+            dfb_data_out.wait_front(1);
+            noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+            noc.async_writes_flushed();
+            dfb_data_out.pop_front(1);
+            ++col;
+            if (col == bottom_slice_stride) {
+                col = 0;
+                ++slice;
+            }
+        }
+    }
+
+    // Corner phase
+    if constexpr (has_right_pad && has_bottom_pad) {
+        for (std::uint32_t k = 0; k < num_corner; ++k) {
+            const std::uint32_t slice = start_corner + k;
+            const std::uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + (W_tiles - 1u);
+            dfb_data_out.wait_front(1);
+            noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+            noc.async_writes_flushed();
+            dfb_data_out.pop_front(1);
+        }
+    }
+
+    noc.async_write_barrier();
 }

@@ -16,15 +16,18 @@ namespace ttnn::operations::data_movement::indexed_fill {
 // Returns true if the program factory should pick the native CB-aliased fast path:
 //   * input_a, batch_id and output are all L1
 //   * input_a and output are HEIGHT_SHARDED with matching grid + matching shard shape
+//   * input_a and output shard orientation is ROW_MAJOR (matches the row-major worker
+//     enumeration the program factory uses to assign `my_batch_id = i` to each core)
 //   * the shard grid covers exactly B = input_a.padded_shape()[0] cores (one batch per core)
 //   * input_a sharding is even (no leftover row/col)
 //
 // `input_b` is allowed to be in DRAM or interleaved; it does not need to match the shard
-// geometry of input_a. Applies to both ROW_MAJOR and TILE layouts.
+// geometry of input_a. Applies to both ROW_MAJOR and TILE layouts (of the tensor data itself;
+// unrelated to the shard orientation requirement above).
 bool is_native_indexed_fill_sharding(
-    const TensorSpec& input_a_spec,
-    const TensorSpec& input_b_spec,
-    const TensorSpec& batch_id_spec,
+    const tt::tt_metal::TensorSpec& input_a_spec,
+    const tt::tt_metal::TensorSpec& input_b_spec,
+    const tt::tt_metal::TensorSpec& batch_id_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 
 // Worker-grid selection priority:
@@ -41,14 +44,22 @@ CoreRangeSet get_indexed_fill_worker_grid(
 // BLOCK_SHARDED input_a.  Conditions:
 //   * input_a is WIDTH_SHARDED or BLOCK_SHARDED, L1
 //   * output  is the same sharding layout, L1, with the same shard grid and shard shape
-//   * input_b is either (a) the same sharding / grid / shape as input_a, or (b) INTERLEAVED
+//   * input_a and output shard orientation is ROW_MAJOR (matches the row-major core
+//     enumeration the program factory uses to derive per-core shard/column indices)
+//   * input_a sharding is even (no leftover row/col)
+//   * for BLOCK_SHARDED: the shard grid is a full rectangle (matches corerange_to_cores'
+//     row-major enumeration) and B (input_a.padded_shape()[0]) is divisible by the grid's
+//     row count n_y
+//   * input_b is either (a) WIDTH_SHARDED with the same grid, shard width, and ROW_MAJOR
+//     orientation as input_a (shard height may differ, since input_b has `b` batches, not
+//     `B`), or (b) INTERLEAVED
 bool is_shard_local_indexed_fill(
-    const TensorSpec& input_a_spec,
-    const TensorSpec& input_b_spec,
+    const tt::tt_metal::TensorSpec& input_a_spec,
+    const tt::tt_metal::TensorSpec& input_b_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 
 // True iff the tensor is sharded and the shard shape does not evenly divide the padded shape.
-bool is_uneven(const TensorSpec& t);
+bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
 // Scale the input shard spec from `from_shape` to `to_shape`.
 // `is_tile` controls the minimum shard dimension: TILE_{HEIGHT,WIDTH} for TILE layout, 1 for ROW_MAJOR.
@@ -58,18 +69,14 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     const ttnn::Shape& to_shape,
     bool is_tile);
 
-// Build a default shard spec for `padded_out_shape` over the device's full compute grid.
-// `is_tile` controls whether shard heights/widths are rounded to tile boundaries.
-tt::tt_metal::ShardSpec generate_shard_spec_all_cores(
+// Synthesize a populated-shard output ShardSpec for specless sharded indexed_fill outputs.
+tt::tt_metal::ShardSpec generate_output_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,
     bool is_tile = true);
 
-// Derive a shard_spec for a sharded output MemoryConfig that has none.
-// Uses adjust_to_shape() when input_tensor_a is sharded, otherwise generate_shard_spec_all_cores().
-// Returns the filled-in MemoryConfig (or the original unchanged if it is not sharded / already
-// has a shard_spec).
+// Fills a specless sharded output MemoryConfig via adjust_to_shape (sharded input) or generate_output_shard_spec.
 tt::tt_metal::MemoryConfig resolve_output_memory_config(
     const Tensor& input_tensor_a,
     const ttnn::Shape& padded_out_shape,

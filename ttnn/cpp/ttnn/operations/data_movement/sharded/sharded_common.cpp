@@ -4,6 +4,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -30,11 +31,11 @@ std::tuple<std::vector<std::vector<WidthShardingReshardSegment>>, uint32_t, uint
 compute_width_sharding_reshard_segments(
     const std::array<uint32_t, 2>& local_shard_shape,
     const std::array<uint32_t, 2>& remote_shard_shape,
-    const std::vector<CoreCoord>& local_cores,
-    const std::vector<CoreCoord>& remote_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& local_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& remote_cores,
     const tt::tt_metal::BufferType& remote_buffer_type,
     const tt::CoreType& /*remote_core_type*/,
-    tt::tt_metal::IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     uint32_t element_size) {
     const uint32_t num_local_shards = local_cores.size();
 
@@ -53,9 +54,15 @@ compute_width_sharding_reshard_segments(
 
     const uint32_t total_num_sticks = local_shard_height;
     const uint32_t local_stride_bytes = element_size * local_shard_width;
-    const uint32_t remote_stride_bytes = element_size * remote_shard_width;
+    // Row-major shards place each stick (row) at the remote buffer's aligned page size, which can
+    // exceed the raw stick bytes: DRAM alignment is 64B on Blackhole vs 32B on Wormhole, so a
+    // 32B-wide u8 shard row is padded to 64B on Blackhole. Advance the remote address by the
+    // aligned stride, otherwise consecutive sticks overlap and the data is scrambled.
+    const uint32_t remote_alignment = device.allocator()->get_alignment(remote_buffer_type);
+    const uint32_t remote_stride_bytes = tt::align(element_size * remote_shard_width, remote_alignment);
 
     std::vector<WidthShardingReshardSegmentForSingleCore> runtime_args_for_each_core;
+    runtime_args_for_each_core.reserve(num_local_shards);
 
     bool is_final_transfer = false;
     uint32_t local_shard_offset = 0;
@@ -73,7 +80,7 @@ compute_width_sharding_reshard_segments(
             const uint32_t transfer_size =
                 is_final_transfer ? remaining_output : std::min(remaining_input, remaining_output);
 
-            const auto bank_id = device->allocator()->get_bank_ids_from_logical_core(
+            const auto bank_id = device.allocator()->get_bank_ids_from_logical_core(
                 remote_buffer_type, remote_cores[current_remote_core_idx])[0];
             core_args.emplace_back(
                 element_size * transfer_size,
@@ -94,7 +101,7 @@ compute_width_sharding_reshard_segments(
             }
         }
         local_shard_offset = 0;
-        runtime_args_for_each_core.push_back(core_args);
+        runtime_args_for_each_core.push_back(std::move(core_args));
     }
 
     TT_FATAL(
@@ -103,7 +110,7 @@ compute_width_sharding_reshard_segments(
         num_local_shards,
         runtime_args_for_each_core.size());  // sanity check
 
-    return {runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes};
+    return {std::move(runtime_args_for_each_core), total_num_sticks, local_stride_bytes, remote_stride_bytes};
 }
 
 }  // namespace ttnn::operations::data_movement::detail

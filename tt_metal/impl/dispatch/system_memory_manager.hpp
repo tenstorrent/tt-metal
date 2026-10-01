@@ -6,10 +6,11 @@
 
 // needed for private members
 #include "system_memory_cq_interface.hpp"
-#include <umd/device/pcie/tlb_window.hpp>            // for tt::umd::TlbWindow
+#include <umd/device/io_window/io_window.hpp>     // for tt::umd::IoWindow
 #include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -20,6 +21,10 @@ using ChipId = int;
 namespace tt::tt_metal {
 
 class Buffer;
+class MetalContext;
+
+// True when the host can't pin D2H memory (no 64-bit PCIe addressing and no IOMMU).
+bool d2h_uses_hugepage_fallback(const MetalContext& ctx);
 
 class SystemMemoryManager {
 public:
@@ -126,8 +131,8 @@ private:
     std::vector<uint32_t> cq_to_last_completed_event;
     mutable std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
-    std::vector<tt::umd::TlbWindow*> prefetch_q_windows;
-    std::vector<tt::umd::TlbWindow*> completion_q_windows;
+    std::vector<std::unique_ptr<tt::umd::IoWindow>> prefetch_q_windows;
+    std::vector<std::unique_ptr<tt::umd::IoWindow>> completion_q_windows;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
 
@@ -137,6 +142,8 @@ private:
 
     std::unique_ptr<char[]> dram_region_staging_buffer;
 
+    // Bump-allocated tail of CQ sysmem (after all per-CQ issue/completion buffers). Device and host
+    // addresses are returned together by allocate_region() for PCIe/D2H consumers.
     uint32_t free_region_start_ = 0;
     uint32_t free_region_size_ = 0;
     uint32_t free_region_bump_ = 0;

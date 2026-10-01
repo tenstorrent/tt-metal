@@ -39,8 +39,8 @@ void bind_combine(nb::module_& mod) {
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, hidden_dim).
                 BFLOAT16 ROW_MAJOR.
             dispatched_metadata (ttnn.Tensor): Per-token routing metadata produced by the dispatch op.
-                Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5).
-                INT32 ROW_MAJOR. Fields per token: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=3).
+                INT32 ROW_MAJOR. Fields per token: [linearized_mesh_coord, token_idx, topk_idx].
             expert_token_counts (ttnn.Tensor): Number of tokens dispatched to each expert, used to bound
                 the valid range of token slots read per expert in dispatched_buffer.
                 Shape per device: (1, 1, num_routed_experts). INT32 or UINT32 ROW_MAJOR.
@@ -66,6 +66,8 @@ void bind_combine(nb::module_& mod) {
                 Defaults to Linear.
             init_zeros (bool, optional): Whether to zero-initialize the output buffer before writing.
                 Defaults to True.
+            use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3.
+                Requires Blackhole hardware. Defaults to False.
 
         Returns:
             ttnn.Tensor:
@@ -91,7 +93,8 @@ void bind_combine(nb::module_& mod) {
         nb::arg("num_links") = 1,
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("init_zeros") = true,
-        nb::arg("use_l1_small_for_semaphores") = false);
+        nb::arg("use_l1_small_for_semaphores") = false,
+        nb::arg("use_fp8_combine") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail

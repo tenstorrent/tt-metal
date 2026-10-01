@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import inspect
 import os
 
 import pytest
@@ -137,9 +138,12 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
             0, :, :, :
         ].reshape(batch * num_chunks, ntok + npadtt, dim)
 
-        feats = callable_reference(
-            tens_input[:, :ntok, :], attention_mask=mask, output_hidden_states=(return_intermediate is not None)
-        )
+        # transformers 5.x MllamaVisionEncoder.forward dropped `output_hidden_states` (it always
+        # returns hidden_states in the BaseModelOutput now); only pass it when accepted.
+        _ref_kwargs = {"attention_mask": mask}
+        if "output_hidden_states" in inspect.signature(callable_reference.forward).parameters:
+            _ref_kwargs["output_hidden_states"] = return_intermediate is not None
+        feats = callable_reference(tens_input[:, :ntok, :], **_ref_kwargs)
         reference_output = feats.last_hidden_state
         if return_intermediate is not None:
             intermediates = feats.hidden_states

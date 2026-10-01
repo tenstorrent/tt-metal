@@ -27,11 +27,11 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
     const auto& sin = tensor_args.sin_cache;
 
     auto* ref_device = input_tensor.device();
-    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Input must be on device!");
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Input must be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Input must be allocated in buffer on device!");
-    TT_FATAL(cos.storage_type() == tt::tt_metal::StorageType::DEVICE, "Cos must be on device!");
+    TT_FATAL(cos.storage_type() == ttnn::StorageType::DEVICE, "Cos must be on device!");
     TT_FATAL(cos.buffer() != nullptr, "Cos must be allocated in buffer on device!");
-    TT_FATAL(sin.storage_type() == tt::tt_metal::StorageType::DEVICE, "Sin must be on device!");
+    TT_FATAL(sin.storage_type() == ttnn::StorageType::DEVICE, "Sin must be on device!");
     TT_FATAL(sin.buffer() != nullptr, "Sin must be allocated in buffer on device!");
     TT_FATAL(input_tensor.device() == ref_device, "All tensors must be on same device!");
     TT_FATAL(cos.device() == ref_device, "All tensors must be on same device!");
@@ -40,7 +40,13 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(cos.layout() == tt::tt_metal::Layout::TILE, "Cos must be tilized");
     TT_FATAL(sin.layout() == tt::tt_metal::Layout::TILE, "Sin must be tilized");
 
-    TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible by 64");
+    TT_FATAL(
+        input_tensor.padded_shape()[-1] == TILE_WIDTH || input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
+        "Input X dim ({}) must be either {} (single tile) or divisible by {} (rotate_half midpoint must align with "
+        "a tile boundary).",
+        input_tensor.padded_shape()[-1],
+        TILE_WIDTH,
+        TILE_WIDTH * 2);
     uint32_t X = input_tensor.padded_shape()[-1];
     TT_FATAL(cos.dtype() == sin.dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.padded_shape() == sin.padded_shape(), "Cos and Sin shapes must match");
@@ -62,11 +68,21 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(sin.padded_shape()[0] == 1, "Sin seq_len must be 1 in decode mode");
     } else {
         // Prefill mode: input [1, num_heads, seq_len, head_dim], cos/sin [1, 1, seq_len, head_dim]
-        uint32_t seq_len = input_tensor.padded_shape()[-2];
+        uint32_t seq_len = input_tensor.logical_shape()[-2];
+        uint32_t cos_seq_len = cos.logical_shape()[-2];
+        uint32_t sin_seq_len = sin.logical_shape()[-2];
         TT_FATAL(cos.padded_shape()[1] == 1, "Cos must have batch dim = 1 in prefill mode");
         TT_FATAL(sin.padded_shape()[1] == 1, "Sin must have batch dim = 1 in prefill mode");
-        TT_FATAL(cos.padded_shape()[-2] >= seq_len, "Cos seq_len must be >= input seq_len");
-        TT_FATAL(sin.padded_shape()[-2] >= seq_len, "Sin seq_len must be >= input seq_len");
+        TT_FATAL(
+            cos_seq_len >= seq_len,
+            "Cos seq_len must be >= input seq_len. Input seq_len: {}, Cos seq_len: {}.",
+            seq_len,
+            cos_seq_len);
+        TT_FATAL(
+            sin_seq_len >= seq_len,
+            "Sin seq_len must be >= input seq_len. Input seq_len: {}, Sin seq_len: {}.",
+            seq_len,
+            sin_seq_len);
 
         if (input_tensor.is_sharded()) {
             TT_FATAL(
@@ -107,7 +123,8 @@ tt::tt_metal::TensorSpec RotaryEmbeddingHfDeviceOperation::compute_output_specs(
             shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.padded_shape()[-1]};
             shard_spec.orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR;
         }
-        auto mem_config = args.output_mem_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
         return tt::tt_metal::TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(
@@ -120,34 +137,19 @@ tt::tt_metal::TensorSpec RotaryEmbeddingHfDeviceOperation::compute_output_specs(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
-tt::tt_metal::Tensor RotaryEmbeddingHfDeviceOperation::create_output_tensors(
+ttnn::Tensor RotaryEmbeddingHfDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::create_device_tensor(
-        compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
-}
-
-tt::stl::hash::hash_t RotaryEmbeddingHfDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(args, tensor_args);
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingHfDeviceOperation>(
-        args.is_decode_mode,
-        args.output_mem_config,
-        args.compute_kernel_config,
-        program_factory.index(),
-        tensor_args.input_tensor,
-        tensor_args.cos_cache,
-        tensor_args.sin_cache);
-    return hash;
+    return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-tt::tt_metal::Tensor rotary_embedding_hf(
-    const tt::tt_metal::Tensor& input,
-    const tt::tt_metal::Tensor& cos,
-    const tt::tt_metal::Tensor& sin,
+ttnn::Tensor rotary_embedding_hf(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& cos,
+    const ttnn::Tensor& sin,
     bool is_decode_mode,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {

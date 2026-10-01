@@ -203,7 +203,11 @@ void write_dependency_hashes(
     }
 }
 
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path) {
+void write_dependency_hashes(
+    const std::string& out_dir,
+    const std::string& obj,
+    const std::string& hash_path,
+    const std::string& extra_dependency) {
     std::filesystem::path obj_path = obj;
     if (obj_path.is_relative()) {
         obj_path = out_dir / obj_path;
@@ -221,6 +225,9 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj,
         hash_file.setstate(std::ios::badbit);
     } else {
         auto dependencies = parse_dependency_file(dep_file);
+        if (!extra_dependency.empty() && dependencies.contains(obj)) {
+            dependencies.at(obj).push_back(extra_dependency);
+        }
         write_dependency_hashes(dependencies, out_dir, obj, hash_file);
     }
     hash_file.close();
@@ -281,10 +288,18 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
     auto up_to_date = dependencies_up_to_date(hash_file);
 
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().register_metric("dependencies_up_to_date");
+    static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().get_or_register_metric("dependencies_up_to_date");
     tok.record(elapsed_ms);
 
     return up_to_date;
+}
+
+bool dependencies_up_to_date_file(const std::string& hash_file_path) {
+    std::ifstream hash_file(hash_file_path);
+    if (!hash_file.is_open()) {
+        return false;
+    }
+    return dependencies_up_to_date(hash_file);
 }
 
 void clear_file_hash_cache() { FileHashCache::instance().clear(); }

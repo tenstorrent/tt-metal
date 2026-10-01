@@ -122,7 +122,7 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
             return fmt::format(
                 compute,
                 root,
-                is_where_op ? "eltwise_where_sfpu_scalar"
+                is_where_op ? "eltwise_where_sfpu_scalar.cpp"
                             : (is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp"));
         case KernelName::ComputeRowBcastNg:
             return fmt::format(
@@ -148,7 +148,11 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
-OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
+OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<EnumT>,
+    [[maybe_unused]] std::optional<DataType> dtype,
+    const std::optional<binary::BinaryOpParams>& op_params) :
     binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
@@ -176,46 +180,42 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::LT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
-                dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LT;
             } else {
                 postprocess = unary::UnaryOpType::LTZ;
             }
             break;
         case BinaryOpType::GT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
-                dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::GT;
             } else {
                 postprocess = unary::UnaryOpType::GTZ;
             }
             break;
         case BinaryOpType::GE:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
-                dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::GE;
             } else {
                 postprocess = unary::UnaryOpType::GEZ;
             }
             break;
         case BinaryOpType::LE:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
-                dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LE;
             } else {
                 postprocess = unary::UnaryOpType::LEZ;
             }
             break;
         case BinaryOpType::EQ:
-            if (is_sfpu_op() && dtype == DataType::FLOAT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::EQ;
             } else {
                 postprocess = unary::UnaryOpType::EQZ;
             }
             break;
         case BinaryOpType::NE:
-            if (is_sfpu_op() && dtype == DataType::FLOAT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::NE;
             } else {
                 postprocess = unary::UnaryOpType::NEZ;
@@ -224,10 +224,16 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
         // (a-b)**2
         case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
         // gelu(a+b)
-        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::BIAS_GELU: {
             binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::GELU;
+            const auto* gelu_params =
+                op_params.has_value() ? std::get_if<binary::BiasGeluParams>(&op_params.value()) : nullptr;
+            const bool fast_and_approximate = gelu_params != nullptr && gelu_params->fast_and_approximate;
+            // The parameter is required: without it this reaches gelu_tile's default template
+            // argument, which is the approximate variant, where ttnn.gelu defaults to exact.
+            postprocess = unary::EltwiseUnaryWithParam{unary::UnaryOpType::GELU, fast_and_approximate ? 1.0f : 0.0f};
             break;
+        }
         case BinaryOpType::LOGICAL_AND:
             process_lhs = unary::UnaryOpType::NEZ;
             process_rhs = unary::UnaryOpType::NEZ;
@@ -250,19 +256,27 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             process_rhs = unary::UnaryOpType::EXP2;
             binary_op = EnumT::MUL;
             break;
-        // log( exp(a) + exp(b) )
+        // max(a, b) + log1p(exp(-|a - b|)), in the fused SFPU kernel. There is no FPU form:
+        // the composed log(exp(a) + exp(b)) overflows at |x| > 88.7 even though the result
+        // is bounded by its inputs, so the FPU arm refuses instead of building it. Today that
+        // arm is unreachable -- LOGADDEXP is float_only, supports_mixed_float_inputs is false
+        // for it, and the SFPU gate accepts exactly that set -- and the throw keeps a future
+        // widening of either set from silently bringing the overflow back.
         case BinaryOpType::LOGADDEXP:
-            process_lhs = unary::UnaryOpType::EXP;
-            process_rhs = unary::UnaryOpType::EXP;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
             break;
-        // log2( 2**a + 2**b )
+        // max(a, b) + log2(1 + 2**-|a - b|): same reasoning, the composed log2(2**a + 2**b)
+        // overflowing at |x| > 127.
         case BinaryOpType::LOGADDEXP2:
-            process_lhs = unary::UnaryOpType::EXP2;
-            process_rhs = unary::UnaryOpType::EXP2;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG2;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP2;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
             break;
         case BinaryOpType::BITWISE_AND:
             if (is_sfpu_op()) {
@@ -369,6 +383,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::NEXTAFTER:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::NEXTAFTER;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         case BinaryOpType::ATAN2:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::ATAN2;
@@ -397,9 +418,17 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             binary_op = EnumT::ADD;
             postprocess = unary::UnaryOpType::SQRT;
             break;
+        case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
+
+// ADD/SUB/RSUB only reach the SFPU when the caller asked for the accurate path
+// (fast_and_approximate_mode = false), so the bf16 narrowing is always RNE, matching what
+// mul_binary_tile/div_binary_tile do. The LLK guards this on !is_fp32_dest_acc_en, and
+// binary_ng always enables fp32 dest accumulation for FLOAT32 operands, so the fp32 route
+// that already used the SFPU is unaffected.
+constexpr auto kRneDstRoundingMode = "ckernel::DstRoundingMode::NearestEven";
 
 std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu_binary_op, DataType dtype) {
     using enum OpConfig::SfpuBinaryOp;
@@ -413,12 +442,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (int_data_format) {
                 return {"add_int_tile_init();", fmt::format("add_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"add_binary_tile_init();", "add_binary_tile"};
+            return {"add_binary_tile_init();", fmt::format("add_binary_tile<{}>", kRneDstRoundingMode)};
         case SUB:
             if (int_data_format) {
                 return {"sub_int_tile_init();", fmt::format("sub_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"sub_binary_tile_init();", "sub_binary_tile"};
+            return {"sub_binary_tile_init();", fmt::format("sub_binary_tile<{}>", kRneDstRoundingMode)};
         case MUL:
             if (int_data_format) {
                 return {
@@ -435,10 +464,10 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
         case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
         case REMAINDER:
-            if (dtype == DataType::UINT32 || dtype == DataType::UINT16 || dtype == DataType::UINT8) {
-                TT_THROW("Unsupported data type for remainder {}", dtype);
-            } else if (dtype == DataType::INT32) {
+            if (dtype == DataType::INT32) {
                 return {"remainder_int32_tile_init();", "remainder_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"remainder_uint32_tile_init();", "remainder_uint32_tile"};
             } else {
                 return {"remainder_binary_tile_init();", "remainder_binary_tile"};
             }
@@ -453,9 +482,11 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (int_data_format) {
                 return {"rsub_int_tile_init();", fmt::format("rsub_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+            return {"rsub_binary_tile_init();", fmt::format("rsub_binary_tile<{}>", kRneDstRoundingMode)};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
+        case LOGADDEXP: return {"logaddexp_binary_tile_init();", "logaddexp_binary_tile"};
+        case LOGADDEXP2: return {"logaddexp2_binary_tile_init();", "logaddexp2_binary_tile"};
         case LEFT_SHIFT:
             return {
                 "binary_shift_tile_init();",
@@ -503,6 +534,14 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         case ATAN2: return {"atan2_binary_tile_init();", "atan2_binary_tile"};
+        case NEXTAFTER:
+            // One ULP of bfloat16 is a wider step in the fp32 dest register than one ULP of
+            // float32, so the destination format picks the entry point.
+            if (dtype == DataType::FLOAT32) {
+                return {"nextafter_binary_tile_init();", "nextafter_binary_tile"};
+            } else {
+                return {"nextafter_bf16_binary_tile_init();", "nextafter_bf16_binary_tile"};
+            }
         case LT:
             if (int_data_format) {
                 return {
@@ -532,15 +571,19 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
             return {"le_binary_tile_init();", "le_binary_tile"};
         case EQ:
-            if (dtype == DataType::FLOAT32) {
-                return {"eq_binary_tile_init();", "eq_binary_tile"};
+            if (int_data_format) {
+                return {
+                    fmt::format("eq_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("eq_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            TT_THROW("SFPU EQ binary tile is only defined for Float32");
+            return {"eq_binary_tile_init();", "eq_binary_tile"};
         case NE:
-            if (dtype == DataType::FLOAT32) {
-                return {"ne_binary_tile_init();", "ne_binary_tile"};
+            if (int_data_format) {
+                return {
+                    fmt::format("ne_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("ne_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            TT_THROW("SFPU NE binary tile is only defined for Float32");
+            return {"ne_binary_tile_init();", "ne_binary_tile"};
         case WHERE: {
             const char* data_format = (dtype == DataType::INT32)     ? "Int32"
                                       : (dtype == DataType::UINT32)  ? "UInt32"
@@ -548,6 +591,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                                                                      : "Float16_b";
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
+        case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -586,6 +630,11 @@ void add_activation_defines(
             unary::utils::update_macro_defines(a.type(), defines);
             return std::move(process);
         });
+    // The activations run in the SFPU kernels the unary op uses; give them the same input-dtype define so the
+    // float32 variants are compiled for float32 operands.
+    if (!activations.empty() && dtype.has_value()) {
+        unary::utils::add_input_dtype_defines(*dtype, defines);
+    }
 }
 
 std::map<std::string, std::string> make_dataflow_defines(
@@ -670,9 +719,6 @@ std::map<std::string, std::string> make_dataflow_defines(
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
 uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataType dtype, const bool is_quant_op) {
-    // std::visit([&](auto v) {
-    //     std::cout << "pack_scalar_runtime_arg: " << v << std::endl;
-    // }, scalar);
     return std::visit(
         [&](auto v) -> uint32_t {
             // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
@@ -689,15 +735,22 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
                 auto val = static_cast<uint16_t>(static_cast<float>(v));
                 return (static_cast<uint32_t>(val) << 16) | val;
             }
-            // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-            auto scalar_bf16 = bfloat16::truncate(static_cast<float>(v));
+            auto scalar_bf16 = bfloat16(static_cast<float>(v));
             return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
         },
         scalar);
 }
 
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<FpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<SfpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
@@ -731,11 +784,11 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     return ret;
 }
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
-bool is_uneven(const TensorSpec& t) {
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
     }
@@ -757,14 +810,31 @@ bool is_uneven(const TensorSpec& t) {
 // the check is based on user facing information, input tensors and output memory config
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c) {
+bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
         return false;
     }
 
+    // Native sharding aliases operand buffers as circular buffers, which Metal permits only for L1. This
+    // predicate is a router, not a validator: declining sends the op to the TensorAccessor path, which
+    // serves DRAM-sharded tensors.
+    const bool a_is_l1 = a.memory_config().buffer_type() == BufferType::L1;
+    const bool c_is_l1 = c.buffer_type() == BufferType::L1;
+
+    // Distinct from a mismatch: an ND_SHARDED config carries nd_shard_spec instead of shard_spec, so
+    // there is nothing to compare and we decline rather than compare across representations. Checking
+    // this also keeps is_uneven() -- which dereferences shard_spec() after testing only is_sharded() --
+    // off an ND-sharded operand.
+    const bool shard_specs_comparable = a.memory_config().shard_spec().has_value() && c.shard_spec().has_value();
+    // Per-core work comes from a's shard while the output buffer is aliased as a CB, so a and c must
+    // agree or the output is addressed on cores where it is not allocated -- which hangs the device. An
+    // unsupplied output config is derived from a's, so the common case still matches.
+    const bool c_shard_matches_a = shard_specs_comparable && *c.shard_spec() == *a.memory_config().shard_spec();
+
     // Scalar value path (b is not a tensor)
     if (!b.has_value() && a.memory_config().is_sharded()) {
-        return !is_uneven(a);
+        return a_is_l1 && c_is_l1 && c_shard_matches_a && !is_uneven(a);
     }
 
     if (!b.has_value()) {
@@ -776,10 +846,12 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
     bool a_is_sharded = a.memory_config().is_sharded();
     bool b_is_sharded = b->memory_config().is_sharded();
     bool a_not_broadcast = (output_shape == a.logical_shape());
-    bool a_sharded_ok = a_is_sharded && a_not_broadcast && !is_uneven(a);
+    // Gates the subtile-broadcast branch below, its only consumer.
+    bool a_native_cb_eligible =
+        a_is_sharded && a_not_broadcast && a_is_l1 && c_is_l1 && c_shard_matches_a && !is_uneven(a);
 
     // avoid complex case when a and b are both sharded
-    if (a_sharded_ok && !b_is_sharded) {
+    if (a_native_cb_eligible && !b_is_sharded) {
         auto subtile_bcast = get_subtile_broadcast_type(
             a.logical_shape()[-2], a.logical_shape()[-1], b->logical_shape()[-2], b->logical_shape()[-1]);
         [[maybe_unused]] bool is_height = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
@@ -858,7 +930,7 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
     const int rank_a = shape_a.rank();
     const int rank_b = shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
-    SmallVector<uint32_t> output_shape(larger_rank, 1);
+    ttsl::SmallVector<uint32_t> output_shape(larger_rank, 1);
     for (int i = -1; i >= -larger_rank; --i) {
         auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
         auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;

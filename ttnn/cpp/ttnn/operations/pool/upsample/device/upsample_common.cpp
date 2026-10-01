@@ -97,7 +97,7 @@ tt::tt_metal::MemoryConfig compute_integer_output_mem_config(
         // Nearest: output shard is input shard * scale factors
         shard_spec.shape = {input.shard_spec()->shape[0] * scale_h * scale_w, input.shard_spec()->shape[1]};
     }
-    return output_mem_config.with_shard_spec(shard_spec);
+    return tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
 }
 
 tt::tt_metal::MemoryConfig compute_float_output_mem_config(

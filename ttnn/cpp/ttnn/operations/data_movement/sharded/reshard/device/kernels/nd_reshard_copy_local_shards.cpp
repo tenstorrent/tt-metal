@@ -5,6 +5,10 @@
 #include <cstdint>
 #include "api/tensor/tensor_accessor.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 // Kernel that:
 // if (is_reader) {
@@ -14,35 +18,50 @@
 // }
 
 void kernel_main() {
-    auto args_src = TensorAccessorArgs<0, 0>();
-    auto args_dst =
-        TensorAccessorArgs<args_src.next_compile_time_args_offset(), args_src.next_common_runtime_args_offset()>();
-    constexpr uint32_t base_idx_cta = args_dst.next_compile_time_args_offset();
-    constexpr uint32_t base_idx_crta = args_dst.next_common_runtime_args_offset();
+    constexpr uint32_t src_page_size = get_arg(args::src_page_size);
+    constexpr uint32_t dst_page_size = get_arg(args::dst_page_size);
+    constexpr uint32_t is_reader = get_arg(args::is_reader);
+    constexpr uint32_t logical_width = get_arg(args::logical_width);
+    constexpr uint32_t src_width = get_arg(args::src_width);
+    constexpr uint32_t dst_width = get_arg(args::dst_width);
+    constexpr uint32_t transfer_size = get_arg(args::transfer_size);
+    // 1 for tile layout (equal src/dst page size): reshard is a pure page permutation, so copy
+    // page N -> page N. 0 for row-major, which needs the row/col re-strider below.
+    constexpr uint32_t page_to_page = get_arg(args::page_to_page);
 
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(base_idx_cta);
-    constexpr uint32_t dst_page_size = get_compile_time_arg_val(base_idx_cta + 1);
-    constexpr uint32_t is_reader = get_compile_time_arg_val(base_idx_cta + 2);
-    constexpr uint32_t logical_width = get_compile_time_arg_val(base_idx_cta + 3);
-    constexpr uint32_t src_width = get_compile_time_arg_val(base_idx_cta + 4);
-    constexpr uint32_t dst_width = get_compile_time_arg_val(base_idx_cta + 5);
-    constexpr uint32_t transfer_size = get_compile_time_arg_val(base_idx_cta + 6);
+    const uint32_t num_shards = get_arg(args::num_shards);
+    const uint32_t shard_id_stride = get_arg(args::shard_id_stride);
 
-    const uint32_t bank_base_address_src = get_common_arg_val<uint32_t>(base_idx_crta);
-    const uint32_t bank_base_address_dst = get_common_arg_val<uint32_t>(base_idx_crta + 1);
-    const uint32_t num_shards = get_common_arg_val<uint32_t>(base_idx_crta + 2);
-    const uint32_t shard_id_stride = get_common_arg_val<uint32_t>(base_idx_crta + 3);
+    const uint32_t first_shard_id = get_arg(args::first_shard_id);
 
-    const uint32_t first_shard_id = get_arg_val<uint32_t>(0);
+    auto accessor_src = TensorAccessor(tensor::input);
+    auto accessor_dst = TensorAccessor(tensor::output);
 
-    auto accessor_src = TensorAccessor(args_src, bank_base_address_src);
-    auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst);
+    Noc noc;
 
     for (uint32_t shard_id = first_shard_id; shard_id < num_shards; shard_id += shard_id_stride) {
         if constexpr (is_reader) {
-                auto shard_pages = accessor_src.shard_pages(shard_id);
+            auto shard_pages = accessor_src.shard_pages(shard_id);
+            if constexpr (page_to_page) {
+                // TILE (equal src/dst page size): page N of the source is logically tile N of the
+                // tensor, so write it straight to page N of the destination. The row/col re-strider
+                // below is only for row-major reshards with differing shard widths.
+                for (const auto& src_page : shard_pages) {
+                    const uint32_t src_l1_addr = static_cast<uint32_t>(src_page.noc_addr());
+                    CoreLocalMem<uint32_t> src_mem(src_l1_addr);
+                    noc.async_write(
+                        src_mem,
+                        accessor_dst,
+                        src_page_size,
+                        {.offset_bytes = 0},
+                        {.page_id = src_page.page_id(), .offset_bytes = 0});
+                }
+                noc.async_writes_flushed();
+            } else {
                 for (const auto& src_page : shard_pages) {
                     auto src_page_id = src_page.page_id();
+                    // Local shard page: low 32 bits of the noc_addr are the L1 address on this core.
+                    const uint32_t src_l1_addr_base = static_cast<uint32_t>(src_page.noc_addr());
                     const uint32_t transfers_per_page = src_page_size / transfer_size;
                     for (uint32_t i = 0; i < transfers_per_page; i++) {
                         const uint32_t src_offset = i * transfer_size;
@@ -68,23 +87,36 @@ void kernel_main() {
                         const uint32_t dst_page_id = dst_global_offset / dst_page_size;
                         const uint32_t dst_offset = dst_global_offset % dst_page_size;
 
-                        uint64_t source_address = src_page.noc_addr() + src_offset;
-                        uint64_t destination_address = accessor_dst.get_noc_addr(dst_page_id, dst_offset);
-                        noc_async_write(source_address, destination_address, transfer_size);
+                        CoreLocalMem<uint32_t> src_mem(src_l1_addr_base + src_offset);
+                        noc.async_write(
+                            src_mem,
+                            accessor_dst,
+                            transfer_size,
+                            {.offset_bytes = 0},
+                            {.page_id = dst_page_id, .offset_bytes = dst_offset});
                     }
-                    noc_async_writes_flushed();
+                    noc.async_writes_flushed();
                 }
+            }
         } else {
             auto shard_pages = accessor_dst.shard_pages(shard_id);
             for (const auto& page : shard_pages) {
-                noc_async_read_page(page.page_id(), accessor_src, page.noc_addr());
+                // Local shard page: low 32 bits of the noc_addr are the L1 address on this core.
+                const uint32_t dst_l1_addr = static_cast<uint32_t>(page.noc_addr());
+                CoreLocalMem<uint32_t> dst_mem(dst_l1_addr);
+                noc.async_read(
+                    accessor_src,
+                    dst_mem,
+                    src_page_size,
+                    {.page_id = page.page_id(), .offset_bytes = 0},
+                    {.offset_bytes = 0});
             }
         }
     }
 
     if constexpr (is_reader) {
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     } else {
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     }
 }

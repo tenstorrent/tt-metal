@@ -11,23 +11,48 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include "erisc_datamover_builder.hpp"
-#include <set>
 #include <vector>
 #include <algorithm>
-#include "fabric_context.hpp"
-#include <queue>
+#include <cctype>
+#include <cstring>
+#include <stdexcept>
 #include <unordered_map>
-#include <unordered_set>
 #include <filesystem>
 #include <fstream>
+#include <fmt/format.h>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
+
+namespace {
+
+// Mock cluster mapping export uses cluster descriptor filenames (basename). Strip MPI-rank uniquifier
+// suffix appended during PSD discovery when multiple ranks share the same descriptor basename.
+HostName hostname_for_mapping_export(const HostName& hostname, bool mock_enabled) {
+    if (!mock_enabled) {
+        return hostname;
+    }
+    constexpr std::string_view cluster_desc_suffix = ".yaml";
+    const auto pos = hostname.rfind(cluster_desc_suffix);
+    if (pos == std::string::npos || pos + cluster_desc_suffix.size() >= hostname.size()) {
+        return hostname;
+    }
+    const std::string tail = hostname.substr(pos + cluster_desc_suffix.size());
+    if (tail.size() <= 1 || tail.front() != '_') {
+        return hostname;
+    }
+    for (char c : tail.substr(1)) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) {
+            return hostname;
+        }
+    }
+    return hostname.substr(0, pos + cluster_desc_suffix.size());
+}
+
+}  // namespace
 
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return is_1d_fabric_config(fabric_config) || is_2d_fabric_config(fabric_config);
@@ -53,38 +78,12 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
 }
 
 bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape) {
-    // Requesting MESH is always valid (can restrict any topology to MESH)
-    if (requested_type == FabricType::MESH) {
-        return false;
-    }
-
-    // Check if available topology can satisfy the requested topology
-    if (available_type == FabricType::MESH) {
-        // Special case: 2-element dimensions make torus wrap-around equivalent to mesh neighbor connections
-        // E.g., in a 2-row mesh, north/south wrap-around just connects to the adjacent row
-        bool has_two_rows = (mesh_shape[0] == 2);
-        bool has_two_cols = (mesh_shape[1] == 2);
-
-        if (has_flag(requested_type, FabricType::TORUS_Y) && !has_two_rows) {
+    for (uint32_t axis = 0; axis < 2; ++axis) {
+        if (has_genuine_torus_axis(requested_type, mesh_shape, axis) &&
+            !has_genuine_torus_axis(available_type, mesh_shape, axis)) {
             return true;
         }
-        if (has_flag(requested_type, FabricType::TORUS_X) && !has_two_cols) {
-            return true;
-        }
-        return false;
     }
-
-    // For non-MESH available types, check if requested features are present
-    if (requested_type == FabricType::TORUS_XY) {
-        return available_type != FabricType::TORUS_XY;
-    }
-    if (requested_type == FabricType::TORUS_X) {
-        return !has_flag(available_type, FabricType::TORUS_X);
-    }
-    if (requested_type == FabricType::TORUS_Y) {
-        return !has_flag(available_type, FabricType::TORUS_Y);
-    }
-
     return false;
 }
 
@@ -138,6 +137,7 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
 
     std::vector<uint32_t> link_indices;
+    link_indices.reserve(forwarding_channels.size());
     for (uint32_t i = 0; i < fabric_channels.size(); i++) {
         if (std::find(forwarding_channels.begin(), forwarding_channels.end(), fabric_channels[i]) !=
             forwarding_channels.end()) {
@@ -189,7 +189,7 @@ void serialize_mesh_coordinates_to_file(
 }
 
 void serialize_asic_to_fabric_node_mapping_to_file(
-    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path) {
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path, bool mock_enabled) {
     // Ensure output directory exists
     std::filesystem::create_directories(output_file_path.parent_path());
 
@@ -222,8 +222,9 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 tt::tt_metal::TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
                 tt::tt_metal::ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
 
-                // Get hostname for this fabric node
-                HostName hostname = topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id);
+                // Get hostname for this fabric node (mock: cluster descriptor filename)
+                HostName hostname = hostname_for_mapping_export(
+                    topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id), mock_enabled);
 
                 // Add to the mapping structure, indexed by umd_chip_id (physical chip ID)
                 AsicMapping mapping{tray_id, asic_location, fabric_node_id, asic_id};
@@ -322,6 +323,77 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized ASIC to Fabric node ID mapping to file: {}", output_file_path.string());
+}
+
+void serialize_intermesh_port_assignment_to_file(
+    const std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>>& exit_node_directions,
+    const std::map<FabricNodeId, std::unordered_map<chan_id_t, std::pair<FabricNodeId, chan_id_t>>>&
+        intermesh_chan_to_peer,
+    const std::filesystem::path& output_file_path) {
+    auto dir_to_str = [](RoutingDirection d) -> const char* {
+        switch (d) {
+            case RoutingDirection::N: return "N";
+            case RoutingDirection::E: return "E";
+            case RoutingDirection::S: return "S";
+            case RoutingDirection::W: return "W";
+            case RoutingDirection::Z: return "Z";
+            case RoutingDirection::C: return "C";
+            default: return "NONE";
+        }
+    };
+
+    std::map<std::string, std::vector<std::string>> intermesh_port_assignment;
+    for (const auto& [my_fn, chan_map] : intermesh_chan_to_peer) {
+        std::vector<chan_id_t> chans;
+        chans.reserve(chan_map.size());
+        for (const auto& [c, _peer] : chan_map) {
+            chans.push_back(c);
+        }
+        std::sort(chans.begin(), chans.end());
+        for (auto c : chans) {
+            const auto& [peer_fn, peer_chan] = chan_map.at(c);
+            RoutingDirection dir = RoutingDirection::NONE;
+            if (auto dit = exit_node_directions.find(my_fn); dit != exit_node_directions.end()) {
+                if (auto cit = dit->second.find(c); cit != dit->second.end()) {
+                    dir = cit->second;
+                }
+            }
+            intermesh_port_assignment[fmt::format("M{}->M{}", *my_fn.mesh_id, *peer_fn.mesh_id)].push_back(fmt::format(
+                "D{}ch{}({})>M{}D{}ch{}",
+                my_fn.chip_id,
+                c,
+                dir_to_str(dir),
+                *peer_fn.mesh_id,
+                peer_fn.chip_id,
+                peer_chan));
+        }
+    }
+    for (auto& [_boundary, entries] : intermesh_port_assignment) {
+        std::sort(entries.begin(), entries.end());
+    }
+
+    std::filesystem::create_directories(output_file_path.parent_path());
+
+    std::ofstream out_file(output_file_path);
+    if (!out_file.is_open()) {
+        TT_THROW("Failed to open output file: {}", output_file_path.string());
+    }
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "intermesh_port_assignment" << YAML::Value << YAML::BeginMap;
+    for (const auto& [boundary, entries] : intermesh_port_assignment) {
+        emitter << YAML::Key << boundary << YAML::Value << YAML::Flow << YAML::BeginSeq;
+        for (const auto& entry : entries) {
+            emitter << entry;
+        }
+        emitter << YAML::EndSeq;
+    }
+    emitter << YAML::EndMap;
+    emitter << YAML::EndMap;
+    out_file << emitter.c_str();
+    out_file.close();
+
+    log_debug(tt::LogFabric, "Serialized inter-mesh port assignment to file: {}", output_file_path.string());
 }
 
 }  // namespace tt::tt_fabric

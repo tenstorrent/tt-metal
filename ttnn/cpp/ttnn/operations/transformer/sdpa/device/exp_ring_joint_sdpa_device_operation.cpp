@@ -26,20 +26,20 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
 
-    const auto& joint_tensor_q = tensor_args.joint_q;
-    const auto& joint_tensor_k = tensor_args.joint_k;
-    const auto& joint_tensor_v = tensor_args.joint_v;
+    const bool has_joint = tensor_args.joint_q.has_value();
+    TT_FATAL(
+        has_joint == tensor_args.joint_k.has_value() && has_joint == tensor_args.joint_v.has_value(),
+        "Joint q/k/v must all be present or all absent");
 
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
 
-    const std::vector<Tensor> sdpa_input_tensors = {
-        input_tensor_q,
-        gathered_input_tensor_k,
-        gathered_input_tensor_v,
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v};
+    std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k, gathered_input_tensor_v};
+    if (has_joint) {
+        sdpa_input_tensors.push_back(tensor_args.joint_q.value());
+        sdpa_input_tensors.push_back(tensor_args.joint_k.value());
+        sdpa_input_tensors.push_back(tensor_args.joint_v.value());
+    }
 
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
 
@@ -60,10 +60,6 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
     const auto& v_shape = gathered_input_tensor_v.logical_shape();
-    const auto& joint_q_shape = joint_tensor_q.logical_shape();
-    const auto& joint_k_shape = joint_tensor_k.logical_shape();
-    const auto& joint_v_shape = joint_tensor_v.logical_shape();
-
     // Validate storage types and buffers
     for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
@@ -84,40 +80,60 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NKH = k_shape[1];
     const auto N_local = q_shape[2];
     const auto N_global = k_shape[2];
-    const auto L = joint_q_shape[2];
+    // Joint sequence length: 0 when there are no joint inputs (self-attention).
+    const auto L = has_joint ? tensor_args.joint_q.value().logical_shape()[2] : 0;
     const auto DH = q_shape[3];
 
     TT_FATAL(
-        k_shape[0] == B && v_shape[0] == B && joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
-        "Batch sizes must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+        k_shape[0] == B && v_shape[0] == B,
+        "Batch sizes must match. Got Q: {}, K: {}, V: {}",
         B,
         k_shape[0],
-        v_shape[0],
-        joint_q_shape[0],
-        joint_k_shape[0],
-        joint_v_shape[0]);
+        v_shape[0]);
 
     // Validate head dimensions match
     TT_FATAL(
-        k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
-            joint_v_shape[3] == DH,
-        "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+        k_shape[3] == DH && v_shape[3] == DH,
+        "Head dimensions must match. Got Q: {}, K: {}, V: {}",
         DH,
         k_shape[3],
-        v_shape[3],
-        joint_q_shape[3],
-        joint_k_shape[3],
-        joint_v_shape[3]);
+        v_shape[3]);
 
-    TT_FATAL(
-        v_shape[1] == NKH && joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NKH,
-        "Num heads must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
-        NQH,
-        NKH,
-        v_shape[1],
-        joint_q_shape[1],
-        joint_k_shape[1],
-        joint_v_shape[1]);
+    TT_FATAL(v_shape[1] == NKH, "Num heads must match. Got K: {}, V: {}", NKH, v_shape[1]);
+
+    // Joint-input shape checks only apply when joint inputs are present.
+    if (has_joint) {
+        const auto& joint_q_shape = tensor_args.joint_q.value().logical_shape();
+        const auto& joint_k_shape = tensor_args.joint_k.value().logical_shape();
+        const auto& joint_v_shape = tensor_args.joint_v.value().logical_shape();
+        TT_FATAL(
+            joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
+            "Joint batch sizes must match. Got B: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            B,
+            joint_q_shape[0],
+            joint_k_shape[0],
+            joint_v_shape[0]);
+        TT_FATAL(
+            joint_q_shape[3] == DH && joint_k_shape[3] == DH && joint_v_shape[3] == DH,
+            "Joint head dimensions must match. Got DH: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            DH,
+            joint_q_shape[3],
+            joint_k_shape[3],
+            joint_v_shape[3]);
+        TT_FATAL(
+            joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NKH,
+            "Joint num heads must match. Got NQH: {}, NKH: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            NQH,
+            NKH,
+            joint_q_shape[1],
+            joint_k_shape[1],
+            joint_v_shape[1]);
+        TT_FATAL(
+            joint_k_shape[2] == L && joint_v_shape[2] == L,
+            "Joint sequence length must match. Got joint_K: {}, joint_V: {}",
+            joint_k_shape[2],
+            joint_v_shape[2]);
+    }
 
     TT_FATAL(
         v_shape[2] == N_global,
@@ -140,20 +156,28 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.logical_n,
         N_global);
 
+    // Trailing fully-pad shards are supported (the kernels skip them consistently on all devices).
+    // Only shard 0 must be real, so every device has >=1 active iteration and an output-drain point.
     TT_FATAL(
-        (N_global - args.logical_n) < N_local,
-        "Delta between global (padded) and logical (unpadded) sequence length must be less than local (per device) "
-        "sequence length. Got delta: {}, local sequence length: {} "
-        "This implies at least one device will have only padded tokens and no real tokens to process. Either "
-        "reduce the ring size or reduce padding by reducing the chunk size.",
-        N_global - args.logical_n,
-        N_local);
+        args.logical_n >= 1,
+        "Logical sequence length must be at least 1 (shard 0 must contain real tokens). Got logical sequence "
+        "length: {}",
+        args.logical_n);
 
-    TT_FATAL(
-        joint_k_shape[2] == L && joint_v_shape[2] == L,
-        "Joint sequence length must match. Got joint_K: {}, joint_V: {}",
-        joint_k_shape[2],
-        joint_v_shape[2]);
+    if (tensor_args.has_logical_n_tensor()) {
+        const auto& t = tensor_args.logical_n_tensor.value();
+        TT_FATAL(
+            t.dtype() == DataType::UINT32 || t.dtype() == DataType::INT32,
+            "logical_n tensor must be UINT32 or INT32 (the kernels read element 0 as a raw 32-bit word). Got {}",
+            t.dtype());
+        TT_FATAL(t.storage_type() == StorageType::DEVICE, "logical_n tensor must be on device");
+        TT_FATAL(t.buffer() != nullptr, "logical_n tensor must be allocated on device");
+        TT_FATAL(
+            t.logical_volume() == 1,
+            "logical_n tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
+            t.logical_volume());
+        // Live-value range is a caller contract, unverifiable on host: live logical_n must be >= 1.
+    }
 
     // Check shapes based on ring
     TT_FATAL(
@@ -175,13 +199,13 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     auto k_chunk_size = args.get_k_chunk_size();
 
     TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+        q_chunk_size > 0 && q_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "q_chunk_size must be a positive multiple of TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
         q_chunk_size,
         tt::constants::TILE_WIDTH);
     TT_FATAL(
-        k_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
+        k_chunk_size > 0 && k_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
         k_chunk_size,
         tt::constants::TILE_WIDTH);
 
@@ -205,9 +229,11 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     // --- Grid and chunk compatibility ---
-    // The factory always computes sdpa_grid = {device_x - 1, device_y} (last column = CCL MUX).
-    // The op is designed for at most one (batch, head) per grid row and one Q chunk per core,
-    // so total Q chunks must not exceed the SDPA core count.
+    // The factory computes sdpa_grid = {user_grid.x - 1, user_grid.y} (last column = fabric MUX),
+    // where user_grid is the program config's grid. Work is assigned row-aligned: each core row
+    // hosts ceil(B*NQH / rows) heads and walks them as serial passes, one Q chunk per pass, with a
+    // head's Q chunks filling its row. Mirror the factory's grid derivation exactly so validation
+    // and the factory never disagree.
 
     TT_FATAL(
         DH % tt::constants::TILE_WIDTH == 0,
@@ -225,8 +251,38 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         "Got {} columns.",
         device_grid.x);
 
-    const uint32_t sdpa_grid_x = device_grid.x - 1;
-    const uint32_t sdpa_grid_y = device_grid.y;
+    const CoreCoord user_grid =
+        args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size : device_grid;
+    TT_FATAL(
+        user_grid.x <= device_grid.x && user_grid.y <= device_grid.y,
+        "Program config grid ({}x{}) exceeds device grid ({}x{}).",
+        user_grid.x,
+        user_grid.y,
+        device_grid.x,
+        device_grid.y);
+    // Mirrors the factory's grid derivation, including the bottom-row MUX experiment.
+    // Lower-bound the grid BEFORE the derivation: last-column mode subtracts the reserved MUX
+    // column from x and bottom-row mode subtracts two rows from y, so an undersized
+    // program-config grid would otherwise underflow unsigned here (and the num_q_chunks modulo
+    // below would divide by zero) instead of failing with a clear error.
+    const bool mux_on_bottom_row = exp_sdpa_mux_on_bottom_row();
+    if (mux_on_bottom_row) {
+        TT_FATAL(
+            user_grid.y >= 3,
+            "Program config grid ({}x{}) too short for bottom-row MUX placement: needs at least 3 "
+            "rows (2 reserved for the MUX row and its spacer).",
+            user_grid.x,
+            user_grid.y);
+    } else {
+        TT_FATAL(
+            user_grid.x >= 2,
+            "Program config grid ({}x{}) too narrow: needs at least 2 columns (the last column is "
+            "reserved for the fabric MUX kernels).",
+            user_grid.x,
+            user_grid.y);
+    }
+    const uint32_t sdpa_grid_x = mux_on_bottom_row ? user_grid.x : user_grid.x - 1;
+    const uint32_t sdpa_grid_y = mux_on_bottom_row ? user_grid.y - 2 : user_grid.y;
     const uint32_t num_sdpa_cores = sdpa_grid_x * sdpa_grid_y;
 
     // Joint sequence must divide evenly (or be zero); last local Q chunk may be padded.
@@ -241,61 +297,98 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
     const uint32_t total_q_chunks = B * NQH * num_q_chunks;
 
-    // One head per row: each (batch, head) pair must map to its own grid row.
+    // Every head-segment must fill its row exactly: fewer chunks than columns would idle the
+    // trailing columns, and the last two SDPA columns are the fabric MUX clients that drive the
+    // K/V all-gather — an idle MUX column means that link never forwards its shard.
     TT_FATAL(
-        B * NQH <= sdpa_grid_y,
-        "Number of (batch × heads) combinations (B={} × NQH={} = {}) exceeds SDPA grid rows ({}) on "
-        "device grid {}×{}. Reduce batch size or head count (e.g. via tensor parallelism).",
-        B,
-        NQH,
-        B * NQH,
-        sdpa_grid_y,
-        device_grid.x,
-        device_grid.y);
-
-    // One Q chunk per column: all Q chunks for one head must fit across the grid columns.
-    TT_FATAL(
-        num_q_chunks <= sdpa_grid_x,
-        "Q chunks per head (num_local={} + num_joint={} = {}) exceeds SDPA grid columns ({}) on "
-        "device grid {}×{}. Increase q_chunk_size or reduce sequence length.",
+        num_q_chunks % sdpa_grid_x == 0,
+        "Q chunks per head (num_local={} + num_joint={} = {}) must be a multiple of the SDPA grid "
+        "columns ({}) on device grid {}×{}. Adjust q_chunk_size so ceil(N_local / q_chunk_size) is "
+        "a multiple of {}.",
         num_local_q_chunks,
         num_joint_q_chunks,
         num_q_chunks,
         sdpa_grid_x,
         device_grid.x,
-        device_grid.y);
+        device_grid.y,
+        sdpa_grid_x);
+    const uint32_t segs_per_head = num_q_chunks / sdpa_grid_x;
+    const uint32_t total_segments = B * NQH * segs_per_head;
 
-    // Final sanity: total Q chunks must not exceed total SDPA cores.
+    // Every SDPA row must own at least one head-segment. An empty row builds no K/V chain and no
+    // injector, and the MUX-writer columns of that row would then hit the row-has-injector
+    // TT_FATAL during program construction — reject the shape here with an actionable message
+    // instead.
     TT_FATAL(
-        total_q_chunks <= num_sdpa_cores,
-        "Total Q chunks (B={} × NQH={} × num_q_chunks={} = {}) exceeds SDPA cores ({}). "
-        "The two constraints above should have caught this.",
+        total_segments >= sdpa_grid_y,
+        "Head-segments (B={} x NQH={} x segs_per_head={} = {}) must cover all {} SDPA grid rows; "
+        "rows without a segment are not supported. Use a program_config grid with at most {} rows, "
+        "or a smaller q_chunk_size to raise segs_per_head.",
+        B,
+        NQH,
+        segs_per_head,
+        total_segments,
+        sdpa_grid_y,
+        total_segments);
+
+    // Segments per row: each core row hosts up to kMaxPasses head-segments, walked as serial
+    // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
+    // (L1-bound).
+    constexpr uint32_t kMaxPasses = 3;
+    const uint32_t num_passes = (total_segments + sdpa_grid_y - 1) / sdpa_grid_y;
+    TT_FATAL(
+        num_passes <= kMaxPasses,
+        "Number of head-segments (B={} × NQH={} × segs_per_head={} = {}) needs {} serial passes on "
+        "{} SDPA grid rows (device grid {}×{}), but at most {} are supported. Reduce batch size or "
+        "head count (e.g. via tensor parallelism), or use a larger q_chunk_size.",
+        B,
+        NQH,
+        segs_per_head,
+        total_segments,
+        num_passes,
+        sdpa_grid_y,
+        device_grid.x,
+        device_grid.y,
+        kMaxPasses);
+
+    // Final sanity: total Q chunks must fit the cores across all passes.
+    TT_FATAL(
+        total_q_chunks <= num_passes * num_sdpa_cores,
+        "Total Q chunks (B={} × NQH={} × num_q_chunks={} = {}) exceeds SDPA cores ({}) across {} "
+        "passes. The two constraints above should have caught this.",
         B,
         NQH,
         num_q_chunks,
         total_q_chunks,
-        num_sdpa_cores);
+        num_sdpa_cores,
+        num_passes);
 }
 
 ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
-    const auto& joint_input = tensor_args.joint_q;
     auto stats_shape = input.logical_shape();
     stats_shape[3] = 1;
+    // Joint output is empty (zero joint sequence length) when there are no joint inputs.
+    auto joint_output_shape = input.logical_shape();
+    joint_output_shape[2] = 0;
+    uint32_t joint_padded_seq = 0;
+    if (tensor_args.joint_q.has_value()) {
+        joint_output_shape = tensor_args.joint_q.value().logical_shape();
+        joint_padded_seq = tensor_args.joint_q.value().padded_shape()[2];
+    }
     // 2× the sequence length: first half stores running max, second half stores running sum.
     // Used as DRAM scratch for multi-Q-chunk deferred norm round-trips between ring iterations.
-    stats_shape[2] = (input.padded_shape()[2] + joint_input.padded_shape()[2]) * 2;
+    stats_shape[2] = (input.padded_shape()[2] + joint_padded_seq) * 2;
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(
-            joint_input.logical_shape(),
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
-
+        tt::tt_metal::TensorSpec(
+            joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
+        tt::tt_metal::TensorSpec(
+            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(
@@ -303,47 +396,22 @@ ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(
     auto output_specs = compute_output_specs(args, tensor_args);
     return {
         create_device_tensor(output_specs[EXP_RING_JOINT_SDPA_OUTPUT_IDX], tensor_args.input_q.device()),
-        create_device_tensor(output_specs[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.joint_q.device()),
+        create_device_tensor(output_specs[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.input_q.device()),
         create_device_tensor(output_specs[EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
     };
 }
 
-tt::stl::hash::hash_t ExpRingJointSDPADeviceOperation::compute_program_hash(
-    const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
-    const std::vector<Tensor> input_tensors = {
-        tensor_args.input_q,
-        tensor_args.input_k,
-        tensor_args.input_v,
-        tensor_args.joint_q,
-        tensor_args.joint_k,
-        tensor_args.joint_v,
-        tensor_args.gathered_k,
-        tensor_args.gathered_v,
-    };
-    return tt::tt_metal::operation::hash_operation<ExpRingJointSDPADeviceOperation>(
-        input_tensors,
-        args.joint_strategy,
-        args.scale,
-        args.logical_n,
-        args.ring_size,
-        args.compute_kernel_config,
-        args.program_config,
-        args.dim,
-        args.num_links,
-        args.cluster_axis);
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADeviceOperation::create_op_performance_model(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args, ExpRingJointSDPAResult& output_tensors) {
-    Tensors input_tensors = {
-        tensor_args.input_q,
-        tensor_args.input_k,
-        tensor_args.input_v,
-        tensor_args.joint_q,
-        tensor_args.joint_k,
-        tensor_args.joint_v,
-        tensor_args.gathered_k,
-        tensor_args.gathered_v};
+    // Order mirrors compute_program_hash: q/k/v, then joints (if present), then gathered k/v.
+    Tensors input_tensors = {tensor_args.input_q, tensor_args.input_k, tensor_args.input_v};
+    if (tensor_args.joint_q.has_value()) {
+        input_tensors.push_back(tensor_args.joint_q.value());
+        input_tensors.push_back(tensor_args.joint_k.value());
+        input_tensors.push_back(tensor_args.joint_v.value());
+    }
+    input_tensors.push_back(tensor_args.gathered_k);
+    input_tensors.push_back(tensor_args.gathered_v);
 
     auto& output_tensor = output_tensors[EXP_RING_JOINT_SDPA_OUTPUT_IDX];
     auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
@@ -357,7 +425,6 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADevi
     const auto& q_shape = tensor_args.input_q.logical_shape();
     const auto& gathered_k_shape = tensor_args.gathered_k.logical_shape();
     const auto& v_shape = tensor_args.gathered_v.logical_shape();
-    const auto& joint_q_shape = tensor_args.joint_q.logical_shape();
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
@@ -367,7 +434,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADevi
     const uint32_t NQH = q_shape[1];
     const uint32_t N_local = q_shape[2];
     const uint32_t N_global = gathered_k_shape[2];
-    const uint32_t L = joint_q_shape[2];
+    const uint32_t L = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0;
     const uint32_t DH = q_shape[3];
     const uint32_t DV = v_shape[3];
 
@@ -391,9 +458,9 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& joint_tensor_q,
-    const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
+    const std::optional<ttnn::Tensor>& joint_tensor_q,
+    const std::optional<ttnn::Tensor>& joint_tensor_k,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
@@ -409,7 +476,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel) {
+    const uint32_t num_buffers_per_channel,
+    const std::optional<ttnn::Tensor>& logical_n_tensor) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -455,7 +523,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v,
         .gathered_k = persistent_output_buffer_k,
-        .gathered_v = persistent_output_buffer_v};
+        .gathered_v = persistent_output_buffer_v,
+        .logical_n_tensor = logical_n_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

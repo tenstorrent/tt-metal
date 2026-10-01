@@ -7,6 +7,10 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 
+#ifdef TRISC_MATH
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#endif
+
 /**
  * @brief Merges per-core top-8 results across 8 cores into a global top-8, then
  *        produces a per-expert selection bitmask.
@@ -35,8 +39,6 @@
 namespace ckernel {
 
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "lltt.h"
@@ -436,7 +438,7 @@ inline void _llk_math_top8_merge_init_() {
 
 template <uint32_t column_idx>
 inline void _llk_math_top8_merge_() {
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_top8_merge_<column_idx>, 0, VectorMode::RC_custom);
+    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _top8_merge_, (column_idx), 0 /*DST_IDX*/, VectorMode::RC_custom);
 }
 
 #endif

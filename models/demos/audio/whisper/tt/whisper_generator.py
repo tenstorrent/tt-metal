@@ -9,7 +9,7 @@ Whisper generation functions using the functional whisper implementation from tt
 import time
 import zlib
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List, Optional, Tuple, Union
 
 import torch
@@ -38,6 +38,48 @@ class GenerationParams:
     return_timestamps: bool = False
 
 
+@dataclass
+class PerfMetrics:
+    """Wall-clock timings for a single generate() call.
+
+    Returned in place of the loose (ttft, decode_throughput) pair when
+    return_perf_metrics=True, so that new measurements can be added without
+    changing the arity of the returned/yielded tuple.
+
+    Stage times are in seconds. feature_extract_s covers host-side feature
+    extraction only; encoder_s covers encoder input preprocessing, the encoder
+    stack, and the device synchronize that makes the encoder result observable.
+
+    total_audio_s is the audio actually processed, i.e. each item's duration capped
+    at the feature extractor's chunk_length, since anything past that window is
+    truncated before the encoder sees it. Note the converse is not corrected for:
+    an item shorter than the window still costs a full padded window of encoder
+    work, so the throughput properties read low on short clips.
+    """
+
+    feature_extract_s: float = 0.0
+    encoder_s: float = 0.0
+    total_audio_s: float = 0.0  # capped at the feature extractor's chunk_length per item
+    ttft: float = 0.0
+    decode_throughput: float = 0.0  # tokens/s/user
+    # True only when the encoder ran as a clean trace replay, i.e. steady state. False for the
+    # two outlier paths: the call that captures a bucket's trace (runs the encoder eagerly to
+    # warm up, then again under capture) and a call whose replay failed and fell back to eager.
+    # Both inflate encoder_s, so exclude them from steady-state throughput reporting. Always
+    # True when encoder tracing is disabled, since then every call is alike.
+    encoder_trace_hit: bool = True
+
+    @property
+    def feature_extract_throughput(self) -> float:
+        """Audio seconds processed per wall-clock second during feature extraction."""
+        return self.total_audio_s / self.feature_extract_s if self.feature_extract_s > 0 else 0.0
+
+    @property
+    def encoder_throughput(self) -> float:
+        """Audio seconds processed per wall-clock second by the encoder."""
+        return self.total_audio_s / self.encoder_s if self.encoder_s > 0 else 0.0
+
+
 # Default values for quality metrics
 DEFAULT_AVG_LOGPROB = -0.5
 DEFAULT_NO_SPEECH_PROB = 0.0
@@ -57,6 +99,12 @@ TIMESTAMP_TOKEN_END = 51864  # 1500 tokens = 30 seconds max
 STARTOFPREV_TOKEN_ID = 50362  # <|startofprev|> token for prompt conditioning
 STARTOFTRANSCRIPT_TOKEN_ID = 50258  # <|startoftranscript|> token
 MAX_PROMPT_TOKENS = 224  # Maximum number of tokens allowed in prompt
+
+# Upper bound on tokens held while waiting for a multi-byte UTF-8 character to complete during
+# streaming incremental detokenization. A single UTF-8 char is at most 4 bytes, so a legitimate
+# split spans only a few tokens; beyond this the trailing U+FFFD can never complete and we stop
+# holding to avoid an unbounded stall (see WhisperGenerator._stream_incremental_texts).
+STREAM_MAX_HOLD_TOKENS = 8
 
 
 class EncoderTraceState:
@@ -216,6 +264,7 @@ class WhisperGenerator:
         cross_attn_cache_per_batch_size=None,
         max_batch_size=2,
         enable_encoder_trace: bool = True,
+        use_2cq: bool = False,
     ):
         """
         Initialize the WhisperGenerator.
@@ -236,6 +285,8 @@ class WhisperGenerator:
             max_batch_size: Maximum supported global batch size for pre-allocated tensors (default 2)
             enable_encoder_trace: If True (default), capture/replay ``encoder()`` per ``batch_size_per_device``
                 after the first occurrence; set False to always run eager encoder.
+            use_2cq: If True, run decode traces and sampled-token reads on CQ 0 while CQ 1
+                handles forced-token writes (input).
         """
         self.config = config
         self.mesh_device = mesh_device
@@ -251,6 +302,16 @@ class WhisperGenerator:
         self.cross_attn_cache_per_batch_size = cross_attn_cache_per_batch_size
         self.max_batch_size = max_batch_size
         self.enable_encoder_trace = enable_encoder_trace
+        self.use_2cq = use_2cq
+        self._op_event = None
+        self._read_event = None
+        self._write_event = None
+        # 2CQ lookahead: the previous loop iteration's prefetched decode step leaves either
+        # an async-read host tensor or a pre-known forced-token value here, to be consumed
+        # at the start of the next iteration. Exactly one of these is non-None between an
+        # enqueue and its matching consume.
+        self._pending_token_host = None
+        self._pending_forced_tokens = None
 
         # Cross-attention cache validity flag
         self.cross_attn_cache_valid = False
@@ -383,17 +444,18 @@ class WhisperGenerator:
             trace_state=self.encoder_trace_state,
         )
 
-    def _reset_decode_pos(self, value, global_batch_size):
+    def _reset_decode_pos(self, value, global_batch_size, cq_id=None):
         """Reset current_decode_pos to a specific value in-place
 
         Args:
             value: The position value to set (integer)
             global_batch_size: Total batch size across all devices
+            cq_id: Optional command queue to use for host-to-device position writes
         """
         pos_host = torch.full((global_batch_size,), value, dtype=torch.int32)
         pos_tensor_host = ttnn.from_torch(pos_host, dtype=ttnn.int32, mesh_mapper=self.input_mesh_mapper)
         trace_key = self._get_batch_size_per_device(global_batch_size)
-        ttnn.copy_host_to_device_tensor(pos_tensor_host, self.current_decode_pos_per_size[trace_key])
+        ttnn.copy_host_to_device_tensor(pos_tensor_host, self.current_decode_pos_per_size[trace_key], cq_id)
         # Also reset the uint32 position embedding tensor
         if self.decode_pos_embed[trace_key] is not None:
             pos_replicate_mapper = (
@@ -405,7 +467,7 @@ class WhisperGenerator:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=pos_replicate_mapper,
             )
-            ttnn.copy_host_to_device_tensor(pos_embed_host, self.decode_pos_embed[trace_key])
+            ttnn.copy_host_to_device_tensor(pos_embed_host, self.decode_pos_embed[trace_key], cq_id)
 
     def _release_all_traces(self):
         """Release captured encoder and decode traces, and reset decode-side staging (token buffers)."""
@@ -479,7 +541,7 @@ class WhisperGenerator:
             logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
 
             # Argmax -> separate tensor, then copy to feedback buffer
-            argmax_result = ttnn.argmax(logits_rm, dim=-1, use_multicore=True)
+            argmax_result = ttnn.argmax(logits_rm, dim=-1)
             ttnn.copy(argmax_result, self.token_id_device[trace_key])
 
             # Increment both position tensors for next iteration
@@ -511,20 +573,27 @@ class WhisperGenerator:
 
         logger.info(f"On-device sampling trace capture complete for batch size per device {trace_key}")
 
-    def _execute_decode_trace(self, trace_key):
+    def _execute_decode_trace(self, trace_key, blocking: bool = True):
         """
-        Execute the on-device sampling trace.
+        Execute the on-device sampling trace on CQ 0.
 
         Args:
             trace_key: Batch size per device key for trace lookup
+            blocking: If True, wait for trace completion and return the sampled token.
+                If False, enqueue the trace on CQ 0 and record an event so that
+                CQ 1 forced-token writes can fence against the trace's argmax output.
 
         Returns:
-            The sampled token as a torch tensor (read from device).
+            The sampled token as a torch tensor for blocking execution; otherwise ``None``.
         """
         if self.trace_id_decode[trace_key] is None:
             raise RuntimeError("Decode trace not captured. Call _capture_decode_trace first.")
 
-        ttnn.execute_trace(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0, blocking=True)
+        ttnn.execute_trace(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0, blocking=blocking)
+
+        if not blocking:
+            self._op_event = ttnn.record_event(self.mesh_device, 0)
+            return None
 
         # Read back the tiny token tensor
         sampled_token = ttnn.to_torch(
@@ -533,6 +602,119 @@ class WhisperGenerator:
         )
 
         return sampled_token
+
+    def _read_token_async(self, trace_key):
+        """Read the sampled token from device on CQ 0 (same queue as the trace).
+
+        No cross-CQ fence is needed because the read is enqueued on the compute CQ
+        and is therefore automatically ordered after the trace's argmax write.
+        """
+        token_host = ttnn.from_device(self.token_id_device[trace_key], blocking=False, cq_id=0)
+        self._read_event = ttnn.record_event(self.mesh_device, 0)
+        return token_host, self._read_event
+
+    def _write_forced_token_async(self, trace_key, forced_host, op_event):
+        """Write a forced token on CQ 1 after the CQ 0 trace finishes producing the
+        argmax output it would otherwise overwrite."""
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(forced_host, self.token_id_device[trace_key], 1)
+        self._write_event = ttnn.record_event(self.mesh_device, 1)
+
+    def _enqueue_traced_decode_step(self, trace_key, iter_idx, forced_tokens_dict, batch_size):
+        """
+        Launch one on-device decode step on CQ 0 and enqueue the matching async I/O
+        (CQ 0 read of the sampled token, or CQ 1 write of a forced token) without
+        blocking the host.
+
+        Cross-CQ fences ensure ``token_id_device`` is not raced: the next trace on
+        CQ 0 waits on any in-flight CQ 1 forced write before reading the previous
+        token as input. The previous CQ 0 read (if any) needs no fence — it shares
+        a queue with the next trace and is therefore implicitly ordered. The pending
+        result is stashed in ``self._pending_token_host`` (async-read path) or
+        ``self._pending_forced_tokens`` (forced path) for later consumption via
+        ``_consume_pending_decode_token``.
+        """
+        assert (
+            self._pending_token_host is None and self._pending_forced_tokens is None
+        ), "Pending decode token must be consumed before enqueuing the next step"
+
+        # Fence CQ 0 on the previous CQ 1 forced write so the next trace doesn't
+        # read stale input while the host-to-device copy is still in flight.
+        if self._write_event is not None:
+            ttnn.wait_for_event(0, self._write_event)
+            self._write_event = None
+
+        self._execute_decode_trace(trace_key, blocking=False)
+        op_event = self._op_event
+
+        if iter_idx in forced_tokens_dict:
+            forced_val = torch.tensor([forced_tokens_dict[iter_idx]]).repeat(batch_size)
+            forced_host = ttnn.from_torch(
+                forced_val[:, None].int(),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.input_mesh_mapper,
+            )
+            self._write_forced_token_async(trace_key, forced_host, op_event)
+            self._pending_forced_tokens = forced_val
+        else:
+            token_host, _ = self._read_token_async(trace_key)
+            self._pending_token_host = token_host
+
+    def _consume_pending_decode_token(self):
+        """
+        Consume the token result launched by ``_enqueue_traced_decode_step``.
+
+        For the forced path the token value is already known on host and is returned
+        directly. For the async-read path this host-synchronizes on the CQ 0 read event
+        that was recorded at enqueue time, then pulls the token to torch. When the
+        lookahead prefetch happened at the end of the previous iteration, the read has
+        typically already completed by the time this runs (CQ 0 trace + CQ 0 read were
+        overlapping with the host post-processing of the previous token), so the
+        host-side synchronize is ~0 cost.
+        """
+        if self._pending_forced_tokens is not None:
+            next_tokens = self._pending_forced_tokens
+            self._pending_forced_tokens = None
+            return next_tokens
+        assert self._pending_token_host is not None, "No pending decode token to consume"
+        ttnn.event_synchronize(self._read_event)
+        sampled = ttnn.to_torch(self._pending_token_host, mesh_composer=self.output_mesh_composer)
+        self._pending_token_host = None
+        return sampled.reshape(-1).long()
+
+    @staticmethod
+    def _stream_incremental_texts(processor, caches, token_ids):
+        """Windowed incremental detokenization for streaming intermediate yields.
+
+        Whisper's byte-level BPE splits a multi-byte UTF-8 character (e.g. a kanji) across
+        tokens, so decoding a single token in isolation yields partial bytes that surface as
+        U+FFFD. Instead, hold unresolved trailing tokens per batch element in ``caches``
+        (a list of per-element token-id lists, mutated in place) and emit text only once the
+        decoded bytes form complete characters. Returns a list with the newly completed
+        incremental text per element ("" while a multi-byte character is still incomplete).
+
+        All batch elements are decoded in a single ``processor.batch_decode`` call so the tight
+        decode loop pays one tokenizer invocation per step rather than one per element per step.
+
+        A genuinely undecodable byte (e.g. a lone continuation byte) would otherwise be held
+        forever; cap the hold at STREAM_MAX_HOLD_TOKENS and flush the U+FFFD as-is so the stream
+        never stalls. The final result is decoded from the full ID sequence and is unaffected.
+
+        ``token_ids`` may be longer than ``caches`` (padded batch); the trailing padded entries
+        are ignored since the zip stops at the number of real (unpadded) batch elements.
+        """
+        for cache, token_id in zip(caches, token_ids):
+            cache.append(int(token_id))
+        decoded = processor.batch_decode(caches, skip_special_tokens=True)
+        results = []
+        for cache, text in zip(caches, decoded):
+            if text.endswith("\ufffd") and len(cache) <= STREAM_MAX_HOLD_TOKENS:
+                results.append("")  # incomplete multi-byte tail — keep the tokens and wait for the next one
+            else:
+                cache.clear()  # bytes form complete characters (or a never-completing tail we stop holding)
+                results.append(text)
+        return results
 
     def generate(
         self,
@@ -554,10 +736,12 @@ class WhisperGenerator:
             task: Task type ("transcribe" or "translate") (batch-homogeneous)
             prompt: Optional prompt to guide style/spelling (batch-homogeneous)
             stream_generation: Whether to stream tokens
-            return_perf_metrics: Whether to return performance metrics
+            return_perf_metrics: Whether to return a PerfMetrics alongside the transcription
 
         Returns:
-            Generated transcription and metrics
+            (transcription, avg_logprobs, no_speech_probs) when return_perf_metrics is False,
+            or (transcription, avg_logprobs, no_speech_probs, PerfMetrics) when it is True.
+            The streaming path yields the same tuples with a trailing is_final flag.
         """
         if generation_params is None:
             generation_params = [GenerationParams() for _ in range(len(current_batch))]
@@ -603,14 +787,20 @@ class WhisperGenerator:
             all_input_features.append(inputs.input_features)
 
         input_features = torch.cat(all_input_features, dim=0)
+        feature_extract_s = time.time() - start_encode
         del all_input_features
         unpadded_batch_size = input_features.shape[0]
         assert (
             unpadded_batch_size <= 2 * self.mesh_device.get_num_devices()
         ), "Only batch size (per device) 1 or 2 is supported for inference"
 
-        # Calculate audio durations for timestamp capping
-        audio_durations = self._calculate_audio_duration(current_batch) if any(return_timestamps) else None
+        # Calculate audio durations for timestamp capping. Durations are also reported as
+        # PerfMetrics.total_audio_s, so compute them unconditionally (host-side arithmetic).
+        all_audio_durations = self._calculate_audio_duration(current_batch)
+        audio_durations = all_audio_durations if any(return_timestamps) else None
+
+        # Stamped after the host-side work above so that encoder_s covers device work only.
+        start_encoder = time.time()
 
         # Compute encoder embeddings
         input_embeds = ttnn_optimized_functional_whisper.preprocess_encoder_inputs(
@@ -624,12 +814,36 @@ class WhisperGenerator:
 
         # Run encoder (optional trace replay per batch/seq-length bucket; see _run_encoder_traced_or_eager)
         trace_key = self._get_batch_size_per_device(unpadded_batch_size)
+        # encoder_trace_hit must mean "this call was a plain trace replay", i.e. steady state.
+        # That needs the bucket sampled on both sides of the call, because the helper mutates it:
+        # a capture adds the key (warm-up, pays an extra eager pass) and a failed replay pops it
+        # and falls back to eager (recovery). Requiring the key before AND after excludes both,
+        # leaving True only for a clean replay.
+        had_trace = trace_key in self.encoder_trace_state.trace_id_encoder
         encoder_output = self._run_encoder_traced_or_eager(trace_key, input_embeds)
+        encoder_trace_hit = (not self.enable_encoder_trace) or (
+            had_trace and trace_key in self.encoder_trace_state.trace_id_encoder
+        )
 
         # Copy encoder output to pre-allocated tensor
         ttnn.copy(encoder_output, self.encoder_hidden_states_per_size[trace_key])
+        # Encoder work is enqueued asynchronously on the eager and capture paths, so this
+        # synchronize is what makes encoder_s a measure of compute rather than of enqueue.
         ttnn.synchronize_device(self.mesh_device)
+        encoder_s = time.time() - start_encoder
         logger.info(f"Time to encoder states: {(time.time() - start_encode)*1000:.3f}ms")
+
+        # The feature extractor pads or truncates every item to a fixed chunk_length window
+        # (30s for Whisper), so only that much of a longer clip ever reaches the encoder. Cap
+        # per item: summing raw durations would over-report the throughput properties by the
+        # truncated remainder (a 90s clip would read 3x fast).
+        chunk_s = getattr(self.feature_extractor, "chunk_length", 30)
+        perf_metrics = PerfMetrics(
+            feature_extract_s=feature_extract_s,
+            encoder_s=encoder_s,
+            total_audio_s=sum(min(d, chunk_s) for d in all_audio_durations),
+            encoder_trace_hit=encoder_trace_hit,
+        )
 
         # Collect temperatures to try: flatten per-request temps to unique sequence
         temps_to_try = []
@@ -646,7 +860,7 @@ class WhisperGenerator:
             return self._generate_with_temperature(
                 temperature=temperature,
                 start_encode=start_encode,
-                input_features=input_features.unsqueeze(1),
+                perf_metrics=perf_metrics,
                 unpadded_batch_size=unpadded_batch_size,
                 return_perf_metrics=return_perf_metrics,
                 return_timestamps=return_timestamps,
@@ -668,7 +882,7 @@ class WhisperGenerator:
                 output = self._generate_with_temperature(
                     temperature=temperature,
                     start_encode=start_encode,
-                    input_features=input_features.unsqueeze(1),
+                    perf_metrics=perf_metrics,
                     unpadded_batch_size=unpadded_batch_size,
                     return_perf_metrics=return_perf_metrics,
                     return_timestamps=return_timestamps,
@@ -681,7 +895,7 @@ class WhisperGenerator:
 
                 # Non-streaming generation - consume the generator
                 if return_perf_metrics:
-                    result_data, avg_logprobs, no_speech_probs, ttft, throughput = next(output)
+                    result_data, avg_logprobs, no_speech_probs, attempt_perf = next(output)
                 else:
                     result_data, avg_logprobs, no_speech_probs = next(output)
 
@@ -722,7 +936,7 @@ class WhisperGenerator:
                 if all_good:
                     logger.info(f"Generation successful with temperature {temperature}")
                     if return_perf_metrics:
-                        return (result_data, avg_logprobs, no_speech_probs, ttft, throughput)
+                        return (result_data, avg_logprobs, no_speech_probs, attempt_perf)
                     else:
                         return (result_data, avg_logprobs, no_speech_probs)
 
@@ -738,7 +952,7 @@ class WhisperGenerator:
                 if avg_compression < best_quality_score:
                     best_quality_score = avg_compression
                     if return_perf_metrics:
-                        best_output = (result_data, avg_logprobs, no_speech_probs, ttft, throughput)
+                        best_output = (result_data, avg_logprobs, no_speech_probs, attempt_perf)
                     else:
                         best_output = (result_data, avg_logprobs, no_speech_probs)
 
@@ -758,8 +972,7 @@ class WhisperGenerator:
                         empty_segments,
                         torch.zeros(unpadded_batch_size),
                         torch.zeros(unpadded_batch_size),
-                        0.0,
-                        0.0,
+                        perf_metrics,
                     )
                 else:
                     return (empty_segments, torch.zeros(unpadded_batch_size), torch.zeros(unpadded_batch_size))
@@ -769,8 +982,7 @@ class WhisperGenerator:
                         [""] * unpadded_batch_size,
                         torch.zeros(unpadded_batch_size),
                         torch.zeros(unpadded_batch_size),
-                        0.0,
-                        0.0,
+                        perf_metrics,
                     )
                 else:
                     return (
@@ -783,7 +995,7 @@ class WhisperGenerator:
         self,
         temperature,
         start_encode,
-        input_features,
+        perf_metrics,
         unpadded_batch_size,
         return_perf_metrics=False,
         return_timestamps=False,
@@ -798,6 +1010,22 @@ class WhisperGenerator:
 
         Uses pre-allocated self.encoder_hidden_states instead of a passed encoder_hidden_states parameter.
         """
+        # Defensive cleanup in case a previous temperature attempt raised mid-loop before
+        # draining 2CQ state. _release_captured_traces_before_new_generation is only called
+        # at the start of each generate() call, not between temperature attempts, so we
+        # re-synchronize here to make sure CQ 1 is idle before we start enqueuing again.
+        if (
+            self._pending_token_host is not None
+            or self._pending_forced_tokens is not None
+            or self._read_event is not None
+            or self._write_event is not None
+        ):
+            ttnn.synchronize_device(self.mesh_device)
+            self._pending_token_host = None
+            self._pending_forced_tokens = None
+            self._read_event = None
+            self._write_event = None
+
         return_timestamps_for_prefix = (
             any(return_timestamps) if isinstance(return_timestamps, list) else return_timestamps
         )
@@ -821,7 +1049,6 @@ class WhisperGenerator:
 
         # When prompt is provided, the sequence becomes:
         # <|startofprev|> -> [prompt tokens] -> <|startoftranscript|> -> <|language|> -> <|task|> -> ...
-        prompt_offset = 0
         if prompt is not None:
             # Tokenize the prompt
             prompt_tokens = self.processor.tokenizer.encode(prompt, add_special_tokens=False)
@@ -859,15 +1086,22 @@ class WhisperGenerator:
         prefix_len = len(prefix_sequence)
 
         # Initialize input_ids with the full prefix sequence for proper conditioning
-        input_ids = torch.tensor([prefix_sequence]).repeat(input_features.shape[0], 1).to(torch.long)
+        input_ids = torch.tensor([prefix_sequence]).repeat(unpadded_batch_size, 1).to(torch.long)
         logits_processor = get_logits_processor(input_ids, self.config)
 
         if not self.kv_cache_per_batch_size[trace_key]:
             input_ids = self._pad_input_32(input_ids, self.config.pad_token_id).to(torch.long)
             decoder_start_values = self.generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
 
-        MAX_GEN_LEN = self.config.max_length
+        MAX_GEN_LEN = self.generation_config.max_length
+        # Collect token IDs (not per-token decoded strings) for every non-timestamp run, both
+        # streaming and non-streaming. The full ID sequence is decoded once at the end so that
+        # multi-byte UTF-8 characters (e.g. CJK) split across BPE tokens are reassembled correctly.
+        collect_output_ids = not return_timestamps_for_prefix
         output_ids = []
+        # Per-batch token buffers for windowed incremental detokenization of streaming
+        # intermediate yields (see _stream_incremental_texts). Unused in non-streaming mode.
+        stream_token_cache = [[] for _ in range(unpadded_batch_size)]
         total_decode_time = 0
         prompt_is_done = [False for _ in range(unpadded_batch_size)]
         log_probs = []  # Track log probabilities
@@ -876,17 +1110,17 @@ class WhisperGenerator:
         # Track full token sequences for timestamp extraction
         full_token_sequences = [[] for _ in range(unpadded_batch_size)] if return_timestamps_for_prefix else None
 
-        # Non-streaming mode: collect all results in a list
-        if not streaming:
-            output = [[] for _ in range(input_features.shape[0])]
         ttft = 0.0
         avg_decode_throughput = 0.0
+
+        def _perf():
+            """Combine the caller's stage timings with this attempt's decode timings."""
+            return replace(perf_metrics, ttft=ttft, decode_throughput=avg_decode_throughput)
 
         # Run prefill pass for KV cache mode to populate cache with the full forced prefix (with or without text prompt)
         # Batched path: one preprocess over full prefix (decode_pos=None) + one decoder(decoder_prefill=True).
         if self.kv_cache_per_batch_size[trace_key] and prefix_len > 1:
             logger.debug(f"Running prefill pass for {prefix_len} prefix tokens")
-            first_transcription_token = None
 
             # Full-prefix hidden states: same embedding path as multi-token decode_pos=None.
             self._reset_decode_pos(0, unpadded_batch_size)
@@ -936,7 +1170,8 @@ class WhisperGenerator:
                     .squeeze(1)
                 )
 
-            output_ids.append(first_transcription_token)
+            if collect_output_ids:
+                output_ids.append(first_transcription_token)
 
             if return_timestamps_for_prefix:
                 for batch_idx in range(unpadded_batch_size):
@@ -947,23 +1182,17 @@ class WhisperGenerator:
                     prompt_is_done[user_id] = True
 
             if streaming:
-                ttnn_transcription = self.processor.batch_decode(
-                    first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
+                ttnn_transcription = self._stream_incremental_texts(
+                    self.processor, stream_token_cache, first_transcription_token
                 )
-                current_avg_logprob = log_probs[0].unsqueeze(0) if log_probs else torch.zeros(input_features.shape[0])
-                if len(log_probs) > 1:
-                    current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
+                current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
 
                 if return_perf_metrics:
-                    yield ttnn_transcription, current_avg_logprob, no_speech_probs, ttft, 0.0, False
+                    yield ttnn_transcription, current_avg_logprob, no_speech_probs, _perf(), False
                 else:
                     yield ttnn_transcription, current_avg_logprob, no_speech_probs, False
-            else:
-                ttnn_transcription = self.processor.batch_decode(
-                    first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
-                )
-                for idx in range(input_features.shape[0]):
-                    output[idx].append(ttnn_transcription[idx])
+            # Non-streaming: nothing to decode here — the token ID was already appended to
+            # output_ids above and is decoded as part of the full sequence at the end.
 
             # Set decode position to prefix_len for generation to continue
             self._reset_decode_pos(prefix_len, unpadded_batch_size)
@@ -1015,20 +1244,32 @@ class WhisperGenerator:
                 and self.cross_attn_cache_valid
                 and i > generation_start
             ):
-                sampled_tokens_torch = self._execute_decode_trace(trace_key)
+                if self.use_2cq:
+                    # One-iteration-ahead pipeline. By the time we get here, the previous
+                    # iteration's end-of-loop prefetch (see below) has already issued trace N
+                    # plus its sampled-token read on CQ 0 (or its forced-token write on CQ 1),
+                    # overlapped with the previous iteration's host post-processing (EOS check,
+                    # tokenizer decode, streaming yield). The very first traced-2CQ iteration
+                    # has no pending state yet, so we enqueue synchronously here to seed the pipeline.
+                    if self._pending_token_host is None and self._pending_forced_tokens is None:
+                        self._enqueue_traced_decode_step(trace_key, i, forced_tokens_dict, unpadded_batch_size)
 
-                # Handle forced tokens: overwrite on-device argmax result if needed
-                if i in forced_tokens_dict:
-                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
-                    forced_host = ttnn.from_torch(
-                        next_tokens[:, None].int(),
-                        dtype=ttnn.uint32,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        mesh_mapper=self.input_mesh_mapper,
-                    )
-                    ttnn.copy_host_to_device_tensor(forced_host, self.token_id_device[trace_key])
+                    next_tokens = self._consume_pending_decode_token()
                 else:
-                    next_tokens = sampled_tokens_torch.reshape(-1).long()
+                    sampled_tokens_torch = self._execute_decode_trace(trace_key)
+
+                    # Handle forced tokens: overwrite on-device argmax result if needed
+                    if i in forced_tokens_dict:
+                        next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(unpadded_batch_size)
+                        forced_host = ttnn.from_torch(
+                            next_tokens[:, None].int(),
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=self.input_mesh_mapper,
+                        )
+                        ttnn.copy_host_to_device_tensor(forced_host, self.token_id_device[trace_key])
+                    else:
+                        next_tokens = sampled_tokens_torch.reshape(-1).long()
 
                 # Note: decode_pos already incremented inside trace (plus_one)
                 input_ids = next_tokens[:, None]
@@ -1080,7 +1321,7 @@ class WhisperGenerator:
                 next_tokens_scores = logits_processor(input_ids, next_token_logits)
 
                 if i in forced_tokens_dict:
-                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
+                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(unpadded_batch_size)
                 else:
                     next_tokens = self._sample_token(next_tokens_scores, temperature)
 
@@ -1142,7 +1383,8 @@ class WhisperGenerator:
                             torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
                         )
 
-                output_ids.append(next_tokens)
+                if collect_output_ids:
+                    output_ids.append(next_tokens)
 
                 if return_timestamps_for_prefix:
                     for batch_idx in range(unpadded_batch_size):
@@ -1169,38 +1411,67 @@ class WhisperGenerator:
                 if prompt_is_done[user_id]:
                     next_tokens[user_id] = self.config.eos_token_id
 
-            # Only output transcription tokens (skip prompt and forced prefix tokens)
-            if i >= transcription_start_pos:
-                ttnn_transcription = self.processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)
+            # 2CQ lookahead prefetch: launch the next iteration's trace + sampled-token
+            # read on CQ 0 (or forced-token write on CQ 1) now, so that they execute
+            # concurrently with the host-side tokenizer decode and streaming yield below.
+            # The next iteration will consume the result at the top of its loop body,
+            # where the host-side event_synchronize is expected to be a no-op in the
+            # steady state.
+            # Guards: only prefetch when the traced branch would otherwise run (trace
+            # captured, cross-attn cache valid), when there is at least one more decode
+            # iteration to consume it, and when EOS has not yet terminated the batch
+            # (so we never enqueue a trace whose result would be thrown away).
+            if (
+                self.use_2cq
+                and self.kv_cache_per_batch_size[trace_key]
+                and self.trace_id_decode[trace_key]
+                and self.cross_attn_cache_valid
+                and i + 1 < MAX_GEN_LEN
+                and not all(prompt_is_done)
+            ):
+                self._enqueue_traced_decode_step(trace_key, i + 1, forced_tokens_dict, unpadded_batch_size)
 
-                # Streaming mode: yield incremental results
-                if streaming:
-                    # Calculate current average log probability for each batch item
-                    if log_probs:
-                        current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
-                    else:
-                        current_avg_logprob = torch.zeros(input_features.shape[0])
+            # Only output transcription tokens (skip prompt and forced prefix tokens).
+            # Streaming mode decodes per-token to yield incremental results; non-streaming
+            # skips this entirely and decodes the full collected ID sequence once at the end.
+            if i >= transcription_start_pos and streaming:
+                ttnn_transcription = self._stream_incremental_texts(self.processor, stream_token_cache, next_tokens)
 
-                    # Use zeros for no_speech_probs if not yet calculated
-                    if no_speech_probs is None:
-                        current_no_speech_probs = torch.zeros(input_features.shape[0])
-                    else:
-                        current_no_speech_probs = no_speech_probs
-
-                    # For streaming, we yield the current transcription without timestamps
-                    # Timestamps will be processed at the end if return_timestamps=True
-                    # is_final=False indicates this is an intermediate token, not the final result
-                    if return_perf_metrics:
-                        yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, ttft, avg_decode_throughput, False
-                    else:
-                        yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, False
+                # Calculate current average log probability for each batch item
+                if log_probs:
+                    current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
                 else:
-                    # Non-streaming mode: collect results
-                    for idx in range(input_features.shape[0]):
-                        output[idx].append(ttnn_transcription[idx])
+                    current_avg_logprob = torch.zeros(unpadded_batch_size)
+
+                # Use zeros for no_speech_probs if not yet calculated
+                if no_speech_probs is None:
+                    current_no_speech_probs = torch.zeros(unpadded_batch_size)
+                else:
+                    current_no_speech_probs = no_speech_probs
+
+                # For streaming, we yield the current transcription without timestamps
+                # Timestamps will be processed at the end if return_timestamps=True
+                # is_final=False indicates this is an intermediate token, not the final result
+                if return_perf_metrics:
+                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, _perf(), False
+                else:
+                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, False
 
             if all(prompt_is_done):
                 break
+
+        # Drain any lookahead state left by the decode loop. Under the normal invariants
+        # the end-of-loop prefetch guard prevents us from breaking out with an unconsumed
+        # pending, but we defensively drain here so that an early break (EOS) cannot leak
+        # in-flight CQ 0 reads or CQ 1 writes into the next temperature attempt or generate() call.
+        if self._pending_token_host is not None or self._pending_forced_tokens is not None:
+            self._consume_pending_decode_token()
+        if self._read_event is not None:
+            ttnn.event_synchronize(self._read_event)
+            self._read_event = None
+        if self._write_event is not None:
+            ttnn.event_synchronize(self._write_event)
+            self._write_event = None
 
         total_generate_time = time.time() - start_encode
         logger.info(f"Time to first token: {(ttft*1000):.3f}ms")
@@ -1213,11 +1484,11 @@ class WhisperGenerator:
         if log_probs:
             avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
         else:
-            avg_logprob = torch.zeros(input_features.shape[0])
+            avg_logprob = torch.zeros(unpadded_batch_size)
 
         # Use zeros for no_speech_probs if not calculated
         if no_speech_probs is None:
-            no_speech_probs = torch.zeros(input_features.shape[0])
+            no_speech_probs = torch.zeros(unpadded_batch_size)
 
         # Process timestamps if requested
         if return_timestamps_for_prefix and full_token_sequences:
@@ -1247,40 +1518,42 @@ class WhisperGenerator:
             # For streaming mode, include is_final=True to mark this as the final result
             if return_perf_metrics:
                 if streaming:
-                    yield final_result, avg_logprob, no_speech_probs, ttft, avg_decode_throughput, True
+                    yield final_result, avg_logprob, no_speech_probs, _perf(), True
                 else:
-                    yield final_result, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
+                    yield final_result, avg_logprob, no_speech_probs, _perf()
             else:
                 if streaming:
                     yield final_result, avg_logprob, no_speech_probs, True
                 else:
                     yield final_result, avg_logprob, no_speech_probs
         else:
-            if streaming:
-                # For streaming without timestamps, yield final accumulated result
-                # Accumulate all tokens from output_ids
-                final_output = []
-                for batch_idx in range(unpadded_batch_size):
-                    # Collect all tokens for this batch item
-                    batch_tokens = [output_ids[i][batch_idx] for i in range(len(output_ids))]
-                    # Decode the full sequence
-                    decoded_text = self.processor.batch_decode(
-                        torch.tensor(batch_tokens).unsqueeze(0), skip_special_tokens=True
-                    )[0]
-                    final_output.append(decoded_text.strip())
+            # No timestamps: decode the full collected ID sequence once per batch item. Decoding
+            # the complete sequence (rather than per-token) is required for correctness — Whisper's
+            # byte-level BPE splits multi-byte UTF-8 characters across tokens, so per-token decoding
+            # corrupts CJK output. Shared by both streaming and non-streaming; only the yielded
+            # tuple shape differs (streaming appends an is_final flag).
+            final_output = []
+            for batch_idx in range(unpadded_batch_size):
+                # Collect all token IDs for this batch item. Trailing EOS/special tokens are
+                # stripped by skip_special_tokens=True. dtype=torch.long keeps an empty sequence
+                # (no tokens generated) decodable instead of defaulting to a float tensor.
+                batch_tokens = [output_ids[i][batch_idx] for i in range(len(output_ids))]
+                decoded_text = self.processor.batch_decode(
+                    torch.tensor(batch_tokens, dtype=torch.long).unsqueeze(0), skip_special_tokens=True
+                )[0]
+                final_output.append(decoded_text.strip())
 
+            if streaming:
                 # is_final=True indicates this is the final batch-decoded result
                 if return_perf_metrics:
-                    yield final_output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput, True
+                    yield final_output, avg_logprob, no_speech_probs, _perf(), True
                 else:
                     yield final_output, avg_logprob, no_speech_probs, True
             else:
-                # Join the collected tokens into final text and strip leading/trailing whitespace
-                output = ["".join(tokens).strip() for tokens in output]
                 if return_perf_metrics:
-                    yield (output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
+                    yield (final_output, avg_logprob, no_speech_probs, _perf())
                 else:
-                    yield (output, avg_logprob, no_speech_probs)
+                    yield (final_output, avg_logprob, no_speech_probs)
 
     def cleanup(self):
         """Release trace resources."""

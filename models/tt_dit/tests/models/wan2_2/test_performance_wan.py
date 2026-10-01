@@ -13,13 +13,21 @@ from PIL import Image
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
+from models.tt_dit.pipelines.events import profiler_event_callback
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.utils.video import export_to_video
 
-from ....utils.test import line_params, ring_params, ring_params_8k
+from ....utils.test import (
+    is_global_rank_zero,
+    line_params_req_exact_devices,
+    ring_params_8k_req_exact_devices,
+    ring_params_req_exact_devices,
+)
 
-DEVICE_PARAMS = {"trace_region_size": 120000000}
+DEVICE_PARAMS = {"trace_region_size": 150000000}
 
 # BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
 BH_4X8_LINEAR_EXPECTED_METRICS_SLACK = 1.10
@@ -57,32 +65,44 @@ def t2v_metrics(mesh_device, height):
                 "total": 850.0,
             }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
-        expected_metrics = {
-            "encoder": 0.1,
-            "denoising": 163.0,
-            "vae": 18.2,
-            "total": 192.0,
-        }
-    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
+        # 30% headroom over measured, 100% on encoder, for now.
+        # Ring measurements only; linear needs remeasuring.
         if is_blackhole():
             expected_metrics = {
-                "encoder": 0.1,
-                "denoising": 140.0,
-                "vae": 2.0,
-                "total": 142.1,
+                "encoder": 0.21,
+                "denoising": 75.0,
+                "vae": 0.42,
+                "total": 76.0,
             }
         else:
             expected_metrics = {
-                "encoder": 0.1,
-                "denoising": 370.0,
-                "vae": 7.0,
-                "total": 375.0,
+                "encoder": 0.23,
+                "denoising": 142.0,
+                "vae": 1.55,
+                "total": 144.0,
+            }
+    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
+        # 30% headroom over measured, 100% on encoder, for now.
+        # Ring measurements only; linear needs remeasuring.
+        if is_blackhole():
+            expected_metrics = {
+                "encoder": 0.22,
+                "denoising": 205.0,
+                "vae": 0.85,
+                "total": 206.0,
+            }
+        else:
+            expected_metrics = {
+                "encoder": 0.22,
+                "denoising": 449.0,
+                "vae": 3.4,
+                "total": 452.0,
             }
     elif tuple(mesh_device.shape) == (2, 2):
         assert height == 480, "2x2 is only supported for 480p"
         assert is_blackhole(), "2x2 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 0.06,
+            "encoder": 0.12,
             "denoising": 680.0,
             "vae": 60.0,
             "total": 760.0,
@@ -91,7 +111,7 @@ def t2v_metrics(mesh_device, height):
         assert is_blackhole(), "4x32 is only supported for blackhole"
         assert height == 720, "4x32 is only supported for 720p"
         expected_metrics = {
-            "encoder": 0.5,
+            "encoder": 0.54,
             "denoising": 75.0,
             "vae": 5.0,
             "total": 80.5,
@@ -124,20 +144,33 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, quant_config_name",
     [
         # FSDP is needed for 2x2 with encoder now on device
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
         # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
         # WH on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params_req_exact_devices, ttnn.Topology.Ring, True, None],
         # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_8k, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_8k_req_exact_devices, ttnn.Topology.Ring, False, None],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params_8k}, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
+        [
+            (4, 32),
+            (4, 32),
+            1,
+            0,
+            2,
+            False,
+            {**DEVICE_PARAMS, **ring_params_8k_req_exact_devices},
+            ttnn.Topology.Ring,
+            False,
+            None,
+        ],
+        # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, "all_bf8_lofi"],
     ],
     ids=[
         "2x2_sp0tp1",
@@ -147,6 +180,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
         "ring_bh_4x8_sp1tp0",
         "line_bh_4x8_sp1tp0",
         "bh_4x32sp1tp0",
+        "2x4_sp0tp1_bf8_lofi",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -184,6 +218,7 @@ def test_pipeline_performance(
     is_ci_env: bool,
     galaxy_type: str,
     is_fsdp: bool,
+    quant_config_name: str | None,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
@@ -193,7 +228,7 @@ def test_pipeline_performance(
     # Skip 4U.
     if galaxy_type == "4U":
         # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
-        if is_ci_env:
+        if is_ci_env and is_global_rank_zero():
             with benchmark_profiler("run", iteration=0):
                 pass
 
@@ -204,6 +239,9 @@ def test_pipeline_performance(
                 ml_model_name="empty_run",
             )
         pytest.skip("4U is not supported for this test")
+
+    if (not is_fsdp) and (not ttnn.device.is_blackhole()):
+        pytest.skip("FSDP=False unsupported on non-blackhole systems due to memory constraints")
 
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -230,18 +268,36 @@ def test_pipeline_performance(
         mesh_device, width, height, model_type, topology
     )
 
-    pipeline = pipeline_cls.create_pipeline(
-        mesh_device=mesh_device,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        num_links=num_links,
-        dynamic_load=dynamic_load,
-        topology=topology,
-        is_fsdp=is_fsdp,
-        height=height,
-        width=width,
-        num_frames=num_frames,
+    h_factor = tuple(mesh_device.shape)[tp_axis]
+    w_factor = tuple(mesh_device.shape)[sp_axis]
+    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(w_factor, sp_axis), tp=(h_factor, tp_axis))
+    vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(h_factor, tp_axis), width=(w_factor, sp_axis))
+    encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
+
+    pipeline = pipeline_cls(
+        device=mesh_device,
+        config=WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            encoder_parallel_config=encoder_parallel_config,
+            num_links=num_links,
+            dynamic_load=dynamic_load,
+            topology=topology,
+            is_fsdp=is_fsdp,
+            model_type=model_type,
+            checkpoint_name=(
+                "Wan-AI/Wan2.2-I2V-A14B-Diffusers" if model_type == "i2v" else "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+            ),
+            height=height,
+            width=width,
+            num_frames=num_frames,
+        ),
     )
+
+    if quant_config_name is not None:
+        qc = getattr(QuantConfig, quant_config_name)()
+        set_quant_config(pipeline, qc)
 
     # Warmup run (not timed)
     logger.info("Running warmup iteration...")
@@ -250,11 +306,8 @@ def test_pipeline_performance(
         if traced:
             with torch.no_grad():
                 pipeline(
-                    prompt=prompts[0],
+                    prompts=[prompts[0]],
                     image_prompt=image_prompt,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
                     num_inference_steps=2,  # Small number of steps to reduce test time.
                     traced=traced,
                 )
@@ -275,15 +328,11 @@ def test_pipeline_performance(
         prompt_idx = (i + 1) % len(prompts)
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
-                result = pipeline(
-                    prompt=prompts[prompt_idx],
+                frames = pipeline(
+                    prompts=[prompts[prompt_idx]],
                     image_prompt=image_prompt,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
                     num_inference_steps=num_inference_steps,
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
+                    on_event=profiler_event_callback(benchmark_profiler, i),
                     seed=42,
                     traced=traced,
                     output_type="uint8",
@@ -293,11 +342,6 @@ def test_pipeline_performance(
         # Check output
 
     pipeline.release_traces()
-
-    if hasattr(result, "frames"):
-        frames = result.frames
-    else:
-        frames = result[0] if isinstance(result, tuple) else result
 
     print(f"✓ Inference completed successfully")
     print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
@@ -378,8 +422,9 @@ def test_pipeline_performance(
         "total": statistics.mean(total_times),
     }
 
-    if is_ci_env:
-        # In CI, dump a performance report
+    if is_ci_env and is_global_rank_zero():
+        # In CI, dump a performance report from rank 0 only: all ranks time the same
+        # collective run, and concurrent saves race on the shared output file.
         benchmark_data = BenchmarkData()
         for iteration in range(num_perf_runs):
             for step_name in ["encoder", "denoising", "vae", "run"]:
@@ -395,10 +440,11 @@ def test_pipeline_performance(
             (2, 2): "BH_QB",
             (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
+            (4, 32): "BH_QG",
         }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type=device_name_map[mesh_shape],
+            run_type=device_name_map[mesh_shape] + ("_quant" if quant_config_name else ""),
             ml_model_name="Wan2.2",
             batch_size=1,
             config_params={

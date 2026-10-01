@@ -70,7 +70,7 @@ runs:
       shell: bash
       run: |
         WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
-        ARTIFACTS=$(gh api repos/${{ github.repository }}/actions/runs/"$WORKFLOW_RUN_ID"/artifacts --jq '.artifacts[].name' 2>&1)
+        ARTIFACTS=$(gh api --paginate repos/${{ github.repository }}/actions/runs/"$WORKFLOW_RUN_ID"/artifacts --jq '.artifacts[].name' 2>&1)
 
         if [ $? -ne 0 ]; then
           echo "ERROR: Failed to list artifacts for run $WORKFLOW_RUN_ID"
@@ -107,7 +107,7 @@ runs:
         fi
 
         # Find wheel artifact
-        WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "ttnn-dist|ttnn" | head -1 || true)
+        WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "^ttnn-dist" | head -1 || true)
 
         # Find packages artifact (optional)
         PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)

@@ -19,24 +19,26 @@ void bind_rand_operation(nb::module_& mod) {
     std::string doc =
         R"doc(
         Generates a tensor with the given shape, filled with random values from a uniform distribution.
-        based on the specified data type:
+        Output semantics depend on the specified data type:
 
-        - DataType.float32 / bfloat16 / bfloat4_b / bfloat8_b:
-            Floating-point values in range [0.0, 1.0)
+        - DataType.float32 / bfloat16:
+            Values are generated natively in the half-open range [`low`, `high`).
 
-        - Integer data types:
-            Not supported for uniform random generation.
+        - DataType.bfloat4_b / bfloat8_b / int8 / int32 / uint16 / uint32:
+            These legacy outputs are generated in float32 and then typecast. Typecast rounding applies, so the
+            converted values are not guaranteed to remain in [`low`, `high`). Integer output is not a discrete
+            uniform distribution. DataType.uint8 and fp8_e4m3 are not supported.
 
         Args:
-            shape (list[int]) - a list of integers defining the shape of the output tensor.
+            shape (list[int]): A list of integers defining the shape of the output tensor.
+            device (ttnn.Device | ttnn.MeshDevice): The device on which the tensor will be allocated.
 
-        Keyword args:
-            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
-            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to ttnn.bfloat16.
-            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to ttnn.TILE_LAYOUT.
+        Keyword Args:
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `ttnn.bfloat16`.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `ttnn.TILE_LAYOUT`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
-            low (float, optional): The lower bound of the range (inclusive).
-            high (float, optional): The upper bound of the range (exclusive).
+            low (float, optional): The lower bound of the range (inclusive). Defaults to 0.0.
+            high (float, optional): The upper bound of the range (exclusive). Defaults to 1.0.
             seed (int, optional): An optional seed to initialize the random number generator
                                 for reproducible results. Defaults to 0.
             mesh_mapper (ttnn.MeshMapperConfig, optional): Distribution strategy for multi-device tensors.
@@ -47,6 +49,19 @@ void bind_rand_operation(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT8, INT32, UINT16, UINT32
+                 - TILE, ROW_MAJOR
+
+            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
         )doc";
 
     ttnn::bind_function<"rand">(

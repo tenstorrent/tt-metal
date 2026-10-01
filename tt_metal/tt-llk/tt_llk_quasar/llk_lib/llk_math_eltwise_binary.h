@@ -12,6 +12,16 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
+/**
+ * @brief Build the encoded FPU instruction (ELWADD/ELWSUB/ELWMUL) for the given binary op type.
+ *
+ * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam CLR_SRC: Source-clear mode applied by the instruction (p_setrwc/p_elwise CLR_* value)
+ * @tparam SRCB_BROADCAST_TYPE: SrcB broadcast mode (p_elwise SRCB_* value)
+ * @tparam ADDR_MOD: Address-mod slot used by the instruction
+ * @param EN_DST_ACC: Enable accumulation into the destination register
+ * @return Encoded TT_OP instruction word.
+ */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, std::uint8_t CLR_SRC, std::uint8_t SRCB_BROADCAST_TYPE, std::uint8_t ADDR_MOD>
 inline std::uint32_t eltwise_binary_func(std::uint8_t EN_DST_ACC)
 {
@@ -32,8 +42,22 @@ inline std::uint32_t eltwise_binary_func(std::uint8_t EN_DST_ACC)
 //----------------------
 // Direct Indexing Method
 //----------------------
+/**
+ * @brief Emit the direct-indexing FPU instruction (ELWADDDI/ELWSUBDI/ELWMULDI) for the given binary op type.
+ *
+ * Direct indexing passes explicit SrcA/SrcB/Dest addresses instead of relying on address-mod increments.
+ *
+ * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @param CLR_SRC: Source-clear mode applied by the instruction (p_setrwc/p_elwise CLR_* value)
+ * @param EN_DST_ACCUM: Enable accumulation into the destination register
+ * @param SRCB_BROADCAST_TYPE: SrcB broadcast mode (p_elwise SRCB_* value)
+ * @param SRCB_ADDR: SrcB read address
+ * @param SRCA_ADDR: SrcA read address
+ * @param ADDR_MOD: Address-mod slot used by the instruction
+ * @param DST_ADDR: Destination write address
+ */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE>
-inline std::uint32_t eltwise_di_binary_func(
+inline void eltwise_di_binary_func(
     std::uint8_t CLR_SRC,
     std::uint8_t EN_DST_ACCUM,
     std::uint8_t SRCB_BROADCAST_TYPE,
@@ -45,24 +69,28 @@ inline std::uint32_t eltwise_di_binary_func(
     std::uint8_t INSTR_MOD = ((SRCB_BROADCAST_TYPE << 0) | (EN_DST_ACCUM << 2));
     if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWADD)
     {
-        return TT_ELWADDDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
+        TT_ELWADDDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
     }
     else if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWSUB)
     {
-        return TT_ELWSUBDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
+        TT_ELWSUBDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
     }
     else
     {
-        return TT_ELWMULDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
+        TT_ELWMULDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
     }
 }
 
 //----------------------
 /**
- * @brief Sets up mop config for elementwise binary operations
+ * @brief Sets up mop config for elementwise binary operations.
+ *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
+ * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
  */
 template <
     EltwiseBinaryType ELTWISE_BINARY_TYPE,
@@ -74,13 +102,13 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
         (reuse_dest != EltwiseBinaryReuseDestType::NONE) ? tensor_shape.face_r_dim : (tensor_shape.total_num_faces() * tensor_shape.face_r_dim);
     constexpr bool high_fidelity = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
-    // For reuse_dest + Elwmul we need dest accumulation (dest = old_dest + srcA*srcB) ; LoFi alone sets EN_DST_ACC=0.
+    // HiFi phases accumulate partial products, including with dest reuse; overwrite mode handles the first phase separately.
     const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : (high_fidelity ? 1u : 0u);
 
     constexpr std::uint8_t addrmod_fid    = high_fidelity ? ADDR_MOD_2 : ADDR_MOD_0;
     const std::uint32_t eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, p_elwise::SRCB_NO_BCAST, addrmod_fid>(EN_DST_ACC);
 
-    const std::uint32_t MOP_OUTER_LOOP     = (rows_per_mop_run >> math_rows_log2(ELTWISE_MATH_ROWS));
+    const std::uint32_t MOP_OUTER_LOOP     = (rows_per_mop_run >> rows_log2(ELTWISE_MATH_ROWS));
     constexpr std::uint32_t MOP_INNER_LOOP = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
 
     const std::uint32_t eltwise_binary_op_clr_valid =
@@ -90,6 +118,11 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
 
     if (high_fidelity)
     {
+        if (!acc_to_dest)
+        {
+            temp.set_start_op(eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2>(0));
+            temp.set_inner_loop_len(MOP_INNER_LOOP - 1);
+        }
         const std::uint32_t eltwise_binary_op_clr_fidelity =
             eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0>(EN_DST_ACC);
         temp.set_last_inner_loop_instr(eltwise_binary_op_clr_fidelity); // clear math fidelity
@@ -101,13 +134,23 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
 //----------------------
 // Direct Indexing Method
 //----------------------
+/**
+ * @brief Sets up mop config for elementwise binary operations using the direct-indexing instruction variant.
+ *
+ * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
+ * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
+ */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_di_binary_mop_config_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     const std::uint32_t total_num_rows_per_tile = tensor_shape.total_num_faces() * tensor_shape.face_r_dim;
-    const std::uint32_t REPLAY_BUF_LEN          = (total_num_rows_per_tile >> math_rows_log2(ELTWISE_MATH_ROWS));
-    const std::uint32_t MOP_INNER_LOOP          = to_underlying(MATH_FIDELITY_TYPE) + 1;
-    constexpr bool high_fidelity                = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    // One ELW instruction covers ELTWISE_MATH_ROWS rows, so a tile with fewer rows than that still needs one.
+    const std::uint32_t REPLAY_BUF_LEN     = ((total_num_rows_per_tile + ELTWISE_MATH_ROWS - 1) >> rows_log2(ELTWISE_MATH_ROWS));
+    constexpr std::uint32_t MOP_INNER_LOOP = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
+    constexpr bool high_fidelity           = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
     const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : static_cast<std::uint32_t>(high_fidelity);
 
@@ -168,8 +211,10 @@ inline void _llk_math_eltwise_di_binary_mop_config_(const ckernel::TensorShape& 
 //----------------------
 
 /**
- * @brief Sets up addrmods for elementwise binary operations
- * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
+ * @brief Sets up addrmods for elementwise binary operations.
+ *
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_addrmod_()
@@ -197,6 +242,12 @@ inline void _llk_math_eltwise_binary_addrmod_()
 //----------------------
 // Direct Indexing Method
 //----------------------
+/**
+ * @brief Sets up addrmods for elementwise binary operations using the direct-indexing instruction variant.
+ *
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_di_binary_addrmod_()
 {
@@ -213,20 +264,30 @@ inline void _llk_math_eltwise_di_binary_addrmod_()
 
 //----------------------
 /**
- * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB
- * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
+ * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB.
+ *
+ * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register.
+ *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam ENABLE_DIRECT_INDEXING: Enable the direct-indexing instruction variant
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
+ * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
+ * @note On the unpack thread (T0): for reuse_dest == NONE pair with @ref _llk_unpack_binary_operands_init_; for DEST_TO_SRCA/DEST_TO_SRCB pair with
+ *       @ref _llk_unpack_unary_operand_init_ (the dummy-dvalid path that lets MOVD2A/B fill the reused source register). On the pack thread, pair with
+ *       @ref _llk_pack_init_ (T2).
+ * @note @ref _llk_math_eltwise_binary_ runs the configured op with matching template args.
  */
 template <
     EltwiseBinaryType ELTWISE_BINARY_TYPE,
     ckernel::MathFidelity MATH_FIDELITY_TYPE,
     EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool EN_DI                            = false>
+    bool ENABLE_DIRECT_INDEXING           = false>
 inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
-    if constexpr (EN_DI)
+    if constexpr (ENABLE_DIRECT_INDEXING)
     {
         _llk_math_eltwise_di_binary_addrmod_<MATH_FIDELITY_TYPE>();
         _llk_math_eltwise_di_binary_mop_config_<ELTWISE_BINARY_TYPE, MATH_FIDELITY_TYPE>(tensor_shape, acc_to_dest);
@@ -242,35 +303,36 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
         addr_mod_t {}.set(ADDR_MOD_3);
     }
 
+    // Each dest tile uses its total face rows, but takes at least one full face.
+    _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));
+
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
 /**
- * @brief Perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB
- * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
- * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB.
- * The MOVD2A/B instruction copies a face from dest to the source register before each MOP run.
- * @param tile_idx: Tile index into the destination register.
- * If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in full mode
- * If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @brief Perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB.
+ *
+ * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register.
+ *
+ * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB. The MOVD2A/B instruction copies a face from dest to the source register
+ * before each MOP run, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
+ * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
+ * @note Call @ref _llk_math_eltwise_binary_init_ with matching template args before this function.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckernel::TensorShape& tensor_shape, const bool clear_in_fp32_mode = false)
+inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckernel::TensorShape& tensor_shape)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_by_rows_(tile_idx);
 
     if constexpr (reuse_dest != EltwiseBinaryReuseDestType::NONE)
     {
-        [[maybe_unused]] auto tile_start = tile_idx * tensor_shape.total_num_faces();
         for (std::uint32_t face_num = 0; face_num < tensor_shape.total_num_faces(); face_num++)
         {
             eltwise_binary_reuse_dest_as_src<reuse_dest>();
-            if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL)
-            {
-                // ELWMUL needs HiFi (therefore dest_acc). Clear dest face-by-face when reusing dest as srcA/B
-                TT_ZEROACC(p_zeroacc::CLR_16, clear_in_fp32_mode, 0, ADDR_MOD_3, tile_start + face_num);
-            }
             ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
         }
     }

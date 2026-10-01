@@ -45,8 +45,10 @@ auto get_tt_l1_ptr_based_on_data_format(const uint32_t addr) {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     } else if constexpr (data_format == DataFormat::Int32) {
         return reinterpret_cast<volatile tt_l1_ptr int32_t*>(addr);
+#ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
     } else if constexpr (data_format == DataFormat::UInt32) {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+#endif
     } else {
         // We need a value-dependent expression (gcc-12) that is not
         // tautologically false (gcc-15)
@@ -85,13 +87,44 @@ auto get_default_value() {
         return uint32_t{NEG_INF_FLOAT32};
     } else if constexpr (data_format == DataFormat::Int32) {
         return int32_t{NEG_INF_INT32};
+#ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
     } else if constexpr (data_format == DataFormat::UInt32) {
         return uint32_t{MIN_UINT32};
+#endif
     } else {
         // We need a value-dependent expression (gcc-12) that is not
         // tautologically false (gcc-15)
         static_assert(data_format == DataFormat::Float16_b, "Unsupported data format");
     }
+}
+
+/*
+ * argmax's ordering policy, matching torch.argmax:
+ *   - a NaN outranks every number,
+ *   - a NaN already held is never displaced, so the FIRST NaN's index wins,
+ *   - +0.0 compares equal to -0.0, so the lower index wins.
+ */
+inline bool argmax_bfloat16_greater(uint16_t a, uint16_t b) {
+    const bool a_is_nan = (a & BFLOAT16_EXPONENT_MASK) == BFLOAT16_EXPONENT_MASK && (a & BFLOAT16_MANTISSA_MASK) != 0;
+    const bool b_is_nan = (b & BFLOAT16_EXPONENT_MASK) == BFLOAT16_EXPONENT_MASK && (b & BFLOAT16_MANTISSA_MASK) != 0;
+    if (a_is_nan || b_is_nan) {
+        return a_is_nan && !b_is_nan;
+    }
+    // bfloat16_greater orders +0.0 above -0.0; argmax needs them equal.
+    if ((a & BFLOAT16_MAGNITUDE_MASK) == 0 && (b & BFLOAT16_MAGNITUDE_MASK) == 0) {
+        return false;
+    }
+    return bfloat16_greater(a, b);
+}
+
+inline bool argmax_float32_greater(uint32_t a, uint32_t b) {
+    const bool a_is_nan = (a & FLOAT32_EXPONENT_MASK) == FLOAT32_EXPONENT_MASK && (a & FLOAT32_MANTISSA_MASK) != 0;
+    const bool b_is_nan = (b & FLOAT32_EXPONENT_MASK) == FLOAT32_EXPONENT_MASK && (b & FLOAT32_MANTISSA_MASK) != 0;
+    if (a_is_nan || b_is_nan) {
+        return a_is_nan && !b_is_nan;
+    }
+    // float32_greater already treats +0.0 and -0.0 as equal; its NaN branch is unreachable from here.
+    return float32_greater(a, b);
 }
 
 /**
@@ -112,7 +145,7 @@ inline uint32_t calculate_argmax_index(
     const uint32_t i,
     const uint32_t inner_dim_units,
     const uint32_t red_dim_units) {
-    return reduce_all ? (k * inner_dim_units * red_dim_units + j * red_dim_units + i) : i;
+    return reduce_all ? ((k * inner_dim_units * red_dim_units) + (j * red_dim_units) + i) : i;
 }
 
 /**
@@ -137,16 +170,17 @@ inline void update_max_if_greater(
 }
 
 /**
- * @brief Compares values from a circular buffer and updates the maximum value and its index for argmax operation.
+ * @brief Compares values from a source L1 buffer and updates the maximum value and its index for argmax operation.
  *
- * This template function reads a value from the specified circular buffer address and compares it with the current
+ * This template function reads a value from the specified source L1 buffer address and compares it with the current
  * maximum value. If the new value is greater, it updates both the maximum value and its corresponding index.
  * The comparison logic is specialized for different data formats using compile-time branching.
  *
  * @tparam data_format The data format type (Float16_b, Float32, UInt16, Int32, UInt32) that determines
  *                     the value type and comparison method to use
  *
- * @param src_cb_addr Address of the source circular buffer containing the input values
+ * @param src_l1_addr L1 address of the source buffer holding the input values. Callers pass either a
+ *                    DataflowBuffer or a legacy CircularBuffer pointer, so this stays buffer-neutral.
  * @param max_val Reference to the current maximum value that may be updated if a larger value is found
  * @param max_idx Reference to the index of the current maximum value that may be updated
  * @param i Index within the reduction dimension (inner-most index)
@@ -163,7 +197,7 @@ inline void update_max_if_greater(
  */
 template <DataFormat data_format>
 void compare_values(
-    const uint32_t src_cb_addr,
+    const uint32_t src_l1_addr,
     decltype(get_default_value<data_format>())& max_val,
     uint32_t& max_idx,
     const uint32_t i,
@@ -172,20 +206,22 @@ void compare_values(
     const uint32_t red_dim_units,
     bool reduce_all,
     uint32_t inner_dim_units) {
-    auto in_vals = get_tt_l1_ptr_based_on_data_format<data_format>(src_cb_addr);
+    auto in_vals = get_tt_l1_ptr_based_on_data_format<data_format>(src_l1_addr);
     auto val = in_vals[i];
     const uint32_t index = calculate_argmax_index(reduce_all, k, j, i, inner_dim_units, red_dim_units);
 
     if constexpr (data_format == DataFormat::Float16_b) {
-        update_max_if_greater(max_val, max_idx, val, index, bfloat16_greater);
+        update_max_if_greater(max_val, max_idx, val, index, argmax_bfloat16_greater);
     } else if constexpr (data_format == DataFormat::Float32) {
-        update_max_if_greater(max_val, max_idx, val, index, float32_greater);
+        update_max_if_greater(max_val, max_idx, val, index, argmax_float32_greater);
     } else if constexpr (data_format == DataFormat::UInt16) {
         update_max_if_greater(max_val, max_idx, val, index, [](auto a, auto b) { return a > b; });
     } else if constexpr (data_format == DataFormat::Int32) {
         update_max_if_greater(max_val, max_idx, val, index, int32_greater);
+#ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
     } else if constexpr (data_format == DataFormat::UInt32) {
         update_max_if_greater(max_val, max_idx, val, index, [](auto a, auto b) { return a > b; });
+#endif
     } else {
         // We need a value-dependent expression (gcc-12) that is not
         // tautologically false (gcc-15)
@@ -213,8 +249,8 @@ void compare_values(
 template <DataFormat data_format, typename ValueType, typename CompareFunc>
 inline void process_core_data(
     const uint32_t inner_idx,
-    volatile tt_l1_ptr ValueType* i_red_vals,
-    volatile tt_l1_ptr uint32_t* i_red_idxs,
+    const volatile tt_l1_ptr ValueType* i_red_vals,
+    const volatile tt_l1_ptr uint32_t* i_red_idxs,
     decltype(get_default_value<data_format>())& max_val,
     uint32_t& max_idx,
     CompareFunc compare_func) {
@@ -223,7 +259,8 @@ inline void process_core_data(
     if (compare_func(val, max_val)) {
         max_idx = i_red_idxs[inner_idx];
         max_val = val;
-    } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
+    } else if (!compare_func(max_val, val) && (i_red_idxs[inner_idx] < max_idx)) {
+        // Ties pick the lower index: cores merge in core-id order, and distinct NaNs or +/-0.0 tie without equal bits.
         max_idx = i_red_idxs[inner_idx];
     }
 }
@@ -261,11 +298,11 @@ inline void process_value_comparison(
     const uint32_t red_dim_units,
     CompareFunc compare_func) {
     if (compare_func(val, max_val)) {
-        auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+        auto full_idx = (outer_idx * inner_dim_units * red_dim_units) + (j * red_dim_units) + i;
         max_idx = reduce_all ? full_idx : i;
         max_val = val;
     } else if (val == max_val) {
-        auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+        auto full_idx = (outer_idx * inner_dim_units * red_dim_units) + (j * red_dim_units) + i;
         max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
     }
 }

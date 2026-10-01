@@ -7,7 +7,7 @@ import numpy as np
 from loguru import logger
 
 
-def get_atol_rtol_pcc(golden, calculated):
+def get_atol_rtol_pcc(golden, calculated, rtol=1e-05, atol=1e-04):
     if golden.is_complex() and calculated.is_complex():
         golden = torch.view_as_real(golden.clone())
         calculated = torch.view_as_real(calculated.clone())
@@ -32,62 +32,56 @@ def get_atol_rtol_pcc(golden, calculated):
             logger.error("One tensor is all nan, the other is not.")
             return 0.0
 
-        # One tensor is all zero, the other is not
-        if torch.any(golden.bool()) != torch.any(calculated.bool()):
-            logger.warning("One tensor is all zero")
-            return 0.0
-
         # if torch.any(torch.isinf(golden)) or torch.any(torch.isinf(calculated)):
         #    raise RuntimeError(f"Tensor overflow to infinity: \n{golden}\n{calculated}")
 
         # if torch.any(torch.isneginf(golden)) or torch.any(torch.isneginf(calculated)):
         #    raise RuntimeError(f"Tensor overflow to negative infinity: \n{golden}\n{calculated}")
 
-        else:
-            # For now, mask all infs and nans so that we check the rest... TODO
-            golden = golden.clone()
-            golden[
-                torch.logical_or(
-                    torch.isnan(golden),
-                    torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-                )
-            ] = 0
-            calculated = calculated.clone()
-            calculated[
-                torch.logical_or(
-                    torch.isnan(calculated),
-                    torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-                )
-            ] = 0
-
-            if torch.equal(golden, calculated):
-                return 1.0
-
-            if golden.dtype == torch.bfloat16:
-                golden = golden.type(torch.float32)
-                calculated = calculated.type(torch.float32)
-
-            # Single element case
-            if golden.numel() == 1:
-                return float(torch.equal(golden, calculated))
-
-            # If both tensors are constant
-            if torch.max(golden) == torch.min(golden) and torch.max(calculated) == torch.min(calculated):
-                return torch.isclose(torch.max(golden), torch.max(calculated)).item()
-
-            cal_pcc = np.ma.corrcoef(
-                np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-                np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
+        # For now, mask all infs and nans so that we check the rest... TODO
+        golden = golden.clone()
+        golden[
+            torch.logical_or(
+                torch.isnan(golden),
+                torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
             )
-            # Remove correlation coefficient with self (typically always 1.0)
-            mask = np.ones(cal_pcc.shape, dtype=bool)
-            np.fill_diagonal(mask, 0)
-            cal_pcc = np.min(cal_pcc[mask])
+        ] = 0
+        calculated = calculated.clone()
+        calculated[
+            torch.logical_or(
+                torch.isnan(calculated),
+                torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
+            )
+        ] = 0
 
-            if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-                return 1.0
+        if torch.equal(golden, calculated):
+            return 1.0
 
-            return cal_pcc
+        if golden.dtype == torch.bfloat16:
+            golden = golden.type(torch.float32)
+            calculated = calculated.type(torch.float32)
+
+        # Single element or constant tensor: PCC is undefined. Fall back to allclose
+        # using the caller's tolerances so relaxed-tolerance callers aren't penalised.
+        if golden.numel() == 1:
+            return float(torch.allclose(golden, calculated, rtol=rtol, atol=atol))
+
+        if torch.max(golden) == torch.min(golden) or torch.max(calculated) == torch.min(calculated):
+            logger.warning("One or both tensors are constant (zero std dev). PCC undefined; falling back to allclose.")
+            return float(torch.allclose(golden, calculated, rtol=rtol, atol=atol))
+
+        cal_pcc = np.ma.corrcoef(
+            np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
+            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
+        )
+        # Read off-diagonal directly to avoid diagonal contamination.
+        cal_pcc = cal_pcc[0, 1]
+
+        if isinstance(cal_pcc, np.ma.core.MaskedConstant) or np.isnan(float(cal_pcc)):
+            logger.warning("PCC returned NaN/masked. Falling back to allclose.")
+            return float(torch.allclose(golden, calculated, rtol=rtol, atol=atol))
+
+        return cal_pcc
 
     cal_pcc = get_pcc(golden, calculated)
 
@@ -199,7 +193,7 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
-    _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden, calculated)
+    _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden, calculated, rtol=rtol, atol=atol)
     passing = True
     allclose_passing = torch.allclose(golden, calculated, rtol, atol, True)
     passing &= allclose_passing

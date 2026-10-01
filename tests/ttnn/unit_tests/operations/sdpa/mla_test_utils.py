@@ -13,52 +13,75 @@ from models.common.utility_functions import nearest_y
 import ttnn
 from loguru import logger
 import pytest
+from ttnn.operations.transformer_golden import (
+    scaled_dot_product_attention_reference,
+    scaled_dot_product_attention_reference_prefill,
+)
 
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 
 
-def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_len, scale, is_causal=True):
-    b, nh, _, _ = Q.shape
-    _, nkv, _, _ = K.shape
+def comp_pcc_lowmem(golden, calculated, pcc=0.99, chunk=1 << 23):
+    """
+    Memory-frugal drop-in for comp_pcc on very large tensors.
 
-    attn_mask = None
-    if is_causal:
-        attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
-        for i in range(b):
-            start_idx = start_indices[i]
-            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+    Computes the same Pearson correlation coefficient as comp_pcc, but in a
+    chunked two-pass scan instead of np.ma.corrcoef (which flattens to float64
+    and allocates several full-size temporaries, ~16x the input — enough to
+    OOM-kill the CI host on the largest prefill outputs). Non-finite elements
+    are excluded pairwise, matching np.ma.masked_invalid. Returns
+    (passing, output_str) so it can substitute for comp_pcc directly.
+    """
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
+    g = golden.detach().reshape(-1)
+    c = calculated.detach().reshape(-1)
+    n = g.numel()
+
+    # Pass 1: means over jointly-finite elements.
+    sum_g = sum_c = 0.0
+    count = 0
+    for i in range(0, n, chunk):
+        gc = g[i : i + chunk].float()
+        cc = c[i : i + chunk].float()
+        m = torch.isfinite(gc) & torch.isfinite(cc)
+        gc, cc = gc[m], cc[m]
+        sum_g += gc.sum().item()
+        sum_c += cc.sum().item()
+        count += gc.numel()
+
+    if count == 0:
+        return True, "PCC: 1.0 (no finite elements)"
+
+    mean_g = sum_g / count
+    mean_c = sum_c / count
+
+    # Pass 2: covariance and per-tensor variance from the centered values.
+    cov = var_g = var_c = 0.0
+    for i in range(0, n, chunk):
+        gc = g[i : i + chunk].float()
+        cc = c[i : i + chunk].float()
+        m = torch.isfinite(gc) & torch.isfinite(cc)
+        gc = gc[m] - mean_g
+        cc = cc[m] - mean_c
+        cov += torch.dot(gc, cc).item()
+        var_g += torch.dot(gc, gc).item()
+        var_c += torch.dot(cc, cc).item()
+
+    if var_g == 0.0 or var_c == 0.0:
+        # Constant tensor(s): correlated iff both are constant.
+        cal_pcc = 1.0 if (var_g == 0.0 and var_c == 0.0) else 0.0
     else:
-        assert False, "Non-causal attention is not supported in this function."
+        cal_pcc = cov / math.sqrt(var_g * var_c)
 
-    Q_slice = Q[:, :nh, :, :]
-    K_slice = K[:, :nkv, :padded_layer_len, :]
-    K_slice = torch.cat([K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
-    V_slice = V[:, :, :padded_layer_len, :]
-    V_slice = torch.cat([V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
-    attn_mask_slice = attn_mask[:, :nh, :, :]
-    out = torch.nn.functional.scaled_dot_product_attention(
-        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
-    )
-
-    return out
-
-
-def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=True):
-    """
-    Full-sequence causal SDPA reference.
-    Q: (B, nh, S, d_qk), K/V: (B, nkv, S, d)
-    """
-    _, nh, _, _ = Q.shape
-    _, nkv, _, _ = V.shape
-    # Expand KV to match Q heads
-    head_rep = nh // nkv
-    K_exp = K.repeat_interleave(head_rep, dim=1)
-    V_exp = V.repeat_interleave(head_rep, dim=1)
-    return torch.nn.functional.scaled_dot_product_attention(
-        Q, K_exp, V_exp, attn_mask=None, scale=scale, is_causal=is_causal
-    )
+    passing = cal_pcc >= pcc
+    output_str = f"PCC: {cal_pcc}"
+    if not passing:
+        output_str += ", PCC check failed"
+    return passing, output_str
 
 
 def page_table_setup(batch_size: int, config: PagedAttentionConfig) -> torch.Tensor:
@@ -70,7 +93,7 @@ def page_table_setup(batch_size: int, config: PagedAttentionConfig) -> torch.Ten
     Returns:
         page_table: The page table tensor.
     """
-    block_size, max_num_blocks = config.block_size, config.max_num_blocks
+    max_num_blocks = config.max_num_blocks
     assert (
         max_num_blocks % batch_size == 0
     ), f"max_num_blocks {max_num_blocks} must be divisible by batch_size {batch_size}."
@@ -583,7 +606,12 @@ def run_flash_mla_prefill_impl(
     if dtype == ttnn.bfloat4_b:
         pcc_threshold = 0.98
 
-    out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
+    # The full prefill output is [B, nh, S, d] — up to ~0.5G elements. The
+    # shared comp_pcc routes through np.ma.corrcoef, which flattens to float64
+    # and builds several full-size temporaries (~16x input), OOM-killing the CI
+    # host on the largest configs. comp_pcc_lowmem computes the same Pearson PCC
+    # in a chunked two-pass scan, keeping peak memory at the input size.
+    out_pass, out_pcc = comp_pcc_lowmem(tt_out_torch, out_t, pcc_threshold)
     logger.debug(f"Output PCC: {out_pcc}")
 
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"

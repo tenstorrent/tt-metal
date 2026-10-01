@@ -10,6 +10,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "impl/buffers/circular_buffer.hpp"
+#include "impl/buffers/global_circular_buffer_impl.hpp"
 #include "circular_buffer_config.hpp"
 #include "circular_buffer_constants.h"
 #include "tile.hpp"
@@ -154,6 +155,16 @@ const std::optional<Tile>& CircularBufferImpl::tile(uint32_t buffer_index) const
     return this->config_.tiles().at(buffer_index);
 }
 
+const std::optional<FaceGeometry>& CircularBufferImpl::unpack_face_geometry(uint32_t buffer_index) const {
+    if (!this->uses_buffer_index(buffer_index)) {
+        TT_THROW(
+            "Cannot access unpack face geometry for buffer index {} because circular buffer is not configured on that "
+            "index",
+            buffer_index);
+    }
+    return this->config_.unpack_face_geometry().at(buffer_index);
+}
+
 uint32_t CircularBufferImpl::address() const {
     if (not locally_allocated_address_.has_value() and not this->globally_allocated()) {
         TT_THROW("Circular buffer has not been allocated, cannot request address at this time!");
@@ -162,18 +173,35 @@ uint32_t CircularBufferImpl::address() const {
     return this->globally_allocated() ? globally_allocated_address_ : locally_allocated_address_.value();
 }
 
+void CircularBufferImpl::set_total_size(uint32_t total_size) {
+    config_.set_total_size(total_size);
+    ++config_generation_;
+}
+
+void CircularBufferImpl::set_page_size(uint8_t buffer_index, uint32_t page_size) {
+    config_.set_page_size(buffer_index, page_size);
+    ++config_generation_;
+}
+
+void CircularBufferImpl::set_global_buffer(const Buffer& buffer, uint32_t total_size, uint32_t address_offset) {
+    config_.set_globally_allocated_address_and_total_size(buffer, total_size, address_offset);
+    assign_global_address();
+}
+
 void CircularBufferImpl::assign_global_address() {
     globally_allocated_address_ = config_.shadow_global_buffer->address() + config_.address_offset();
+    ++config_generation_;
 }
 
 void CircularBufferImpl::set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(
-        global_circular_buffer.all_cores().contains(this->core_ranges_),
+        global_circular_buffer.impl().all_cores().contains(this->core_ranges_),
         "Specified cores are not contained in associated GlobalCircularBuffer");
-    this->config().set_globally_allocated_address(global_circular_buffer.cb_buffer());
+    config_.set_globally_allocated_address(global_circular_buffer.cb_buffer());
     this->shadow_global_circular_buffer_ = &global_circular_buffer;
     this->globally_allocated_address_ = global_circular_buffer.buffer_address();
     this->global_circular_buffer_config_address_ = global_circular_buffer.config_address();
+    ++config_generation_;
 }
 
 DeviceAddr CircularBufferImpl::config_address() const { return this->global_circular_buffer_config_address_; }

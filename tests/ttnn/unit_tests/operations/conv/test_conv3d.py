@@ -10,6 +10,8 @@ import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
 
+pytestmark = pytest.mark.use_module_device
+
 
 def _out_size(in_size, pad, stride, k, dilation):
     effective_k = (dilation * (k - 1)) + 1
@@ -123,6 +125,7 @@ def run_conv3d_test(
     grid_size=(1, 1),
     dilation=(1, 1, 1),
     dtype=ttnn.DataType.BFLOAT16,
+    config=None,
 ):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
         input_shape,
@@ -140,9 +143,10 @@ def run_conv3d_test(
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    config = create_conv3d_config(
-        compute_with_storage_grid_size=grid_size, C_in_block=32, dilation=dilation, weights_dtype=dtype
-    )
+    if config is None:
+        config = create_conv3d_config(
+            compute_with_storage_grid_size=grid_size, C_in_block=32, dilation=dilation, weights_dtype=dtype
+        )
 
     w = conv3d_module.weight.data
     tt_weight = ttnn.from_torch(w, dtype=dtype, pad_value=0)
@@ -186,17 +190,51 @@ def run_conv3d_test(
     assert pcc_passed, pcc_message
 
 
-@pytest.mark.parametrize("B", [1, 2])
-@pytest.mark.parametrize("C_in", [12, 64])
-@pytest.mark.parametrize("C_out", [64, 48])
-@pytest.mark.parametrize("T", [8, 11])
-@pytest.mark.parametrize("H", [10, 13])
-@pytest.mark.parametrize("W", [9, 12])
-@pytest.mark.parametrize("kernel_size", [(3, 3, 3), (1, 1, 1)], ids=["kernel_333", "kernel_111"])
-@pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
-@pytest.mark.parametrize("groups", [1, 2, 4], ids=["groups_1", "groups_2", "groups_4"])
-@pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
-@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+@pytest.mark.parametrize(
+    "B, C_in, C_out, T, H, W, kernel_size, stride, groups, padding, padding_mode",
+    [
+        # fmt: off
+        # 1. baseline: k333, s111, g1, zeros, aligned Cin/Cout
+        (1, 64, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 2. grouped conv + replicate padding
+        (1, 64, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 4, (0, 1, 1), "replicate"),
+        # 3. kernel 1×1×1 + non-aligned Cout
+        (1, 64, 48, 8, 10, 9, (1, 1, 1), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 4. stride 2×2×2
+        (1, 64, 64, 8, 10, 9, (3, 3, 3), (2, 2, 2), 1, (0, 1, 1), "zeros"),
+        # 5. stride 2×2×2 + groups + replicate + non-aligned Cout
+        (1, 64, 48, 8, 10, 9, (3, 3, 3), (2, 2, 2), 4, (0, 1, 1), "replicate"),
+        # 6. kernel 1×1×1 + stride 2×2×2
+        (1, 64, 64, 8, 10, 9, (1, 1, 1), (2, 2, 2), 1, (0, 1, 1), "zeros"),
+        # 7. non-aligned Cin (12), k333, s111
+        (1, 12, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 8. non-aligned Cin + kernel 1×1×1 + stride 2×2×2 + non-aligned Cout
+        (1, 12, 48, 8, 10, 9, (1, 1, 1), (2, 2, 2), 1, (0, 1, 1), "zeros"),
+        # 9. non-aligned Cin + groups + replicate + non-aligned Cout
+        (1, 12, 48, 8, 10, 9, (3, 3, 3), (1, 1, 1), 4, (0, 1, 1), "replicate"),
+        # 10. batch > 1
+        (2, 64, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 11. kernel 1×1×1 + groups + zeros
+        (1, 64, 64, 8, 10, 9, (1, 1, 1), (1, 1, 1), 4, (0, 1, 1), "zeros"),
+        # 12. stride 2×2×2 + replicate + non-aligned Cin
+        (1, 12, 64, 8, 10, 9, (3, 3, 3), (2, 2, 2), 1, (0, 1, 1), "replicate"),
+        # fmt: on
+    ],
+    ids=[
+        "k333_s111_g1_zeros_c64_c64",
+        "k333_s111_g4_replicate_c64_c64",
+        "k111_s111_g1_zeros_c64_c48",
+        "k333_s222_g1_zeros_c64_c64",
+        "k333_s222_g4_replicate_c64_c48",
+        "k111_s222_g1_zeros_c64_c64",
+        "k333_s111_g1_zeros_c12_c64",
+        "k111_s222_g1_zeros_c12_c48",
+        "k333_s111_g4_replicate_c12_c48",
+        "k333_s111_g1_zeros_c64_c64_B2",
+        "k111_s111_g4_zeros_c64_c64",
+        "k333_s222_g1_replicate_c12_c64",
+    ],
+)
 @skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_sweep_shapes(
     device,
@@ -213,17 +251,11 @@ def test_conv3d_sweep_shapes(
     padding_mode,
 ):
     input_shape = (B, C_in, T, H, W)
-    out_channels = C_out
-    kernel_size = kernel_size
-    stride = stride
-    groups = groups
-    padding = padding
-    padding_mode = padding_mode
     grid_size = device.compute_with_storage_grid_size()
     run_conv3d_test(
         device,
         input_shape,
-        out_channels,
+        C_out,
         kernel_size,
         stride,
         groups,
@@ -398,8 +430,9 @@ def test_conv3d_qwen_shapes(
         [(1, 64, 8, 10, 9), 64, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"],
         [(1, 64, 8, 10, 9), 64, (1, 1, 1), (1, 1, 1), 1, (0, 1, 1), "zeros"],
         [(1, 32, 4, 8, 8), 32, (3, 3, 3), (2, 2, 2), 1, (0, 1, 1), "zeros"],
+        [(2, 3, 2, 14, 14), 1280, (2, 14, 14), (2, 14, 14), 1, (0, 0, 0), "zeros"],
     ],
-    ids=["auto_block_k333", "auto_block_k111", "auto_block_stride222"],
+    ids=["auto_block_k333", "auto_block_k111", "auto_block_stride222", "auto_block_large_kernel"],
 )
 def test_conv3d_no_config(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode):
     """Test Conv3d with no config (auto-blocking with conservative defaults)."""
@@ -590,3 +623,332 @@ def test_conv3d_fp32_reduction_c_in_blocking(device, C_in_block):
         f"fp32 reduction should have significantly lower error than bf16, "
         f"but ratio is only {error_ratio:.1f}x (fp32={fp32_mean_err:.6f}, bf16={bf16_mean_err:.6f})"
     )
+
+
+def apply_logical_pad_mask(input_tensor, h_start, w_start, logical_h_mask, logical_w_mask):
+    """Zero the [N, C, D, H, W] positions conv3d's logical-pad mask drops.
+
+    The kernel masks on the GLOBAL spatial index (this device's origin + the local index), so the
+    reference offsets the same way. A zero mask means that axis is unmasked.
+    """
+    masked = input_tensor.clone()
+    _, _, _, H, W = masked.shape
+    if logical_h_mask != 0:
+        masked[:, :, :, (torch.arange(H) + h_start) >= logical_h_mask, :] = 0.0
+    if logical_w_mask != 0:
+        masked[:, :, :, :, (torch.arange(W) + w_start) >= logical_w_mask] = 0.0
+    return masked
+
+
+@pytest.mark.parametrize(
+    "h_start, w_start, logical_h_mask, logical_w_mask",
+    [
+        (0, 0, 12, 0),
+        (0, 0, 0, 10),
+        (0, 0, 12, 10),
+        (4, 2, 12, 10),
+        (0, 0, 0, 0),
+    ],
+    ids=["h_only", "w_only", "h_and_w", "offset_origin", "mask_disabled"],
+)
+def test_conv3d_logical_pad_mask(device, h_start, w_start, logical_h_mask, logical_w_mask):
+    """Masking an input position must match convolving over that position pre-zeroed.
+
+    No halo buffer is passed, so this covers masking standalone: the plain persistent-padded path
+    where the reader masks a padded input in-kernel rather than reading neighbor pixels. The
+    mask_disabled case pins the opt-out — a pad offset alone must not change the result.
+    """
+    input_shape = (1, 32, 4, 16, 16)
+    out_channels = 32
+    kernel_size = (3, 3, 3)
+    stride = (1, 1, 1)
+    padding = (0, 1, 1)
+    groups = 1
+    dtype = ttnn.DataType.BFLOAT16
+
+    torch.manual_seed(42)
+    N, C, D, H, W = input_shape
+    D_out = _out_size(D, padding[0], stride[0], kernel_size[0], 1)
+    H_out = _out_size(H, padding[1], stride[1], kernel_size[1], 1)
+    W_out = _out_size(W, padding[2], stride[2], kernel_size[2], 1)
+
+    input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
+    conv3d_module = nn.Conv3d(
+        C,
+        out_channels,
+        groups=groups,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        bias=True,
+        padding_mode="zeros",
+    )
+
+    masked_input = apply_logical_pad_mask(input_tensor, h_start, w_start, logical_h_mask, logical_w_mask)
+    gt_output = conv3d_module(masked_input)
+
+    if logical_h_mask != 0 or logical_w_mask != 0:
+        # Without this the test would still pass if masking silently did nothing.
+        assert not torch.allclose(gt_output, conv3d_module(input_tensor)), "mask does not affect this shape"
+
+    tt_input = prepare_input_tensor(input_tensor, C, device, dtype=dtype)
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    config = create_conv3d_config(C_in_block=32, weights_dtype=dtype)
+
+    tt_weight = ttnn.from_torch(conv3d_module.weight.data, dtype=dtype, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=groups, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+    )
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=0
+    )
+    # One page holding this device's [h_start, w_start] spatial origin.
+    pad_offset_tensor = ttnn.from_torch(
+        torch.tensor([[h_start, w_start]], dtype=torch.int32),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=dtype,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        groups=groups,
+        padding=padding,
+        dilation=(1, 1, 1),
+        padding_mode="zeros",
+        config=config,
+        compute_kernel_config=kernel_config,
+        logical_h_mask=logical_h_mask,
+        logical_w_mask=logical_w_mask,
+        pad_offset_tensor=pad_offset_tensor,
+    )
+
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+    assert tt_output.shape == gt_output.shape
+
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(
+        f"logical-pad mask (start=({h_start},{w_start}), logical=({logical_h_mask},{logical_w_mask})): {pcc_message}"
+    )
+    assert pcc_passed, pcc_message
+
+
+@pytest.mark.parametrize(
+    "padding_mode, dilation, halo_pages, expected",
+    [
+        ("replicate", (1, 1, 1), 512, "padding_mode"),
+        ("zeros", (1, 2, 2), 512, "spatial reuse and no dilation"),
+        ("zeros", (1, 1, 1), 1, "sections need"),
+    ],
+    ids=["rejects_replicate", "rejects_dilation", "rejects_undersized_halo"],
+)
+def test_conv3d_halo_buffer_rejects_unsupported(device, expect_error, padding_mode, dilation, halo_pages, expected):
+    """A halo buffer the reader cannot honor must fail on the host, not silently degrade.
+
+    Each case selects a path with no halo support: replicate clamping, the direct reader (dilated),
+    and a buffer too small for the [Htop|Hbot|Wleft|Wright] sections.
+    """
+    input_shape = (1, 32, 4, 16, 16)
+    out_channels = 32
+    kernel_size = (3, 3, 3)
+    dtype = ttnn.DataType.BFLOAT16
+
+    torch.manual_seed(42)
+    N, C, D, H, W = input_shape
+    input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
+    conv3d_module = nn.Conv3d(C, out_channels, kernel_size=kernel_size, padding=(0, 1, 1), bias=True)
+
+    tt_input = prepare_input_tensor(input_tensor, C, device, dtype=dtype)
+    config = create_conv3d_config(C_in_block=32, dilation=dilation, weights_dtype=dtype)
+    tt_weight = ttnn.from_torch(conv3d_module.weight.data, dtype=dtype, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=1, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+    )
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=0
+    )
+    halo_buffer = ttnn.from_torch(
+        torch.zeros(halo_pages, C).bfloat16(), device=device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+
+    with expect_error(RuntimeError, expected):
+        ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            device=device,
+            bias_tensor=tt_bias,
+            dtype=dtype,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=(1, 1, 1),
+            groups=1,
+            padding=(0, 1, 1),
+            dilation=dilation,
+            padding_mode=padding_mode,
+            config=config,
+            halo_buffer=halo_buffer,
+        )
+
+
+def _prepare_fp32_conv3d_weight(weight, C_in_block, device):
+    tt_weight = ttnn.from_torch(weight, dtype=ttnn.float32, pad_value=0)
+    return ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=1, C_in_block=C_in_block, alignment=ALIGNMENT, device=device
+    )
+
+
+@pytest.mark.parametrize(
+    "C_in, C_out, kernel, T",
+    [(512, 512, 11, 400), (128, 128, 3, 1900), (2048, 1024, 7, 80)],
+    ids=["cin512_cout512_k11_t400", "cin128_cout128_k3_t1900", "cin2048_cout1024_k7_t80"],
+)
+def test_conv3d_fp32_operand_split(device, C_in, C_out, kernel, T):
+    """In-kernel hi/lo operand split vs the three-pass host split and the unsplit fp32 conv, 1-D convs along T."""
+    torch.manual_seed(0)
+    N = 2
+    kernel_size = (kernel, 1, 1)
+    padding = (kernel // 2, 0, 0)
+    conv3d_module = nn.Conv3d(C_in, C_out, kernel_size=kernel_size, padding=padding, bias=True)
+    weight = conv3d_module.weight.detach().clone()
+    bias = conv3d_module.bias.detach().clone()
+    input_tensor = torch.randn(N, C_in, T, 1, 1) * 0.1
+    with torch.no_grad():
+        golden = conv3d_module.double()(input_tensor.double())
+
+    # The fp32 multiply keeps ~11 significand bits per operand; hi = bf16(W) plus the exact residual
+    # lo = W - hi carries the rest, and the op expects the weight in that hi form.
+    weight_hi = weight.bfloat16().float()
+    weight_lo = weight - weight_hi
+
+    grid_size = device.compute_with_storage_grid_size()
+    config, split_config = (
+        create_conv3d_config(
+            T_out_block=8,
+            C_out_block=32,
+            C_in_block=128,
+            compute_with_storage_grid_size=grid_size,
+            weights_dtype=ttnn.float32,
+        )
+        for _ in range(2)
+    )
+    split_config.enable_fp32_operand_split = True
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_input = prepare_input_tensor(input_tensor, C_in, device, dtype=ttnn.float32)
+    tt_weight_hi = _prepare_fp32_conv3d_weight(weight_hi, config.C_in_block, device)
+    tt_weight_lo = _prepare_fp32_conv3d_weight(weight_lo, config.C_in_block, device)
+    tt_bias = ttnn.from_torch(
+        bias.reshape(1, -1), device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, pad_value=0
+    )
+
+    def conv(x, w, bias_tensor=None, weight_lo_tensor=None):
+        return ttnn.experimental.conv3d(
+            input_tensor=x,
+            weight_tensor=w,
+            device=device,
+            bias_tensor=bias_tensor,
+            dtype=ttnn.float32,
+            output_channels=C_out,
+            kernel_size=kernel_size,
+            padding=padding,
+            config=split_config if weight_lo_tensor is not None else config,
+            compute_kernel_config=kernel_config,
+            weight_lo_tensor=weight_lo_tensor,
+        )
+
+    plain = conv(tt_input, tt_weight_hi, tt_bias)
+    x_hi = ttnn.typecast(ttnn.typecast(tt_input, ttnn.bfloat16), ttnn.float32)
+    x_lo = ttnn.subtract(tt_input, x_hi)
+    host_split = ttnn.add(
+        ttnn.add(conv(x_hi, tt_weight_hi, tt_bias), conv(x_hi, tt_weight_lo)), conv(x_lo, tt_weight_hi)
+    )
+    kernel_split = conv(tt_input, tt_weight_hi, tt_bias, weight_lo_tensor=tt_weight_lo)
+
+    outputs = {
+        name: reshape_output(t, N, T, 1, 1, C_out, device).double()
+        for name, t in (("plain", plain), ("host", host_split), ("kernel", kernel_split))
+    }
+    rel_rmse = {name: ((out - golden).pow(2).mean().sqrt() / golden.std()).item() for name, out in outputs.items()}
+    kernel_vs_host = (outputs["kernel"] - outputs["host"]).abs().max().item()
+    logger.info(
+        f"C_in={C_in} C_out={C_out} k={kernel} T={T}: rel_rmse {rel_rmse}, kernel vs host max |diff| {kernel_vs_host:.3e}"
+    )
+
+    assert (
+        rel_rmse["kernel"] <= 1.05 * rel_rmse["host"]
+    ), f"kernel split is less accurate than the host split: {rel_rmse}"
+    assert rel_rmse["kernel"] <= 0.70 * rel_rmse["plain"], f"kernel split did not beat the unsplit conv: {rel_rmse}"
+
+
+def test_conv3d_fp32_operand_split_raw_weights(device):
+    """Raw rank-5 W_hi / W_lo passed straight to conv3d: the op prepares weight_lo_tensor itself, and the result
+    matches the pre-prepared split exactly (split first, then prepare both with the same arguments)."""
+    torch.manual_seed(0)
+    N, C_in, C_out, kernel, T = 1, 128, 64, 3, 64
+    kernel_size = (kernel, 1, 1)
+    padding = (kernel // 2, 0, 0)
+    weight = torch.randn(C_out, C_in, *kernel_size) * 0.05
+    weight_hi = weight.bfloat16().float()
+    weight_lo = weight - weight_hi
+    input_tensor = torch.randn(N, C_in, T, 1, 1) * 0.1
+
+    config = create_conv3d_config(
+        T_out_block=8,
+        C_out_block=32,
+        C_in_block=128,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        weights_dtype=ttnn.float32,
+    )
+    config.enable_fp32_operand_split = True
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_input = prepare_input_tensor(input_tensor, C_in, device, dtype=ttnn.float32)
+
+    def conv(w, w_lo):
+        return ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=w,
+            device=device,
+            dtype=ttnn.float32,
+            output_channels=C_out,
+            kernel_size=kernel_size,
+            padding=padding,
+            config=config,
+            compute_kernel_config=kernel_config,
+            weight_lo_tensor=w_lo,
+        )
+
+    raw = conv(
+        ttnn.from_torch(weight_hi, dtype=ttnn.float32, pad_value=0),
+        ttnn.from_torch(weight_lo, dtype=ttnn.float32, pad_value=0),
+    )
+    prepared = conv(
+        _prepare_fp32_conv3d_weight(weight_hi, config.C_in_block, device),
+        _prepare_fp32_conv3d_weight(weight_lo, config.C_in_block, device),
+    )
+    raw_out = reshape_output(raw, N, T, 1, 1, C_out, device)
+    prepared_out = reshape_output(prepared, N, T, 1, 1, C_out, device)
+    assert torch.equal(raw_out, prepared_out), "raw rank-5 weights and pre-prepared weights disagree"

@@ -2,17 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
+#include <bit>
+#include <string_view>
 
-#include "dropout_program_factory.hpp"
+#include "dropout_device_operation.hpp"
 
-#include "dropout_device_operation_types.hpp"
-#include "tt-metalium/mesh_workload.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::experimental::prim {
 namespace {
@@ -22,9 +20,6 @@ constexpr auto kReaderKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/reader_dropout_interleaved_start_id.cpp";
 constexpr auto kComputeKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp";
-constexpr auto kSeedIdx = 0;
-constexpr auto kDstBufferIdx = 0;
-constexpr auto kSrcBufferIdx = 0;
 
 constexpr auto kSrc0CbIndex = tt::CBIndex::c_0;
 constexpr auto kOutputCbIndex = tt::CBIndex::c_2;
@@ -32,12 +27,16 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_2;
 constexpr uint32_t kNumInputTiles = 2;
 constexpr uint32_t kNumOutputTiles = 2;
 
-// Overrides the seed with a per-device seed by using the device ID as an offset.
-DropoutParams override_per_device_seed(
-    const DropoutParams& args, const ttnn::MeshCoordinate& mesh_coord, const ttnn::Tensor& input_tensor) {
-    DropoutParams args_with_per_device_seed = args;
-    args_with_per_device_seed.seed += input_tensor.device()->get_device(mesh_coord)->id();
-    return args_with_per_device_seed;
+// Offsets the seed by the device ID so each device of a mesh draws a different mask.
+// Single-sourced: used by DropoutMeshWorkloadFactory::create_descriptor (cache miss) and by
+// override_runtime_arguments (cache hit), which must reproduce the same seed bit-for-bit.
+uint32_t per_device_seed(
+    const DropoutParams& args,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+    const ttnn::Tensor& input_tensor) {
+    auto* device = input_tensor.device();
+    return args.seed +
+           (mesh_dispatch_coordinate.has_value() ? device->get_device(*mesh_dispatch_coordinate)->id() : device->id());
 }
 
 }  // namespace
@@ -49,17 +48,17 @@ using namespace tt::constants;
  *        used during runtime argument setup.
  */
 struct DropoutKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
-    tt::tt_metal::KernelHandle compute_group_2;
+    tt::tt_metal::KernelDescriptor reader;
+    tt::tt_metal::KernelDescriptor writer;
+    tt::tt_metal::KernelDescriptor compute_group_1;
+    std::optional<tt::tt_metal::KernelDescriptor> compute_group_2;
 };
 
 /**
- *   Create and configure a circular buffer, returning both the configuration and the handle.
+ *   Create and configure a circular buffer descriptor.
  */
-inline tt::tt_metal::CBHandle create_circular_buffer(
-    tt::tt_metal::Program& program,
+inline void create_circular_buffer(
+    tt::tt_metal::ProgramDescriptor& descriptor,
     const tt::tt_metal::CoreRangeSet& core_ranges,
     uint32_t cb_index,
     tt::DataFormat data_format,
@@ -67,110 +66,179 @@ inline tt::tt_metal::CBHandle create_circular_buffer(
     uint32_t num_tiles) {
     using namespace tt::tt_metal;
 
-    CircularBufferConfig cb_config = CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
-                                         .set_page_size(cb_index, single_tile_size);
-
-    auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
-    return cb_handle;
+    descriptor.cbs.push_back(CBDescriptor{
+        .total_size = num_tiles * single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cb_index,
+            .data_format = data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 }
 
 /**
- *   Create a reader kernel with the given compile-time arguments.
+ *   Create a reader kernel descriptor with the given compile-time arguments.
  */
-inline tt::tt_metal::KernelHandle create_reader_kernel(
-    tt::tt_metal::Program& program,
+inline tt::tt_metal::KernelDescriptor create_reader_kernel(
     const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::string& kernel_path) {
+    tt::tt_metal::KernelDescriptor::CompileTimeArgs&& compile_time_args,
+    std::string_view kernel_path) {
     using namespace tt::tt_metal;
 
-    return CreateKernel(program, kernel_path, core_ranges, ReaderDataMovementConfig(compile_time_args));
+    KernelDescriptor descriptor;
+    descriptor.kernel_source = kernel_path;
+    descriptor.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    descriptor.core_ranges = core_ranges;
+    descriptor.compile_time_args = std::move(compile_time_args);
+    descriptor.config = ReaderConfigDescriptor{};
+    return descriptor;
 }
 
 /**
- *   Create a writer kernel with the given compile-time arguments.
+ *   Create a writer kernel descriptor with the given compile-time arguments.
  */
-inline tt::tt_metal::KernelHandle create_writer_kernel(
-    tt::tt_metal::Program& program,
+inline tt::tt_metal::KernelDescriptor create_writer_kernel(
     const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::string& kernel_path) {
+    tt::tt_metal::KernelDescriptor::CompileTimeArgs&& compile_time_args,
+    std::string_view kernel_path) {
     using namespace tt::tt_metal;
 
-    return CreateKernel(program, kernel_path, core_ranges, WriterDataMovementConfig(compile_time_args));
+    KernelDescriptor descriptor;
+    descriptor.kernel_source = kernel_path;
+    descriptor.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    descriptor.core_ranges = core_ranges;
+    descriptor.compile_time_args = std::move(compile_time_args);
+    descriptor.config = WriterConfigDescriptor{};
+    return descriptor;
 }
 
 /**
- * Create a compute kernel (for dropout) with the given compile-time arguments.
+ * Create a compute kernel descriptor (for dropout) with the given compile-time arguments.
  */
-inline tt::tt_metal::KernelHandle create_compute_kernel(
-    tt::tt_metal::Program& program,
+inline tt::tt_metal::KernelDescriptor create_compute_kernel(
     const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::string& kernel_path,
+    tt::tt_metal::KernelDescriptor::CompileTimeArgs&& compile_time_args,
+    std::string_view kernel_path,
     bool math_approx_mode) {
     using namespace tt::tt_metal;
 
-    return CreateKernel(
-        program,
-        kernel_path,
-        core_ranges,
-        ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compile_time_args});
+    KernelDescriptor descriptor;
+    descriptor.kernel_source = kernel_path;
+    descriptor.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    descriptor.core_ranges = core_ranges;
+    descriptor.compile_time_args = std::move(compile_time_args);
+    descriptor.config = ComputeConfigDescriptor{
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .fp32_dest_acc_en = false,
+        .dst_full_sync_en = false,
+        .math_approx_mode = math_approx_mode,
+    };
+    return descriptor;
 }
 
-/**
- * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
- *        for each core in the grid.
- */
-inline void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const DropoutKernels& kernels,
-    const tt::tt_metal::Buffer* src_buffer,
-    const tt::tt_metal::Buffer* dst_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_tiles_per_core_group_1,
-    uint32_t num_tiles_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2,
-    uint32_t seed) {
-    using namespace tt::tt_metal;
+// Work split used by create_descriptor (cache miss) and override_runtime_arguments (cache hit).
+struct DropoutCoreSplit {
+    uint32_t num_cores = 0;
+    uint32_t num_cores_y = 0;
+    tt::tt_metal::CoreRangeSet all_cores;
+    tt::tt_metal::CoreRangeSet core_group_1;
+    tt::tt_metal::CoreRangeSet core_group_2;
+    uint32_t num_tiles_per_core_group_1 = 0;
+    uint32_t num_tiles_per_core_group_2 = 0;
+};
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+DropoutCoreSplit dropout_core_split(const Tensor& input) {
+    auto grid = input.device()->compute_with_storage_grid_size();
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(grid, num_tiles);
+    return {
+        num_cores,
+        grid.y,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        num_tiles_per_core_group_1,
+        num_tiles_per_core_group_2};
+}
 
-        // Determine how many tiles this core will process
-        uint32_t num_tiles_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
-        }
+// Per-core slice of the work split.
+struct DropoutCoreWork {
+    tt::tt_metal::CoreCoord core;
+    uint32_t num_tiles = 0;
+    uint32_t tile_offset = 0;
+    bool in_group_1 = false;  // otherwise in core_group_2
+};
 
-        if (core_group_1.contains(core)) {
-            SetRuntimeArgs(program, kernels.compute_group_1, core, {seed});
-        } else if (core_group_2.contains(core)) {
-            SetRuntimeArgs(program, kernels.compute_group_2, core, {seed});
-        } else {
-            TT_THROW("Core not in specified core ranges.");
-        }
-        // Reader kernel: (src_addr, number_of_tiles, offset_in_tiles)
-        SetRuntimeArgs(program, kernels.reader, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
+// Walks the cores in the exact order create_descriptor emplaces runtime args for them. Shared with
+// override_runtime_arguments so the per-core layout the cache-hit patch writes cannot drift from the
+// one the cache-miss build baked.
+template <typename Fn>
+void for_each_dropout_core(const DropoutCoreSplit& split, const Fn& fn) {
+    for (uint32_t i = 0, num_tiles_written = 0; i < split.num_cores; i++) {
+        const tt::tt_metal::CoreCoord core = {i / split.num_cores_y, i % split.num_cores_y};
+        const bool in_group_1 = split.core_group_1.contains(core);
+        TT_FATAL(
+            in_group_1 || split.core_group_2.contains(core),
+            "Core ({}, {}) is not in the specified core ranges",
+            core.x,
+            core.y);
+        const uint32_t num_tiles = in_group_1 ? split.num_tiles_per_core_group_1 : split.num_tiles_per_core_group_2;
 
-        // Writer kernel: (dst_addr, number_of_tiles, offset_in_tiles)
-        SetRuntimeArgs(program, kernels.writer, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        fn(DropoutCoreWork{core, num_tiles, num_tiles_written, in_group_1});
 
-        num_tiles_written += num_tiles_per_core;
+        num_tiles_written += num_tiles;
     }
 }
 
-DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
+/**
+ * Set up the runtime arguments for the relevant kernels (reader, writer, compute G1, compute G2)
+ *        for each core in the grid.
+ */
+inline void assign_per_core_runtime_args(
+    DropoutKernels& kernels,
+    tt::tt_metal::Buffer* src_buffer,
+    tt::tt_metal::Buffer* dst_buffer,
+    const DropoutCoreSplit& split,
+    uint32_t seed) {
+    using namespace tt::tt_metal;
+
+    kernels.reader.runtime_args.reserve(split.num_cores);
+    kernels.writer.runtime_args.reserve(split.num_cores);
+    kernels.compute_group_1.runtime_args.reserve(split.num_cores);
+    if (kernels.compute_group_2.has_value()) {
+        kernels.compute_group_2->runtime_args.reserve(split.num_cores);
+    }
+
+    for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
+        // Compute kernel: (seed)
+        if (work.in_group_1) {
+            kernels.compute_group_1.runtime_args.emplace_back(work.core, KernelDescriptor::CoreRuntimeArgs{seed});
+        } else {
+            TT_FATAL(kernels.compute_group_2.has_value(), "Core group 2 descriptor should be present");
+            kernels.compute_group_2->runtime_args.emplace_back(work.core, KernelDescriptor::CoreRuntimeArgs{seed});
+        }
+
+        // Reader kernel: (src_addr, number_of_tiles, offset_in_tiles).  src/dst go in as Buffer*
+        // bindings so this cache-miss build resolves their current addresses; on a cache hit
+        // override_runtime_arguments re-applies them (correct for the input==output in-place case).
+        kernels.reader.emplace_runtime_args(work.core, {src_buffer, work.num_tiles, work.tile_offset});
+
+        // Writer kernel: (dst_addr, number_of_tiles, offset_in_tiles)
+        kernels.writer.emplace_runtime_args(work.core, {dst_buffer, work.num_tiles, work.tile_offset});
+    });
+}
+
+namespace {
+// Kernel indices: positions in the `descriptor.kernels` push order at the end of create_descriptor
+// (reader, writer, compute group 1, then compute group 2 only when core_group_2 is non-empty).
+// Single-sourced here, next to the pushes that define the order, so the cache-miss push order and the
+// cache-hit GetRuntimeArgs indices in override_runtime_arguments stay one edit apart.
+enum : uint32_t { kReaderIdx, kWriterIdx, kComputeGroup1Idx, kComputeGroup2Idx };
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor DropoutProgramFactory::create_descriptor(
     const DropoutParams& args, const DropoutInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -179,9 +247,8 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     // 1) Setup device, data formats, tile sizes, and compute split
     // -------------------------------------------------------------------------
     const auto& input = tensor_args.input;
-    auto* device = input.device();
 
-    tt::tt_metal::Program program{};
+    ProgramDescriptor descriptor{};
 
     tt::DataFormat data_fmt_in = datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat data_fmt_out = datatype_to_dataformat_converter(output.dtype());
@@ -189,37 +256,36 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     uint32_t single_tile_size_in = tt::tile_size(data_fmt_in);
     uint32_t single_tile_size_out = tt::tile_size(data_fmt_out);
 
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    // Kept whole so it can be handed to for_each_dropout_core, the walk shared with the cache-hit patch.
+    const auto split = dropout_core_split(input);
+    const auto& all_cores = split.all_cores;
+    const auto& core_group_1 = split.core_group_1;
+    const auto& core_group_2 = split.core_group_2;
+    const uint32_t num_tiles_per_core_group_1 = split.num_tiles_per_core_group_1;
+    const uint32_t num_tiles_per_core_group_2 = split.num_tiles_per_core_group_2;
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
+    create_circular_buffer(descriptor, all_cores, kSrc0CbIndex, data_fmt_in, single_tile_size_in, kNumInputTiles);
 
-    create_circular_buffer(program, all_cores, kSrc0CbIndex, data_fmt_in, single_tile_size_in, kNumInputTiles);
-
-    create_circular_buffer(program, all_cores, kOutputCbIndex, data_fmt_out, single_tile_size_out, kNumOutputTiles);
+    create_circular_buffer(descriptor, all_cores, kOutputCbIndex, data_fmt_out, single_tile_size_out, kNumOutputTiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
     auto* src_buffer = input.buffer();
-    std::vector<uint32_t> reader_compile_args = {static_cast<uint32_t>(kSrc0CbIndex)};
+    KernelDescriptor::CompileTimeArgs reader_compile_args = {static_cast<uint32_t>(kSrc0CbIndex)};
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_args);
 
     auto* dst_buffer = output.buffer();
-    std::vector<uint32_t> writer_compile_args = {static_cast<uint32_t>(kOutputCbIndex)};
+    KernelDescriptor::CompileTimeArgs writer_compile_args = {static_cast<uint32_t>(kOutputCbIndex)};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_args);
 
-    DropoutKernels kernels{};
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, kReaderKernelPath);
-
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, kWriterKernelPath);
+    DropoutKernels kernels{
+        .reader = create_reader_kernel(all_cores, std::move(reader_compile_args), kReaderKernelPath),
+        .writer = create_writer_kernel(all_cores, std::move(writer_compile_args), kWriterKernelPath),
+    };
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for dropout
@@ -240,7 +306,7 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     bool math_approx_mode = false;
 
     kernels.compute_group_1 =
-        create_compute_kernel(program, core_group_1, compute_group_1_args, kComputeKernelPath, math_approx_mode);
+        create_compute_kernel(core_group_1, std::move(compute_group_1_args), kComputeKernelPath, math_approx_mode);
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -252,134 +318,100 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
         };
 
         kernels.compute_group_2 =
-            create_compute_kernel(program, core_group_2, compute_group_2_args, kComputeKernelPath, math_approx_mode);
+            create_compute_kernel(core_group_2, std::move(compute_group_2_args), kComputeKernelPath, math_approx_mode);
     }
 
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        src_buffer,
-        dst_buffer,
-        num_cores,
-        num_cores_y,
-        num_tiles_per_core_group_1,
-        num_tiles_per_core_group_2,
-        core_group_1,
-        core_group_2,
-        args.seed);
+    assign_per_core_runtime_args(kernels, src_buffer, dst_buffer, split, args.seed);
 
     // -------------------------------------------------------------------------
-    // 6) Return the fully configured program & relevant shared variables
+    // 6) Return the fully configured descriptor
     // -------------------------------------------------------------------------
-    return cached_program_t{
-        std::move(program),
-        {/* dropout_reader_kernel_id  = */ kernels.reader,
-         /* dropout_writer_kernel_id  = */ kernels.writer,
-         /* dropout_kernel_group_1_id = */ kernels.compute_group_1,
-         /* dropout_kernel_group_2_id = */ kernels.compute_group_2,
-         /* core_group_1              = */ core_group_1,
-         /* core_group_2              = */ core_group_2,
-         /* num_cores                 = */ num_cores,
-         /* num_cores_y               = */ num_cores_y}};
+    descriptor.kernels.push_back(std::move(kernels.reader));           // kReaderIdx
+    descriptor.kernels.push_back(std::move(kernels.writer));           // kWriterIdx
+    descriptor.kernels.push_back(std::move(kernels.compute_group_1));  // kComputeGroup1Idx
+    if (kernels.compute_group_2.has_value()) {
+        descriptor.kernels.push_back(std::move(*kernels.compute_group_2));  // kComputeGroup2Idx
+    }
+
+    return descriptor;
+}
+
+tt::tt_metal::ProgramDescriptor DropoutMeshWorkloadFactory::create_descriptor(
+    const DropoutParams& args,
+    const DropoutInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
+    DropoutParams effective_args = args;
+    effective_args.seed = per_device_seed(args, mesh_dispatch_coordinate, tensor_args.input);
+    return DropoutProgramFactory::create_descriptor(effective_args, tensor_args, output);
 }
 
 void DropoutProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
     const DropoutParams& operation_attributes,
     const DropoutInputs& tensor_args,
-    Tensor& output) {
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     using namespace tt::tt_metal;
 
-    auto& shared_vars = cached_program.shared_variables;
-    auto& dropout_reader_kernel = shared_vars.dropout_reader_kernel_id;
-    auto& dropout_writer_kernel = shared_vars.dropout_writer_kernel_id;
-    auto& dropout_group_1_kernel = shared_vars.dropout_kernel_group_1_id;
-    auto& dropout_group_2_kernel = shared_vars.dropout_kernel_group_2_id;
-    auto& core_group_1 = shared_vars.core_group_1;
-    auto& core_group_2 = shared_vars.core_group_2;
-    auto& program = cached_program.program;
-
-    uint32_t num_cores = shared_vars.num_cores;
-    uint32_t num_cores_y = shared_vars.num_cores_y;
-
+    // Kernel indices (kReaderIdx/kWriterIdx/kComputeGroup{1,2}Idx) are shared with create_descriptor's
+    // `descriptor.kernels` push order -- see the enum defined next to those pushes.
     const auto& input = tensor_args.input;
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
 
-    // Only seed/address arguments need updating here; tile counts remain the same as in create().
-    auto& reader_runtime_args = GetRuntimeArgs(program, dropout_reader_kernel);
-    auto& writer_runtime_args = GetRuntimeArgs(program, dropout_writer_kernel);
-    auto& group_1_runtime_args = GetRuntimeArgs(program, dropout_group_1_kernel);
-    // we need to initialize it with something, but if group 2 is  empty it will be used in the loop
-    auto& group_2_runtime_args =
-        core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, dropout_group_2_kernel);
+    // `seed` is excluded from the program hash, so the cached program still carries the first miss's
+    // seed and it must be re-derived here exactly as the selected factory derives it:
+    // DropoutMeshWorkloadFactory offsets it by the dispatch coordinate's device id.
+    const uint32_t seed = operation_attributes.use_per_device_seed
+                              ? per_device_seed(operation_attributes, mesh_dispatch_coordinate, input)
+                              : operation_attributes.seed;
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    // override_runtime_arguments supersedes resolve_bindings, so the buffer addresses the descriptor
+    // emplaced as Buffer* bindings are ours to re-apply. Each address comes from its own tensor, which
+    // is what makes the in-place case (input == output, so both addresses equal) correct.
+    const uint32_t src_addr = input.buffer()->address();
+    const uint32_t dst_addr = tensor_return_value.buffer()->address();
 
-        // Update the source address for the reader kernel
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kSrcBufferIdx] = src_buffer->address();
-        }
-        // Update the destination address for the writer kernel
-        {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kDstBufferIdx] = dst_buffer->address();
-        }
-        // Update the seed for the compute kernels
-        if (core_group_1.contains(core)) {
-            auto& runtime_args = group_1_runtime_args[core.x][core.y];
-            runtime_args[kSeedIdx] = operation_attributes.seed;
-        } else if (core_group_2.contains(core)) {
-            auto& runtime_args = group_2_runtime_args[core.x][core.y];
-            runtime_args[kSeedIdx] = operation_attributes.seed;
-        } else {
-            TT_THROW("Core not in specified core ranges.");
-        }
-    }
-}
+    // Everything else the descriptor emplaced (tile counts/offsets) derives from the input spec and the
+    // compute grid, both fixed on a cache hit; rewritten anyway since the shared walk already has them.
+    // Both CBs are program-local (no .buffer/.tensor binding), so there is no CB address to re-point.
+    // Hoist the per-kernel lookup: the whole-kernel overload hands back the [x][y] grid, so this costs
+    // one lookup per kernel instead of one per core per kernel (same amortisation apply_resolved_bindings does).
+    const DropoutCoreSplit split = dropout_core_split(input);
+    auto& reader_grid = GetRuntimeArgs(program, kReaderIdx);
+    auto& writer_grid = GetRuntimeArgs(program, kWriterIdx);
+    auto& compute_group_1_grid = GetRuntimeArgs(program, kComputeGroup1Idx);
+    auto* compute_group_2_grid =
+        split.core_group_2.ranges().empty() ? nullptr : &GetRuntimeArgs(program, kComputeGroup2Idx);
 
-DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::create_mesh_workload(
-    const DropoutParams& args,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const DropoutInputs& tensor_args,
-    Tensor& output) {
-    TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
+    for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
+        auto& reader_args = reader_grid[work.core.x][work.core.y];
+        reader_args[0] = src_addr;
+        reader_args[1] = work.num_tiles;
+        reader_args[2] = work.tile_offset;
 
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            auto single_device_program = DropoutProgramFactory::create(
-                override_per_device_seed(args, mesh_coord, tensor_args.input), tensor_args, output);
-            shared_variables[mesh_coord_range] = std::move(single_device_program.shared_variables);
-            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
-        }
-    }
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+        auto& writer_args = writer_grid[work.core.x][work.core.y];
+        writer_args[0] = dst_addr;
+        writer_args[1] = work.num_tiles;
+        writer_args[2] = work.tile_offset;
+
+        TT_FATAL(work.in_group_1 || compute_group_2_grid != nullptr, "Core group 2 kernel should be present");
+        auto& compute_grid = work.in_group_1 ? compute_group_1_grid : *compute_group_2_grid;
+        compute_grid[work.core.x][work.core.y][0] = seed;
+    });
 }
 
 void DropoutMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const DropoutParams& args,
+    tt::tt_metal::Program& program,
+    const DropoutParams& operation_attributes,
     const DropoutInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
-
-    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto cached_program_proxy = DropoutProgramFactory::cached_program_t::proxy(
-            program, cached_workload.shared_variables.at(mesh_coord_range));
-        DropoutProgramFactory::override_runtime_arguments(
-            cached_program_proxy,
-            override_per_device_seed(args, mesh_coord_range.start_coord(), tensor_args.input),
-            tensor_args,
-            tensor_return_value);
-    }
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    DropoutProgramFactory::override_runtime_arguments(
+        program, operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
 }
 
 }  // namespace ttnn::experimental::prim

@@ -4,80 +4,132 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_unreduced_backward_device_operation.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
 
-MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_unreduced_backward_impl_2d(
-    const Tensor& target,
-    const std::optional<Tensor>& weight,
-    const Tensor& output_grad,
-    const Tensor& input_grad,
+using namespace tt;
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
+
+namespace {
+
+// ProgramSpec resource names, shared by all three rank configurations.
+const KernelSpecName READER{"reader"};
+const KernelSpecName WRITER{"writer"};
+
+const DFBSpecName TARGET_DFB{"target"};
+const DFBSpecName OUTPUT_GRAD_DFB{"output_grad"};
+const DFBSpecName WEIGHT_DFB{"weight"};
+// Scratch staging for read_line: it NoC-reads a whole DRAM-aligned chunk here, then copies out just
+// the valid elements. Needed because DRAM's minimum read size exceeds L1's on some architectures.
+const DFBSpecName WEIGHT_SCRATCH_DFB{"weight_scratch"};
+const DFBSpecName OUTPUT_GRAD_SCRATCH_DFB{"output_grad_scratch"};
+const DFBSpecName INPUT_GRAD_DFB{"input_grad"};
+
+const TensorParamName TARGET_TENSOR{"target"};
+const TensorParamName OUTPUT_GRAD_TENSOR{"output_grad"};
+const TensorParamName WEIGHT_TENSOR{"weight"};
+const TensorParamName INPUT_GRAD_TENSOR{"input_grad"};
+
+// Helper: append a DFB holding `num_tiles` tiles of `data_format` (skips creation when num_tiles == 0).
+void push_dfb(ProgramSpec& spec, const DFBSpecName& unique_id, uint32_t num_tiles, tt::DataFormat data_format) {
+    if (num_tiles == 0) {
+        return;
+    }
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = unique_id,
+        .entry_size = tt::tile_size(data_format),
+        .num_entries = num_tiles,
+        .data_format_metadata = data_format,
+    });
+}
+
+// Helper: the reader both fills and drains its private DFBs — some through the FIFO, some purely as an
+// address source — so it is the buffer's only toucher and takes both endpoint roles. One accessor name
+// for both, so the kernel keeps a single DataflowBuffer object per DFB.
+void bind_self_loop(KernelSpec& kernel, const DFBSpecName& dfb, std::string_view accessor_name) {
+    kernel.dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = dfb,
+        .accessor_name = std::string{accessor_name},
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    kernel.dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = dfb,
+        .accessor_name = std::string{accessor_name},
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    });
+}
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_2d(
+    const MeshTensor& target,
+    const std::optional<std::reference_wrapper<const MeshTensor>>& weight,
+    const MeshTensor& output_grad,
+    const MeshTensor& input_grad,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
 
     // input_grad: (N, C)
-    auto input_grad_shape = input_grad.padded_shape();
+    const auto& input_grad_spec = input_grad.tensor_spec();
+    auto input_grad_shape = input_grad_spec.padded_shape();
     auto N = input_grad_shape[0];
-    auto channel_size = input_grad_shape[1];
+    uint32_t channel_size = input_grad_shape[1];
 
     const bool weight_has_value = weight.has_value();
 
-    tt::tt_metal::IDevice* device = target.device();
-    auto grid = device->compute_with_storage_grid_size();
+    const auto& device = target.device();
+    auto grid = device.compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
-    uint32_t units_to_divide = input_grad.physical_volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+    uint32_t units_to_divide = input_grad_shape.volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
-    Program program = Program();
+    ProgramSpec spec{.name = "moreh_nll_loss_unreduced_backward_2d"};
 
-    // create circular buffers
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
+    // create dataflow buffers
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad_spec.data_type());
 
     auto Ct = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
     auto Nt = tt::div_up(N, tt::constants::TILE_WIDTH);
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        data_format,
-        {
-            {tt::CBIndex::c_0, 1, tt::DataFormat::Int32},                          // target
-            {tt::CBIndex::c_1, Nt},                                                // output_grad
-            {tt::CBIndex::c_2, static_cast<uint32_t>(weight_has_value ? Ct : 0)},  // weight
-            {tt::CBIndex::c_16, 1},                                                // input_grad
-        });
 
-    // create read/write kernel
-    std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
+    push_dfb(spec, TARGET_DFB, 1, tt::DataFormat::Int32);                 // target
+    push_dfb(spec, OUTPUT_GRAD_DFB, Nt, data_format);                     // output_grad
+    push_dfb(spec, WEIGHT_DFB, weight_has_value ? Ct : 0u, data_format);  // weight
+    push_dfb(spec, INPUT_GRAD_DFB, 1, data_format);                       // input_grad
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = "1";
+        // This DFB will be used as scratch storage when reading data from DRAM into L1
+        push_dfb(spec, WEIGHT_SCRATCH_DFB, 1, data_format);  // weight scratch
+    }
+    // Need another scratch DFB for output_grad reading data from DRAM into L1.
+    push_dfb(spec, OUTPUT_GRAD_SCRATCH_DFB, 1, data_format);  // output_grad scratch
+
+    // create read/write kernel
+    KernelSpec::CompilerOptions::Defines reader_defines;
+
+    if (weight_has_value) {
+        reader_defines.emplace("WEIGHT", "1");
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        reader_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
 
     const auto* const reader_kernel_file =
@@ -87,15 +139,78 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp";
 
-    auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = reader_kernel_file,
+        .compiler_options = {.defines = std::move(reader_defines)},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "Nt", "Ct"},
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+    bind_self_loop(reader, TARGET_DFB, "target");
+    bind_self_loop(reader, OUTPUT_GRAD_DFB, "output_grad");
+    bind_self_loop(reader, OUTPUT_GRAD_SCRATCH_DFB, "output_grad_scratch");
+    reader.dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = INPUT_GRAD_DFB,
+        .accessor_name = "input_grad",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    reader.tensor_bindings.push_back(TensorBinding{
+        .tensor_parameter_name = TARGET_TENSOR,
+        .accessor_name = "target",
+    });
+    reader.tensor_bindings.push_back(TensorBinding{
+        .tensor_parameter_name = OUTPUT_GRAD_TENSOR,
+        .accessor_name = "output_grad",
+    });
+    if (weight_has_value) {
+        bind_self_loop(reader, WEIGHT_DFB, "weight");
+        bind_self_loop(reader, WEIGHT_SCRATCH_DFB, "weight_scratch");
+        reader.tensor_bindings.push_back(TensorBinding{
+            .tensor_parameter_name = WEIGHT_TENSOR,
+            .accessor_name = "weight",
+        });
+    }
 
-    const auto target_addr = target.buffer()->address();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
-    const auto output_grad_addr = output_grad.buffer()->address();
-    const auto input_grad_addr = input_grad.buffer()->address();
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = writer_kernel_file,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_GRAD_DFB,
+                    .accessor_name = "input_grad",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT_GRAD_TENSOR,
+                    .accessor_name = "input_grad",
+                },
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"num_tiles_per_core", "start_id"},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = TARGET_TENSOR, .spec = target.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = OUTPUT_GRAD_TENSOR, .spec = output_grad.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT_GRAD_TENSOR, .spec = input_grad_spec});
+    if (weight_has_value) {
+        spec.tensor_parameters.push_back(
+            TensorParameter{.unique_id = WEIGHT_TENSOR, .spec = weight->get().tensor_spec()});
+    }
+
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     // Set Runtime Args
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
@@ -109,46 +224,55 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
             TT_THROW("Core not in specified core ranges");
         }
 
-        std::vector<uint32_t> reader_args = {
-            target_addr,
-            output_grad_addr,
-            weight_addr,
-            ignore_index,
-            units_per_core,
-            tile_offset,
-            Nt,
-            channel_size,
-            Ct,
-        };
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {
+                {"ignore_index", ignore_index},
+                {"num_tiles_per_core", units_per_core},
+                {"start_id", tile_offset},
+                {"Nt", Nt},
+                {"Ct", Ct},
+            });
 
-        std::vector<uint32_t> writer_args = {input_grad_addr, units_per_core, tile_offset};
-
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_tiles_per_core", units_per_core}, {"start_id", tile_offset}});
 
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+
+    run_args.tensor_args.emplace(TARGET_TENSOR, target);
+    run_args.tensor_args.emplace(OUTPUT_GRAD_TENSOR, output_grad);
+    run_args.tensor_args.emplace(INPUT_GRAD_TENSOR, input_grad);
+    if (weight_has_value) {
+        run_args.tensor_args.emplace(WEIGHT_TENSOR, weight->get());
+    }
+
+    spec.kernels.push_back(std::move(reader));
+    spec.kernels.push_back(std::move(writer));
+    spec.work_units.push_back(WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_unreduced_backward_impl_3d(
-    const Tensor& target,
-    const std::optional<Tensor>& weight,
-    const Tensor& output_grad,
-    const Tensor& input_grad,
+ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_3d(
+    const MeshTensor& target,
+    const std::optional<std::reference_wrapper<const MeshTensor>>& weight,
+    const MeshTensor& output_grad,
+    const MeshTensor& input_grad,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
 
     // input_grad: (N, C, W)
-    auto input_grad_shape = input_grad.padded_shape();
-    auto channel_size = input_grad_shape[1];
+    const auto& input_grad_spec = input_grad.tensor_spec();
+    auto input_grad_shape = input_grad_spec.padded_shape();
+    uint32_t channel_size = input_grad_shape[1];
 
     auto W = input_grad_shape[-1];
     auto Ct = channel_size / tt::constants::TILE_HEIGHT;
@@ -156,52 +280,42 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
 
     const bool weight_has_value = weight.has_value();
 
-    tt::tt_metal::IDevice* device = target.device();
-    auto grid = device->compute_with_storage_grid_size();
+    const auto& device = target.device();
+    auto grid = device.compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
-    uint32_t units_to_divide = input_grad.physical_volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+    uint32_t units_to_divide = input_grad_shape.volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
-    Program program = Program();
+    ProgramSpec spec{.name = "moreh_nll_loss_unreduced_backward_3d"};
 
-    // create circular buffers
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
+    // create dataflow buffers
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad_spec.data_type());
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        data_format,
-        {
-            {tt::CBIndex::c_0, 1, tt::DataFormat::Int32},                          // target
-            {tt::CBIndex::c_1, 1},                                                 // output_grad
-            {tt::CBIndex::c_2, static_cast<uint32_t>(weight_has_value ? Ct : 0)},  // weight
-            {tt::CBIndex::c_16, 1},                                                // input_grad
-        });
-
-    // create read/write kernel
-    std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
+    push_dfb(spec, TARGET_DFB, 1, tt::DataFormat::Int32);                 // target
+    push_dfb(spec, OUTPUT_GRAD_DFB, 1, data_format);                      // output_grad
+    push_dfb(spec, WEIGHT_DFB, weight_has_value ? Ct : 0u, data_format);  // weight
+    push_dfb(spec, INPUT_GRAD_DFB, 1, data_format);                       // input_grad
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = "1";
+        // This DFB will be used as scratch storage when reading data from DRAM into L1
+        push_dfb(spec, WEIGHT_SCRATCH_DFB, 1, data_format);  // weight scratch
+    }
+
+    // create read/write kernel
+    KernelSpec::CompilerOptions::Defines reader_defines;
+
+    if (weight_has_value) {
+        reader_defines.emplace("WEIGHT", "1");
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        reader_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
 
     const auto* const reader_kernel_file =
@@ -211,15 +325,77 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp";
 
-    auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = reader_kernel_file,
+        .compiler_options = {.defines = std::move(reader_defines)},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "Ct", "Wt"},
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+    bind_self_loop(reader, TARGET_DFB, "target");
+    bind_self_loop(reader, OUTPUT_GRAD_DFB, "output_grad");
+    reader.dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = INPUT_GRAD_DFB,
+        .accessor_name = "input_grad",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    reader.tensor_bindings.push_back(TensorBinding{
+        .tensor_parameter_name = TARGET_TENSOR,
+        .accessor_name = "target",
+    });
+    reader.tensor_bindings.push_back(TensorBinding{
+        .tensor_parameter_name = OUTPUT_GRAD_TENSOR,
+        .accessor_name = "output_grad",
+    });
+    if (weight_has_value) {
+        bind_self_loop(reader, WEIGHT_DFB, "weight");
+        bind_self_loop(reader, WEIGHT_SCRATCH_DFB, "weight_scratch");
+        reader.tensor_bindings.push_back(TensorBinding{
+            .tensor_parameter_name = WEIGHT_TENSOR,
+            .accessor_name = "weight",
+        });
+    }
 
-    const auto target_addr = target.buffer()->address();
-    const auto output_grad_addr = output_grad.buffer()->address();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
-    const auto input_grad_addr = input_grad.buffer()->address();
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = writer_kernel_file,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_GRAD_DFB,
+                    .accessor_name = "input_grad",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT_GRAD_TENSOR,
+                    .accessor_name = "input_grad",
+                },
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"num_tiles_per_core", "start_id"},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = TARGET_TENSOR, .spec = target.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = OUTPUT_GRAD_TENSOR, .spec = output_grad.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT_GRAD_TENSOR, .spec = input_grad_spec});
+    if (weight_has_value) {
+        spec.tensor_parameters.push_back(
+            TensorParameter{.unique_id = WEIGHT_TENSOR, .spec = weight->get().tensor_spec()});
+    }
+
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     // Set Runtime Args
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
@@ -233,45 +409,55 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
             TT_THROW("Core not in specified core ranges");
         }
 
-        std::vector<uint32_t> reader_args = {
-            target_addr,
-            output_grad_addr,
-            weight_addr,
-            ignore_index,
-            units_per_core,
-            tile_offset,
-            channel_size,
-            Ct,
-            Wt,
-        };
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {
+                {"ignore_index", ignore_index},
+                {"num_tiles_per_core", units_per_core},
+                {"start_id", tile_offset},
+                {"Ct", Ct},
+                {"Wt", Wt},
+            });
 
-        std::vector<uint32_t> writer_args = {input_grad_addr, units_per_core, tile_offset};
-
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_tiles_per_core", units_per_core}, {"start_id", tile_offset}});
 
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+
+    run_args.tensor_args.emplace(TARGET_TENSOR, target);
+    run_args.tensor_args.emplace(OUTPUT_GRAD_TENSOR, output_grad);
+    run_args.tensor_args.emplace(INPUT_GRAD_TENSOR, input_grad);
+    if (weight_has_value) {
+        run_args.tensor_args.emplace(WEIGHT_TENSOR, weight->get());
+    }
+
+    spec.kernels.push_back(std::move(reader));
+    spec.kernels.push_back(std::move(writer));
+    spec.work_units.push_back(WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_unreduced_backward_impl_4d(
-    const Tensor& target,
-    const std::optional<Tensor>& weight,
-    const Tensor& output_grad,
-    const Tensor& input_grad,
+ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_4d(
+    const MeshTensor& target,
+    const std::optional<std::reference_wrapper<const MeshTensor>>& weight,
+    const MeshTensor& output_grad,
+    const MeshTensor& input_grad,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_grad_shape = input_grad.padded_shape();
+    const auto& input_grad_spec = input_grad.tensor_spec();
+    const auto& target_spec = target.tensor_spec();
+    auto input_grad_shape = input_grad_spec.padded_shape();
     auto N = input_grad_shape[0];
-    auto channel_size = input_grad_shape[1];
+    uint32_t channel_size = input_grad_shape[1];
 
     auto Ct = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
 
@@ -279,56 +465,47 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto W = input_grad_shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
-    auto num_inner_tile = target.physical_volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+    uint32_t num_inner_tile =
+        target_spec.padded_shape().volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
 
-    tt::tt_metal::IDevice* device = target.device();
-    auto grid = device->compute_with_storage_grid_size();
+    const auto& device = target.device();
+    auto grid = device.compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
-    uint32_t units_to_divide = input_grad.physical_volume() / H / W * Ht * Wt;
+    uint32_t units_to_divide = input_grad_shape.volume() / H / W * Ht * Wt;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
-    Program program = Program();
+    ProgramSpec spec{.name = "moreh_nll_loss_unreduced_backward_4d"};
 
-    // create circular buffers
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
+    // create dataflow buffers
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad_spec.data_type());
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        data_format,
-        {
-            {tt::CBIndex::c_0, 1, tt::DataFormat::Int32},                          // target
-            {tt::CBIndex::c_1, 1},                                                 // output_grad
-            {tt::CBIndex::c_2, static_cast<uint32_t>(weight_has_value ? Ct : 0)},  // weight
-            {tt::CBIndex::c_16, 1},                                                // input_grad
-        });
-
-    // create read/write kernel
-    std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
+    push_dfb(spec, TARGET_DFB, 1, tt::DataFormat::Int32);                 // target
+    push_dfb(spec, OUTPUT_GRAD_DFB, 1, data_format);                      // output_grad
+    push_dfb(spec, WEIGHT_DFB, weight_has_value ? Ct : 0u, data_format);  // weight
+    push_dfb(spec, INPUT_GRAD_DFB, 1, data_format);                       // input_grad
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = "1";
+        // This DFB will be used as scratch storage when reading data from DRAM into L1
+        push_dfb(spec, WEIGHT_SCRATCH_DFB, 1, data_format);  // weight scratch
+    }
+
+    // create read/write kernel
+    KernelSpec::CompilerOptions::Defines reader_defines;
+
+    if (weight_has_value) {
+        reader_defines.emplace("WEIGHT", "1");
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        reader_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
 
     const auto* const reader_kernel_file =
@@ -338,15 +515,77 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp";
 
-    auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = reader_kernel_file,
+        .compiler_options = {.defines = std::move(reader_defines)},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "num_inner_tile", "C", "Ct"},
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+    bind_self_loop(reader, TARGET_DFB, "target");
+    bind_self_loop(reader, OUTPUT_GRAD_DFB, "output_grad");
+    reader.dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = INPUT_GRAD_DFB,
+        .accessor_name = "input_grad",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    reader.tensor_bindings.push_back(TensorBinding{
+        .tensor_parameter_name = TARGET_TENSOR,
+        .accessor_name = "target",
+    });
+    reader.tensor_bindings.push_back(TensorBinding{
+        .tensor_parameter_name = OUTPUT_GRAD_TENSOR,
+        .accessor_name = "output_grad",
+    });
+    if (weight_has_value) {
+        bind_self_loop(reader, WEIGHT_DFB, "weight");
+        bind_self_loop(reader, WEIGHT_SCRATCH_DFB, "weight_scratch");
+        reader.tensor_bindings.push_back(TensorBinding{
+            .tensor_parameter_name = WEIGHT_TENSOR,
+            .accessor_name = "weight",
+        });
+    }
 
-    const auto target_addr = target.buffer()->address();
-    const auto output_grad_addr = output_grad.buffer()->address();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
-    const auto input_grad_addr = input_grad.buffer()->address();
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = writer_kernel_file,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_GRAD_DFB,
+                    .accessor_name = "input_grad",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT_GRAD_TENSOR,
+                    .accessor_name = "input_grad",
+                },
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"num_tiles_per_core", "start_id"},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = TARGET_TENSOR, .spec = target_spec});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = OUTPUT_GRAD_TENSOR, .spec = output_grad.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT_GRAD_TENSOR, .spec = input_grad_spec});
+    if (weight_has_value) {
+        spec.tensor_parameters.push_back(
+            TensorParameter{.unique_id = WEIGHT_TENSOR, .spec = weight->get().tensor_spec()});
+    }
+
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     // Set Runtime Args
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
@@ -360,53 +599,66 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
             TT_THROW("Core not in specified core ranges");
         }
 
-        std::vector<uint32_t> reader_args = {
-            target_addr,
-            output_grad_addr,
-            weight_addr,
-            ignore_index,
-            units_per_core,
-            tile_offset,
-            num_inner_tile,
-            channel_size,
-            Ct,
-        };
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {
+                {"ignore_index", ignore_index},
+                {"num_tiles_per_core", units_per_core},
+                {"start_id", tile_offset},
+                {"num_inner_tile", num_inner_tile},
+                {"C", channel_size},
+                {"Ct", Ct},
+            });
 
-        std::vector<uint32_t> writer_args = {input_grad_addr, units_per_core, tile_offset};
-
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_tiles_per_core", units_per_core}, {"start_id", tile_offset}});
 
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+
+    run_args.tensor_args.emplace(TARGET_TENSOR, target);
+    run_args.tensor_args.emplace(OUTPUT_GRAD_TENSOR, output_grad);
+    run_args.tensor_args.emplace(INPUT_GRAD_TENSOR, input_grad);
+    if (weight_has_value) {
+        run_args.tensor_args.emplace(WEIGHT_TENSOR, weight->get());
+    }
+
+    spec.kernels.push_back(std::move(reader));
+    spec.kernels.push_back(std::move(writer));
+    spec.work_units.push_back(WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t
-MorehNllLossUnreducedBackwardDeviceOperation::Factory::create(
+ttnn::device_operation::ProgramArtifacts
+MorehNllLossUnreducedBackwardDeviceOperation::Factory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const Tensor& target = tensor_args.target_tensor;
-    const std::optional<Tensor>& weight = tensor_args.weight_tensor;
-    const Tensor& output_grad = tensor_args.output_grad_tensor;
+    const MeshTensor& target = tensor_args.target_tensor.mesh_tensor();
+    const std::optional<Tensor>& weight_tensor = tensor_args.weight_tensor;
+    std::optional<std::reference_wrapper<const MeshTensor>> weight;
+    if (weight_tensor.has_value()) {
+        weight = std::cref(weight_tensor->mesh_tensor());
+    }
+    const MeshTensor& output_grad = tensor_args.output_grad_tensor.mesh_tensor();
 
     const uint32_t ignore_index = operation_attributes.ignore_index;
     const DeviceComputeKernelConfig compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    const Tensor& input_grad = tensor_return_value;
+    const MeshTensor& input_grad = tensor_return_value.mesh_tensor();
 
     // split work
-    const auto& input_grad_shape = input_grad.logical_shape();
+    const auto& input_grad_shape = input_grad.tensor_spec().logical_shape();
     auto input_grad_rank = input_grad_shape.rank();
 
     if (input_grad_rank == 2) {
@@ -421,42 +673,6 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::create(
 
     return moreh_nll_loss_unreduced_backward_impl_4d(
         target, weight, output_grad, input_grad, ignore_index, compute_kernel_config);
-}
-
-void MorehNllLossUnreducedBackwardDeviceOperation::Factory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    const uint32_t target_addr = tensor_args.target_tensor.buffer()->address();
-    const uint32_t output_grad_addr = tensor_args.output_grad_tensor.buffer()->address();
-    const uint32_t weight_addr =
-        tensor_args.weight_tensor.has_value() ? tensor_args.weight_tensor.value().buffer()->address() : 0;
-    const uint32_t ignore_index = operation_attributes.ignore_index;
-
-    const uint32_t input_grad_addr = tensor_return_value.buffer()->address();
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = target_addr;
-            runtime_args[1] = output_grad_addr;
-            runtime_args[2] = weight_addr;
-            runtime_args[3] = ignore_index;
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = input_grad_addr;
-        }
-    }
 }
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward

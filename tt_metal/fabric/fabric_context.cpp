@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <vector>
 #include <map>
-#include <algorithm>
+#include <ostream>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -16,16 +16,14 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
-#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_fabric::Topology& topology) {
-    tt::stl::reflection::operator<<(os, topology);
+    ttsl::reflection::operator<<(os, topology);
     return os;
 }
 
@@ -231,13 +229,18 @@ size_t FabricContext::compute_max_payload_size_bytes(const tt_metal::Hal& hal, t
 }
 
 FabricContext::FabricContext(
-    const ControlPlane& control_plane,
+    ControlPlane& control_plane,
     const tt_metal::Hal& hal,
-    tt::ARCH arch,
-    bool is_ubb_galaxy,
+    const tt::Cluster& cluster,
+    const llrt::RunTimeOptions& rtoptions,
     tt::tt_fabric::FabricConfig fabric_config,
     const FabricRouterConfig& router_config) :
-    router_config_(router_config), is_ubb_galaxy_(is_ubb_galaxy) {
+    control_plane_(control_plane),
+    hal_(hal),
+    cluster_(cluster),
+    rtoptions_(rtoptions),
+    router_config_(router_config),
+    is_ubb_galaxy_(cluster.is_ubb_galaxy()) {
     // === Initialization order critical - dependencies flow downward ===
     // fabric_config_ → topology_ → routing flags → packet specs
 
@@ -259,11 +262,10 @@ FabricContext::FabricContext(
     this->compute_routing_mode();
 
     // Step 5: Compute packet specifications (depends on: routing flags)
-    this->compute_packet_specifications(control_plane, hal, arch);
+    this->compute_packet_specifications(control_plane, hal, cluster.arch());
 
     // Step 6: Additional independent configs
-    auto fabric_tensix_config = control_plane.get_fabric_tensix_config();
-    this->tensix_enabled_ = (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED);
+    this->fabric_tensix_config_ = control_plane.get_fabric_tensix_config();
 
     // Compute intermesh VC configuration (requires ControlPlane to be initialized)
     // this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
@@ -296,7 +298,7 @@ bool FabricContext::has_z_router_on_device(
     // Check if this fabric node has Z router ethernet channels
     // Query control plane for active channels and check if any have Z direction
 
-    // Try to get active channels - if node doesn't exist, the map lookup will return empty
+    // Every configured fabric node has channel metadata; an absent entry is a topology error.
     auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
     // If no channels, node doesn't have Z router (or isn't configured yet)

@@ -1,0 +1,786 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Multi-core and multi-DFB (concurrent/sequential) tests (Metal 2.0).
+
+#include "dfb_test_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
+
+namespace tt::tt_metal {
+
+
+// multi-core + concurrent/sequential multi-DFB harnesses (Metal 2.0)
+static void run_single_dfb_multicore_2_0(
+    distributed::MeshDevice& mesh_device,
+    uint32_t num_producers,
+    uint32_t num_consumers,
+    m2::DFBAccessPattern pap,
+    m2::DFBAccessPattern cap,
+    bool implicit_sync) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    CoreCoord grid = mesh_device.compute_with_storage_grid_size();
+    if (grid.x * grid.y < 2) {
+        GTEST_SKIP() << "Multi-core test requires >= 2 Tensix cores";
+    }
+    // DM-DM ALL + implicit sync is unsupported (legacy parity); the single-core path
+    // (run_single_dfb_program_2_0) skips it too. The multicore helper was missing this guard, so the
+    // *_1Sx4A_2_0/ImplicitSyncTrue variant would fail on the device instead of skipping.
+    if (cap == m2::DFBAccessPattern::ALL && implicit_sync) {
+        GTEST_SKIP() << "DM-DM ALL with implicit_sync not supported (legacy parity)";
+    }
+
+    constexpr uint32_t entry_size = 1024;
+    const uint32_t num_entries = default_num_entries(num_producers, num_consumers);
+    const m2::NodeCoord core_a{0, 0};
+    const m2::NodeCoord core_b{1, 0};
+    const bool is_all = (cap == m2::DFBAccessPattern::ALL);
+
+    const m2::DFBSpecName DFB{"dfb"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    // Each core owns num_entries slots → total = 2 * num_entries.
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 2 * num_entries, DataType::UINT32);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+
+    m2::DataflowBufferSpec dfb_spec{
+        .unique_id = DFB,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    const uint32_t per_producer = (num_entries + num_producers - 1) / num_producers;
+    const uint32_t per_consumer = is_all ? num_entries : (num_entries + num_consumers - 1) / num_consumers;
+
+    auto producer = make_dm_dfb_producer(PRODUCER, DFB, IN_TENSOR, per_producer, implicit_sync, pap, num_producers);
+
+    auto consumer =
+        make_dm_dfb_consumer(CONSUMER, DFB, OUT_TENSOR, per_consumer, is_all, implicit_sync, cap, num_consumers);
+
+    // All-pass: dfb.disable_implicit_sync = !implicit_sync (now per-DM-endpoint, post-#45160).
+    maybe_disable_implicit_sync(producer, implicit_sync, DFB);
+    maybe_disable_implicit_sync(consumer, implicit_sync, DFB);
+
+    // Single WU covering both cores via NodeRange.
+    m2::WorkUnitSpec wu{
+        .name = "wu",
+        .kernels = {PRODUCER, CONSUMER},
+        .target_nodes = m2::NodeRange{core_a, core_b},
+    };
+
+    m2::ProgramSpec spec{
+        .name = "multicore_dfb_2_0",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
+
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = PRODUCER,
+         .runtime_arg_values =
+             {{"chunk_offset", {{core_a, 0u}, {core_b, num_entries}}},
+              {"entries_per_core", {{core_a, num_entries}, {core_b, num_entries}}}}},
+        {.kernel = CONSUMER,
+         .runtime_arg_values =
+             {{"chunk_offset", {{core_a, 0u}, {core_b, num_entries}}},
+              {"entries_per_core", {{core_a, num_entries}, {core_b, num_entries}}}}},
+    };
+    params.tensor_args = {
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
+    };
+    m2::SetProgramRunArgs(program, params);
+
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
+        0, 1000000, 2 * num_entries * entry_size / sizeof(uint32_t));
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    EXPECT_EQ(input, output) << "M2 multi-core DFB identity mismatch";
+}
+
+static void run_concurrent_dfbs_program_2_0(
+    distributed::MeshDevice& mesh_device,
+    uint32_t num_dfbs,
+    uint32_t entry_size,
+    uint32_t entries_per_dfb,
+    bool implicit_sync) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Concurrent DFB tests require Quasar";
+    }
+    if (2 * num_dfbs > 6) {
+        GTEST_SKIP() << "2*num_dfbs must fit in 6 Quasar DM threads";
+    }
+
+    const m2::NodeCoord node{0, 0};
+
+    // One big DRAM tensor sliced num_dfbs ways for input + same for output.
+    const uint32_t total_entries = num_dfbs * entries_per_dfb;
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_entries, DataType::UINT32);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+
+    // Build N DFBs + N producer kernels + N consumer kernels.
+    std::vector<m2::DataflowBufferSpec> dfbs;
+    std::vector<m2::KernelSpec> kernels;
+    std::vector<m2::KernelSpecName> kernel_names;
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        const m2::DFBSpecName dfb_id{"dfb_" + std::to_string(i)};
+        const m2::KernelSpecName prod_id{"producer_" + std::to_string(i)};
+        const m2::KernelSpecName cons_id{"consumer_" + std::to_string(i)};
+        dfbs.push_back({
+            .unique_id = dfb_id,
+            .entry_size = entry_size,
+            .num_entries = entries_per_dfb,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        });
+        auto prod = make_dm_kernel(prod_id, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_producer_2_0.cpp");
+        prod.dfb_bindings = {
+            {.dfb_spec_name = dfb_id,
+             .accessor_name = "out",
+             .endpoint_type = m2::DFBEndpointType::PRODUCER,
+             .access_pattern = m2::DFBAccessPattern::STRIDED}};
+        prod.tensor_bindings = {
+            {.tensor_parameter_name = m2::TensorParamName{"in_tensor"}, .accessor_name = "src_tensor"}};
+        prod.compile_time_args = {
+            {"num_entries_per_producer", entries_per_dfb},
+            {"implicit_sync", implicit_sync ? 1u : 0u},
+            {"chunk_offset", i * entries_per_dfb}};
+        maybe_disable_implicit_sync(prod, implicit_sync, dfb_id);  // all-pass: !implicit_sync (post-#45160)
+        kernels.push_back(prod);
+        kernel_names.push_back(prod_id);
+
+        auto cons = make_dm_kernel(cons_id, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer_2_0.cpp");
+        cons.dfb_bindings = {
+            {.dfb_spec_name = dfb_id,
+             .accessor_name = "in",
+             .endpoint_type = m2::DFBEndpointType::CONSUMER,
+             .access_pattern = m2::DFBAccessPattern::STRIDED}};
+        cons.tensor_bindings = {
+            {.tensor_parameter_name = m2::TensorParamName{"out_tensor"}, .accessor_name = "dst_tensor"}};
+        cons.compile_time_args = {
+            {"num_entries_per_consumer", entries_per_dfb},
+            {"implicit_sync", implicit_sync ? 1u : 0u},
+            {"chunk_offset", i * entries_per_dfb}};
+        maybe_disable_implicit_sync(cons, implicit_sync, dfb_id);  // all-pass: !implicit_sync (post-#45160)
+        kernels.push_back(cons);
+        kernel_names.push_back(cons_id);
+    }
+
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = kernel_names, .target_nodes = node};
+
+    m2::ProgramSpec spec{
+        .name = "concurrent_dfbs_2_0",
+        .kernels = kernels,
+        .dataflow_buffers = dfbs,
+        .tensor_parameters =
+            {
+                {.unique_id = m2::TensorParamName{"in_tensor"}, .spec = in_tensor.tensor_spec()},
+                {.unique_id = m2::TensorParamName{"out_tensor"}, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
+
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    m2::ProgramRunArgs params;
+    for (const auto& name : kernel_names) {
+        params.kernel_run_args.push_back({.kernel = name});
+    }
+    params.tensor_args = {
+        {m2::TensorParamName{"in_tensor"}, std::cref(in_tensor)},
+        {m2::TensorParamName{"out_tensor"}, std::cref(out_tensor)},
+    };
+    m2::SetProgramRunArgs(program, params);
+
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
+        0, 1000000, total_entries * entry_size / sizeof(uint32_t));
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    EXPECT_EQ(input, output) << "M2 concurrent DFBs mismatch";
+}
+
+struct M2SeqDFBSpec {
+    m2::DFBAccessPattern cap;
+};
+
+static void run_sequential_4_dfbs_2_0(
+    distributed::MeshDevice& mesh_device,
+    const std::array<M2SeqDFBSpec, 4>& dfb_specs,
+    uint32_t num_producers,
+    uint32_t num_consumers,
+    bool implicit_sync) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Sequential 4-DFB test requires Quasar";
+    }
+    if (num_producers + num_consumers > 6) {
+        GTEST_SKIP() << "num_p + num_c must fit in 6 Quasar DM threads";
+    }
+
+    constexpr uint32_t entry_size = 1024;
+    // num_entries must be divisible by both num_producers and num_consumers.
+    const uint32_t lcm_pc = (num_producers * num_consumers) / std::gcd(num_producers, num_consumers);
+    const uint32_t num_entries = ((16u + lcm_pc - 1u) / lcm_pc) * lcm_pc;
+    const uint32_t entries_per_producer = num_entries / num_producers;
+    const uint32_t entries_per_consumer_strided = num_entries / num_consumers;
+    const uint32_t entries_per_consumer_all = num_entries;
+    const m2::NodeCoord node{0, 0};
+
+    constexpr std::array<const char*, 4> DFB_NAMES{"buf_0", "buf_1", "buf_2", "buf_3"};
+    constexpr std::array<const char*, 4> SRC_NAMES{"src_0", "src_1", "src_2", "src_3"};
+    constexpr std::array<const char*, 4> DST_NAMES{"dst_0", "dst_1", "dst_2", "dst_3"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
+    std::vector<MeshTensor> in_tensors, out_tensors;
+    in_tensors.reserve(4);
+    out_tensors.reserve(4);
+    for (uint32_t i = 0; i < 4; ++i) {
+        in_tensors.push_back(MeshTensor::allocate_on_device(mesh_device, tensor_spec));
+        out_tensors.push_back(MeshTensor::allocate_on_device(mesh_device, tensor_spec));
+    }
+
+    std::vector<m2::DataflowBufferSpec> dfbs;
+    dfbs.reserve(4);
+    for (uint32_t i = 0; i < 4; ++i) {
+        dfbs.push_back({
+            .unique_id = m2::DFBSpecName{DFB_NAMES[i]},
+            .entry_size = entry_size,
+            .num_entries = num_entries,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        });
+    }
+
+    auto producer = make_dm_kernel(
+        PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer_quad_2_0.cpp", num_producers);
+    for (uint32_t i = 0; i < 4; ++i) {
+        producer.dfb_bindings.push_back(
+            {.dfb_spec_name = m2::DFBSpecName{DFB_NAMES[i]},
+             .accessor_name = DFB_NAMES[i],
+             .endpoint_type = m2::DFBEndpointType::PRODUCER,
+             .access_pattern = m2::DFBAccessPattern::STRIDED});
+        producer.tensor_bindings.push_back(
+            {.tensor_parameter_name = m2::TensorParamName{SRC_NAMES[i]}, .accessor_name = SRC_NAMES[i]});
+    }
+    producer.compile_time_args = {
+        {"num_entries_per_producer", entries_per_producer}, {"implicit_sync", implicit_sync ? 1u : 0u}};
+
+    auto consumer = make_dm_kernel(
+        CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_consumer_quad_2_0.cpp", num_consumers);
+    for (uint32_t i = 0; i < 4; ++i) {
+        const auto cap = dfb_specs[i].cap;
+        consumer.dfb_bindings.push_back(
+            {.dfb_spec_name = m2::DFBSpecName{DFB_NAMES[i]},
+             .accessor_name = DFB_NAMES[i],
+             .endpoint_type = m2::DFBEndpointType::CONSUMER,
+             .access_pattern = cap});
+        consumer.tensor_bindings.push_back(
+            {.tensor_parameter_name = m2::TensorParamName{DST_NAMES[i]}, .accessor_name = DST_NAMES[i]});
+    }
+    consumer.compile_time_args = {
+        {"implicit_sync", implicit_sync ? 1u : 0u},
+        {"entries_per_consumer_strided", entries_per_consumer_strided},
+        {"entries_per_consumer_all", entries_per_consumer_all},
+        {"is_blocked_0", dfb_specs[0].cap == m2::DFBAccessPattern::ALL ? 1u : 0u},
+        {"is_blocked_1", dfb_specs[1].cap == m2::DFBAccessPattern::ALL ? 1u : 0u},
+        {"is_blocked_2", dfb_specs[2].cap == m2::DFBAccessPattern::ALL ? 1u : 0u},
+        {"is_blocked_3", dfb_specs[3].cap == m2::DFBAccessPattern::ALL ? 1u : 0u},
+    };
+
+    // All-pass: each DFB .disable_implicit_sync = !implicit_sync (now per-DM-endpoint, post-#45160).
+    for (uint32_t i = 0; i < 4; ++i) {
+        maybe_disable_implicit_sync(producer, implicit_sync, m2::DFBSpecName{DFB_NAMES[i]});
+        maybe_disable_implicit_sync(consumer, implicit_sync, m2::DFBSpecName{DFB_NAMES[i]});
+    }
+
+    std::vector<m2::TensorParameter> tensor_parameters;
+    tensor_parameters.reserve(8);
+    for (uint32_t i = 0; i < 4; ++i) {
+        tensor_parameters.push_back({.unique_id = m2::TensorParamName{SRC_NAMES[i]}, .spec = tensor_spec});
+        tensor_parameters.push_back({.unique_id = m2::TensorParamName{DST_NAMES[i]}, .spec = tensor_spec});
+    }
+
+    m2::ProgramSpec spec{
+        .name = "seq_4dfb_2_0",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = dfbs,
+        .tensor_parameters = tensor_parameters,
+        .work_units = {m2::WorkUnitSpec{
+            .name = "wu",
+            .kernels = {PRODUCER, CONSUMER},
+            .target_nodes = node,
+        }},
+    };
+
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    m2::ProgramRunArgs params;
+    // Kernels with no runtime args still need a KernelRunArgs entry so the
+    // framework actually launches them on each node. Without this, the kernels
+    // are wired up but never start, and outputs stay at the initial value (0).
+    params.kernel_run_args = {
+        {.kernel = PRODUCER, .runtime_arg_values = {}},
+        {.kernel = CONSUMER, .runtime_arg_values = {}},
+    };
+    for (uint32_t i = 0; i < 4; ++i) {
+        params.tensor_args.insert({m2::TensorParamName{SRC_NAMES[i]}, std::cref(in_tensors[i])});
+        params.tensor_args.insert({m2::TensorParamName{DST_NAMES[i]}, std::cref(out_tensors[i])});
+    }
+    m2::SetProgramRunArgs(program, params);
+
+    std::vector<std::vector<uint32_t>> inputs(4);
+    for (uint32_t i = 0; i < 4; ++i) {
+        inputs[i] = tt::test_utils::generate_uniform_random_vector<uint32_t>(
+            0, 100, num_entries * entry_size / sizeof(uint32_t));
+        slow_dispatch::WriteToBuffer(in_tensors[i].mesh_buffer(), inputs[i]);
+        m2_writeshard_barrier_uint32(mesh_device, in_tensors[i], inputs[i]);
+    }
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    for (uint32_t i = 0; i < 4; ++i) {
+        std::vector<uint32_t> output;
+        slow_dispatch::ReadFromBuffer(out_tensors[i].mesh_buffer(), output);
+        EXPECT_EQ(inputs[i], output) << "M2 sequential 4xDFB[" << i << "] output mismatch";
+    }
+}
+
+// multi-core tests
+TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_1Sx1S_2_0) {
+    run_single_dfb_multicore_2_0(
+        this->device(), 1, 1, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::STRIDED, GetParam());
+}
+TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_2Sx2S_2_0) {
+    run_single_dfb_multicore_2_0(
+        this->device(), 2, 2, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::STRIDED, GetParam());
+}
+TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_1Sx4A_2_0) {
+    run_single_dfb_multicore_2_0(
+        this->device(), 1, 4, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::ALL, GetParam());
+}
+
+// concurrent / sequential multi-DFB tests
+TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest3xDFB_1Sx1S_2_0) {
+    run_concurrent_dfbs_program_2_0(
+        this->device(),
+        /*num_dfbs=*/3,
+        /*entry_size=*/1024,
+        /*entries_per_dfb=*/16,
+        GetParam());
+}
+
+TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_3Sx3S_2_0) {
+    // 4 DFBs × 3P+3C STRIDED — stresses TC allocator across 6 DM threads.
+    std::array<M2SeqDFBSpec, 4> dfbs{
+        M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED},
+        M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED},
+        M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED},
+        M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED}};
+    run_sequential_4_dfbs_2_0(this->device(), dfbs, /*num_producers=*/3, /*num_consumers=*/3, GetParam());
+}
+
+TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_Mixed_2_0) {
+    // 2× STRIDED + 2× ALL — exercises mixed plain/remapper TCs in one program.
+    if (GetParam()) {
+        // Legacy parity: DM→DM ALL with implicit sync deadlocks (no DM↔DM remapper).
+        GTEST_SKIP() << "DM→DM ALL with implicit_sync not supported (legacy parity)";
+    }
+    std::array<M2SeqDFBSpec, 4> dfbs{
+        M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED},
+        M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED},
+        M2SeqDFBSpec{m2::DFBAccessPattern::ALL},
+        M2SeqDFBSpec{m2::DFBAccessPattern::ALL}};
+    run_sequential_4_dfbs_2_0(this->device(), dfbs, /*num_producers=*/3, /*num_consumers=*/3, GetParam());
+}
+
+TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    const bool implicit_sync = GetParam();
+
+    constexpr uint32_t num_dfbs = 4;
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries = 16;
+    constexpr uint32_t total_bytes = num_entries * entry_size;
+    const m2::NodeCoord node{0, 0};
+
+    constexpr std::array<const char*, 4> DFB_NAMES{"buf_0", "buf_1", "buf_2", "buf_3"};
+    constexpr std::array<const char*, 4> DST_NAMES{"dst_0", "dst_1", "dst_2", "dst_3"};
+    constexpr std::array<const char*, 4> CONSUMER_NAMES{"consumer_0", "consumer_1", "consumer_2", "consumer_3"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+
+    const auto dram_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
+
+    std::vector<MeshTensor> out_tensors;
+    out_tensors.reserve(4);
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        out_tensors.push_back(MeshTensor::allocate_on_device(this->device(), dram_spec));
+    }
+
+    std::vector<m2::DataflowBufferSpec> dfbs;
+    dfbs.reserve(num_dfbs);
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        dfbs.push_back({
+            .unique_id = m2::DFBSpecName{DFB_NAMES[i]},
+            .entry_size = entry_size,
+            .num_entries = num_entries,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        });
+    }
+
+    // Tensix sequential producer: 1 thread, hardcoded 4 DFB bindings. No
+    // tensor_bindings — TRISC compute kernels can't include tensor_accessor.h
+    // transitively. Host pre-fills each ring's L1 region via uniform_alloc_addr.
+    auto producer = make_compute_kernel(
+        PRODUCER, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer_quad_2_0.cpp", /*num_threads=*/1);
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        producer.dfb_bindings.push_back(
+            {.dfb_spec_name = m2::DFBSpecName{DFB_NAMES[i]},
+             .accessor_name = DFB_NAMES[i],
+             .endpoint_type = m2::DFBEndpointType::PRODUCER,
+             .access_pattern = m2::DFBAccessPattern::STRIDED});
+    }
+    producer.compile_time_args = {{"num_entries_per_producer", num_entries}};
+
+    // 4 independent DM consumer kernels; each reuses dfb_consumer_2_0.cpp.
+    std::vector<m2::KernelSpec> consumers;
+    consumers.reserve(num_dfbs);
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        auto c = make_dm_kernel(
+            m2::KernelSpecName{CONSUMER_NAMES[i]},
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
+        c.dfb_bindings = {
+            {.dfb_spec_name = m2::DFBSpecName{DFB_NAMES[i]},
+             .accessor_name = "in",
+             .endpoint_type = m2::DFBEndpointType::CONSUMER,
+             .access_pattern = m2::DFBAccessPattern::STRIDED}};
+        c.tensor_bindings = {
+            {.tensor_parameter_name = m2::TensorParamName{DST_NAMES[i]}, .accessor_name = "dst_tensor"}};
+        c.compile_time_args = {
+            {"num_entries_per_consumer", num_entries},
+            {"blocked_consumer", 0u},
+            {"implicit_sync", implicit_sync ? 1u : 0u}};
+        c.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+        // All-pass: DFB .disable_implicit_sync = !implicit_sync. Producer is Tensix (no DM
+        // side); disable on the DM consumer endpoint (post-#45160).
+        maybe_disable_implicit_sync(c, implicit_sync, m2::DFBSpecName{DFB_NAMES[i]});
+        consumers.push_back(c);
+    }
+
+    std::vector<m2::TensorParameter> tensor_parameters;
+    tensor_parameters.reserve(num_dfbs);
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        tensor_parameters.push_back({.unique_id = m2::TensorParamName{DST_NAMES[i]}, .spec = dram_spec});
+    }
+
+    std::vector<m2::KernelSpec> all_kernels;
+    all_kernels.push_back(producer);
+    for (const auto& c : consumers) {
+        all_kernels.push_back(c);
+    }
+
+    std::vector<m2::KernelSpecName> wu_kernel_names{PRODUCER};
+    for (const auto* n : CONSUMER_NAMES) {
+        wu_kernel_names.emplace_back(n);
+    }
+
+    m2::ProgramSpec spec{
+        .name = "tensix_dm_4dfb_2_0",
+        .kernels = all_kernels,
+        .dataflow_buffers = dfbs,
+        .tensor_parameters = tensor_parameters,
+        .work_units = {m2::WorkUnitSpec{
+            .name = "wu",
+            .kernels = wu_kernel_names,
+            .target_nodes = node,
+        }},
+    };
+
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+
+    m2::ProgramRunArgs params;
+    // Producer has no runtime args but still needs a KernelRunArgs entry to be
+    // launched. Without it, the kernel is wired up but never runs.
+    params.kernel_run_args.push_back({.kernel = PRODUCER, .runtime_arg_values = {}});
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        params.kernel_run_args.push_back(
+            {.kernel = m2::KernelSpecName{CONSUMER_NAMES[i]},
+             .runtime_arg_values =
+                 m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})});
+    }
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        params.tensor_args.insert({m2::TensorParamName{DST_NAMES[i]}, std::cref(out_tensors[i])});
+    }
+    m2::SetProgramRunArgs(program, params);
+
+    // Pre-fill each DFB's L1 ring directly via uniform_alloc_addr after manual
+    // finalize+allocate. No borrowed_from / ring tensor needed; the compute
+    // kernel is TRISC-only and can't carry tensor bindings.
+    program.impl().compile(&this->device());
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+
+    std::vector<std::vector<uint32_t>> inputs(num_dfbs);
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        const uint32_t dfb_l1_addr =
+            program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(DFB_NAMES[i]))->uniform_alloc_addr();
+        inputs[i] = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_bytes / sizeof(uint32_t));
+        slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), dfb_l1_addr, inputs[i]);
+    }
+
+    LaunchProgram(this->device(), std::move(program));
+
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        std::vector<uint32_t> output;
+        slow_dispatch::ReadFromBuffer(out_tensors[i].mesh_buffer(), output);
+        EXPECT_EQ(inputs[i], output) << "M2 concurrent Tensix→DM 4xDFB[" << i << "] mismatch";
+    }
+}
+
+// homogeneous-grid multi-core group test
+TEST_F(UnitMeshFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    CoreCoord grid = this->device().compute_with_storage_grid_size();
+    if (grid.x < 2 || grid.y < 2) {
+        GTEST_SKIP() << "Homogeneous-grid test requires >= 2x2 Tensix grid";
+    }
+
+    constexpr uint32_t entry_size = 512;
+    constexpr uint32_t num_entries = 8;
+    const m2::NodeRange grid_2x2{m2::NodeCoord{0, 0}, m2::NodeCoord{1, 1}};  // 4 cores
+
+    const m2::DFBSpecName DFB{"dfb"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    // Each core owns num_entries slots → 4 cores × num_entries pages total.
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 4 * num_entries, DataType::UINT32);
+    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+
+    m2::DataflowBufferSpec dfb_spec{
+        .unique_id = DFB,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    auto producer = make_dm_dfb_producer(PRODUCER, DFB, IN_TENSOR, num_entries, /*implicit_sync=*/false);
+
+    auto consumer = make_dm_dfb_consumer(
+        CONSUMER, DFB, OUT_TENSOR, num_entries, /*blocked_consumer=*/false, /*implicit_sync=*/false);
+
+    // All-pass disabled dfb implicit sync (now per-DM-endpoint, post-#45160). Set before the
+    // ProgramSpec copies these kernels by value.
+    disable_implicit_sync_for(producer, DFB);
+    disable_implicit_sync_for(consumer, DFB);
+
+    m2::ProgramSpec spec{
+        .name = "homogeneous_grid_2_0",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {m2::WorkUnitSpec{
+            .name = "wu",
+            .kernels = {PRODUCER, CONSUMER},
+            .target_nodes = grid_2x2,
+        }},
+    };
+
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    // Identical HW config across the 4 cores → must collapse into 1 DfbGroup.
+    CoreCoord first_core{0, 0};
+    auto dfbs = program.impl().dataflow_buffers_on_core(first_core);
+    ASSERT_EQ(dfbs.size(), 1u) << "Expected exactly 1 DFB on core";
+    const auto& dfb = dfbs[0];
+    ASSERT_EQ(dfb->groups.size(), 1u) << "Homogeneous 2x2 grid must collapse to 1 DfbGroup";
+    EXPECT_EQ(dfb->groups[0].l1_by_core.size(), 4u) << "Single DfbGroup must cover all 4 cores";
+
+    // All 4 cores in the 2x2 grid should appear in the group's l1_by_core map.
+    std::set<CoreCoord> accounted_cores;
+    for (const auto& [c, _] : dfb->groups[0].l1_by_core) {
+        accounted_cores.insert(c);
+    }
+    for (uint32_t x = 0; x <= 1; ++x) {
+        for (uint32_t y = 0; y <= 1; ++y) {
+            EXPECT_EQ(accounted_cores.count(CoreCoord(x, y)), 1u)
+                << "Core (" << x << "," << y << ") missing from DfbGroup";
+        }
+    }
+}
+
+// In fast dispatch every worker gets the go signal and reads the launch-ring slot at launch_msg_rd_ptr,
+// whether or not the current program targets it. After a slot runs, firmware clears only `enables`;
+// local_cb_mask/local_cb_offset keep the values of whichever program last ran there. This test ensures
+// DM0/DM1 on an idle core do not set up implicit sync and the remapper from stale DFB config.
+//
+// Reaching a stale slot naturally takes launch_msg_buffer_num_entries launches, so instead the test seeds
+// idle core_b's next slot directly: enables = 0, a nonzero local_cb_mask, and a config pointer aimed at a
+// zeroed DFB header in scratch L1. A DFB program then runs once on core_a only. With has_dm0_isr == 0,
+// setup_dfb_implicit_sync() marks the header by setting dm0_isr_ready = 1, so the byte records whether
+// core_b's DM0 consumed the slot's DFB config. Fixed firmware treats the slot as having no DFBs and never
+// touches it.
+TEST_F(UnitMeshAnyDispatchFixture, IdleCoreStaleLaunchSlot_DMDM) {
+    if (this->IsSlowDispatch()) {
+        GTEST_SKIP() << "Slow dispatch sends the go signal only to program cores; this needs fast dispatch";
+    }
+    auto& mesh_device = this->device();
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    CoreCoord grid = mesh_device.compute_with_storage_grid_size();
+    if (grid.x < 2) {
+        GTEST_SKIP() << "Idle-core test requires >= 2 Tensix cores in a row";
+    }
+
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries = 4;
+    constexpr bool implicit_sync = true;
+    const m2::NodeCoord core_a{0, 0};
+    const CoreCoord core_b{1, 0};
+
+    const m2::DFBSpecName DFB{"dfb"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+
+    m2::DataflowBufferSpec dfb_spec{
+        .unique_id = DFB,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    auto producer = make_dm_dfb_producer(PRODUCER, DFB, IN_TENSOR, num_entries, implicit_sync);
+    auto consumer =
+        make_dm_dfb_consumer(CONSUMER, DFB, OUT_TENSOR, num_entries, /*blocked_consumer=*/false, implicit_sync);
+
+    m2::ProgramSpec spec{
+        .name = "idle_core_stale_slot",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {m2::WorkUnitSpec{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = core_a}},
+    };
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = PRODUCER,
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(core_a, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
+        {.kernel = CONSUMER,
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(core_a, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
+    };
+    params.tensor_args = {
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
+    };
+    m2::SetProgramRunArgs(program, params);
+
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, num_entries * entry_size / 4);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    slow_dispatch::WriteToBuffer(out_tensor.mesh_buffer(), std::vector<uint32_t>(input.size(), 0u));
+
+    // Seed core_b while the device is idle, so neither firmware nor dispatch is touching its launch ring.
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::Finish(cq);
+
+    const auto& hal = MetalContext::instance().hal();
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto device_id = mesh_device.get_device_ids()[0];
+    const CoreCoord virtual_core_b = mesh_device.worker_core_from_logical_core(core_b);
+    const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
+    const uint32_t tensix_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+
+    // Fake stale DFB config: a zeroed header (has_dm0_isr = 0, dm0_isr_ready = 0) followed by a zeroed DM1
+    // remapper blob (num_slots = 0), so pre-fix firmware takes only the harmless marker-writing path.
+    const uint32_t fake_config_bytes = 2 * sizeof(dfb_global_header_t);
+    const uint32_t fake_config_addr = top_of_l1_scratch_addr(mesh_device, fake_config_bytes);
+    std::vector<uint32_t> fake_config(fake_config_bytes / sizeof(uint32_t), 0u);
+    fake_config[offsetof(dfb_global_header_t, dm1_remapper_blob_offset) / sizeof(uint32_t)] =
+        sizeof(dfb_global_header_t);
+    slow_dispatch::WriteToL1(mesh_device, core_b, fake_config_addr, fake_config);
+
+    // core_b's next launch slot: keep what is there (mode stays DEV), overwrite the stale-able fields.
+    const uint32_t rd_ptr = cluster.read_core(
+        device_id,
+        virtual_core_b,
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR),
+        sizeof(uint32_t))[0];
+    const uint32_t launch_msg_size = factory.size_of<dev_msgs::launch_msg_t>();
+    const uint64_t slot_addr =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) + rd_ptr * launch_msg_size;
+    std::vector<std::byte> slot(launch_msg_size);
+    cluster.read_core(slot.data(), launch_msg_size, tt_cxy_pair(device_id, virtual_core_b), slot_addr);
+    {
+        auto kernel_config = factory.create_view<dev_msgs::launch_msg_t>(slot.data()).kernel_config();
+        ASSERT_EQ(kernel_config.mode(), dev_msgs::DISPATCH_MODE_DEV);
+        ASSERT_EQ(kernel_config.enables(), 0u) << "core_b's next launch slot should be idle";
+        kernel_config.kernel_config_base()[tensix_index] = fake_config_addr;
+        kernel_config.local_cb_offset() = 0;
+        kernel_config.local_cb_mask() = 1;
+    }
+    cluster.write_core(slot.data(), launch_msg_size, tt_cxy_pair(device_id, virtual_core_b), slot_addr);
+    tt_driver_atomics::mfence();
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<uint32_t> readback;
+    slow_dispatch::ReadFromL1(mesh_device, core_b, fake_config_addr, sizeof(dfb_global_header_t), readback);
+    const uint8_t dm0_isr_ready =
+        reinterpret_cast<const uint8_t*>(readback.data())[offsetof(dfb_global_header_t, dm0_isr_ready)];
+    EXPECT_EQ(dm0_isr_ready, 0u) << "Idle core_b set up DFBs from its stale launch slot";
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    EXPECT_EQ(input, output) << "Program on core_a mismatch";
+}
+
+}  // namespace tt::tt_metal

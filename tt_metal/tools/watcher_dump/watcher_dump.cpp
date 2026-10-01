@@ -56,7 +56,7 @@ void dump_data(
         std::ofstream cq_file = std::ofstream(cq_fname);
         string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
         std::ofstream iq_file = std::ofstream(iq_fname);
-        // Minimal setup, since we'll be attaching to a potentially hanging chip.
+        // Attach with minimal setup; the chip may be hung so MeshDevice::create_unit_mesh is not appropriate.
         IDevice* device = tt::tt_metal::CreateDeviceMinimal(
             id, num_hw_cqs, DispatchCoreConfig{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER});
         devices.push_back(std::unique_ptr<IDevice>(device));
@@ -64,7 +64,7 @@ void dump_data(
             cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
             std::unique_ptr<SystemMemoryManager> sysmem_manager =
                 std::make_unique<SystemMemoryManager>(DEFAULT_CONTEXT_ID, id, num_hw_cqs);
-            internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
+            ::internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
     }
 

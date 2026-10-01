@@ -4,13 +4,17 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cmath>
+#include <set>
+#include <tuple>
 
 #include "ccl_host_datastructures.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
@@ -22,6 +26,60 @@ bool is_fabric_2d() {
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D;
+}
+
+std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config, tt::tt_metal::DataType input_dtype) {
+    if (!compute_kernel_config.has_value() && input_dtype == tt::tt_metal::DataType::FLOAT32) {
+        return ttnn::DeviceComputeKernelConfig{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,
+        };
+    }
+    return compute_kernel_config;
+}
+
+void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size) {
+    // NOTE: ideally query the below which are currently not publicly accessible.
+    // FabricEriscDatamoverBuilder::max_packet_payload_size_bytes_{wormhole,blackhole} in
+    // tt_metal/fabric/erisc_datamover_builder.hpp
+    constexpr size_t max_packet_payload_wormhole = 7616;
+    constexpr size_t max_packet_payload_blackhole = 15232;
+    // NOC_SCATTER_WRITE_MAX_CHUNKS in tt_metal/fabric/fabric_edm_packet_header.hpp
+    constexpr size_t max_scatter_write_chunks = 4;
+
+    if (page_size == 0) {
+        return;
+    }
+    size_t hw_max_packet_size = 0;
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: hw_max_packet_size = max_packet_payload_wormhole; break;
+        case tt::ARCH::BLACKHOLE: hw_max_packet_size = max_packet_payload_blackhole; break;
+        default: return;  // no known hardware max for this arch: skip the check
+    }
+
+    // Ideal = the most whole pages that fit in one hardware packet (capped by scatter-write chunks),
+    // or the full hardware packet when a single page is larger than any packet.
+    const size_t pages_per_packet = std::min<size_t>(hw_max_packet_size / page_size, max_scatter_write_chunks);
+    const size_t ideal_packet_size = (pages_per_packet == 0) ? hw_max_packet_size : pages_per_packet * page_size;
+
+    if (packet_size != ideal_packet_size) {
+        // A given (packet_size, page_size, ideal_packet_size) combination is identical on every
+        // call for a fixed op/shape/topology, so this fires once per worker/iteration in a hot
+        // loop (up to hundreds of times per run for the same underlying condition). Warn only
+        // once per distinct combination per process to surface the actionable message without
+        // spamming identical repeats.
+        static std::set<std::tuple<size_t, uint32_t, size_t>> warned_packet_sizes;
+        if (warned_packet_sizes.insert({packet_size, page_size, ideal_packet_size}).second) {
+            log_warning(
+                tt::LogOp,
+                "Fabric packet size {} B is suboptimal for transporting {} B pages. Configure {} B packet size to "
+                "maximize throughput.",
+                packet_size,
+                page_size,
+                ideal_packet_size);
+        }
+    }
 }
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology) {
@@ -42,24 +100,26 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     if (topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Mesh) {
         return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
     }
-    // ring is possible if device coordinates along our cluster axis are the same as the last coordinate in the mesh
-    // shape first_index = 0 last index = mesh_shape[cluster_axis] - 1
+    // For the cluster_axis API the collective spans the entire mesh axis by definition, so the
+    // ring geometry is determined by the GLOBAL mesh shape, not the local shard coordinates.
+    // In multi-host distributed setups device_storage().get_coords() only contains the coordinates
+    // of the shards owned by this host (e.g. columns 8-15 for the second host of a 4x32 mesh).
+    // Deciding WRAP/NONE from those local coordinates would incorrectly return NONE for every
+    // host whose shard does not begin at global index 0. A ring wraps iff the global axis extent
+    // is > 2; the local slice is always a contiguous sub-ring of the full global ring.
     if (cluster_axis.has_value()) {
         if (mesh_shape[cluster_axis.value()] == 2) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
         }
-        bool first_index_is_0 = device_coords[0][cluster_axis.value()] == 0;
-        bool last_index_is_mesh_shape_minus_1 =
-            device_coords[device_coords.size() - 1][cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
-        if (first_index_is_0 && last_index_is_mesh_shape_minus_1) {
-            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
-        }
-        return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+        return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
     }
+    // Without a cluster_axis the ring is formed over the tensor's own device list via linear
+    // index arithmetic (see get_physical_neighbor_from_physical_coord). Keep the boundary decision
+    // consistent with that list: only wrap when the tensor's devices span the full mesh from
+    // (0,..,0) to (max,..,max).
     if (mesh_shape[0] == 2 || mesh_shape[1] == 2) {
         return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
     }
-    TT_FATAL(!device_coords.empty(), "device_coords is empty");
     for (int i = 0; i < device_coords.front().dims(); i++) {
         if (device_coords.front()[i] != 0) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
@@ -74,14 +134,95 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
 }
 
+bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
+    const auto& mesh_view = mesh_device.get_view();
+    const auto& mesh_shape = mesh_view.shape();
+    if (mesh_shape[axis] < 2) {
+        return true;  // no hops to compare
+    }
+
+    // Axis 0 runs down a column, axis 1 along a row.
+    std::optional<tt::tt_fabric::eth_chan_directions> axis_direction;
+    for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+        const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
+                                     : mesh_view.get_fabric_node_ids_on_row(row_or_col);
+        for (size_t i = 1; i < nodes.size(); i++) {
+            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(nodes[i - 1], nodes[i]);
+            if (directions.empty() || (axis_direction.has_value() && directions.front() != *axis_direction)) {
+                return false;
+            }
+            axis_direction = directions.front();
+        }
+    }
+    return true;
+}
+
+tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const size_t l1_small_bank_size = mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+    return l1_small_bank_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+}
+
+size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& allocator = mesh_device.allocator();
+    return allocator->get_worker_l1_size() - allocator->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+}
+
+bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
+    const auto& mesh_view = mesh_device.get_view();
+    const auto& mesh_shape = mesh_view.shape();
+    // A 2-device axis would close on the link it already uses, so it stays open and never rings.
+    if (!tt::tt_fabric::is_genuine_torus_dim(mesh_shape[axis])) {
+        return false;
+    }
+
+    // Axis 0 runs down a column, axis 1 along a row.
+    for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+        const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
+                                     : mesh_view.get_fabric_node_ids_on_row(row_or_col);
+        if (tt::tt_fabric::get_neighbor_eth_directions(nodes.back(), nodes.front()).empty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis) {
+    // Whether the fabric wraps this axis into a ring/torus.
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
+    bool axis_can_wrap;
+    if (fabric_is_2d) {
+        if (axis == 1) {
+            axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+                            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+        } else {
+            axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+                            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+        }
+    } else {
+        axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+    }
+
+    // The torus flags name a fabric axis. A view axis can be a permutation of it, so the flag alone
+    // says nothing about this axis: only a wired closing link makes it a ring.
+    const bool axis_is_ring = axis_can_wrap && is_axis_wrap_wired(*tensor.device(), axis);
+    return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
+}
+
 tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis) {
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
-        auto boundary_mode = get_boundary_mode(tensor, topology_, cluster_axis);
-        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+        bool wraps;
+        if (cluster_axis.has_value()) {
+            wraps = is_axis_wrap_wired(*tensor.device(), *cluster_axis);
+        } else {
+            wraps = get_boundary_mode(tensor, topology_, cluster_axis) ==
+                    tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+        }
+        if (wraps) {
             return topology_;
         }
         if (topology_ == tt::tt_fabric::Topology::Torus) {
@@ -93,32 +234,33 @@ tt::tt_fabric::Topology get_usable_topology(
 }
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis) {
-    const auto device_coords = tensor.device_storage().get_coords();
-    TT_FATAL(!device_coords.empty(), "device_coords is empty");
+    // For cluster_axis ops, ring_size is the global extent of the mesh along that axis.
+    // Using local device_coords (which only covers this host's shard) would undercount the ring
+    // in multi-host setups — e.g. max(local col)+1 = 16 instead of the true global 32.
     if (cluster_axis.has_value()) {
         log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
-        TT_FATAL(!device_coords.empty(), "device_coords is empty");
+        const auto mesh_shape = tensor.device()->shape();
         TT_FATAL(
-            device_coords[0].dims() > cluster_axis.value(),
-            "cluster axis {} is out of range for device coords rank {} ",
+            mesh_shape.dims() > cluster_axis.value(),
+            "cluster axis {} is out of range for mesh shape rank {}",
             cluster_axis.value(),
-            device_coords[0].dims());
-        uint32_t ring_size = 0;
-        for (const auto& device_coord : device_coords) {
-            ring_size = std::max(ring_size, device_coord[cluster_axis.value()] + 1);
-        }
+            mesh_shape.dims());
+        const uint32_t ring_size = mesh_shape[cluster_axis.value()];
         TT_FATAL(ring_size > 0, "ring_size is 0");
         log_debug(tt::LogOp, "Topological dimension {}", ring_size);
         return ring_size;
     }
+    // Without a cluster_axis the CCL spans the tensor's own device list, and
+    // get_linearized_index_from_physical_coord indexes into that same list. Keep the two in sync:
+    // switching this to the global mesh size alone would let a ring index exceed the ring size.
+    const auto device_coords = tensor.device_storage().get_coords();
+    TT_FATAL(!device_coords.empty(), "device_coords is empty");
     log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
     return device_coords.size();
 }
 
 uint32_t get_linearized_index_from_physical_coord(
     const Tensor& tensor, const MeshCoordinate& physical_coord, const std::optional<uint32_t>& cluster_axis) {
-    const auto device_coords = tensor.device_storage().get_coords();
-    TT_FATAL(!device_coords.empty(), "device_coords is empty");
     if (cluster_axis.has_value()) {
         log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
         TT_FATAL(
@@ -126,24 +268,16 @@ uint32_t get_linearized_index_from_physical_coord(
             "cluster axis {} is out of range for physical coord rank {} ",
             cluster_axis.value(),
             physical_coord.dims());
-        // find minimum value along the cluster axis
-        uint32_t min_value = std::numeric_limits<uint32_t>::max();
-        for (const auto& device_coord : device_coords) {
-            min_value = std::min(min_value, device_coord[cluster_axis.value()]);
-        }
-        TT_FATAL(
-            physical_coord[cluster_axis.value()] >= min_value,
-            "physical_coord[{}] {} is less than min_value {}",
-            cluster_axis.value(),
-            physical_coord[cluster_axis.value()],
-            min_value);
-        log_debug(
-            tt::LogOp,
-            "Physical linearized index for physical_coord: {} is {}",
-            physical_coord,
-            physical_coord[cluster_axis.value()] - min_value);
-        return physical_coord[cluster_axis.value()] - min_value;
+        // The global ring index is the coordinate value itself — the global origin along any
+        // mesh axis is always 0. Subtracting a local min_value (derived from this host's shard)
+        // would produce indices that are only locally-relative (e.g. 0-7 instead of 8-15),
+        // which breaks ring ordering and CCL program indexing in multi-host setups.
+        const uint32_t ring_index = physical_coord[cluster_axis.value()];
+        log_debug(tt::LogOp, "Physical linearized index for physical_coord: {} is {}", physical_coord, ring_index);
+        return ring_index;
     }
+    const auto device_coords = tensor.device_storage().get_coords();
+    TT_FATAL(!device_coords.empty(), "device_coords is empty");
     auto it = std::find(device_coords.begin(), device_coords.end(), physical_coord);
     TT_FATAL(it != device_coords.end(), "physical_coord not found in device_coords");
     log_debug(
@@ -165,33 +299,42 @@ std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
     auto boundary_mode = get_boundary_mode(tensor, topology, cluster_axis);
     if (cluster_axis.has_value()) {
         TT_FATAL(
-            device_coords[0][cluster_axis.value()] == 0,
-            "Currently, we only support CCLs with physical coordinates starting from 0 along the cluster axis {}, we "
-            "got {}",
-            cluster_axis.value(),
-            device_coords[0][cluster_axis.value()]);
-        TT_FATAL(
             physical_coord.dims() > cluster_axis.value(),
             "cluster axis {} is out of range for physical coord rank {} ",
             cluster_axis.value(),
             physical_coord.dims());
         log_debug(tt::LogOp, "Boundary mode: {}", boundary_mode);
+        // Compute neighbor in the global coordinate space. get_neighbor() operates on the global
+        // mesh shape and returns nullopt only when boundary_mode==NONE and we are at the edge of
+        // the full ring — i.e. a genuine topology boundary, not merely the edge of this host's
+        // local shard.
         auto potential_neighbor =
             physical_coord.get_neighbor(tensor.device()->shape(), offset, cluster_axis.value(), boundary_mode);
-        auto it = std::find(device_coords.begin(), device_coords.end(), potential_neighbor);
-        if (it != device_coords.end()) {
+        if (!potential_neighbor.has_value()) {
             log_debug(
                 tt::LogOp,
-                "Physical coord {} Potential neighbor {} is found in device_coords",
+                "Physical coord {} has no neighbor at offset {} along axis {} (topology boundary)",
                 physical_coord,
-                potential_neighbor);
+                offset,
+                cluster_axis.value());
+            return std::nullopt;
+        }
+        // Validate against the global mesh view rather than the local device_coords list.
+        // In multi-host setups device_coords only contains this host's shard; a neighbor on
+        // another host is still a valid ring participant and reachable via the fabric.
+        if (tensor.device()->get_view().contains(*potential_neighbor)) {
+            log_debug(
+                tt::LogOp,
+                "Physical coord {} Potential neighbor {} is valid in global mesh",
+                physical_coord,
+                *potential_neighbor);
             return potential_neighbor;
         }
         log_debug(
             tt::LogOp,
-            "Physical coord {} Potential neighbor {} is not found in device_coords",
+            "Physical coord {} Potential neighbor {} is not in global mesh",
             physical_coord,
-            potential_neighbor);
+            *potential_neighbor);
         return std::nullopt;
     }
     uint32_t physical_linearized_index = get_linearized_index_from_physical_coord(tensor, physical_coord, cluster_axis);
@@ -329,7 +472,7 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
     return devices;
 }
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+WorkerCoreSelection try_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
     IDevice* device,
@@ -337,12 +480,12 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     const CoreCoord core_grid_offset,
     const std::optional<CoreRangeSet>& sub_core_grid,
     CoreAllocationStrategy strategy) {
-    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    auto available_cores = device->worker_cores(
+    const auto worker_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto available_cores = worker_cores;
     if (sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(sub_core_grid.value());
     }
@@ -397,19 +540,51 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
             break;
         }
     }
-    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
+
+    // The loops above shift each candidate by core_grid_offset without re-checking it, so an offset near the grid
+    // edge can push cores off the worker grid entirely (onto dispatch cores).
+    WorkerCoreSelection selection{
+        sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true), {}};
+    for (const auto& core : selection.cores) {
+        if (!worker_cores.contains(core)) {
+            selection.unplaceable_cores.push_back(core);
+        }
+    }
+    return selection;
+}
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
+    auto selection = try_choose_worker_cores(
+        num_links, num_workers_per_link, device, sub_device_id, core_grid_offset, sub_core_grid, strategy);
+    TT_FATAL(
+        selection.all_placeable(),
+        "Core grid offset {} pushed {} of the {} selected worker cores (first: {}) off the worker grid; kernels "
+        "cannot be placed there. Request fewer cores or use a smaller offset.",
+        core_grid_offset.str(),
+        selection.unplaceable_cores.size(),
+        selection.cores.size(),
+        selection.unplaceable_cores.front().str());
+    return {std::move(selection.core_range_set), std::move(selection.cores)};
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     const uint32_t num_devices,
-    const ttnn::SmallVector<uint32_t>& unpad_elements,
+    const ttsl::SmallVector<uint32_t>& unpad_elements,
     const int dim) {
     std::vector<ttnn::Tensor> combined_tensors;
+    combined_tensors.reserve(num_devices);
 
-    ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
-    ttnn::SmallVector<uint32_t> ends = {1, 1, 1, 1};
-    ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+    ttsl::SmallVector<uint32_t> begins = {0, 0, 0, 0};
+    ttsl::SmallVector<uint32_t> ends = {1, 1, 1, 1};
+    ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
     ends = unpad_elements;
 
     for (int i = 0; i < num_devices; ++i) {
@@ -418,7 +593,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
 
         ttnn::Tensor sliced_tensor = ttnn::slice(output_tensor.at(0), begins, ends, step);
 
-        combined_tensors.push_back(sliced_tensor);
+        combined_tensors.push_back(std::move(sliced_tensor));
     }
     ttnn::Tensor concat_tensor = ttnn::concat(combined_tensors, dim);
     return {concat_tensor};
@@ -1265,141 +1440,6 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
     return slices;
 }
 
-/*
- * @brief: Given a tensor shape, evenly break it into pieces along a given dimension and generate the slices
- * accordingly. This can be fed into a CCL Send command generator
- */
-std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
-    TensorSlice::ords_t tensor_shape,
-    TensorSlice::ords_t worker_slice_shape,
-    TensorSlice::ords_t worker_slice_offset,
-    std::size_t fracture_dim,
-    std::size_t num_slices,
-    std::int64_t start_slice_index,
-    std::int64_t end_slice_index_exclusive,
-    std::size_t worker_index) {
-    static_assert(
-        std::is_same_v<TensorSlice::ords_t, tt_xy_pair>,
-        "generate_slice_sequence_on_dim_v2 not yet implemented for type not of tt_xy_pair");
-    // We don't support 4D shapes in the CCL kernels yet, which are needed for proper reduction/concatenation in some
-    // cases so for now we subtract the outer dims from the fracture_dim since we only support 2D at the moment.
-    if (fracture_dim == 3) {
-        fracture_dim -= 2;
-    } else {
-        // dims are
-        fracture_dim = 0;
-    }
-
-    TT_ASSERT(worker_slice_shape.y == 1);
-
-    std::vector<TensorSlice> slices;
-    auto dim_size = fracture_dim == 1 ? tensor_shape.x : tensor_shape.y;
-    TT_ASSERT(dim_size % num_slices == 0);
-    auto slice_size_on_dim = dim_size / num_slices;
-    auto slice_shape = fracture_dim == 0 ? tt_xy_pair{tensor_shape.x, slice_size_on_dim}
-                                         : tt_xy_pair{slice_size_on_dim, tensor_shape.y};
-
-    auto dim_start_offset = start_slice_index * slice_size_on_dim;
-    TensorSlice::ords_t tensor_slice_offset =
-        fracture_dim == 0 ? tt_xy_pair{0, dim_start_offset} : tt_xy_pair{dim_start_offset, 0};
-
-    bool forward_direction = start_slice_index > end_slice_index_exclusive;  // only for debug
-    auto incr = start_slice_index < end_slice_index_exclusive ? 1 : -1;
-    if (forward_direction) {
-        log_trace(tt::LogOp, "slice_size_on_dim {}", slice_size_on_dim);
-        log_trace(tt::LogOp, "worker_index {}", worker_index);
-    }
-
-    auto worker_slice_start_offset = worker_slice_offset;
-
-    auto generate_slice = [forward_direction,
-                           incr,
-                           &slices,
-                           &tensor_shape,
-                           &slice_shape,
-                           &worker_slice_shape,
-                           tensor_slice_offset,
-                           &worker_slice_start_offset,
-                           fracture_dim,
-                           dim_start_offset,
-                           slice_size_on_dim](std::int64_t i) {
-        auto tensor_slice_offset_adjusted = tensor_slice_offset;
-        if (fracture_dim == 0) {
-            tensor_slice_offset_adjusted.y = slice_size_on_dim * i;
-        } else {
-            tensor_slice_offset_adjusted.x = slice_size_on_dim * i;
-        }
-        TT_ASSERT(tensor_shape.x > 0, "Invalid tensor shape. x = 0 but it must be > 0");
-        TT_ASSERT(tensor_shape.y > 0, "Invalid tensor shape. y = 0 but it must be > 0");
-        TT_ASSERT(slice_shape.x > 0, "Invalid tensor slice shape. x = 0 but it must be > 0");
-        TT_ASSERT(slice_shape.y > 0, "Invalid tensor slice shape. x = 0 but it must be > 0");
-        TT_ASSERT(
-            tensor_slice_offset_adjusted.x < tensor_shape.x,
-            "Invalid tensor slice offset. x = {} but it must be < tensor shape x={}. slice_offset: (y={},x={}), "
-            "tensor_shape: (y={},x={}). slice_size_on_dim: {}, i: {}",
-            tensor_slice_offset_adjusted.x,
-            tensor_shape.x,
-            tensor_slice_offset_adjusted.y,
-            tensor_slice_offset_adjusted.x,
-            tensor_shape.y,
-            tensor_shape.x,
-            slice_size_on_dim,
-            i);
-        TT_ASSERT(
-            tensor_slice_offset_adjusted.y < tensor_shape.y,
-            "Invalid tensor slice offset. y = {} but it must be < tensor shape y={}. slice_offset: (y={},x={}), "
-            "tensor_shape: (y={},x={}). slice_size_on_dim: {}, i: {}",
-            tensor_slice_offset_adjusted.y,
-            tensor_shape.y,
-            tensor_slice_offset_adjusted.y,
-            tensor_slice_offset_adjusted.x,
-            tensor_shape.y,
-            tensor_shape.x,
-            slice_size_on_dim,
-            i);
-        TT_ASSERT(worker_slice_shape.x > 0, "Invalid worker slice shape. x = 0 but it must be > 0");
-        TT_ASSERT(worker_slice_shape.y > 0, "Invalid worker slice shape. y = 0 but it must be > 0");
-
-        const auto& tensor_slice = TensorSlice(
-            tensor_shape,
-            slice_shape,
-            tensor_slice_offset_adjusted,
-            worker_slice_shape,
-            worker_slice_start_offset,
-            fracture_dim);
-        if (forward_direction) {
-            log_trace(
-                tt::LogOp,
-                "generate_slice ({}):\n\ttensor_shape: (y={},x={})\n\ttensor_slice_shape: "
-                "(y={},x={})\n\ttensor_slice_offset_adjusted: (y={},x={})\n\tslice_start_shape: (y={},x={})\n\tworker "
-                "relative slice_start_offset: (y={},x={})\n\tfracture_dim: {}\n\tdim_start_offset: "
-                "{}\n\tslice_size_on_dim: {}\n",
-                i,
-                tensor_slice.tensor_shape.y,
-                tensor_slice.tensor_shape.x,
-                tensor_slice.tensor_slice_shape.y,
-                tensor_slice.tensor_slice_shape.x,
-                tensor_slice.tensor_slice_offset.y,
-                tensor_slice.tensor_slice_offset.x,
-                tensor_slice.worker_slice_shape.y,
-                tensor_slice.worker_slice_shape.x,
-                tensor_slice.worker_slice_offset.y,
-                tensor_slice.worker_slice_offset.x,
-                fracture_dim,
-                dim_start_offset,
-                slice_size_on_dim);
-        }
-
-        slices.push_back(tensor_slice);
-    };
-
-    for (int i = start_slice_index; i != end_slice_index_exclusive; i += incr) {
-        generate_slice(i);
-    }
-
-    return slices;
-}
-
 GenericWrappedTensorSlicer::GenericWrappedTensorSlicer(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -1844,6 +1884,22 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     return std::make_tuple(forward_args, backward_args);
 }
 
+namespace {
+
+void validate_fabric_mux_client_index(
+    uint32_t client_index,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config) {
+    const auto channel_count = mux_kernel_config.get_num_channels(channel_type);
+    TT_FATAL(
+        client_index < channel_count,
+        "Fabric mux client index {} is out of range for channel count {}",
+        client_index,
+        channel_count);
+}
+
+}  // namespace
+
 void fabric_mux_connection_ct_args(
     const uint32_t num_workers_per_direction,
     const tt::tt_fabric::FabricMuxChannelType channel_type,
@@ -1870,6 +1926,7 @@ void fabric_mux_connection_rt_args(
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> termination_master_semaphore_id) {
+    validate_fabric_mux_client_index(worker_id, channel_type, mux_kernel_config);
     worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
     worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
     worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
@@ -1886,14 +1943,127 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
-    worker_rt_args.push_back(termination_master_semaphore_id.value_or(
-        CreateSemaphore(program, {worker_logical_core}, 0)));                      // termination_sync_address 10
+    const uint32_t termination_sync_semaphore_id = termination_master_semaphore_id.has_value()
+                                                       ? *termination_master_semaphore_id
+                                                       : CreateSemaphore(program, {worker_logical_core}, 0);
+    worker_rt_args.push_back(termination_sync_semaphore_id);                       // termination_sync_address 10
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address 11
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address 12
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address 13
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_buffer_index_address 14
     worker_rt_args.push_back(termination_master_virtual_core.x);                   // termination_master_noc_x 15
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
+}
+
+void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::ProgramDescriptor& desc,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id) {
+    validate_fabric_mux_client_index(worker_id, channel_type, mux_kernel_config);
+    // Allocate a worker-core-scoped semaphore by querying the next available ID
+    // and parking a SemaphoreDescriptor on the ProgramDescriptor. Returns the new ID.
+    auto alloc_sem = [&]() -> uint32_t {
+        auto id_opt = desc.find_available_semaphore_id(worker_logical_core, tt::CoreType::WORKER);
+        TT_FATAL(
+            id_opt.has_value(),
+            "No available semaphore ID for fabric mux connection on worker core (x={}, y={}, core_type=WORKER); "
+            "{} SemaphoreDescriptors already allocated on this ProgramDescriptor.",
+            worker_logical_core.x,
+            worker_logical_core.y,
+            desc.semaphores.size());
+        const uint32_t id = id_opt.value();
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = CoreRangeSet(CoreRange(worker_logical_core, worker_logical_core)),
+            .initial_value = 0});
+        return id;
+    };
+
+    worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
+    worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
+    worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
+    worker_rt_args.push_back(mux_virtual_core.y);     // fabric_mux_y 3
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_base_address(channel_type, worker_id));  // fabric_mux_channel_base_address 4
+    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(
+        channel_type, worker_id));  // fabric_mux_connection_info_address 5
+    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(
+        channel_type, worker_id));  // fabric_mux_connection_handshake_address 6
+    worker_rt_args.push_back(
+        mux_kernel_config.get_flow_control_address(channel_type, worker_id));  // fabric_mux_flow_control_address 7
+    worker_rt_args.push_back(
+        mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));    // fabric_mux_channel_id 9
+    const uint32_t termination_sync_semaphore_id =
+        termination_master_semaphore_id.has_value() ? *termination_master_semaphore_id : alloc_sem();
+    worker_rt_args.push_back(termination_sync_semaphore_id);      // termination_sync_address 10
+    worker_rt_args.push_back(alloc_sem());                        // local_fabric_mux_status_address 11
+    worker_rt_args.push_back(alloc_sem());                        // local_flow_control_address 12
+    worker_rt_args.push_back(alloc_sem());                        // local_teardown_address 13
+    worker_rt_args.push_back(alloc_sem());                        // local_buffer_index_address 14
+    worker_rt_args.push_back(termination_master_virtual_core.x);  // termination_master_noc_x 15
+    worker_rt_args.push_back(termination_master_virtual_core.y);  // termination_master_noc_y 16
+}
+
+namespace {  // anonymous namespace for internal helpers
+
+// Fabric bandwidth is based on raw hardware capability
+double lookup_fabric_link_bw(tt::ARCH arch) {
+    switch (arch) {
+        // WH: 100 Gbps per link = 12.5 GB/s
+        case tt::ARCH::WORMHOLE_B0: return 12.5;
+        // ~~BH: 400 Gbps per link = 50 GB/s~~ TODO (AM) currently devices limited to half BW: 25.0 GB/s
+        case tt::ARCH::BLACKHOLE: return 25.0;
+        default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
+    }
+}
+
+// One-way per-hop fabric latency (ns): marginal cost to forward the first packet across one more hop.
+// Measured on hardware via a single-clock round trip (src -> chip N hops away -> src) that cancels
+// cross-chip clock skew; per_hop = slope(RTT vs hops)/2, 256B payload (latency-bound), p50.
+// Fabric_1D uses 16B LowLatency header and Fabric_2D uses 96B Hybrid header.
+//   arch        2D fabric                          1D fabric
+//   Wormhole    874ns (for T3K, 907ns for Galaxy)  711ns (for T3K; 734ns on Galaxy for small hops)
+//   Blackhole   619ns (for p150_x4)                515ns (for p150_x4)
+// Note: Fabric_1D latency seems to increase with distance (~695*h + 4.7*h^2), not modelled here ...
+double lookup_fabric_hop_latency_ns(tt::ARCH arch, tt::tt_fabric::FabricConfig fabric_config) {
+    const bool is_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return is_2d ? 874.0 : 711.0;
+        case tt::ARCH::BLACKHOLE: return is_2d ? 619.0 : 515.0;
+        default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
+    }
+}
+
+}  // namespace
+
+std::pair<int, int> estimate_fabric_transfer_cycles(
+    tt::ARCH arch,
+    tt::tt_fabric::FabricConfig fabric_config,
+    int clock_rate_mhz,
+    uint64_t data_bytes,
+    uint32_t num_links,
+    uint32_t num_hops) {
+    const double total_bw = lookup_fabric_link_bw(arch) * num_links;
+    const double bandwidth_ns = (total_bw > 0.0) ? static_cast<double>(data_bytes) / total_bw : 0.0;
+
+    const double latency_ns = lookup_fabric_hop_latency_ns(arch, fabric_config) * num_hops;
+
+    // Convert ns -> device clock cycles
+    const double cycles_per_ns = static_cast<double>(clock_rate_mhz) / 1000.0;
+    return {
+        static_cast<int>(std::ceil(bandwidth_ns * cycles_per_ns)),
+        static_cast<int>(std::ceil(latency_ns * cycles_per_ns))};
 }
 
 }  // namespace ttnn::ccl

@@ -9,9 +9,11 @@ import pytest
 import torch
 from loguru import logger
 from tracy import signpost
+from ttnn.operations.transformer_golden import scaled_dot_product_attention_reference
 
 import ttnn
 from models.common.utility_functions import nearest_y
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -66,36 +68,6 @@ def create_page_table(device, num_users, num_blocks):
     return tt_page_table, page_table
 
 
-def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_len, scale, is_causal=True):
-    b, nh, _, _ = Q.shape  # b, nh, 1, d
-    _, nkv, _, _ = K.shape
-
-    attn_mask = None
-    if is_causal:
-        attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
-        for i in range(b):
-            start_idx = start_indices[i]
-            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
-    else:
-        assert False, "Non-causal attention is not supported in this function."
-
-    Q_slice = Q[:, :nh, :, :]  # b, nh, 1, d
-    K_slice = K[:, :nkv, :padded_layer_len, :]  # b, nkv, S, d
-    K_slice = torch.cat(
-        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
-    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
-    V_slice = torch.cat(
-        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
-    attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
-    out = torch.nn.functional.scaled_dot_product_attention(
-        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
-    )  # b, nh, 1, d
-
-    return out
-
-
 def _reconstruct_logical_cache_from_paged(
     paged_cache: torch.Tensor,
     page_table: torch.Tensor,
@@ -138,7 +110,7 @@ def _reconstruct_logical_cache_from_paged(
     "device_params",
     [
         {
-            "trace_region_size": 5500000,  # Larger trace region for flash attention
+            "trace_region_size": 0,  # Dynamic allocation mode; no dedicated trace region
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],
@@ -369,7 +341,7 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
         }
     ],
     indirect=True,

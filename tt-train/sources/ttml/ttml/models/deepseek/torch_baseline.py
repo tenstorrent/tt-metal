@@ -166,7 +166,10 @@ class Gate(nn.Module):
         biased = scores + self.expert_bias
 
         if self.n_groups > 1:
-            biased = biased.view(x.size(0), self.n_groups, -1)
+            # Score groups in fp32 to match the ttml side (moe.py::compute_routing):
+            # near-equal group sums would collapse to the same bf16 value and
+            # route to a topk tie-break.
+            biased = biased.float().view(x.size(0), self.n_groups, -1)
             group_scores = biased.topk(2, dim=-1)[0].sum(dim=-1)
             top_group_idx = group_scores.topk(self.topk_groups, dim=-1)[1]
             group_mask = biased.new_ones(x.size(0), self.n_groups, dtype=bool).scatter_(1, top_group_idx, False)

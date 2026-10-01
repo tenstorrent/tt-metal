@@ -61,9 +61,16 @@ bool is_1d_depthwise_conv(
     uint32_t input_channels,
     uint32_t output_channels,
     uint32_t kernel_height,
-    uint32_t kernel_width,
     uint32_t image_height,
     bool has_bias);
+
+bool should_coalesce_1d_depthwise_conv_reads(
+    bool is_1d_depthwise_conv,
+    TensorMemoryLayout input_tensor_memory_layout,
+    uint32_t input_channels_padded,
+    uint32_t kernel_width,
+    uint32_t dilation_w,
+    DataType input_datatype);
 
 struct SkipMcast {
     bool skip_activation_mcast;
@@ -93,6 +100,11 @@ sliding_window::ParallelConfig determine_output_parallel_config(
     uint32_t out_channels,
     tt::tt_metal::ShardOrientation block_shard_orientation,
     bool is_mm_conv);
+
+// Both are used as host divisors, so a zero (or, for the override, a non-tile multiple) must be rejected
+// before any division.
+void validate_stride(const std::array<uint32_t, 2>& stride);
+void validate_act_block_h_override(uint32_t act_block_h_override);
 
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(
     std::array<uint32_t, 2> input_image_size,
@@ -147,7 +159,8 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     bool fp32_accum,
     bool full_inner_dim,
     bool enable_activation_reuse = false,
-    bool is_1d_depthwise_conv = false);
+    bool is_1d_depthwise_conv = false,
+    bool coalesce_1d_depthwise_kw_reads = false);
 
 std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,
@@ -161,7 +174,8 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
     const CoreCoord& compute_grid,
-    bool is_1d_depthwise_conv = false);
+    bool is_1d_depthwise_conv = false,
+    bool coalesce_1d_depthwise_kw_reads = false);
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     TensorMemoryLayout shard_layout,

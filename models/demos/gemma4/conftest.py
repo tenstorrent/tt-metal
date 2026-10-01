@@ -10,19 +10,54 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 _DEFAULT_MAX_PREFILL = 8192
 
 
+def pytest_configure(config):
+    # Registered here (not tests/conftest.py) because demo/text_demo.py also uses this
+    # marker and is not under tests/, so a conftest.py scoped to tests/ would leave it
+    # unregistered there and pytest would emit PytestUnknownMarkWarning for every demo
+    # test collected with this marker.
+    config.addinivalue_line(
+        "markers",
+        "gemma4_hf_direct_parity: Direct model prefill/decode PCC vs HuggingFace reference",
+    )
+    config.addinivalue_line(
+        "markers",
+        "gemma4_batched_prefill: Batched multi-user prefill integration and perf",
+    )
+    config.addinivalue_line(
+        "markers",
+        "gemma4_prefill_trace: Prefill device trace parity, amortization, and Tracy CSV",
+    )
+
+
 def pytest_addoption(parser):
     parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
+    parser.addoption(
+        "--speculative",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the text demo in speculative-decoding mode (it-assistant drafter "
+            "verified by the target). batch=1 only; the drafter defaults to "
+            "<HF_MODEL>-assistant unless GEMMA4_ASSISTANT_MODEL is set."
+        ),
+    )
+    parser.addoption(
+        "--spec-draft-len",
+        action="store",
+        type=int,
+        default=None,
+        help="Speculative draft length K (drafts proposed per verify). Default: 3 (or GEMMA4_SPEC_DRAFT_LEN).",
+    )
     parser.addoption(
         "--max-prefill",
         action="store",
         type=int,
         default=_DEFAULT_MAX_PREFILL,
         help=(
-            "Maximum prefill seq_len to run. Tests parametrized over "
-            "PREFILL_BUCKETS skip lengths above this cap; the demo skips "
-            "buckets above this cap in test_demo_prefill_lengths. Default: "
-            f"{_DEFAULT_MAX_PREFILL}. Set higher (up to 262144) to exercise "
-            "long-context kernels."
+            "Maximum prefill seq_len for unit-test PREFILL_BUCKETS and short "
+            f"demo buckets (test_demo / batch_prefill). Default: {_DEFAULT_MAX_PREFILL}. "
+            "Does not apply to test_demo_long_context / text_demo_v2 long-context-* "
+            "rows — select those with ``-k long-context-*``."
         ),
     )
 

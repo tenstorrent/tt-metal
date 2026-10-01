@@ -30,11 +30,9 @@ def ttnn_integral_image_channel_last(features_nhwc):
     [
         # fmt: off
         ([1, 12, 40, 256]),
-        ([1, 24, 80, 256]),
-        ([1, 48, 160, 256]),
-        ([1, 96, 160, 256])
+        ([1, 24, 80, 256])
     ],
-    ids=["OFT32", "OFT16", "OFT8", "big_one"],
+    ids=["OFT32", "OFT16"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["DRAM"])

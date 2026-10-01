@@ -23,15 +23,25 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_latent_proj import TtLatentMoeProjections
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
-from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE, TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+
+# Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
+#
+#   emb_dim            7168  model hidden. Gate input, shared-expert input, block in/out.
+#   routed_emb_dim     3584  width the routed experts run at (K3's latent space); defaults to emb_dim.
+#   hidden_dim         3072  per-routed-expert FFN intermediate.
+#   shared_hidden_dim  6144  shared-expert FFN intermediate; defaults to hidden_dim.
 
 
 class TtMoe(LightweightModule):
@@ -57,14 +67,36 @@ class TtMoe(LightweightModule):
     """
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, layer_idx: int, experts_per_chip: int) -> bool:
-        """Check if MoE cache is complete (gate + routed experts + shared expert)."""
+    def check_cache_complete(
+        cache_path: Path,
+        layer_idx: int,
+        experts_per_chip: int,
+        use_latent_moe: bool = False,
+        latent_use_norm: bool = True,
+        routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+    ) -> bool:
+        """Check if MoE cache is complete (gate + routed experts + shared expert [+ latent proj]).
+
+        ``use_latent_moe`` must be passed for Kimi-K3, otherwise a cache missing the latent
+        projections would be reported complete and __init__ would then fail loading them.
+
+        routed_expert_weights_dtype: dtype the routed experts were/will be BUILT at.
+        as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
+        same value it will later request -- otherwise a stale cache at another dtype reports
+        complete and the empty placeholder is loaded as the weights.
+        """
         prefix = f"layer_{layer_idx}"
         if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
             return False
-        if not TtRoutedExpert.check_cache_complete(cache_path, f"{prefix}.routed_expert", experts_per_chip):
+        if not TtRoutedExpert.check_cache_complete(
+            cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
+        ):
             return False
         if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
+            return False
+        if use_latent_moe and not TtLatentMoeProjections.check_cache_complete(
+            cache_path, f"{prefix}.latent_proj", use_norm=latent_use_norm
+        ):
             return False
         return True
 
@@ -81,16 +113,29 @@ class TtMoe(LightweightModule):
         shared_expert_weights_dtype: ttnn.DataType,
         cache_path: Path,
         layer_idx: int,
+        shared_hidden_dim: int | None = None,
+        routed_emb_dim: int | None = None,
+        latent_weights: dict | None = None,
+        latent_use_norm: bool = True,
     ):
-        """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy."""
+        """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy.
+
+        ``shared_hidden_dim`` defaults to ``hidden_dim``; pass it separately when the shared expert's
+        intermediate differs from the routed experts' (Kimi-K3: 6144 vs 3072). Note the routed-expert
+        cache needs no dim arguments -- it derives shapes from the weight tensors themselves -- so
+        ``routed_emb_dim`` does not appear here.
+        """
+        if shared_hidden_dim is None:
+            shared_hidden_dim = hidden_dim
         # Build gate cache (delegate to TtMoEGatePrefill)
         if gate_weights:
             from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
 
-            # Create minimal config for caching
-            gate_config = TtMoEGateConfig()
-            gate_config.dim = emb_dim
-            gate_config.n_routed_experts = gate_weights["weight"].shape[0]
+            # Minimal config for caching
+            gate_config = TtMoEGateConfig(
+                dim=emb_dim,
+                n_routed_experts=gate_weights["weight"].shape[0],
+            )
 
             TtMoEGatePrefill.build_ttnn_cache(
                 torch_weight=gate_weights["weight"],
@@ -117,11 +162,25 @@ class TtMoe(LightweightModule):
             TtSharedExpert.build_ttnn_cache(
                 shared_expert_weights,
                 emb_dim,
-                hidden_dim,
+                shared_hidden_dim,
                 mesh_device,
                 shared_expert_weights_dtype,
                 cache_path,
                 f"layer_{layer_idx}.shared_expert",
+            )
+
+        # Gated on the weights, not the dims alone: without weights the placeholder branch would write
+        # uninitialised tensorbins that check_cache_complete then reports as a complete cache.
+        if latent_weights and routed_emb_dim is not None and routed_emb_dim != emb_dim:
+            TtLatentMoeProjections.build_ttnn_cache(
+                torch_weights=latent_weights,
+                emb_dim=emb_dim,
+                routed_emb_dim=routed_emb_dim,
+                mesh_device=mesh_device,
+                weights_dtype=shared_expert_weights_dtype,
+                cache_path=cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.latent_proj",
+                use_norm=latent_use_norm,
             )
 
     def __init__(
@@ -137,19 +196,40 @@ class TtMoe(LightweightModule):
         max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         gate_weights: dict,
-        emb_dim: int = DeepSeekV3Config.EMB_SIZE,
-        hidden_dim: int = DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+        emb_dim: int,
+        hidden_dim: int,
+        n_expert_groups: int,
+        n_limited_groups: int,
+        route_scale: float,
         num_links: Union[int, tuple[int, int]] = 1,
         topology: Union[ttnn.Topology, tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
         routed_expert_weights: list[dict] = None,
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
+        routed_expert_hybrid_token_threshold=None,
+        routed_expert_weights_dram_nd_sharded: Optional[bool] = None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
+        shared_expert_activation: str = ACTIVATION_SILU,
+        shared_expert_situ_beta: float | None = None,
+        shared_expert_situ_linear_beta: float | None = None,
+        shared_expert_clamped_silu_glu_limit: float | None = None,
+        gate_score_func: str | None = None,
+        gate_hash_table: torch.Tensor | None = None,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
+        overlap_shared_expert_with_dispatch: bool = True,
+        routing_use_l1_small_for_semaphores: bool = False,
+        is_balanced: bool = False,
+        routed_emb_dim: Optional[int] = None,
+        shared_hidden_dim: Optional[int] = None,
+        latent_weights: dict = None,
+        latent_use_norm: bool = True,
+        rms_norm_eps: float = 1e-5,
+        max_gate_seq_len_per_chip: Optional[int] = None,
     ):
         """
         Initialize TtMoe module.
@@ -181,19 +261,76 @@ class TtMoe(LightweightModule):
             routed_expert_weights_dtype: Data type for routed expert weights
             shared_expert_activations_dtype: Data type for shared expert activations
             shared_expert_weights_dtype: Data type for shared expert weights
+            shared_expert_activation: GLU activation the shared expert runs -- "silu" (default) or
+                "situ" for Kimi-K3's SiTU-GLU. Independent of routed_expert_activation: the two
+                sites run different ops (Python-composed vs fused kernel) at different widths.
+            shared_expert_situ_beta / shared_expert_situ_linear_beta: SiTU softcap betas, required
+                when shared_expert_activation == "situ".
+            shared_expert_clamped_silu_glu_limit: clamp limit, required when
+                shared_expert_activation == "clamped_silu_glu".
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
+            gate_score_func: Router affinity applied to the raw logits. None keeps
+                TtMoEGateConfig's default. Read by the grouped-topk gate and by both hash gates.
+            gate_hash_table: tid2eid table, (vocab_size, num_experts_per_tok). Required by the
+                HASH_HOST / HASH_DEVICE gate modes. Not cached -- the gate replicates it. TtMoe is
+                the lowest layer that takes it: no caller above supplies it yet, so those modes are
+                reachable only by constructing TtMoe directly.
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
+            overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
+                on disjoint sub-devices so they overlap on-chip. If False, skip sub-device
+                setup and run them sequentially on the full Tensix grid.
+            is_balanced: If True, uses zigzag sequence placement for padding awareness.
+                Should match the is_balanced flag used in MLA/transformer.
+            routed_emb_dim: Width the ROUTED side runs at -- dispatch, routed experts, combine and
+                reduce. Defaults to emb_dim, which is every model except Kimi-K3. K3 sets it to 3584
+                against an emb_dim of 7168 ("LatentMoE"), halving the bytes each dispatched token
+                moves over fabric. The gate is unaffected and still reads the full emb_dim, as does
+                the shared expert.
+            shared_hidden_dim: The SHARED expert's FFN intermediate. Defaults to hidden_dim. K3 needs
+                it separate because its shared expert is a single MLP at moe_intermediate_size *
+                num_shared_experts (6144), while hidden_dim is the per-routed-expert intermediate
+                (3072). Every prior model has num_shared_experts == 1, so the two coincided and one
+                parameter sufficed.
+            latent_weights: Dict with down_proj / up_proj / norm for the LatentMoE projections.
+                Only read when routed_emb_dim implies a latent space; None when the TTNN cache exists.
+            latent_use_norm: Whether a latent RMSNorm sits between the reduce and the up-projection
+                (K3: latent_moe_use_norm=True).
+            rms_norm_eps: eps for that latent norm. Passed explicitly because
+                TtDistributedRmsNorm defaults to 1e-6 while K3's config says 1e-5.
+            routed_expert_activation: GLU activation the fused routed-expert kernel runs.
+                Defaults to SiLU (DeepSeek / K2.7 / GLM). Kimi-K3 passes SituGlu. Routed only --
+                the shared expert takes shared_expert_activation, which is a separate knob.
+            routed_expert_hybrid_token_threshold: split the routed experts across BOTH
+                routed-expert ops by load. None (default) keeps the single-op path. An int T
+                sends experts with <= T active tokens to moe_fused_swiglu and the rest to
+                unified_routed_expert_moe; each op reads the same device-resident counts and
+                drops the experts outside its band, so the split needs no extra tensor and no
+                host sync. The crossover is per model and per shape, not a constant -- measure
+                before choosing T: the two ops' per-shape device times are gated by
+                test_moe_fused_swiglu_perf.py and test_single_routed_expert_perf.py.
+            routed_expert_weights_dram_nd_sharded: DRAM placement of the routed-expert weights.
+                None (default) takes TtRoutedExpert's arch default -- ND-sharded on Blackhole, where
+                both routed-expert ops read a per-core weight slice as one NoC transaction per
+                K-row; interleaved elsewhere. Passed straight through; the cache is placement-
+                agnostic, so this never invalidates one.
         """
         super().__init__()
         self.mesh_device = mesh_device
+        # Shared per-mesh CCL singleton: persistent global semaphores for the TP all-gather of x,
+        # so all_gather_async reuses them instead of leaking fresh L1 semaphores every layer.
+        self.tt_ccl = get_tt_ccl(mesh_device)
         self.dispatch_group_size = dispatch_group_size
         self.num_dispatch_groups = num_dispatch_groups
         self.experts_per_chip = experts_per_chip
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
+        self.layer_idx = layer_idx  # GLOBAL index; only consumed by the env-gated routing dump
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
+        self.routed_emb_dim = emb_dim if routed_emb_dim is None else routed_emb_dim
+        self.shared_hidden_dim = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
+        self.use_latent_moe = self.routed_emb_dim != emb_dim
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -206,18 +343,54 @@ class TtMoe(LightweightModule):
         else:
             self.row_topology = self.col_topology = topology
 
+        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+        # Optional SubDeviceTraceController (capture phase): the shared-expert/dispatch overlap's
+        # sub-device load/clear go through it so the trace can be split at those boundaries instead of
+        # resetting worker state mid-capture. None => load/clear the mesh device directly.
+        self._trace_controller = None
+
+        # The shared expert, WHEN OVERLAPPED with dispatch, runs on disjoint Tensix sub-devices that
+        # still SHARE the EDM fabric routers. In that case its TP-axis reduce-scatter must stay Linear
+        # even when the TP axis is a ring: a *ring* reduce-scatter concurrent with dispatch makes the
+        # two ops' wrap-link traffic form a cyclic EDM buffer-credit dependency and deadlocks (the
+        # shared-expert reduce_scatter wedges on its batch_ready_sem barrier at
+        # ring_reduce_scatter_minimal_async_writer.cpp). This mirrors the proven FABRIC_2D_TORUS_Y
+        # path, where the overlapped shared expert is Linear (col axis unwrapped) while dispatch
+        # rings on SP. The forcing is gated on the overlap flag: with overlap disabled the reduce-
+        # scatter runs alone (no concurrent dispatch on the shared routers), so Ring is safe and kept.
+        # Every other TP-axis collective (MLA, dense FFN, gate, pre-dispatch all-gather, post-combine
+        # reduce) is never overlapped and keeps col_topology (Ring).
+        force_shared_expert_linear = (
+            self.overlap_shared_expert_with_dispatch and self.col_topology == ttnn.Topology.Ring
+        )
+        self.shared_expert_topology = ttnn.Topology.Linear if force_shared_expert_linear else self.col_topology
+        if force_shared_expert_linear:
+            logger.info(
+                "TtMoe: shared-expert reduce-scatter forced to Linear (overlapped with dispatch on a "
+                "TP-ring fabric) to avoid an EDM deadlock; other TP collectives keep Ring"
+            )
+
         # Always create dispatch table at init (static tensor) - needed by gate and dispatch module
         expert_dispatch_table = ExpertMapping.create_dispatch_table(
             num_routed_experts, dispatch_group_size, num_dispatch_groups
         )
 
         # Build gate internally
-        gate_config = TtMoEGateConfig()
-        gate_config.dim = emb_dim
-        gate_config.sp_dim = seq_len_per_chip
-        gate_config.n_routed_experts = num_routed_experts
-        gate_config.n_activated_experts = num_experts_per_tok
+        gate_config = TtMoEGateConfig(
+            dim=emb_dim,
+            sp_dim=seq_len_per_chip,
+            n_routed_experts=num_routed_experts,
+            n_activated_experts=num_experts_per_tok,
+            n_expert_groups=n_expert_groups,
+            n_limited_groups=n_limited_groups,
+            route_scale=route_scale,
+            max_sp_dim=max_gate_seq_len_per_chip,
+        )
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
+        # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows col_topology.
+        gate_config.ccl_config["TOPOLOGY"] = self.col_topology
+        if gate_score_func is not None:
+            gate_config.score_func = gate_score_func
 
         # Handle cache-only case (gate_weights=None)
         if gate_weights is not None:
@@ -231,13 +404,21 @@ class TtMoe(LightweightModule):
         self.gate = TtMoEGatePrefill(
             gate_config,
             mesh_device,
-            dispatch_table=expert_dispatch_table,
-            experts_per_chip=experts_per_chip,
             weight=gate_weight,
             bias=gate_bias,
             fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
+            is_balanced=is_balanced,
+            hash_table=gate_hash_table,
+        )
+
+        self.routing_setup = TtMoERoutingSetup(
+            mesh_device,
+            expert_dispatch_table,
+            num_links=gate_config.ccl_config["NUM_LINKS"],
+            experts_per_chip=experts_per_chip,
+            use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
         )
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
@@ -250,6 +431,45 @@ class TtMoe(LightweightModule):
             mesh_device, expert_dispatch_table, dispatch_axis=0
         )
 
+        # ========================================
+        # Sub-devices: when overlap is enabled, split the Tensix grid into a "dispatch"
+        # strip and a "shared expert" strip so the two ops run on disjoint cores and the
+        # Fast-Dispatch per-sub-device counters let them overlap on-chip.
+        #   sub-device 0 (dispatch_sd):     rows [0, dispatch_sd_rows)
+        #   sub-device 1 (shared_sd):       rows [dispatch_sd_rows, grid_y)
+        # When overlap is disabled, both ops run sequentially on the full grid and no
+        # sub-device manager is created.
+        # ========================================
+        if self.overlap_shared_expert_with_dispatch:
+            dispatch_sd_rows = 1
+            grid = mesh_device.compute_with_storage_grid_size()
+            grid_x, grid_y = grid.x, grid.y
+            assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
+            dispatch_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, dispatch_sd_rows - 1))}
+            )
+            shared_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, dispatch_sd_rows), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
+            )
+            dispatch_sd = ttnn.SubDevice([dispatch_cores])
+            shared_sd = ttnn.SubDevice([shared_cores])
+            self.sd_manager_id = mesh_device.create_sub_device_manager([dispatch_sd, shared_sd], 0)
+            self.dispatch_sd_id = ttnn.SubDeviceId(0)
+            self.shared_sd_id = ttnn.SubDeviceId(1)
+            # Stash the CoreRangeSet of the shared sub-device so TtSharedExpert can build
+            # sub-device-confined shard_specs in Python without a C++ worker_cores binding.
+            self.shared_sd_cores = shared_cores
+            logger.debug(
+                f"Sub-devices: grid={grid_x}x{grid_y}, dispatch=rows[0,{dispatch_sd_rows}), "
+                f"shared=rows[{dispatch_sd_rows},{grid_y})"
+            )
+        else:
+            self.sd_manager_id = None
+            self.dispatch_sd_id = None
+            self.shared_sd_id = None
+            self.shared_sd_cores = None
+            logger.debug("Sub-devices disabled: shared expert and dispatch will run sequentially")
+
         # Initialize dispatch module (row axis: axis 0)
         self.dispatch_module = TtDispatchModule(
             mesh_device=mesh_device,
@@ -260,10 +480,11 @@ class TtMoe(LightweightModule):
             metadata_len=metadata_len,
             max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
-            emb_dim=emb_dim,
+            emb_dim=self.routed_emb_dim,
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
+            subdevice_id=self.dispatch_sd_id,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -277,7 +498,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            init_zeros=True,
+            init_zeros=False,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
@@ -303,7 +524,7 @@ class TtMoe(LightweightModule):
             mesh_device=mesh_device,
             experts_per_chip=experts_per_chip,
             global_expert_idx_table=global_expert_idx_tt,
-            emb_dim=emb_dim,
+            emb_dim=self.routed_emb_dim,
             hidden_dim=hidden_dim,
             max_tokens=max_dispatched_tokens_per_expert,
             torch_weights=routed_expert_weights,
@@ -311,20 +532,49 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
+            activation=routed_expert_activation,
+            hybrid_token_threshold=routed_expert_hybrid_token_threshold,
+            weights_dram_nd_sharded=routed_expert_weights_dram_nd_sharded,
         )
 
         # Initialize shared expert (col axis: axis 1)
         self.shared_expert = TtSharedExpert(
             mesh_device=mesh_device,
+            # The shared expert reads the pre-projection hidden, so it stays at the full emb_dim.
             emb_dim=emb_dim,
-            hidden_dim=hidden_dim,
+            hidden_dim=self.shared_hidden_dim,
             torch_weights=shared_expert_weights,
             num_links=self.col_num_links,
-            topology=self.col_topology,
+            topology=self.shared_expert_topology,
             activations_dtype=shared_expert_activations_dtype,
             weights_dtype=shared_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.shared_expert",
+            subdevice_id=self.shared_sd_id,
+            subdevice_cores=self.shared_sd_cores,
+            activation=shared_expert_activation,
+            situ_beta=shared_expert_situ_beta,
+            situ_linear_beta=shared_expert_situ_linear_beta,
+            clamped_silu_glu_limit=shared_expert_clamped_silu_glu_limit,
+        )
+
+        self.latent_projections = (
+            TtLatentMoeProjections(
+                mesh_device=mesh_device,
+                emb_dim=emb_dim,
+                routed_emb_dim=self.routed_emb_dim,
+                torch_weights=latent_weights,
+                use_norm=latent_use_norm,
+                rms_norm_eps=rms_norm_eps,
+                # ~10% of routed-expert FLOPs, so they take the shared expert's precision.
+                weights_dtype=shared_expert_weights_dtype,
+                num_links=self.col_num_links,
+                topology=self.col_topology,
+                weight_cache_path=weight_cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.latent_proj",
+            )
+            if self.use_latent_moe
+            else None
         )
 
         # Initialize reduce module for post-combine reduction (col axis: axis 1)
@@ -343,10 +593,110 @@ class TtMoe(LightweightModule):
 
         logger.debug("TtMoe initialization complete")
 
+    def set_trace_controller(self, controller):
+        """Attach (or clear with None) a SubDeviceTraceController. While set, the shared-expert/
+        dispatch overlap routes its sub-device load/clear through the controller so a ttnn trace can
+        be split at those boundaries (see utils/sub_device_trace.py)."""
+        self._trace_controller = controller
+
+    def release_sub_device_manager(self):
+        """Remove the overlap sub-device manager this MoE created (no-op if overlap is off). Call
+        before closing the mesh device — leaving managers registered at close has been observed to
+        segfault the teardown. Idempotent."""
+        if getattr(self, "sd_manager_id", None) is not None:
+            self.mesh_device.remove_sub_device_manager(self.sd_manager_id)
+            self.sd_manager_id = None
+
+    _dump_traced_warned = False  # see the traced-path branch below; warn once per process
+
+    def _dump_routing(
+        self,
+        indices: ttnn.Tensor,
+        scores: ttnn.Tensor,
+        actual_start: int,
+        cache_user_id: int,
+        traced: bool,
+    ) -> None:
+        """Env-gated (PREFILL_DUMP_ROUTING_DIR) host dump of the gate's per-token top-k selection.
+
+        A no-op unless the var is set. The routing tensors never otherwise leave the device, so this
+        costs a full device sync plus a [tokens, topk] readback per layer per chunk: a debug tool, not
+        a production path. The file name carries the GLOBAL layer index, the KV slot and the chunk's
+        absolute KV start, because start is what lets the analysis script invert the rotated
+        block-cyclic chip->token mapping back to global token order (see rotated_chip_positions).
+
+        The ids written are GLOBAL expert ids (0..num_routed_experts-1), plus the pad sentinel
+        num_routed_experts: the gate matmul is TP-sharded on K and all-reduced, so every chip runs the
+        top-k over the FULL expert axis. Expert parallelism only enters later, in dispatch.
+        """
+        dump_dir = os.environ.get("PREFILL_DUMP_ROUTING_DIR")
+        if not dump_dir:
+            return
+        # Every dumped layer costs a device sync, so a 93-layer x 11-chunk run pays ~1000 of them and
+        # writes ~700 MB. PREFILL_DUMP_ROUTING_LAYERS narrows it to the layers actually being chased
+        # (e.g. the ones that already have a KV dump). Unset = every MoE layer.
+        wanted = os.environ.get("PREFILL_DUMP_ROUTING_LAYERS")
+        if wanted and str(self.layer_idx) not in {s.strip() for s in wanted.split(",") if s.strip()}:
+            return
+        if traced:
+            # A device->host readback is illegal inside a trace capture, and a capture recorded with
+            # one would be wrong for every replay. Stay off and say so rather than corrupt the run.
+            # Once per process, not once per MoE layer per chunk -- that would be ~69 x N identical
+            # lines on Kimi-K3 and would bury everything else in the log.
+            if not TtMoe._dump_traced_warned:
+                TtMoe._dump_traced_warned = True
+                logger.warning(
+                    "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is the traced path; "
+                    "routing dump skipped for all layers (run with use_trace=False to collect it)"
+                )
+            return
+        try:
+            # SP is mesh axis 0 and the gate output is TP-replicated (the logits all-reduce), so concat
+            # along axis 0 over the SP rows and collapse the TP columns -- the same composition
+            # TtMoEGatePrefill._compose_logits_to_host uses.
+            composer = ttnn.create_mesh_composer(
+                self.mesh_device,
+                config=ttnn.MeshComposerConfig(
+                    dims=(0, -1),
+                    mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], 1),
+                ),
+            )
+            host_indices = ttnn.to_torch(indices, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
+            host_scores = ttnn.to_torch(scores, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
+            sp_factor = int(self.mesh_device.shape[0])
+            os.makedirs(dump_dir, exist_ok=True)
+            torch.save(
+                {
+                    # int32, not int16: the sentinel is num_routed_experts and a wider expert space
+                    # would not fit int16. The file is written once and read offline; size is not the
+                    # constraint here.
+                    "expert_ids": host_indices.to(torch.int32),
+                    "expert_weights": host_scores.to(torch.float32),
+                    "layer_idx": self.layer_idx,
+                    "slot_id": int(cache_user_id),
+                    "actual_start": int(actual_start),
+                    "sp_factor": sp_factor,
+                    "tokens_per_chip": int(host_indices.shape[0]) // sp_factor,
+                    "num_routed_experts": int(self.num_routed_experts),
+                },
+                os.path.join(
+                    dump_dir,
+                    f"routing_layer{self.layer_idx}_slot{int(cache_user_id)}_start{int(actual_start)}.pt",
+                ),
+            )
+        except Exception as exc:  # diagnostics must never fail a run
+            logger.warning(f"[TtMoe] routing dump for layer {self.layer_idx} failed: {exc}")
+
     def forward(
         self,
         x: ttnn.Tensor,
         return_intermediates: bool = False,
+        actual_isl: int = None,
+        padding_side: str = "right",
+        actual_start: Optional[int] = None,
+        metadata: Optional[tuple] = None,
+        input_ids: Optional[torch.Tensor] = None,
+        cache_user_id: int = 0,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -356,23 +706,108 @@ class TtMoe(LightweightModule):
                - For 2D mesh: sharded dims=(0, -1) - dim 0 across axis 0, dim -1 across axis 1
                - Shape per device: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
             return_intermediates: If True, return intermediate tensors for debugging
+            actual_isl: Actual ISL of the sequence (None = no padding). Doubles as the padding-config
+                GUARD: not-None enables padding awareness. On the traced path (`metadata` set) that is
+                its ONLY role — pass the full chunk, since the real per-chunk bound is read on-device
+                from the metadata tensors and this value is unused.
+            padding_side: Padding side of the sequence
+            actual_start: chunked-prefill absolute KV position of this chunk's first real token
+                (None/0 = single-shot, sequential SP layout). Required for correct per-chip real-token
+                counts: chunked prefill feeds the KV-pad-aware ROTATED block-cyclic layout, where a
+                chip's real rows are NOT its slice of the natural sequence. See build_padding_config.
+            metadata: the traced path's (slot_id, actual_start, actual_end) tuple of 1-element uint32
+                device tensors. When given, the padding config is built ON DEVICE from them
+                (build_padding_config_device) instead of on host — the host builder's from_torch is
+                illegal inside a trace capture, and a config baked in at capture time would be wrong
+                for every later chunk. Ignored unless padding awareness is active (actual_isl set and
+                a DEVICE_FP32 gate).
+            input_ids: host token ids for the whole sequence, flat, one per row of x. Required by
+                the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
+                HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
+                assumes sequential SP placement (not is_balanced).
 
         Returns:
             Tuple of (final_output, intermediates):
             - final_output: MoE output with same sharding as input
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
-        logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
-        logger.debug(f"  x.shape={x.shape}")
+        # Preserve profiler region labels without duplicating them through Python logging.
+        ttnn.tracy_message("`TT_SIGNPOST: MoE_START`")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
+            logger.debug(f"  x.shape={x.shape}")
 
         # ========================================
         # Gate: compute weights/indices/offsets/counts from x
         # ========================================
-        # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
+        # Padding awareness is only validated/safe for RIGHT padding. With right padding,
+        # real tokens have the lowest indices, so they are packed first in every expert
+        # region and stay within the shortened FFN/dispatch bound. For left padding the
+        # real tokens land at the tail of each region while padded tokens (in non-sentinel
+        # gate modes) are dispatched first, so a shortened bound could drop real tokens.
+        # Disable padding awareness for left padding and process the full (always-correct)
+        # token range by clearing actual_isl for the rest of this forward.
+        #
+        # Under trace this stays ON: the captured (metadata) forward always passes the FULL chunk as
+        # actual_isl, so build_padding_config yields a single full-range config that the memoization
+        # below builds once during warm-up — the replayed command stream contains no host transfer.
+        # Only the eager/scalar paths pass a partial actual_isl, and that is the rotated-padded path
+        # #51440 fixed.
+        if actual_isl is not None and padding_side != "right":
+            logger.warning(
+                "[TtMoe.forward] padding-aware MoE is only supported for right padding; "
+                f"got padding_side={padding_side!r}. Falling back to the full token range."
+            )
+            actual_isl = None
 
-        scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets = self.gate(
-            ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2]))
+        # Build the per-device [local_real_tokens, pad_side] config once and share the
+        # SAME tensor between the gate topk (sentinel-marks padded rows) and the dispatch
+        # op (bounds its token loop). This is only valid in DEVICE_FP32, where the gate
+        # actually sentinel-marks padded tokens so routing_setup/combine stay consistent
+        # with a shortened dispatch loop. In other gate modes padded tokens keep real
+        # expert indices, so dispatch must process the full range -> padding_config=None.
+        #
+        # NOTE on `actual_isl` in this guard: it plays two DIFFERENT roles depending on the path.
+        #   * eager/scalar: it is BOTH the guard (not-None => padding awareness on) AND the actual
+        #     bound handed to the host builder below.
+        #   * traced (metadata set): it is ONLY the guard. The real per-chunk bound is read on-device
+        #     from the metadata tensors, so the caller passes the FULL chunk here (see
+        #     TtPrefillRuntime._forward_traced, actual_isl=chunk_size) purely to say "padding
+        #     awareness is ON" — its VALUE is deliberately unused. That is what keeps the guard
+        #     itself trace-safe: it is a static, capture-time decision (one captured program either
+        #     has the padding-aware ops or it does not), while the values that change per chunk stay
+        #     on-device. A caller that wanted padding awareness OFF under trace would pass
+        #     actual_isl=None and get a capture with no padding-aware path at all.
+        padding_config = None
+        if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
+            if metadata is not None:
+                # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
+                # the config with the device op. The host builder's from_torch cannot run inside a
+                # capture, and a config baked in at capture time would be wrong for every later chunk.
+                # `actual_isl` is NOT forwarded here — only the guard above consumed it; the op derives
+                # the real bound from actual_start/actual_end itself.
+                # Raises for is_balanced=True (not expressible in the op's closed form).
+                padding_config = self.gate.build_padding_config_device(metadata, padding_side)
+            else:
+                padding_config = self.gate.build_padding_config(actual_isl, padding_side, actual_start or 0)
+
+        scores, indices, gate_logits = self.gate(
+            ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])),
+            actual_isl=actual_isl,
+            padding_side=padding_side,
+            padding_config=padding_config,
+            actual_start=actual_start or 0,
+            input_ids=input_ids,
         )
+
+        self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
+
+        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = self.routing_setup(
+            ttnn_top_k_experts_indices=indices,
+            num_routed_experts=self.num_routed_experts,
+            num_experts_per_tok=self.num_experts_per_tok,
+        )
+
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
             if return_intermediates
@@ -391,17 +826,8 @@ class TtMoe(LightweightModule):
             _offsets_host = ttnn.to_torch(_offsets_4d, mesh_composer=_ep_composer).squeeze(2)
             logger.info(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
 
-        # Gate outputs uint16 indices; dispatch requires int32.
-        # this should be aligned in the further PR.
-        # Typecast in TILE_LAYOUT to avoid alignment issues, then convert to ROW_MAJOR.
-        if indices.dtype != ttnn.int32:
-            indices = ttnn.to_layout(indices, ttnn.TILE_LAYOUT)
-            indices = ttnn.typecast(indices, ttnn.int32)
-            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-        else:
-            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-        #
         # Ensure ROW_MAJOR layout for dispatch compatibility
+        indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
         scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
 
         # Reshape back to 3D: (batch*seq, topk) -> (batch, seq, topk)
@@ -410,8 +836,9 @@ class TtMoe(LightweightModule):
         scores = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
         indices = ttnn.reshape(indices, (batch_dim, seq_dim, indices.shape[-1]))
 
-        logger.debug(f"  {scores.shape=} {scores.memory_config()=}")
-        logger.debug(f"  {indices.shape=} {indices.memory_config()=}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"  {scores.shape=} {scores.memory_config()=}")
+            logger.debug(f"  {indices.shape=} {indices.memory_config()=}")
 
         # ========================================
         # Step 0: All-gather x to get full emb_dim (replicated across TP axis)
@@ -420,41 +847,95 @@ class TtMoe(LightweightModule):
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
         # Only needed if there are multiple devices in TP axis (axis 1)
         if self.mesh_device.shape[1] > 1:
-            x = ttnn.all_gather(
+            x = ttnn.experimental.all_gather_async(
                 x,
                 dim=-1,  # Gather along emb_dim
                 cluster_axis=1,  # Gather across axis 1 (TP axis)
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.col_num_links,
                 topology=self.col_topology,
             )
-        logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
         # ========================================
-        # Step 1: Shared expert (enabled)
+        # Step 0b: LatentMoE -- project into the latent space (Kimi-K3 only)
         # ========================================
-        # Shared expert expects replicated input (full emb_dim)
-        # Convert x to TILE_LAYOUT for shared expert
-        logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
+        # Outside the sub-device window below: the down-projection feeds dispatch, so it cannot
+        # overlap it. x stays full-width for the shared expert, which reads the pre-projection hidden.
+        routed_x = self.latent_projections.to_latent(x) if self.use_latent_moe else x
+        if self.use_latent_moe and DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] routed_x (latent) shape: {routed_x.shape}")
 
-        shared_output = self.shared_expert(x)
-        logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+        ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_start`")
+        if self.overlap_shared_expert_with_dispatch:
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_load(self.sd_manager_id)
+            else:
+                self.mesh_device.load_sub_device_manager(self.sd_manager_id)
 
         # ========================================
-        # Step 2: Dispatch (enabled)
+        # Step 1: Dispatch (enabled)
         # ========================================
-        # Dispatch expects full emb_dim on each device (x already has this)
-        logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
+        # Dispatch expects complete routed-side rows on each device: full emb_dim normally, or the
+        # all-gathered latent under LatentMoE (routed_x is x itself when there is no latent space).
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] {routed_x.shape=} {routed_x.memory_config()=}")
         dispatched_buffer, metadata = self.dispatch_module(
-            x,
+            routed_x,
             scores,
             indices,
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
+            padding_config=padding_config,
         )
-        x = ttnn.deallocate(x)
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(
+                f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}"
+            )
+
+            logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
+
+        # ========================================
+        # Step 2: Shared expert (enabled)
+        # ========================================
+        # Shared expert expects replicated input (full emb_dim)
+        # Convert x to TILE_LAYOUT for shared expert
+        shared_output = self.shared_expert(x)
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+
+        if self.overlap_shared_expert_with_dispatch:
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_clear()
+            else:
+                self.mesh_device.clear_loaded_sub_device_manager()
+        # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
+        # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
+        # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
+        # would leave the cache holding a deallocated tensor (next forward's cache hit fails is_allocated()).
+        # Dispatch has consumed routed_x by here. Under LatentMoE it is the latent buffer, a distinct
+        # allocation needing its own free; without a latent space it IS x, so it is only an alias to
+        # drop so that the deallocate below sees a single reference to the buffer.
+        latent_input = None
+        if not self.use_latent_moe:
+            routed_x = None
+        elif return_intermediates:
+            # to_memory_config short-circuits when the config already matches, handing back a tensor
+            # that SHARES routed_x's buffer instead of copying it -- and routed_x is interleaved-DRAM
+            # on every path run today. Freeing it then would leave the PCC path reading freed memory,
+            # so release routed_x only when a real copy was made.
+            latent_input = ttnn.to_memory_config(routed_x, ttnn.DRAM_MEMORY_CONFIG)
+            if routed_x.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                routed_x = ttnn.deallocate(routed_x, force=True)
+        else:
+            routed_x = ttnn.deallocate(routed_x, force=True)
+        x = ttnn.deallocate(x, force=True)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
+
+        ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_end`")
 
         # ========================================
         # Step 3: Routed experts (enabled)
@@ -463,42 +944,39 @@ class TtMoe(LightweightModule):
         # Routed expert expects (experts_per_chip, max_tokens, emb_dim)
         # Squeeze the first two dimensions
 
-        # Convert dispatched_buffer to TILE_LAYOUT for routed experts
-        dispatched_buffer = ttnn.to_layout(
-            ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0), ttnn.TILE_LAYOUT
-        )
-        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer.shape}")
-
-        expert_outputs = self.routed_expert(dispatched_buffer, tt_expert_token_counts, tt_expert_region_offsets)
-
+        # TtRoutedExpert.forward owns the per-arch layout/dtype prep: Blackhole
+        # consumes the ROW_MAJOR bf16 buffer and returns a fresh output; Wormhole
+        # tiles it internally for the extract loop. Either way the ROW_MAJOR input
+        # is independent of the result and can be freed here, unless the PCC check
+        # needs it to compare against the bfloat16 torch reference.
+        squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
+        expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
-        else:
-            # add squeezed dimenisions back for intermediates to match original dispatch output shape
-            dispatched_buffer = ttnn.unsqueeze(dispatched_buffer, dim=0)
-            dispatched_buffer = ttnn.unsqueeze(dispatched_buffer, dim=0)
-
-        logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine
         # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
         expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
         expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
+
+            logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
 
         # ========================================
         # Step 4: Combine (enabled)
         # ========================================
         # Combine expects TILE_LAYOUT input
-        logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
-
         combined_output = self.combine_module(
             expert_outputs,
             metadata,
             tt_expert_token_counts,
             tt_expert_region_offsets,
         )
-        logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
 
         # ========================================
         # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)
@@ -515,12 +993,27 @@ class TtMoe(LightweightModule):
             indices=indices,
             expert_dispatch_table=self.tt_expert_dispatch_table,
         )
-        logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
+
+        # ========================================
+        # Step 5b: LatentMoE -- project back out of the latent space (Kimi-K3 only)
+        # ========================================
+        # Must stay above the squeeze: the distributed norm inside from_latent() is rank-4 only.
+        latent_routed_output = None
+        if self.use_latent_moe:
+            if return_intermediates:
+                # Reshape only; from_latent() reads routed_output without mutating it.
+                latent_routed_output = ttnn.squeeze(routed_output, dim=0)
+            routed_output = self.latent_projections.from_latent(routed_output)
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"[TtMoe.forward] routed_output (after latent up_proj) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape
         # (1, 1, 256, 512) -> (1, 256, 512)
         routed_output = ttnn.squeeze(routed_output, dim=0)
-        logger.debug(f"[TtMoe.forward] routed_output (squeezed) shape: {routed_output.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] routed_output (squeezed) shape: {routed_output.shape}")
 
         # ========================================
         # Step 6: Final output
@@ -528,7 +1021,8 @@ class TtMoe(LightweightModule):
         # final_output = routed_output + shared_output
         # Both should be in TILE_LAYOUT with shape (dispatch_group_size, seq_len_per_chip, emb_dim)
         final_output = ttnn.add(routed_output, shared_output)
-        logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
 
         # Build intermediates if requested
         intermediates = None
@@ -555,8 +1049,9 @@ class TtMoe(LightweightModule):
                     f"Overflow tokens were dropped - output data is corrupted. "
                     f"Reduce sequence length."
                 )
-                logger.debug(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
-                logger.debug(f"[TtMoe.forward] per_chip_sums: {_per_chip_sums.tolist()}")
+                if DEBUG_LOGGING_ENABLED:
+                    logger.debug(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
+                    logger.debug(f"[TtMoe.forward] per_chip_sums: {_per_chip_sums.tolist()}")
 
             # Every per-expert region offset must address a row inside the dispatch buffer
             # (i.e. < max_dispatch_buffer_token_size). An offset >= capacity means the
@@ -579,7 +1074,8 @@ class TtMoe(LightweightModule):
                     f"Overflow tokens were dropped - output data is corrupted. "
                     f"Reduce sequence length."
                 )
-                logger.debug(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
+                if DEBUG_LOGGING_ENABLED:
+                    logger.debug(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
 
             intermediates = TtMoEIntermediates(
                 gate_scores=scores,
@@ -591,7 +1087,10 @@ class TtMoe(LightweightModule):
                 shared_output=shared_output,
                 combined_output=combined_output,
                 routed_output=routed_output,
+                latent_routed_output=latent_routed_output,
+                latent_input=latent_input,
                 expert_token_counts=tt_expert_token_counts,
             )
 
+        ttnn.tracy_message("`TT_SIGNPOST: MoE_END`")
         return final_output, intermediates

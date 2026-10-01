@@ -13,6 +13,8 @@
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include <program_cache.hpp>
+#include <system_mesh.hpp>
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -39,9 +41,13 @@ std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) 
     return std::string(buf.data(), buf.size());
 }
 
-Data::Data(std::optional<int> rank) : logger(MetalContext::instance().rtoptions().get_inspector_log_path(), rank) {
+Data::Data(std::optional<int> rank, ContextId context_id) :
+    context_id(context_id), logger(MetalContext::instance().rtoptions().get_inspector_log_path(), rank) {
     // Initialize RPC server if enabled
     const auto& rtoptions = MetalContext::instance().rtoptions();
+    mesh_buffer_logging_enabled = rtoptions.get_inspector_log_mesh_buffers();
+    mesh_socket_logging_enabled = rtoptions.get_inspector_log_mesh_sockets();
+    runtime_entries_logging_enabled = rtoptions.get_inspector_log_runtime_entries();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
         try {
             int port = rtoptions.get_inspector_rpc_server_port();
@@ -55,6 +61,7 @@ Data::Data(std::optional<int> rank) : logger(MetalContext::instance().rtoptions(
             // Connect callbacks that we want to respond to
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
+            get_rpc_server().setGetSocketsCallback([this](auto result) { this->rpc_get_sockets(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
             get_rpc_server().setGetMeshWorkloadRuntimeEntriesCallback(
                 [this](auto result) { this->rpc_get_mesh_workload_runtime_entries(result); });
@@ -68,6 +75,7 @@ Data::Data(std::optional<int> rank) : logger(MetalContext::instance().rtoptions(
             get_rpc_server().setGetMetalDeviceIdMappingsCallback(
                 [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
             get_rpc_server().setGetConfigurationCallback([this](auto result) { this->rpc_get_configuration(result); });
+            get_rpc_server().setGetSystemMeshCallback([this](auto result) { this->rpc_get_system_mesh(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -120,6 +128,10 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
             kernel.setPath(kernel_data.path);
             kernel.setSource(kernel_data.source);
             kernel.setProgramId(program_id);
+            auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
+            for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
+                elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
+            }
         }
     }
 }
@@ -142,11 +154,48 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
         const auto& shape_view = mesh_device_data.mesh_device->get_view().shape();
         auto shape = mesh_device.initShape(shape_view.dims());
         for (size_t k = 0; k < shape_view.dims(); ++k) {
-            shape.set(k, shape_view.get_stride(k));
+            shape.set(k, shape_view[k]);
         }
 
         mesh_device.setParentMeshId(mesh_device_data.parent_mesh_id.value_or(-1));
         mesh_device.setInitialized(mesh_device_data.initialized);
+        mesh_device.setProgramCacheEnabled(
+            const_cast<distributed::MeshDeviceImpl*>(mesh_device_data.mesh_device)->get_program_cache().is_enabled());
+    }
+}
+
+void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(mesh_buffers_mutex);
+    auto sockets = results.initSockets(mesh_sockets_data.size());
+    uint32_t i = 0;
+    for (const auto& [config_buffer, socket_data] : mesh_sockets_data) {
+        auto socket = sockets[i++];
+        socket.setIsSender(socket_data.is_sender);
+        socket.setConfigBufferAddress(socket_data.config_buffer_address);
+        socket.setDataBufferAddress(socket_data.data_buffer_address);
+        socket.setFifoSize(socket_data.fifo_size);
+        socket.setBytesAckedOffsetBytes(socket_data.bytes_acked_offset_bytes);
+        socket.setBytesAckedStrideBytes(socket_data.bytes_acked_stride_bytes);
+        socket.setLocalMeshId(socket_data.local_mesh_id);
+        socket.setPeerMeshId(socket_data.peer_mesh_id);
+        auto local_cores = socket.initLocalCores(socket_data.local_cores.size());
+        uint32_t j = 0;
+        for (const auto& c : socket_data.local_cores) {
+            auto local_core = local_cores[j++];
+            local_core.setChipId(c.chip_id);
+            auto core = local_core.initCore();
+            core.setCoreX(c.core.core_x);
+            core.setCoreY(c.core.core_y);
+            core.setFabricChipId(c.core.fabric_chip_id);
+            auto peers = local_core.initPeers(c.peers.size());
+            uint32_t k = 0;
+            for (const auto& p : c.peers) {
+                auto peer = peers[k++];
+                peer.setFabricChipId(p.fabric_chip_id);
+                peer.setCoreX(p.core_x);
+                peer.setCoreY(p.core_y);
+            }
+        }
     }
 }
 
@@ -258,6 +307,10 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
     kernel.setPath(kernel_data.path);
     kernel.setSource(kernel_data.source);
     kernel.setProgramId(program_id);
+    auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
+    for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
+        elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
+    }
 }
 
 // Get build environment information for all devices
@@ -267,12 +320,18 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
 // Declared here in Data to centralize Inspector RPC callback registration and
 // tie it to Inspector Data's lifetime
 void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results) {
-    // Get build environment info for all devices
-    // Calls to BuildEnvManager::get_all_build_envs_info are thread-safe as it's protected by an internal mutex
-    const auto& build_envs_info = BuildEnvManager::get_instance().get_all_build_envs_info();
+    // Get build environment info for all devices in this Inspector's owning MetalContext.
+    // Calls to BuildEnvManager::get_all_build_envs_info are thread-safe as it's protected by an internal mutex.
+    const auto& build_envs_info = BuildEnvManager::get_instance(context_id).get_all_build_envs_info();
     // Populate RPC response with build environment info for all devices
     auto result_build_envs = results.initBuildEnvs(build_envs_info.size());
     const auto fw_compile_hash = this->fw_compile_hash.load(std::memory_order_acquire);
+    const auto tensix_fw_launch_addr_value = [] {
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const auto tensix_core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        return hal.get_jit_build_config(tensix_core_type_idx, 0, 0).fw_launch_addr_value;
+    }();
+
     size_t i = 0;
     for (const auto& build_env : build_envs_info) {
         auto item = result_build_envs[i++];
@@ -282,10 +341,11 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         build_info.setBuildKey(build_env.build_key);
         build_info.setFirmwarePath(build_env.firmware_root_path);
         build_info.setFwCompileHash(fw_compile_hash);
-        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only)
-        // This reflects the runtime option used when initializing HAL on silicon.
+        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only).
+        // Reflects what the HAL registered at init; see MetalEnvImpl for the enable conditions.
         build_info.setDramProgrammableCoresEnabled(
-            tt::tt_metal::MetalContext::instance().rtoptions().get_enable_blackhole_dram_programmable_cores());
+            tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM));
+        build_info.setTensixFwLaunchAddrValue(tensix_fw_launch_addr_value);
     }
 }
 
@@ -342,6 +402,7 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
 
 void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results) {
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
     auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
 
     auto chips_builder = results.initChips(device_ids.size());
@@ -354,11 +415,15 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         std::vector<std::pair<uint32_t, uint32_t>> active_eth_xy;
         std::vector<std::pair<uint32_t, uint32_t>> idle_eth_xy;
 
-        for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
+        const auto active_eth_cores = control_plane.get_active_ethernet_cores(device_id);
+        active_eth_xy.reserve(active_eth_cores.size());
+        for (const CoreCoord& logical_core : active_eth_cores) {
             active_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
-        for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
+        const auto idle_eth_cores = control_plane.get_inactive_ethernet_cores(device_id);
+        idle_eth_xy.reserve(idle_eth_cores.size());
+        for (const CoreCoord& logical_core : idle_eth_cores) {
             idle_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
@@ -372,6 +437,18 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         };
         set_coords([&blocks](size_t n) { return blocks.initActiveEth(n); }, active_eth_xy);
         set_coords([&blocks](size_t n) { return blocks.initIdleEth(n); }, idle_eth_xy);
+
+        // DRAM cores Metal manages (TRANSLATED coords), reported only when DRAM programmable cores are
+        // available. get_metal_dram_cores omits the syseng-owned NOC0 worker endpoints (CMFW DRAM
+        // telemetry), where Metal runs no DRISC firmware, so tools dump only these cores.
+        std::vector<std::pair<uint32_t, uint32_t>> dram_cores_xy;
+        if (MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+            for (const auto& dram_core :
+                 cluster.get_soc_desc(device_id).get_metal_dram_cores(CoordSystem::TRANSLATED)) {
+                dram_cores_xy.emplace_back(dram_core.x, dram_core.y);
+            }
+        }
+        set_coords([&chip_entry](size_t n) { return chip_entry.initDramCores(n); }, dram_cores_xy);
     }
 }
 
@@ -559,7 +636,6 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(arc_debug_buffer_size);
     RT(validate_kernel_binaries);
     RT(record_noc_transfers);
-    RT(use_device_print);
 
     // Timeouts
     RT_CUSTOM("timeout_duration_for_operations", fmt::format("{}s", rt.get_timeout_duration_for_operations().count()));
@@ -574,6 +650,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(fabric_trimming_profile_path);
     RT(fabric_trimming_override_path);
     RT(enable_fabric_vc2);
+    RT(enable_fabric_mesh_pass_through);
     RT(fabric_router_sync_timeout_ms);
     RT(fabric_kernel_opt_level);
     RT(reliability_mode);
@@ -631,6 +708,8 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(inspector_rpc_server_port);
     RT(inspector_capture_tensor_specs);
     RT(inspector_log_runtime_entries);
+    RT(inspector_log_mesh_buffers);
+    RT(inspector_log_mesh_sockets);
     RT_CUSTOM("inspector_log_path", rt.get_inspector_log_path().string());
     RT(serialize_inspector_on_dispatch_timeout);
     RT(riscv_debug_info_enabled);
@@ -645,12 +724,9 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     // DispatchCoreConfig
     {
         static const char* dispatch_core_types[] = {"WORKER", "ETH"};
-        static const char* dispatch_core_axes[] = {"ROW", "COL"};
-        auto config = rt.get_dispatch_core_config();
-        auto type_idx = static_cast<int>(config.get_dispatch_core_type());
-        auto axis_idx = static_cast<int>(config.get_dispatch_core_axis());
+        auto type_idx = static_cast<int>(
+            rt.get_dispatch_core_type_override().value_or(tt::tt_metal::DispatchCoreType::WORKER));
         RT_CUSTOM("dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx));
-        RT_CUSTOM("dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx));
     }
 
     // FabricTelemetrySettings
@@ -681,6 +757,45 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
 #undef RT
 #undef RT_CUSTOM
 #undef RT_GUARDED
+
+void Data::rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& results) {
+    auto& system_mesh = MetalContext::instance().get_system_mesh();
+    auto system_mesh_builder = results.initSystemMesh();
+
+    const auto& global_shape = system_mesh.shape();
+    auto global_shape_builder = system_mesh_builder.initGlobalShape(global_shape.dims());
+    for (size_t i = 0; i < global_shape.dims(); ++i) {
+        global_shape_builder.set(i, global_shape[i]);
+    }
+
+    const auto& local_shape = system_mesh.local_shape();
+    auto local_shape_builder = system_mesh_builder.initLocalShape(local_shape.dims());
+    for (size_t i = 0; i < local_shape.dims(); ++i) {
+        local_shape_builder.set(i, local_shape[i]);
+    }
+
+    const auto local_offset = MetalContext::instance().get_control_plane().get_local_mesh_offset();
+    auto local_offset_builder = system_mesh_builder.initLocalOffset(local_offset.dims());
+    for (size_t i = 0; i < local_offset.dims(); ++i) {
+        local_offset_builder.set(i, local_offset[i]);
+    }
+
+    const auto mapped = system_mesh.get_mapped_devices(std::nullopt);
+    auto mapped_builder = system_mesh_builder.initMappedDevices(mapped.fabric_node_ids.size());
+    for (size_t i = 0; i < mapped.fabric_node_ids.size(); ++i) {
+        auto entry = mapped_builder[i];
+        const auto& fabric_node_id = mapped.fabric_node_ids[i];
+        entry.setFabricMeshId(*fabric_node_id.mesh_id);
+        entry.setFabricChipId(fabric_node_id.chip_id);
+
+        const auto& device_id = mapped.device_ids[i];
+        const bool is_local = device_id.is_local();
+        entry.setIsLocal(is_local);
+        if (is_local) {
+            entry.setLocalChipId(static_cast<uint32_t>(*device_id));
+        }
+    }
+}
 
 void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results) {
     std::vector<ConfigurationEntry> all_entries;

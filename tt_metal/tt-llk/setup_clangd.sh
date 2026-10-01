@@ -47,7 +47,7 @@ set_arch_variables() {
             ;;
         *)
             echo "ERROR: Unsupported architecture: $arch" >&2
-            echo "Supported architectures: wormhole, blackhole" >&2
+            echo "Supported architectures: wormhole, blackhole, quasar" >&2
             return 1
             ;;
     esac
@@ -153,6 +153,7 @@ $ROOT_DIR/tests/sfpi/include
 -I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc
 -I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc/sfpu
 -I$ROOT_DIR/$ARCH_LLK_ROOT/llk_lib
+-I$ROOT_DIR/$ARCH_LLK_ROOT/llk_lib/hal
 -I$ROOT_DIR/tests/helpers/include
 -I$METAL_DIR/tt_metal/hw/inc/
 EOF
@@ -182,6 +183,7 @@ EOF
 -I$METAL_DIR/tt_metal/hw/ckernels/quasar/metal/llk_api
 
 -DLLK_BOOT_MODE_TRISC
+-DLLK_TRISC_ISOLATE_SFPU
 EOF
             ;;
     esac
@@ -219,6 +221,7 @@ Set up clangd configuration for TT-LLK development.
 ARCHITECTURE:
     wormhole    Configure for Wormhole architecture
     blackhole   Configure for Blackhole architecture
+    quasar      Configure for Quasar architecture
 
 If no architecture is specified, the script will attempt to auto-detect
 the architecture using tt-smi.
@@ -226,6 +229,7 @@ the architecture using tt-smi.
 Examples:
     $0 wormhole     # Set up for Wormhole
     $0 blackhole    # Set up for Blackhole
+    $0 quasar       # Set up for Quasar
     $0              # Auto-detect architecture
 EOF
 }

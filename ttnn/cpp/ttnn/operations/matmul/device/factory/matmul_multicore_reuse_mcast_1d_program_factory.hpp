@@ -8,6 +8,7 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_1d_type.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -24,22 +25,16 @@ struct matmul_mcast_1d_common_override_variables_t {
 struct MatmulMultiCoreReuseMcast1DProgramFactory {
     using shared_variables_t = matmul_mcast_1d_common_override_variables_t;
 
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const ttnn::prim::MatmulParams& operation_attributes,
-        const ttnn::prim::MatmulInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const ttnn::prim::MatmulParams& operation_attributes,
-        const ttnn::prim::MatmulInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
-
+    // This method is the cache-hit hook for the MeshWorkload sibling factory below and for
+    // all_gather_matmul_async, which call it directly.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const shared_variables_t& shared_variables,
+        const ttnn::prim::MatmulParams& operation_attributes,
+        const ttnn::prim::MatmulInputs& tensor_args,
+        std::vector<ttnn::Tensor>& tensor_return_value);
+
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ttnn::prim::MatmulParams& operation_attributes,
         const ttnn::prim::MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
@@ -78,7 +73,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores);
 
-MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
+ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t>
+matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,

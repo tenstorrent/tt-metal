@@ -15,9 +15,16 @@
 #include "ttnn-nanobind/events.hpp"
 #include "ttnn-nanobind/fabric.hpp"
 #include "ttnn-nanobind/disaggregation.hpp"
+#include "ttnn-nanobind/layer_completion.hpp"
 #include "ttnn-nanobind/global_circular_buffer.hpp"
 #include "ttnn-nanobind/global_semaphore.hpp"
+#include "ttnn-nanobind/prefetcher_pipe.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
+#include "ttnn-nanobind/d2d_stream_service.hpp"
+#include "ttnn-nanobind/counter_channel.hpp"
+#include "ttnn-nanobind/h2d_stream_service.hpp"
+#include "ttnn-nanobind/d2h_stream_service.hpp"
+#include "ttnn-nanobind/layer_ack_service.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
 #include "ttnn-nanobind/bfp_utils.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
@@ -66,7 +73,6 @@
 #include "ttnn/operations/normalization/normalization_nanobind.hpp"
 #include "ttnn/operations/point_to_point/point_to_point_nanobind.hpp"
 #include "ttnn/operations/pool/generic/generic_pools_nanobind.hpp"
-#include "ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.hpp"
 #include "ttnn/operations/pool/rotate/rotate_nanobind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_nanobind.hpp"
 #include "ttnn/operations/pool/grid_sample/grid_sample_nanobind.hpp"
@@ -168,7 +174,6 @@ void py_module(nb::module_& mod) {
 
     auto m_pool = mod.def_submodule("pool", "pooling  operations");
     pool::py_module(m_pool);
-    avgpool::py_module(m_pool);
     rotate::py_module(m_pool);
     upsample::py_module(m_pool);
     grid_sample::bind_grid_sample(m_pool);
@@ -254,7 +259,18 @@ NB_MODULE(_ttnn, mod) {
     auto m_events = mod.def_submodule("events", "ttnn events");
     auto m_global_circular_buffer = mod.def_submodule("global_circular_buffer", "ttnn global circular buffer");
     auto m_global_semaphore = mod.def_submodule("global_semaphore", "ttnn global semaphore");
+    auto m_prefetcher_pipe = mod.def_submodule("prefetcher_pipe", "ttnn prefetcher pipe (experimental)");
     auto m_hd_socket = mod.def_submodule("hd_socket", "ttnn host-device sockets");
+    auto m_h2d_stream_service =
+        mod.def_submodule("h2d_stream_service", "ttnn persistent host-to-device streaming service");
+    auto m_d2h_stream_service =
+        mod.def_submodule("d2h_stream_service", "ttnn persistent device-to-host streaming service");
+    auto m_d2d_stream_service =
+        mod.def_submodule("d2d_stream_service", "ttnn persistent device-to-device streaming service");
+    auto m_counter_channel = mod.def_submodule("counter_channel", "ttnn cross-process producer-counter channel");
+    auto m_layer_ack_service = mod.def_submodule("layer_ack_service", "ttnn per-layer completion ack service");
+    auto m_layer_completion =
+        mod.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router/consumer");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = mod.def_submodule("reports", "ttnn reports");
@@ -278,7 +294,14 @@ NB_MODULE(_ttnn, mod) {
     ttnn::events::py_module_types(m_events);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
+    ttnn::prefetcher_pipe::py_module_types(m_prefetcher_pipe);
     ttnn::hd_socket::py_module_types(m_hd_socket);
+    ttnn::h2d_stream_service::py_module_types(m_h2d_stream_service);
+    ttnn::d2h_stream_service::py_module_types(m_d2h_stream_service);
+    ttnn::d2d_stream_service::py_module_types(m_d2d_stream_service);
+    ttnn::counter_channel::py_module_types(m_counter_channel);
+    ttnn::layer_ack_service::py_module_types(m_layer_ack_service);
+    ttnn::layer_completion::bind_layer_completion_api(m_layer_completion);
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
@@ -315,7 +338,12 @@ NB_MODULE(_ttnn, mod) {
     ttnn::events::py_module(m_events);
     ttnn::global_circular_buffer::py_module(m_global_circular_buffer);
     ttnn::global_semaphore::py_module(m_global_semaphore);
+    ttnn::prefetcher_pipe::py_module(m_prefetcher_pipe);
     ttnn::hd_socket::py_module(m_hd_socket);
+    ttnn::h2d_stream_service::py_module(m_h2d_stream_service);
+    ttnn::d2h_stream_service::py_module(m_d2h_stream_service);
+    ttnn::d2d_stream_service::py_module(m_d2d_stream_service);
+    ttnn::counter_channel::py_module(m_counter_channel);
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
@@ -347,15 +375,15 @@ NB_MODULE(_ttnn, mod) {
         []() -> std::uint64_t { return ttnn::CoreIDs::instance().fetch_and_increment_python_operation_id(); },
         "Increment tensor id and return the previously held id");
 
-    mod.def("get_tensor_id", &tt::tt_metal::Tensor::get_tensor_id_counter, "Get the current tensor ID counter value");
+    mod.def("get_tensor_id", &ttnn::Tensor::get_tensor_id_counter, "Get the current tensor ID counter value");
     mod.def(
         "set_tensor_id",
-        &tt::tt_metal::Tensor::set_tensor_id_counter,
+        &ttnn::Tensor::set_tensor_id_counter,
         nb::arg("id"),
         "Set the tensor ID counter to a specific value");
     mod.def(
         "fetch_and_increment_tensor_id",
-        &tt::tt_metal::Tensor::next_tensor_id,
+        &ttnn::Tensor::next_tensor_id,
         "Atomically fetch and increment the tensor ID counter");
 
     mod.def(

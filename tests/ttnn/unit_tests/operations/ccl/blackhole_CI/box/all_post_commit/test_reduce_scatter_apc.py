@@ -509,3 +509,88 @@ def test_rs_row_2D_nightly_linear(
         num_buffers_per_channel=num_buffers_per_channel,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+# The ring path (scatter dim != 0) supports two intermediate staging layouts, and the op picks between
+# them from the intermediate it is handed: a chunk-paged contiguous staging buffer, or an input-shaped
+# tiled one. With no persistent intermediate the op allocates the contiguous buffer itself. The kernels
+# select the matching addressing scheme through the `contiguous_interm` compile-time arg, so both
+# layouts need coverage to stay correct.
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(2)
+@pytest.mark.parametrize("num_links", [1], ids=["1_link"])
+@pytest.mark.parametrize(
+    "rs_input_shape, dim, layout",
+    [
+        ([1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 512, 1024], 2, ttnn.TILE_LAYOUT),
+        ([2, 1, 256, 1024], 3, ttnn.TILE_LAYOUT),
+    ],
+    ids=["dim3", "dim2", "batch2_dim3"],
+)
+@pytest.mark.parametrize(
+    "rs_input_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+    ids=["float_16", "bfloat_8"],
+)
+@pytest.mark.parametrize(
+    "use_persistent_buffers, contiguous_staging",
+    [
+        (False, None),
+        (True, True),
+        (True, False),
+    ],
+    ids=["no_persistent_interm", "persistent_contiguous_interm", "persistent_tiled_interm"],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+    ],
+    ids=["dram_only"],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+)
+def test_rs_row_nightly_ring_intermediate_staging(
+    bh_1d_mesh_device,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    use_persistent_buffers,
+    contiguous_staging,
+    mem_config_input,
+    mem_config_rs,
+    rs_topology,
+):
+    num_devices = bh_1d_mesh_device.shape[0]
+    validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    cluster_axis = 0
+    run_reduce_scatter_impl(
+        submesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=False,
+        num_iters=2,
+        cluster_axis=cluster_axis,
+        use_persistent_buffers=use_persistent_buffers,
+        contiguous_staging=contiguous_staging,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)

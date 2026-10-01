@@ -5,6 +5,7 @@
 #include "transformer_nanobind.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <tt_stl/reflection.hpp>
 
@@ -13,10 +14,11 @@
 
 #include "attention_softmax/attention_softmax_nanobind.hpp"
 #include "concatenate_heads/concatenate_heads_nanobind.hpp"
+#include "gated_delta_attn/gated_delta_attn_nanobind.hpp"
+#include "chunk_gated_delta_rule/chunk_gated_delta_rule_nanobind.hpp"
 #include "sdpa/sdpa_nanobind.hpp"
 #include "sdpa_config.hpp"
 #include "sdpa_decode/sdpa_decode_nanobind.hpp"
-#include "sdpa_windowed/sdpa_windowed_nanobind.hpp"
 #include "split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.hpp"
 
 namespace ttnn::operations::transformer {
@@ -24,30 +26,60 @@ namespace ttnn::operations::transformer {
 void py_module(nb::module_& mod) {
     nb::class_<SDPAProgramConfig>(mod, "SDPAProgramConfig")
         .def(
-            nb::init<CoreCoord, std::optional<CoreRangeSet>, std::size_t, std::size_t, std::optional<bool>, uint32_t>(),
+            nb::init<
+                tt::tt_metal::CoreCoord,
+                std::optional<CoreRangeSet>,
+                std::size_t,
+                std::size_t,
+                std::optional<bool>,
+                uint32_t,
+                uint32_t,
+                std::optional<tt::tt_metal::MathFidelity>,
+                bool>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("q_chunk_size").noconvert(),
             nb::arg("k_chunk_size").noconvert(),
             nb::arg("exp_approx_mode") = nb::none(),
-            nb::arg("max_cores_per_head_batch") = 16)
+            nb::arg("max_cores_per_head_batch") = 16,
+            nb::arg("max_k_splits") = 1,
+            nb::arg("matmul_math_fidelity") = nb::none(),
+            nb::arg("segmented_accumulation") = false)
         .def_rw("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
         .def_rw("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_rw("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
         .def_rw("k_chunk_size", &SDPAProgramConfig::k_chunk_size)
         .def_rw("exp_approx_mode", &SDPAProgramConfig::exp_approx_mode)
         .def_rw("max_cores_per_head_batch", &SDPAProgramConfig::max_cores_per_head_batch)
+        .def_rw("max_k_splits", &SDPAProgramConfig::max_k_splits)
+        .def_rw("matmul_math_fidelity", &SDPAProgramConfig::matmul_math_fidelity)
+        .def_rw("segmented_accumulation", &SDPAProgramConfig::segmented_accumulation)
         .def("__repr__", [](const SDPAProgramConfig& config) {
             return fmt::format(
                 "SDPAProgramConfig(compute_with_storage_grid_size={}, sub_core_grids={}, q_chunk_size={}, "
-                "k_chunk_size={}, exp_approx_mode={}, max_cores_per_head_batch={})",
+                "k_chunk_size={}, exp_approx_mode={}, max_cores_per_head_batch={}, max_k_splits={}, "
+                "matmul_math_fidelity={}, segmented_accumulation={})",
                 config.compute_with_storage_grid_size,
                 config.sub_core_grids,
                 config.q_chunk_size,
                 config.k_chunk_size,
                 config.exp_approx_mode,
-                config.max_cores_per_head_batch);
+                config.max_cores_per_head_batch,
+                config.max_k_splits,
+                config.matmul_math_fidelity,
+                config.segmented_accumulation);
+        });
+
+    nb::class_<PagedCacheGeometryOverride>(mod, "PagedCacheGeometryOverride")
+        .def(nb::init<>())
+        .def(nb::init<uint32_t, uint32_t>(), nb::kw_only(), nb::arg("block_size") = 0, nb::arg("num_kv_heads") = 0)
+        .def_rw("block_size", &PagedCacheGeometryOverride::block_size)
+        .def_rw("num_kv_heads", &PagedCacheGeometryOverride::num_kv_heads)
+        .def("active", &PagedCacheGeometryOverride::active)
+        .def("__repr__", [](const PagedCacheGeometryOverride& geo) {
+            return fmt::format(
+                "PagedCacheGeometryOverride(block_size={}, num_kv_heads={})", geo.block_size, geo.num_kv_heads);
         });
 
     bind_attention_softmax(mod);
@@ -56,7 +88,8 @@ void py_module(nb::module_& mod) {
 
     bind_sdpa(mod);
     bind_sdpa_decode(mod);
-    bind_sdpa_windowed(mod);
+    bind_gated_delta_attn_seq(mod);
+    bind_chunk_gated_delta_rule(mod);
 }
 
 }  // namespace ttnn::operations::transformer

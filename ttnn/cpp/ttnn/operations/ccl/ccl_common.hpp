@@ -12,16 +12,26 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::ccl {
 
 bool is_fabric_2d();
+
+std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    tt::tt_metal::DataType input_dtype);
+
+// Warn about ideal packet size
+void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size);
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
@@ -29,6 +39,32 @@ tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
+// Is every hop along this mesh axis wired in same dir? Ex: a 1x8 view of a 2x4 board makes axis-1 turn corners.
+bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis);
+
+// Is the link that would close this mesh axis into a ring wired? Always false for an axis of 2 or
+// fewer devices, which closes on the link it already uses.
+bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis);
+
+// Where to allocate a GlobalSemaphore whose value is CARRIED across invocations (a barrier or arrival
+// counter, written once and thereafter only incremented). A fabric mux carves raw L1 upward from the
+// unreserved base, outside the allocator, and one clobber of a carried counter is unrecoverable
+// (#56769). L1_SMALL sits above the mux's ceiling, so prefer it; with no L1_SMALL region configured
+// there is nowhere safer than general L1, and an op that cannot tolerate that is expected to say so
+// itself (see selective_reduce_combine, whose mux is by far the greediest).
+tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+
+// Floor of the L1_SMALL region, i.e. the highest address a fabric mux's raw-L1 map may reach. Derived
+// from immutable limits: worker L1 is fixed and the L1_SMALL bank is never shrunk, whereas the L1 bank
+// size IS reduced by a sub-device manager's bottom-up reservation
+// (sub_device_manager_tracker.cpp), which would drag a floor computed as base + L1 bank size below the
+// real one and cost a V1 mux buffers -- or make a V2 mux reject a map that physically fits.
+size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+
+// Resolve the topology (Ring vs Linear) for a single mesh axis
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis);
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
@@ -84,6 +120,26 @@ enum class CoreAllocationStrategy {
     COL_MAJOR,
 };
 
+struct WorkerCoreSelection {
+    CoreRangeSet core_range_set;
+    std::vector<CoreCoord> cores;
+    // Selected cores that core_grid_offset shifted off the device's worker grid. Kernels cannot be placed on these.
+    std::vector<CoreCoord> unplaceable_cores;
+
+    bool all_placeable() const { return unplaceable_cores.empty(); }
+};
+
+// Selects worker cores without asserting on the result. Callers that can adapt to a selection which does not fit at
+// core_grid_offset use this; everyone else should use choose_worker_cores(), which rejects such a selection.
+WorkerCoreSelection try_choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
+
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
@@ -98,7 +154,7 @@ class EriscDatamoverBuilder;
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     uint32_t num_devices,
-    const ttnn::SmallVector<uint32_t>& unpad_elements,
+    const ttsl::SmallVector<uint32_t>& unpad_elements,
     int dim);
 
 class LineTopology {
@@ -146,14 +202,6 @@ struct RingTopology {
     uint32_t ring_size;
     uint32_t ring_index;
     bool is_linear;
-};
-
-struct TensorPartition {
-    TensorPartition(uint32_t partition_size, uint32_t partition_index) :
-        partition_size(partition_size), partition_index(partition_index) {}
-
-    uint32_t partition_size;
-    uint32_t partition_index;
 };
 
 class CclOpTensorConfig {
@@ -631,16 +679,6 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     EriscDataMoverTerminationMode termination_mode);
 
-std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
-    TensorSlice::ords_t tensor_shape,
-    TensorSlice::ords_t worker_slice_shape,
-    TensorSlice::ords_t worker_slice_offset,
-    std::size_t fracture_dim,
-    std::size_t num_slices,
-    std::int64_t start_slice_index,
-    std::int64_t end_slice_index_exclusive,
-    std::size_t worker_index);
-
 class GenericWrappedTensorSlicer {
 public:
     GenericWrappedTensorSlicer(
@@ -782,5 +820,36 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> = std::nullopt);
 
+// ProgramDescriptor variant of the Program& helper above; produces the same 17-word client ABI. New semaphores are
+// appended to desc.semaphores with IDs from find_available_semaphore_id, so they do not collide with IDs already
+// allocated on worker_logical_core. A supplied termination_master_semaphore_id is reused, not allocated.
+void fabric_mux_connection_rt_args(
+    bool mux_connection_valid,
+    bool is_termination_master,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::ProgramDescriptor& desc,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id = std::nullopt);
+
+// Fabric transfer time in device clock cycles, as a {bandwidth_cycles, latency_cycles} pair.
+// bandwidth_cycles represents steady-state, latency_cycles is pipeline fill.
+//   arch:          Wormhole or Blackhole
+//   fabric_config: fabric config
+//   clock_rate_mhz: device AICLK, used to convert ns -> cycles
+//   data_bytes:    total bytes traversing the link
+//   num_links:     number of parallel ethernet links
+//   num_hops:      number of device hops
+std::pair<int, int> estimate_fabric_transfer_cycles(
+    tt::ARCH arch,
+    tt::tt_fabric::FabricConfig fabric_config,
+    int clock_rate_mhz,
+    uint64_t data_bytes,
+    uint32_t num_links,
+    uint32_t num_hops);
 
 }  // namespace ttnn::ccl

@@ -23,6 +23,11 @@ void ShardedToInterleavedPartialDeviceOperation::validate_on_program_cache_miss(
         args.num_slices);
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Currently, only tile layout is supported for partial S->I");
     TT_FATAL(
+        cache_tensor.layout() == input_tensor.layout(),
+        "Cache tensor layout must match input tensor layout, got {} and {}",
+        cache_tensor.layout(),
+        input_tensor.layout());
+    TT_FATAL(
         (cache_tensor.physical_volume() / cache_tensor.padded_shape()[-1]) % args.num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
 
@@ -47,7 +52,7 @@ void ShardedToInterleavedPartialDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec ShardedToInterleavedPartialDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec ShardedToInterleavedPartialDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // Return the spec of the cache tensor since we're writing to it
     return tensor_args.cache_tensor.tensor_spec();

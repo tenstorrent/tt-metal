@@ -8,7 +8,12 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <algorithm>
+#include <cstdlib>
+#include <optional>
+#include <set>
+#include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
@@ -26,6 +31,9 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
+#include <internal/blitz_decode_pipeline.hpp>
 
 namespace {
 
@@ -86,12 +94,10 @@ struct RoutingTableGeneratorTestHelper {
     RoutingTableGeneratorTestHelper(const std::string& mesh_graph_desc_file) {
         const tt::Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         mesh_graph = std::make_unique<tt::tt_fabric::MeshGraph>(cluster, mesh_graph_desc_file);
-        const auto& driver = cluster.get_driver();
         const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
-        auto psd =
-            tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+        auto psd = tt::tt_metal::run_physical_system_discovery(
+            *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
         physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
         tt::tt_fabric::LocalMeshBinding local_mesh_binding;
@@ -185,6 +191,32 @@ TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
     EXPECT_NE(control_plane.get_mesh_graph().get_mesh_ids().size(), 0u);
 }
 
+// Galaxy layout validation: MGD host topology vs runtime, plus per-host rank-group tray/asic checks.
+// Two-tray 4x4 rank groups and four-tray split-host 4x4 layouts are both handled here; split-host is
+// selected when the mesh spans multiple hosts or uses trays {1,2,3,4}.
+TEST_F(ControlPlaneFixture, TestGalaxyLayoutCheck) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+    expect_galaxy_rank_group_checks(control_plane);
+}
+
+// Galaxy corner folding: mesh endpoints (first/last logical chips) must map to tray-corner ASICs.
+TEST_F(ControlPlaneFixture, TestGalaxyCornerPins) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+    expect_galaxy_corner_folding_check(control_plane);
+}
+
 TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -193,6 +225,46 @@ TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
     EXPECT_EQ(
         mesh_graph_desc.get_coord_range(MeshId{0}, MeshHostRankId(0)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)));
+}
+
+TEST(MeshGraphValidation, TestT3kCollapsedTorusYRetainsMeshDirections) {
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
+    auto mesh_graph = make_mesh_graph(t3k_mesh_graph_desc_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y);
+    const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(0);
+
+    // In a two-row mesh, the torus wrap neighbor is the same chip as the ordinary vertical neighbor. It must retain
+    // normal mesh directionality rather than collapsing both ends of the link onto NORTH.
+    EXPECT_EQ(connectivity.at(0).at(4).port_direction, RoutingDirection::S);
+    EXPECT_EQ(connectivity.at(4).at(0).port_direction, RoutingDirection::N);
+
+    // The torus on axis 0 comes from the fabric config (the T3K MGD declares LINE), so the N/S edge
+    // ports are reserved for the torus and excluded from inter-mesh use even though the collapsed
+    // axis realizes no wrap cable (issue #54650). The non-torus axis keeps its boundary ports.
+    const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(0);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::N, 0}), 0u);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::S, 0}), 0u);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::W, 0}), 0);
+}
+
+// Torus edge-port reservation is decided per axis by who declared the torus (issue #54650), pinned
+// on the mixed-origin case: the 4-stage 2x2 pipeline-ring MGD declares dim_types [RING, LINE], and
+// FABRIC_2D_TORUS_XY is requested on top. Axis 0's torus is MGD-declared, so it keeps its boundary
+// ports; axis 1's torus exists only in the fabric config, so its ports are reserved.
+TEST(MeshGraphValidation, Test2x2StageRingPortReservationByTorusOrigin) {
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+        "fabric_cpu_only_single_galaxy_2x2_ring_4stage_ring_mesh_graph_descriptor.textproto";
+    auto mesh_graph = make_mesh_graph(mgd_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+        const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
+        EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
+        EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 2);
+        EXPECT_EQ(edge_ports.count({RoutingDirection::E, 0}), 0u);
+        EXPECT_EQ(edge_ports.count({RoutingDirection::W, 0}), 0u);
+    }
 }
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
@@ -204,8 +276,7 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
-    std::filesystem::path root_dir = rtoptions.get_root_dir();
-    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path generated_dir = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric";
     std::string generated_filename =
         "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
     std::filesystem::path generated_file = generated_dir / generated_filename;
@@ -375,8 +446,7 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
-    std::filesystem::path root_dir = rtoptions.get_root_dir();
-    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path generated_dir = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric";
     std::string generated_filename =
         "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
     std::filesystem::path generated_file = generated_dir / generated_filename;
@@ -493,12 +563,10 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
 
     // Create physical system descriptor to access ASIC information
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
-    auto psd =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    auto psd = tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
     auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
     // Test that fabric node id 0 maps to a valid ASIC location and tray id
@@ -506,11 +574,10 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     auto physical_chip_id_0 = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_0);
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
     uint64_t asic_id_0 = 0;
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        if (chip_id == physical_chip_id_0) {
-            asic_id_0 = unique_id;
-            break;
-        }
+    auto it0 = std::find_if(
+        chip_unique_ids.begin(), chip_unique_ids.end(), [&](const auto& p) { return p.first == physical_chip_id_0; });
+    if (it0 != chip_unique_ids.end()) {
+        asic_id_0 = it0->second;
     }
     EXPECT_GT(asic_id_0, 0) << "ASIC ID should be greater than 0 for fabric node id 0";
     auto tray_id_0 = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_0});
@@ -522,11 +589,10 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     FabricNodeId fabric_node_id_1(MeshId{0}, 1);
     auto physical_chip_id_1 = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_1);
     uint64_t asic_id_1 = 0;
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        if (chip_id == physical_chip_id_1) {
-            asic_id_1 = unique_id;
-            break;
-        }
+    auto it1 = std::find_if(
+        chip_unique_ids.begin(), chip_unique_ids.end(), [&](const auto& p) { return p.first == physical_chip_id_1; });
+    if (it1 != chip_unique_ids.end()) {
+        asic_id_1 = it1->second;
     }
     EXPECT_GT(asic_id_1, 0) << "ASIC ID should be greater than 0 for fabric node id 1";
     auto tray_id_1 = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_1});
@@ -539,11 +605,11 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     FabricNodeId fabric_node_id_y_size(MeshId{0}, y_size);
     auto physical_chip_id_y_size = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_y_size);
     uint64_t asic_id_y_size = 0;
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        if (chip_id == physical_chip_id_y_size) {
-            asic_id_y_size = unique_id;
-            break;
-        }
+    auto it_ys = std::find_if(chip_unique_ids.begin(), chip_unique_ids.end(), [&](const auto& p) {
+        return p.first == physical_chip_id_y_size;
+    });
+    if (it_ys != chip_unique_ids.end()) {
+        asic_id_y_size = it_ys->second;
     }
     EXPECT_GT(asic_id_y_size, 0) << "ASIC ID should be greater than 0 for fabric node id " << y_size;
     auto tray_id_y_size = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_y_size});
@@ -552,6 +618,38 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     EXPECT_EQ(*asic_location_y_size, 2) << "Fabric node id " << y_size << " should map to ASIC location 2";
 
     check_asic_mapping_against_golden("TestSingleGalaxyControlPlaneInit", "ControlPlaneFixture_SingleGalaxy");
+}
+
+// Checks that auto-discovery still reports all 32 chips on a galaxy that only wraps on Y.
+TEST_F(ControlPlaneFixture, ProbeWormholeSingleGalaxyAutoDiscoveryFullCoverage) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& dctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+
+    // Auto-discovery must map every physical chip, whatever fabric type it settles on.
+    const std::size_t expected_chips = cluster.number_of_devices();
+
+    auto check_full_coverage = [&](const std::string& label, tt::tt_fabric::FabricConfig cfg) {
+        SCOPED_TRACE(label);
+        std::unique_ptr<tt::tt_fabric::ControlPlane> cp;
+        ASSERT_NO_THROW(
+            cp = std::make_unique<tt::tt_fabric::ControlPlane>(cluster, rtoptions, hal, dctx, cfg, kReliabilityMode));
+
+        const auto mesh_ids = cp->get_user_physical_mesh_ids();
+        ASSERT_EQ(mesh_ids.size(), 1u) << "Auto-discovery should produce a single mesh on a single galaxy";
+
+        const auto mesh_shape = cp->get_physical_mesh_shape(mesh_ids.front());
+        EXPECT_EQ(mesh_shape.mesh_size(), expected_chips)
+            << "Auto-discovery dropped chips: got " << mesh_shape.mesh_size() << " of " << expected_chips;
+        EXPECT_TRUE(
+            mesh_shape == tt::tt_metal::distributed::MeshShape(8, 4) ||
+            mesh_shape == tt::tt_metal::distributed::MeshShape(4, 8))
+            << "Expected an 8x4 (or 4x8) mesh, got: " << mesh_shape[0] << "x" << mesh_shape[1];
+    };
+
+    check_full_coverage("FABRIC_1D_RING", tt::tt_fabric::FabricConfig::FABRIC_1D_RING);
+    check_full_coverage("FABRIC_2D", tt::tt_fabric::FabricConfig::FABRIC_2D);
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
@@ -1255,12 +1353,10 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
 
     // Create a TopologyMapper for testing (similar to RoutingTableGeneratorTestHelper)
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
-    auto psd =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    auto psd = tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
     auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
     tt::tt_fabric::LocalMeshBinding local_mesh_binding;
@@ -1408,13 +1504,8 @@ void validate_sp5_blitz_decode_pipeline_stages(
         auto pairs =
             control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(curr_mesh_id, next_mesh_id);
 
-        bool found = false;
-        for (const auto& [exit_node, peer_node] : pairs) {
-            if (exit_node == exit_fn && peer_node == entry_fn) {
-                found = true;
-                break;
-            }
-        }
+        bool found = std::any_of(
+            pairs.begin(), pairs.end(), [&](const auto& p) { return p.first == exit_fn && p.second == entry_fn; });
         EXPECT_TRUE(found) << "Stages [" << i << "]->[" << (i + 1) << "]: exit (M" << *curr_mesh_id << "D"
                            << exit_chip_id << ") coord " << coord_str(curr.exit_node_coord)
                            << " is not physically connected to entry (M" << *next_mesh_id << "D" << entry_chip_id
@@ -1906,6 +1997,26 @@ void validate_sp5_blitz_decode_pipeline_stages(
                         continue;
                     }
                     MeshId dst_mesh = mesh_ids[j];
+                    // Only enforce multi-peer representation for mesh pairs that are LOGICALLY
+                    // connected in the mesh graph (MGD). Physical cabling can incidentally link
+                    // logically-unconnected meshes (e.g. ring stages laid out on physically
+                    // adjacent boards); the control plane correctly does not route those, so they
+                    // must not be asserted here.
+                    {
+                        const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
+                        bool logically_connected = false;
+                        if (static_cast<std::size_t>(*src_mesh) < inter_mesh_connectivity.size()) {
+                            for (const auto& chip_connections : inter_mesh_connectivity[*src_mesh]) {
+                                if (chip_connections.contains(dst_mesh)) {
+                                    logically_connected = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!logically_connected) {
+                            continue;  // incidental physical cabling, not a logical hop
+                        }
+                    }
                     // Enumerate distinct peer ASICs in dst_mesh that are physically
                     // cabled to exit_fn per PSD.
                     std::set<tt::tt_metal::AsicID> psd_peer_asics;
@@ -2082,7 +2193,7 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -2093,99 +2204,277 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
 
     ASSERT_GE(num_meshes, 2u) << "Pipeline builder requires at least 2 meshes";
 
-    auto fn_to_coord = [&](const FabricNodeId& fn) { return mesh_graph.chip_to_coordinate(fn.mesh_id, fn.chip_id); };
+    const auto generated_stages = tt::tt_metal::internal::blitz::generate_blitz_decode_pipeline(true);
+    std::vector<Sp5BlitzPipelineStage> stages;
+    stages.reserve(generated_stages.size());
+    for (const auto& s : generated_stages) {
+        stages.push_back({s.stage_index, s.entry_node_coord, s.exit_node_coord});
+    }
+    validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
+}
 
-    // --- build_pipeline_from_topology ---
-    std::set<FabricNodeId> used_nodes;
+// 4-stage pipeline ring of 2x2 RING+LINE stages on a single galaxy (issue #54650 shape class):
+// an MGD may declare RING on a 2-device dimension and everything must still come up —
+//  - the ring collapses onto the ordinary mesh edge without duplicating connections,
+//  - routing planes are not downgraded: both cables of a pair (the "direct" and the "wrap") serve
+//    the same direction as extra planes instead of being split across opposite directions,
+//  - the inter-mesh ring closes, including the mesh 3 -> mesh 0 loopback.
+TEST_F(ControlPlaneFixture, Test2x2StageRingPipelineOnSingleGalaxy) {
+    // Only meaningful with the 4-stage 2x2 pipeline-ring MGD; broad fixture filters (e.g.
+    // ControlPlaneFixture.*SingleGalaxy*) also run this against unrelated mocks.
+    const char* mgd_path_env = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (mgd_path_env == nullptr ||
+        std::string_view(mgd_path_env).find("2x2_ring_4stage_ring") == std::string_view::npos) {
+        GTEST_SKIP() << "Requires the single_galaxy_2x2_ring_4stage_ring MGD via --mesh-graph-descriptor";
+    }
 
-    // Select one inter-mesh pair per hop, avoiding collisions.
-    // hop[i] connects mesh_ids[i] -> mesh_ids[(i+1) % N].
-    std::vector<std::pair<FabricNodeId, FabricNodeId>> hops;
-    hops.reserve(num_meshes);
-    for (std::size_t i = 0; i < num_meshes; i++) {
-        auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
-            mesh_ids[i], mesh_ids[(i + 1) % num_meshes]);
-        ASSERT_FALSE(pairs.empty()) << "No inter-mesh connection from mesh " << *mesh_ids[i] << " to mesh "
-                                    << *mesh_ids[(i + 1) % num_meshes];
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
 
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    ASSERT_EQ(mesh_ids.size(), 4u);
+
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    auto is_local_mesh = [&](MeshId mesh_id) {
+        return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+    };
+
+    for (const auto& mesh_id : mesh_ids) {
+        const auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        ASSERT_EQ(mesh_shape[0], 2u);
+        ASSERT_EQ(mesh_shape[1], 2u);
+
+        const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(*mesh_id);
+        for (ChipId chip_id = 0; chip_id < 4; chip_id++) {
+            // Every chip of a 2x2 has exactly its two mesh neighbors; the collapsed ring must not
+            // add a duplicate wrap connection or relabel the pair onto one direction.
+            ASSERT_EQ(connectivity.at(chip_id).size(), 2u);
+            std::set<RoutingDirection> directions;
+            for (const auto& [peer_chip_id, edge] : connectivity.at(chip_id)) {
+                directions.insert(edge.port_direction);
+
+                // Both physical cables of the pair count as routing planes in this one direction.
+                // Plane state only exists for the mesh this rank hosts.
+                if (is_local_mesh(mesh_id)) {
+                    const FabricNodeId fabric_node_id(mesh_id, chip_id);
+                    EXPECT_GE(control_plane.get_num_usable_routing_planes(fabric_node_id, edge.port_direction), 2u)
+                        << "mesh " << *mesh_id << " chip " << chip_id << " direction "
+                        << enchantum::to_string(edge.port_direction);
+                }
+            }
+            EXPECT_EQ(directions.size(), 2u) << "mesh " << *mesh_id << " chip " << chip_id
+                                             << ": the two neighbors must sit in two distinct directions";
+        }
+    }
+
+    // The inter-stage ring closes: every consecutive pair, including the 3 -> 0 loopback, has at
+    // least one realized inter-mesh link.
+    for (size_t i = 0; i < mesh_ids.size(); i++) {
+        const auto src = mesh_ids[i];
+        const auto dst = mesh_ids[(i + 1) % mesh_ids.size()];
+        const auto exit_pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src, dst);
+        EXPECT_FALSE(exit_pairs.empty()) << "no inter-mesh link between mesh " << *src << " and mesh " << *dst;
+    }
+}
+
+// Same 4-stage 2x2 pipeline ring, but every axis is declared LINE in the MGD and the fabric config
+// requests FABRIC_2D_TORUS_XY on top. Both planar axes are then config-driven torus axes, so ALL
+// N/S/E/W edge ports are reserved for the torus (issue #54650) and the declared inter-mesh
+// connections have exactly one direction class left: the ring must come up entirely on Z-direction
+// routers (Z pairs only with Z, and a Z label reads identically on both ends of a cable, so the
+// deadlock-avoidance setting can never mismatch across it).
+TEST_F(ControlPlaneFixture, Test2x2StageRingForcedOntoZByConfigTorus) {
+    // Only meaningful with the LINE,LINE 4-stage 2x2 pipeline-ring MGD; guard against broad
+    // fixture filters running this with unrelated mocks (where TORUS_XY may not even be valid).
+    const char* mgd_path_env = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (mgd_path_env == nullptr ||
+        std::string_view(mgd_path_env).find("2x2_line_4stage_ring") == std::string_view::npos) {
+        GTEST_SKIP() << "Requires the single_galaxy_2x2_line_4stage_ring MGD via --mesh-graph-descriptor";
+    }
+
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // The requested config stays latched — nothing rewrites it.
+    EXPECT_EQ(control_plane.get_fabric_config(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    ASSERT_EQ(mesh_ids.size(), 4u);
+
+    // The ring closes on Z: every consecutive pair (including 3 -> 0) has inter-mesh links, and
+    // every inter-mesh-facing ethernet channel on this rank's mesh is a Z-direction router.
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    auto is_local_mesh = [&](MeshId mesh_id) {
+        return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+    };
+    for (size_t i = 0; i < mesh_ids.size(); i++) {
+        const auto src = mesh_ids[i];
+        const auto dst = mesh_ids[(i + 1) % mesh_ids.size()];
+        const auto exit_pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src, dst);
+        EXPECT_FALSE(exit_pairs.empty()) << "no inter-mesh link between mesh " << *src << " and mesh " << *dst;
+        for (const auto& [exit_node, peer_node] : exit_pairs) {
+            if (!is_local_mesh(exit_node.mesh_id)) {
+                continue;  // per-channel direction state only exists for the mesh this rank hosts
+            }
+            const auto intermesh_chans = control_plane.get_intermesh_facing_eth_chans(exit_node);
+            EXPECT_FALSE(intermesh_chans.empty());
+            for (const auto& chan : intermesh_chans) {
+                EXPECT_EQ(control_plane.get_eth_chan_direction(exit_node, chan), eth_chan_directions::Z)
+                    << "inter-mesh channel " << +chan << " on " << exit_node << " is not a Z-direction router";
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pure CPU-only unit tests for the inter-mesh hop allocator behind the blitz
+// decode pipeline builder (detail::assign_non_colliding_hops). No control plane
+// or cluster required -- candidate pairs are synthesized to exercise contention,
+// backtracking, and infeasible corner cases. Node identity is all that matters
+// to the allocator, so synthetic FabricNodeIds stand in for real chips.
+// ---------------------------------------------------------------------------
+namespace blitz_assign_tests {
+
+using ::tt::tt_fabric::FabricNodeId;
+using ::tt::tt_fabric::MeshId;
+using ::tt::tt_metal::experimental::tt_fabric::assign_non_colliding_hops;
+using HopPair = std::pair<FabricNodeId, FabricNodeId>;
+
+FabricNodeId node(std::uint32_t mesh, std::uint32_t chip) { return FabricNodeId(MeshId{mesh}, chip); }
+
+// Assert: one pair per hop, each chosen pair came from that hop's candidate list, all nodes distinct.
+void expect_valid_assignment(const std::vector<std::vector<HopPair>>& candidates, const std::vector<HopPair>& chosen) {
+    ASSERT_EQ(chosen.size(), candidates.size());
+    std::set<FabricNodeId> seen;
+    for (std::size_t i = 0; i < chosen.size(); i++) {
+        const bool from_candidates =
+            std::find(candidates[i].begin(), candidates[i].end(), chosen[i]) != candidates[i].end();
+        EXPECT_TRUE(from_candidates) << "hop " << i << " chose a pair not in its candidate list";
+        EXPECT_TRUE(seen.insert(chosen[i].first).second) << "node reused across hops (hop " << i << " exit)";
+        EXPECT_TRUE(seen.insert(chosen[i].second).second) << "node reused across hops (hop " << i << " peer)";
+    }
+}
+
+// The OLD in-ring-order greedy first-fit, kept only to prove a given input is one the old code failed
+// on -- so each contention test documents the exact regression it guards against.
+bool greedy_first_fit_succeeds(const std::vector<std::vector<HopPair>>& candidates) {
+    std::set<FabricNodeId> used;
+    for (const auto& hop : candidates) {
         bool found = false;
-        for (const auto& pair : pairs) {
-            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
+        for (const auto& p : hop) {
+            if (used.contains(p.first) || used.contains(p.second)) {
                 continue;
             }
-            hops.push_back(pair);
-            used_nodes.insert(pair.first);
-            used_nodes.insert(pair.second);
+            used.insert(p.first);
+            used.insert(p.second);
             found = true;
             break;
         }
-        ASSERT_TRUE(found) << "No non-colliding inter-mesh pair from mesh " << *mesh_ids[i] << " to mesh "
-                           << *mesh_ids[(i + 1) % num_meshes] << " (all " << pairs.size()
-                           << " candidate pairs overlap with already-claimed nodes)";
-    }
-
-    // Find two unclaimed nodes on mesh_0 for stage 0 entry and loopback exit.
-    // We need a pair that has a direct intra-mesh ethernet link between them
-    // (loopback_exit -> stage_0_entry). Prefer non-Z direction links.
-    auto mesh_0_coord_range = mesh_graph.get_coord_range(mesh_ids[0]);
-    std::vector<FabricNodeId> unclaimed_mesh_0_nodes;
-    for (const auto& coord : mesh_0_coord_range) {
-        auto chip_id = mesh_graph.coordinate_to_chip(mesh_ids[0], coord);
-        FabricNodeId fn(mesh_ids[0], chip_id);
-        if (!used_nodes.contains(fn)) {
-            unclaimed_mesh_0_nodes.push_back(fn);
+        if (!found) {
+            return false;
         }
     }
-    ASSERT_GE(unclaimed_mesh_0_nodes.size(), 2u)
-        << "Need at least 2 unclaimed nodes on mesh " << *mesh_ids[0] << " for stage 0 entry and loopback exit, found "
-        << unclaimed_mesh_0_nodes.size();
-
-    std::optional<FabricNodeId> stage_0_entry_fn;
-    std::optional<FabricNodeId> loopback_exit_fn;
-    bool found_non_z_pair = false;
-
-    for (std::size_t a = 0; a < unclaimed_mesh_0_nodes.size() && !found_non_z_pair; a++) {
-        auto fn_a = unclaimed_mesh_0_nodes[a];
-        auto channels_a = control_plane.get_active_fabric_eth_channels(fn_a);
-        for (const auto& [chan_id, direction] : channels_a) {
-            auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(fn_a, chan_id);
-            if (peer_fn.mesh_id != mesh_ids[0]) {
-                continue;
-            }
-            bool peer_unclaimed = !used_nodes.contains(peer_fn) &&
-                                  std::find(unclaimed_mesh_0_nodes.begin(), unclaimed_mesh_0_nodes.end(), peer_fn) !=
-                                      unclaimed_mesh_0_nodes.end();
-            if (!peer_unclaimed) {
-                continue;
-            }
-            bool is_non_z = (direction != tt::tt_fabric::eth_chan_directions::Z);
-            if (!loopback_exit_fn.has_value() || (is_non_z && !found_non_z_pair)) {
-                loopback_exit_fn = fn_a;
-                stage_0_entry_fn = peer_fn;
-                found_non_z_pair = is_non_z;
-            }
-        }
-    }
-
-    ASSERT_TRUE(loopback_exit_fn.has_value()) << "Could not find a directly-connected unclaimed pair on mesh "
-                                              << *mesh_ids[0] << " for loopback exit -> stage 0 entry";
-
-    std::vector<Sp5BlitzPipelineStage> stages;
-    stages.reserve(num_meshes + 1);
-
-    stages.push_back(
-        {static_cast<std::size_t>(*mesh_ids[0]), fn_to_coord(*stage_0_entry_fn), fn_to_coord(hops[0].first)});
-
-    for (std::size_t i = 1; i < num_meshes; i++) {
-        stages.push_back(
-            {static_cast<std::size_t>(*mesh_ids[i]), fn_to_coord(hops[i - 1].second), fn_to_coord(hops[i].first)});
-    }
-
-    stages.push_back(
-        {static_cast<std::size_t>(*mesh_ids[0]),
-         fn_to_coord(hops[num_meshes - 1].second),
-         fn_to_coord(*loopback_exit_fn)});
-
-    validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
+    return true;
 }
+
+TEST(BlitzDecodePipelineAssignment, NoContentionLinear) {
+    const std::vector<std::vector<HopPair>> candidates = {
+        {{node(0, 0), node(1, 0)}},
+        {{node(1, 1), node(2, 0)}},
+        {{node(2, 1), node(0, 1)}},
+    };
+    auto result = assign_non_colliding_hops(candidates);
+    ASSERT_TRUE(result.has_value());
+    expect_valid_assignment(candidates, *result);
+}
+
+TEST(BlitzDecodePipelineAssignment, ResolvesContentionGreedyWouldStrand) {
+    // hop1's first candidate steals node(2,0), which hop2's only candidate needs -> in-ring-order
+    // greedy strands hop2. A valid assignment exists (hop1 takes its second candidate).
+    const std::vector<std::vector<HopPair>> candidates = {
+        {{node(0, 0), node(1, 0)}},
+        {{node(1, 1), node(2, 0)}, {node(1, 2), node(2, 1)}},
+        {{node(2, 0), node(0, 1)}},
+    };
+    EXPECT_FALSE(greedy_first_fit_succeeds(candidates)) << "input should defeat naive greedy first-fit";
+    auto result = assign_non_colliding_hops(candidates);
+    ASSERT_TRUE(result.has_value());
+    expect_valid_assignment(candidates, *result);
+}
+
+TEST(BlitzDecodePipelineAssignment, RequiresBacktracking) {
+    // hop0's first candidate (A,B) consumes both nodes that hop2's two candidates need, so the solver
+    // must undo hop0's first choice and take (C,D). (hop1 is most-constrained, visited first by MRV.)
+    const FabricNodeId A = node(0, 0), B = node(1, 0), C = node(0, 1), D = node(1, 1);
+    const FabricNodeId E = node(2, 0), F = node(2, 1), G = node(3, 0), H = node(3, 1);
+    const std::vector<std::vector<HopPair>> candidates = {
+        {{A, B}, {C, D}},
+        {{E, F}},
+        {{A, G}, {B, H}},
+    };
+    EXPECT_FALSE(greedy_first_fit_succeeds(candidates)) << "input should require backtracking";
+    auto result = assign_non_colliding_hops(candidates);
+    ASSERT_TRUE(result.has_value());
+    expect_valid_assignment(candidates, *result);
+    EXPECT_EQ((*result)[0], (HopPair{C, D})) << "hop0 should be forced onto its second candidate";
+}
+
+TEST(BlitzDecodePipelineAssignment, InfeasibleNodeReuse) {
+    // Both hops can only use node(0,0) -> no collision-free assignment.
+    const std::vector<std::vector<HopPair>> candidates = {
+        {{node(0, 0), node(1, 0)}},
+        {{node(0, 0), node(2, 0)}},
+    };
+    EXPECT_FALSE(assign_non_colliding_hops(candidates).has_value());
+}
+
+TEST(BlitzDecodePipelineAssignment, InfeasibleEmptyHop) {
+    const std::vector<std::vector<HopPair>> candidates = {
+        {{node(0, 0), node(1, 0)}},
+        {},  // no inter-mesh cable available for this hop
+    };
+    EXPECT_FALSE(assign_non_colliding_hops(candidates).has_value());
+}
+
+TEST(BlitzDecodePipelineAssignment, ResolvesEvenRingContention) {
+    // Ring of N meshes, 2 chips each, 2 candidate cables per boundary (a->a, b->b). Adjacent hops share
+    // a mesh, so a valid layout must strictly alternate a,b around the ring -- solvable for even N.
+    // Simulates the tight decode ring where naive ordering strands a mid-chain hop.
+    const std::uint32_t N = 8;
+    std::vector<std::vector<HopPair>> candidates(N);
+    for (std::uint32_t i = 0; i < N; i++) {
+        const std::uint32_t next = (i + 1) % N;
+        candidates[i] = {{node(i, 0), node(next, 0)}, {node(i, 1), node(next, 1)}};
+    }
+    auto result = assign_non_colliding_hops(candidates);
+    ASSERT_TRUE(result.has_value());
+    expect_valid_assignment(candidates, *result);
+}
+
+TEST(BlitzDecodePipelineAssignment, InfeasibleOddRingTwoCables) {
+    // Same structure with odd N: strict a/b alternation cannot close the ring -> genuinely infeasible.
+    const std::uint32_t N = 3;
+    std::vector<std::vector<HopPair>> candidates(N);
+    for (std::uint32_t i = 0; i < N; i++) {
+        const std::uint32_t next = (i + 1) % N;
+        candidates[i] = {{node(i, 0), node(next, 0)}, {node(i, 1), node(next, 1)}};
+    }
+    EXPECT_FALSE(assign_non_colliding_hops(candidates).has_value());
+}
+
+}  // namespace blitz_assign_tests
 }  // namespace tt::tt_fabric::fabric_router_tests

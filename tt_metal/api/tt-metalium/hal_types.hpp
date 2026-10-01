@@ -12,9 +12,7 @@ using DeviceAddr = std::uint64_t;
 
 enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
 
-enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, DRAM = 3, COUNT = 4 };
-
-static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
+enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, DRAM = 3, DISPATCH = 4, COUNT = 5 };
 
 // TODO: Move to llrt/hal.hpp after device function cleanup
 enum class HalL1MemAddrType : uint8_t {
@@ -39,10 +37,16 @@ enum class HalL1MemAddrType : uint8_t {
     APP_ROUTING_INFO,
     RETRAIN_COUNT,
     RETRAIN_FORCE,
-    CRC_ERR,    // Link status - CRC error count
-    CORR_CW,    // Link status - Corrected Codewords count
-    UNCORR_CW,  // Link status - Uncorrected Codewords count
-    LINK_UP,    // Link status - Link up status
+    CRC_ERR,          // Link status - CRC error count
+    CORR_CW,          // Link status - Corrected Codewords count
+    UNCORR_CW,        // Link status - Uncorrected Codewords count
+    TXQ0_RESEND_CNT,  // Link status - TX queue 0 packet resend count (Blackhole only)
+    TXQ1_RESEND_CNT,  // Link status - TX queue 1 packet resend count (Blackhole only)
+    TXQ2_RESEND_CNT,  // Link status - TX queue 2 packet resend count (Blackhole only)
+    RXQ0_PKT_DROP,    // Link status - RX queue 0 packet drop count (Blackhole only)
+    RXQ1_PKT_DROP,    // Link status - RX queue 1 packet drop count (Blackhole only)
+    RXQ2_PKT_DROP,    // Link status - RX queue 2 packet drop count (Blackhole only)
+    LINK_UP,          // Link status - Link up status
     FABRIC_TELEMETRY,
     ROUTING_TABLE,
     ROUTER_STATE,
@@ -50,7 +54,8 @@ enum class HalL1MemAddrType : uint8_t {
     ETH_FW_MAILBOX,
     TENSIX_FABRIC_CONNECTIONS,
     FABRIC_CONNECTION_LOCK,
-    COUNT  // Keep this last so it always indicates number of enum options
+    ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)
+    COUNT           // Keep this last so it always indicates number of enum options
 };
 
 enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };

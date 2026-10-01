@@ -2,6 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+from functools import partial
+from itertools import chain
+
 import pytest
 
 pytestmark = pytest.mark.use_module_device
@@ -14,50 +18,154 @@ from tests.ttnn.utils_for_testing import assert_equal
 
 TEST_PADDING_VALUE = -42
 
+RM = ttnn.ROW_MAJOR_LAYOUT
+TL = ttnn.TILE_LAYOUT
+
+
+def _case(shape, layout, dim, keepdim, dtype, error_msg=None, enable_secondary_dm=None):
+    """Single argmax test case tuple (readable shorthand for parametrization)."""
+    return (shape, layout, dim, keepdim, dtype, error_msg, enable_secondary_dm)
+
+
+def _argmax_misc_and_rank_special():
+    return [
+        _case([], RM, None, True, torch.bfloat16),
+        _case([32], RM, -1, False, torch.float32),
+        _case([32, 0], RM, 1, True, torch.bfloat16, "Expected reduction dim 1 to have non-zero size"),
+        _case([64], RM, -1, True, torch.bfloat16),
+        _case([1, 512], RM, -1, True, torch.float32),
+        _case([1, 1024], RM, -1, True, torch.int32),
+        _case([1, 65], RM, -1, True, torch.uint8),
+        _case([8, 10, 129], RM, 2, True, torch.bfloat16),
+        _case([1, 8, 160], RM, -1, False, torch.bfloat16),
+        _case([1, 256, 1024 * 8], RM, -1, False, torch.float32),
+        _case([32, 32, 32, 1], RM, -1, True, torch.float32),
+        _case([128], RM, -1, True, torch.float32),
+        _case([256], RM, -1, False, torch.bfloat16),
+        _case([128], TL, -1, True, torch.float32),
+        _case([256], TL, -1, False, torch.bfloat16),
+    ]
+
+
+def _argmax_row_major_wide_reduce_last_dim():
+    return [
+        _case([64, 128], RM, -1, True, torch.float32),
+        _case([64, 128], RM, -1, False, torch.int32),
+        _case([32, 64, 128], RM, -1, True, torch.float32),
+        _case([32, 64, 128], RM, -1, True, torch.bfloat16),
+        _case([32, 64, 128], TL, -1, False, torch.bfloat16),
+        _case([16, 32, 64, 128], RM, -1, True, torch.bfloat16),
+        _case([16, 32, 64, 128], RM, -1, True, torch.float32),
+        _case([16, 32, 64, 128], RM, -1, True, torch.int32),
+        _case([16, 32, 64, 128], TL, -1, True, torch.bfloat16),
+        _case([16, 32, 64, 128], TL, -1, False, torch.float32),
+        _case([16, 32, 70, 130], TL, -1, True, torch.bfloat16),
+        _case([16, 32, 70, 130], TL, -1, False, torch.bfloat16),
+        _case([8, 16, 32, 64], RM, -1, True, torch.float32),
+        _case([8, 16, 32, 64], RM, -1, False, torch.bfloat16),
+        _case([4, 8, 16, 32], RM, -1, False, torch.float32),
+        _case([100, 200], RM, -1, True, torch.bfloat16),
+        _case([100, 200], RM, -1, False, torch.float32),
+        _case([50, 100, 200], RM, -1, True, torch.int32),
+        _case([25, 50, 100], RM, -1, False, torch.uint8),
+        _case([12, 24, 48, 96], RM, -1, True, torch.bfloat16),
+        _case([1, 8, 20, 18], TL, -1, True, torch.bfloat16),
+    ]
+
+
+def _argmax_dm_split_edge_cases():
+    """ROW_MAJOR last-dim cases that stress the data-movement split boundaries.
+
+    The multicore reader divides the inner (row) loop between both data movement processors
+    once there are at least two rows.
+    """
+    cases = [
+        # Row count at and around the split threshold.
+        _case([1, 96], RM, -1, False, torch.bfloat16),
+        _case([2, 96], RM, -1, False, torch.bfloat16),
+        _case([3, 96], RM, -1, False, torch.bfloat16),
+        _case([5, 96], RM, -1, False, torch.float32),
+        # Ties are near certain at this width, so the int cases double as tie-break checks.
+        _case([7, 96], RM, -1, False, torch.int32),
+        # Reduction width not a multiple of the per-core alignment unit: short last block.
+        _case([3, 17], RM, -1, False, torch.bfloat16),
+        _case([16, 33], RM, -1, False, torch.bfloat16),
+        _case([3, 1000], RM, -1, False, torch.float32),
+        _case([16, 4095], RM, -1, False, torch.bfloat16),
+        # outer_dim_units > 1: one handoff per output page.
+        _case([8, 2, 65], RM, -1, False, torch.bfloat16),
+        _case([3, 5, 96], RM, -1, False, torch.int32),
+        _case([2, 3, 16, 128], RM, -1, False, torch.bfloat16),
+        _case([4, 7, 33, 64], RM, -1, False, torch.uint8),
+        # Wide reduction dim -> many cores, each contributing a partial to the merge.
+        _case([3, 32768], RM, -1, False, torch.bfloat16),
+        _case([64, 32768], RM, -1, False, torch.bfloat16),
+        # Tallest input here: ~200 KB of partial buffers, the largest staging footprint in this list.
+        _case([2048, 1024], RM, -1, False, torch.bfloat16),
+    ]
+    # Demand the split instead of relying on the heuristic; the one-row case cannot have it.
+    return [(*c[:6], True) if c[0][-2] >= 2 else c for c in cases]
+
+
+def _argmax_nc_hw_mixed_shapes():
+    """Non-last dims on TILE and ROW_MAJOR (padding / rank coverage)."""
+    return [
+        _case([4, 32, 32], TL, 0, True, torch.bfloat16),
+        _case([2, 64, 64], TL, -2, True, torch.bfloat16),
+        _case([2, 64, 64], TL, 1, False, torch.bfloat16),
+        _case([1, 70, 130], TL, -2, True, torch.bfloat16),
+        _case([1, 2, 32, 32], TL, 2, True, torch.float32),
+        _case([2, 64, 64], RM, 1, True, torch.bfloat16),
+        _case([2, 64, 64], RM, -2, False, torch.bfloat16),
+        _case([1, 48, 96], RM, -2, True, torch.float32),
+        _case([4, 32, 32], TL, 0, False, torch.bfloat16),
+        _case([4, 32, 32], RM, 0, True, torch.bfloat16),
+    ]
+
+
+def _argmax_nc_nd_rank4():
+    return [
+        _case([2, 3, 64, 64], TL, 0, True, torch.float32),
+        _case([2, 3, 64, 64], TL, 1, True, torch.float32),
+        _case([2, 3, 64, 64], TL, 1, False, torch.float32),
+        _case([2, 3, 64, 64], TL, -2 - 1, False, torch.bfloat16),
+        _case([2, 3, 64, 64], RM, 1, True, torch.bfloat16),
+        _case([2, 5, 70, 130], TL, 0, True, torch.float32),
+        _case([2, 5, 70, 130], TL, 0, True, torch.bfloat16),
+        _case([2, 5, 70, 130], TL, 1, False, torch.bfloat16),
+        _case([1, 5, 32, 32], TL, 1, False, torch.float32),
+        _case([5, 1, 64, 64], TL, 0, True, torch.bfloat16),
+        _case([3, 5, 256, 256], TL, 0, True, torch.bfloat16),
+        _case([2, 3, 64, 64], TL, 2, True, torch.bfloat16),
+        _case([2, 3, 70, 130], TL, 2, False, torch.bfloat16),
+    ]
+
+
+def _argmax_nc_nd_rank5():
+    return [
+        _case([2, 3, 4, 32, 32], TL, 0, True, torch.bfloat16),
+        _case([2, 3, 4, 32, 32], TL, 1, False, torch.bfloat16),
+        _case([2, 3, 4, 32, 32], TL, 2, True, torch.float32),
+        _case([2, 3, 4, 64, 64], TL, 3, True, torch.bfloat16),
+    ]
+
+
+def argmax_torch_ttnn_cases():
+    yield from chain(
+        _argmax_misc_and_rank_special(),
+        _argmax_row_major_wide_reduce_last_dim(),
+        _argmax_dm_split_edge_cases(),
+        _argmax_nc_hw_mixed_shapes(),
+        _argmax_nc_nd_rank4(),
+        _argmax_nc_nd_rank5(),
+    )
+
 
 @pytest.mark.parametrize(
-    argnames="tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype",
-    argvalues=[
-        ([], ttnn.ROW_MAJOR_LAYOUT, None, True, True, torch.bfloat16),
-        ([32], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.float32),
-        ([32, 0], ttnn.ROW_MAJOR_LAYOUT, 1, True, True, torch.bfloat16),
-        ([64], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
-        ([1, 512], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([1, 1024], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
-        ([1, 65], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.uint8),
-        ([8, 10, 129], ttnn.ROW_MAJOR_LAYOUT, 2, True, False, torch.bfloat16),
-        ([1, 8, 160], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.bfloat16),
-        ([1, 256, 1024 * 8], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.float32),
-        ([32, 32, 32, 1], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([256], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.bfloat16),
-        ([128], ttnn.TILE_LAYOUT, -1, True, False, torch.float32),
-        ([256], ttnn.TILE_LAYOUT, -1, False, False, torch.bfloat16),
-        ([64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.int32),
-        ([64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.float32),
-        ([32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
-        ([32, 64, 128], ttnn.TILE_LAYOUT, -1, False, False, torch.bfloat16),
-        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.bfloat16),
-        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.float32),
-        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
-        ([16, 32, 64, 128], ttnn.TILE_LAYOUT, -1, True, False, torch.bfloat16),
-        ([16, 32, 64, 128], ttnn.TILE_LAYOUT, -1, False, False, torch.float32),
-        ([16, 32, 70, 130], ttnn.TILE_LAYOUT, -1, True, False, torch.bfloat16),
-        ([16, 32, 70, 130], ttnn.TILE_LAYOUT, -1, False, False, torch.bfloat16),
-        ([8, 16, 32, 64], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([8, 16, 32, 64], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.bfloat16),
-        ([4, 8, 16, 32], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.float32),
-        ([100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.bfloat16),
-        ([100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.float32),
-        ([50, 100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
-        ([25, 50, 100], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.uint8),
-        ([12, 24, 48, 96], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
-        ([1, 8, 20, 18], ttnn.TILE_LAYOUT, -1, True, False, torch.bfloat16),
-    ],
+    argnames="tensor_shape, tensor_layout, dim, keepdim, dtype, error_msg, enable_secondary_dm",
+    argvalues=list(argmax_torch_ttnn_cases()),
 )
-def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype):
+def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, dtype, error_msg, enable_secondary_dm, expect_error):
     """
     Test the compatibility of the torch and ttnn output for argmax of different
     tensor shapes, dim values, and data types.
@@ -90,7 +198,8 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
         if tensor_layout == ttnn.TILE_LAYOUT:
             ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
 
-    torch_op, ttnn_op = getattr(torch, "argmax"), getattr(ttnn, "argmax")
+    torch_op = getattr(torch, "argmax")
+    ttnn_op = partial(ttnn.argmax, enable_secondary_dm=enable_secondary_dm)
 
     # Run on both and flag exceptions
     torch_errored = False
@@ -103,14 +212,23 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
 
     ttnn_errored = False
     ttnn_error_msg = ""
-    try:
-        if dim is not None:
-            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore)
-        else:
-            ttnn_result = ttnn_op(ttnn_tensor, use_multicore=use_multicore)
-    except RuntimeError as e:
+    if error_msg:
+        with expect_error(RuntimeError, error_msg):
+            if dim is not None:
+                ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
+            else:
+                ttnn_result = ttnn_op(ttnn_tensor)
         ttnn_errored = True
-        ttnn_error_msg = str(e)
+        ttnn_error_msg = error_msg
+    else:
+        try:
+            if dim is not None:
+                ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
+            else:
+                ttnn_result = ttnn_op(ttnn_tensor)
+        except RuntimeError as e:
+            ttnn_errored = True
+            ttnn_error_msg = str(e)
 
     assert (
         torch_errored == ttnn_errored
@@ -125,3 +243,386 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
 
     # test for equivalance
     assert_equal(torch_result, ttnn_result)
+
+
+@pytest.mark.merge_gate
+def test_argmax_nc_ties_first_index_wins(device):
+    """Constant tensor: argmax tie-break must match PyTorch (smallest index wins)."""
+    t = torch.full([4, 3, 64, 64], 1.0, dtype=torch.bfloat16)
+    for dim in (0, 1):
+        ref = torch.argmax(t, dim=dim, keepdim=True)
+        ttnn_t = ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT)
+        ttnn_t = ttnn.fill_implicit_tile_padding(ttnn_t, TEST_PADDING_VALUE)
+        out = ttnn.argmax(ttnn_t, dim=dim, keepdim=True)
+        assert_equal(ref, ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
+
+
+@pytest.mark.merge_gate
+def test_argmax_nc_preallocated_output(device):
+    torch.manual_seed(0)
+    t = torch.randn(2, 3, 64, 64, dtype=torch.float32)
+    ttnn_in = ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_in = ttnn.fill_implicit_tile_padding(ttnn_in, TEST_PADDING_VALUE)
+    ref = torch.argmax(t, dim=1, keepdim=True)
+    out_shape = ref.shape
+    ttnn_out = ttnn.zeros(list(out_shape), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    result = ttnn.argmax(ttnn_in, dim=1, keepdim=True, output_tensor=ttnn_out)
+    assert_equal(ref, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
+
+
+@pytest.mark.merge_gate
+def test_argmax_nc_program_cache(device):
+    """NC argmax cache hit: a second call with a new same-spec input and preallocated output stays correct.
+
+    The max sits on a different channel in each input, so a stale reader address returns the first
+    result. Both device tensors are kept alive so the allocator cannot hand those buffers back.
+    """
+    device.clear_program_cache()
+    device.enable_program_cache()
+
+    def run(winner):
+        torch_tensor = torch.full((2, 4, 64, 64), -1.0, dtype=torch.bfloat16)
+        torch_tensor[:, winner, :, :] = 1.0
+        ref = torch.argmax(torch_tensor, dim=1, keepdim=True)
+        ttnn_in = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+        ttnn_in = ttnn.fill_implicit_tile_padding(ttnn_in, TEST_PADDING_VALUE)
+        ttnn_out = ttnn.zeros(list(ref.shape), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        result = ttnn.argmax(ttnn_in, dim=1, keepdim=True, output_tensor=ttnn_out)
+        return ref, ttnn_in, result
+
+    base = device.num_program_cache_entries()
+    ref1, input1, output1 = run(0)
+    after_first = device.num_program_cache_entries()
+    assert after_first > base, "first NC argmax must miss the program cache"
+
+    ref2, input2, output2 = run(3)
+    assert device.num_program_cache_entries() == after_first, "second NC argmax must hit the program cache"
+    assert input1.shape == input2.shape
+
+    assert_equal(ref1, ttnn.to_torch(ttnn.from_device(output1)).to(torch.int32))
+    assert_equal(ref2, ttnn.to_torch(ttnn.from_device(output2)).to(torch.int32))
+
+
+@pytest.mark.timeout(120, method="thread")
+def test_argmax_reduce_all_multicore_no_deadlock(device):
+    """
+    Guard for the multi-core reduce_all (whole-tensor) argmax path.
+
+    The reduce core signals each iteration via start_sem (set + multicast), which increases
+    monotonically.  In the reduce_all path there is no per-iteration done_sem back-pressure (it is
+    lifted out of the k-loop), so the reduce core free-runs and can advance start_sem past a given
+    value before a lagging worker samples it.  Workers therefore wait with wait_min(k+1) (>=) rather
+    than an exact match, so a skipped-over value cannot strand a worker at noc_semaphore_wait and
+    deadlock the op.
+
+    A ROW_MAJOR tensor with dim=None routes to the multi-core reduce_all reader; the shape is large
+    enough to split across many cores and run several k-iterations.  The check guards correctness of
+    the reduce_all multi-core path and, via the worker-thread watchdog + pytest-timeout, converts a
+    deadlock into an assertion failure instead of a hung session.
+    """
+    torch.manual_seed(0)
+    t = torch.randn((64, 4096), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    result = {}
+
+    def _run():
+        try:
+            out = ttnn.argmax(ttnn_in)  # dim=None -> reduce_all multi-core path
+            ttnn.synchronize_device(device)
+            result["out"] = out
+        except Exception as exc:  # surface device/compile errors to the main thread
+            result["error"] = exc
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=60.0)
+
+    assert not worker.is_alive(), (
+        "ttnn.argmax(dim=None) did not complete on the multi-core reduce_all path: a worker's "
+        "start_sem wait was starved -- workers must wait_min(>=) on the monotonic start_sem, since "
+        "an exact-match wait can be lapped by the free-running reduce core."
+    )
+    if "error" in result:
+        raise result["error"]
+
+    ref = int(torch.argmax(t.reshape(-1)))
+    got = int(ttnn.to_torch(ttnn.from_device(result["out"])).item())
+    assert got == ref, f"argmax reduce_all mismatch: got {got}, expected {ref}"
+
+
+def _run_argmax_in_worker(fn, timeout_s=60.0):
+    """Run `fn` on a worker thread so a device hang surfaces as an assertion, not a hung session."""
+    result = {}
+
+    def _run():
+        try:
+            result["out"] = fn()
+        except Exception as exc:  # surface device/compile errors to the main thread
+            result["error"] = exc
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=timeout_s)
+    return worker, result
+
+
+@pytest.mark.timeout(120, method="thread")
+@pytest.mark.parametrize(
+    "tensor_shape, core_ranges",
+    [
+        # More sub-grid cores than blocks of work
+        ([8, 32], [((0, 0), (1, 1))]),  # 4 cores, 2 blocks
+        ([1, 64], [((0, 0), (7, 0))]),  # 8 cores, 4 blocks
+        # Fewer cores than blocks
+        ([1, 80], [((0, 0), (3, 0))]),  # 4 cores, 5 blocks -> 2 blocks each = 128 units for 80
+        ([1, 144], [((0, 0), (7, 0))]),  # 8 cores, 9 blocks -> 2 blocks each = 256 units for 144
+        # Two ranges exercise the second core group (cores1 / red_dim_units1).
+        ([4, 80], [((0, 0), (1, 0)), ((0, 1), (1, 1))]),
+        # Widths that already split cleanly
+        ([1, 128], [((0, 0), (7, 0))]),
+        ([8, 1024], [((0, 0), (7, 0))]),
+    ],
+)
+def test_argmax_sub_core_grids_work_split(device, tensor_shape, core_ranges):
+    """
+    Guard the sub_core_grids work-split: rounded-up per-core shares can overshoot the
+    reduction dim by more than one core's share, and trimming only the last core then underflowed
+    uint32 into a large read size and a hang.  Slices are now clamped per core instead.
+    """
+    torch.manual_seed(0)
+    grids = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(*start), ttnn.CoreCoord(*end)) for start, end in core_ranges}
+    )
+
+    torch_tensor = torch.randn(*tensor_shape, dtype=torch.bfloat16)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    def _run():
+        out = ttnn.argmax(ttnn_tensor, dim=-1, keepdim=False, sub_core_grids=grids)
+        ttnn.synchronize_device(device)
+        return out
+
+    worker, result = _run_argmax_in_worker(_run)
+
+    assert not worker.is_alive(), f"ttnn.argmax timed out for shape={tensor_shape}, " f"sub_core_grids={core_ranges}"
+    if "error" in result:
+        raise result["error"]
+
+    ttnn_result = ttnn.to_torch(ttnn.from_device(result["out"])).to(torch.int32)
+    assert_equal(torch.argmax(torch_tensor, dim=-1, keepdim=False), ttnn_result)
+
+
+@pytest.mark.timeout(120, method="thread")
+def test_argmax_reduce_all_sub_core_grids_idle_cores(device):
+    """
+    dim=None uses the kernel's separate reduce_all block (its own partial-write and semaphore
+    sequence); drive it with a sub_core_grids wide enough to leave cores with no work.
+    """
+    torch.manual_seed(0)
+    # 4 cores for a 32-wide reduction dim = 2 blocks of work, so two cores are left idle.
+    grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    t = torch.randn(8, 32, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    def _run():
+        out = ttnn.argmax(ttnn_in, sub_core_grids=grids)  # dim=None -> reduce_all
+        ttnn.synchronize_device(device)
+        return out
+
+    worker, result = _run_argmax_in_worker(_run)
+
+    assert not worker.is_alive(), "ttnn.argmax(dim=None) timed out with sub_core_grids leaving idle cores"
+    if "error" in result:
+        raise result["error"]
+
+    got = int(ttnn.to_torch(ttnn.from_device(result["out"])).item())
+    assert got == int(torch.argmax(t.reshape(-1))), f"reduce_all mismatch: got {got}"
+
+
+def test_argmax_dm_split_ties_smallest_index_wins(device):
+    """ROW_MAJOR last-dim ties must return the smallest index.
+
+    One processor reduces a whole row, so what the split reaches is the cross-core merge
+    between partials carrying global indices. The odd row count gives unequal halves.
+    """
+    h, w = 33, 64
+    t = torch.zeros(h, w, dtype=torch.float32)
+    for row in range(h):
+        first = row % (w - 8)
+        t[row, first] = 5.0
+        t[row, first + 8] = 5.0
+
+    ttnn_in = ttnn.from_torch(t, device=device, layout=RM)
+    out = ttnn.argmax(ttnn_in, dim=-1, keepdim=False, enable_secondary_dm=True)
+    assert_equal(torch.argmax(t, dim=-1), ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
+
+
+@pytest.mark.parametrize("shape", ([2, 64], [33, 96], [2, 3, 16, 128]))
+def test_argmax_dm_split_single_core_grid(device, shape):
+    """One core: isolates the on-core handoff from the cross-core merge protocol."""
+    one_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    torch.manual_seed(0)
+    t = torch.randn(*shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, device=device, layout=RM)
+    out = ttnn.argmax(ttnn_in, dim=-1, keepdim=False, sub_core_grids=one_core, enable_secondary_dm=True)
+    assert_equal(torch.argmax(t, dim=-1), ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
+
+
+def test_argmax_enable_secondary_dm_matches_single(device):
+    """The split must be bit-identical to the single-processor path, ties included."""
+    torch.manual_seed(0)
+    t = torch.randn(64, 1024, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, device=device, layout=RM)
+    split = ttnn.argmax(ttnn_in, dim=-1, keepdim=False, enable_secondary_dm=True)
+    single = ttnn.argmax(ttnn_in, dim=-1, keepdim=False, enable_secondary_dm=False)
+    assert_equal(ttnn.to_torch(ttnn.from_device(single)), ttnn.to_torch(ttnn.from_device(split)))
+    assert_equal(torch.argmax(t, dim=-1), ttnn.to_torch(ttnn.from_device(split)).to(torch.int32))
+
+
+def test_argmax_enable_secondary_dm_l1_fatal(device, expect_error):
+    """Requesting the split must fail, not fall back, when L1 cannot hold the buffers."""
+    all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    t = torch.zeros(4096, 1024, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, device=device, layout=RM)
+    with expect_error(RuntimeError, "enable_secondary_dm was requested"):
+        ttnn.argmax(ttnn_in, dim=-1, keepdim=False, sub_core_grids=all_cores, enable_secondary_dm=True)
+
+
+@pytest.mark.parametrize("kwargs", ({"dim": None}, {"dim": -1, "keepdim": True}))
+def test_argmax_enable_secondary_dm_split_ineligible(device, expect_error, kwargs):
+    """Asking for the split where it cannot run must fail rather than be ignored."""
+    torch.manual_seed(0)
+    t = torch.randn(64, 1024, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, device=device, layout=RM)
+    with expect_error(RuntimeError, "enable_secondary_dm needs at least two output rows"):
+        ttnn.argmax(ttnn_in, enable_secondary_dm=True, **kwargs)
+
+
+def test_argmax_preallocated_output_wrong_shape_rejected(device, expect_error):
+    """
+    A preallocated output whose page layout does not match the reduction result must be rejected.
+    """
+    torch.manual_seed(0)
+    batch, width = 32, 1024
+    t = torch.randn(1, 1, batch, width, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    bad_out = ttnn.zeros([1, 1, 1, batch], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Preallocated output tensor is not page-compatible"):
+        ttnn.argmax(ttnn_in, dim=3, keepdim=True, output_tensor=bad_out)
+
+
+def test_argmax_preallocated_output_rank4_buffer_keepdim_false(device):
+    """Verify keepdim=False accepts a physically compatible rank-4 preallocated output."""
+    torch.manual_seed(0)
+    batch, width = 32, 1024
+    t = torch.randn(1, 1, batch, width, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    out = ttnn.zeros([1, 1, 1, batch], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    result = ttnn.argmax(ttnn_in, dim=-1, keepdim=False, output_tensor=out)
+
+    got = ttnn.to_torch(ttnn.from_device(result)).reshape(-1).to(torch.int32)
+    assert_equal(torch.argmax(t, dim=-1).reshape(-1), got)
+
+
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_argmax_preallocated_output_multicore(device, keepdim):
+    """The correctly shaped preallocated output still works on the ROW_MAJOR multicore path."""
+    torch.manual_seed(0)
+    batch, width = 32, 1024
+    t = torch.randn(1, 1, batch, width, dtype=torch.bfloat16)
+    ref = torch.argmax(t, dim=3, keepdim=keepdim)
+
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out = ttnn.zeros(list(ref.shape), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    result = ttnn.argmax(ttnn_in, dim=3, keepdim=keepdim, output_tensor=out)
+
+    assert_equal(ref, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
+
+
+BF16_BITS = {
+    "1.0": 0x3F80,
+    "-1.0": 0xBF80,
+    "2.0": 0x4000,
+    "+nan": 0x7FC0,
+    "-nan": 0xFFC0,
+    "+inf": 0x7F80,
+    "+0": 0x0000,
+    "-0": 0x8000,
+    "fill": 0xF14A,
+}
+FP32_BITS = {
+    "1.0": 0x3F800000,
+    "-1.0": 0xBF800000,
+    "2.0": 0x40000000,
+    "+nan": 0x7FC00000,
+    "-nan": 0xFFC00000,
+    "+inf": 0x7F800000,
+    "+0": 0x00000000,
+    "-0": 0x80000000,
+    "fill": 0xF1000000,
+}
+
+
+def _from_bits(patterns, dtype):
+    """Build a tensor with exact bit patterns; a python float cannot express a negative NaN in bf16."""
+    if dtype == torch.bfloat16:
+        signed = [p - 0x10000 if p > 0x7FFF else p for p in patterns]
+        return torch.tensor(signed, dtype=torch.int16).view(torch.bfloat16)
+    signed = [p - 0x100000000 if p > 0x7FFFFFFF else p for p in patterns]
+    return torch.tensor(signed, dtype=torch.int32).view(torch.float32)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize(
+    "layout, dim",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, -1),
+        (ttnn.TILE_LAYOUT, -1),
+        (ttnn.TILE_LAYOUT, -2),
+    ],
+)
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["1.0", "+nan", "2.0"],
+        ["1.0", "-nan", "2.0"],
+        ["+nan", "1.0"],
+        ["1.0", "+inf", "+nan"],
+        ["1.0", "+nan", "+inf"],
+        ["+nan", "-nan", "1.0"],
+        ["-nan", "+nan", "1.0"],
+        ["-0", "+0"],
+        ["+0", "-0"],
+        ["1.0", "1.0"],
+    ],
+)
+def test_argmax_nan_and_signed_zero_matches_torch(device, values, dtype, layout, dim):
+    table = BF16_BITS if dtype == torch.bfloat16 else FP32_BITS
+    height, width = 32, 64
+    patterns = [table["fill"]] * (height * width)
+    for i, v in enumerate(values):
+        patterns[i if dim == -1 else i * width] = table[v]
+    t = _from_bits(patterns, dtype).reshape(height, width)
+
+    ttnn_t = ttnn.from_torch(t, device=device, layout=layout)
+    got = ttnn.to_torch(ttnn.from_device(ttnn.argmax(ttnn_t, dim=dim))).reshape(-1)
+    assert_equal(torch.argmax(t, dim=dim), got.to(torch.int32))
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("early, late", [(16, 64), (32, 64)])
+@pytest.mark.parametrize("base, lo, hi", [("1.0", "-nan", "+nan"), ("-1.0", "-0", "+0")])
+def test_argmax_reduce_all_first_index_wins_across_cores(device, dtype, early, late, base, lo, hi):
+    """reduce_all merges in core-id order, not index order: the globally-first winner must still win."""
+    table = BF16_BITS if dtype == torch.bfloat16 else FP32_BITS
+    patterns = [table[base]] * 128
+    patterns[early] = table[lo]
+    patterns[late] = table[hi]
+    t = _from_bits(patterns, dtype).reshape(2, 64)
+
+    ttnn_t = ttnn.from_torch(t, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    got = int(ttnn.to_torch(ttnn.from_device(ttnn.argmax(ttnn_t))).reshape(-1)[0])
+    assert got == int(torch.argmax(t.reshape(-1))) == early, f"expected {early}, got {got}"

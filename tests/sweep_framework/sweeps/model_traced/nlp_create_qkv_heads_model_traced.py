@@ -106,7 +106,7 @@ def _qkv_input_shard_axis_and_factor(placement_dict):
 def _qkv_per_chip_q(per_chip_input, num_q_heads, num_kv_heads):
     b, _, s, hd = per_chip_input.shape
     head_dim = hd // (num_q_heads + 2 * num_kv_heads)
-    (q, _k, _v) = torch.split(
+    q, _k, _v = torch.split(
         per_chip_input,
         [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim],
         dim=-1,
@@ -182,7 +182,7 @@ def run(
     # replicate_with_topology and runs the kernel independently. The gathered
     # output is the per-chip Q tiled along the shard axis — handled by
     # reconcile_golden_to_actual below.
-    (ref_q, _, _) = torch.split(
+    ref_q, _, _ = torch.split(
         torch_input_tensor_a,
         [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim],
         dim=-1,
@@ -226,9 +226,17 @@ def run(
     # Handle tuple return - convert to torch
     if isinstance(output_result, tuple):
         # Take the first tensor (q_heads) for comparison, or concatenate all
-        output_tensor = mesh_tensor_to_torch(output_result[0], device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_result[0],
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
     else:
-        output_tensor = mesh_tensor_to_torch(output_result, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_result,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - using lower tolerance for complex operations

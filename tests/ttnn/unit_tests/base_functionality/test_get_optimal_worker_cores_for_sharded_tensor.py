@@ -890,18 +890,58 @@ def test_dram_nd_sharded_round_robin(device, tensor_shape, shard_shape, grid, or
     assert_cores_match(actual_cores, expected_cores)
 
 
-def test_get_optimal_worker_cores_for_sharded_tensor_rejects_host_tensor():
+def test_get_optimal_worker_cores_for_sharded_tensor_rejects_host_tensor(expect_error):
     torch_tensor = torch.randn([1, 1, 32, 64], dtype=torch.bfloat16)
     tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    with pytest.raises(RuntimeError, match="Tensor must be on device to compute optimal worker cores"):
+    with expect_error(RuntimeError, "Tensor must be on device to compute optimal worker cores"):
         ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_tensor)
 
 
-def test_get_optimal_worker_cores_for_sharded_tensor_rejects_interleaved_tensor(device):
+def test_get_optimal_worker_cores_for_sharded_tensor_rejects_interleaved_tensor(device, expect_error):
     torch_tensor = torch.randn([1, 1, 32, 64], dtype=torch.bfloat16)
     tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_tensor = ttnn.to_device(tt_tensor, device)
 
-    with pytest.raises(RuntimeError, match="Tensor must be sharded to compute optimal worker cores"):
+    with expect_error(RuntimeError, "Tensor must be sharded to compute optimal worker cores"):
         ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_tensor)
+
+
+# ============================================================================
+#  Optimal DRAM Worker Core Bounds Validation
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
+@pytest.mark.parametrize("noc", [ttnn.NOC.NOC_0, ttnn.NOC.NOC_1])
+def test_optimal_dram_workers_within_compute_grid(device, noc):
+    """
+    Validate that get_optimal_dram_bank_to_logical_worker_assignment returns one valid
+    worker core per DRAM bank, with every core inside the device's logical compute grid.
+
+    Since compute_with_storage_grid_size() is the logical Tensix worker grid (it already
+    excludes dispatch columns and harvested rows), an in-bounds logical core is by
+    construction a valid worker core.
+
+    Regression test for issue #41031, where column major dispatch on harvested Wormhole
+    devices returned cores on the dispatch column (e.g. (7, 2) on a 7x9 compute grid).
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    dram_grid = device.dram_grid_size()
+    expected_num_banks = dram_grid.x * dram_grid.y
+
+    optimal_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc)
+
+    assert len(optimal_workers) == expected_num_banks, (
+        f"Expected {expected_num_banks} optimal worker cores (one per DRAM bank), " f"got {len(optimal_workers)}"
+    )
+
+    for i, core in enumerate(optimal_workers):
+        assert core.x < compute_grid.x and core.y < compute_grid.y, (
+            f"DRAM bank {i}: optimal worker core ({core.x}, {core.y}) is outside "
+            f"compute grid ({compute_grid.x}, {compute_grid.y})"
+        )

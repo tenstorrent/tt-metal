@@ -5,7 +5,10 @@
 import pytest
 
 from models.common.utility_functions import run_for_wormhole_b0
-from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.perf_device_resnet50 import run_perf_device
+from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.perf_device_resnet50 import (
+    inner_pytest_timeout_s,
+    run_perf_device,
+)
 
 
 @run_for_wormhole_b0()
@@ -13,9 +16,9 @@ from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.perf_d
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [16, "True-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0", 6140.0],
+        [16, "True-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0", 6335.0],
     ],
 )
-def test_perf_device(batch_size, test, expected_perf):
+def test_perf_device(batch_size, test, expected_perf, request):
     command = f"pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_performant.py::test_run_resnet50_inference[{test}]"
-    run_perf_device(batch_size, test, command, expected_perf)
+    run_perf_device(batch_size, test, command, expected_perf, inner_pytest_timeout_s(request.config))

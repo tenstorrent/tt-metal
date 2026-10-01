@@ -46,7 +46,7 @@ void kernel_main() {
         uint32_t cb_write_addr = get_write_ptr(cb_id_in0);
 
         // Read tile from DRAM into L1 circular buffer
-        noc_async_read_tile(tile_idx, src_addr_gen, cb_write_addr);
+        noc_async_read_page(tile_idx, src_addr_gen, cb_write_addr);
         noc_async_read_barrier();
 
         // Mark tile as ready in CB (for tracking, though we're the only consumer)

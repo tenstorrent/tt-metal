@@ -55,15 +55,17 @@ autograd::TensorPtr all_gather(
 
     autograd::GradFunction grad = [tensor, out, dim, cluster_axis, grad_output_type]() {
         if (out->is_grad_initialized()) {
-            auto reduced_grad = ttnn_fixed::distributed::reduce_scatter(out->get_grad(), dim, cluster_axis);
             if (grad_output_type == GradOutputType::SHARDED) {
-                tensor->add_grad(reduced_grad);
+                // The gathered output slices were distinct per device, so the output grad
+                // is sharded: sum the reduce-scattered slices back onto each input shard.
+                tensor->add_grad(ttnn_fixed::distributed::reduce_scatter(out->get_grad(), dim, cluster_axis));
             } else {
-                auto* device = &autograd::ctx().get_device();
-                auto mesh_shape = device->shape();
-                uint32_t tp_size = cluster_axis.has_value() ? mesh_shape[cluster_axis.value()]
-                                                            : static_cast<uint32_t>(device->num_devices());
-                tensor->add_grad(ttnn::multiply(reduced_grad, 1.F / static_cast<float>(tp_size)));
+                // The gathered output was replicated across `cluster_axis`, so the output
+                // grad is replicated too. reduce_scatter would sum tp_size identical copies
+                // and we would divide by tp_size to recover each device's slice — which is
+                // exactly a local partition of the replicated grad. Take it directly:
+                // no collective and no elementwise scale.
+                tensor->add_grad(ttnn_fixed::distributed::mesh_partition(out->get_grad(), dim, cluster_axis));
             }
         }
     };

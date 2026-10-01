@@ -13,9 +13,57 @@ Device
    ttnn.close_device
    ttnn.manage_device
    ttnn.synchronize_device
+   ttnn.is_trace_capture_active
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
-   ttnn.pad_to_tile_shape
+
+Deprecated Device APIs
+======================
+
+.. _ttnn-pad-to-tile-shape-deprecated:
+
+``ttnn.pad_to_tile_shape``
+------------------------------------
+
+``ttnn.pad_to_tile_shape`` has been removed. It previously rounded the last two
+dimensions of a shape to multiples of 32 (tile alignment).
+
+**Migration options:**
+
+1. **Preferred** — use :func:`ttnn.to_layout` which handles tile-alignment
+   automatically when converting to tile layout:
+
+   .. code-block:: python
+
+      # Before
+      padded = ttnn.pad_to_tile_shape(tensor.padded_shape)
+      tensor = ttnn.tilize_with_val_padding(tensor, padded, 0.0, mem_config)
+
+      # After
+      tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=mem_config)
+
+2. If you only need the padded shape value (e.g. for memory config calculations),
+   use ``align_shape_to_tile`` from model utilities:
+
+   .. code-block:: python
+
+      from models.common.tensor_utils import align_shape_to_tile
+
+      padded = align_shape_to_tile([1, 384, 49, 96])
+      # => [1, 384, 64, 96]
+
+Trace
+*****
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.begin_trace_capture
+   ttnn.end_trace_capture
+   ttnn.execute_trace
+   ttnn.release_trace
 
 Memory Config
 *************
@@ -42,6 +90,7 @@ Core
    ttnn.as_tensor
    ttnn.copy_device_to_host_tensor
    ttnn.copy_host_to_device_tensor
+   ttnn.copy_host_to_device_tensor_partial
    ttnn.deallocate
    ttnn.dump_tensor
    ttnn.from_device
@@ -78,6 +127,7 @@ Tensor Creation
    ttnn.ones
    ttnn.ones_like
    ttnn.rand
+   ttnn.randn
    ttnn.uniform
    ttnn.zeros
    ttnn.zeros_like
@@ -216,6 +266,7 @@ Pointwise Unary
    ttnn.silu
    ttnn.sin
    ttnn.sinh
+   ttnn.softcap
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
@@ -252,6 +303,7 @@ Pointwise Binary
    ttnn.bitwise_and
    ttnn.bitwise_or
    ttnn.bitwise_xor
+   ttnn.clamped_silu_glu
    ttnn.div
    ttnn.div_no_nan
    ttnn.divide
@@ -298,6 +350,7 @@ Pointwise Binary
    ttnn.rpow
    ttnn.rsub
    ttnn.rsub_
+   ttnn.situ_glu
    ttnn.squared_difference
    ttnn.squared_difference_
    ttnn.subalpha
@@ -317,6 +370,7 @@ Pointwise Ternary
    ttnn.addcmul
    ttnn.lerp
    ttnn.mac
+   ttnn.snake_beta
    ttnn.where
 
 Quantization
@@ -363,6 +417,7 @@ Reduction
    ttnn.sampling
    ttnn.std
    ttnn.sum
+   ttnn.experimental.topk_large_indices
    ttnn.topk
    ttnn.var
 
@@ -391,6 +446,7 @@ Data Movement
    ttnn.moe_expert_token_remap
    ttnn.moe_routing_remap
    ttnn.move
+   ttnn.narrow
    ttnn.nonzero
    ttnn.pad
    ttnn.permute
@@ -463,20 +519,26 @@ Transformer
 
    ttnn.transformer.attention_softmax
    ttnn.transformer.attention_softmax_
+   ttnn.transformer.chunk_gated_delta_rule
    ttnn.transformer.chunked_flash_mla_prefill
    ttnn.transformer.chunked_scaled_dot_product_attention
    ttnn.transformer.concatenate_heads
    ttnn.transformer.flash_mla_prefill
    ttnn.transformer.flash_multi_latent_attention_decode
+   ttnn.transformer.gated_delta_attn_seq
    ttnn.transformer.joint_scaled_dot_product_attention
    ttnn.transformer.paged_flash_multi_latent_attention_decode
    ttnn.transformer.paged_scaled_dot_product_attention_decode
    ttnn.transformer.ring_distributed_scaled_dot_product_attention
    ttnn.transformer.ring_joint_scaled_dot_product_attention
+   ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.sparse_sdpa
+   ttnn.transformer.sparse_sdpa_msa
    ttnn.transformer.split_query_key_value_and_split_heads
-   ttnn.transformer.windowed_scaled_dot_product_attention
+   ttnn.experimental.indexer_score_dsa
+   ttnn.experimental.indexer_score_msa
 
 CCL
 ===
@@ -589,6 +651,7 @@ KV Cache
    ttnn.kv_cache.update_cache_for_token_
    ttnn.fill_cache
    ttnn.update_cache
+   ttnn.experimental.indexed_fused_update_cache
 
 Backward operations
 ===================
@@ -632,7 +695,6 @@ Backward operations
    ttnn.erfinv_bw
    ttnn.exp2_bw
    ttnn.exp_bw
-   ttnn.experimental.gelu_bw
    ttnn.expm1_bw
    ttnn.fill_bw
    ttnn.fill_zero_bw

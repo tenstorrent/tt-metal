@@ -1,0 +1,128 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+#include <cstdint>
+#include "llk_pack_common_api.h"
+#include "sanitizer/api.h"
+
+/*************************************************************************
+ * LLK PACK
+ *************************************************************************/
+
+/**
+ * @brief No-op pack-side ordering primitive; present only for API parity with Quasar.
+ *
+ * WH/BH have no pack-side WAIT/PUSH ordering requirement, so this has no functional role in a kernel. It
+ * exists only so the shared compute-API dummy_pack() resolves on every architecture; on Quasar the same
+ * call is a required TEN-4746 drain primitive (see that arch's llk_pack_tile_api.h).
+ *
+ * @param pack_output  The output dataflow buffer identifier (unused).
+ */
+inline void llk_pack_dummy([[maybe_unused]] const std::uint32_t pack_output) {}
+
+template <
+    PackMode pack_mode = PackMode::Default,
+    bool zero_output = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false>
+inline void llk_pack_init(const std::uint32_t pack_output, std::uint32_t num_tiles = 1) {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
+        "Wormhole B0: pack init supports PackMode::Default and PackMode::Untilize only");
+    const std::uint32_t output_id = get_output_id(pack_output);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const bool partial_face = get_output_partial_face(output_id);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    if constexpr (!skip_addrmod_config) {
+        LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+    }
+
+    // The MOP bakes pack_dst_format in only for multi-tile output addressing and the partial-face BFP
+    // PACR variant. Otherwise a later reconfig re-derives it, so a format change is not drift.
+    if (num_tiles > 1 || partial_face) {
+        SAN_HOOK(init<OperationPack>(
+            StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+            StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+            StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+            StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+            StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+            StateVal<OperationPack::NumTiles>(num_tiles)));
+    } else {
+        SAN_HOOK(init<OperationPack>(
+            StateDiscard<std::uint32_t>(pack_dst_format[output_id]),
+            StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+            StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+            StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+            StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+            StateVal<OperationPack::NumTiles>(num_tiles)));
+    }
+
+    _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+}
+
+template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
+inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
+    LLK_ASSERT(
+        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
+
+    std::uint8_t output_id = get_output_id(output);
+
+    static_assert(
+        !((pack_mode == PackMode::Untilize) && out_of_order_output), "untilize out of order packing is not supported!");
+
+    std::uint32_t pack_tile_addr =
+        get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
+
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+
+    SAN_HOOK(execute<OperationPack>(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
+        StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(get_output_narrow_tile(output_id)),
+        StateDiscard<std::uint32_t>(tile_index),
+        StateDiscard<std::uint32_t>(output_tile_index)));
+
+    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+}
+
+template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
+inline void llk_matmul_pack(
+    std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles, std::uint32_t output_tile_index = 0) {
+    std::uint8_t output_id = get_output_id(output);
+
+    static_assert(
+        !((pack_mode == PackMode::Untilize) && out_of_order_output), "untilize out of order packing is not supported!");
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+    LLK_ASSERT(
+        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
+
+    SAN_HOOK(execute<OperationPack>(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
+        StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(get_output_narrow_tile(output_id)),
+        StateDiscard<std::uint32_t>(start_tile_index),
+        StateDiscard<std::uint32_t>(ntiles),
+        StateDiscard<std::uint32_t>(output_tile_index)));
+
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+        std::uint32_t pack_tile_addr =
+            get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
+
+        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+    }
+}

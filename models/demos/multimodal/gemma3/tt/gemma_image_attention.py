@@ -234,15 +234,17 @@ class TtGemmaImageAttention(LightweightModule):
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
+        # Bias applied outside ttnn.linear to avoid the FUSE_BIAS matmul kernel path.
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
-            bias=self.bqkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
+        if self.bqkv is not None:
+            xqkv_fused = ttnn.add(xqkv_fused, self.bqkv, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_11SH)
 
         q_heads_1QSD, k_heads_1KSD, v_heads_1VSD = ttnn.experimental.nlp_create_qkv_heads(

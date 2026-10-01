@@ -24,7 +24,8 @@ struct Conv3dConfig {
         uint32_t C_in_block_ = 0,
         std::array<uint32_t, 3> dilation_ = {1, 1, 1},
         uint32_t alignment_ = 32,
-        CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
+        tt::tt_metal::CoreCoord compute_with_storage_grid_size_ = {1, 1},
+        bool enable_fp32_operand_split_ = false) :
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
         T_out_block(T_out_block_),
@@ -34,7 +35,8 @@ struct Conv3dConfig {
         C_in_block(C_in_block_),
         dilation(dilation_),
         alignment(alignment_),
-        compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
+        compute_with_storage_grid_size(compute_with_storage_grid_size_),
+        enable_fp32_operand_split(enable_fp32_operand_split_) {}
 
     tt::tt_metal::DataType weights_dtype;
     tt::tt_metal::Layout output_layout;
@@ -45,7 +47,13 @@ struct Conv3dConfig {
     uint32_t C_in_block;
     std::array<uint32_t, 3> dilation;
     uint32_t alignment;
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
+    // FP32-only precision mode. The kernel splits the fp32 activation x into x_hi = bf16(x) and x_lo = x - x_hi and
+    // accumulates x_hi*W_hi + x_hi*W_lo + x_lo*W_hi in one pass (x_lo*W_lo is dropped), where W_hi / W_lo are the
+    // bf16 weight and its residual W - bf16(W). Requires float32 input, a matching weight_lo_tensor prepared from
+    // W_lo exactly as the weight tensor is prepared from W_hi, and compute_kernel_config.fp32_dest_acc_en.
+    // Three matmul products per block instead of one.
+    bool enable_fp32_operand_split;
 
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",
@@ -57,7 +65,8 @@ struct Conv3dConfig {
         "C_in_block",
         "dilation",
         "alignment",
-        "compute_with_storage_grid_size");
+        "compute_with_storage_grid_size",
+        "enable_fp32_operand_split");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -70,7 +79,8 @@ struct Conv3dConfig {
             this->C_in_block,
             this->dilation,
             this->alignment,
-            this->compute_with_storage_grid_size);
+            this->compute_with_storage_grid_size,
+            this->enable_fp32_operand_split);
     }
 };
 
@@ -86,12 +96,23 @@ struct Conv3dParams {
     std::array<uint32_t, 3> dilation;
     std::string padding_mode;
     uint32_t groups;
+    // Logical-pad masking (opt-in)
+    // 0 == disabled.
+    uint32_t logical_h_mask = 0;
+    uint32_t logical_w_mask = 0;
+    // Padded-output mode (opt-in)
+    // 0 == compact output.
+    uint32_t output_pad_h = 0;
+    uint32_t output_pad_w = 0;
 };
 
 struct Conv3dInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias_tensor;
+    std::optional<const Tensor> halo_buffer;
+    std::optional<const Tensor> pad_offset_tensor;
+    std::optional<const Tensor> weight_lo_tensor;
 };
 
 namespace detail {

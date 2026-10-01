@@ -3,12 +3,23 @@
 
 import inspect
 import math
+from dataclasses import dataclass
 from itertools import product
-from typing import Iterator, List, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 import pytest
+from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .constraints import (
+    _quasar_effective_sfpu_format,
+    _quasar_fpu_source_format,
+    _quasar_sfpu_hardware_format,
+    is_valid_quasar_fpu_path,
+    is_valid_quasar_packer_conversion,
+    is_valid_quasar_unpack_to_dest,
+)
 from .data_format_inference import is_format_combination_outlier
 from .format_config import (
     DataFormat,
@@ -16,7 +27,33 @@ from .format_config import (
     InputOutputFormat,
 )
 from .golden_generators import TILE_DIMENSIONS
-from .llk_params import BlocksCalculationAlgorithm, DestAccumulation, DestSync
+from .llk_params import (
+    BlocksCalculationAlgorithm,
+    DestAccumulation,
+    DestSync,
+    MathOperation,
+)
+
+RUNTIME_AXES_MARK = "runtime_axes"
+
+
+class _RuntimeMarker:
+    """Wrapper that tags a parameter value as runtime only."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
+def runtime(value):
+    """Mark a parametrize value as runtime only so compile producer can deduplicate it.
+
+    Wrapped values are excluded from the compile key: test variants that differ only in
+    ``runtime()`` parameters share an ELF and are collapsed to a single compilation.
+    """
+    return _RuntimeMarker(value)
+
 
 checked_formats_and_dest_acc = {}
 
@@ -289,29 +326,82 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
     return list(_solve_recursive(resolved, 0))
 
 
+def build_param_id(parameters, value_tuple):
+    """Readable pytest ID for one parameter tuple, e.g.
+    `formats:Bfp4_b->Float16_b-mathop:Sin`.
+
+    Exposed so tests that call pytest.mark.parametrize directly (because they build
+    their own value tuples) can produce the same IDs as @parametrize, keeping -k
+    filters on format and mathop working across the whole suite.
+    """
+    parts = []
+    for param, value in zip(parameters, value_tuple):
+        if isinstance(value, InputOutputFormat):
+            param_value = f"{value.input_format.name}->{value.output_format.name}"
+        elif hasattr(value, "name"):
+            param_value = value.name
+        elif hasattr(value, "value"):
+            param_value = str(value.value)
+        else:
+            param_value = str(value)
+        parts.append(f"{param}:{param_value}")
+    return "-".join(parts)
+
+
 def parametrize(**kwargs: any):
-    parameters = tuple(kwargs.keys())
+    compile_key_fn = None
+    _rt_names = set()
+    _combo_rt_indices = {}
+    unwrapped = {}
+    for name, value in kwargs.items():
+        if isinstance(value, _RuntimeMarker):
+            _rt_names.add(name)
+            unwrapped[name] = value.value
+        elif (
+            isinstance(value, list)
+            and value
+            and all(isinstance(v, tuple) for v in value)
+            and any(isinstance(el, _RuntimeMarker) for combo in value for el in combo)
+        ):
+            _combo_rt_indices[name] = frozenset(
+                i
+                for combo in value
+                for i, el in enumerate(combo)
+                if isinstance(el, _RuntimeMarker)
+            )
+            unwrapped[name] = [
+                tuple(v.value if isinstance(v, _RuntimeMarker) else v for v in combo)
+                for combo in value
+            ]
+        else:
+            unwrapped[name] = value
+
+    if _rt_names or _combo_rt_indices:
+
+        def compile_key_fn(params):
+            parts = []
+            for k, v in sorted(params.items()):
+                if k in _rt_names:
+                    continue
+                if k in _combo_rt_indices:
+                    if len(v) == 1 and isinstance(v[0], tuple):
+                        v = v[0]
+                    rt_indices = _combo_rt_indices[k]
+                    v = tuple(el for i, el in enumerate(v) if i not in rt_indices)
+                parts.append((k, v))
+            return tuple(parts)
+
+    parameters = tuple(unwrapped.keys())
     parameters_string = ",".join(parameters)
-    parameter_values = _params_solve_dependencies(**kwargs)
+    parameter_values = _params_solve_dependencies(**unwrapped)
 
-    def generate_id(value_tuple):
-        """Generate readable test IDs from parameter values."""
-        parts = []
-        for param, value in zip(parameters, value_tuple):
-            if isinstance(value, InputOutputFormat):
-                param_value = f"{value.input_format.name}->{value.output_format.name}"
-            elif hasattr(value, "name"):
-                param_value = value.name
-            elif hasattr(value, "value"):
-                param_value = str(value.value)
-            else:
-                param_value = str(value)
-            parts.append(f"{param}:{param_value}")
-        return "-".join(parts)
-
-    ids = [generate_id(values) for values in parameter_values]
+    ids = [build_param_id(parameters, values) for values in parameter_values]
 
     def decorator(test_function):
+        if compile_key_fn is not None:
+            test_function = getattr(pytest.mark, RUNTIME_AXES_MARK)(
+                compile_key_fn=compile_key_fn
+            )(test_function)
         return pytest.mark.parametrize(parameters_string, parameter_values, ids=ids)(
             test_function
         )
@@ -341,6 +431,42 @@ def input_output_formats(
     if same:
         return [InputOutputFormat(input, input) for input in formats]
     return [InputOutputFormat(input, output) for input in formats for output in formats]
+
+
+def quasar_mx_smoke(
+    input_format: DataFormat, output_format: DataFormat
+) -> List[InputOutputFormat]:
+    """
+    Single MX format pair for a test that is not the pack or the unpack test.
+
+    On Quasar the MX formats live only in L1. The unpacker decodes every one of them
+    to Float16_b in SrcA/SrcB (@ref infer_unpack_out), so an op fed an MX input runs
+    the exact same math and pack configuration as the Float16_b row beside it in the
+    same sweep, and an op writing an MX output only exercises the packer. Sweeping MX
+    across a whole test therefore re-measures one unpacker descriptor field against an
+    unchanged pipeline. test_pack_quasar and test_unpack_unary_operand_quasar own
+    those two conversions: MxFp4 / MxInt8 / MxInt4 / MxInt2 as a full cross product,
+    and MxFp8R / MxFp8P as one directed pair each (unpack decodes MxFp8* to
+    Float16_b, pack encodes Float16_b to MxFp8*). MxFp8 stays out of that cross
+    product because those two suites are already the bulk of the Quasar compile.
+
+    Every other test keeps exactly one pair, so the MX-conditional plumbing it does
+    own stays covered: format-inference bypass, the ImpliedMathFormat.Yes requirement,
+    MX stimulus clamping and the sub-byte L1 tile-size constraints.
+
+    MxFp4_2x_A / MxFp4_2x_B are not covered by this rule. They are real SrcA/SrcB
+    register formats that change the math format and the per-tile MVMUL sequence, so
+    they are swept wherever they apply (matmul, reduce GAPOOL).
+
+    Parameters:
+    input_format (DataFormat): MX format to feed from L1, or the L1 input paired with
+        an MX output when the test's MX coverage is on the pack side.
+    output_format (DataFormat): the paired output format.
+    Returns:
+    List[InputOutputFormat]: a one-element list, ready to concatenate onto an
+        input_output_formats() product.
+    """
+    return [InputOutputFormat(input_format, output_format)]
 
 
 def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]:
@@ -385,53 +511,271 @@ def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]
     ]
 
 
-def is_invalid_quasar_sfpu_format_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation
-) -> bool:
-    """
-    Check if a Quasar SFPU (input_format, output_format, dest_acc) combination
-    is unsupported by the hardware and should be skipped by the parametrize sweep.
-    """
-    in_fmt = fmt.input_format
-    out_fmt = fmt.output_format
+@dataclass(frozen=True)
+class QuasarSfpuVariant:
+    """One executable Quasar SFPU format and data-movement configuration."""
 
-    # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
-    if (
-        in_fmt != DataFormat.Float32
-        and out_fmt == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
+    formats: InputOutputFormat
+    dest_acc: DestAccumulation
+    unpack_to_dest: bool
+    unpack_dst: DataFormat
+    sfpu_src: DataFormat
+    sfpu_dst: DataFormat
+    pack_src: DataFormat
+
+    @property
+    def uses_fpu(self) -> bool:
+        return not self.unpack_to_dest
+
+    def apply_formats(self, formats_config: List[FormatConfig]) -> None:
+        """Apply the resolved Dest-facing formats after generic inference."""
+        for config in formats_config:
+            config.unpack_A_dst = self.unpack_dst
+            config.unpack_B_dst = self.unpack_dst
+            config.unpack_S_dst = self.unpack_dst
+            config.math = self.unpack_dst
+            config.sfpu_src = self.sfpu_src
+            config.sfpu_dst = self.sfpu_dst
+            config.pack_src = self.pack_src
+            config.pack_S_src = self.pack_src
+
+
+def _quasar_narrow_dest_candidates(
+    input_format: DataFormat, output_format: DataFormat
+) -> Tuple[DataFormat, ...]:
+    candidates = []
+    for candidate in (
+        _quasar_effective_sfpu_format(input_format),
+        _quasar_effective_sfpu_format(output_format),
     ):
-        return True
+        if not candidate.is_32_bit() and candidate not in candidates:
+            candidates.append(candidate)
+    return tuple(candidates)
 
-    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes
-    if (
-        in_fmt == DataFormat.Float32
-        and out_fmt == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
+
+def _make_quasar_sfpu_variant(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    *,
+    unpack_to_dest: bool,
+    unpack_dst: DataFormat,
+    sfpu_src: DataFormat,
+    sfpu_dst: DataFormat,
+    pack_src: DataFormat,
+) -> Optional[QuasarSfpuVariant]:
+    if not is_valid_quasar_packer_conversion(pack_src, formats.output_format):
+        return None
+    return QuasarSfpuVariant(
+        formats=formats,
+        dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
+        unpack_dst=unpack_dst,
+        sfpu_src=sfpu_src,
+        sfpu_dst=sfpu_dst,
+        pack_src=pack_src,
+    )
+
+
+def _resolve_quasar_typecast_variant(
+    formats: InputOutputFormat, dest_acc: DestAccumulation
+) -> Optional[QuasarSfpuVariant]:
+    input_format = formats.input_format
+    output_format = formats.output_format
+    requires_32bit_dest = input_format.is_32_bit() or output_format.is_32_bit()
+
+    if requires_32bit_dest != (dest_acc == DestAccumulation.Yes):
+        return None
+
+    unpack_dst_format = _quasar_effective_sfpu_format(input_format)
+    if not is_valid_quasar_unpack_to_dest(
+        input_format,
+        unpack_dst_format,
+        dest_acc,
+        allow_narrow_in_32bit_dest=True,
     ):
-        return True
+        return None
 
-    return False
+    if output_format.is_integer():
+        pack_src = _quasar_sfpu_hardware_format(output_format)
+    elif dest_acc == DestAccumulation.Yes:
+        pack_src = DataFormat.Float32
+    else:
+        pack_src = output_format
+
+    # SFPU consumes the narrow input representation and overwrites Dest with
+    # the converted output, so widening before SFPU is not required.
+    return _make_quasar_sfpu_variant(
+        formats,
+        dest_acc,
+        unpack_to_dest=True,
+        unpack_dst=unpack_dst_format,
+        sfpu_src=input_format,
+        sfpu_dst=output_format,
+        pack_src=pack_src,
+    )
 
 
-def generate_sfpu_format_dest_acc_combinations(
-    formats_list: List[FormatConfig],
-) -> List[Tuple[FormatConfig, DestAccumulation]]:
+def _resolve_quasar_direct_sfpu_variant(
+    formats: InputOutputFormat, dest_acc: DestAccumulation, dest_format: DataFormat
+) -> Optional[QuasarSfpuVariant]:
+    if not is_valid_quasar_unpack_to_dest(formats.input_format, dest_format, dest_acc):
+        return None
+
+    sfpu_format = (
+        DataFormat.UInt16
+        if formats.input_format == DataFormat.UInt16 and dest_format == DataFormat.Int16
+        else dest_format
+    )
+    return _make_quasar_sfpu_variant(
+        formats,
+        dest_acc,
+        unpack_to_dest=True,
+        unpack_dst=dest_format,
+        sfpu_src=sfpu_format,
+        sfpu_dst=sfpu_format,
+        pack_src=dest_format,
+    )
+
+
+def _resolve_quasar_fpu_sfpu_variant(
+    formats: InputOutputFormat, dest_acc: DestAccumulation, dest_format: DataFormat
+) -> Optional[QuasarSfpuVariant]:
+    fpu_source = _quasar_fpu_source_format(formats.input_format)
+    if not is_valid_quasar_fpu_path(
+        formats.input_format, fpu_source, dest_format, dest_acc
+    ):
+        return None
+
+    return _make_quasar_sfpu_variant(
+        formats,
+        dest_acc,
+        unpack_to_dest=False,
+        unpack_dst=fpu_source,
+        sfpu_src=dest_format,
+        sfpu_dst=dest_format,
+        pack_src=dest_format,
+    )
+
+
+def resolve_quasar_sfpu_variant(
+    op: Optional[MathOperation],
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+) -> Optional[QuasarSfpuVariant]:
+    """Resolve one exact requested external format and Dest configuration."""
+    if op == MathOperation.Typecast:
+        return _resolve_quasar_typecast_variant(formats, dest_acc)
+
+    # Only SFPU typecast may cross the integer/float boundary.
+    if formats.input_format.is_integer() != formats.output_format.is_integer():
+        return None
+
+    dest_candidates = (
+        (DataFormat.Int32 if formats.input_format.is_integer() else DataFormat.Float32,)
+        if dest_acc == DestAccumulation.Yes
+        else _quasar_narrow_dest_candidates(formats.input_format, formats.output_format)
+    )
+    for dest_format in dest_candidates:
+        variant = _resolve_quasar_direct_sfpu_variant(formats, dest_acc, dest_format)
+        if variant is not None:
+            return variant
+        variant = _resolve_quasar_fpu_sfpu_variant(formats, dest_acc, dest_format)
+        if variant is not None:
+            return variant
+    return None
+
+
+def _quasar_sfpu_state_key(variant: QuasarSfpuVariant) -> Tuple:
+    return (
+        variant.dest_acc,
+        variant.sfpu_src,
+        variant.sfpu_dst,
+        variant.pack_src,
+    )
+
+
+def _deduplicate_quasar_sfpu_operation_variants(
+    variants: List[QuasarSfpuVariant],
+) -> List[QuasarSfpuVariant]:
+    representatives = {}
+    for variant in variants:
+        key = _quasar_sfpu_state_key(variant)
+        current = representatives.get(key)
+
+        # Keep one route per state. Prefer direct Unpack-to-Dest, then prefer a
+        # route with no L1-to-Dest or Dest-to-L1 format conversion.
+        variant_is_identity = (
+            variant.formats.input_format == variant.unpack_dst
+            and variant.pack_src == variant.formats.output_format
+        )
+        current_is_identity = current is not None and (
+            current.formats.input_format == current.unpack_dst
+            and current.pack_src == current.formats.output_format
+        )
+        if (
+            current is None
+            or (variant.unpack_to_dest and not current.unpack_to_dest)
+            or (
+                variant.unpack_to_dest == current.unpack_to_dest
+                and variant_is_identity
+                and not current_is_identity
+            )
+        ):
+            representatives[key] = variant
+
+    return list(representatives.values())
+
+
+def generate_quasar_sfpu_format_variants(
+    op: Optional[MathOperation],
+    formats_list: List[InputOutputFormat],
+    *,
+    full_format_route_sweep: bool = False,
+) -> List[QuasarSfpuVariant]:
+    """Generate executable Quasar SFPU variants.
+
+    By default, keep one variant for each format combination seen by SFPU and
+    the packer. Set ``full_format_route_sweep=True`` to keep every valid
+    Unpack-to-Dest and FPU-to-Dest path. Typecast keeps each input/output
+    conversion.
+
+    Args:
+        full_format_route_sweep: Include every valid input/output format
+            conversion and data path (Unpack-to-Dest or FPU-to-Dest). When
+            false, keep only one representative for each format seen by SFPU.
     """
-    Generate (format, dest_acc) pairs for Quasar SFPU tests.
+    variants = []
+    for formats in formats_list:
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+            variant = resolve_quasar_sfpu_variant(op, formats, dest_acc)
+            if variant is not None:
+                variants.append(variant)
 
-    `dest_acc` modes are chosen based on the input format:
-    - 32-bit inputs: DestAccumulation.Yes only
-    - MX formats:    DestAccumulation.No only
-    - Otherwise:     both No and Yes
+    if full_format_route_sweep:
+        return variants
 
-    Invalid Quasar combinations (see `is_invalid_quasar_sfpu_format_combination`)
-    are filtered out.
+    # Remove variants that present the same Dest and pack-source formats to SFPU.
+    # For example, with DestAccumulation.Yes, Float32 -> Float16 through
+    # Unpack-to-Dest duplicates Float16 -> Float16 through FPU widening: both
+    # run SFPU on Float32 in Dest and pack from Float32 to Float16.
+    return _deduplicate_quasar_sfpu_operation_variants(variants)
+
+
+def generate_quasar_srcs_format_dest_acc_combinations(
+    formats_list: List[InputOutputFormat],
+) -> List[Tuple[InputOutputFormat, DestAccumulation]]:
+    """UNP_S -> SrcS -> PACK1 combinations.
+
+    16-bit inputs stay 16-bit in SrcS (no fp16 -> TF32 conversion), so
+    16-bit-input -> 32-bit-output is dropped.
     """
-    combinations: List[Tuple[FormatConfig, DestAccumulation]] = []
+    combinations: List[Tuple[InputOutputFormat, DestAccumulation]] = []
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
+
+        if not in_fmt.is_32_bit() and fmt.output_format.is_32_bit():
+            continue
 
         if in_fmt.is_32_bit():
             dest_acc_modes = (DestAccumulation.Yes,)
@@ -441,8 +785,6 @@ def generate_sfpu_format_dest_acc_combinations(
             dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
 
         for dest_acc in dest_acc_modes:
-            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
-                continue
             combinations.append((fmt, dest_acc))
 
     return combinations
@@ -458,6 +800,8 @@ def calculate_edgecase_dest_indices(
     1. The lowest possible dest index is always 0.
     2. When DestSync.Half:  max_dst_tiles=8 (if dest is 16bit) or max_dst_tiles=4 (if dest is 32bit)
     3. When DestSync.Full:  max_dst_tiles=16 (if dest is 16bit) or max_dst_tiles=8 (if dest is 32bit)
+    4. A result that does not fit in dest is processed one full section at a time, which
+       leaves no room for an offset, so 0 is the only index.
 
     Args:
         dest_acc: Dest 16/32 bit mode, has to match is_fp32_dest_acc_en from C++
@@ -470,17 +814,9 @@ def calculate_edgecase_dest_indices(
 
     combinations = []
 
-    capacity_divisor = 2 if dest_acc else 1
-
     for dest_sync in dest_sync_modes:
-        base_tile_limit = DEST_SYNC_TILE_LIMITS[dest_sync]
-        max_tiles = base_tile_limit // capacity_divisor
-        max_index = max_tiles - result_tiles
-
-        if max_index < 0:
-            raise ValueError(
-                f"Too many result tiles ({result_tiles}) for destination capacity ({max_tiles}) with {dest_sync.name}"
-            )
+        # get_max_dst_index clamps dest_index to 0 when result_tiles > dest capacity
+        max_index = get_max_dst_index(dest_sync, dest_acc, result_tiles)
 
         # Add both combinations: lowest possible index = 0 and at max possible index
         # If max_index = 0 add only (dest_sync, 0) to avoid duplicates
@@ -497,7 +833,7 @@ def get_max_dst_index(dest_sync: DestSync, dest_acc: bool, result_tiles: int) ->
     return max(max_tiles - result_tiles, 0)
 
 
-def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half):
+def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shape=None):
     """Generate all possible input dimensions for unary operations.
     These dimensions are determined by the number of tiles that can fit into dest, which is determined by dest_sync and dest_acc.
     The generated input dimensions should ensure that all of the data fits into dest without any overflow when running unary operations.
@@ -517,14 +853,164 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half):
     capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
     max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
 
-    num_tile_rows = 32
-    num_tile_cols = 32
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    num_tile_rows = tile_shape.total_row_dim()
+    num_tile_cols = tile_shape.total_col_dim()
 
     return [
         [row * num_tile_rows, column * num_tile_cols]
         for row in range(1, max_tiles_in_dest + 1)
         for column in range(1, (max_tiles_in_dest // row) + 1)
     ]
+
+
+def generate_reduced_input_dimensions(
+    dest_acc, dest_sync=DestSync.Half, tile_shape=None
+):
+    """Minimal set of input dimensions that cover every distinct dest layout.
+    Returns shapes: a single tile, a full-width row, a full-height column,
+    a balanced grid, an odd tile number example (max_tiles_in_dest - 1), and a multi-section
+    matrix that overflows dest and forces bank switching (three sections:
+    bank 0 → 1 → 0).
+
+    Args:
+        dest_acc: Dest 16/32 bit mode
+        dest_sync: DestSync mode. Defaults to DestSync.Half
+        tile_shape: Tile shape the dimensions are expressed in. Defaults to 32x32.
+
+    Returns:
+        List of representative input dimensions
+    """
+
+    # Three sections walk bank 0 -> bank 1 -> bank 0 under DestSync.Half, so the
+    # wrap back to the first bank is covered and not just the initial switch.
+    num_dest_sections = 3
+
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    num_tile_rows = tile_shape.total_row_dim()
+    num_tile_cols = tile_shape.total_col_dim()
+
+    tile_counts = [
+        (1, 1),
+        (1, max_tiles_in_dest),
+        (max_tiles_in_dest, 1),
+        (2, max_tiles_in_dest // 2),
+        (max_tiles_in_dest - 1, 1),
+        (num_dest_sections * max_tiles_in_dest, 1),
+    ]
+
+    return [
+        [rows * num_tile_rows, columns * num_tile_cols] for rows, columns in tile_counts
+    ]
+
+
+PERF_INPUT_DIMENSIONS = (
+    [256, 32],
+    [32, 256],
+    [512, 32],
+    [32, 512],
+)
+
+# One representative per HW tile MOP class. Intersect with each test's functional
+# tile-size set via ``select_perf_tile_sizes`` instead of pinning a single shape.
+PERF_TILE_SIZES = (
+    (32, 32),  # 4-face standard
+    (16, 16),  # 1-face
+    (32, 16),  # 2-face narrow
+    (1, 32),  # tiny-tile MOP (shared with 2/4/8 x 32)
+)
+
+
+def select_perf_tile_sizes(functional_tile_sizes):
+    """Select MOP-class tile sizes that a functional sweep actually supports.
+
+    Keeps ``PERF_TILE_SIZES`` order. MX / unpack-to-dest filters still apply at
+    the call site; this only intersects with the functional tile-size list.
+    """
+    supported_tile_sizes = {tuple(tile_dims) for tile_dims in functional_tile_sizes}
+    return [
+        tile_dims for tile_dims in PERF_TILE_SIZES if tile_dims in supported_tile_sizes
+    ]
+
+
+def select_perf_input_dimensions(functional_dimensions, *, use_largest_fallback=True):
+    """Select perf matrices from the dimensions supported by a functional test.
+
+    Keep supported target matrices in ``PERF_INPUT_DIMENSIONS`` order. If the
+    functional test supports none of them, optionally keep only its largest
+    matrix. Prefer the taller matrix when multiple supported matrices have the
+    same area.
+    """
+    normalized_dimensions = [list(dimensions) for dimensions in functional_dimensions]
+    supported_dimensions = {tuple(dimensions) for dimensions in normalized_dimensions}
+    selected_dimensions = [
+        dimensions.copy()
+        for dimensions in PERF_INPUT_DIMENSIONS
+        if tuple(dimensions) in supported_dimensions
+    ]
+    if selected_dimensions:
+        return selected_dimensions
+    if not normalized_dimensions or not use_largest_fallback:
+        return []
+
+    return [
+        max(
+            normalized_dimensions,
+            key=lambda dimensions: (
+                dimensions[0] * dimensions[1],
+                dimensions[0],
+            ),
+        )
+    ]
+
+
+def generate_perf_input_dimensions(
+    dest_acc,
+    dest_sync=DestSync.Half,
+    tile_shape=None,
+    *,
+    use_largest_fallback=True,
+):
+    """Dest-full tall and wide matrices, scaled by ``tile_shape``.
+
+    Tile counts are ``(max_tiles, 1)`` and ``(1, max_tiles)`` for the dest
+    capacity of ``dest_sync`` / ``dest_acc``. ``use_largest_fallback`` is kept
+    for call-site compatibility; dest-fill matrices always fit dest.
+    """
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    tile_rows = tile_shape.total_row_dim()
+    tile_cols = tile_shape.total_col_dim()
+
+    dest_fill_tile_counts = ((max_tiles_in_dest, 1), (1, max_tiles_in_dest))
+    dimensions = []
+    seen = set()
+    for rt_dim, ct_dim in dest_fill_tile_counts:
+        matrix = [rt_dim * tile_rows, ct_dim * tile_cols]
+        key = tuple(matrix)
+        if key not in seen:
+            seen.add(key)
+            dimensions.append(matrix)
+
+    if dimensions or not use_largest_fallback:
+        return dimensions
+
+    return select_perf_input_dimensions(
+        generate_unary_input_dimensions(
+            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+        ),
+        use_largest_fallback=True,
+    )
 
 
 def get_num_blocks_and_num_tiles_in_block(
@@ -560,14 +1046,17 @@ def get_num_blocks_and_num_tiles_in_block(
         processed with blocks of the same size. Opposite is possible but not recommended.
     """
 
-    num_rows_tensor, num_cols_tensor = input_dimensions
-    num_rows_tile, num_cols_tile = tile_dimensions
-
     if tile_dimensions is None:
         tile_dimensions = TILE_DIMENSIONS
 
-    is_outlier = is_format_combination_outlier(
-        formats.input_format, formats.output_format, dest_acc
+    num_rows_tensor, num_cols_tensor = input_dimensions
+    num_rows_tile, num_cols_tile = tile_dimensions
+
+    is_outlier = (
+        is_format_combination_outlier(
+            formats.input_format, formats.output_format, dest_acc
+        )
+        and get_chip_architecture() != ChipArchitecture.QUASAR
     )
 
     capacity_divisor = (

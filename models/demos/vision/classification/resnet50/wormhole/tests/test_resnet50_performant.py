@@ -24,6 +24,8 @@ from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet
 def test_run_resnet50_inference(
     device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator, skip_compile_run
 ):
+    if ttnn.get_num_devices() >= 8:
+        pytest.skip("1- and 2-chip ResNet-50 test; the 8-chip variant lives in ttnn_resnet/tests/")
     run_resnet50_inference(
         device,
         batch_size,
@@ -49,6 +51,8 @@ def test_run_resnet50_trace_inference(
     math_fidelity,
     model_location_generator,
 ):
+    if ttnn.get_num_devices() >= 8:
+        pytest.skip("1- and 2-chip ResNet-50 test; the 8-chip variant lives in ttnn_resnet/tests/")
     run_resnet50_trace_inference(
         device,
         batch_size,
@@ -68,6 +72,8 @@ def test_run_resnet50_trace_inference(
 def test_run_resnet50_2cqs_inference(
     device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
 ):
+    if ttnn.get_num_devices() >= 8:
+        pytest.skip("1- and 2-chip ResNet-50 test; the 8-chip variant lives in ttnn_resnet/tests/")
     run_resnet50_2cqs_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator)
 
 
@@ -87,6 +93,8 @@ def test_run_resnet50_trace_2cqs_inference(
     math_fidelity,
     model_location_generator,
 ):
+    if ttnn.get_num_devices() >= 8:
+        pytest.skip("1- and 2-chip ResNet-50 test; the 8-chip variant lives in ttnn_resnet/tests/")
     run_resnet50_trace_2cqs_inference(
         device,
         batch_size,

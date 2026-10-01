@@ -22,27 +22,23 @@ inline void _add_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 {
     static_assert(is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
 
-    // For int32, use '12' if Dest is in sign-magnitude format and '4' for 2's complement,
-    // because TTI_SFPIADD requires 2's complement format in LREGs
-    constexpr int sfpload_instr_mod = SIGN_MAGNITUDE_FORMAT ? INT32_2S_COMP : to_underlying(INSTRUCTION_MODE);
+    // integer add/sub requires 2's complement format in LREGs.
+    constexpr InstrModLoadStore sfpload_instr_mod = SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;
 
-    // Operand A is input1 (int32/uint16/uint32)
-    // Operand B is input2 (int32/uint16/uint32)
-    // Output is int32/uint16/uint32
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
-    // size of each tile in Dest is 64 rows
-    constexpr std::uint32_t dst_tile_size = 64;
+    constexpr sfpi::DataLayout layout = (sfpload_instr_mod == InstrModLoadStore::LO16)            ? sfpi::DataLayout::U16
+                                        : (sfpload_instr_mod == InstrModLoadStore::INT32_2S_COMP) ? sfpi::DataLayout::SM32
+                                                                                                  : sfpi::DataLayout::I32;
+    using vType                       = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        // operand A
-        TT_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
-        // operand B
-        TT_SFPLOAD(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        // LREG_0 -> dest
-        TT_SFPSTORE(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
+        vType a                                                          = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<layout>();
+        vType b                                                          = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<layout>();
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>() = a + b;
         sfpi::dst_reg++;
     }
 }

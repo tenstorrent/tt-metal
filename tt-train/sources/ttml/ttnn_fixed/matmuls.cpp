@@ -7,12 +7,12 @@
 #include "core/compute_kernel_config.hpp"
 
 namespace ttml::ttnn_fixed {
-tt::tt_metal::Tensor matmul(
-    const tt::tt_metal::Tensor& a,
-    const tt::tt_metal::Tensor& b,
+ttnn::Tensor matmul(
+    const ttnn::Tensor& a,
+    const ttnn::Tensor& b,
     bool transpose_a,
     bool transpose_b,
-    std::optional<tt::tt_metal::Tensor> output_tensor) {
+    std::optional<ttnn::Tensor> output_tensor) {
     const auto grid_size = a.device()->compute_with_storage_grid_size();
     auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
 
@@ -32,12 +32,8 @@ tt::tt_metal::Tensor matmul(
         /* optional_output_tensor */ std::move(output_tensor));
 }
 
-std::pair<tt::tt_metal::Tensor, tt::tt_metal::Tensor> matmul_backward(
-    const tt::tt_metal::Tensor& a,
-    const tt::tt_metal::Tensor& b,
-    const tt::tt_metal::Tensor& out_grad,
-    bool transpose_a,
-    bool transpose_b) {
+std::pair<ttnn::Tensor, ttnn::Tensor> matmul_backward(
+    const ttnn::Tensor& a, const ttnn::Tensor& b, const ttnn::Tensor& out_grad, bool transpose_a, bool transpose_b) {
     auto a_shape = a.logical_shape();
     auto b_shape = b.logical_shape();
     auto grad_shape = out_grad.logical_shape();
@@ -55,27 +51,28 @@ std::pair<tt::tt_metal::Tensor, tt::tt_metal::Tensor> matmul_backward(
         // A was used as is.
         // grad_A = reshaped_grad * ( (transpose_b ? B^T : B) )^T.
         // If transpose_b is false: (B)^T = B^T, if true: (B^T)^T = B.
-        reshaped_a_grad = matmul(reshaped_grad, b, false, !transpose_b);
+        reshaped_a_grad = ttnn_fixed::matmul(reshaped_grad, b, false, !transpose_b);
     } else {
         // A was transposed in the forward pass (i.e. we used A^T).
         // Compute dA_eff = reshaped_grad * ( (transpose_b ? B^T : B) )^T.
         // Then grad_A = (dA_eff)^T = ( (transpose_b ? B^T : B) ) * reshaped_grad^T.
         if (!transpose_b)
-            reshaped_a_grad = matmul(b, reshaped_grad, false, true);  // B as is, reshaped_grad transposed.
+            reshaped_a_grad = ttnn_fixed::matmul(b, reshaped_grad, false, true);  // B as is, reshaped_grad transposed.
         else
-            reshaped_a_grad = matmul(b, reshaped_grad, true, true);  // B transposed, reshaped_grad transposed.
+            reshaped_a_grad =
+                ttnn_fixed::matmul(b, reshaped_grad, true, true);  // B transposed, reshaped_grad transposed.
     }
 
     if (!transpose_b) {
         // B was used as is.
         // grad_B = ( (transpose_a ? A^T : A) )^T * d_out.
         // If transpose_a is false: (A)^T = A^T, if true: (A^T)^T = A.
-        reshaped_b_grad = matmul(reshaped_a, reshaped_grad, !transpose_a, false);
+        reshaped_b_grad = ttnn_fixed::matmul(reshaped_a, reshaped_grad, !transpose_a, false);
     } else {
         // B was transposed in the forward pass (i.e. we used B^T).
         // Compute dB_eff = ( (transpose_a ? A^T : A) )^T * d_out,
         // then grad_B = (dB_eff)^T = d_out^T * (transpose_a ? A^T : A).
-        reshaped_b_grad = matmul(reshaped_grad, reshaped_a, true, transpose_a);
+        reshaped_b_grad = ttnn_fixed::matmul(reshaped_grad, reshaped_a, true, transpose_a);
     }
     auto a_grad = ttnn::reshape(reshaped_a_grad, a_shape);
     auto b_grad = ttnn::reshape(reshaped_b_grad, b_shape);

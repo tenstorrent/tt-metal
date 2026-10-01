@@ -18,9 +18,11 @@ The current classification addresses both models and target systems. As such, th
 | Unit Tests | All required modules | All required modules | Most critical module only |
 | Sweep Tests | Comprehensive | Reduced | — |
 | Device OP Perf Tests | Yes | — | — |
-| vLLM Integration Tests | Yes | Yes | — |
+| vLLM Model Tests | Yes | Yes | Select&nbsp;models* |
 | PR/Merge Gate Tests | Yes | — | — |
 | Stress Tests | Yes | — | — |
+
+\* vLLM Model Tests run as a **single pipeline** covering a curated set of models across all tiers at one cadence (see [vLLM Model Tests](#vllm-model-tests)). The tier shown per model there mirrors its End-to-End/Unit tier and does **not** gate execution — so a few Tier 3 models (e.g. Gemma-4-E2B) are included too.
 
 ## Tier 1 — Full Coverage
 Tier 1 models receive the highest priority for developer time and bug fixing. They run the full CI test suite on a frequent schedule, including comprehensive sweeps, per-OP device performance tracking, commit-level gate tests, and multi-hour stress runs.
@@ -34,57 +36,126 @@ Tier 3 models are compatible with the latest TT-Metal releases but are not optim
 
 # Current Model Assignments
 
+## Agentic Research Models
+
+These models use the [weekly Agentic Research pipeline](#agentic-research-model-tests).
+
+| Model implementation | System | Tier | Weekly coverage |
+|----------------------|--------|------|-----------------|
+| Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
+| Gemma4 31B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC, trace and API tests; GPQA 10/198 subset; fixed-length serving performance |
+| Qwen3.8-27B QB2 TP4 | BH QuietBox 2 | 3 | Full decoder serving; linear-attention convolution PCC; GPQA 10/198 subset; API and fixed-length performance |
+
+## Daily Model Pipelines
+
 The initial release of the 3-tier model CI includes models owned by the models-team. We plan to onboard the remaining models incrementally to reduce CI load. The current list of models and systems in the new pipelines can be seen below.
 
+
+The Systems column is the union of systems across the End-to-End, Unit, and Sweep
+configs for that model at that tier. A model may appear in more than one tier when
+it is classified differently on different systems.
 
 ## Tier 1 Models
 | Model | Systems |
 |-------|---------|
-| Llama3.3-70B | WH Galaxy, BH Galaxy |
+| Llama3.1-8B | WH N150, BH P150 |
+| Llama3.1-8B-DP | WH Galaxy |
+| Llama3.3-70B | WH Galaxy |
 | Qwen3-32B | WH Galaxy, BH Galaxy |
-| Deepseek | WH Galaxy |
-| GPT-OSS | WH Galaxy |
-| llama3.1-8B | N150, P150 |
-| Whisper | N150, P150 |
+| Qwen3.6-27B | BH QuietBox 2 |
+| Qwen3.6-35B-A3B | BH QuietBox 2 |
+| GPT-OSS 120B | WH LLMBox, WH Galaxy, BH QuietBox 2, BH Galaxy |
+| MiniMax-M3 | BH P150, BH Galaxy |
+| Gemma-4-12B | BH QuietBox 2 |
+| Gemma-4-26B-A4B | BH QuietBox 2 |
+| Gemma-4-31B | BH QuietBox 2 |
+| LTX-2.3 | BH SC1 |
+| Whisper | WH N150, BH P150 |
+| Flux.1-schnell | BH QuietBox 2 |
+| Flux.1-dev | BH QuietBox 2, BH Single Galaxy |
+| Flux.2-dev | BH QuietBox 2, BH Single Galaxy |
+| Wan2.2-T2V-A14B | WH Galaxy, BH QuietBox 2, BH SC1, BH SC4 |
+| Wan2.2-I2V-A14B | WH Galaxy, BH SC1, BH SC4 |
+| Z-Image-Turbo | BH QuietBox 2 |
+| TT-DiT (shared) | WH N150, BH QuietBox 2 |
+| TT-DiT encoders (shared) | WH LLMBox |
+| TT-Transformers (shared) | WH LLMBox |
+| ResNet-50 | WH N150, WH LLMBox, BH P150b |
 ## Tier 2 Models
 | Model | Systems |
 |-------|---------|
-| GPT-OSS 120B batch=1 | WH Galaxy |
-| GPT-OSS 20B | WH LoudBox |
-| Llama70B (TTT) | WH/BH LoudBox |
-| Qwen3-32B (TTT) | WH/BH LoudBox |
-| Qwen2.5 32B (TTT) | WH LoudBox |
-| Qwen2.5-Coder-32B (TTT) | WH LoudBox |
-| llama90B-VL | WH LoudBox |
-| Qwen2.5-72B-VL | WH LoudBox |
-| Shallow-UNet | N150, N300, WH LoudBox |
-| Mistral-7B | N150 |
-| Mixtral 8x7B | WH LoudBox |
-| Gemma-3-4B | N150 |
-| Gemma-3-27B | WH LoudBox |
-| Gemma-4-E2B | N150 |
-| Gemma-4-E4B | N150 |
-| Gemma-4-26B-A4B | WH LoudBox |
-| Gemma-4-31B | WH LoudBox |
+| GPT-OSS 20B | WH LLMBox, BH P150, BH QuietBox 2 |
+| GPT-OSS 120B | BH P150 |
+| Llama3.1-8B | WH LLMBox, BH QuietBox 2 |
+| Llama3.1-8B-DP | WH LLMBox, BH P300, BH QuietBox 2 |
+| Llama3.3-70B | WH LLMBox, BH QuietBox 2 |
+| Llama3.2-90B-Vision | WH LLMBox |
+| Qwen3-32B | WH LLMBox, BH QuietBox 2 |
+| Qwen2.5-32B | WH LLMBox, BH QuietBox 2 |
+| Qwen2.5-Coder-32B | WH LLMBox, BH QuietBox 2 |
+| Qwen2.5-VL-72B | WH LLMBox, BH QuietBox 2 |
+| Qwen3-VL-32B | WH LLMBox |
+| Shallow-UNet | WH N150, WH LLMBox, BH P150 |
+| Mistral-7B | WH N150 |
+| Mixtral-8x7B | WH LLMBox |
+| Gemma-3-4B | WH N150, BH P150 |
+| Gemma-3-27B | WH LLMBox |
+| Gemma-4-26B-A4B | WH LLMBox |
+| Gemma-4-31B | WH LLMBox |
+| Stable Diffusion XL | WH N150, WH N300, BH P150 |
+| ViT | WH N150, WH N300 |
+| Motif-Image-6B | WH LLMBox |
+| BGE-M3 | WH N150 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
-| Falcon-7B | N150 |
-| Falcon-40B | WH LoudBox |
-| Mamba | N150 |
-| Llama 1B | N150 |
-| Llama 3B | N150 |
-| Llama 11B-VL | WH LoudBox |
-| QwQ-32B | WH LoudBox |
-| Qwen 2.5-7B | N150, N300 |
-| Qwen 2.5-72B | WH LoudBox |
-| Qwen2.5-VL-32B | WH LoudBox |
-| Phi-3 | N150 |
+| Falcon-7B | WH N150 |
+| Falcon-40B | WH LLMBox |
+| Gemma-2-2B | WH N150, WH N300 |
+| Gemma-2-9B | WH N300 |
+| Llama3.2-1B | WH N150 |
+| Llama3.2-3B | WH N150 |
+| Llama3.2-11B-Vision | WH LLMBox |
+| QwQ-32B | WH LLMBox |
+| Qwen2.5-7B | WH N300 |
+| Qwen2.5-72B | WH LLMBox |
+| Qwen2.5-VL-32B | WH LLMBox, BH QuietBox 2 |
+| Qwen3-0.6B | WH N150, BH P150 |
+| Qwen3-1.7B | WH N150, BH P150 |
+| Gemma-4-E2B | WH N150, BH P150 |
+| PaddleOCR-VL-1.6 | BH P150 |
+| Gemma-4-E4B | BH P300, BH QuietBox 2 |
+| Mamba-2.8B | WH N150 |
+| Phi-3-mini | WH N150 |
+| Janus-Pro-7B | BH P150 |
+| HunyuanImage-3.0 | BH QuietBox 2 |
+| Panoptic-DeepLab | BH P150 |
+| BEVFormer | BH P150 |
+| DiffusionDrive | WH N300 |
+| Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
+| Stable Diffusion 3.5 Large | WH LLMBox |
+| Mochi-1-preview | WH LLMBox, WH Galaxy |
+| XTTS-v2 | BH P150 |
+| VGGNet | WH N150 |
+| BERT-Tiny | WH N150 |
+| BERT-Large | WH N150 |
+| ModernBERT-base | WH N300 |
+| DistilBERT | WH N150 |
+| SqueezeBERT | WH N150 |
+| MNIST MLP classifier | WH N150 |
+| EfficientDet-D0 | WH N150 |
+| MobileNetV3 | WH N150 |
+| RetinaNet | WH N150 |
+| SSD512 | WH N150 |
+| VAD v2 | WH N150 |
+| OpenPDN-MNIST | WH N150 |
+| YuNet | WH N150 |
+| VibeVoice-1.5B | BH P150 |
 
 
 # Pipelines
 
-Each test type has a per-tier GitHub Actions workflow and a shared configuration file. The workflows are separated by tier to allow independent scheduling, but the test definitions live in a single config YAML per pipeline.
+End-to-End, Unit, and Sweep tests have per-tier GitHub Actions workflows and a shared configuration file for each test type. vLLM Model Tests and Agentic Research Model Tests each use one workflow for all registered tiers.
 
 ## End-to-End Tests
 
@@ -131,16 +202,126 @@ Captures device timing for a single layer of each target model, used to track pe
 
 > **TODO:** Add pipeline links once merged to main.
 
+## vLLM Model Tests
+
+End-to-end serving tests that stand up a vLLM server for each model and exercise the
+tt-metal backend through the OpenAI-compatible API. Unlike the pipelines above, this
+is **not** split by tier — every entry runs together as a single pipeline at one
+nightly cadence, since the curated model set is small enough that per-tier scheduling
+would be overkill. Each entry still carries a `tier` value for classification, mirroring
+the model's End-to-End/Unit tier.
+
+Per entry the pipeline runs a throughput/latency benchmark and, where enabled, a
+coherence guard (verbatim echo), structured-output benchmark, multimodal image test,
+and the sampling-parameter test suite. A fast `validate-filters` pre-check fails in
+seconds (before the build) if a manually-selected model/SKU/tier combination matches
+no test, printing the valid combinations.
+
+| Item | Workflow |
+|------|----------|
+| Pipeline | [`vLLM Model Tests`](../.github/workflows/vllm-model-tests.yaml) |
+| Impl | [`[internal] vLLM Model tests impl`](../.github/workflows/vllm-model-tests-impl.yaml) |
+| Config | [`vllm_model_tests.yaml`](../tests/pipeline_reorg/vllm_model_tests.yaml) |
+
+Models covered (system · classification tier):
+
+| Model | Systems | Tier |
+|-------|---------|------|
+| Llama3.1-8B | WH Galaxy | 1 |
+| Llama3.1-8B | WH LLMBox, BH QuietBox 2, BH LoudBox | 2 |
+| Llama3.3-70B | WH Galaxy | 1 |
+| Qwen3-32B | WH Galaxy | 1 |
+| Qwen3.6-27B | BH QuietBox 2 | 1 |
+| Qwen2.5-VL-72B | WH LLMBox | 2 |
+| Qwen3-VL-32B | WH LLMBox | 2 |
+| GPT-OSS 120B | WH Galaxy | 1 |
+| Gemma-3-27B | WH LLMBox, WH Galaxy | 2 |
+| Gemma-4-12B | BH QuietBox 2 | 1 |
+| Gemma-4-26B-A4B | BH QuietBox 2 | 1 |
+| Gemma-4-31B | BH QuietBox 2 | 1 |
+| Gemma-4-31B | WH LLMBox | 2 |
+| Gemma-4-E2B | WH N150 | 3 |
+| NoOp (vLLM overhead) | WH Galaxy | 1 |
+
+## Agentic Research Model Tests
+
+This pipeline tests models brought up through agentic research. It runs every
+**Saturday at 07:00 UTC**. All registered tiers run on that schedule. Each model
+and hardware pair has its own tier, test coverage, and time budget.
+
+| Item | File |
+|------|------|
+| Workflow | [Agentic Research Model Tests](../.github/workflows/agentic-research-model-tests.yaml) |
+| Test commands | [agentic_research_model_tests.yaml](../tests/pipeline_reorg/agentic_research_model_tests.yaml) |
+| Time budgets | [time_budget.yaml](../.github/time_budget.yaml) |
+| Shared runner | [models-e2e-tests-impl.yaml](../.github/workflows/models-e2e-tests-impl.yaml) |
+
+Each test entry contains a `cmd`, either as an inline block or as a model-owned
+runner under its demo directory. Keep the complete procedure in one of those
+locations so reviewers can inspect it and developers can run the same command
+locally with the required hardware and model weights.
+
+Before each single-host model test, **Check device readiness (tt-check)** installs
+the latest tt-check release and runs `tt-check --json` with the installed TTNN
+build. It resets the assigned devices and prints the full JSON output in the CI
+log, also saved to `generated/test_logs/tt-check.log`. A failed check stops the
+model test. This step has a separate five-minute timeout. Its replay timings include device work,
+communications, readback, and CPU validation.
+
+For a manual run, select **Run workflow** in GitHub Actions. Choose `model`, `sku`,
+and `tier`, or leave them at `all`. Use `vllm-tt-plugin-ref` to select a plugin
+branch or tag. Both manual and scheduled runs default to `main`. A selection with no matching tests fails before the build starts. The
+Saturday schedule becomes active after the workflow is merged to the default branch.
+
+Gemma4 31B QB2 uses Tier 3. Its weekly command runs two real-weight decoder comparisons (full and sliding
+attention), twelve client/adapter checks, five representative API checks,
+**10 of 198 GPQA Diamond questions**
+(seed 42, 32768 output tokens), and fixed-length 128-input/128-output performance on separate
+one-slot and 32-slot servers. The default benchmark also offers 1024-token inputs; weekly CI selects
+the shorter shapes to fit the existing timeout. Performance records label server capacity independently of request concurrency. The subset
+and smaller output budget bound CI runtime; they do not reproduce the separately
+reported full-dataset benchmark. The command saves actual request counts, raw
+responses, scoring inputs and timing definitions.
+
+To add a model:
+
+1. Add its command, model identifier, owner, and team to the test YAML.
+2. For each SKU, set `tier` and `timeout` in minutes.
+3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
+   `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
+   the budget. The QB2 Tier 3 budget is:
+
+   - **Llama3.1-8B:** 12 minutes
+   - **Gemma4 31B:** 40 minutes
+   - **Qwen3.8-27B:** 50 minutes
+   - **Total:** 12 + 40 + 50 = 102 minutes
+
+   The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
+   passed all 24 model tests and completed 54 of 56 serving requests before its
+   timeout; the budget includes room for completion and runner variance.
+
+   Gemma allows up to 20 minutes for each server startup within its total allowance;
+   periodic metadata snapshots distinguish slow loading from stopped progress.
+   Gemma's allowance covers the measured 15½-minute CI setup/checks, about 5½ minutes
+   for GPQA, the remaining performance/reporting work, and runner variance.
+
+   Qwen's allowance covers model tests, three server startups, GPQA, API checks,
+   and fixed-length performance. Measured CI runs completed in 42–44 minutes,
+   leaving 6–8 minutes for runner variance.
+
+4. Add any new model or SKU to the workflow's manual choices. Add the required
+   targets to [model_targets.yaml](model_targets.yaml).
+
+The shared runner collects test reports and benchmark data, then checks the
+central targets. Tier 3 requires accuracy targets. Its `perf` field can be
+omitted or set to `{}`; measured performance is still reported.
+
 ## Other Pipelines
 
 > **TODO:** Expand descriptions for the pipelines below.
 
 | Pipeline | Workflow |
 |----------|----------|
-| Models post-commit | [`[internal] models tests impl`](../.github/workflows/models-post-commit.yaml) |
 | PR Gate | [`PR Gate`](../.github/workflows/pr-gate.yaml) |
 | Merge Gate | [`Merge Gate`](../.github/workflows/merge-gate.yaml) |
-| vLLM nightly tests | [`vLLM nightly tests`](../.github/workflows/vllm-nightly-tests.yaml) |
-| vLLM nightly impl | [`[internal] vLLM nightly tests impl`](../.github/workflows/vllm-nightly-tests-impl.yaml) |
 | Galaxy stress tests | [`(Galaxy) Stress`](../.github/workflows/galaxy-stress-tests.yaml) |
-| TTNN stress tests | [`ttnn stress tests`](../.github/workflows/ttnn-stress-tests.yaml) |

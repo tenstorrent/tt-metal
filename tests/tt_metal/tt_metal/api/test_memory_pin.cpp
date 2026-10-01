@@ -5,14 +5,18 @@
 #include <gmock/gmock.h>
 
 #include <functional>
+#include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/memory_pin.hpp>
+#include "common/memory_pin_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
 
-TEST(MemoryPinTest, Lifecycle) {
+TEST(MemoryPinTest, CPU_Lifecycle) {
     int inc_count = 0;
     int dec_count = 0;
     {
@@ -24,7 +28,7 @@ TEST(MemoryPinTest, Lifecycle) {
     EXPECT_EQ(dec_count, 1);
 }
 
-TEST(MemoryPinTest, EmptyPin) {
+TEST(MemoryPinTest, CPU_EmptyPin) {
     {
         MemoryPin pin;
         EXPECT_EQ(pin, nullptr);
@@ -38,7 +42,7 @@ TEST(MemoryPinTest, EmptyPin) {
     }
 }
 
-TEST(MemoryPinTest, FromSharedPtr) {
+TEST(MemoryPinTest, CPU_FromSharedPtr) {
     auto ptr = std::make_shared<int>(42);
     MemoryPin pin(ptr);
 
@@ -52,7 +56,22 @@ TEST(MemoryPinTest, FromSharedPtr) {
     EXPECT_EQ(ptr.use_count(), 2);
 }
 
-TEST(MemoryPinTest, CopyConstruction) {
+TEST(MemoryPinTest, CPU_FinalReleaseCallbackRunsBeforeLastDecrement) {
+    std::vector<std::string> events;
+    {
+        MemoryPin pin([]() {}, [&events]() { events.push_back("decrement"); });
+        pin.impl().add_final_release_callback([&events]() { events.push_back("final_release"); });
+
+        {
+            MemoryPin pin_copy(pin);
+        }
+        EXPECT_THAT(events, ::testing::ElementsAre("decrement"));
+    }
+
+    EXPECT_THAT(events, ::testing::ElementsAre("decrement", "final_release", "decrement"));
+}
+
+TEST(MemoryPinTest, CPU_CopyConstruction) {
     int inc_count = 0;
     int dec_count = 0;
     MemoryPin pin1([&]() { inc_count++; }, [&]() { dec_count++; });
@@ -67,7 +86,7 @@ TEST(MemoryPinTest, CopyConstruction) {
     EXPECT_EQ(dec_count, 1);
 }
 
-TEST(MemoryPinTest, CopyAssignment) {
+TEST(MemoryPinTest, CPU_CopyAssignment) {
     int inc_count1 = 0;
     int dec_count1 = 0;
     int inc_count2 = 0;
@@ -94,7 +113,7 @@ TEST(MemoryPinTest, CopyAssignment) {
     EXPECT_EQ(dec_count2, 1);
 }
 
-TEST(MemoryPinTest, CopyAssignmentToEmpty) {
+TEST(MemoryPinTest, CPU_CopyAssignmentToEmpty) {
     int inc_count = 0;
     int dec_count = 0;
     MemoryPin pin1([&]() { inc_count++; }, [&]() { dec_count++; });
@@ -111,7 +130,7 @@ TEST(MemoryPinTest, CopyAssignmentToEmpty) {
     EXPECT_EQ(dec_count, 1);
 }
 
-TEST(MemoryPinTest, MoveConstruction) {
+TEST(MemoryPinTest, CPU_MoveConstruction) {
     int inc_count = 0;
     int dec_count = 0;
     MemoryPin pin1([&]() { inc_count++; }, [&]() { dec_count++; });
@@ -129,7 +148,7 @@ TEST(MemoryPinTest, MoveConstruction) {
     EXPECT_EQ(dec_count, 1);
 }
 
-TEST(MemoryPinTest, MoveAssignment) {
+TEST(MemoryPinTest, CPU_MoveAssignment) {
     int inc_count1 = 0;
     int dec_count1 = 0;
     int inc_count2 = 0;
@@ -158,7 +177,7 @@ TEST(MemoryPinTest, MoveAssignment) {
     EXPECT_EQ(dec_count2, 1);
 }
 
-TEST(MemoryPinTest, MoveAssignmentToEmpty) {
+TEST(MemoryPinTest, CPU_MoveAssignmentToEmpty) {
     int inc_count = 0;
     int dec_count = 0;
     MemoryPin pin1([&]() { inc_count++; }, [&]() { dec_count++; });

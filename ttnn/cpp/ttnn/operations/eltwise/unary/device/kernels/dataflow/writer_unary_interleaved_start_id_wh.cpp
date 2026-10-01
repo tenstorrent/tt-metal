@@ -3,30 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t single_block_size_row_arg = get_arg_val<uint32_t>(2);
-    uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(3);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t single_block_size_row_arg = get_arg(args::single_block_size_row_arg);
+    uint32_t single_block_size_col_arg = get_arg(args::single_block_size_col_arg);
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t num_tiles_per_2d = get_compile_time_arg_val(1);
-    constexpr uint32_t third_dim = get_compile_time_arg_val(2);
-    constexpr uint32_t total_tiles_per_row = get_compile_time_arg_val(3);
-    constexpr auto dst_args = TensorAccessorArgs<4>();
+    constexpr auto num_tiles_per_2d = get_arg(args::num_tiles_per_2d);
+    constexpr auto third_dim = get_arg(args::third_dim);
+    constexpr auto total_tiles_per_row = get_arg(args::total_tiles_per_row);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id_out);
+    Noc noc;
+    DataflowBuffer dfb(dfb::out);
+
+    // Tile size comes off the DFB object (its entry size), not a free function keyed by buffer id.
+    const uint32_t tile_bytes = dfb.get_tile_size();
 
 #ifdef BACKWARDS
     for (uint32_t dim = 0; dim > -third_dim; dim--) {
@@ -39,10 +39,10 @@ void kernel_main() {
             for (uint32_t r = 0; r < single_block_size_row_arg; r++) {
                 uint32_t tile = start_id + dim * num_tiles_per_2d + c * total_tiles_per_row + r;
 #endif
-                cb.wait_front(onetile);
-                noc.async_write(cb, s, tile_bytes, {}, {.page_id = tile});
+                dfb.wait_front(onetile);
+                noc.async_write(dfb, s, tile_bytes, {}, {.page_id = tile});
                 noc.async_writes_flushed();
-                cb.pop_front(onetile);
+                dfb.pop_front(onetile);
             }
         }
     }

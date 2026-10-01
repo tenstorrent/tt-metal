@@ -5,9 +5,9 @@
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
@@ -31,16 +31,17 @@ void kernel_main() {
     constexpr uint32_t cb_intermed2 = tt::CBIndex::c_4;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_5;
 
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
-    experimental::CircularBuffer cb_in1_obj(cb_in1);
-    experimental::CircularBuffer cb_intermed0_obj(cb_intermed0);
-    experimental::CircularBuffer cb_intermed1_obj(cb_intermed1);
-    experimental::CircularBuffer cb_intermed2_obj(cb_intermed2);
-    experimental::CircularBuffer cb_out_obj(out_cb_id);
+    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in1_obj(cb_in1);
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
+    CircularBuffer cb_intermed1_obj(cb_intermed1);
+    CircularBuffer cb_intermed2_obj(cb_intermed2);
+    CircularBuffer cb_out_obj(out_cb_id);
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_intermed0);
+    matmul_init(cb_in0, cb_in1, transpose_hw);
 
     for (uint32_t nb = 0; nb < batch; ++nb) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
@@ -75,7 +76,8 @@ void kernel_main() {
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
 
-                    mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+                    reconfig_data_format_srca(cb_intermed0, cb_in1);
+                    matmul_init(cb_in0, cb_in1, transpose_hw);
                 }
                 cb_in0_obj.pop_front(Kt);
 
@@ -84,7 +86,8 @@ void kernel_main() {
                 compute_kernel_lib::tilize<onetile, cb_intermed2, out_cb_id>(1);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
-                mm_block_init_short_with_both_dt(cb_in0, cb_in1, cb_intermed2, cb_intermed2, transpose_hw);
+                reconfig_data_format(cb_intermed2, cb_in1, cb_intermed2, cb_in0);
+                matmul_block_init(cb_in0, cb_in1, transpose_hw);
             }
         }
     }

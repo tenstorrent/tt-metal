@@ -19,6 +19,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     create_ttnn_model,
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    bf16_conv_via_fp32,
     skip_if_not_blackhole_110_cores,
     skip_if_not_blackhole_20_cores,
 )
@@ -40,8 +41,8 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
         (
             PANOPTIC_DEEPLAB,
             {
-                "semantic": {"pcc": 0.983, "abs_err": 1.7, "rel_err": 0.4},
-                "center": {"pcc": 0.95, "abs_err": 0.1, "rel_err": 2.1},
+                "semantic": {"pcc": 0.985, "abs_err": 1.7, "rel_err": 0.4},
+                "center": {"pcc": 0.948, "abs_err": 0.1, "rel_err": 2.1},
                 "offset": {"pcc": 0.992, "abs_err": 8.5, "rel_err": 0.5},
             },
             skip_if_not_blackhole_110_cores,
@@ -56,7 +57,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
         (
             DEEPLAB_V3_PLUS,
             {
-                "semantic": {"pcc": 0.983, "abs_err": 1.7, "rel_err": 0.4},
+                "semantic": {"pcc": 0.985, "abs_err": 1.7, "rel_err": 0.4},
             },
             skip_if_not_blackhole_110_cores,
         ),
@@ -138,7 +139,7 @@ def test_model_panoptic_deeplab(device, model_category, pcc_values, skip_check, 
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
     logger.info("Running PyTorch model...")
-    with torch.no_grad():
+    with torch.no_grad(), bf16_conv_via_fp32():
         pytorch_semantic, pytorch_center, pytorch_offset, _ = pytorch_model.forward(pytorch_input)
 
     logger.info("Running TTNN model with fused Conv+BatchNorm parameters...")

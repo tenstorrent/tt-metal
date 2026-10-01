@@ -5,77 +5,90 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <tuple>
+#include <variant>
 
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_metal {
 
 class Buffer;
+class Program;
 class IDevice;
+
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
 
 namespace experimental {
 
+class GlobalCircularBufferImpl;
+
+// Forward declarations for the experimental DRAM-sender extension defined in
+// tt-metalium/experimental/global_circular_buffer.hpp. The DRAM-sender feature is an
+// opt-in mode that is not part of the public GlobalCircularBuffer API surface; existing
+// callers continue to see the original public interface unchanged.
+class GlobalCircularBuffer;
+enum class SenderCoreType : uint8_t;
+namespace global_circular_buffer_dram_sender {
+struct GlobalCircularBufferDramSenderInternals;
+}  // namespace global_circular_buffer_dram_sender
+
 class GlobalCircularBuffer {
 public:
+    explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
+
     GlobalCircularBuffer(
-        IDevice* device,
+        distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type = BufferType::L1);
 
-    GlobalCircularBuffer(const GlobalCircularBuffer&) = default;
-    GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = default;
-
-    GlobalCircularBuffer(GlobalCircularBuffer&&) noexcept = default;
-    GlobalCircularBuffer& operator=(GlobalCircularBuffer&&) noexcept = default;
+    GlobalCircularBuffer(const GlobalCircularBuffer& other);
+    GlobalCircularBuffer& operator=(const GlobalCircularBuffer& other);
+    GlobalCircularBuffer(GlobalCircularBuffer&& other) noexcept;
+    GlobalCircularBuffer& operator=(GlobalCircularBuffer&& other) noexcept;
+    ~GlobalCircularBuffer();
 
     const Buffer& cb_buffer() const;
 
     const CoreRangeSet& sender_cores() const;
     const CoreRangeSet& receiver_cores() const;
-    const CoreRangeSet& all_cores() const;
     DeviceAddr buffer_address() const;
     DeviceAddr config_address() const;
     uint32_t size() const;
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;
-    IDevice* get_device() const { return this->device_; }
 
+    // Reflection / hashing hooks used by ttnn device-op attribute machinery.
     static constexpr auto attribute_names =
         std::forward_as_tuple("sender_receiver_core_mapping", "size", "buffer_type");
-    auto attribute_values() const {
-        return std::make_tuple(
-            this->sender_receiver_core_mapping_, this->size_, cb_buffer_.get_buffer()->buffer_type());
-    }
+    std::tuple<std::vector<std::pair<CoreCoord, CoreRangeSet>>, uint32_t, BufferType> attribute_values() const;
+
+    GlobalCircularBufferImpl& impl();
+    const GlobalCircularBufferImpl& impl() const;
 
 private:
-    void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
+    std::unique_ptr<GlobalCircularBufferImpl> impl_;
 
-    // GlobalCircularBuffer is implemented as a wrapper around a sharded buffer
-    // This can be updated in the future to be its own container with optimized dispatch functions
-    distributed::AnyBuffer cb_buffer_;
-    distributed::AnyBuffer cb_config_buffer_;
-    IDevice* device_;
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping_;
-    CoreRangeSet sender_cores_;
-    CoreRangeSet receiver_cores_;
-    CoreRangeSet all_cores_;
-    uint32_t size_ = 0;
+    friend struct global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals;
 };
 
 /**
  * @brief Allocates a global circular buffer in L1 on the device.
  *
- * @param device The device to create the global circular buffer on.
+ * @param device Mesh device to create the global circular buffer on.
  * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular buffer.
  * @param size Size of the global circular buffer per core in bytes.
- * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.\
+ * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
  * @return The allocated global circular buffer.
  */
 GlobalCircularBuffer CreateGlobalCircularBuffer(
-    IDevice* device,
+    distributed::MeshDevice& device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type = BufferType::L1);

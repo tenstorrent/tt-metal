@@ -49,8 +49,11 @@ class TopKRouter:
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
         self.hidden_dim = hf_config.hidden_size
+        self.tensor_cache_path = tensor_cache_path
+        torch_weight = state_dict["weight"].transpose(0, 1) if state_dict else None
+        torch_bias = state_dict["bias"].unsqueeze(0) if state_dict else None
         self.weight = ttnn.as_tensor(
-            state_dict["weight"].transpose(0, 1),
+            torch_weight,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
@@ -58,7 +61,7 @@ class TopKRouter:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.bias = ttnn.as_tensor(
-            state_dict["bias"].unsqueeze(0),
+            torch_bias,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
@@ -81,13 +84,15 @@ class TopKRouter:
 
         # Fused op support: matmul + topk + softmax in one kernel
         # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
-        # each), so it requires exactly 128 experts. Enable automatically when possible.
-        self.use_fused_op = self.num_experts == 128
+        # each), so it requires exactly 128 experts and 12 DRAM-aligned cores.
+        # Blackhole has only 8 DRAM banks; use the generic router on that architecture.
+        # Issue for native 8 bank BH support: https://github.com/tenstorrent/tt-metal/issues/57186
+        self.use_fused_op = self.num_experts == 128 and not ttnn.device.is_blackhole(mesh_device)
         self._fused_bias = None
         # Keep the original unsharded bias for fused op initialization
         # (ttnn.as_tensor shards self.bias across the mesh, but the fused op
         # needs the full [1, num_experts] bias replicated on every device)
-        if self.use_fused_op:
+        if self.use_fused_op and state_dict:
             self._bias_torch = state_dict["bias"].unsqueeze(0).to(torch.bfloat16)
         else:
             self._bias_torch = None
@@ -97,16 +102,20 @@ class TopKRouter:
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
 
         if self._fused_bias is None:
-            # Use the original unsharded bias (self._bias_torch is [1, num_experts])
-            # and broadcast to [B, num_experts] so every tile row has the bias vector.
-            bias_bcast = self._bias_torch.expand(B, -1).contiguous()
-            self._fused_bias = ttnn.from_torch(
+            if self._bias_torch is not None:
+                # Use the original unsharded bias (self._bias_torch is [1, num_experts])
+                # and broadcast to [B, num_experts] so every tile row has the bias vector.
+                bias_bcast = self._bias_torch.expand(B, -1).contiguous()
+            else:
+                bias_bcast = None
+            self._fused_bias = ttnn.as_tensor(
                 bias_bcast,
                 dtype=ttnn.bfloat16,
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mesh_mapper,
+                cache_file_name=get_cache_file_name(self.tensor_cache_path, f"fused_bias_B{B}"),
             )
 
     def __call__(self, hidden_states, use_throughput_experts):

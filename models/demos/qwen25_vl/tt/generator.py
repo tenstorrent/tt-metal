@@ -6,12 +6,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
-class Generator(WarmupForwardMixin):
+class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a Qwen2_5_Vision wrapper requires only a mesh_device and model_args.
@@ -93,6 +94,18 @@ class Generator(WarmupForwardMixin):
         # convert to torch tensor
         self.model.rope_setup.rope_deltas = torch.tensor(rope_deltas_list)
 
+    def remap_rope_deltas(self, slot_remap):
+        """Move persistent per-slot RoPE state after vLLM condenses a batch."""
+        rope_setup = self.model.rope_setup
+        batch_size = rope_setup.batch_size
+        indices = torch.as_tensor(slot_remap, dtype=torch.long).reshape(-1)
+        if indices.numel() < batch_size:
+            raise ValueError(f"slot_remap has {indices.numel()} entries, expected at least {batch_size}")
+        indices = indices[:batch_size]
+        if torch.any(indices < 0) or torch.any(indices >= batch_size):
+            raise ValueError(f"slot_remap entries must be in [0, {batch_size})")
+        rope_setup.rope_deltas = rope_setup.rope_deltas.index_select(0, indices).clone()
+
     def decode_forward(
         self,
         tokens,
@@ -102,6 +115,12 @@ class Generator(WarmupForwardMixin):
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
+        slot_remap=None,
+        *,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
     ):
         return self._ttt_generator.decode_forward(
             tokens=tokens,
@@ -111,6 +130,11 @@ class Generator(WarmupForwardMixin):
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
+            slot_remap=slot_remap,
+            reload_inputs=reload_inputs,
+            reload_page_table=reload_page_table,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
         )
 
     def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None):
@@ -217,7 +241,7 @@ class Generator(WarmupForwardMixin):
     def process_decode_output_host(self, tt_out, is_tokens=False):
         return self._ttt_generator.process_decode_output_host(tt_out, is_tokens=is_tokens)
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False) -> None:
         logger.warning("Warmup model prefill not implemented for Qwen2_5_VL Generator")
         logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")
 

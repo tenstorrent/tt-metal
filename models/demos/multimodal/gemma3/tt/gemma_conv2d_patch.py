@@ -108,15 +108,18 @@ class TtGemmaConv2dPatch(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # Bias applied outside ttnn.linear to avoid the FUSE_BIAS matmul kernel path.
         out = ttnn.linear(
             x,
             self._linear_weight,
-            bias=self.bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
+
+        if self.bias is not None:
+            out = ttnn.add(out, self.bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         ttnn.deallocate(x)
 

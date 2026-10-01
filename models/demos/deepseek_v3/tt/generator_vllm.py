@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
@@ -38,13 +39,40 @@ def _pad_tokens(tokens: torch.Tensor, pad_value: int = 0, block_size: int = USER
 
 
 class DeepseekV3ForCausalLM(DeepseekGenerator):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
+        "supports_sample_on_device": True,
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        max_model_len: int | None = None,
+        max_num_seqs: int | None = None,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific all-user KV-cache token capacity."""
+        if "DeepSeek-R1-0528" in model_name and is_wormhole_b0():
+            if max_model_len is None or max_num_seqs is None:
+                raise ValueError(
+                    "DeepSeek-R1-0528 on Wormhole requires max_model_len and max_num_seqs "
+                    "to derive the all-user KV-cache token budget; got "
+                    f"max_model_len={max_model_len}, max_num_seqs={max_num_seqs}. "
+                    "Ensure the vLLM plugin passes model_config.max_model_len and "
+                    "scheduler_config.max_num_seqs (see tenstorrent/vllm#384)."
+                )
+            return int(max_model_len) * int(max_num_seqs)
+        else:
+            raise ValueError("DeepSeek-R1-0528 not supported on non-Wormhole devices")
 
     @classmethod
     def initialize_vllm_model(
@@ -59,6 +87,24 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             )
         tokenizer = load_tokenizer(model_path)
 
+        mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
+        mesh_world = mesh_rows * mesh_cols
+        if tt_data_parallel <= 0:
+            raise ValueError(f"tt_data_parallel must be > 0, got {tt_data_parallel}")
+        if tt_data_parallel != mesh_world:
+            raise ValueError(
+                "Unsupported tt_data_parallel/mesh layout for Deepseek vLLM bridge: "
+                f"tt_data_parallel={tt_data_parallel}, mesh_shape={mesh_device.shape}. "
+                f"Expected tt_data_parallel to equal mesh world size ({mesh_world}) so that "
+                "vLLM global max_batch_size matches DeepseekGenerator.batch_size."
+            )
+        if max_batch_size % tt_data_parallel != 0:
+            raise ValueError(
+                f"Global max_batch_size {max_batch_size} must be divisible by tt_data_parallel {tt_data_parallel}"
+            )
+        per_dp_batch = max_batch_size // tt_data_parallel
+        batch_size_per_row = per_dp_batch * mesh_cols
+
         model = cls(
             hf_config=hf_config,
             mesh_device=mesh_device,
@@ -67,6 +113,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             tokenizer=tokenizer,
             max_seq_len=max_seq_len,
             vllm_context=True,
+            batch_size_per_row=batch_size_per_row,
         )
 
         return model
@@ -109,7 +156,28 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         )
         num_of_users = tokens.shape[0]
         if sample_on_device:
-            self._validate_and_initialize_sampling(sampling_params, sample_on_device)
+            sampling_user_slots = list(empty_slots) if empty_slots is not None else list(range(num_of_users))
+            if len(sampling_user_slots) != num_of_users:
+                raise ValueError(
+                    f"DeepSeek prefill has {num_of_users} requests but " f"{len(sampling_user_slots)} stable slots"
+                )
+            prompt_history = self._sampling_history_for_user_slots(
+                self._prompt_history(tokens, lengths),
+                sampling_user_slots,
+            )
+            self._validate_and_initialize_sampling(
+                self._sampling_params_for_user_slots(
+                    sampling_params,
+                    sampling_user_slots,
+                ),
+                sample_on_device,
+                enable_trace=False,
+                reload_sampling_params=True,
+                reset_sampling_state=True,
+                user_slots=sampling_user_slots,
+                prompt_tokens=prompt_history,
+                preserve_unlisted_slots=True,
+            )
 
         user_outputs = []
         for i in range(num_of_users):
@@ -136,16 +204,18 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 local_user_id=i,
                 sample_on_device=sample_on_device,
                 return_last_hidden=False,
+                prompt_len=prompt_len,
             )
 
             if sample_on_device:
-                prefill_logits = self._slice_last_token_logits(prefill_logits, prompt_len, expand_to_batch=True)
-                prefill_logits_sampled_device = self._sample_tokens_device(prefill_logits, user_slots=[user_id])
+                prefill_logits_sampled_device = self._sample_tokens_device(
+                    prefill_logits, user_slots=[user_id], skip_precompile=True
+                )
                 prefill_logits_sampled_host = self._tokens_from_device(
-                    prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
+                    prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                 )
                 # Device-sampling path emits token ids.
-                user_output = prefill_logits_sampled_host[0].to(torch.int64)
+                user_output = prefill_logits_sampled_host[user_id].to(torch.int64)
             else:
                 assert isinstance(prefill_logits, torch.Tensor), "prefill_logits should be a torch.Tensor on host"
                 user_logits = prefill_logits.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
@@ -169,7 +239,16 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
 
         return prefill_output
 
-    def decode_forward(self, *args, **kwargs):
+    def decode_forward(
+        self,
+        *args,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        slot_remap=None,
+        **kwargs,
+    ):
         assert self.model_run_config_decode is not None, "Model run config decode is not initialized"
 
         page_tables = kwargs.get("page_table", None)
@@ -178,23 +257,51 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         read_from_device = kwargs.get("read_from_device", True)
         sampling_params = kwargs.get("sampling_params", None)
         sample_on_device = bool(sampling_params is not None)
+        prompt_tokens = kwargs.get("prompt_tokens")
+        output_tokens = kwargs.get("output_tokens")
+        if not reload_inputs or reload_page_table:
+            raise ValueError("DeepSeek vLLM decode requires a full host-input reload")
+        if not sample_on_device and (reload_sampling_params or reset_sampling_state):
+            raise ValueError("DeepSeek sampling update commands require device sampling")
+
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
+        start_pos = kwargs["start_pos"]
+        active_user_slots = [
+            idx for idx, position in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist()) if int(position) >= 0
+        ]
         if sample_on_device:
-            self._validate_and_initialize_sampling(sampling_params, sample_on_device, enable_trace=enable_trace)
+            self._apply_sampling_slot_remap(slot_remap)
+            self._validate_and_initialize_sampling(
+                sampling_params,
+                sample_on_device,
+                enable_trace=enable_trace,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+                user_slots=active_user_slots,
+                positions=start_pos,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+            )
         decode_step_output = super().decode_forward(
             tokens=tokens_step,
-            start_pos=kwargs["start_pos"],
+            start_pos=start_pos,
             enable_trace=enable_trace,
             page_table=page_tables,
             sample_on_device=sample_on_device,
         )
 
         if sample_on_device:
-            decode_output = self._sample_tokens_device(decode_step_output, enable_trace=enable_trace)
+            decode_output = self.sample_decode_on_device(
+                decode_step_output,
+                enable_trace=enable_trace,
+                user_slots=active_user_slots,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
+            )
             if read_from_device:
                 decode_output = self._tokens_from_device(
                     decode_output, self.mesh_device, batch_size_per_row=self.batch_size_per_row
@@ -213,6 +320,11 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                     f"Unexpected decode logits rank for host sampling: {tuple(decode_step_output.shape)}"
                 )
             decode_output = decode_step_output.unsqueeze(1)
+            # Host sampling bypasses the device sampler, but its dormant
+            # per-slot state must still follow the layout. Apply after the
+            # decode/output path succeeds so retries cannot consume the same
+            # non-idempotent remap twice.
+            self._apply_sampling_slot_remap(slot_remap)
 
         # decode_output semantics:
         # - sample_on_device=True  -> sampled token ids

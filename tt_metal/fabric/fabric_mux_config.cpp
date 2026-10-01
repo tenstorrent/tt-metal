@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstddef>
 #include <vector>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -87,7 +88,8 @@ FabricMuxConfig::FabricMuxConfig(
     uint8_t num_buffers_header_only_channel,
     size_t buffer_size_bytes_full_size_channel,
     size_t base_l1_address,
-    CoreType core_type) :
+    CoreType core_type,
+    size_t usable_l1_end_address) :
     core_type_(core_type),
     num_full_size_channels_(num_full_size_channels),
     num_header_only_channels_(num_header_only_channels),
@@ -146,7 +148,13 @@ FabricMuxConfig::FabricMuxConfig(
     flow_control_region_ = MemoryRegion(current_address, noc_aligned_address_size_bytes_, num_total_channels);
     current_address = flow_control_region_.get_end_address();
 
-    // Buffer index region (one entry per channel)
+    // Buffer index region (one entry per channel). The producer reads and writes each entry as a
+    // whole SenderChannelProducerCursor, so the struct *is* the entry -- require equality, not fit.
+    TT_FATAL(
+        sizeof(tt::tt_fabric::SenderChannelProducerCursor) == noc_aligned_address_size_bytes_,
+        "SenderChannelProducerCursor is {} B but the per-channel buffer index entry is {} B; they must match",
+        sizeof(tt::tt_fabric::SenderChannelProducerCursor),
+        noc_aligned_address_size_bytes_);
     buffer_index_region_ = MemoryRegion(current_address, noc_aligned_address_size_bytes_, num_total_channels);
     current_address = buffer_index_region_.get_end_address();
 
@@ -171,15 +179,22 @@ FabricMuxConfig::FabricMuxConfig(
     }
 
     core_type_index_ = hal.get_programmable_core_type_index(hal_core_type);
-    auto l1_end_address = hal.get_dev_addr(hal_core_type, tt_metal::HalL1MemAddrType::BASE) +
-                          hal.get_dev_size(hal_core_type, tt_metal::HalL1MemAddrType::BASE);
+    const auto physical_l1_end_address = hal.get_dev_addr(hal_core_type, tt_metal::HalL1MemAddrType::BASE) +
+                                         hal.get_dev_size(hal_core_type, tt_metal::HalL1MemAddrType::BASE);
+
+    // A caller-supplied ceiling only ever tightens the bound; it can never license the map to run past
+    // the physical end of L1.
+    const auto l1_end_address = usable_l1_end_address == 0
+                                    ? physical_l1_end_address
+                                    : std::min<size_t>(usable_l1_end_address, physical_l1_end_address);
 
     // The memory map ends at the end of the last region (header-only channels)
     TT_FATAL(
         memory_map_end_address_ <= l1_end_address,
-        "Memory map end address: {} is greater than L1 end address: {}",
+        "Memory map end address: {} is greater than L1 end address: {} (physical L1 end: {})",
         memory_map_end_address_,
-        l1_end_address);
+        l1_end_address,
+        physical_l1_end_address);
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
@@ -260,7 +275,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
     ProgramOrDescriptor& mux_program_or_desc,
-    const CoreCoord& mux_logical_core) const {
+    const tt::tt_metal::CoreCoord& mux_logical_core) const {
     std::vector<uint32_t> args;
 
     auto regions_to_clear = get_memory_regions_to_clear();
@@ -279,10 +294,10 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
 }
 
 template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::Program>(
-    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::Program&, const CoreCoord&) const;
+    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::Program&, const tt::tt_metal::CoreCoord&) const;
 
 template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::ProgramDescriptor&, const CoreCoord&) const;
+    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::ProgramDescriptor&, const tt::tt_metal::CoreCoord&) const;
 
 uint8_t FabricMuxConfig::get_num_buffers(FabricMuxChannelType channel_type) const {
     return channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL ? num_buffers_full_size_channel_

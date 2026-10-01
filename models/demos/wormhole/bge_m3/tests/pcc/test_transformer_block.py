@@ -45,12 +45,20 @@ def first_layer_artifacts(model_location_generator):
 
     hf_layer = backbone.encoder.layer[0]
     state_dict = {f"roberta.encoder.layer.0.{key}": value for key, value in hf_layer.state_dict().items()}
+    # Mirrors the ModelArgs fields BgeM3TransformerBlock reads. The serving
+    # flags stay off, so the block builds the base attention and MLP modules.
     args = SimpleNamespace(
         dim=HIDDEN_SIZE,
         n_heads=NUM_HEADS,
         head_dim=HEAD_DIM,
         intermediate_size=MLP_SIZE,
         norm_eps=backbone.config.layer_norm_eps,
+        use_jit=False,
+        data_parallel=False,
+        use_experimental_encoder_sdpa=False,
+        use_qkv_scatter_matmul=False,
+        quality_mode=False,
+        mlp_wi_output_dtype=None,
     )
     return hf_layer, state_dict, args
 
@@ -61,12 +69,17 @@ def test_transformer_block_vs_hf_first_layer(device, first_layer_artifacts, seq_
     require_single_device(device)
     hf_layer, state_dict, args = first_layer_artifacts
     args.grid_size = device.compute_with_storage_grid_size()
+    args.max_seq_len = seq_len
 
     torch.manual_seed(42)
     hidden_states = torch.randn((BATCH_SIZE, seq_len, HIDDEN_SIZE), dtype=torch.bfloat16)
 
     with torch.no_grad():
-        reference_output = hf_layer(hidden_states=hidden_states, attention_mask=None)[0].unsqueeze(1).to(torch.float32)
+        hf_result = hf_layer(hidden_states=hidden_states, attention_mask=None)
+        # transformers < 5.0 returns a tuple[Tensor], while >= 5.0 returns a bare Tensor.
+        # Unwrap the tuple form without indexing into the batch dim of the bare Tensor.
+        hf_hidden_states = hf_result[0] if isinstance(hf_result, tuple) else hf_result
+        reference_output = hf_hidden_states.unsqueeze(1).to(torch.float32)
 
     tt_block = BgeM3TransformerBlock(
         args=args,

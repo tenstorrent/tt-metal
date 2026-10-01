@@ -82,7 +82,7 @@ RotaryEmbeddingFusedQKDeviceOperation::spec_return_value_t RotaryEmbeddingFusedQ
     auto make_spec = [&](const Tensor& t) {
         auto shape = t.padded_shape();
         shape[-2] = tt::round_up(args.seq_len, TILE_HEIGHT);
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             shape, tt::tt_metal::TensorLayout(t.dtype(), tt::tt_metal::PageConfig(t.layout()), args.output_mem_config));
     };
     return {make_spec(q), make_spec(k)};

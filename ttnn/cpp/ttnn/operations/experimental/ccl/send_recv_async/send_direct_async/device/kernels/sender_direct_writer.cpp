@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,15 +22,15 @@ constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(6);
 constexpr uint32_t num_whole_packets_per_page = get_compile_time_arg_val(7);
 constexpr uint32_t partial_packet_size = get_compile_time_arg_val(8);
 constexpr uint32_t whole_packet_size = get_compile_time_arg_val(9);
-constexpr uint32_t output_args_cta_idx = 10;
+constexpr uint32_t num_banks = get_compile_time_arg_val(10);
+constexpr uint32_t enable_bank_packing = get_compile_time_arg_val(11);
+constexpr uint32_t output_args_cta_idx = 12;
 constexpr uint32_t output_args_crta_idx = 0;
 
 // direct_dest_info layout (must match recv_direct_async/device/kernels/receiver_direct.cpp).
 // Offsets are in bytes from the base of handshake page 0.
 constexpr uint32_t DEST_VALID_OFFSET = 0;
 constexpr uint32_t DEST_OUTPUT_ADDR_OFFSET = 4;
-constexpr uint32_t DEST_PAGE_SIZE_OFFSET = 8;
-constexpr uint32_t DEST_NUM_PAGES_OFFSET = 12;
 
 FORCE_INLINE void fabric_write_page(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -51,17 +51,15 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     size_t rt_args_idx = 0;
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);            // pages for this core
-    uint32_t page_start_offset = get_arg_val<uint32_t>(rt_args_idx++);    // page start offset for this core
-    uint32_t num_whole_packets = get_arg_val<uint32_t>(rt_args_idx++);    // whole packets for this core
-    uint32_t num_pages_remainder = get_arg_val<uint32_t>(rt_args_idx++);  // remainder pages for this core
+    uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);          // pages for this core
+    uint32_t page_start_offset = get_arg_val<uint32_t>(rt_args_idx++);  // page start offset for this core
+    [[maybe_unused]] uint32_t num_whole_packets = get_arg_val<uint32_t>(rt_args_idx++);    // whole packets (fallback)
+    [[maybe_unused]] uint32_t num_pages_remainder = get_arg_val<uint32_t>(rt_args_idx++);  // remainder (fallback)
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    // Two fabric headers stored in fabric_packet_header_cb:
-    //  - data_packet_header: issues direct writes to the receiver (output tensor + handshake advertise)
-    //  - socket_packet_header: used by socket APIs for control flow
+    // Separate headers so the data path and the socket control path do not clobber each other.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
@@ -119,9 +117,39 @@ void kernel_main() {
     //////////////////////////////////////////////////
     // STEP 3: stream pages directly into the receiver's output tensor
     //////////////////////////////////////////////////
-    uint32_t page_index = page_start_offset;
-    if constexpr (num_pages_per_packet > 0) {
+    if constexpr (enable_bank_packing) {
+        // Pages whose indices differ by num_banks share a bank at consecutive slots, so they are
+        // contiguous on the receiver too and one packet covering {p, p + num_banks, ...} lands at the
+        // head page's noc address. The reader hands over one CB entry per super-block of
+        // (num_banks * num_pages_per_packet) pages, bank b at region [b * bank_region_bytes]; this
+        // iteration mirrors the reader exactly so the CB FIFO stays in sync.
+        constexpr uint32_t super_block_pages = num_banks * num_pages_per_packet;
+        constexpr uint32_t bank_region_bytes = num_pages_per_packet * output_page_size;
+        const uint32_t end_page = page_start_offset + num_pages;
+        for (uint32_t sb_base = page_start_offset; sb_base < end_page; sb_base += super_block_pages) {
+            cb_wait_front(data_cb_id, 1);
+            const uint32_t l1_base = get_read_ptr(data_cb_id);
+            for (uint32_t b = 0; b < num_banks; ++b) {
+                const uint32_t head = sb_base + b;
+                if (head >= end_page) {
+                    break;  // remaining banks in this super-block have no pages
+                }
+                uint32_t count = 0;
+                for (uint32_t pp = head; count < num_pages_per_packet && pp < end_page; pp += num_banks) {
+                    ++count;
+                }
+                fabric_write_page(
+                    fabric_connection,
+                    data_packet_header_addr,
+                    l1_base + b * bank_region_bytes,
+                    output_addr_gen.get_noc_addr(head),
+                    count * output_page_size);
+            }
+            cb_pop_front(data_cb_id, 1);
+        }
+    } else if constexpr (num_pages_per_packet > 0) {
         // Small pages: each CB entry holds num_pages_per_packet whole pages at socket_page_size stride.
+        uint32_t page_index = page_start_offset;
         for (uint32_t i = 0; i < num_whole_packets; ++i) {
             cb_wait_front(data_cb_id, 1);
             uint32_t l1_read_addr = get_read_ptr(data_cb_id);
@@ -149,6 +177,7 @@ void kernel_main() {
         }
     } else {
         // Large pages: each output page spans multiple fabric packets (one CB entry per packet).
+        uint32_t page_index = page_start_offset;
         for (uint32_t i = 0; i < num_pages; ++i) {
             uint64_t out_noc_addr = output_addr_gen.get_noc_addr(page_index);
             for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {

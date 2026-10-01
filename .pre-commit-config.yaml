@@ -7,9 +7,11 @@ repos:
     - id: trailing-whitespace
       exclude: \.patch$
     - id: end-of-file-fixer
-      exclude: \.patch$
+      # Preserve the hashed, token-aligned book excerpt, including its missing final newline.
+      exclude: (\.patch$|^models/demos/llama_3p1_8b_d_p/tests/model/fixtures/book/pride_and_prejudice\.txt$)
     - id: check-yaml
       args: ["--unsafe"]
+    - id: check-merge-conflict
 # Using this mirror lets us use mypyc-compiled black, which is about 2x faster
 - repo: https://github.com/psf/black-pre-commit-mirror
   rev: 23.10.1
@@ -47,20 +49,30 @@ repos:
       args: ["--style=file"]
 - repo: local
   hooks:
+    - id: prefer-expect-error
+      name: "tests: use the expect_error fixture instead of pytest.raises"
+      language: pygrep
+      files: (^|/)tests/.*\.py$
+      entry: '(?<!allow-)pytest\.raises(?!.*allow-pytest\.raises)'
+      # Override on the same line:  with pytest.raises(...):  # allow-pytest.raises: <why>
+- repo: local
+  hooks:
     - id: check-large-files
       name: check for large files (>500 KB)
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
-    - id: validate-metalium-includes
-      name: validate-metalium-includes
-      entry: python3 scripts/validate_api/validate_includes.py tt_metal/api --check-ttnn-forwards
+    - id: validate-metalium-api
+      name: validate-metalium-api
+      entry: python3 scripts/validate_api/validate_api.py tt_metal/api
       language: system
+      always_run: true
       pass_filenames: false
-    - id: validate-metalium-deprecation
-      name: validate-metalium-deprecation
-      entry: python3 scripts/validate_api/validate_deprecation.py tt_metal/api origin/main
+    - id: test-metalium-api
+      name: test-metalium-api
+      entry: python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
       language: system
+      files: ^scripts/validate_api/
       pass_filenames: false
 - repo: local
   hooks:
@@ -69,6 +81,15 @@ repos:
       entry: python3 scripts/validate_no_global_torch_imports.py
       language: system
       pass_filenames: false
+- repo: local
+  hooks:
+    - id: check-kernel-cb-ptrs
+      name: Forbid get_read_ptr on cb_reserve_back'd CBs (issue #39432)
+      entry: python3 scripts/check_kernel_cb_ptrs.py
+      language: system
+      pass_filenames: true
+      types_or: [c++, c]
+      files: /kernels?/.*\.(cpp|cc|h|hpp)$
 - repo: local
   hooks:
     - id: block-ttnn-pybind-changes
@@ -93,6 +114,20 @@ repos:
       files: ^ttnn/.*\.hpp$
       pass_filenames: true
       require_serial: true
+    - id: detect-smuggled-rta
+      name: Detect smuggled buffer-address runtime args in descriptor factories
+      entry: python3 scripts/detect_smuggled_rta.py
+      language: system
+      types: [file]
+      files: ^ttnn/.*/device/.*\.(cpp|hpp)$
+      pass_filenames: true
+    - id: detect-override-rebuild
+      name: Detect ProgramDescriptor rebuilds inside override_runtime_arguments
+      entry: python3 scripts/detect_override_rebuild.py
+      language: system
+      types: [file]
+      files: ^ttnn/.*/device/.*\.(cpp|hpp)$
+      pass_filenames: true
 - repo: local
   hooks:
     - id: validate-golden-csv-columns
@@ -100,13 +135,102 @@ repos:
       entry: bash .github/scripts/utils/validate_golden_csv_columns.sh
       language: system
       pass_filenames: false
-      files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
+      files: ^tests/tt_metal/tt_fabric/test_infra/golden/.*bandwidth.*\.csv$
+- repo: local
+  hooks:
+    - id: lint-pipeline-cmds
+      name: Pipeline cmd blocks stop at the first failed test command
+      entry: python3 .github/scripts/utils/lint_pipeline_cmds.py
+      language: system
+      pass_filenames: false
+      files: ^(tests/pipeline_reorg/.*\.yaml|\.github/pipeline_cmd_lint_baseline\.yaml|\.github/scripts/utils/lint_pipeline_cmds\.py)$
+- repo: local
+  hooks:
+    - id: triage-type-check
+      name: tt-triage type checks
+      entry: tools/triage/run_type_checks.sh
+      language: system
+      pass_filenames: false
+      files: ^tools/triage/
+- repo: local
+  hooks:
+    - id: compile-agentic-workflows
+      name: Regenerate agentic workflow lock files
+      entry: python3 .github/scripts/utils/update_agentic_workflows.py
+      language: system
+      files: ^\.github/workflows/[^/]+\.(md|lock\.yml)$
+      pass_filenames: true
+      require_serial: true
 
 # ---- LLK hooks (tt_metal/tt-llk/) ----
 # LLK lives at tt_metal/tt-llk/ and has its own formatting standards.
 # Metal's hooks above are excluded from that subtree; these entries replace them.
 - repo: local
   hooks:
+    - id: llk-mutex-balance
+      name: "llk: Tensix mutex acquire/release balance"
+      entry: python3 tt_metal/tt-llk/infra/check_mutex_balance.py
+      language: system
+      # All three architectures: the check is lexical and needs no per-arch tables.
+      files: ^tt_metal/tt-llk/tt_llk_.*\.(h|hpp)$
+    - id: llk-xthread-cfg-wormhole
+      name: "llk: cross-thread config write (wormhole)"
+      entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py
+      language: system
+      # The touched files are passed so the check can scope its verdict: a commit fails only on
+      # findings at, or caused by, what it touched -- never on unrelated debt elsewhere -- and a
+      # commit touching a verdict input (checker, defs, consumers, baseline) is checked against
+      # the whole tree. Output is shown even when it passes, so the advisory findings and the
+      # unclassified-write note are seen rather than swallowed.
+      verbose: true
+      # Every run parses the whole tree for ownership, so parallel batches only repeat that work
+      # and print the same output several times: run once.
+      require_serial: true
+      args: ["--arch", "wormhole_b0",
+             "--defs", "tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h",
+             "--tree", "tt_metal/tt-llk/tt_llk_wormhole_b0",
+             "--baseline", "tt_metal/tt-llk/infra/xthread_cfg_baseline_wormhole_b0.txt"]
+      # Every input the verdict depends on, not just the tree: a change to the register
+      # definitions, the consumer table or the checker itself moves the answer on headers
+      # this commit does not touch.
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_wormhole_b0/.*\.(h|hpp)|
+          tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h|
+          tt_metal/tt-llk/infra/cfg_consumers\.yaml|
+          tt_metal/tt-llk/infra/check_cross_thread_cfg\.py|
+          tt_metal/tt-llk/infra/xthread_cfg_baseline_wormhole_b0\.txt
+        )$
+    - id: llk-xthread-cfg-blackhole
+      name: "llk: cross-thread config write (blackhole)"
+      entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py
+      language: system
+      # The touched files are passed so the check can scope its verdict: a commit fails only on
+      # findings at, or caused by, what it touched -- never on unrelated debt elsewhere -- and a
+      # commit touching a verdict input (checker, defs, consumers, baseline) is checked against
+      # the whole tree. Output is shown even when it passes, so the advisory findings and the
+      # unclassified-write note are seen rather than swallowed.
+      verbose: true
+      # Every run parses the whole tree for ownership, so parallel batches only repeat that work
+      # and print the same output several times: run once.
+      require_serial: true
+      args: ["--arch", "blackhole",
+             "--defs", "tt_metal/hw/inc/internal/tt-1xx/blackhole/cfg_defines.h",
+             "--tree", "tt_metal/tt-llk/tt_llk_blackhole",
+             "--baseline", "tt_metal/tt-llk/infra/xthread_cfg_baseline_blackhole.txt"]
+      # Quasar is deliberately absent: it writes config via cfg_rmw/RMWCIB, which this checker
+      # does not model, so it would report a vacuous zero. The script refuses that arch outright.
+      # Every input the verdict depends on, not just the tree: a change to the register
+      # definitions, the consumer table or the checker itself moves the answer on headers
+      # this commit does not touch.
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_blackhole/.*\.(h|hpp)|
+          tt_metal/hw/inc/internal/tt-1xx/blackhole/cfg_defines.h|
+          tt_metal/tt-llk/infra/cfg_consumers\.yaml|
+          tt_metal/tt-llk/infra/check_cross_thread_cfg\.py|
+          tt_metal/tt-llk/infra/xthread_cfg_baseline_blackhole\.txt
+        )$
     - id: llk-fix-cstdint
       name: "llk: fix std::uint*_t and add cstdint include"
       entry: python3 tt_metal/tt-llk/infra/fix_cstdint.py

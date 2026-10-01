@@ -506,13 +506,7 @@ def test_all_reduce_fabric_2d(
     )
 
     if memory_config.is_sharded() == False:
-        if device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D:
-            logger.info(f"Number of program cache entries: {mesh_device.cache_entries_counter.total}")
-            assert (
-                mesh_device.cache_entries_counter.total == 3
-            ), f"Number of program cache entries: {mesh_device.cache_entries_counter.total} but was expecting 3 as we are using fabric 2D, which fallsback to composite all gather + local reduce"
-        elif device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D:
-            logger.info(f"Number of program cache entries: {mesh_device.cache_entries_counter.total}")
-            assert (
-                mesh_device.cache_entries_counter.total == 2
-            ), f"Number of program cache entries: {mesh_device.cache_entries_counter.total} but was expecting 2 as we are using fabric 2D dynamic, which uses reduce scatter + all gather"
+        logger.info(f"Number of program cache entries: {mesh_device.cache_entries_counter.total}")
+        assert (
+            mesh_device.cache_entries_counter.total == 2
+        ), f"Number of program cache entries: {mesh_device.cache_entries_counter.total} but was expecting 2 as we are using fabric 2D, which uses reduce scatter + all gather"

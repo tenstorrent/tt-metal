@@ -52,18 +52,14 @@ def _check_gh() -> None:
     result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
-            "The 'gh' CLI is not authenticated. "
-            "Run 'gh auth login' to authenticate before using --pr."
+            "The 'gh' CLI is not authenticated. " "Run 'gh auth login' to authenticate before using --pr."
         )
 
 
 def _check_git() -> None:
     result = subprocess.run(["git", "--version"], capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(
-            "git is not installed or not on PATH. "
-            "Install git and ensure it is on your PATH."
-        )
+        raise RuntimeError("git is not installed or not on PATH. " "Install git and ensure it is on your PATH.")
 
 
 def _gh(*args: str, input_data: str | None = None) -> str:
@@ -90,7 +86,7 @@ def fetch_pr_info(pr_number: int) -> PRInfo:
         "--repo",
         REPO,
         "--json",
-        "title,baseRefOid,headRefOid,labels,files",
+        "title,labels,files,commits",
     )
     pr_data = json.loads(pr_json)
 
@@ -98,6 +94,8 @@ def fetch_pr_info(pr_number: int) -> PRInfo:
     diff = _gh("pr", "diff", str(pr_number), "--repo", REPO)
     changed_files = [f["path"] for f in pr_data.get("files", [])]
     labels = [l["name"] for l in pr_data.get("labels", [])]
+    commits = pr_data.get("commits") or []
+    head_sha = commits[-1].get("oid", "") if commits else ""
 
     diff, truncated_files = _truncate_diff(diff, changed_files)
     if truncated_files:
@@ -111,7 +109,7 @@ def fetch_pr_info(pr_number: int) -> PRInfo:
         number=pr_number,
         title=pr_data.get("title", ""),
         base_sha=pr_data.get("baseRefOid", ""),
-        head_sha=pr_data.get("headRefOid", ""),
+        head_sha=head_sha,
         diff=diff,
         changed_files=changed_files,
         labels=labels,
@@ -198,10 +196,7 @@ def _truncate_diff(diff: str, changed_files: list[str]) -> tuple[str, list[str]]
     if len(lines) <= MAX_DIFF_LINES:
         return diff, []
 
-    truncated = (
-        "\n".join(lines[:MAX_DIFF_LINES])
-        + "\n\n# [diff truncated — too large for full analysis]"
-    )
+    truncated = "\n".join(lines[:MAX_DIFF_LINES]) + "\n\n# [diff truncated — too large for full analysis]"
     files_in_truncated = diff_file_paths(truncated)
 
     # The last file with a header in the truncated output may be incomplete —

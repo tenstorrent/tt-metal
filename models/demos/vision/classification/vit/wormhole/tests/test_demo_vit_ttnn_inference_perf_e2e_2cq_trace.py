@@ -119,14 +119,23 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1753088}], indirect=True
+    # trace_region_size is the TOTAL trace budget across DRAM banks (#47122). The captured
+    # ViT 2CQ trace is ~1.70 MiB; with 12 banks and max page size 8192, each bank needs
+    # 147456 B. 1753088 only reserved 146112 B/bank under pre-#47766 dram_alignment
+    # rounding and OOM'd on N300 (#47887). 2_000_000 leaves headroom after page rounding.
+    "device_params",
+    [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 2_000_000}],
+    indirect=True,
 )
 @pytest.mark.parametrize("batch_size", [8])
 def test_vit(device, batch_size, is_single_card_n300):
     # Test is ran either on n300 or n150
-    # If it's n300, there's a problem with eth dispatch, hence lower perf
+    # If it's n300, there's a problem with eth dispatch, hence lower perf.
+    # Targets are the typical scheduled-CI host after the fleet-wide ~2 % speed-up of
+    # 2026-09-25 (main b75d7c2800e..01d6e7bdf4a). N300 pool 2026-09-26..30: vm-88 1357,
+    # vm-238 1362, vm-236 1382 (fastest host, +2 % on every night); N150 pool 1473-1480.
     if is_single_card_n300:
-        expected_samples_per_sec = 1323
+        expected_samples_per_sec = 1360
     else:  # n150
         expected_samples_per_sec = 1470
     torch.manual_seed(0)
@@ -169,9 +178,21 @@ def test_vit(device, batch_size, is_single_card_n300):
     logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
     samples_per_sec = 1 / inference_time_avg * batch_size
     logger.info(f"Samples per second: {samples_per_sec}")
-    margin = 0.04
+    # 5 %: the N300 pool spreads 1352-1382 and the N150 pool 1473-1484 around their targets on the
+    # same build, and N150 sat 1-3 % under 1470 for most of 2026-09 before the fleet-wide speed-up.
+    margin = 0.05
     min_range = expected_samples_per_sec * (1 - margin)
     max_range = expected_samples_per_sec * (1 + margin)
+    # The regression side is the gate. A run above the band is a stale target (the pool's
+    # fastest host reaches it first), so it warns instead of failing; a loose ceiling still
+    # catches a broken measurement loop.
+    sanity_ceiling = expected_samples_per_sec * 1.25
+    assert samples_per_sec > min_range, f"Samples per second {samples_per_sec} is too low, expected > {min_range}"
     assert (
-        samples_per_sec > min_range and samples_per_sec < max_range
-    ), f"Samples per second {samples_per_sec} is either too low or high, expected at to be in range of: [{min_range}, {max_range}]"
+        samples_per_sec < sanity_ceiling
+    ), f"Samples per second {samples_per_sec} is implausibly high (> {sanity_ceiling}); check the measurement loop"
+    if samples_per_sec > max_range:
+        logger.warning(
+            f"Samples per second {samples_per_sec} is above the expected band [{min_range}, {max_range}]; "
+            "re-centre expected_samples_per_sec"
+        )

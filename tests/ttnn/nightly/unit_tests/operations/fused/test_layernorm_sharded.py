@@ -11,6 +11,15 @@ import math
 
 from models.common.utility_functions import torch2tt_tensor
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
+    ttnn_layer_norm_in_place,
+    ttnn_rms_norm_in_place,
+    MIX_PRECISION_TEST_IDS,
+    MIX_PRECISION_TEST_ID_NAMES,
+)
+
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
 
 
 def rms_norm(x, dim, gamma, beta, eps):
@@ -30,11 +39,6 @@ def rms_norm(x, dim, gamma, beta, eps):
     ],
 )
 @pytest.mark.parametrize(
-    "gamma_dtype",
-    (ttnn.bfloat16,),
-    ids=["BFLOAT16"],
-)
-@pytest.mark.parametrize(
     "in_dtype",
     (
         ttnn.float32,
@@ -43,24 +47,8 @@ def rms_norm(x, dim, gamma, beta, eps):
     ),
     ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
 )
-@pytest.mark.parametrize(
-    "test_id",
-    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
-    ids=[
-        "add_LN",
-        "add_LN_G",
-        "add_LN_GB",
-        "add_RMSN",
-        "add_RMSN_G",
-        "add_RMSN_GB",
-        "LN",
-        "LN_G",
-        "LN_GB",
-        "RMSN",
-        "RMSN_G",
-        "RMSN_GB",
-    ],
-)
+# gamma_dtype is fused into test_id instead of crossed with it -- see MIX_PRECISION_TEST_IDS.
+@pytest.mark.parametrize("test_id, gamma_dtype", MIX_PRECISION_TEST_IDS, ids=MIX_PRECISION_TEST_ID_NAMES)
 @pytest.mark.parametrize("width_padding", [False, True], ids=["no_padding", "padding"])
 def test_layernorm_sharded_mix_precision_rm(
     test_id, in_dtype, gamma_dtype, gamma_beta_mem_config, out_mem_config, device, width_padding
@@ -146,7 +134,7 @@ def test_layernorm_sharded_mix_precision_rm(
     )
 
     if test_id == 0:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -155,7 +143,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 1:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -165,7 +153,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 2:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -176,7 +164,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 3:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -185,7 +173,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 4:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -195,7 +183,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 5:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -206,7 +194,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 6:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             memory_config=out_mem_config,
@@ -214,7 +202,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 7:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -223,7 +211,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 8:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -233,7 +221,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 9:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             memory_config=out_mem_config,
@@ -241,7 +229,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 10:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -250,7 +238,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 11:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -298,11 +286,6 @@ def test_layernorm_sharded_mix_precision_rm(
     ],
 )
 @pytest.mark.parametrize(
-    "gamma_dtype",
-    (ttnn.bfloat16,),
-    ids=["BFLOAT16"],
-)
-@pytest.mark.parametrize(
     "in_dtype",
     (
         ttnn.float32,
@@ -319,24 +302,8 @@ def test_layernorm_sharded_mix_precision_rm(
         (512, 2048, 1),
     ],
 )
-@pytest.mark.parametrize(
-    "test_id",
-    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
-    ids=[
-        "add_LN",
-        "add_LN_G",
-        "add_LN_GB",
-        "add_RMSN",
-        "add_RMSN_G",
-        "add_RMSN_GB",
-        "LN",
-        "LN_G",
-        "LN_GB",
-        "RMSN",
-        "RMSN_G",
-        "RMSN_GB",
-    ],
-)
+# gamma_dtype is fused into test_id instead of crossed with it -- see MIX_PRECISION_TEST_IDS.
+@pytest.mark.parametrize("test_id, gamma_dtype", MIX_PRECISION_TEST_IDS, ids=MIX_PRECISION_TEST_ID_NAMES)
 def test_layernorm_1d_sharded_mix_precision_rm(
     test_id, M, K, subblock_w, in_dtype, gamma_dtype, gamma_beta_mem_config, out_mem_config, shard_orientation, device
 ):
@@ -419,12 +386,12 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
     if test_id == 0:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -433,7 +400,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 1:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -443,7 +410,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 2:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -454,7 +421,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 3:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -463,7 +430,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 4:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -473,7 +440,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 5:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -484,7 +451,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 6:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             memory_config=out_mem_config,
@@ -492,7 +459,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 7:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -501,7 +468,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 8:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -511,7 +478,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 9:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             memory_config=out_mem_config,
@@ -519,7 +486,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 10:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -528,7 +495,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 11:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -556,3 +523,116 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         atol=0.087,
         frobenius_threshold=0.016,
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# FP32 coverage for the complete (non-distributed) block-sharded LayerNorm op.
+# Spans {legacy, welford} x {fp32, bf16} input x {bf16, fp32} ROW_MAJOR gamma/beta. FP32 requires
+# fp32_dest_acc_en=True. Input is TILE (welford requires TILE; ROW_MAJOR input hangs).
+# ---------------------------------------------------------------------------------------------
+def run_layernorm_block_sharded(device, dtype, use_welford, gamma_dtype, has_weight=True, has_bias=True):
+    torch.manual_seed(1234)
+    g = device.compute_with_storage_grid_size()
+    grid_size = [g.x, min(g.y, 8)]
+    batch = grid_size[1]
+    width = 128 * grid_size[1]
+    in0_shape = (batch, 1, 32 * grid_size[0], width)
+    M, K = in0_shape[2] * batch, in0_shape[3]
+
+    x = torch.rand(in0_shape, dtype=torch.float32) * 2 - 0.95
+    w = torch.rand(K, dtype=torch.float32) * 2 - 1 if has_weight else None
+    b = torch.rand(K, dtype=torch.float32) * 2 - 1.1 if has_bias else None
+    ref = torch.nn.functional.layer_norm(x, (K,), weight=w, bias=b, eps=1e-2)
+
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_shape = [M // grid_size[0], math.ceil(K / grid_size[1] / 32) * 32]
+    x_shard = ttnn.interleaved_to_sharded(
+        xt, grid_size, shard_shape, ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.ShardOrientation.COL_MAJOR
+    )
+
+    wt = (
+        ttnn.from_torch(w.reshape(1, 1, -1, 32), dtype=gamma_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if has_weight
+        else None
+    )
+    bt = (
+        ttnn.from_torch(b.reshape(1, 1, -1, 32), dtype=gamma_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if has_bias
+        else None
+    )
+
+    cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        subblock_w=4,
+        block_h=batch,
+        block_w=4,
+        inplace=False,
+        use_welford=use_welford,
+    )
+    out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, x_shard.memory_config().shard_spec
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for FP32
+        packer_l1_acc=False,
+    )
+
+    recip = None
+    if use_welford:
+        sspec = x_shard.memory_config().shard_spec
+        recip = ttnn.create_layer_norm_reciprocals(device, sspec.grid, sspec.shape[1])
+
+    out = ttnn.layer_norm(
+        x_shard,
+        epsilon=1e-2,
+        weight=wt,
+        bias=bt,
+        memory_config=out_mem,
+        program_config=cfg,
+        compute_kernel_config=compute_kernel_config,
+        recip_tensor=recip,
+    )
+    ot = (
+        ttnn.to_torch(ttnn.from_device(ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)))
+        .float()
+        .reshape(ref.shape)
+    )
+
+    if dtype == ttnn.bfloat8_b:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.02, 0.045, 0.011
+    elif dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.006, 0.019, 0.003
+        if not (has_weight and has_bias):
+            # Without gamma/beta the output norm is smaller, so the relative Frobenius error is larger.
+            frobenius_threshold = 0.005
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.006, 0.013, 0.003
+
+    assert_numeric_metrics(
+        ref,
+        ot,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+
+@pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b], ids=["fp32", "bf16", "bf8"])
+def test_layernorm_block_sharded_all_config(device, dtype, use_welford, gamma_dtype):
+    run_layernorm_block_sharded(device, dtype, use_welford, gamma_dtype)
+
+
+# Bias without weight used to add beta to stale L1 in the sharded Welford kernel.
+@pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16], ids=["gb_bf16"])
+@pytest.mark.parametrize("use_welford", [True], ids=["welford"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("has_weight", [True, False])
+@pytest.mark.parametrize("has_bias", [True, False])
+def test_layernorm_block_sharded_optional_affine(device, dtype, use_welford, gamma_dtype, has_weight, has_bias):
+    run_layernorm_block_sharded(device, dtype, use_welford, gamma_dtype, has_weight=has_weight, has_bias=has_bias)

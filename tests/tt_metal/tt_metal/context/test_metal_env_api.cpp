@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/device/mock_device_util.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -24,8 +25,8 @@ TEST(MetalEnv, Init) {
 }
 
 TEST(MetalEnv, Mock) {
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
-    MetalEnvDescriptor settings(mock_path);
+    const MetalEnvDescriptor settings{
+        .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)};
     MetalEnv env_1(settings);
     MetalEnv env_2(settings);
     EXPECT_EQ(env_1.get_arch(), tt::ARCH::WORMHOLE_B0);
@@ -35,11 +36,8 @@ TEST(MetalEnv, Mock) {
 TEST(MetalEnv, OnePhysicalMultipleMock) {
     auto env_physical = MetalEnv();
 
-    auto mock_path_1 = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value();
-    MetalEnv env_mock_1{MetalEnvDescriptor(mock_path_1)};
-
-    auto mock_path_2 = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2).value();
-    MetalEnv env_mock_2{MetalEnvDescriptor(mock_path_2)};
+    MetalEnv env_mock_1({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
+    MetalEnv env_mock_2({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
 
     EXPECT_EQ(MetalEnvAccessor(env_mock_1).impl().get_cluster().arch(), tt::ARCH::BLACKHOLE);
     EXPECT_EQ(MetalEnvAccessor(env_mock_2).impl().get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
@@ -53,7 +51,7 @@ TEST(MetalEnv, EnvQueries) {
     EXPECT_NO_THROW(env.get_l1_size());
     EXPECT_NO_THROW(env.get_dram_alignment());
     EXPECT_NO_THROW(env.get_l1_alignment());
-    EXPECT_NO_THROW(env.get_arch_num_circular_buffers());
+    EXPECT_NO_THROW(env.get_num_dataflow_buffers());
     EXPECT_NO_THROW(env.get_max_worker_l1_unreserved_size());
     EXPECT_NO_THROW(env.get_eps());
     EXPECT_NO_THROW(env.get_nan());
@@ -61,14 +59,13 @@ TEST(MetalEnv, EnvQueries) {
 }
 
 TEST(MetalEnv, EnvQueriesMock) {
-    auto env_settings = MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2));
-    MetalEnv env(env_settings);
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
     EXPECT_EQ(env.get_arch(), tt::ARCH::BLACKHOLE);
     EXPECT_NO_THROW(env.get_l1_size());
     EXPECT_EQ(env.get_num_pcie_devices(), 2);
     EXPECT_NO_THROW(env.get_dram_alignment());
     EXPECT_NO_THROW(env.get_l1_alignment());
-    EXPECT_NO_THROW(env.get_arch_num_circular_buffers());
+    EXPECT_NO_THROW(env.get_num_dataflow_buffers());
     EXPECT_NO_THROW(env.get_max_worker_l1_unreserved_size());
     EXPECT_NO_THROW(env.get_eps());
     EXPECT_NO_THROW(env.get_nan());
@@ -96,8 +93,7 @@ TEST(MetalEnv, ForkSafety) {
 TEST(MetalEnv, ForkSafetyMultipleEnvs) {
     MetalEnv env_physical;
 
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value();
-    MetalEnv env_mock{MetalEnvDescriptor(mock_path)};
+    MetalEnv env_mock({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
 
     pid_t pid = fork();
     ASSERT_NE(pid, -1) << "fork() failed";
@@ -135,6 +131,25 @@ TEST(MetalEnv, ForkSafetyActiveEnv) {
     EXPECT_EQ(WEXITSTATUS(status), 1);
 }
 
+// --- MetalEnvDescriptor tests ---
+
+TEST(MetalEnv, DefaultDescriptorTargetsSilicon) {
+    const MetalEnvDescriptor settings;
+    EXPECT_FALSE(settings.is_mock_device());
+    EXPECT_FALSE(settings.mock_cluster_desc_path.has_value());
+}
+
+TEST(MetalEnv, DescriptorMockByPath) {
+    const MetalEnvDescriptor settings{.mock_cluster_desc_path = "wormhole_N150.yaml"};
+    EXPECT_TRUE(settings.is_mock_device());
+    EXPECT_EQ(settings.mock_cluster_desc_path, "wormhole_N150.yaml");
+}
+
+TEST(MetalEnv, EmptyPathIsNotMock) {
+    const MetalEnvDescriptor settings{.mock_cluster_desc_path = ""};
+    EXPECT_FALSE(settings.is_mock_device());
+}
+
 // --- FabricConfigDescriptor tests ---
 
 TEST(MetalEnv, FabricConfigDescriptorDefaults) {
@@ -154,11 +169,11 @@ TEST(MetalEnv, DescriptorWithFabricConfig) {
     fc.num_routing_planes = 4;
     fc.fabric_tensix_config = tt_fabric::FabricTensixConfig::MUX;
 
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1);
-    MetalEnvDescriptor settings(mock_path, fc);
+    const MetalEnvDescriptor settings{
+        .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1), .fabric = fc};
 
     EXPECT_TRUE(settings.is_mock_device());
-    const auto& stored = settings.fabric_config_descriptor();
+    const auto& stored = settings.fabric;
     EXPECT_EQ(stored.fabric_config, tt_fabric::FabricConfig::FABRIC_1D);
     EXPECT_EQ(stored.reliability_mode, tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     EXPECT_TRUE(stored.num_routing_planes.has_value());
@@ -167,19 +182,18 @@ TEST(MetalEnv, DescriptorWithFabricConfig) {
 }
 
 TEST(MetalEnv, DefaultDescriptorFabricConfigIsDisabled) {
-    MetalEnvDescriptor settings;
-    EXPECT_EQ(settings.fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::DISABLED);
+    const MetalEnvDescriptor settings;
+    EXPECT_EQ(settings.fabric.fabric_config, tt_fabric::FabricConfig::DISABLED);
 }
 
 TEST(MetalEnv, FabricConfigPreservedThroughEnv) {
     FabricConfigDescriptor fc;
     fc.fabric_config = tt_fabric::FabricConfig::FABRIC_2D;
 
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2);
-    MetalEnvDescriptor settings(mock_path, fc);
-    MetalEnv env(settings);
+    MetalEnv env(
+        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2), .fabric = fc});
 
-    const auto& stored = env.get_descriptor().fabric_config_descriptor();
+    const auto& stored = env.get_descriptor().fabric;
     EXPECT_EQ(stored.fabric_config, tt_fabric::FabricConfig::FABRIC_2D);
 }
 
@@ -188,9 +202,8 @@ TEST(MetalEnv, AccessorFabricConfigMatchesDescriptor) {
     fc.fabric_config = tt_fabric::FabricConfig::FABRIC_1D_RING;
     fc.fabric_udm_mode = tt_fabric::FabricUDMMode::ENABLED;
 
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1);
-    MetalEnvDescriptor settings(mock_path, fc);
-    MetalEnv env(settings);
+    MetalEnv env(
+        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1), .fabric = fc});
 
     MetalEnvImpl& accessor = MetalEnvAccessor(env).impl();
 
@@ -198,46 +211,17 @@ TEST(MetalEnv, AccessorFabricConfigMatchesDescriptor) {
     EXPECT_EQ(accessor.get_fabric_udm_mode(), tt_fabric::FabricUDMMode::ENABLED);
 }
 
-// --- Control plane and system mesh tests ---
-
-TEST(MetalEnv, ControlPlaneAccessibleOnMock) {
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1);
-    MetalEnvDescriptor settings(mock_path);
-    MetalEnv env(settings);
-
-    auto& cp = env.get_control_plane();
-    EXPECT_EQ(cp.get_fabric_config(), tt_fabric::FabricConfig::DISABLED);
-}
+// --- System mesh tests ---
 
 TEST(MetalEnv, SystemMeshAccessibleOnMock) {
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1);
-    MetalEnvDescriptor settings(mock_path);
-    MetalEnv env(settings);
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
 
     auto& mesh = env.get_system_mesh();
     EXPECT_GT(mesh.shape().mesh_size(), 0);
 }
 
-TEST(MetalEnv, ControlPlaneReflectsFabricConfig) {
-    FabricConfigDescriptor fc;
-    fc.fabric_config = tt_fabric::FabricConfig::FABRIC_1D;
-
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2);
-    MetalEnvDescriptor settings(mock_path, fc);
-    MetalEnv env(settings);
-
-    auto& cp = env.get_control_plane();
-    EXPECT_EQ(cp.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
-}
-
-TEST(MetalEnv, ControlPlaneAndSystemMeshSameEnv) {
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2);
-    MetalEnvDescriptor settings(mock_path);
-    MetalEnv env(settings);
-
-    auto& cp1 = env.get_control_plane();
-    auto& cp2 = env.get_control_plane();
-    EXPECT_EQ(&cp1, &cp2);
+TEST(MetalEnv, SystemMeshSameEnv) {
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
 
     auto& mesh1 = env.get_system_mesh();
     auto& mesh2 = env.get_system_mesh();
@@ -248,16 +232,14 @@ TEST(MetalEnv, ControlPlaneAndSystemMeshSameEnv) {
 // If fabric not enabled by the user, but it turns out we need dispatch on fabric, then the
 // env needs to be reconfigured to enable fabric.
 TEST(MetalEnv, ReconfigureFabricForDispatch) {
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2);
-    MetalEnvDescriptor settings(mock_path);
-    MetalEnv env(settings);
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
 
     // MetalEnv cannot be reconfigured after init so use the internal accessor
     MetalEnvImpl& accessor = MetalEnvAccessor(env).impl();
 
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::DISABLED);
 
-    auto& cp_before = env.get_control_plane();
+    auto& cp_before = accessor.get_control_plane();
     EXPECT_EQ(cp_before.get_fabric_config(), tt_fabric::FabricConfig::DISABLED);
 
     auto& mesh_before = env.get_system_mesh();
@@ -269,12 +251,67 @@ TEST(MetalEnv, ReconfigureFabricForDispatch) {
 
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
 
-    auto& cp_after = env.get_control_plane();
+    auto& cp_after = accessor.get_control_plane();
     EXPECT_EQ(cp_after.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
     EXPECT_NE(cp_ptr_before, &cp_after);
 
     auto& mesh_after = env.get_system_mesh();
     EXPECT_GT(mesh_after.shape().mesh_size(), 0);
+}
+
+// --- Context leaks on failed mesh device creation (#57286) ---
+
+namespace {
+
+// The lowest free slot is handed out first, so a leaked context shifts this upward.
+ContextId next_free_context_id(const std::string& mock_path) {
+    MetalEnv probe({.mock_cluster_desc_path = mock_path});
+    ContextId id = MetalContext::create_instance(probe);
+    MetalContext::destroy_instance(/*check_device_count=*/false, id);
+    return id;
+}
+
+}  // namespace
+
+TEST(MetalEnv, FailedCreateMeshDeviceDoesNotLeakContext) {
+    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1);
+    const ContextId baseline = next_free_context_id(mock_path);
+
+    for (int i = 0; i < 3; ++i) {
+        MetalEnv env({.mock_cluster_desc_path = mock_path});
+        // Fatals inside MeshDeviceImpl::create, after the context exists and before ownership transfers.
+        EXPECT_THROW(
+            env.create_mesh_device(distributed::MeshDeviceConfig(
+                /*mesh_shape=*/std::nullopt, /*offset=*/std::nullopt, /*physical_device_ids=*/{0})),
+            std::runtime_error);
+    }
+
+    EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
+}
+
+TEST(MetalEnv, FailedCreateUnitMeshDeviceDoesNotLeakContext) {
+    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1);
+    const ContextId baseline = next_free_context_id(mock_path);
+
+    for (int i = 0; i < 3; ++i) {
+        MetalEnv env({.mock_cluster_desc_path = mock_path});
+        // Device 99 is not in the 1-chip mock cluster, so opening it fails.
+        EXPECT_THROW(env.create_unit_mesh(99), std::runtime_error);
+    }
+
+    EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
+}
+
+TEST(MetalEnv, FailedCreateUnitMeshesDoesNotLeakContext) {
+    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1);
+    const ContextId baseline = next_free_context_id(mock_path);
+
+    for (int i = 0; i < 3; ++i) {
+        MetalEnv env({.mock_cluster_desc_path = mock_path});
+        EXPECT_THROW(env.create_unit_meshes({}), std::runtime_error);
+    }
+
+    EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
 }
 
 }  // namespace tt::tt_metal

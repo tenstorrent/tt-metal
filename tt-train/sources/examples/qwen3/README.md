@@ -21,7 +21,6 @@ All three scripts load a pretrained HuggingFace Qwen3 model and accept the same 
 | `--model_path` | HuggingFace model (e.g. `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`) | required |
 | `--max_seq_len` | Maximum sequence length | `128` |
 | `--mesh_shape ROWS COLS` | Device mesh `[DP, TP]` | `1 1` |
-| `--sharded_loss` | Keep LM head output vocab-sharded (distributed cross-entropy) | off |
 | `--checkpoint` | Gradient checkpointing (activation recomputation) | off |
 | `--track_memory [N]` | Memory tracking (snapshot every N-th layer) | off |
 
@@ -50,10 +49,6 @@ python generate.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \
 # On-device sampling (no D2H logits transfer)
 python generate.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \
     --max_tokens 32 --max_seq_len 128 --mesh_shape 1 8 --no_logits
-
-# Sharded loss + on-device sampling
-python generate.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \
-    --max_tokens 32 --max_seq_len 128 --mesh_shape 1 8 --sharded_loss --no_logits
 
 # Batched generation
 python generate.py --model_path Qwen/Qwen3-0.6B --prompt "Once upon a time" \
@@ -155,7 +150,7 @@ python train.py --model_path Qwen/Qwen3-0.6B --max_seq_len 128 \
 | MLP gate/up | ColumnParallel | broadcast input |
 | MLP down | RowParallel | all-reduce output |
 | RMSNorm, QK-Norm | Replicated | None |
-| LM head | ColumnParallel + gather | broadcast + all-gather |
+| LM head | ColumnParallel (vocab-sharded output) | broadcast |
 
 **2 all-reduces per layer.** TP requires all head counts, hidden, and intermediate sizes divisible by `tp_size`.
 
@@ -182,14 +177,12 @@ qwen3/
     ├── dataset.py               # TextDataset, SourceCodeDataset loaders
     ├── device_setup.py          # Device/mesh initialization
     ├── dist_helpers.py          # Sharded/replicated tensor constructors
-    ├── distributed_ops.py       # AllGather/Scatter autograd ops, VocabParallelEmbedding
     ├── kv_cache.py              # KV cache, causal/decode masks
     ├── lora.py                  # LoRA adapter injection
     ├── memory.py                # Memory usage tracking
     ├── model_factory.py         # Unified model creation (auto-selects single/distributed)
     ├── param_utils.py           # Weight mapping, permutation transforms
     ├── save_load.py             # Checkpoint save/load, HF export
-    ├── sharded_loss.py          # Distributed cross-entropy (vocab-sharded)
     └── tensor_utils.py          # Tensor creation, padding, mesh gather helpers
 ```
 
@@ -197,9 +190,16 @@ qwen3/
 
 Device initialisation lives in `utils/device_setup.py` and is shared by all
 three entry-point scripts (`generate.py`, `gradients.py`, `train.py`).
-In distributed mode it calls `ttml.core.distributed.enable_fabric()` which
-automatically selects the fabric config (including wrap-around / torus
-connections) from the Mesh Graph Descriptor (MGD) file.
+In distributed mode it calls `ttml.open_device_mesh(ttml.Mesh((dp, tp), ("dp",
+"tp")))`, which enables TT-Fabric — automatically selecting the fabric config
+(including wrap-around / torus connections) from the Mesh Graph Descriptor
+(MGD) file — validates the requested mesh shape against that MGD, and registers
+the mesh under the axis names `"dp"` and `"tp"`.
+
+Registering the *named* mesh is what lets the model use the shared
+`ttml.modules` parallel layers: `VocabParallelEmbedding` and
+`FeatureParallelEmbedding` resolve their cluster axis via
+`ttml.mesh().axis_index("tp")`, and raise if no mesh has been opened.
 
 ### Setting the MGD file
 
@@ -232,7 +232,10 @@ the [Distributed Training documentation](https://github.com/tenstorrent/tt-metal
 
 ## Nice-to-Have TODOs
 
-- **VocabParallelEmbedding & sharded loss** — `_vocab_parallel_embedding`
-  (`utils/distributed_ops.py`) and `sharded_cross_entropy_loss`
-  (`utils/sharded_loss.py`) are composite ops with NumPy host-side logic.
-  Implement as proper device kernels.
+- **Embedding as a device kernel** — the TP embeddings are composite ops built
+  from `ttnn` primitives (`ttml.modules.VocabParallelEmbedding` for tied
+  weights, `FeatureParallelEmbedding` for untied). Everything runs on device
+  and no host round-trip remains, but a fused kernel would still save the
+  intermediate mask/gather traffic. (The TP cross-entropy already runs through
+  the C++ `ttml.ops.distributed.vocab_parallel_cross_entropy_loss` op, which
+  `train.py` selects automatically when TP is enabled.)

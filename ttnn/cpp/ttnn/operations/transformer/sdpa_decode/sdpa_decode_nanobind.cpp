@@ -92,7 +92,18 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("sliding_window_size") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        // Read the K/V cache through a different (block_size, num_kv_heads, head_dim) view
+        // than its declared shape; needed for vLLM's shared kv-cache groups. Same type as
+        // chunked prefill SDPA. See ttnn.PagedCacheGeometryOverride.
+        nb::arg("paged_cache_geometry") = nb::none(),
+        // cache_position_modulo (in tokens) treats the cache as a circular buffer:
+        // every page_table lookup uses cur_pos % cache_position_modulo. Required when
+        // the cache is sized for sliding-window-only allocation (vLLM
+        // SlidingWindowSpec); without it, positions past the bounded capacity collapse
+        // onto physical block 0 and silently corrupt the cache. Must be a multiple of
+        // (effective) block_size and >= sliding_window_size. Paged-mode only.
+        nb::arg("cache_position_modulo") = nb::none());
 
     ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,

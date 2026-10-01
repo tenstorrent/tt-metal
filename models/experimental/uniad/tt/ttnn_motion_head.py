@@ -50,12 +50,18 @@ class TtMotionHead:
         self.num_anchor = num_anchor
         self.num_anchor_group = len(group_id_list)
 
-        # we merge the classes into groups for anchor assignment
-        self.cls2group = [0 for i in range(num_classes)]
+        # we merge the classes into groups for anchor assignment.
+        # Keep cls2group as a small host-side Python list — it's only used
+        # for a single int→int lookup in group_mode_query_pos. The previous
+        # code uploaded it as a ttnn.Tensor and then indexed it with a host
+        # int, which forced a host roundtrip on every lookup to read the
+        # result back. Pure host indexing avoids both transfers, and a plain
+        # list yields native Python ints (no numpy scalar to unwrap).
+        cls2group = [0 for _ in range(num_classes)]
         for i, grouped_ids in enumerate(group_id_list):
             for gid in grouped_ids:
-                self.cls2group[gid] = i
-        self.cls2group = ttnn.Tensor(np.array(self.cls2group), device=device)
+                cls2group[gid] = i
+        self.cls2group = cls2group
         self.pc_range = pc_range
         self.predict_steps = predict_steps
         self.vehicle_id_list = vehicle_id_list
@@ -64,6 +70,11 @@ class TtMotionHead:
         self._load_anchors(anchor_info_path)
         self._build_layers(transformerlayers, det_layer_num)
         self._init_layers()
+        # valid_traj_masks is a constant all-ones tensor whose shape comes
+        # from track_query.shape per forward. Lazy-cache so we don't
+        # allocate per-frame inside the would-be traced region.
+        self._valid_traj_masks_cache = None
+        self._valid_traj_masks_cache_key = None
 
     def _load_anchors(self, anchor_info_path):
         anchor_infos = pickle.load(open(anchor_info_path, "rb"))
@@ -213,23 +224,13 @@ class TtMotionHead:
         def filter_vehicle_query(outs_motion, labels, vehicle_id_list):
             if len(labels.shape) < 1:  # No other obj query except sdc query.
                 return None
-
-            # select vehicle query according to vehicle_id_list
-            vehicle_mask = ttnn.zeros(labels.shape, device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT)
-            for veh_id in vehicle_id_list:
-                vehicle_mask = ttnn.bitwise_or(vehicle_mask, labels.item() == veh_id)
-            outs_motion["traj_query"] = outs_motion["traj_query"][
-                :, :, :
-            ]  # vehicle_mask > 0] #vechile_mask=1 os keeping as True
-            outs_motion["track_query"] = outs_motion["track_query"][
-                :, :
-            ]  # vehicle_mask > 0]#vechile_mask=1 os keeping as True
-            outs_motion["track_query_pos"] = outs_motion["track_query_pos"][
-                :, :
-            ]  # vehicle_mask > 0]#vechile_mask=1 os keeping as True
-            outs_motion["track_scores"] = outs_motion["track_scores"][
-                :, :
-            ]  # vehicle_mask > 0]#vechile_mask=1 os keeping as True
+            # The original code built a per-veh-id bitwise_or mask but then
+            # commented out the actual mask-application slices (the existing
+            # slicing `[:, :, :]` etc. is identity). The mask was discarded,
+            # so the construction loop was dead work — including a per-iter
+            # `labels.item()` host read. Drop the loop; the identity slices
+            # are likewise pure no-ops on the outs_motion dict, so just
+            # return the dict unchanged.
             return outs_motion
 
         outs_motion = filter_vehicle_query(outs_motion, labels, self.vehicle_id_list)
@@ -425,7 +426,13 @@ class TtMotionHead:
         outputs_trajs = ttnn.stack(outputs_trajs, dim=0)
 
         B, A_track, D = track_query.shape
-        valid_traj_masks = ttnn.ones((B, A_track), device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT)
+        cache_key = (B, A_track)
+        if self._valid_traj_masks_cache_key != cache_key:
+            self._valid_traj_masks_cache = ttnn.ones(
+                (B, A_track), device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
+            )
+            self._valid_traj_masks_cache_key = cache_key
+        valid_traj_masks = self._valid_traj_masks_cache
         outs = {
             "all_traj_scores": outputs_traj_scores,
             "all_traj_preds": outputs_trajs,
@@ -441,14 +448,12 @@ class TtMotionHead:
         batch_size = len(bbox_results)
         agent_num = mode_query_pos.shape[1]
         batched_mode_query_pos = []
-        self.cls2group = self.cls2group
         for i in range(batch_size):
             bboxes, scores, labels, bbox_index, mask = bbox_results[i]
-            label = ttnn.clone(labels)
-            grouped_label = self.cls2group[label.item()]
-            grouped_mode_query_pos = []
-            for j in range(agent_num):
-                grouped_mode_query_pos.append(mode_query_pos[i, j, grouped_label.item()])
+            # cls2group lives on host (Python list) so the lookup is a pure
+            # host op — one device→host read for `labels`, then int indexing.
+            glabel_int = int(self.cls2group[int(labels.item())])
+            grouped_mode_query_pos = [mode_query_pos[i, j, glabel_int] for j in range(agent_num)]
             batched_mode_query_pos.append(ttnn.stack(grouped_mode_query_pos, 0))
         return ttnn.stack(batched_mode_query_pos, 0)
 

@@ -14,6 +14,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_ttnn,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def get_tensors(
     input_shape,
@@ -210,6 +213,8 @@ def test_moreh_linear_wo_output(shapes, has_bias, npu_dtype, device):
 )
 def test_moreh_linear_enable_cache(shapes, device):
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         passing = moreh_linear(shapes, True, True, get_compute_kernel_options(False), device)
@@ -370,6 +375,8 @@ def test_moreh_linear_backward_enable_cache(shapes, device):
     compute_kernel_config = get_compute_kernel_options(False)
 
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         passing = moreh_linear_backward(
@@ -478,8 +485,8 @@ def test_moreh_bias_backward_fp32(shapes, device):
     torch_output.backward(torch_output_grad.float())
     ## test for equivalance
     rtol = atol = 0.1
-    tt_bias_grad_fp32_cpu = tt_bias_grad_fp32.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(bias_shape).to_torch()
-    tt_bias_grad_cpu = tt_bias_grad.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(bias_shape).to_torch()
+    tt_bias_grad_fp32_cpu = ttnn.to_torch(tt_bias_grad_fp32)
+    tt_bias_grad_cpu = ttnn.to_torch(tt_bias_grad)
     passing, output_pcc = comp_allclose_and_pcc(
         torch_bias_fp32.grad, tt_bias_grad_fp32_cpu, pcc=0.98, rtol=rtol, atol=atol
     )

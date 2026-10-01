@@ -5,29 +5,35 @@
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/debug/dprint_pages.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 #define u16_l1_ptr volatile tt_l1_ptr uint16_t*
 #define u32_l1_ptr volatile tt_l1_ptr uint32_t*
 
 template <uint32_t padding_value_num_bytes, uint32_t num_bytes>
-inline __attribute__((always_inline)) void fill_cb_with_padding_value(
-    const uint32_t cb_id, const uint32_t padding_value_as_u32) {
+inline __attribute__((always_inline)) void fill_dfb_with_padding_value(
+    Scratchpad<uint8_t>& pad, const uint32_t padding_value_as_u32) {
     constexpr uint32_t num_elts =
         num_bytes / padding_value_num_bytes;  // constexpr so that this division happens once on host
-    experimental::CircularBuffer cb(cb_id);
-    uint32_t cb_write_addr = cb.get_write_ptr();
+    uint32_t dfb_write_addr = pad.get_base_address();
 
     if constexpr (padding_value_num_bytes == 4) {
-        u32_l1_ptr cb_write_addr_as_u32 = reinterpret_cast<u32_l1_ptr>(cb_write_addr);
+        u32_l1_ptr dfb_write_addr_as_u32 = reinterpret_cast<u32_l1_ptr>(dfb_write_addr);
         for (uint32_t i = 0; i < num_elts; i++) {
-            cb_write_addr_as_u32[i] = padding_value_as_u32;
+            dfb_write_addr_as_u32[i] = padding_value_as_u32;
         }
     } else if constexpr (padding_value_num_bytes == 2) {
         uint16_t padding_value_as_u16 = static_cast<uint16_t>(padding_value_as_u32);
-        u16_l1_ptr cb_write_addr_as_u16 = reinterpret_cast<u16_l1_ptr>(cb_write_addr);
+        u16_l1_ptr dfb_write_addr_as_u16 = reinterpret_cast<u16_l1_ptr>(dfb_write_addr);
         for (uint32_t i = 0; i < num_elts; i++) {
-            cb_write_addr_as_u16[i] = padding_value_as_u16;
+            dfb_write_addr_as_u16[i] = padding_value_as_u16;
         }
     } else {
         static_assert(
@@ -36,29 +42,44 @@ inline __attribute__((always_inline)) void fill_cb_with_padding_value(
 }
 
 void kernel_main() {
-    constexpr uint32_t padded_stick_bytes         = get_compile_time_arg_val(0);
-    constexpr uint32_t padded_shard_height        = get_compile_time_arg_val(1);
-    constexpr uint32_t padding_value_as_u32         = get_compile_time_arg_val(2);
-    constexpr uint32_t padding_value_num_bytes      = get_compile_time_arg_val(3);
+    constexpr auto padded_stick_bytes = get_arg(args::padded_stick_bytes);
+    constexpr auto padded_shard_height = get_arg(args::padded_shard_height);
+    constexpr auto padding_value_as_u32 = get_arg(args::padding_value_as_u32);
+    constexpr auto padding_value_num_bytes = get_arg(args::padding_value_num_bytes);
 
-    constexpr auto output_shard_cb = get_compile_time_arg_val(4);
-    constexpr auto padding_value_cb = get_compile_time_arg_val(5);
-    experimental::CircularBuffer cb_output_shard(output_shard_cb);
-    experimental::CircularBuffer cb_padding_value(padding_value_cb);
+    DataflowBuffer dfb_output_shard(dfb::out_shard);
+    Scratchpad<uint8_t> pad(scratch::pad);
 
-    cb_output_shard.reserve_back(padded_shard_height);
-    uint32_t output_shard_base_addr = cb_output_shard.get_write_ptr();
+    Noc noc;
 
-    fill_cb_with_padding_value<padding_value_num_bytes, padded_stick_bytes>(padding_value_cb, padding_value_as_u32);
-    uint32_t padding_value_base_addr = cb_padding_value.get_read_ptr();
+    dfb_output_shard.reserve_back(padded_shard_height);
+    uint32_t output_shard_base_addr = dfb_output_shard.get_write_ptr();
 
-    uint64_t output_stick_noc_addr = get_noc_addr(output_shard_base_addr);
+    fill_dfb_with_padding_value<padding_value_num_bytes, padded_stick_bytes>(pad, padding_value_as_u32);
+    uint32_t padding_value_base_addr = pad.get_base_address();
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: the fill above is CPU stores that land in L1D/L2; the NoC below sources the scratchpad from
+    // TL1 directly. Flush the filled stick so the NoC copies see the pad value. No-op on WH/BH. Matches
+    // fill_rm_interleaved.cpp (#51763).
+    flush_l2_cache_range(static_cast<uintptr_t>(padding_value_base_addr), static_cast<size_t>(padded_stick_bytes));
+#endif
+
+    CoreLocalMem<uint32_t> pad_src(padding_value_base_addr);
+    uint32_t output_stick_addr = output_shard_base_addr;
     for (uint32_t h = 0; h < padded_shard_height; h++) {
-        noc_async_write(padding_value_base_addr, output_stick_noc_addr, padded_stick_bytes);
-        noc_async_write_barrier();
+        noc.async_write(
+            pad_src,
+            UnicastEndpoint{},
+            padded_stick_bytes,
+            {.offset_bytes = 0},
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = output_stick_addr});
+        noc.async_write_barrier();
 
-        cb_output_shard.push_back(1);
+        dfb_output_shard.push_back(1);
 
-        output_stick_noc_addr += padded_stick_bytes;
+        output_stick_addr += padded_stick_bytes;
     }
 }

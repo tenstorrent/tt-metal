@@ -26,9 +26,9 @@ void apply_device_delay(
     SubDeviceId sd = subdevice_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd);
 
-    log_info(tt::LogAlways, "Starting delay primitive");
+    log_debug(tt::LogAlways, "Starting delay primitive");
     ttnn::prim::apply_device_delay(mesh_device, delays, subdevice_core_range_set);
-    log_info(tt::LogAlways, "Ending delay primitive");
+    log_debug(tt::LogAlways, "Ending delay primitive");
 }
 
 }  // namespace ttnn::operations::debug

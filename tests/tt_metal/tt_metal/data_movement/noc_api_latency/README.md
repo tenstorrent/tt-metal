@@ -3,7 +3,7 @@
 This test suite measures the issue latency (in cycles) of various NOC API calls using the experimental dataflow 2.0 API.
 
 ## Dispatch Mode
-These tests use **Fast Dispatch (Mesh Device API)** with `GenericMeshDeviceFixture` for optimal performance measurement.
+These tests use **Fast Dispatch (Mesh Device API)** with `UnitMeshFastDispatchFixture` for optimal performance measurement.
 
 ## Test Description
 
@@ -11,7 +11,7 @@ The tests measure the time taken by NOC API calls themselves, excluding barrier 
 1. Performs a sweep over number of transactions (1 to 256)
 2. Performs a sweep over transaction sizes (configurable)
 3. Measures cycles for the API calls only (barriers are outside the measurement window)
-4. Uses experimental NOC 2.0 API (`experimental::Noc`, `experimental::UnicastEndpoint`, etc.)
+4. Uses NOC 2.0 API (`Noc`, `UnicastEndpoint`, etc.)
 
 ## Test Parameters
 

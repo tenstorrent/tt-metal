@@ -3,30 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_AB_reduce.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB REDUCE
  *************************************************************************/
 
 template <PoolType pool_type, ReduceDim reduce_dim>
-inline void llk_unpack_AB_reduce_mop_config(const std::uint32_t operand_id = 0) {
-    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(tensor_shape);
-}
-
-template <PoolType pool_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
-    if constexpr (enforce_fp32_accumulation) {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
-    }
-
-    _llk_unpack_AB_reduce_init_<pool_type, reduce_dim, enforce_fp32_accumulation>(tensor_shape);
+    _llk_unpack_AB_reduce_init_<pool_type, reduce_dim>(tensor_shape);
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim>
@@ -35,6 +27,7 @@ inline void llk_unpack_AB_reduce(
     const std::uint32_t operandB,
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b) {
+    SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;

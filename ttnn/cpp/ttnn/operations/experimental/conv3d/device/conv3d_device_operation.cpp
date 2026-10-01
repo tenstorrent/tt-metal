@@ -29,6 +29,12 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     const std::array<uint32_t, 3>& stride,
     const std::array<uint32_t, 3>& kernel_size,
     const std::array<uint32_t, 3>& dilation) {
+    TT_FATAL(
+        stride[0] > 0 && stride[1] > 0 && stride[2] > 0,
+        "stride must be greater than 0, got ({}, {}, {})",
+        stride[0],
+        stride[1],
+        stride[2]);
     uint32_t T_out = ((T_in + 2 * padding[0] - (dilation[0] * (kernel_size[0] - 1)) - 1) / stride[0]) + 1;
     uint32_t H_out = ((H_in + 2 * padding[1] - (dilation[1] * (kernel_size[1] - 1)) - 1) / stride[1]) + 1;
     uint32_t W_out = ((W_in + 2 * padding[2] - (dilation[2] * (kernel_size[2] - 1)) - 1) / stride[2]) + 1;
@@ -95,6 +101,7 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             bias_tensor.logical_shape().size());
     }
 
+    TT_FATAL(args.groups > 0, "groups must be greater than 0");
     TT_FATAL(
         input_tensor_a.logical_shape()[4] % args.groups == 0,
         "Input channels must be divisible by groups. Got input channels {} and groups {}",
@@ -179,6 +186,34 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             args.output_channels);
     }
 
+    if (args.config.enable_fp32_operand_split) {
+        TT_FATAL(
+            tensor_args.weight_lo_tensor.has_value(),
+            "enable_fp32_operand_split needs weight_lo_tensor (the W - bf16(W) residual).");
+        const auto& weight_lo = tensor_args.weight_lo_tensor.value();
+        TT_FATAL(
+            input_tensor_a.dtype() == DataType::FLOAT32,
+            "enable_fp32_operand_split recovers fp32 operand bits; the activation must be float32. got {}",
+            input_tensor_a.dtype());
+        TT_FATAL(weight_lo.layout() == Layout::TILE, "weight_lo_tensor must be tiled.");
+        TT_FATAL(
+            weight_lo.dtype() == weight_tensor.dtype() && weight_lo.logical_shape() == weight_tensor.logical_shape(),
+            "weight_lo_tensor must match weight_tensor in dtype and shape. got {} {} vs {} {}",
+            weight_lo.dtype(),
+            weight_lo.logical_shape(),
+            weight_tensor.dtype(),
+            weight_tensor.logical_shape());
+        [[maybe_unused]] const auto [fidelity, approx, fp32_dest_acc, l1_acc, full_sync] =
+            get_compute_kernel_config_args(hal::get_arch(), args.compute_kernel_config);
+        TT_FATAL(
+            fp32_dest_acc,
+            "enable_fp32_operand_split accumulates three products in fp32 DST; fp32_dest_acc_en must be set.");
+    } else {
+        TT_FATAL(
+            !tensor_args.weight_lo_tensor.has_value(),
+            "weight_lo_tensor is only read with enable_fp32_operand_split=True.");
+    }
+
     // Add grid size validation
     const auto& device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
     TT_FATAL(
@@ -214,9 +249,70 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         "Number of C_in blocks ({}) must be <= the number of cores ({})",
         C_in_blocks,
         total_cores);
+
+    if (tensor_args.halo_buffer.has_value()) {
+        TT_FATAL(args.padding_mode == "zeros", "Halo mode requires padding_mode \"zeros\". got {}", args.padding_mode);
+        // Halo reads exist only on the shard-gather path. The direct reader (no spatial reuse, or
+        // any dilation) zero-pads boundaries with no halo branch, so it would drop the halo.
+        const bool has_spatial_reuse = args.kernel_size[0] > 1 || args.kernel_size[1] > 1 || args.kernel_size[2] > 1;
+        const bool has_no_dilation = args.dilation[0] == 1 && args.dilation[1] == 1 && args.dilation[2] == 1;
+        TT_FATAL(
+            has_spatial_reuse && has_no_dilation,
+            "Halo mode requires a kernel with spatial reuse and no dilation. got kernel_size=({}, {}, {}), "
+            "dilation=({}, {}, {})",
+            args.kernel_size[0],
+            args.kernel_size[1],
+            args.kernel_size[2],
+            args.dilation[0],
+            args.dilation[1],
+            args.dilation[2]);
+        const uint64_t outer = static_cast<uint64_t>(input_shape[0]) * static_cast<uint64_t>(input_shape[1]);
+        const uint64_t h_total = H_in + (2 * static_cast<uint64_t>(args.padding[1]));
+        const uint64_t required_pages =
+            2 * outer *
+            ((static_cast<uint64_t>(args.padding[1]) * W_in) + (static_cast<uint64_t>(args.padding[2]) * h_total));
+        const auto& halo_tensor = tensor_args.halo_buffer.value();
+        TT_FATAL(
+            halo_tensor.dtype() == input_tensor_a.dtype(),
+            "Halo buffer dtype must match the input dtype. got {} vs {}",
+            halo_tensor.dtype(),
+            input_tensor_a.dtype());
+        TT_FATAL(halo_tensor.layout() == Layout::ROW_MAJOR, "Halo buffer must be row-major.");
+        TT_FATAL(
+            halo_tensor.buffer()->num_pages() >= required_pages,
+            "Halo buffer holds {} pages but the [Htop|Hbot|Wleft|Wright] sections need {} (N*T_in={}, H_in={}, "
+            "W_in={}, pad_h={}, pad_w={})",
+            halo_tensor.buffer()->num_pages(),
+            required_pages,
+            outer,
+            H_in,
+            W_in,
+            args.padding[1],
+            args.padding[2]);
+        TT_FATAL(
+            halo_tensor.buffer()->aligned_page_size() == input_tensor_a.buffer()->aligned_page_size(),
+            "Halo buffer page size ({} B) must match the input's ({} B); the reader fetches halo sticks with the "
+            "input's row size",
+            halo_tensor.buffer()->aligned_page_size(),
+            input_tensor_a.buffer()->aligned_page_size());
+    }
+
+    if (tensor_args.pad_offset_tensor.has_value()) {
+        // The reader blind-reads [h_start, w_start] out of page 0 to evaluate the logical-pad mask.
+        const auto& offset_tensor = tensor_args.pad_offset_tensor.value();
+        TT_FATAL(
+            offset_tensor.dtype() == DataType::UINT32,
+            "Pad offset tensor must be uint32. got {}",
+            offset_tensor.dtype());
+        TT_FATAL(
+            offset_tensor.buffer()->aligned_page_size() >= 2 * sizeof(uint32_t),
+            "Pad offset tensor page 0 must hold [h_start, w_start] ({} B); got a {} B page",
+            2 * sizeof(uint32_t),
+            offset_tensor.buffer()->aligned_page_size());
+    }
 }
 
-TensorSpec Conv3dDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     const auto& input_tensor_a_shape = input_tensor_a.logical_shape();
@@ -230,13 +326,17 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
     auto [T_out, H_out, W_out] =
         detail::compute_output_dims(T_in, H_in, W_in, args.padding, args.stride, args.kernel_size, args.dilation);
 
+    // Padded-output mode: allocate a spatially padded output; the writer fills only the interior.
+    H_out += 2 * args.output_pad_h;
+    W_out += 2 * args.output_pad_w;
+
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
     ttnn::Shape padded_output_shape({N, T_out, H_out, W_out, padded_C_out});
 
     const auto& memory_config = args.output_mem_config;
     auto dtype = args.dtype;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config, output_shape, padded_output_shape));
@@ -245,24 +345,6 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
 Tensor Conv3dDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
-}
-
-ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& weight_tensor = tensor_args.weight_tensor;
-    const auto& bias_tensor = tensor_args.bias_tensor;
-    operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
-        args,
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_tensor.logical_shape(),
-        weight_tensor.dtype(),
-        weight_tensor.memory_config(),
-        weight_tensor.logical_shape(),
-        bias_tensor.has_value());
-
-    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv3dDeviceOperation::create_op_performance_model(
@@ -291,6 +373,12 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv3dDeviceOperation
     int64_t num_mul_adds_per_elem =
         static_cast<int64_t>(C_in) * filter_t * filter_h * filter_w * 2;  // 1 multiply and 1 add per element
     int64_t num_mul_adds = num_mul_adds_per_elem * T_out * H_out * W_out * args.output_channels * batch_size;
+    // The fp32 operand split runs three matmul products per block (x_hi*W_hi + x_hi*W_lo + x_lo*W_hi). Not modeled:
+    // the SFPU hi/lo split of each activation tile, and the extra weight reads -- the split disables weight sharing,
+    // so every core reads W_hi and W_lo from DRAM itself, while the byte count below takes each tensor once.
+    if (args.config.enable_fp32_operand_split) {
+        num_mul_adds *= 3;
+    }
 
     int ideal_dev_clock_cycles = std::ceil(
         (static_cast<float>(num_mul_adds) / static_cast<float>(num_cores * tensix_mul_adds_per_cycle_lofi)) *
@@ -300,6 +388,12 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv3dDeviceOperation
     Tensors input_tensors = {tensor_args.input_tensor, tensor_args.weight_tensor};
     if (tensor_args.bias_tensor.has_value()) {
         input_tensors.push_back(tensor_args.bias_tensor.value());
+    }
+    if (tensor_args.halo_buffer.has_value()) {
+        input_tensors.push_back(tensor_args.halo_buffer.value());
+    }
+    if (tensor_args.weight_lo_tensor.has_value()) {
+        input_tensors.push_back(tensor_args.weight_lo_tensor.value());
     }
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         input_tensors, output_tensor, ideal_dev_clock_cycles);
@@ -325,7 +419,14 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     const std::string& padding_mode_,
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& halo_buffer,
+    uint32_t logical_h_mask,
+    uint32_t logical_w_mask,
+    const std::optional<Tensor>& pad_offset_tensor,
+    uint32_t output_pad_h,
+    uint32_t output_pad_w,
+    const std::optional<Tensor>& weight_lo_tensor) {
     using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -345,7 +446,11 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .dilation =
             (config.dilation != default_dilation && dilation_ == default_dilation) ? config.dilation : dilation_,
         .padding_mode = padding_mode_,
-        .groups = groups_};
+        .groups = groups_,
+        .logical_h_mask = logical_h_mask,
+        .logical_w_mask = logical_w_mask,
+        .output_pad_h = output_pad_h,
+        .output_pad_w = output_pad_w};
     TT_FATAL(
         config.dilation == default_dilation || dilation_ == default_dilation || config.dilation == dilation_,
         "dilation in Conv3dConfig and op args must match when both are set. config=({}, {}, {}), args=({}, {}, {})",
@@ -356,7 +461,12 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         dilation_[1],
         dilation_[2]);
     auto tensor_args = OperationType::tensor_args_t{
-        .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor};
+        .input_tensor = input_tensor,
+        .weight_tensor = weight_tensor,
+        .bias_tensor = bias_tensor,
+        .halo_buffer = halo_buffer,
+        .pad_offset_tensor = pad_offset_tensor,
+        .weight_lo_tensor = weight_lo_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

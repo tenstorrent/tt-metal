@@ -102,6 +102,10 @@ list(
     Library
     json-dev
     ttml
+    PPQSort_Development
+    Development
+    headers
+    pkgconfig
     Unspecified # TODO: audit if there's anything we need to ship here
 )
 
@@ -161,6 +165,7 @@ cpack_add_component(
     DEPENDS
         nn
         metalium
+        metalium-validation
     GROUP nn-validation
     DESCRIPTION "TT-NN validation tools"
 )

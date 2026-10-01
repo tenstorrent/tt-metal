@@ -5,11 +5,14 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include "ttnn/distributed/types.hpp"
 #include "update_cache_device_operation_types.hpp"
 #include "fill_cache_multi_core_program_factory.hpp"
 #include "update_cache_multi_core_program_factory.hpp"
@@ -19,7 +22,7 @@ namespace ttnn::prim {
 struct UpdateKVCacheOperation {
     using operation_attributes_t = KvCacheParams;
     using tensor_args_t = KvCacheInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<UpdateCacheMultiCoreProgramFactory, FillCacheMultiCoreProgramFactory>;
 
@@ -31,6 +34,11 @@ struct UpdateKVCacheOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    // Cache-hit re-apply of all per-dispatch state (buffer addresses + the args derived from the
+    // batch_idx/update_idx/batch_offset that compute_program_hash excludes) lives on each program
+    // factory as override_runtime_arguments(); the framework calls it on the factory that built the
+    // cached program.
 };
 
 Tensor update_cache(

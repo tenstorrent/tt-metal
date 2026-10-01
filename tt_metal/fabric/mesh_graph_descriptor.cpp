@@ -8,17 +8,23 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
+#include <regex>
+#include <map>
+#include <set>
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
@@ -29,6 +35,22 @@ using namespace tt::tt_metal::distributed;
 namespace tt::tt_fabric {
 
 namespace {
+
+// When DistributedContext is initialized (MPI / tt-run split layout), prefix instance names with mgd{id}_ using
+// subcontext_id() so split-job ranks load disjoint logical names.
+std::optional<int> subcontext_id_for_instance_name_uniquify() {
+    using tt::tt_metal::distributed::multihost::DistributedContext;
+    if (DistributedContext::is_initialized()) {
+        const auto& world = DistributedContext::get_current_world();
+        if (world != nullptr) {
+            const auto sc = world->subcontext_id();
+            if (sc.has_value()) {
+                return *sc.value();
+            }
+        }
+    }
+    return std::nullopt;
+}
 
 std::string read_file_to_string(const std::filesystem::path& file_path) {
     std::ifstream input(file_path);
@@ -43,7 +65,8 @@ std::string read_file_to_string(const std::filesystem::path& file_path) {
 uint32_t get_max_dimensions_for_architecture(proto::Architecture arch) {
     switch (arch) {
         case proto::Architecture::WORMHOLE_B0: return 2;
-        case proto::Architecture::BLACKHOLE: return 3;
+        case proto::Architecture::BLACKHOLE:
+        case proto::Architecture::QUASAR: return 3;  // QUASAR is blackhole-like (SIMULATOR_QUASAR -> p150 descriptor)
         case proto::Architecture::INVALID_ARCHITECTURE:
         default: return 0;
     }
@@ -142,34 +165,337 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+MeshGraphDescriptor::MeshGraphDescriptor(
+    std::shared_ptr<proto::MeshGraphDescriptor> proto, const bool backwards_compatible) :
     top_level_id_(static_cast<GlobalNodeId>(-1)) {
-    proto::MeshGraphDescriptor temp_proto;
-    google::protobuf::TextFormat::Parser parser;
-
-    // Allowing for back and forward compatibility for fields not currently in the proto file
-    parser.AllowUnknownField(true);
-    parser.AllowUnknownExtension(true);
-
-    TT_FATAL(parser.ParseFromString(text_proto, &temp_proto), "Failed to parse MeshGraphDescriptor textproto");
-
-    // Set defaults for missing fields
-    set_defaults(temp_proto);
-
-    // Validate the proto
-    const auto errors = static_validate(temp_proto, backwards_compatible);
+    TT_FATAL(proto != nullptr, "MeshGraphDescriptor proto is null");
+    set_defaults(*proto);
+    const auto errors = static_validate(*proto, backwards_compatible);
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
-
-    proto_ = std::make_shared<proto::MeshGraphDescriptor>(temp_proto);
-
+    proto_ = std::move(proto);
     populate();
+
+    if (const auto sid = subcontext_id_for_instance_name_uniquify(); sid.has_value()) {
+        const std::string prefix = "mgd" + std::to_string(*sid) + "_";
+        instances_by_name_.clear();
+        for (auto& [_, inst] : instances_) {
+            inst.name = prefix + inst.name;
+        }
+        for (const auto& [gid, inst] : instances_) {
+            instances_by_name_[inst.name].push_back(gid);
+        }
+    }
 }
+
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+    MeshGraphDescriptor(
+        [&] {
+            auto temp_proto = std::make_shared<proto::MeshGraphDescriptor>();
+            google::protobuf::TextFormat::Parser parser;
+            parser.AllowUnknownField(true);
+            parser.AllowUnknownExtension(true);
+            TT_FATAL(
+                parser.ParseFromString(text_proto, temp_proto.get()), "Failed to parse MeshGraphDescriptor textproto");
+            return temp_proto;
+        }(),
+        backwards_compatible) {}
 
 MeshGraphDescriptor::MeshGraphDescriptor(
     const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
     MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
+
+namespace {
+
+proto::Architecture proto_arch_from_arch(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return proto::Architecture::WORMHOLE_B0;
+        case tt::ARCH::BLACKHOLE: return proto::Architecture::BLACKHOLE;
+        // QUASAR (blackhole-like) is generated the same way as the others; main handled it via the arch-tolerant
+        // MeshGraph::generate_mesh_graph_of_shape, so keep it representable here to avoid a regression on the
+        // QUASAR CPU tests that reach this through init_control_plane_auto_discovery.
+        case tt::ARCH::QUASAR: return proto::Architecture::QUASAR;
+        default: TT_THROW("Unsupported architecture for generated MeshGraphDescriptor: {}", enchantum::to_string(arch));
+    }
+}
+
+}  // namespace
+
+MeshGraphDescriptor MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+    tt::tt_metal::distributed::MeshShape mesh_shape,
+    FabricType fabric_type,
+    FabricReliabilityMode reliability_mode,
+    tt::ARCH arch,
+    std::uint32_t num_connections_per_direction) {
+    TT_FATAL(
+        mesh_shape[0] > 0 && mesh_shape[1] > 0,
+        "MeshGraphDescriptor: Mesh shape dimensions must be positive, got {}x{}",
+        mesh_shape[0],
+        mesh_shape[1]);
+
+    auto proto = std::make_shared<proto::MeshGraphDescriptor>();
+    auto* mesh = proto->add_mesh_descriptors();
+    mesh->set_name("M0");
+    mesh->set_arch(proto_arch_from_arch(arch));
+
+    auto* device_topology = mesh->mutable_device_topology();
+    device_topology->add_dims(static_cast<int32_t>(mesh_shape[0]));
+    device_topology->add_dims(static_cast<int32_t>(mesh_shape[1]));
+    device_topology->add_dim_types(
+        has_flag(fabric_type, torus_flag_for_axis(0)) ? proto::TorusTopology::RING : proto::TorusTopology::LINE);
+    device_topology->add_dim_types(
+        has_flag(fabric_type, torus_flag_for_axis(1)) ? proto::TorusTopology::RING : proto::TorusTopology::LINE);
+
+    auto* host_topology = mesh->mutable_host_topology();
+    host_topology->add_dims(1);
+    host_topology->add_dims(1);
+
+    auto* channels = mesh->mutable_channels();
+    channels->set_count(num_connections_per_direction);
+    channels->set_policy(
+        reliability_mode == FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE ? proto::Policy::RELAXED
+                                                                                    : proto::Policy::STRICT);
+
+    auto* top_level_mesh = proto->mutable_top_level_instance()->mutable_mesh();
+    top_level_mesh->set_mesh_descriptor("M0");
+    top_level_mesh->set_mesh_id(0);
+
+    return MeshGraphDescriptor(std::move(proto), /*backwards_compatible=*/true);
+}
+
+namespace {
+
+void remap_node_ref_for_merge(
+    proto::NodeRef& ref, const std::string& name_prefix, const std::map<uint32_t, uint32_t>& local_to_global) {
+    if (ref.has_mesh()) {
+        auto* mesh = ref.mutable_mesh();
+        mesh->set_mesh_descriptor(name_prefix + mesh->mesh_descriptor());
+        const auto it = local_to_global.find(static_cast<uint32_t>(mesh->mesh_id()));
+        TT_FATAL(
+            it != local_to_global.end(),
+            "MeshGraphDescriptor::merge: no global mesh id for local mesh_id {}",
+            mesh->mesh_id());
+        mesh->set_mesh_id(static_cast<int32_t>(it->second));
+    } else if (ref.has_switch_()) {
+        auto* sw = ref.mutable_switch_();
+        sw->set_switch_descriptor(name_prefix + sw->switch_descriptor());
+        const auto it = local_to_global.find(static_cast<uint32_t>(sw->switch_id()));
+        if (it != local_to_global.end()) {
+            sw->set_switch_id(static_cast<int32_t>(it->second));
+        }
+    } else if (ref.has_graph()) {
+        auto* graph = ref.mutable_graph();
+        graph->set_graph_descriptor(name_prefix + graph->graph_descriptor());
+        if (graph->has_sub_ref()) {
+            remap_node_ref_for_merge(*graph->mutable_sub_ref(), name_prefix, local_to_global);
+        }
+    }
+}
+
+void prefix_and_remap_mgd_proto(
+    proto::MeshGraphDescriptor& proto,
+    const std::string& name_prefix,
+    const std::map<uint32_t, uint32_t>& local_to_global) {
+    for (auto& mesh : *proto.mutable_mesh_descriptors()) {
+        mesh.set_name(name_prefix + mesh.name());
+    }
+    for (auto& sw : *proto.mutable_switch_descriptors()) {
+        sw.set_name(name_prefix + sw.name());
+    }
+    for (auto& graph : *proto.mutable_graph_descriptors()) {
+        graph.set_name(name_prefix + graph.name());
+        for (auto& inst : *graph.mutable_instances()) {
+            remap_node_ref_for_merge(inst, name_prefix, local_to_global);
+        }
+        for (auto& conn : *graph.mutable_connections()) {
+            for (auto& node : *conn.mutable_nodes()) {
+                remap_node_ref_for_merge(node, name_prefix, local_to_global);
+            }
+        }
+    }
+    if (proto.has_top_level_instance()) {
+        remap_node_ref_for_merge(*proto.mutable_top_level_instance(), name_prefix, local_to_global);
+    }
+    for (auto& pin : *proto.mutable_pinnings()) {
+        for (auto& node : *pin.mutable_logical_fabric_node_id()) {
+            if (!node.has_mesh_id()) {
+                continue;
+            }
+            const auto it = local_to_global.find(node.mesh_id());
+            if (it != local_to_global.end()) {
+                node.set_mesh_id(it->second);
+            }
+        }
+    }
+}
+
+std::vector<std::map<MeshId, MeshId>> compute_mgd_merge_local_to_global(
+    const std::vector<const MeshGraphDescriptor*>& descriptors) {
+    std::vector<std::map<MeshId, MeshId>> maps;
+    maps.reserve(descriptors.size());
+    if (descriptors.size() == 1) {
+        std::map<MeshId, MeshId> identity;
+        for (const auto& [local, unused_name] : descriptors.front()->mesh_id_to_instance_name()) {
+            (void)unused_name;
+            identity[local] = local;
+        }
+        maps.push_back(std::move(identity));
+        return maps;
+    }
+    std::uint32_t next_base = 0;
+    for (const MeshGraphDescriptor* descriptor : descriptors) {
+        std::set<MeshId> locals;
+        for (const auto& [local, unused_name] : descriptor->mesh_id_to_instance_name()) {
+            (void)unused_name;
+            locals.insert(local);
+        }
+        std::map<MeshId, MeshId> local_to_global;
+        std::uint32_t index = 0;
+        for (MeshId local : locals) {
+            local_to_global[local] = MeshId{next_base + index};
+            ++index;
+        }
+        next_base += static_cast<std::uint32_t>(locals.size());
+        maps.push_back(std::move(local_to_global));
+    }
+    return maps;
+}
+
+}  // namespace
+
+MeshGraphDescriptor MeshGraphDescriptor::merge(
+    const std::vector<const MeshGraphDescriptor*>& descriptors,
+    std::vector<std::map<MeshId, MeshId>>* per_part_local_to_global_mesh_ids) {
+    TT_FATAL(!descriptors.empty(), "MeshGraphDescriptor::merge requires at least one descriptor");
+    for (std::size_t i = 0; i < descriptors.size(); ++i) {
+        TT_FATAL(descriptors[i] != nullptr, "MeshGraphDescriptor::merge: descriptor {} is null", i);
+        TT_FATAL(descriptors[i]->proto_ != nullptr, "MeshGraphDescriptor::merge: descriptor {} has no proto", i);
+    }
+
+    auto maps = compute_mgd_merge_local_to_global(descriptors);
+    if (per_part_local_to_global_mesh_ids != nullptr) {
+        *per_part_local_to_global_mesh_ids = maps;
+    }
+
+    std::optional<bool> shared_inter_mesh_relaxed;
+    std::size_t shared_index = 0;
+    for (std::size_t i = 0; i < descriptors.size(); ++i) {
+        if (!descriptors[i]->inter_mesh_policy_specified_) {
+            continue;
+        }
+        const bool relaxed = descriptors[i]->is_inter_mesh_policy_relaxed();
+        if (!shared_inter_mesh_relaxed.has_value()) {
+            shared_inter_mesh_relaxed = relaxed;
+            shared_index = i;
+            continue;
+        }
+        TT_FATAL(
+            relaxed == *shared_inter_mesh_relaxed,
+            "MeshGraphDescriptor::merge: inter-mesh channel policy must be consistent, but descriptor {} is {} "
+            "while descriptor {} is {}",
+            shared_index,
+            *shared_inter_mesh_relaxed ? "RELAXED" : "STRICT",
+            i,
+            relaxed ? "RELAXED" : "STRICT");
+    }
+
+    if (descriptors.size() == 1) {
+        auto proto = std::make_shared<proto::MeshGraphDescriptor>();
+        proto->CopyFrom(*descriptors.front()->proto_);
+        return MeshGraphDescriptor(std::move(proto), /*backwards_compatible=*/true);
+    }
+
+    auto merged = std::make_shared<proto::MeshGraphDescriptor>();
+    auto* fabric = merged->add_graph_descriptors();
+    fabric->set_name("G0");
+    fabric->set_type("FABRIC");
+    std::optional<proto::Policy> shared_connection_policy;
+
+    for (std::size_t i = 0; i < descriptors.size(); ++i) {
+        const std::string prefix = "mgd" + std::to_string(i) + "_";
+        std::map<uint32_t, uint32_t> local_to_global;
+        for (const auto& [local, global] : maps[i]) {
+            local_to_global[*local] = *global;
+        }
+
+        proto::MeshGraphDescriptor part;
+        part.CopyFrom(*descriptors[i]->proto_);
+        prefix_and_remap_mgd_proto(part, prefix, local_to_global);
+
+        for (const auto& mesh : part.mesh_descriptors()) {
+            *merged->add_mesh_descriptors() = mesh;
+        }
+        for (const auto& sw : part.switch_descriptors()) {
+            *merged->add_switch_descriptors() = sw;
+        }
+        for (const auto& pin : part.pinnings()) {
+            *merged->add_pinnings() = pin;
+        }
+
+        const proto::NodeRef& top = part.top_level_instance();
+        if (top.has_mesh() || top.has_switch_()) {
+            *fabric->add_instances() = top;
+            continue;
+        }
+        TT_FATAL(
+            top.has_graph(), "MeshGraphDescriptor::merge: descriptor {} has no top-level mesh, switch, or graph", i);
+        const std::string& top_graph_name = top.graph().graph_descriptor();
+        const proto::GraphDescriptor* source_fabric = nullptr;
+        for (const auto& graph : part.graph_descriptors()) {
+            if (graph.name() == top_graph_name) {
+                source_fabric = &graph;
+                break;
+            }
+        }
+        TT_FATAL(
+            source_fabric != nullptr,
+            "MeshGraphDescriptor::merge: descriptor {} top-level graph '{}' was not found after remap",
+            i,
+            top_graph_name);
+        TT_FATAL(
+            source_fabric->type() == "FABRIC",
+            "MeshGraphDescriptor::merge: only a flat FABRIC top-level can be merged (MGD 1.0); descriptor {} "
+            "top-level graph '{}' has type '{}'",
+            i,
+            top_graph_name,
+            source_fabric->type());
+        TT_FATAL(
+            !source_fabric->has_graph_topology(),
+            "MeshGraphDescriptor::merge: descriptor {} FABRIC graph '{}' uses graph_topology; merging would "
+            "change the inter-mesh adjacency (ALL_TO_ALL/RING would span every merged mesh). Use explicit "
+            "connections so each part's seams stay local to that part.",
+            i,
+            top_graph_name);
+
+        for (const auto& inst : source_fabric->instances()) {
+            *fabric->add_instances() = inst;
+        }
+        for (const auto& conn : source_fabric->connections()) {
+            proto::Policy policy = proto::Policy::STRICT;
+            if (conn.has_channels() && conn.channels().has_policy()) {
+                policy = conn.channels().policy();
+            }
+            if (!shared_connection_policy.has_value()) {
+                shared_connection_policy = policy;
+            } else {
+                TT_FATAL(
+                    policy == *shared_connection_policy,
+                    "MeshGraphDescriptor::merge: inter-mesh adjacency is not consistent; mixed {} and {} "
+                    "connection policies across the merged FABRIC graph",
+                    *shared_connection_policy == proto::Policy::RELAXED ? "RELAXED" : "STRICT",
+                    policy == proto::Policy::RELAXED ? "RELAXED" : "STRICT");
+            }
+            *fabric->add_connections() = conn;
+        }
+    }
+
+    auto* top_ref = merged->mutable_top_level_instance()->mutable_graph();
+    top_ref->set_graph_descriptor("G0");
+    top_ref->set_graph_id(0);
+
+    return MeshGraphDescriptor(std::move(merged), /*backwards_compatible=*/true);
+}
 
 proto::Architecture MeshGraphDescriptor::get_arch() const {
     // All meshes must have the same arch
@@ -178,6 +504,87 @@ proto::Architecture MeshGraphDescriptor::get_arch() const {
 
 uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
     return proto_->mesh_descriptors(0).channels().count();
+}
+
+std::vector<std::string> MeshGraphDescriptor::get_all_mesh_names() const {
+    std::unordered_set<std::string> names;
+    names.reserve(mesh_instances_.size());
+    for (GlobalNodeId id : mesh_instances_) {
+        names.insert(get_instance(id).name);
+    }
+    std::vector<std::string> out(names.begin(), names.end());
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+bool MeshGraphDescriptor::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
+    const auto it = intra_mesh_relaxed_policy_.find(mesh_id);
+    TT_FATAL(it != intra_mesh_relaxed_policy_.end(), "No intra-mesh policy for mesh_id {}", *mesh_id);
+    return it->second;
+}
+
+bool MeshGraphDescriptor::is_inter_mesh_policy_relaxed() const { return inter_mesh_relaxed_policy_; }
+
+bool MeshGraphDescriptor::is_inter_mesh_policy_specified() const { return inter_mesh_policy_specified_; }
+
+std::unordered_map<MeshId, std::string> MeshGraphDescriptor::mesh_id_to_instance_name() const {
+    std::unordered_map<MeshId, std::string> mesh_id_to_name;
+    for (const auto global_id : all_meshes()) {
+        const auto& instance = get_instance(global_id);
+        mesh_id_to_name.emplace(MeshId{instance.local_id}, instance.name);
+    }
+    for (const auto global_id : all_switches()) {
+        const auto& instance = get_instance(global_id);
+        mesh_id_to_name.emplace(MeshId{instance.local_id}, instance.name);
+    }
+    return mesh_id_to_name;
+}
+
+DeclaredTopology MeshGraphDescriptor::get_declared_topology(GlobalNodeId instance_id) const {
+    return get_declared_topology(get_instance(instance_id));
+}
+
+std::optional<DeclaredTopology> MeshGraphDescriptor::try_get_declared_topology(const std::string& instance_name) const {
+    const auto& instance_ids = instances_by_name(instance_name);
+    if (instance_ids.empty()) {
+        return std::nullopt;
+    }
+    DeclaredTopology declared = get_declared_topology(instance_ids[0]);
+    if (declared.dims.empty()) {
+        return std::nullopt;
+    }
+    return declared;
+}
+
+DeclaredTopology MeshGraphDescriptor::get_declared_topology(const InstanceData& instance) const {
+    const proto::TorusTopology* device_topology = nullptr;
+    const proto::MeshTopology* host_topology = nullptr;
+    if (is_mesh(instance)) {
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        if (mesh_desc != nullptr) {
+            device_topology = &mesh_desc->device_topology();
+            host_topology = &mesh_desc->host_topology();
+        }
+    } else if (is_switch(instance)) {
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+        if (switch_desc != nullptr) {
+            device_topology = &switch_desc->device_topology();
+        }
+    }
+
+    DeclaredTopology topology;
+    if (device_topology == nullptr) {
+        return topology;
+    }
+    topology.dims.assign(device_topology->dims().begin(), device_topology->dims().end());
+    topology.ring_dims.reserve(device_topology->dim_types_size());
+    for (int dim = 0; dim < device_topology->dim_types_size(); ++dim) {
+        topology.ring_dims.push_back(device_topology->dim_types(dim) == proto::TorusTopology::RING);
+    }
+    if (host_topology != nullptr) {
+        topology.host_dims.assign(host_topology->dims().begin(), host_topology->dims().end());
+    }
+    return topology;
 }
 
 uint32_t MeshGraphDescriptor::get_chip_count(GlobalNodeId mesh_instance_id) const {
@@ -235,14 +642,17 @@ std::unordered_map<std::string, uint32_t> MeshGraphDescriptor::count_instances_b
     return counts;
 }
 
-FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
-    const auto& dim_types = mesh_desc->device_topology().dim_types();
+namespace {
+
+template <typename Descriptor>
+FabricType infer_declared_fabric_type_from_dim_types(const Descriptor* descriptor) {
+    const auto& dim_types = descriptor->device_topology().dim_types();
     if (dim_types.size() < 2) {
         return FabricType::MESH;
     }
 
-    bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
-    bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
+    const bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
+    const bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
 
     if (y_is_ring && x_is_ring) {
         return FabricType::TORUS_XY;
@@ -254,6 +664,16 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Me
         return FabricType::TORUS_X;
     }
     return FabricType::MESH;
+}
+
+}  // namespace
+
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
+    return infer_declared_fabric_type_from_dim_types(mesh_desc);
+}
+
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc) {
+    return infer_declared_fabric_type_from_dim_types(switch_desc);
 }
 
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
@@ -358,7 +778,32 @@ void MeshGraphDescriptor::populate() {
 
     populate_connections();
 
+    populate_inter_mesh_policy();
+
     populate_pinnings();
+}
+
+void MeshGraphDescriptor::populate_inter_mesh_policy() {
+    inter_mesh_relaxed_policy_ = false;
+    inter_mesh_policy_specified_ = false;
+
+    if (has_connections_of_type("FABRIC")) {
+        const auto& fabric_connections = connections_by_type("FABRIC");
+        if (!fabric_connections.empty()) {
+            inter_mesh_relaxed_policy_ = get_connection(fabric_connections[0]).policy == proto::Policy::RELAXED;
+            inter_mesh_policy_specified_ = true;
+            return;
+        }
+    }
+
+    const auto& top_level_instance = top_level();
+    if (top_level_instance.kind == NodeKind::Graph) {
+        const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
+        if (graph_desc != nullptr && graph_desc->has_graph_topology() && graph_desc->graph_topology().has_channels()) {
+            inter_mesh_relaxed_policy_ = graph_desc->graph_topology().channels().policy() == proto::Policy::RELAXED;
+            inter_mesh_policy_specified_ = true;
+        }
+    }
 }
 
 void MeshGraphDescriptor::populate_top_level_instance() {
@@ -747,6 +1192,11 @@ void MeshGraphDescriptor::validate_legacy_requirements(
         }
     }
 
+    // Mixed policies are unsupported downstream: the solver applies one inter_mesh_validation_mode to
+    // every seam, and control plane fatals when both intermesh maps are non-empty. Both production
+    // entry points (MeshGraph, generate_rank_bindings) pass backwards_compatible so they hit this check.
+    // https://github.com/tenstorrent/tt-metal/issues/49960
+    //
     // Check that connections in the same graph don't mix STRICT and RELAXED policies
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.connections_size() == 0) {
@@ -1027,10 +1477,24 @@ void MeshGraphDescriptor::add_to_fast_lookups(const InstanceData& instance) {
 
     // Add to kind-specific lookups
     switch (instance.kind) {
-        case NodeKind::Mesh: mesh_instances_.push_back(instance.global_id); break;
+        case NodeKind::Mesh: {
+            mesh_instances_.push_back(instance.global_id);
+            const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+            TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for mesh instance {}", instance.name);
+            intra_mesh_relaxed_policy_[MeshId{instance.local_id}] =
+                mesh_desc->channels().policy() == proto::Policy::RELAXED;
+            break;
+        }
         case NodeKind::Graph: graph_instances_.push_back(instance.global_id); break;
         case NodeKind::Device: device_instances_.push_back(instance.global_id); break;
-        case NodeKind::Switch: switch_instances_.push_back(instance.global_id); break;
+        case NodeKind::Switch: {
+            switch_instances_.push_back(instance.global_id);
+            const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+            TT_FATAL(switch_desc != nullptr, "Switch descriptor is null for switch instance {}", instance.name);
+            intra_mesh_relaxed_policy_[MeshId{instance.local_id}] =
+                switch_desc->channels().policy() == proto::Policy::RELAXED;
+            break;
+        }
     }
 }
 
@@ -1319,6 +1783,28 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
 
         TT_ASSERT(nodes.size() >= 2, "Graph descriptor connections must have at least two nodes");
 
+        // Directional inter-mesh connections are not yet supported end-to-end (issue #50292). Only the authored
+        // direction is recorded, so in the control plane the peer endpoint never gathers the physical cable (the
+        // two-sided connection_hash join needs both sides) and strict binding resolves 0 routers -> a hard-fatal
+        // with a confusing "0 resolved" downstream. Surface it clearly here at parse time. Prefer directional:
+        // false until directionality is tracked as a first-class property.
+        if (connection.directional()) {
+            std::string endpoints;
+            for (const auto& node_global_id : nodes) {
+                if (!endpoints.empty()) {
+                    endpoints += " -> ";
+                }
+                endpoints += instances_.at(node_global_id).name;
+            }
+            TT_THROW(
+                "Graph descriptor '{}' declares a directional inter-mesh connection ({}). Directional inter-mesh "
+                "connections are not fully supported: only the authored direction is stored, so the peer endpoint "
+                "will not gather the cable and strict binding will resolve 0 routers. Use directional: false "
+                "instead. Tracking: https://github.com/tenstorrent/tt-metal/issues/50292.",
+                instance.name,
+                endpoints);
+        }
+
         // Add the connection in every direction of the connection
         for (std::size_t i = 0; i < connection.nodes_size(); ++i) {
             // Create a copy of the nodes vector and swap the first and i-th elements so source is always first
@@ -1547,49 +2033,416 @@ void MeshGraphDescriptor::print_all_nodes() {
     print_node(top_level_id_, 0);
 }
 
+namespace {
+struct IdPatternResult {
+    std::vector<uint32_t> ids;
+    std::string error;
+};
+
+std::string trim_id_pattern(const std::string& pattern) {
+    auto b = pattern.find_first_not_of(" \t");
+    auto e = pattern.find_last_not_of(" \t");
+    return (b == std::string::npos) ? std::string{} : pattern.substr(b, e - b + 1);
+}
+
+bool is_range_list_pattern(const std::string& p) { return p.find_first_not_of("0123456789,- \t") == std::string::npos; }
+
+// Validate range/list/regex syntax without expanding against a domain.
+void validate_id_pattern_syntax(
+    const std::string& pattern, const std::string& field_label, std::vector<std::string>& errors) {
+    const std::string p = trim_id_pattern(pattern);
+    if (p.empty()) {
+        errors.push_back(fmt::format("{} is empty", field_label));
+        return;
+    }
+
+    if (is_range_list_pattern(p)) {
+        std::stringstream ss(p);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            const auto dash = tok.find('-');
+            try {
+                if (dash == std::string::npos) {
+                    if (tok.find_first_not_of("0123456789 \t") != std::string::npos || tok.empty()) {
+                        errors.push_back(fmt::format("{} has malformed token '{}'", field_label, tok));
+                    } else {
+                        (void)std::stoul(tok);
+                    }
+                } else {
+                    if (dash == 0 || dash + 1 >= tok.size()) {
+                        errors.push_back(fmt::format("{} has malformed range token '{}'", field_label, tok));
+                        continue;
+                    }
+                    const auto lo = static_cast<uint32_t>(std::stoul(tok.substr(0, dash)));
+                    const auto hi = static_cast<uint32_t>(std::stoul(tok.substr(dash + 1)));
+                    if (lo > hi) {
+                        errors.push_back(fmt::format("{} has inverted range '{}' in token '{}'", field_label, p, tok));
+                    }
+                }
+            } catch (const std::exception&) {
+                errors.push_back(fmt::format("{} has malformed token '{}'", field_label, tok));
+            }
+        }
+        return;
+    }
+
+    try {
+        (void)std::regex(p);
+    } catch (const std::regex_error& e) {
+        errors.push_back(fmt::format("{} has invalid regex '{}': {}", field_label, p, e.what()));
+    }
+}
+
+// Expand a pinning id pattern against a domain of valid ids. Supports:
+//   - inclusive numeric range   "0-8"          -> ids in domain within 0..8
+//   - comma list of the above   "0,2,4-6"      -> ids in domain matching any token
+//   - std::regex (full match)   "\\d*[02468]"  -> every id whose decimal string matches
+// The result is the subset of `domain` (in domain order) selected by the pattern.
+IdPatternResult expand_id_pattern(const std::string& pattern, const std::vector<uint32_t>& domain) {
+    const std::string p = trim_id_pattern(pattern);
+    IdPatternResult result;
+    if (p.empty()) {
+        result.error = "id pattern is empty";
+        return result;
+    }
+
+    // Pure digits/commas/dashes -> treat as a range/list; anything else -> regex.
+    if (is_range_list_pattern(p)) {
+        struct TokenSpec {
+            bool is_range = false;
+            uint32_t single = 0;
+            uint32_t lo = 0;
+            uint32_t hi = 0;
+        };
+        std::vector<TokenSpec> specs;
+        std::stringstream ss(p);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            const auto dash = tok.find('-');
+            try {
+                if (dash == std::string::npos) {
+                    if (tok.find_first_not_of("0123456789 \t") != std::string::npos || tok.empty()) {
+                        result.error = fmt::format("malformed token '{}'", tok);
+                        return result;
+                    }
+                    specs.push_back({false, static_cast<uint32_t>(std::stoul(tok)), 0, 0});
+                } else {
+                    if (dash == 0 || dash + 1 >= tok.size()) {
+                        result.error = fmt::format("malformed range token '{}'", tok);
+                        return result;
+                    }
+                    const auto lo = static_cast<uint32_t>(std::stoul(tok.substr(0, dash)));
+                    const auto hi = static_cast<uint32_t>(std::stoul(tok.substr(dash + 1)));
+                    if (lo > hi) {
+                        result.error = fmt::format("inverted range in token '{}'", tok);
+                        return result;
+                    }
+                    specs.push_back({true, 0, lo, hi});
+                }
+            } catch (const std::exception&) {
+                result.error = fmt::format("malformed token '{}'", tok);
+                return result;
+            }
+        }
+
+        for (uint32_t id : domain) {
+            for (const auto& spec : specs) {
+                const bool matches = spec.is_range ? (id >= spec.lo && id <= spec.hi) : (id == spec.single);
+                if (matches) {
+                    result.ids.push_back(id);
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
+    try {
+        const std::regex re(p);
+        for (uint32_t id : domain) {
+            if (std::regex_match(std::to_string(id), re)) {
+                result.ids.push_back(id);
+            }
+        }
+    } catch (const std::regex_error& e) {
+        result.error = fmt::format("invalid regex '{}': {}", p, e.what());
+    }
+    return result;
+}
+
+constexpr uint32_t kPhysicalIdDomainMax = 255;
+
+const std::vector<uint32_t>& physical_id_domain() {
+    static const std::vector<uint32_t> domain = []() {
+        std::vector<uint32_t> ids;
+        ids.reserve(kPhysicalIdDomainMax + 1);
+        for (uint32_t i = 0; i <= kPhysicalIdDomainMax; ++i) {
+            ids.push_back(i);
+        }
+        return ids;
+    }();
+    return domain;
+}
+
+std::vector<AsicPosition> expand_physical_asic_positions(
+    const google::protobuf::RepeatedPtrField<proto::PhysicalAsicPosition>& physical_positions, std::string& error) {
+    const auto& domain = physical_id_domain();
+    std::vector<AsicPosition> positions;
+    std::set<std::pair<uint32_t, uint32_t>> seen;
+    for (const auto& physical_pos : physical_positions) {
+        std::vector<uint32_t> trays;
+        if (physical_pos.tray_id_regex().empty()) {
+            trays = {physical_pos.tray_id()};
+        } else {
+            IdPatternResult tray_result = expand_id_pattern(physical_pos.tray_id_regex(), domain);
+            if (!tray_result.error.empty()) {
+                error = fmt::format("tray_id_regex: {}", tray_result.error);
+                return {};
+            }
+            trays = std::move(tray_result.ids);
+        }
+
+        std::vector<uint32_t> asic_locs;
+        if (physical_pos.asic_location_regex().empty()) {
+            asic_locs = {physical_pos.asic_location()};
+        } else {
+            IdPatternResult loc_result = expand_id_pattern(physical_pos.asic_location_regex(), domain);
+            if (!loc_result.error.empty()) {
+                error = fmt::format("asic_location_regex: {}", loc_result.error);
+                return {};
+            }
+            asic_locs = std::move(loc_result.ids);
+        }
+
+        for (uint32_t tray : trays) {
+            for (uint32_t loc : asic_locs) {
+                if (seen.insert({tray, loc}).second) {
+                    positions.emplace_back(tt::tt_metal::TrayID{tray}, tt::tt_metal::ASICLocation{loc});
+                }
+            }
+        }
+    }
+    return positions;
+}
+
+bool pinning_entry_uses_regex(const proto::AsicPinning& pinning) {
+    for (const auto& n : pinning.logical_fabric_node_id()) {
+        if (!n.mesh_id_regex().empty() || !n.chip_id_regex().empty()) {
+            return true;
+        }
+    }
+    for (const auto& p : pinning.physical_asic_position()) {
+        if (!p.tray_id_regex().empty() || !p.asic_location_regex().empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+}  // namespace
+
 void MeshGraphDescriptor::populate_pinnings() {
     pinnings_.clear();
 
-    // Extract pinnings from top-level pinnings section
-    for (const auto& pinning : proto_->pinnings()) {
-        // Extract LogicalFabricNodeId from proto
-        const auto& logical_node_id = pinning.logical_fabric_node_id();
-        ::tt::tt_fabric::FabricNodeId fabric_node(MeshId{logical_node_id.mesh_id()}, logical_node_id.chip_id());
-
-        // Extract PhysicalAsicPosition from proto and convert to AsicPosition
-        const auto& physical_pos = pinning.physical_asic_position();
-        AsicPosition asic_pos(
-            tt::tt_metal::TrayID{physical_pos.tray_id()}, tt::tt_metal::ASICLocation{physical_pos.asic_location()});
-
-        // Store as pair(AsicPosition, FabricNodeId) for C++ compatibility
-        // MeshId is embedded in FabricNodeId, so no need to group by MeshId
-        pinnings_.emplace_back(asic_pos, fabric_node);
+    // Domain for logical-id regex expansion: instantiated local mesh ids and their chip counts.
+    std::map<uint32_t, uint32_t> mesh_chip_count;  // local mesh_id -> chip count
+    for (GlobalNodeId gid : mesh_instances_) {
+        const auto& inst = get_instance(gid);
+        mesh_chip_count[static_cast<uint32_t>(inst.local_id)] = get_chip_count(inst);
     }
+    std::vector<uint32_t> all_mesh_ids;
+    all_mesh_ids.reserve(mesh_chip_count.size());
+    for (const auto& [m, _] : mesh_chip_count) {
+        all_mesh_ids.push_back(m);
+    }
+
+    auto board_revision_of = [](const proto::AsicPinning& pinning) -> std::optional<BoardRevision> {
+        if (!pinning.has_board_revision()) {
+            return std::nullopt;
+        }
+        switch (pinning.board_revision()) {
+            case proto::BoardRevision::BH_REV_AB: return BoardRevision::BhRevAb;
+            case proto::BoardRevision::BH_REV_C: return BoardRevision::BhRevC;
+            case proto::BoardRevision::WH: return BoardRevision::Wh;
+            case proto::BoardRevision::BOARD_REVISION_UNSPECIFIED:
+            default: return std::nullopt;
+        }
+    };
+
+    // Extract pinnings from the top-level pinnings section, preserving the many-to-many grouping.
+    //
+    // Each AsicPinning entry may list multiple logical fabric nodes and multiple physical ASIC
+    // positions (all-to-all). We keep the group intact here: any listed node may map to any listed
+    // position. Downstream consumers enumerate each group into the existing 1:many pinning format --
+    // one (fabric_node -> asic_positions) entry per node -- so no downstream interface changes. A
+    // single-node/single-position entry reproduces the classic one-to-one pin.
+    for (const auto& pinning : proto_->pinnings()) {
+        std::string expand_error;
+        // Physical positions are shared by every group produced from this entry (regex-expanded when used).
+        const std::vector<AsicPosition> positions =
+            expand_physical_asic_positions(pinning.physical_asic_position(), expand_error);
+        TT_FATAL(expand_error.empty(), "Failed to expand physical ASIC positions: {}", expand_error);
+
+        // Fast path: no regex fields. Still emit one group PER MESH so downstream can look up pins by
+        // mesh id (same shape as the regex path) instead of filtering mixed-mesh groups later.
+        if (!pinning_entry_uses_regex(pinning)) {
+            std::map<uint32_t, std::vector<uint32_t>> mesh_to_chips;
+            for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+                mesh_to_chips[logical_node_id.mesh_id()].push_back(logical_node_id.chip_id());
+            }
+            for (const auto& [m, chips] : mesh_to_chips) {
+                AsicPinningGroup group;
+                group.fabric_nodes.reserve(chips.size());
+                for (uint32_t c : chips) {
+                    group.fabric_nodes.emplace_back(MeshId{m}, c);
+                }
+                group.asic_positions = positions;
+                group.board_revision = board_revision_of(pinning);
+                pinnings_[MeshId{m}].push_back(std::move(group));
+            }
+            continue;
+        }
+
+        // Regex path: expand into concrete (mesh_id -> chips), grouped BY MESH so each matched mesh gets its
+        // own all-to-all group (preserving the per-mesh bijection).
+        std::map<uint32_t, std::vector<uint32_t>> mesh_to_chips;  // ordered mesh -> ordered unique chips
+        std::map<uint32_t, std::set<uint32_t>> seen_chips;
+        for (const auto& n : pinning.logical_fabric_node_id()) {
+            std::vector<uint32_t> meshes;
+            if (n.mesh_id_regex().empty()) {
+                meshes = {n.mesh_id()};
+            } else {
+                IdPatternResult mesh_result = expand_id_pattern(n.mesh_id_regex(), all_mesh_ids);
+                TT_FATAL(
+                    mesh_result.error.empty(),
+                    "Failed to expand mesh_id_regex '{}': {}",
+                    n.mesh_id_regex(),
+                    mesh_result.error);
+                meshes = std::move(mesh_result.ids);
+            }
+            for (uint32_t m : meshes) {
+                std::vector<uint32_t> chips;
+                if (n.chip_id_regex().empty()) {
+                    chips = {n.chip_id()};
+                } else {
+                    std::vector<uint32_t> chip_domain;
+                    auto it = mesh_chip_count.find(m);
+                    const uint32_t cc = (it != mesh_chip_count.end()) ? it->second : 0;
+                    chip_domain.reserve(cc);
+                    for (uint32_t c = 0; c < cc; ++c) {
+                        chip_domain.push_back(c);
+                    }
+                    IdPatternResult chip_result = expand_id_pattern(n.chip_id_regex(), chip_domain);
+                    TT_FATAL(
+                        chip_result.error.empty(),
+                        "Failed to expand chip_id_regex '{}': {}",
+                        n.chip_id_regex(),
+                        chip_result.error);
+                    chips = std::move(chip_result.ids);
+                }
+                for (uint32_t c : chips) {
+                    if (seen_chips[m].insert(c).second) {
+                        mesh_to_chips[m].push_back(c);
+                    }
+                }
+            }
+        }
+        for (const auto& [m, chips] : mesh_to_chips) {
+            AsicPinningGroup group;
+            group.fabric_nodes.reserve(chips.size());
+            for (uint32_t c : chips) {
+                group.fabric_nodes.emplace_back(MeshId{m}, c);
+            }
+            group.asic_positions = positions;
+            group.board_revision = board_revision_of(pinning);
+            pinnings_[MeshId{m}].push_back(std::move(group));
+        }
+    }
+
+    // A logical fabric node may appear in several pinning groups. Each group is carried through as its own
+    // constraint; the consumer filters out whatever is not present on the physical mesh being solved and
+    // applies the rest, so a node listed in a wide group and in a 1:1 anchor is narrowed by the anchor.
 }
 
 void MeshGraphDescriptor::validate_pinnings(
     const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
-    // Track duplicate pinnings for the same logical_fabric_node_id
-    std::map<std::pair<uint32_t, uint32_t>, uint32_t> fabric_node_pinning_count;
-
     for (const auto& pinning : proto.pinnings()) {
-        const auto& logical_node_id = pinning.logical_fabric_node_id();
-
-        uint32_t mesh_id = logical_node_id.mesh_id();
-        uint32_t chip_id = logical_node_id.chip_id();
-
-        // Check for duplicate pinnings
-        auto key = std::make_pair(mesh_id, chip_id);
-        fabric_node_pinning_count[key]++;
-        if (fabric_node_pinning_count[key] > 1) {
-            error_messages.push_back(
-                fmt::format("Duplicate pinning for fabric node (mesh_id: {}, chip_id: {})", mesh_id, chip_id));
+        // All-to-all entries must list at least one logical node and at least one physical position.
+        if (pinning.logical_fabric_node_id().empty()) {
+            error_messages.push_back("Pinning entry has no logical_fabric_node_id");
+        }
+        if (pinning.physical_asic_position().empty()) {
+            error_messages.push_back("Pinning entry has no physical_asic_position");
         }
 
-        // Validate that mesh_id exists in the mesh instances
-        // Note: We can't fully validate chip_id range without knowing which mesh descriptor
-        // corresponds to which mesh_id, but we can at least check that mesh_id is reasonable
-        // More precise validation would require checking the top_level_instance structure
+        // A single pinning entry must not mix regex and non-regex logical_fabric_node_id fields.
+        // Allowing both would make expansion ambiguous (literal nodes vs pattern-expanded nodes in
+        // the same group).
+        bool has_regex_node = false;
+        bool has_non_regex_node = false;
+        for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+            if (!logical_node_id.mesh_id_regex().empty() || !logical_node_id.chip_id_regex().empty()) {
+                has_regex_node = true;
+            } else {
+                has_non_regex_node = true;
+            }
+        }
+        if (has_regex_node && has_non_regex_node) {
+            error_messages.push_back(
+                "Pinning entry mixes regex and non-regex logical_fabric_node_id fields; use separate entries");
+        }
+
+        for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+            if (!logical_node_id.mesh_id_regex().empty()) {
+                validate_id_pattern_syntax(
+                    logical_node_id.mesh_id_regex(), "logical_fabric_node_id.mesh_id_regex", error_messages);
+            }
+            if (!logical_node_id.chip_id_regex().empty()) {
+                validate_id_pattern_syntax(
+                    logical_node_id.chip_id_regex(), "logical_fabric_node_id.chip_id_regex", error_messages);
+            }
+            if (!logical_node_id.mesh_id_regex().empty() && logical_node_id.has_mesh_id()) {
+                error_messages.push_back(
+                    "logical_fabric_node_id sets both mesh_id_regex and mesh_id; use one or the other");
+            }
+            if (!logical_node_id.chip_id_regex().empty() && logical_node_id.has_chip_id()) {
+                error_messages.push_back(
+                    "logical_fabric_node_id sets both chip_id_regex and chip_id; use one or the other");
+            }
+        }
+
+        // A single pinning entry must not mix regex and non-regex physical_asic_position fields.
+        bool has_regex_physical = false;
+        bool has_non_regex_physical = false;
+        for (const auto& physical_pos : pinning.physical_asic_position()) {
+            if (!physical_pos.tray_id_regex().empty() || !physical_pos.asic_location_regex().empty()) {
+                has_regex_physical = true;
+            } else {
+                has_non_regex_physical = true;
+            }
+        }
+        if (has_regex_physical && has_non_regex_physical) {
+            error_messages.push_back(
+                "Pinning entry mixes regex and non-regex physical_asic_position fields; use separate entries");
+        }
+
+        for (const auto& physical_pos : pinning.physical_asic_position()) {
+            if (!physical_pos.tray_id_regex().empty()) {
+                validate_id_pattern_syntax(
+                    physical_pos.tray_id_regex(), "physical_asic_position.tray_id_regex", error_messages);
+            }
+            if (!physical_pos.asic_location_regex().empty()) {
+                validate_id_pattern_syntax(
+                    physical_pos.asic_location_regex(), "physical_asic_position.asic_location_regex", error_messages);
+            }
+            if (!physical_pos.tray_id_regex().empty() && physical_pos.has_tray_id()) {
+                error_messages.push_back(
+                    "physical_asic_position sets both tray_id_regex and tray_id; use one or the other");
+            }
+            if (!physical_pos.asic_location_regex().empty() && physical_pos.has_asic_location()) {
+                error_messages.push_back(
+                    "physical_asic_position sets both asic_location_regex and asic_location; use one or the other");
+            }
+        }
     }
 }
 }  // namespace tt::tt_fabric

@@ -72,7 +72,10 @@ static json get_kernels_json(ChipId device_id, const Program& program) {
     // profiler JSON well within Tracy's 64 KiB message limit.
     std::set<std::pair<std::string_view, std::string>> seenCompute;
     std::set<std::string_view> seenDatamovement;
-    for (const auto& kernel : detail::collect_kernel_meta(program, device)) {
+    const auto kernelMeta = detail::collect_kernel_meta(program, device);
+    computeKernels.reserve(kernelMeta.size());
+    datamovementKernels.reserve(kernelMeta.size());
+    for (const auto& kernel : kernelMeta) {
         auto processor_class = kernel.processor_class;
         if (processor_class == HalProcessorClassType::COMPUTE) {
             auto fidelityStr = enchantum::to_string(kernel.math_fidelity.value());
@@ -181,7 +184,9 @@ std::string assemble_device_op_json(
     // The message is wrapped in backticks which serve as the CSV quotechar.
     // If the message is truncated by tracy_message(), the closing backtick is
     // lost, causing the CSV reader to absorb subsequent rows into this field.
-    // Build with pretty JSON first, then compact, then drop kernel_info to fit.
+    // Escalation: pretty → compact → drop kernel_info → truncate tensor lists +
+    // drop attributes (fused ops with hundreds of input tensors blow past the
+    // limit even after dropping kernel_info).
     constexpr size_t tracy_limit = std::numeric_limits<uint16_t>::max() - 1;
     auto msg = fmt::format("{}{} ->\n{}`", short_str, data.operation_id, j.dump(4));
     if (msg.size() > tracy_limit) {
@@ -192,10 +197,31 @@ std::string assemble_device_op_json(
         msg = fmt::format("{}{} ->\n{}`", short_str, data.operation_id, j.dump(-1));
     }
     if (msg.size() > tracy_limit) {
+        // Keep the first kKeepTensors entries so downstream readers (which
+        // expect uniform tensor records) keep working; record the original
+        // count in a sibling field rather than inside the array.
+        constexpr size_t kKeepTensors = 8;
+        auto truncate_tensor_list = [&](const char* key) {
+            if (!j.contains(key) || !j[key].is_array()) {
+                return;
+            }
+            auto& arr = j[key];
+            if (arr.size() > kKeepTensors) {
+                j[std::string(key) + "_original_count"] = arr.size();
+                arr.erase(arr.begin() + kKeepTensors, arr.end());
+            }
+        };
+        truncate_tensor_list("input_tensors");
+        truncate_tensor_list("output_tensors");
+        truncate_tensor_list("optional_input_tensors");
+        j.erase("attributes");
+        msg = fmt::format("{}{} ->\n{}`", short_str, data.operation_id, j.dump(-1));
+    }
+    if (msg.size() > tracy_limit) {
         log_warning(
             tt::LogMetal,
             "Tracy op profiler message for op '{}' (call {}, device {}) exceeded the {} byte limit even after "
-            "dropping kernel_info ({} bytes). Message discarded.",
+            "dropping kernel_info, attributes, and truncating tensor lists ({} bytes). Message discarded.",
             j.value("op_code", "?"),
             data.operation_id,
             device_id,

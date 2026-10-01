@@ -28,9 +28,9 @@ void bind_ternary_where(nb::module_& mod, const std::string& description) {
             {2}
 
         Args:
-            condition (ttnn.Tensor): the condition tensor must contain only 0's or 1's.
-            true_value (ttnn.Tensor or Number): The value selected if the corresponding element in condition is 1.
-            false_value (ttnn.Tensor or Number): The value selected if the corresponding element in condition is 0.
+            predicate (ttnn.Tensor): the predicate tensor must contain only 0's or 1's.
+            true_value (ttnn.Tensor or Number): The value selected if the corresponding element in predicate is 1.
+            false_value (ttnn.Tensor or Number): The value selected if the corresponding element in predicate is 0.
 
 
         Keyword Args:
@@ -47,7 +47,7 @@ void bind_ternary_where(nb::module_& mod, const std::string& description) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, BFLOAT8_B, FLOAT32, INT32
+               * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])
                  - TILE
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
@@ -286,13 +286,28 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
         R"doc(
             {2}
 
+        Supported call signatures (all return ``a * b + c``):
+
+        .. code-block:: python
+
+            # TTT — all tensors
+            ttnn.mac(a, b, c, *, memory_config=None, output_tensor=None, sub_core_grids=None)
+            # TTS — a * b + scalar
+            ttnn.mac(a, b, value, *, memory_config=None)
+            # TST — a * scalar + c
+            ttnn.mac(a, value, c, *, memory_config=None)
+            # TSS — a * scalar1 + scalar2
+            ttnn.mac(a, value1, value2, *, memory_config=None)
+
         Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
-            input_tensor_c (ttnn.Tensor or Number): the input tensor.
+            input_tensor_a (ttnn.Tensor): the first input tensor (always a tensor).
+            input_tensor_b (ttnn.Tensor or float): the second input — tensor (TTT/TTS) or scalar (TST/TSS).
+            input_tensor_c (ttnn.Tensor or float): the third input — tensor (TTT/TST) or scalar (TTS/TSS).
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor to write into. TTT only. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): restrict execution to this set of cores. TTT only. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -308,7 +323,9 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
                * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE
 
-            bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
+            bfloat8_b/bfloat4_b supports only on TILE_LAYOUT.
+
+            ``output_tensor`` and ``sub_core_grids`` are only supported on the TTT native LLK path.
         )doc",
         "mac",
         "ttnn.mac",
@@ -318,10 +335,31 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
-                &ttnn::mac),
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::mac),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
+            nb::arg("input_tensor_c"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&>(&ttnn::mac),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::arg("value"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, float, const Tensor&, const std::optional<MemoryConfig>&>(&ttnn::mac),
+            nb::arg("input_tensor_a"),
+            nb::arg("value"),
             nb::arg("input_tensor_c"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()),
@@ -332,6 +370,48 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
             nb::arg("value2"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()));
+}
+
+void bind_ternary_snake_beta(nb::module_& mod, const std::string& description) {
+    auto doc = std::string(R"doc(
+Computes the SnakeBeta activation element-wise on :attr:`input_tensor`:
+
+.. math::
+
+    \text{output}_i = \text{input}_i + \frac{\sin^2(\text{alpha}_i \cdot \text{input}_i)}{\text{beta}_i}
+
+This is the BigVGAN-style Snake activation with separate learnable ``alpha`` and ``beta`` parameters.
+
+Args:
+    input_tensor (ttnn.Tensor): the input tensor. Must be rank >= 2 and in TILE layout.
+    alpha (ttnn.Tensor): the frequency parameter tensor. Broadcastable on the last dimension.
+    beta (ttnn.Tensor): the denominator parameter tensor. Same shape as ``alpha``.
+        Caller is responsible for ensuring ``beta != 0`` (no internal epsilon).
+
+Keyword Args:
+    memory_config (ttnn.MemoryConfig, optional): memory configuration for the output. Defaults to ``None``.
+    output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to ``None``.
+
+Note:
+    - ``alpha``, ``beta``, and ``input_tensor`` must all be TILE layout and share the same dtype (BFLOAT16 or FLOAT32).
+    - ``alpha.shape == beta.shape``; both may only have non-1 size on the last dimension, which must equal ``input_tensor.shape[-1]``.
+
+Example:
+    >>> alpha = ttnn.from_torch(torch.ones(48, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    >>> beta = ttnn.from_torch(torch.ones(48, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    >>> output = ttnn.snake_beta(input_tensor, alpha, beta)
+)doc") + description;
+
+    ttnn::bind_function<"snake_beta">(
+        mod,
+        doc.c_str(),
+        &ttnn::snake_beta,
+        nb::arg("input_tensor"),
+        nb::arg("alpha"),
+        nb::arg("beta"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace
@@ -357,7 +437,7 @@ void py_module(nb::module_& mod) {
         "FLOAT32, BFLOAT16, BFLOAT8_B");
     bind_ternary_where(
         mod,
-        R"doc(Selects elements from :attr:`true_value` or :attr:`false_value` depending on the corresponding value in :attr:`condition`. For each element, if the corresponding entry in :attr:`condition` is 1, the output element is taken from :attr:`true_value`; otherwise, it is taken from :attr:`false_value`.)doc");
+        R"doc(Selects elements from :attr:`true_value` or :attr:`false_value` depending on the corresponding value in :attr:`predicate`. For each element, if the corresponding entry in :attr:`predicate` is 1, the output element is taken from :attr:`true_value`; otherwise, it is taken from :attr:`false_value`.)doc");
 
     bind_ternary_lerp(
         mod,
@@ -366,6 +446,10 @@ void py_module(nb::module_& mod) {
     bind_ternary_mac(
         mod,
         R"doc(Computes Mac on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+
+    bind_ternary_snake_beta(
+        mod,
+        R"doc(Computes the SnakeBeta activation `y = x + sin^2(alpha * x) / beta` element-wise on :attr:`input_tensor` with broadcastable per-channel :attr:`alpha` and :attr:`beta`, and returns a tensor with the same layout as :attr:`input_tensor`.)doc");
 }
 
 }  // namespace ttnn::operations::ternary

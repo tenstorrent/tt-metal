@@ -4,47 +4,57 @@
 
 #include <cstdint>
 
-#include "api/compute/eltwise_binary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     constexpr int onetile = 1;
-    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    const auto per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
+
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        bool last_out = block == (per_core_block_cnt - 1);
+        const bool last_out = block == (per_core_block_cnt - 1);
 
-        // elemwise-mul
-        ACQ();
-        cb_wait_front(tt::CBIndex::c_0, onetile);
-        cb_wait_front(tt::CBIndex::c_1, onetile);
-
-        cb_reserve_back(tt::CBIndex::c_24, onetile);
-        mul_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
-        // dst0 = c_in0 x c_in1
-        mul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-        // c_intermed0 = pack(dst0)
-        pack_tile(0, tt::CBIndex::c_24);
-        cb_push_back(tt::CBIndex::c_24, onetile);
-
-        cb_pop_front(tt::CBIndex::c_0, onetile);
-        cb_pop_front(tt::CBIndex::c_1, onetile);
-        REL();
+        ckl::mul<
+            ckl::input(dfb::in0),
+            ckl::input(dfb::in1),
+            ckl::output(
+                dfb::im0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
+            ckl::IterationShape::tiles(onetile));
 
         // reduce-w
-        compute_kernel_lib::reduce<
-            REDUCE_OP,
-            REDUCE_DIM,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-            tt::CBIndex::c_24,
-            tt::CBIndex::c_2,
-            last_out ? tt::CBIndex::c_16 : tt::CBIndex::c_25,
-            compute_kernel_lib::ReduceInputBlockShape::single(),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
+        if (last_out) {
+            ckl::reduce<
+                REDUCE_OP,
+                REDUCE_DIM,
+                dfb::im0,
+                dfb::scaler,
+                dfb::out,
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::NONE>(
+                ckl::ReduceInputBlockShape::single(),
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::Accumulate::at(dfb::im1, block));
+        } else {
+            ckl::reduce<
+                REDUCE_OP,
+                REDUCE_DIM,
+                dfb::im0,
+                dfb::scaler,
+                dfb::im1,
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::NONE>(
+                ckl::ReduceInputBlockShape::single(),
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::Accumulate::at(dfb::im1, block));
+        }
     }
+    // The reduce helper reuses the scaler tile for every block.
+    dfb_scaler.pop_front(onetile);
 }

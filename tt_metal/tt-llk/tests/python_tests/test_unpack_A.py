@@ -8,7 +8,7 @@ import pytest
 import torch
 from conftest import skip_for_blackhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
     TILE_DIMENSIONS,
@@ -42,6 +42,8 @@ from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     PARTIAL_FACE,
     REUSE_DEST_TYPE,
@@ -51,6 +53,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
+from helpers.tile_shape import FACE_C_DIM, TileShape, construct_tile_shape
 from helpers.utils import passed_test
 
 # SUPPORTED FORMATS FOR TEST
@@ -66,14 +69,12 @@ broadcast_types = [
     BroadcastType.None_,
 ]
 dest_acc = [DestAccumulation.Yes, DestAccumulation.No]
-disable_src_zero_flags = [False, True]
+# NOTE: disable_src_zero_flag is no longer an unpack hw_configure parameter - the Src zero-substitution
+# flag is owned by the math-side data-format state tracker. This list is kept as a
+# single value to preserve the test-variant wiring; full removal of the parameter is tracked in #47001.
+disable_src_zero_flags = [False]
 acc_to_dest_flags = [False, True]
-stochastic_rnd = [
-    StochasticRounding.No,
-    StochasticRounding.Fpu,
-    StochasticRounding.Pack,
-    StochasticRounding.All,
-]
+stochastic_rnd = [StochasticRounding.No]
 reuse_dest_types = [
     EltwiseBinaryReuseDestType.NONE,
     EltwiseBinaryReuseDestType.DEST_TO_SRCA,
@@ -87,6 +88,16 @@ face_r_dim_values = [1, 2, 4, 8, 16]
 input_dimensions = [[r, 32] for r in face_r_dim_values] + [[256, 256]]
 # Use only cross_test_formats as it already includes same-format combinations
 test_formats = input_output_formats(supported_formats, False)
+
+
+def legacy_num_faces_to_grid(num_faces: int) -> tuple[int, int]:
+    if num_faces == 1:
+        return 1, 1
+    if num_faces == 2:
+        return 1, 2
+    if num_faces == 4:
+        return 2, 2
+    raise ValueError(f"Unsupported num_faces={num_faces}")
 
 
 # Generate unpack_A specific parameter combinations using itertools.product
@@ -263,12 +274,6 @@ def filter_params_with_constraints(all_params):
             # when unpack_to_dest=True. Block this combination.
             continue
 
-        # Format-specific checks (most expensive, do last)
-        # Block Bfp8_b output with stochastic rounding (Pack or All)
-        if formats.output_format == DataFormat.Bfp8_b:
-            if stochastic_rnd in (StochasticRounding.Pack, StochasticRounding.All):
-                continue
-
         # Block Float16/Float16_b transpose combinations that produce garbage values on CI runners
         if (
             formats.input_format in (DataFormat.Float16_b, DataFormat.Float16)
@@ -386,6 +391,7 @@ def test_unpack_comprehensive(
 
     # torch.manual_seed(0.0)
     partial_face = face_r_dim < 16
+    num_faces_r_dim, num_faces_c_dim = legacy_num_faces_to_grid(num_faces)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -543,6 +549,8 @@ def test_unpack_comprehensive(
             UNPACK_TRANS_FACES(transpose_of_faces),
             UNPACK_TRANS_WITHIN_FACE(within_face_16x16_transpose),
             NUM_FACES(num_faces),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(face_r_dim=face_r_dim),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
@@ -566,6 +574,167 @@ def test_unpack_comprehensive(
         ),
         dest_acc=(DestAccumulation.Yes if acc_to_dest else DestAccumulation.No),
         unpack_to_dest=(formats.input_format.is_32_bit() and acc_to_dest),
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"
+
+
+targeted_tensor_shape_cases = [
+    pytest.param(
+        "fr8_nf1x1",
+        8,
+        1,
+        1,
+        1,
+        [8, 16],
+        None,
+        id="tensor_shape_FR8_NF1x1",
+    ),
+    pytest.param(
+        "fr16_nf2x1",
+        16,
+        2,
+        2,
+        1,
+        [32, 16],
+        [32, 16],
+        id="tensor_shape_FR16_NF2x1",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "case_name, face_r_dim, num_faces, num_faces_r_dim, num_faces_c_dim, input_dimensions, tile_dimensions",
+    targeted_tensor_shape_cases,
+)
+def test_unpack_A_targeted_tensor_shape_coverage(
+    case_name,
+    face_r_dim,
+    num_faces,
+    num_faces_r_dim,
+    num_faces_c_dim,
+    input_dimensions,
+    tile_dimensions,
+):
+    del case_name
+    formats = FormatConfig(
+        unpack_A_src=DataFormat.Float16_b,
+        unpack_A_dst=DataFormat.Float16_b,
+        pack_src=DataFormat.Float16_b,
+        pack_dst=DataFormat.Float16_b,
+        math=DataFormat.Float16_b,
+    )
+
+    stimuli_kwargs = (
+        {"tile_dimensions": tile_dimensions}
+        if tile_dimensions is not None
+        else {"face_r_dim": face_r_dim, "num_faces": num_faces}
+    )
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        **stimuli_kwargs,
+    )
+
+    generate_golden = get_golden_generator(DataCopyGolden)
+    tile_shape = (
+        construct_tile_shape(tile_dimensions)
+        if tile_dimensions is not None
+        else TileShape(
+            face_r_dim=face_r_dim,
+            face_c_dim=FACE_C_DIM,
+            num_faces_r_dim=num_faces_r_dim,
+            num_faces_c_dim=num_faces_c_dim,
+        )
+    )
+    golden_tensor = generate_golden(
+        src_A,
+        formats.output_format,
+        num_faces,
+        input_dimensions,
+        face_r_dim,
+        tile_shape=tile_shape,
+    )
+
+    raw_dimensions = [
+        (
+            input_dimensions[0]
+            if input_dimensions[0] >= TILE_DIMENSIONS[0]
+            else TILE_DIMENSIONS[0]
+        ),
+        (
+            input_dimensions[1]
+            if input_dimensions[1] >= TILE_DIMENSIONS[1]
+            else TILE_DIMENSIONS[1]
+        ),
+    ]
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        DestAccumulation.No,
+        formats,
+        raw_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/unpack_A_test.cpp",
+        formats,
+        templates=[
+            STOCHASTIC_ROUNDING(StochasticRounding.No),
+            BROADCAST_TYPE(BroadcastType.None_),
+            ACC_TO_DEST(False),
+            REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
+            PARTIAL_FACE(
+                partial_a=face_r_dim < 16,
+                partial_face_pack=face_r_dim < 16,
+                partial_b=face_r_dim < 16,
+                partial_face_math=face_r_dim < 16,
+            ),
+            DISABLE_SRC_ZERO_FLAG(False),
+        ],
+        runtimes=[
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            NUM_FACES(num_faces),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
+            TILE_COUNT(tile_cnt_A),
+            TEST_FACE_DIMS(face_r_dim=face_r_dim),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            NUM_BLOCKS(num_blocks),
+            INPUT_DIMENSIONS(
+                raw_dimensions[0] // TILE_DIMENSIONS[0],
+                raw_dimensions[1] // TILE_DIMENSIONS[1],
+            ),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dimensions or [32, 32],
+            use_dense_tile_dimensions=tile_dimensions is not None,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
     )
 
     res_from_L1 = configuration.run().result

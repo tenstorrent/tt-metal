@@ -65,6 +65,18 @@ public:
         bool /*is_globally_allocated*/,
         const IDevice* /*device*/) {};
 
+    // borrows_memory: a view onto a tensor's buffer, so counting its bytes again double-counts.
+    virtual void track_allocate_dataflow_buffer(
+        const CoreRangeSet& /*core_range_set*/,
+        uint64_t /*addr*/,
+        uint64_t /*size*/,
+        bool /*borrows_memory*/,
+        const IDevice* /*device*/) {};
+
+    virtual void track_allocate_scratchpad(
+        const CoreRangeSet& /*core_range_set*/, uint64_t /*addr*/, uint64_t /*size*/, const IDevice* /*device*/) {};
+
+    // Releases every kind of program-scope L1 above: they share one lifetime.
     virtual void track_deallocate_cb(const IDevice* /*device*/) {};
 
     virtual void track_program(tt::tt_metal::Program* /*program*/, const IDevice* /*device*/) {};
@@ -102,6 +114,18 @@ public:
     virtual ~IGraphHooks() = default;
 };
 
+// Process-wide singleton that fans out op-dispatch events to registered
+// processors and consults an optional hook to intercept buffer / program
+// operations.
+//
+// Threading contract:
+//   * The processor stack (`processors`) and `hook` are *per-thread*. A
+//     `push_processor` / capture / `pop_processor` sequence is scoped to the
+//     calling thread; ops dispatched on other threads are not observed by
+//     that capture.
+//   * `hooked_buffers` is process-wide and guarded by `hooked_buffers_mutex`.
+//     This is the only piece of GraphTracker state that is shared across
+//     threads.
 class GraphTracker {
 public:
     GraphTracker(const GraphTracker&) = delete;
@@ -126,6 +150,12 @@ public:
         uint64_t size,
         bool is_globally_allocated,
         const IDevice* device);
+
+    void track_allocate_dataflow_buffer(
+        const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, bool borrows_memory, const IDevice* device);
+
+    void track_allocate_scratchpad(
+        const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, const IDevice* device);
 
     void track_deallocate_cb(const IDevice* device);
 
@@ -191,9 +221,9 @@ private:
     GraphTracker() = default;
     ~GraphTracker() = default;
 
-    std::vector<std::shared_ptr<IGraphProcessor>> processors;
-
-    std::shared_ptr<IGraphHooks> hook;
+    // Per-thread state. See the class-level threading contract above.
+    static thread_local std::vector<std::shared_ptr<IGraphProcessor>> processors;
+    static thread_local std::shared_ptr<IGraphHooks> hook;
 
     std::mutex hooked_buffers_mutex;
     std::unordered_set<const Buffer*> hooked_buffers;

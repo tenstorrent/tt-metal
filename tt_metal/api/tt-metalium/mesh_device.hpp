@@ -39,7 +39,6 @@
 
 namespace tt::tt_metal {
 class Allocator;
-class MetalEnv;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -74,13 +73,10 @@ using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
     friend class MeshDeviceImpl;
-    friend class tt::tt_metal::MetalEnv;
 
 private:
-    MeshDevice() = default;
-    // [[Experimental]] Creates a MeshDevice that uses the given MetalEnv instance.
-    // This is used by MetalEnv::create_mesh_device and MetalEnv::create_unit_mesh_device.
-    explicit MeshDevice(MetalEnv& metal_env);
+    // Adopts a fully-constructed impl, so pimpl_ is never null.
+    explicit MeshDevice(std::unique_ptr<MeshDeviceImpl> impl);
 
     std::unique_ptr<MeshDeviceImpl> pimpl_;
 
@@ -116,10 +112,27 @@ public:
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(
         const std::vector<CoreCoord>& logical_cores) const override;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    // Deprecated: returns the assignment of the mesh's reference (front) device only. On a mesh with
+    // heterogeneous harvesting the optimal placement differs per device, so this silently returns the
+    // wrong cores for every device but the reference one. Use the MeshCoordinate overload below to get
+    // the assignment for a specific device.
+    [[deprecated(
+        "Returns only the reference device's assignment, which is incorrect on heterogeneously-harvested "
+        "meshes. Use get_optimal_dram_bank_to_logical_worker_assignment(noc, coord) instead.")]]
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const override;
+
+    // Returns the optimal DRAM-bank-to-logical-worker assignment for the device at `coord` as a map from
+    // DRAM bank id to the logical worker core that should service it. The assignment is a device-local
+    // physical property (it depends on that device's harvesting and DRAM configuration), so it may differ
+    // per device on a heterogeneous mesh. If `coord` maps to a remote device, this falls back to an
+    // arbitrary local device's assignment (best-effort, exact only on homogeneous meshes); it throws only
+    // when the mesh has no local device to fall back to.
+    std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
+        NOC noc, const MeshCoordinate& coord) const;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
@@ -128,7 +141,6 @@ public:
     std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
@@ -149,10 +161,25 @@ public:
     SystemMemoryManager& sysmem_manager() override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
-    // If cq_id is not provided, the current command queue is returned from the current thread
+    MeshTraceId begin_mesh_trace(MeshCommandQueue& cq);
+    void begin_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id);
+    void end_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id);
+    void replay_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id, bool blocking);
+    [[deprecated(
+        "Use begin_mesh_trace(MeshCommandQueue&) instead. begin_mesh_trace(uint8_t) will be removed after September "
+        "9th, 2026.")]]
     MeshTraceId begin_mesh_trace(uint8_t cq_id);
+    [[deprecated(
+        "Use begin_mesh_trace(MeshCommandQueue&, const MeshTraceId&) instead. begin_mesh_trace(uint8_t, const "
+        "MeshTraceId&) will be removed after September 9th, 2026.")]]
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    [[deprecated(
+        "Use end_mesh_trace(MeshCommandQueue&, const MeshTraceId&) instead. end_mesh_trace(uint8_t, const "
+        "MeshTraceId&) will be removed after September 9th, 2026.")]]
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    [[deprecated(
+        "Use replay_mesh_trace(MeshCommandQueue&, const MeshTraceId&, bool) instead. replay_mesh_trace(uint8_t, const "
+        "MeshTraceId&, bool) will be removed after September 9th, 2026.")]]
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
@@ -175,9 +202,6 @@ public:
     std::size_t num_program_cache_entries() override;
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
-    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(

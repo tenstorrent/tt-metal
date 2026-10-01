@@ -2,45 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 void kernel_main() {
+    namespace ckl = compute_kernel_lib;
+
     // compile-time args
-    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t num_input_tiles = get_compile_time_arg_val(1);
+    // num_output_tiles carries the per-core work-split count (the host's num_cols_per_core_group_N).
+    constexpr uint32_t num_output_tiles = get_arg(args::num_output_tiles);
+    constexpr uint32_t num_input_tiles = get_arg(args::num_input_tiles);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
-    constexpr uint32_t idx0 = 0;
-    constexpr bool acc_to_dest = true;
+    compute_kernel_hw_startup(dfb::input, dfb::zero, dfb::out);
 
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    cb_wait_front(cb_in1, onetile);
-
-    for (uint32_t i = 0; i < num_output_tiles; i++) {
-        tile_regs_acquire();
-        add_tiles_init(cb_in0, cb_in1, acc_to_dest);
-        for (uint32_t j = 0; j < num_input_tiles; ++j) {
-            cb_wait_front(cb_in0, onetile);
-#if defined FP32_DEST_ACC_EN
-            reconfig_data_format(cb_in0, cb_in1);
-#endif
-            add_tiles(cb_in0, cb_in1, idx0, idx0, dst0);
-            cb_pop_front(cb_in0, onetile);
-        }
-        tile_regs_commit();
-
-        cb_reserve_back(cb_out0, onetile);
-        tile_regs_wait();
-#if defined FP32_DEST_ACC_EN
-        pack_reconfig_data_format(cb_out0);
-#endif
-        pack_tile(dst0, cb_out0);
-        tile_regs_release();
-        cb_push_back(cb_out0, onetile);
-    }
+    ckl::eltwise_chain(
+        ckl::IterationShape::grid(num_output_tiles, num_input_tiles),
+        ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Add,
+            ckl::input(
+                dfb::input, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+            ckl::input(dfb::zero, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Scalar),
+            ckl::Dst::D0,
+            ckl::DestAccumulation::PerRow>{},
+        ckl::PackTile<ckl::output(
+            dfb::out,
+            ckl::ReservePolicy::PerOuter,
+            ckl::PushPolicy::PerOuter,
+            ckl::DataFormatReconfig::Enabled,
+            ckl::TileAddressing::Direct,
+            ckl::DestAccumulation::PerRow)>{});
 }

@@ -6,21 +6,19 @@
 // Writes values to cacheable memory and flushes/invalidates using various L2 functions.
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "dev_mem_map.h"
+#include "experimental/kernel_args.h"
 #include "risc_common.h"
 
 void kernel_main() {
-    // Runtime args
-    uint32_t base_addr = get_arg_val<uint32_t>(0);
+    uint32_t base_addr = get_arg(args::base_addr);
     // 0=flush_line, 1=flush_range, 2=flush_full, 3=invalidate_line, 4=invalidate_fresh_read
-    uint32_t test_mode = get_arg_val<uint32_t>(1);
+    uint32_t test_mode = get_arg(args::test_mode);
 
-    // Common args
-    uint32_t value = get_common_arg_val<uint32_t>(0);
-    uint32_t num_words = get_common_arg_val<uint32_t>(1);
+    uint32_t value = get_arg(args::value);
+    uint32_t num_words = get_arg(args::num_words);
 
-    DPRINT << "START mode=" << test_mode << " words=" << num_words << ENDL();
     DEVICE_PRINT("START mode={} words={}\n", test_mode, num_words);
 
     // Write values to cacheable addresses
@@ -29,7 +27,6 @@ void kernel_main() {
         ptr[i] = value + i;
     }
 
-    DPRINT << "WRITES DONE" << ENDL();
     DEVICE_PRINT("WRITES DONE\n");
 
     // Flush/invalidate based on test mode
@@ -86,6 +83,5 @@ void kernel_main() {
             while (1);
     }
 
-    DPRINT << "DONE" << ENDL();
     DEVICE_PRINT("DONE\n");
 }

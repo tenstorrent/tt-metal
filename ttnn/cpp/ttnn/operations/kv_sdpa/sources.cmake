@@ -6,3 +6,5 @@ set(TTNN_OP_KV_SDPA_SRCS
     device/kv_sdpa_device_operation.cpp
     device/kv_sdpa_fused_program_factory.cpp
 )
+
+set(TTNN_OP_KV_SDPA_NANOBIND_SRCS kv_sdpa_nanobind.cpp)

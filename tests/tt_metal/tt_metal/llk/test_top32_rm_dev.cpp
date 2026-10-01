@@ -164,7 +164,6 @@ bool verify_top32_outputs(
 
 bool run_top32_rm_dev(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t row_elements, uint32_t seed) {
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -182,19 +181,22 @@ bool run_top32_rm_dev(
     const uint32_t out0_bytes = kOutputTiles * tile_bf16;
     const uint32_t out1_bytes = kOutputTiles * tile_u32;
 
-    InterleavedBufferConfig dram_in0{
-        .device = device, .size = in0_bytes, .page_size = in0_bytes, .buffer_type = BufferType::DRAM};
-    InterleavedBufferConfig dram_in1{
-        .device = device, .size = in1_bytes, .page_size = in1_bytes, .buffer_type = BufferType::DRAM};
-    InterleavedBufferConfig dram_out0{
-        .device = device, .size = out0_bytes, .page_size = out0_bytes, .buffer_type = BufferType::DRAM};
-    InterleavedBufferConfig dram_out1{
-        .device = device, .size = out1_bytes, .page_size = out1_bytes, .buffer_type = BufferType::DRAM};
-
-    auto buf_in0 = CreateBuffer(dram_in0);
-    auto buf_in1 = CreateBuffer(dram_in1);
-    auto buf_out0 = CreateBuffer(dram_out0);
-    auto buf_out1 = CreateBuffer(dram_out1);
+    auto buf_in0 = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in0_bytes},
+        {.page_size = in0_bytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto buf_in1 = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in1_bytes},
+        {.page_size = in1_bytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto buf_out0 = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out0_bytes},
+        {.page_size = out0_bytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto buf_out1 = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out1_bytes},
+        {.page_size = out1_bytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
 
     CoreCoord core{0, 0};
     CoreRangeSet crs({CoreRange(core)});
@@ -234,33 +236,39 @@ bool run_top32_rm_dev(
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     std::vector<uint32_t> compute_compile_args = {row_elements, num_in_tiles, kOutputTiles};
+    // The v2 kernel handles >= 1024 elements (whole 1024-chunk pre-sort path), while the original
+    // kernel handles < 1024 elements (64-elements-at-a-time path).
+    const char* compute_kernel = (row_elements >= 1024)
+                                     ? "tests/tt_metal/tt_metal/test_kernels/compute/top32_rm_dev_compute_v2.cpp"
+                                     : "tests/tt_metal/tt_metal/test_kernels/compute/top32_rm_dev_compute.cpp";
     CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/top32_rm_dev_compute_v2.cpp",
-        crs,
-        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_compile_args});
+        program_, compute_kernel, crs, ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_compile_args});
 
     SetRuntimeArgs(program_, reader, core, {buf_in0->address(), 0u, buf_in1->address(), 0u, num_in_tiles});
     SetRuntimeArgs(program_, writer, core, {buf_out0->address(), 0u, buf_out1->address(), 0u, kOutputTiles});
 
     ShuffledInputs in = make_shuffled_inputs_row_major(row_elements, seed);
 
-    detail::WriteToBuffer(buf_in0, in.packed_scores);
-    detail::WriteToBuffer(buf_in1, in.indices_u32);
+    distributed::EnqueueWriteMeshBuffer(cq, buf_in0, in.packed_scores, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, buf_in1, in.indices_u32, /*blocking=*/true);
 
     EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
     std::vector<uint32_t> out0;
     std::vector<uint32_t> out1;
-    detail::ReadFromBuffer(buf_out0, out0);
-    detail::ReadFromBuffer(buf_out1, out1);
+    distributed::EnqueueReadMeshBuffer(cq, out0, buf_out0, /*blocking=*/true);
+    distributed::EnqueueReadMeshBuffer(cq, out1, buf_out1, /*blocking=*/true);
     return verify_top32_outputs(in.packed_scores, in.indices_u32, out0, out1, row_elements);
 }
 
 }  // namespace unit_tests::compute::top32_rm_dev
 
 TEST_F(MeshDeviceFixture, Top32RmDevPipelineCompletes) {
+    // The top32_rm_dev kernels rely on Blackhole-only DeepSeek LLK headers; no WH B0 port exists yet.
+    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "top32_rm_dev kernels are only supported on Blackhole";
+    }
     for (uint32_t row : {64u, 128u, 160u, 3232u}) {
         log_info(LogTest, "Top32 RM dev row_elements={}", row);
         EXPECT_TRUE(unit_tests::compute::top32_rm_dev::run_top32_rm_dev(this->devices_.at(0), row, 12345u));

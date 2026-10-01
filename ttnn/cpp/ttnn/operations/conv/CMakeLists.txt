@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_conv ${LIB_TYPE})
 add_library(TTNN::Ops::Conv ALIAS ttnn_op_conv)
 
-tt_reuse_precompile_headers(ttnn_op_conv TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_conv TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_conv)
 set_target_properties(
     ttnn_op_conv
@@ -11,34 +13,24 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels conv2d/device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    conv2d/device/kernels/*.cpp
+    conv2d/device/kernels/*.hpp
+)
 target_sources(
     ttnn_op_conv
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            conv2d/conv2d.hpp
-            conv2d/device/conv2d_device_operation_types.hpp
-            conv2d/device/conv2d_device_operation.hpp
-            conv2d/device/conv2d_op_sharded_program_factory.hpp
-            conv2d/device/conv2d_op_width_sharded_program_factory.hpp
+        FILES ${TTNN_OP_CONV_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        conv2d/conv2d.cpp
-        conv2d/conv2d_utils.cpp
-        conv2d/conv2d_op_program_factory_common.cpp
-        conv2d/device/conv2d_device_operation.cpp
-        conv2d/device/conv2d_op_sharded_program_factory.cpp
-        conv2d/device/conv2d_op_width_sharded_program_factory.cpp
-        conv_transpose2d/conv_transpose2d.cpp
-        conv_transpose2d/prepare_conv_transpose2d_weights.cpp
-        conv2d/prepare_conv2d_weights.cpp
-        conv1d/conv1d.cpp
+        ${TTNN_OP_CONV_SRCS}
 )
 
 target_include_directories(ttnn_op_conv PRIVATE ${FixmeOpIncDirs})
@@ -53,3 +45,19 @@ install(
         COMPONENT ttnn-runtime
 )
 install(TARGETS ttnn_op_conv FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_CONV_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_CONV_NANOBIND_SRCS})
+endif()

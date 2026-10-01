@@ -4,88 +4,90 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
-inline __attribute__((always_inline)) void fill_pad_cb_with_val(
-    const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
-    experimental::CircularBuffer cb(cb_id);
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
+inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
+    Noc& noc, DataflowBuffer& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
         ptr[i] = val;
     }
 
-    uint32_t pad_val_addr = cb.get_write_ptr();
-    uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
+    uint32_t pad_val_addr = dfb.get_write_ptr();
     uint32_t l1_write_addr = pad_val_addr;
 
     for (uint32_t i = 0; i < num_noc_transfer; ++i) {
-        noc_async_read(pad_val_noc_addr, l1_write_addr, num_bytes_risc);
+        CoreLocalMem<uint32_t> dst(l1_write_addr);
+        noc.async_read(
+            UnicastEndpoint{},
+            dst,
+            num_bytes_risc,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = pad_val_addr},
+            {.offset_bytes = 0});
         l1_write_addr += num_bytes_risc;
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
-inline __attribute__((always_inline)) void fill_pad_cb_with_zero(
-    const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
-    experimental::CircularBuffer cb(cb_id);
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t pad_val_addr = cb.get_write_ptr();
-    uint32_t l1_write_addr = pad_val_addr;
-
-    for (uint32_t i = 0; i < num_noc_transfer; ++i) {
-        noc_async_read(zeros_noc_addr, l1_write_addr, num_bytes_risc);
-        l1_write_addr += num_bytes_risc;
-    }
-    noc_async_read_barrier();
+inline __attribute__((always_inline)) void fill_pad_dfb_with_zero(
+    Noc& noc, DataflowBuffer& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
+    noc.async_write_zeros(dfb, num_bytes_risc * num_noc_transfer);
+    noc.write_zeros_l1_barrier();
 }
 
 void kernel_main() {
-    uint32_t num_sticks_per_core = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t front_pad_n = get_arg_val<uint32_t>(2);
-    uint32_t front_pad_c = get_arg_val<uint32_t>(3);
-    uint32_t front_pad_h = get_arg_val<uint32_t>(4);
-    tt_l1_ptr uint32_t* start_dim_offset = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
+    auto num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    auto start_id = get_arg(args::start_id);
+    auto front_pad_n = get_arg(args::front_pad_n);
+    auto front_pad_c = get_arg(args::front_pad_c);
+    auto front_pad_h = get_arg(args::front_pad_h);
 
-    constexpr uint32_t N = get_compile_time_arg_val(0);
-    constexpr uint32_t H = get_compile_time_arg_val(1);
-    constexpr uint32_t C = get_compile_time_arg_val(2);
-    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t N_padded = get_compile_time_arg_val(4);
-    constexpr uint32_t H_padded = get_compile_time_arg_val(5);
-    constexpr uint32_t C_padded = get_compile_time_arg_val(6);
-    constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(7);
-    constexpr uint32_t zero_pad_stick_size = get_compile_time_arg_val(8);
+    constexpr auto N = get_arg(args::N);
+    constexpr auto H = get_arg(args::H);
+    constexpr auto C = get_arg(args::C);
+    constexpr auto stick_size_bytes = get_arg(args::stick_size_bytes);
+    constexpr auto N_padded = get_arg(args::N_padded);
+    constexpr auto H_padded = get_arg(args::H_padded);
+    constexpr auto C_padded = get_arg(args::C_padded);
+    constexpr auto num_zero_pad_sticks_read = get_arg(args::num_zero_pad_sticks_read);
+    constexpr auto zero_pad_stick_size = get_arg(args::zero_pad_stick_size);
 
-    constexpr bool not_pad_by_zero = get_compile_time_arg_val(9) == 1;
+    constexpr bool not_pad_by_zero = get_arg(args::not_pad_by_zero) == 1;
     uint32_t packed_pad_value = 0;
     uint32_t row_major_min_bytes = 0;
     uint32_t num_sticks_padded_read = 0;
     if constexpr (not_pad_by_zero) {
-        packed_pad_value = kernel_compile_time_args[10];
-        row_major_min_bytes = kernel_compile_time_args[11];
-        num_sticks_padded_read = kernel_compile_time_args[12];
+        packed_pad_value = get_arg(args::packed_pad_value);
+        row_major_min_bytes = get_arg(args::row_major_min_bytes);
+        num_sticks_padded_read = get_arg(args::num_sticks_padded_read);
     }
 
-    constexpr auto cb_pad = tt::CBIndex::c_1;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb_pad_exp(cb_pad);
-    experimental::CircularBuffer cb_out0_exp(cb_out0);
+    DataflowBuffer dfb_pad_exp(dfb::pad);
+    DataflowBuffer dfb_out0_exp(dfb::out_shard);
 
-    uint32_t pad_val_addr = cb_pad_exp.get_read_ptr();
-    uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
+    Noc noc;
+
+    const uint32_t pad_val_addr = dfb_pad_exp.get_read_ptr();
 
     if constexpr (not_pad_by_zero) {
-        fill_pad_cb_with_val(cb_pad, row_major_min_bytes, num_sticks_padded_read, packed_pad_value);
+        fill_pad_dfb_with_val(noc, dfb_pad_exp, row_major_min_bytes, num_sticks_padded_read, packed_pad_value);
     } else {
-        fill_pad_cb_with_zero(cb_pad, zero_pad_stick_size, num_zero_pad_sticks_read);
+        fill_pad_dfb_with_zero(noc, dfb_pad_exp, zero_pad_stick_size, num_zero_pad_sticks_read);
     }
 
-    uint32_t l1_write_addr = cb_out0_exp.get_write_ptr();
+    uint32_t l1_write_addr = dfb_out0_exp.get_write_ptr();
 
     uint32_t i_stick = start_id;
-    uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];
+    uint32_t curr_c = get_arg(args::start_dim_offset_c), curr_h = get_arg(args::start_dim_offset_h),
+             curr_n = get_arg(args::start_dim_offset_n);
     for (uint32_t iter = 0; iter < num_sticks_per_core; ++iter) {
         bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                           (curr_n >= front_pad_n and curr_n < N);
@@ -95,7 +97,15 @@ void kernel_main() {
             i_stick++;
 
         } else {
-            noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_bytes);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read(
+                UnicastEndpoint{},
+                dst,
+                stick_size_bytes,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = pad_val_addr},
+                {.offset_bytes = 0});
             l1_write_addr += stick_size_bytes;
         }
 
@@ -110,5 +120,5 @@ void kernel_main() {
         }
     }
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

@@ -4,15 +4,20 @@
 
 #include "sdpa_decode.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <utility>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include "device/sdpa_decode_device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/device.hpp"
 using namespace tt::tt_metal;
 
 namespace {
+constexpr uint32_t kDefaultDecodeChunkSize = 32;
+constexpr uint32_t kDefaultMaxCoresPerHeadBatch = 1;
+
 inline uint32_t get_chunk_size(uint32_t s) {
     /*
     # find maximum power of 2 divisor of s
@@ -47,9 +52,6 @@ ttnn::Tensor scaled_dot_product_attention_decode(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<bool> share_cache) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     uint32_t s = input_tensor_k.logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
@@ -105,10 +107,27 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    std::optional<uint32_t> cache_position_modulo) {
+    if (!program_config.has_value()) {
+        program_config = ttnn::operations::transformer::SDPAProgramConfig{
+            input_tensor_q.device()->compute_with_storage_grid_size(),
+            std::nullopt,
+            kDefaultDecodeChunkSize,
+            kDefaultDecodeChunkSize,
+            std::nullopt,
+            kDefaultMaxCoresPerHeadBatch};
+        log_debug(
+            tt::LogOp,
+            "Paged SDPA decode default config: grid={}x{}, q_chunk_size={}, k_chunk_size={}, "
+            "max_cores_per_head_batch={}",
+            program_config->compute_with_storage_grid_size.x,
+            program_config->compute_with_storage_grid_size.y,
+            program_config->q_chunk_size,
+            program_config->k_chunk_size,
+            program_config->max_cores_per_head_batch);
+    }
 
     // Use k_chunk_size as override; if k_chunk_size == 0, figure it out in kernels
     // uint32_t k_chunk_size = get_chunk_size(s);
@@ -146,7 +165,9 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
         k_chunk_size,
         std::nullopt,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        paged_cache_geometry,
+        cache_position_modulo);
 }
 
 ttnn::Tensor flash_multi_latent_attention_decode(
@@ -164,9 +185,6 @@ ttnn::Tensor flash_multi_latent_attention_decode(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     uint32_t s = input_tensor_k.logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
@@ -232,9 +250,6 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     // NOTE: If V tensor is not provided, the operator assumes that V is subset of K in the hidden dimension.
     // and V will be read from the K tensor buffer.
 

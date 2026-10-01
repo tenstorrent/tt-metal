@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from triage import ScriptConfig, log_warning, triage_field, run_script, log_check
 from ttexalens.memory_access import MemoryAccess, RiscDebugMemoryAccess
 from run_checks import run as get_run_checks
-from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
+from elfs_cache import ElfFile, run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
@@ -43,8 +43,6 @@ BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
 
 @dataclass
 class DumpWaitGlobalsData:
-    location: OnChipCoordinate = triage_field("Loc")
-    risc_name: str = triage_field("Proc")
     kernel_name: str = triage_field("Kernel Name")
     worker_type: str | None = triage_field("worker_type")
     cq_id: int | None = triage_field("cq_id")
@@ -52,6 +50,8 @@ class DumpWaitGlobalsData:
     # Verbose fields for detailed debugging
     last_wait_count: int | None = triage_field("last_wait_count", verbose=2)
     last_wait_stream: int | None = triage_field("last_wait_stream", verbose=2)
+    last_go_token: int | None = triage_field("last_go_token", verbose=2)
+    last_fds_tracked_sub_device_mask: int | None = triage_field("last_fds_tracked_sub_device_mask", verbose=2)
     wait_stream_value: int | None = triage_field("wait_stream_value", verbose=2)
     cb_fence: int | None = triage_field("cb_fence", verbose=2)
     cmd_ptr: int | None = triage_field("cmd_ptr", verbose=2)
@@ -63,9 +63,7 @@ class DumpWaitGlobalsData:
     sem_minus_local: int | None = triage_field("cb_extra_pages", verbose=1)
 
 
-def _read_symbol_value(
-    elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess, check_value: bool = True
-) -> int | None:
+def _read_symbol_value(elf_obj: ElfFile, symbol: str, mem_access: MemoryAccess, check_value: bool = True) -> int | None:
     """Resolve and read an integer symbol value from the kernel ELF using the provided mem_access.
 
     Returns None if the symbol cannot be read.
@@ -203,11 +201,16 @@ def read_wait_globals(
     last_wait_stream = _read_symbol_value(
         kernel_elf, "last_wait_stream", loc_mem_access, check_value=is_dispatcher_kernel
     )
+    last_go_token = _read_symbol_value(kernel_elf, "last_go_token", loc_mem_access, check_value=False)
+    last_fds_tracked_sub_device_mask = _read_symbol_value(
+        kernel_elf, "last_fds_tracked_sub_device_mask", loc_mem_access, check_value=False
+    )
     last_event = _read_symbol_value(
         kernel_elf, "last_event", loc_mem_access, check_value=dispatcher_core_data.kernel_name == "cq_dispatch"
     )
+    circular_buffer_fence: int | None
     try:
-        circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_
+        circular_buffer_fence = int(kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_)
     except TimeoutDeviceRegisterError:
         raise
     except Exception:
@@ -240,12 +243,6 @@ def read_wait_globals(
             stream_addr0 + stream_stride_bytes * last_wait_stream,
         )
 
-        if is_dispatcher_kernel:
-            log_check(
-                wait_stream_value is not None,
-                f"Failed to read wait_stream_value for kernel {dispatcher_core_data.kernel_name}. There may be a problem with the dispatcher kernel.",
-            )
-
     if last_wait_count is not None and stream_width is not None:
         # Wrap the global wait count to the stream width, to match the stream wrap behavior
         last_wait_count = last_wait_count & ((1 << stream_width) - 1)
@@ -254,11 +251,14 @@ def read_wait_globals(
     sem_minus_local: int | None = None
     try:
         if dispatcher_core_data.kernel_name == "cq_dispatch":
-            my_dispatch_cb_sem_id = int(kernel_elf.get_constant("my_dispatch_cb_sem_id"))
-            fd_core_type_idx = int(kernel_elf.get_constant("fd_core_type_idx"))
+            my_dispatch_cb_sem_id_const = kernel_elf.get_constant("my_dispatch_cb_sem_id")
+            programmable_core_type_idx_const = kernel_elf.get_constant("programmable_core_type_idx")
+            assert my_dispatch_cb_sem_id_const is not None and programmable_core_type_idx_const is not None
+            my_dispatch_cb_sem_id = int(my_dispatch_cb_sem_id_const)
+            programmable_core_type_idx = int(programmable_core_type_idx_const)
 
             # sem_l1_base is a firmware global array of L1 pointers; index by core type
-            sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[fd_core_type_idx]
+            sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[programmable_core_type_idx]
             sem_value = sem_base_ptr[my_dispatch_cb_sem_id * 16 // 4]
             local_count = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).local_count_
 
@@ -278,7 +278,7 @@ def read_wait_globals(
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
     # Use unique_id instead of device.id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
-    chip_id = location._device.unique_id
+    chip_id = location.device.unique_id
     x, y = virtual_coord
 
     # Lookup core info for the given kernel name based on virtual coordinates
@@ -289,11 +289,11 @@ def read_wait_globals(
     core_info = multi_info.get_info_for_kernel(dispatcher_core_data.kernel_name) if multi_info else None
 
     return DumpWaitGlobalsData(
-        location=location,
-        risc_name=risc_name,
         kernel_name=dispatcher_core_data.kernel_name,
         last_wait_count=last_wait_count,
         last_wait_stream=last_wait_stream,
+        last_go_token=last_go_token,
+        last_fds_tracked_sub_device_mask=last_fds_tracked_sub_device_mask,
         wait_stream_value=wait_stream_value,
         cb_fence=circular_buffer_fence,
         cmd_ptr=command_pointer,
@@ -336,6 +336,7 @@ def run(args, context: Context):
             continue
 
         device = run_checks.get_device_by_unique_id(chip_unique_id)
+        assert device is not None, f"No device found for unique_id {chip_unique_id}"
         # Create OnChipCoordinate for this dispatcher core location
         location = OnChipCoordinate(x, y, "translated", device)
 
@@ -347,7 +348,7 @@ def run(args, context: Context):
         # Check RISC core with risc_name at this location for dispatcher kernels
         if location not in locations_to_check:
             return None
-        noc_block = location._device.get_block(location)
+        noc_block = location.device.get_block(location)
         dispatch_core_pairs = []
         for risc_name in noc_block.risc_names:
             dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)

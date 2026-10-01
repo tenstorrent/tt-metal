@@ -12,19 +12,21 @@
 #include "tt_eth_ss_regs.h"
 #include "internal/ethernet/tt_eth_api.h"
 inline void RISC_POST_STATUS(uint32_t status) {
-    volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
+    volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)(NOC_CFG(ROUTER_CFG_2));
     ptr[0] = status;
 }
 
+#if !defined(ARCH_QUASAR)
 static volatile uint32_t* const fabric_postcode_ptr =
-    reinterpret_cast<volatile uint32_t*>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE);
+    reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE));
 
 #define POSTCODE(status) (*fabric_postcode_ptr = static_cast<uint32_t>(status))
 
 static volatile uint32_t* const fabric_scratch_ptr =
-    reinterpret_cast<volatile uint32_t*>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE);
+    reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE));
 
 #define ROUTER_SCRATCH_WRITE(id, val) (fabric_scratch_ptr[id]) = val;
+#endif
 
 struct eth_channel_sync_t {
     // Do not reorder fields without also updating the corresponding APIs that use
@@ -55,11 +57,12 @@ struct erisc_info_t {
         channels[eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS];  // user_buffer_bytes_sent
 };
 
-erisc_info_t* erisc_info = (erisc_info_t*)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
-routing_info_t* routing_info = (routing_info_t*)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
+erisc_info_t* erisc_info = (erisc_info_t*)(uintptr_t)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+routing_info_t* routing_info = (routing_info_t*)(uintptr_t)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
 
 // Context Switch Config
-tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
+tt_l1_ptr mailboxes_t* const mailboxes =
+    (tt_l1_ptr mailboxes_t*)(uintptr_t)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
 
 extern uint32_t __erisc_jump_table;
 volatile uint32_t* RtosTable =
@@ -136,6 +139,7 @@ void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint32
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_REG);
 }
 
+#if !defined(ARCH_QUASAR)
 void check_and_context_switch() {
     uint32_t start_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t end_time = start_time;
@@ -147,6 +151,7 @@ void check_and_context_switch() {
     }
     // proceed
 }
+#endif
 
 FORCE_INLINE
 void notify_dispatch_core_done(uint64_t dispatch_addr) {

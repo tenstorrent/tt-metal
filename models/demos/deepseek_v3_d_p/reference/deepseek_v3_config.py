@@ -15,6 +15,7 @@ class DeepSeekV3Config:
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
@@ -24,6 +25,11 @@ class DeepSeekV3Config:
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 8
     NUM_LIMITED_GROUPS = 4
+
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 256 experts, top-8, group-limited floors at
+    # 0.9950 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.985
 
     # Model architecture
     NUM_LAYERS = 61

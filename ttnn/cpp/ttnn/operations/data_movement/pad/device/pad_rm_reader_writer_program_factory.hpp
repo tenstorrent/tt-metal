@@ -4,30 +4,20 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "pad_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
-struct PadRmReaderWriterSharedVariables {
-    int ncores_h{};
-    int ncores_w{};
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-};
-
 struct PadRmReaderWriterProgramFactory {
-    using shared_variables_t = PadRmReaderWriterSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const PadParams& operation_attributes,
-        const PadInputs& tensor_args,
-        Tensor& tensor_return_value);
+    // The pad-value const tensor is allocated once on cache miss inside create_program_artifacts()
+    // and handed to the framework as an op-owned tensor, so it outlives the cache miss and keeps a
+    // stable address for the cached Program's lifetime.  The owning MeshTensor is moved out of the
+    // build Tensor with release_mesh_tensor(): holding the SOURCE Tensor would not be enough on its
+    // own, because ~Tensor force-deallocates the device memory through DeviceStorage::deallocate
+    // regardless of external shared_ptr<MeshBuffer> owners (see #44565).
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value);
 };
 }  // namespace ttnn::prim

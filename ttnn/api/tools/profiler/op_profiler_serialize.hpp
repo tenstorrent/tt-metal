@@ -35,6 +35,8 @@ class Program;
 namespace detail {
 // Note: no default argument here — redefinition of default argument is ill-formed when tt_metal.hpp is also included.
 // Callers in this header always pass all three arguments explicitly.
+// The profiler keeps a lightweight declaration to avoid the full API include.
+// NOLINTNEXTLINE(readability-redundant-declaration)
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op);
 }  // namespace detail
 }  // namespace tt::tt_metal
@@ -112,32 +114,11 @@ private:
     DEVICE_OP_MAP map;
 };
 
-class thread_safe_call_stack {
-public:
-    void push(const TracyCZoneCtx& ctx) {
-        std::scoped_lock<std::mutex> lock(stack_mutex);
-        call_stack.push(ctx);
-    }
-    bool empty() {
-        std::scoped_lock<std::mutex> lock(stack_mutex);
-        return call_stack.empty();
-    }
-    void pop() {
-        std::scoped_lock<std::mutex> lock(stack_mutex);
-        call_stack.pop();
-    }
-    TracyCZoneCtx& top() {
-        std::scoped_lock<std::mutex> lock(stack_mutex);
-        return call_stack.top();
-    }
-
-private:
-    std::mutex stack_mutex;
-    std::stack<TracyCZoneCtx> call_stack;
-};
-
+// Zone nesting is inherently per-thread (Tracy's own ZoneScopedN uses a per-thread stack
+// internally); a single shared stack here would let two threads pop each other's context and
+// silently corrupt zone durations, so this stack must stay thread_local rather than mutex-shared.
 inline thread_safe_cached_ops_map cached_ops{};
-inline thread_safe_call_stack call_stack;
+inline thread_local std::stack<TracyCZoneCtx> call_stack;
 inline bool op_profiler_is_enabled = false;
 
 #endif  // TRACY_ENABLE
@@ -208,7 +189,7 @@ inline void start_tracy_zone(
     [[maybe_unused]] uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
     auto tracySrcLoc =
-        ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length());
+        ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length(), color);
     TracyCZoneCtx ctx = ___tracy_emit_zone_begin_alloc(tracySrcLoc, 1);
     if (color != 0) {
         TracyCZoneColor(ctx, color);
@@ -299,9 +280,9 @@ inline auto compute_program_hash(
 // make_tensor_meta — extract TensorMeta from a Tensor (no JSON)
 // ---------------------------------------------------------------------------
 
-static inline TensorMeta make_tensor_meta(const Tensor& tensor) {
+static inline TensorMeta make_tensor_meta(const ttnn::Tensor& tensor) {
     TensorMeta m;
-    if (tensor.storage_type() == StorageType::DEVICE) {
+    if (tensor.storage_type() == ttnn::StorageType::DEVICE) {
         m.is_device = true;
         m.device_id = tensor.device()->id();
         m.buffer_type = std::string(enchantum::to_string(tensor.memory_config().buffer_type()));
@@ -373,11 +354,11 @@ inline std::string op_meta_data_serialized_json(
         }
 
         // Input tensors → TensorMeta (no JSON)
-        ttsl::reflection::visit_object_of_type<Tensor>(
+        ttsl::reflection::visit_object_of_type<ttnn::Tensor>(
             [&data](auto&& tensor) { data.input_tensors.push_back(make_tensor_meta(tensor)); }, tensor_args);
 
         // Output tensors → TensorMeta (no JSON)
-        ttsl::reflection::visit_object_of_type<Tensor>(
+        ttsl::reflection::visit_object_of_type<ttnn::Tensor>(
             [&data](auto&& tensor) { data.output_tensors.push_back(make_tensor_meta(tensor)); }, tensor_return_value);
 
         // Performance model — use if constexpr to avoid depending on OpPerformanceModel type
@@ -414,11 +395,14 @@ inline std::string op_meta_data_serialized_json(
                 /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */    \
                 /* regression tests well-formed data. */                                                              \
                 /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                          \
-                if (!(mesh_device)->is_local(coord)) {                                                                \
+                auto devices = (mesh_device)                                                                          \
+                                   ->get_view()                                                                       \
+                                   .get_devices(tt::tt_metal::distributed::MeshCoordinateRange(coord, coord));        \
+                if (devices.empty()) {                                                                                \
                     continue;                                                                                         \
                 }                                                                                                     \
                 ZoneScopedN("TT_DNN_DEVICE_OP");                                                                      \
-                auto device_id = (mesh_device)->get_device(coord)->id();                                              \
+                auto device_id = devices.front()->id();                                                               \
                 auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id, false);       \
                 std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                     \
                     operation,                                                                                        \

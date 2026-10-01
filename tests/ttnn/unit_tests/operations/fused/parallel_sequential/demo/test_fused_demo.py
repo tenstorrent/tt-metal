@@ -38,12 +38,11 @@ import pytest
 import torch
 import torch.nn.functional as F
 import ttnn
+from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
+from models.experimental.ops.descriptors.fusion import clear_build_cache
+from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import is_watcher_enabled
-from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
-from models.experimental.ops.descriptors.fusion import clear_build_cache
-
 
 # =============================================================================
 # Helpers
@@ -78,17 +77,17 @@ TILE_SIZE_BF16 = 2048  # 32x32 x 2 bytes
 DRAM_READER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_in");
-    uint32_t tile_bytes = get_tile_size(cb_id);
+    std::uint32_t src_addr = get_arg_val<std::uint32_t>(0);
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(1);
+    constexpr std::uint32_t cb_id = get_named_compile_time_arg_val("cb_in");
+    std::uint32_t tile_bytes = get_tile_size(cb_id);
     DataFormat data_format = get_dataformat(cb_id);
     const InterleavedAddrGenFast<true> s = {
         .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         cb_reserve_back(cb_id, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
-        noc_async_read_tile(i, s, l1_write_addr);
+        std::uint32_t l1_write_addr = get_write_ptr(cb_id);
+        noc_async_read_page(i, s, l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(cb_id, 1);
     }
@@ -101,12 +100,12 @@ TILE_COPY_COMPUTE_SOURCE = """\
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
 void kernel_main() {
-    constexpr uint32_t cb_in = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    unary_op_init_common(cb_in, cb_out);
-    copy_tile_init(cb_in);
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    constexpr std::uint32_t cb_in = get_named_compile_time_arg_val("cb_in");
+    constexpr std::uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(0);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    copy_init(cb_in);
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_in, 1);
         tile_regs_acquire();
         copy_tile(cb_in, 0, 0);
@@ -124,17 +123,17 @@ void kernel_main() {
 DRAM_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_out");
-    uint32_t tile_bytes = get_tile_size(cb_id);
+    std::uint32_t dst_addr = get_arg_val<std::uint32_t>(0);
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(1);
+    constexpr std::uint32_t cb_id = get_named_compile_time_arg_val("cb_out");
+    std::uint32_t tile_bytes = get_tile_size(cb_id);
     DataFormat data_format = get_dataformat(cb_id);
     const InterleavedAddrGenFast<true> d = {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_id, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id);
-        noc_async_write_tile(i, d, l1_read_addr);
+        std::uint32_t l1_read_addr = get_read_ptr(cb_id);
+        noc_async_write_page(i, d, l1_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_id, 1);
     }
@@ -325,6 +324,7 @@ class TestPerfDemos:
             out_subblock_w=min(N_tiles, 4),
             per_core_M=M_tiles // 8,
             per_core_N=N_tiles,
+            allowed_worker_cores=core_range,
         )
 
         torch_input = torch.randn(1, 1, 256, H, dtype=torch.bfloat16)
@@ -339,8 +339,8 @@ class TestPerfDemos:
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_linear_chain_rms_matmul_rms_fused(self, device, H, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential
-        from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors.normalization import rms_norm
 
         core_range, mm_cfg, torch_input, torch_w, torch_b = self._linear_chain_setup(device, H)
 
@@ -542,7 +542,10 @@ class TestPerfDemos:
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_sharded_chain_rms_layernorm_fused(self, device, H, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
+        from models.experimental.ops.descriptors.normalization import (
+            layer_norm,
+            rms_norm,
+        )
 
         cores, sharded_mem, program_cfg, tt_input, tt_w, _, _ = self._sharded_chain_setup(device, H)
 
@@ -726,13 +729,24 @@ class TestPerfDemos:
         # [1024,256] x [256,128] on 1x8 grid
         # M=32 tiles, K=8 tiles, N=4 tiles
         # per_core_M=32/8=4, per_core_N=4, in0_block_w=K/32=8
-        mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+        # Two separate configs bound to their respective disjoint grids
+        mm_cfg_a = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
             in0_block_w=K // 32,
             out_subblock_h=1,
             out_subblock_w=min(N // 32, 4),
             per_core_M=shard_h // 32,
             per_core_N=N // 32,
+            allowed_worker_cores=cores_a,
+        )
+        mm_cfg_b = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            in0_block_w=K // 32,
+            out_subblock_h=1,
+            out_subblock_w=min(N // 32, 4),
+            per_core_M=shard_h // 32,
+            per_core_N=N // 32,
+            allowed_worker_cores=cores_b,
         )
 
         torch_a = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
@@ -769,7 +783,8 @@ class TestPerfDemos:
             sharded_in_b,
             sharded_out_a,
             sharded_out_b,
-            mm_cfg,
+            mm_cfg_a,
+            mm_cfg_b,
             ta,
             tb,
             tw,
@@ -777,13 +792,19 @@ class TestPerfDemos:
             tB,
         )
 
+    # TT_METAL_LLK_ASSERTS run produced incorrect fused output for branch A
+    # (PCC=0.004586, Frobenius=1.0) while the unfused companion passed.
+    @skip_with_llk_assert("Issue #49031: Fused parallel chains fail numeric checks with LLK asserts enabled.")
     @pytest.mark.parametrize(
         "perf_mode", ["none"]
     )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_parallel_chains_ln_mm_rms_mm_fused(self, device, perf_mode):
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
+        from models.experimental.ops.descriptors.fusion import Parallel, Sequential
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors.normalization import (
+            layer_norm,
+            rms_norm,
+        )
 
         (
             cores_a,
@@ -792,7 +813,8 @@ class TestPerfDemos:
             sharded_in_b,
             sharded_out_a,
             sharded_out_b,
-            mm_cfg,
+            mm_cfg_a,
+            mm_cfg_b,
             ta,
             tb,
             tw,
@@ -813,7 +835,7 @@ class TestPerfDemos:
             la.output_tensors[0],
             tB,
             core_range_set=cores_a,
-            program_config=mm_cfg,
+            program_config=mm_cfg_a,
             compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=sharded_out_a,
         )
@@ -829,7 +851,7 @@ class TestPerfDemos:
             rb.output_tensors[0],
             tB,
             core_range_set=cores_b,
-            program_config=mm_cfg,
+            program_config=mm_cfg_b,
             compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=sharded_out_b,
         )
@@ -841,9 +863,9 @@ class TestPerfDemos:
             result_b = ttnn.to_torch(result_b_t)
 
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg_a, compute_kernel_config=COMPUTE_CONFIG)
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg_b, compute_kernel_config=COMPUTE_CONFIG)
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
@@ -863,9 +885,9 @@ class TestPerfDemos:
 
             # Unfused reference for PCC — interleaved to avoid core mapping constraints
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg_a, compute_kernel_config=COMPUTE_CONFIG)
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg_b, compute_kernel_config=COMPUTE_CONFIG)
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
@@ -881,9 +903,9 @@ class TestPerfDemos:
 
             # Unfused reference for accuracy check — interleaved to avoid core mapping constraints
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg_a, compute_kernel_config=COMPUTE_CONFIG)
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg_b, compute_kernel_config=COMPUTE_CONFIG)
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
@@ -921,6 +943,7 @@ class TestPerfDemos:
             out_subblock_w=min(N // 32, 4),
             per_core_M=shard_h // 32,
             per_core_N=N // 32,
+            allowed_worker_cores=cores,
         )
         ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(1, 8),
@@ -1034,13 +1057,23 @@ class TestPerfDemos:
         # B=[1,1,256,128] -> output [1,1,1024,128]
         # in0_block_w must equal shard_w / tile_w for block-sharded A input
         # (shard [128,256] on 1-col grid -> shard_w=256, so in0_block_w=256/32=8)
-        mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+        mm_cfg_left = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
             in0_block_w=cols // 32,
             out_subblock_h=1,
             out_subblock_w=min(mm_n // 32, 4),
             per_core_M=4,
             per_core_N=mm_n // 32,
+            allowed_worker_cores=left_cores,
+        )
+        mm_cfg_right = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            in0_block_w=cols // 32,
+            out_subblock_h=1,
+            out_subblock_w=min(mm_n // 32, 4),
+            per_core_M=4,
+            per_core_N=mm_n // 32,
+            allowed_worker_cores=right_cores,
         )
 
         # Block-sharded: height / grid_rows, width / grid_cols.
@@ -1097,7 +1130,8 @@ class TestPerfDemos:
             lr_cores,
             rl_cores,
             rr_cores,
-            mm_cfg,
+            mm_cfg_left,
+            mm_cfg_right,
             mm_n,
             tt_input,
             tt_B_left,
@@ -1107,9 +1141,9 @@ class TestPerfDemos:
 
     def _sharded_tree_make_ops(self, device):
         """Create all OpDescriptors for the sharded tree."""
-        from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.data_movement.slice import slice
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors.normalization import layer_norm
 
         (
             stem_cores,
@@ -1119,7 +1153,8 @@ class TestPerfDemos:
             lr_cores,
             rl_cores,
             rr_cores,
-            mm_cfg,
+            mm_cfg_left,
+            mm_cfg_right,
             mm_n,
             tt_input,
             tt_B_left,
@@ -1156,7 +1191,7 @@ class TestPerfDemos:
             sl_top.output_tensors[0],
             tt_B_left,
             core_range_set=left_cores,
-            program_config=mm_cfg,
+            program_config=mm_cfg_left,
             compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=shards["mm_left"],
         )
@@ -1164,7 +1199,7 @@ class TestPerfDemos:
             sl_bot.output_tensors[0],
             tt_B_right,
             core_range_set=right_cores,
-            program_config=mm_cfg,
+            program_config=mm_cfg_right,
             compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=shards["mm_right"],
         )
@@ -1226,7 +1261,7 @@ class TestPerfDemos:
             ln_lr,
             ln_rl,
             ln_rr,
-            mm_cfg,
+            mm_cfg_left,
             mm_n,
             tt_input,
             tt_B_left,
@@ -1235,9 +1270,9 @@ class TestPerfDemos:
         )
 
     def _sharded_tree_container(self, ops):
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Parallel, Sequential
 
-        (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr) = ops
+        ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr = ops
         return Sequential(
             ln_stem,
             Parallel(
@@ -1246,6 +1281,9 @@ class TestPerfDemos:
             ),
         )
 
+    # TT_METAL_LLK_ASSERTS run produced incorrect fused output for the left leaf
+    # (PCC=0.005098, Frobenius=1.414062) while the unfused companion passed.
+    @skip_with_llk_assert("Issue #49031: Fused sharded tree fails numeric checks with LLK asserts enabled.")
     @pytest.mark.parametrize(
         "perf_mode", ["none"]
     )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
@@ -1264,7 +1302,7 @@ class TestPerfDemos:
             ln_lr,
             ln_rl,
             ln_rr,
-            mm_cfg,
+            mm_cfg_left,
             mm_n,
             tt_input,
             tt_B_left,
@@ -1310,7 +1348,7 @@ class TestPerfDemos:
             u_left = ttnn.matmul(
                 u_top,
                 tt_B_left,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1330,7 +1368,7 @@ class TestPerfDemos:
             u_right = ttnn.matmul(
                 u_bot,
                 tt_B_right,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1394,7 +1432,7 @@ class TestPerfDemos:
             u_left = ttnn.matmul(
                 u_top,
                 tt_B_left,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1414,7 +1452,7 @@ class TestPerfDemos:
             u_right = ttnn.matmul(
                 u_bot,
                 tt_B_right,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1474,7 +1512,7 @@ class TestPerfDemos:
             u_left = ttnn.matmul(
                 u_top,
                 tt_B_left,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1494,7 +1532,7 @@ class TestPerfDemos:
             u_right = ttnn.matmul(
                 u_bot,
                 tt_B_right,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1563,6 +1601,7 @@ class TestPerfDemos:
             out_subblock_w=min(mm_n // 32, 4),
             per_core_M=4,
             per_core_N=mm_n // 32,
+            allowed_worker_cores=branch_cores,
         )
 
         ln_prog_cfg = lambda gx, gy, bh, bw: ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -1719,9 +1758,12 @@ class TestPerfDemos:
         "perf_mode", ["none"]
     )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_asymmetric_branches_ln_slice_rms_ln_fused(self, device, perf_mode):
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
         from models.experimental.ops.descriptors.data_movement.slice import slice
+        from models.experimental.ops.descriptors.fusion import Parallel, Sequential
+        from models.experimental.ops.descriptors.normalization import (
+            layer_norm,
+            rms_norm,
+        )
 
         (
             stem_cores,
@@ -1987,22 +2029,22 @@ class TestPerfDemos:
 
 
 def test_global_circular_buffer_fused(device):
-    from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+    from models.experimental.ops.descriptors.fusion import Parallel, Sequential
 
     GLOBALCB_SENDER_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/remote_circular_buffer.h"
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    constexpr uint32_t local_cb_id = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
-    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-    experimental::CircularBuffer local_cb{local_cb_id};
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(0);
+    constexpr std::uint32_t local_cb_id = get_named_compile_time_arg_val("cb_out");
+    constexpr std::uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
+    constexpr std::uint32_t page_size = get_named_compile_time_arg_val("page_size");
+    CircularBuffer local_cb{local_cb_id};
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
-    experimental::Noc noc;
+    Noc noc;
     remote_cb.set_receiver_page_size(noc, page_size);
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         local_cb.wait_front(1);
         remote_cb.reserve_back(1);
         remote_cb.push_back(noc, local_cb, 1, 1, 1, page_size);
@@ -2015,20 +2057,20 @@ void kernel_main() {
 
     GLOBALCB_RECEIVER_READER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/remote_circular_buffer.h"
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
-    constexpr uint32_t local_cb_id = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-    experimental::CircularBuffer local_cb{local_cb_id};
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(0);
+    constexpr std::uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
+    constexpr std::uint32_t local_cb_id = get_named_compile_time_arg_val("cb_in");
+    constexpr std::uint32_t page_size = get_named_compile_time_arg_val("page_size");
+    CircularBuffer local_cb{local_cb_id};
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
-    experimental::Noc noc;
+    Noc noc;
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     remote_cb.set_sender_page_size(noc, page_size);
     experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {local_cb_id});
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         local_cb.reserve_back(1);
         remote_cb.wait_front(1);
         local_cb.push_back(1);
@@ -2043,17 +2085,17 @@ void kernel_main() {
     RECEIVER_DRAM_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_in");
-    uint32_t tile_bytes = get_tile_size(cb_id);
+    std::uint32_t dst_addr = get_arg_val<std::uint32_t>(0);
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(1);
+    constexpr std::uint32_t cb_id = get_named_compile_time_arg_val("cb_in");
+    std::uint32_t tile_bytes = get_tile_size(cb_id);
     DataFormat data_format = get_dataformat(cb_id);
     const InterleavedAddrGenFast<true> d = {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_id, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id);
-        noc_async_write_tile(i, d, l1_read_addr);
+        std::uint32_t l1_read_addr = get_read_ptr(cb_id);
+        noc_async_write_page(i, d, l1_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_id, 1);
     }
@@ -2266,7 +2308,7 @@ def _non_contiguous_grid_setup(device, num_tiles=4):
     "perf_mode", ["none"]
 )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
 def test_non_contiguous_core_grid_fused(device, perf_mode):
-    from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+    from models.experimental.ops.descriptors.fusion import Parallel, Sequential
 
     stem, op_a, op_b, t_in, _, _ = _non_contiguous_grid_setup(device)
 

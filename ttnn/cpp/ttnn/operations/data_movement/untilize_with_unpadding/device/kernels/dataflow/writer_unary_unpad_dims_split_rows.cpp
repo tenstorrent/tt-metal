@@ -4,65 +4,69 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 inline uint64_t round_down_32(uint64_t a) { return (a >> 5) << 5; }
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
 
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_unpadded_W = get_arg_val<uint32_t>(1);
-    const uint32_t padded_W_diff_blocks = get_arg_val<uint32_t>(2);
-    const uint32_t num_unpadded_Z = get_arg_val<uint32_t>(3);
-    const uint32_t padded_Z_diff_blocks = get_arg_val<uint32_t>(4);
-    const uint32_t num_unpadded_Y = get_arg_val<uint32_t>(5);
-    const uint32_t padded_Y_diff_blocks = get_arg_val<uint32_t>(6);
-    const uint32_t num_leftover_Y = get_arg_val<uint32_t>(7);
-    const uint32_t num_unpadded_X = get_arg_val<uint32_t>(8);
-    const uint32_t padded_X_size = get_arg_val<uint32_t>(9);
-    const uint32_t num_blocks_w_input = get_arg_val<uint32_t>(10);
-    const uint32_t num_blocks_w_output = get_arg_val<uint32_t>(11);
-    const uint32_t num_blocks_w_diff = get_arg_val<uint32_t>(12);
-    const uint32_t block_row_size = get_arg_val<uint32_t>(13);
-    const uint32_t block_row_leftover_size = get_arg_val<uint32_t>(14);
+    const auto num_unpadded_W = get_arg(args::num_unpadded_W);
+    const auto padded_W_diff_blocks = get_arg(args::padded_W_diff_blocks);
+    const auto num_unpadded_Z = get_arg(args::num_unpadded_Z);
+    const auto padded_Z_diff_blocks = get_arg(args::padded_Z_diff_blocks);
+    const auto num_unpadded_Y = get_arg(args::num_unpadded_Y);
+    const auto padded_Y_diff_blocks = get_arg(args::padded_Y_diff_blocks);
+    const auto num_leftover_Y = get_arg(args::num_leftover_Y);
+    const auto num_unpadded_X = get_arg(args::num_unpadded_X);
+    const auto padded_X_size = get_arg(args::padded_X_size);
+    const auto num_blocks_w_input = get_arg(args::num_blocks_w_input);
+    const auto num_blocks_w_output = get_arg(args::num_blocks_w_output);
+    const auto num_blocks_w_diff = get_arg(args::num_blocks_w_diff);
+    const auto block_row_size = get_arg(args::block_row_size);
+    const auto block_row_leftover_size = get_arg(args::block_row_leftover_size);
 
     uint32_t stick_id = 0;
 
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
 
     const uint32_t num_tiles_block_c =
         FLOAT32_DTYPE ? block_row_size / 128
                       : block_row_size / 64;  // Assuming 4 / 2 bytes per datum, there are 128 / 64 bytes per tile row
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
+    Noc noc;
+    // The untilized output block the compute kernel packs and this writer drains.
+    DataflowBuffer dfb_out0(dfb::out);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_wait_front(cb_id_out0, num_tiles_block_c);
-            cb_pop_front(cb_id_out0, num_tiles_block_c);
+            dfb_out0.wait_front(num_tiles_block_c);
+            dfb_out0.pop_front(num_tiles_block_c);
         }
     };
 
     auto write_block = [&](uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
-        cb_wait_front(cb_id_out0, num_tiles_block_c);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        dfb_out0.wait_front(num_tiles_block_c);
+        uint32_t l1_read_addr = dfb_out0.get_read_ptr();
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = s.get_noc_addr(curr_stick_id) + offset;
-
-            // Write out tmp buffer
-            noc_async_write(l1_read_addr, dst_noc_addr, block_size);
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(
+                src, s, block_size, {.offset_bytes = 0}, {.page_id = curr_stick_id, .offset_bytes = offset});
 
             l1_read_addr += block_row_size;
             curr_stick_id++;
 
             // Block write
-            noc_async_write_barrier();
+            noc.async_write_barrier();
         }
-        cb_pop_front(cb_id_out0, num_tiles_block_c);
+        dfb_out0.pop_front(num_tiles_block_c);
     };
 
     auto write_block_rows = [&](uint32_t num_rows_block, uint32_t base_stick_id) {

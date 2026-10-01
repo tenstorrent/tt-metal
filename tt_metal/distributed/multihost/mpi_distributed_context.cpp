@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mpi_distributed_context.hpp"
+#include "dtype_size.hpp"
 #include <mpi.h>
 #include <mpi-ext.h>
 
@@ -138,26 +139,6 @@ constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
     return MPI_DATATYPE_NULL;
 }
 
-constexpr int mpi_dtype_size(DType dt) noexcept {
-    switch (dt) {
-        case DType::INT8:
-        case DType::UINT8:
-        case DType::BOOL:
-        case DType::BYTE: return 1;
-        case DType::INT16:
-        case DType::UINT16: return 2;
-        case DType::INT32:
-        case DType::UINT32:
-        case DType::FLOAT32: return 4;
-        case DType::INT64:
-        case DType::UINT64:
-        case DType::FLOAT64:
-        case DType::COMPLEX_FLOAT: return 8;
-        case DType::COMPLEX_DOUBLE: return 16;
-    }
-    return 0;
-}
-
 inline void check_size_fits_int(std::size_t n) {
     if (n > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         TT_THROW("MPI buffer size > INT_MAX");
@@ -242,16 +223,30 @@ bool MPIRequest::active() const { return !done_; }
 
 inline void init_env(int& argc, char**& argv) {
     static std::once_flag mpi_once;
+    static int provided_thread_level = MPI_THREAD_SINGLE;
 
     std::call_once(mpi_once, [&] {
         int provided = 0;
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
+        provided_thread_level = provided;
 
         // Ensure MPI_Finalize is called when the program exits
         std::atexit([] { MPI_Finalize(); });
     });
+
+    // Validate AFTER the once-block completes: MPI is initialized exactly once and the finalizer is
+    // registered even when we reject the runtime. The Python bindings release the GIL around
+    // barrier / send_bytes / recv_bytes and the host-socket calls, so several Python threads may be
+    // inside MPI at once (DFlash relay + collective teardown). That is only legal at
+    // MPI_THREAD_MULTIPLE; MPI_Init_thread may succeed while granting a weaker level.
+    TT_FATAL(
+        provided_thread_level >= MPI_THREAD_MULTIPLE,
+        "MPI runtime provided thread level {} but MPI_THREAD_MULTIPLE ({}) is required for concurrent "
+        "host-socket / barrier calls from multiple Python threads",
+        provided_thread_level,
+        static_cast<int>(MPI_THREAD_MULTIPLE));
 }
 
 void MPIContext::create(int argc, char** argv) {
@@ -327,7 +322,7 @@ Size MPIContext::subcontext_size(SubcontextId subcontext_id) const {
     return Size(L.subcontext_sizes[*subcontext_id]);
 }
 
-tt::stl::Span<const int> MPIContext::subcontext_sizes() const {
+ttsl::Span<const int> MPIContext::subcontext_sizes() const {
     const auto& L = g_mpi_launcher_env_layout;
     return {L.subcontext_sizes.data(), L.subcontext_sizes.size()};
 }
@@ -387,22 +382,22 @@ void MPIContext::barrier() const { MPI_CHECK(MPI_Barrier(comm_)); }
 
 /* ---- point‑to‑point ---------------------------------------------------- */
 
-void MPIContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+void MPIContext::send(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
 }
 
-void MPIContext::ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+void MPIContext::ssend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Ssend(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
 }
 
-void MPIContext::recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
+void MPIContext::recv(ttsl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, MPI_STATUS_IGNORE));
 }
 
-RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+RequestPtr MPIContext::isend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
     MPI_CHECK(MPI_Isend(
@@ -410,7 +405,7 @@ RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) c
     return std::make_shared<MPIRequest>(req);
 }
 
-RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
+RequestPtr MPIContext::irecv(ttsl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
     MPI_CHECK(MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, &req));
@@ -419,13 +414,13 @@ RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) co
 
 /* ---- collectives ------------------------------------------------------- */
 
-void MPIContext::broadcast(tt::stl::Span<std::byte> buf, Rank root) const {
+void MPIContext::broadcast(ttsl::Span<std::byte> buf, Rank root) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Bcast(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *root, comm_));
 }
 
 void MPIContext::all_reduce(
-    tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     check_size_fits_int(send_buf.size());
 
     TT_FATAL(
@@ -434,7 +429,7 @@ void MPIContext::all_reduce(
         send_buf.size(),
         recv_buf.size());
 
-    const int elem_size = mpi_dtype_size(dtype);  // e.g. 4 for FLOAT32
+    const int elem_size = static_cast<int>(dtype_size(dtype));  // e.g. 4 for FLOAT32
     TT_FATAL(
         send_buf.size() % elem_size == 0,
         "all_reduce: buffer size {} is not a multiple of element size {}",
@@ -450,8 +445,8 @@ void MPIContext::all_reduce(
 }
 
 void MPIContext::reduce(
-    tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root) const {
-    const int elem_sz = mpi_dtype_size(dtype);
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root) const {
+    const int elem_sz = static_cast<int>(dtype_size(dtype));
     TT_FATAL(
         send_buf.size() % elem_sz == 0,
         "reduce: send size {} not multiple of element size {}",
@@ -475,7 +470,7 @@ void MPIContext::reduce(
     MPI_CHECK(MPI_Reduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), *root, comm_));
 }
 
-void MPIContext::gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
+void MPIContext::gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const {
     const int send_count = static_cast<int>(send_buf.size());
     check_size_fits_int(send_count);
 
@@ -489,7 +484,7 @@ void MPIContext::gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::by
     MPI_CHECK(MPI_Gather(send_buf.data(), send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, *root, comm_));
 }
 
-void MPIContext::scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
+void MPIContext::scatter(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const {
     const int recv_count = static_cast<int>(recv_buf.size());
     check_size_fits_int(recv_count);
 
@@ -502,7 +497,7 @@ void MPIContext::scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::b
     MPI_CHECK(MPI_Scatter(send_buf.data(), recv_count, MPI_CHAR, recv_buf.data(), recv_count, MPI_CHAR, *root, comm_));
 }
 
-void MPIContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
+void MPIContext::all_gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const {
     const int send_count = static_cast<int>(send_buf.size());
     check_size_fits_int(send_count);
 
@@ -520,7 +515,7 @@ void MPIContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std
     MPI_CHECK(MPI_Allgather(send_ptr, send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, comm_));
 }
 
-void MPIContext::all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
+void MPIContext::all_to_all(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const {
     const int world = *size();
 
     TT_FATAL(
@@ -543,9 +538,9 @@ void MPIContext::all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std
 }
 
 void MPIContext::reduce_scatter(
-    tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     const int world = *size();
-    const int elem_sz = mpi_dtype_size(dtype);
+    const int elem_sz = static_cast<int>(dtype_size(dtype));
 
     TT_FATAL(
         send_buf.size() % elem_sz == 0,
@@ -583,11 +578,11 @@ void MPIContext::reduce_scatter(
 }
 
 void MPIContext::scan(
-    tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     TT_FATAL(
         send_buf.size() == recv_buf.size(), "scan: send size {} != recv size {}", send_buf.size(), recv_buf.size());
 
-    const int elem_sz = mpi_dtype_size(dtype);
+    const int elem_sz = static_cast<int>(dtype_size(dtype));
     TT_FATAL(
         send_buf.size() % elem_sz == 0,
         "scan: buffer size {} not multiple of element size {}",
@@ -618,7 +613,7 @@ ContextPtr MPIContext::split(Color color, Key key) const {
     return std::make_shared<MPIContext>(split_comm);
 }
 
-ContextPtr MPIContext::create_sub_context(tt::stl::Span<int> ranks) const {
+ContextPtr MPIContext::create_sub_context(ttsl::Span<int> ranks) const {
     MPI_Group sub_grp = MPI_GROUP_NULL;
     MPI_Comm sub_comm = MPI_COMM_NULL;
 
@@ -638,7 +633,7 @@ ContextPtr MPIContext::create_sub_context(tt::stl::Span<int> ranks) const {
 }
 
 void MPIContext::translate_ranks_to_other_ctx(
-    tt::stl::Span<int> ranks, const ContextPtr& other_ctx, tt::stl::Span<int> translated_ranks) const {
+    ttsl::Span<int> ranks, const ContextPtr& other_ctx, ttsl::Span<int> translated_ranks) const {
     TT_FATAL(
         ranks.size() == translated_ranks.size(),
         "translate_ranks_to_other_ctx: ranks size {} != translated_ranks size {}",

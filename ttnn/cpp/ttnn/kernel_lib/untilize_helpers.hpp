@@ -3,10 +3,9 @@
 
 #pragma once
 
-#include "tt-metalium/circular_buffer_constants.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/experimental/fast_untilize.h"
 #include "api/compute/cb_api.h"
-#include "internal/circular_buffer_interface.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 // This is the go-to helper for all untilize usage in compute kernels.
@@ -15,7 +14,7 @@ namespace compute_kernel_lib {
 
 namespace untilize_config {
 
-constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
+constexpr uint32_t INVALID_DFB = 0xFFFFFFFFu;
 
 // Register datatype reconfiguration — use when switching data formats between operations.
 enum class ReconfigureRegisterDatatypeMode : uint8_t {
@@ -43,6 +42,13 @@ enum class WaitMode : uint8_t {
     NoWait        // Caller manages synchronization externally
 };
 
+// Controls whether BH untilize configures DEST remap during init.
+// Use AssumeConfigured only when the caller configured remap once before entering a hot loop.
+enum class RemapMode : uint8_t {
+    Configure,        // Default: init configures remap
+    AssumeConfigured  // Caller already configured remap for this kernel
+};
+
 }  // namespace untilize_config
 
 // Standalone init/uninit wrappers for manual lifecycle control.
@@ -53,10 +59,14 @@ enum class WaitMode : uint8_t {
 // untilize() reconfig_mode — use NoReconfigure or PackReconfigure only.
 // If you need unpacker reconfiguration, call unpacker and packer reconfiguration manually
 // before untilize_init(), or use the unified untilize() which handles it automatically.
-template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
+template <
+    uint32_t block_width_tiles,
+    uint32_t input_dfb,
+    uint32_t output_dfb,
+    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure>
 ALWI void untilize_init();
 
-template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
+template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 ALWI void untilize_uninit();
 
 /**
@@ -75,11 +85,14 @@ ALWI void untilize_uninit();
  * ── Template Parameters (compile-time) ──────────────────────────────────────
  *
  *   block_width_tiles — Number of tiles per row (FIRST template param).
- *   input_cb          — Input circular buffer index (0–31, tiled data).
- *   output_cb         — Output circular buffer index (0–31, row-major output, must differ from input_cb).
+ *   input_dfb         — Input DataflowBuffer index (tiled data).
+ *   output_dfb        — Output DataflowBuffer index (row-major output, must differ from input_dfb).
  *   init_uninit_mode  — Init/uninit lifecycle control (default: InitAndUninit).
  *   wait_mode         — How to synchronize on input data (default: WaitBlock).
- *   reconfig_mode     — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
+ *   reconfig_mode      — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
+ *   remap_mode        — BH DEST remap setup control (default: Configure).
+ *                        Configure: helper configures remap during pack untilize init.
+ *                        AssumeConfigured: caller already enabled BH DEST remap and no intervening code changes it.
  *
  * ── Block Geometry ─────────────────────────────────────────────────────────
  *
@@ -93,50 +106,51 @@ ALWI void untilize_uninit();
  *
  *   num_blocks          — Number of tile-rows to process (height in tiles).
  *
- * NOTE: Asymmetric CB page support (total_input_pages) exists only in the tilize helper.
- * The untilize helper always uses symmetric (tile-sized) pages for both input and output CBs.
+ * NOTE: Asymmetric DFB page support (total_input_pages) exists only in the tilize helper.
+ * The untilize helper always uses symmetric (tile-sized) entries for both input and output DFBs.
  *
  * ── Examples ────────────────────────────────────────────────────────────────
  *
  *   #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
  *
  *   // Hardware init — only if no other init or compute_kernel_hw_startup was called before
- *   compute_kernel_hw_startup(cb_in, cb_out);
+ *   compute_kernel_hw_startup(dfb_in, dfb_out);
  *
  *   // 1. Basic untilize (most common)
- *   compute_kernel_lib::untilize<4, cb_in, cb_out>(num_blocks);
+ *   compute_kernel_lib::untilize<4, dfb_in, dfb_out>(num_blocks);
  *
  *   // 2. Wait-upfront (e.g., GroupNorm pattern)
  *   using namespace compute_kernel_lib::untilize_config;
- *   compute_kernel_lib::untilize<10, cb_in, cb_out,
+ *   compute_kernel_lib::untilize<10, dfb_in, dfb_out,
  *            InitUninitMode::InitAndUninit,
  *            WaitMode::WaitUpfront>(num_rows);
  *
  *   // 3. Register reconfiguration (switching data formats mid-kernel)
- *   compute_kernel_lib::untilize<4, cb_in, cb_out,
+ *   compute_kernel_lib::untilize<4, dfb_in, dfb_out,
  *            untilize_config::InitUninitMode::InitAndUninit,
  *            untilize_config::WaitMode::WaitBlock,
  *            untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(num_blocks);
  *
- *   // 4. Caller-managed synchronization (data already in CB)
- *   compute_kernel_lib::untilize<4, cb_in, cb_out,
+ *   // 4. Caller-managed synchronization (data already in DFB)
+ *   compute_kernel_lib::untilize<4, dfb_in, dfb_out,
  *            untilize_config::InitUninitMode::InitAndUninit,
  *            untilize_config::WaitMode::NoWait>(num_blocks);
  *
  *   // 5. Multiple back-to-back untilize calls — skip redundant init/uninit between them
- *   compute_kernel_lib::untilize<w, cb_in, cb_out, untilize_config::InitUninitMode::InitOnly>(blocks);   // first
- *   compute_kernel_lib::untilize<w, cb_in, cb_out, untilize_config::InitUninitMode::Neither>(blocks);    // middle
- *   compute_kernel_lib::untilize<w, cb_in, cb_out, untilize_config::InitUninitMode::UninitOnly>(blocks); // last
+ *   compute_kernel_lib::untilize<w, dfb_in, dfb_out, untilize_config::InitUninitMode::InitOnly>(blocks);   // first
+ *   compute_kernel_lib::untilize<w, dfb_in, dfb_out, untilize_config::InitUninitMode::Neither>(blocks);    // middle
+ *   compute_kernel_lib::untilize<w, dfb_in, dfb_out, untilize_config::InitUninitMode::UninitOnly>(blocks); // last
  *
  */
 template <
     uint32_t block_width_tiles,
-    uint32_t input_cb,
-    uint32_t output_cb,
+    uint32_t input_dfb,
+    uint32_t output_dfb,
     untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
+        untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib

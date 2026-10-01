@@ -55,6 +55,11 @@ void validate_tensors(
     }
 }
 
+MorehDotBackwardOperation::program_factory_t MorehDotBackwardOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return ProgramFactory{};
+}
+
 void MorehDotBackwardOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
@@ -62,7 +67,7 @@ void MorehDotBackwardOperation::validate_on_program_cache_miss(
 
 MorehDotBackwardOperation::spec_return_value_t MorehDotBackwardOperation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    std::vector<std::optional<TensorSpec>> output_specs;
+    std::vector<std::optional<tt::tt_metal::TensorSpec>> output_specs;
     output_specs.reserve(tensor_args.output_tensors.size());
     for (const auto& output_tensor : tensor_args.output_tensors) {
         if (output_tensor.has_value()) {

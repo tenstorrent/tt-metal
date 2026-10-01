@@ -39,14 +39,58 @@ bool find_device_with_neighbor_in_direction(
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
     const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords);
 
-// Compare ASIC mapping YAML files (hostname-agnostic comparison)
+// Compare ASIC mapping YAML files (fabric node, ASIC ID, hostname, and tray placement)
 bool compare_asic_mapping_files(const std::filesystem::path& generated_file, const std::filesystem::path& golden_file);
 
 // Helper function to check generated ASIC mapping files against golden files
 void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name = "");
 
+// Per-host rank-group dispatch (two-tray and split-host 4x4; called from layout tests).
+void expect_galaxy_rank_group_checks(const ControlPlane& control_plane);
+
+// Per-host rank-group checks for supported MGD slice shapes (dim0 x dim1 or dim1 x dim0; implementations in utils.cpp).
+void expect_galaxy_rank_group_1x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_1x2_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_2x2_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_2x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_2x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x16_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x32_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_8x16_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+
+// Mesh-wide four-tray split-host 4x4 check (dispatched from expect_galaxy_rank_group_checks).
+void expect_galaxy_rank_group_4x4_4x4split_check(
+    const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+
+// Galaxy corner folding: mesh endpoint logical chips (row-major first/last) must map to tray_ids 1–4
+// and asic_location 1. Used by MultiHost init tests and ControlPlaneFixture.TestGalaxyCornerPins.
+// Compare inter-mesh port assignment YAML files (exact; both are already sorted/host-independent).
+bool compare_intermesh_port_assignment_files(
+    const std::filesystem::path& generated_file, const std::filesystem::path& golden_file);
+
+// Check the generated inter-mesh port assignment against a golden file. The file is per-rank, so only rank 0
+// is compared (mock tests only). golden_name is the golden file base name (without extension).
+void check_intermesh_port_assignment_against_golden(const std::string& golden_name);
+
 // Galaxy corner folding (dual/quad/triple-pod 16x8/single-galaxy ControlPlane init tests only): mesh endpoint logical
 // chips (row-major first/last) must map to tray_ids 1–4 and asic_location 1 in the physical system descriptor.
 void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
+
+// Cross-checks three independent inputs: tt-run rank bindings (TT_MESH_ID / TT_MESH_HOST_RANK),
+// MGD host_topology slices (MeshGraph), and topology-mapper runtime state (discovery/mapping).
+// Rank binding order is not checked here (verify visually vs MGD when adding tests).
+void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control_plane);
+
+// Fabric config the active MGD (TT_MESH_GRAPH_DESC_PATH / custom fabric mesh graph desc) declares via its
+// device_topology dim_types: RING on both axes -> FABRIC_2D_TORUS_XY, RING on one -> TORUS_X/Y, else
+// FABRIC_2D. ControlPlaneFixture tests that can share a tt-run process (galaxy layout/corner checks and
+// the pipeline-builder checks) must all use this same MGD-implied config, otherwise the set-once fabric
+// config guard (metal_env.cpp:276 "Tried to override previous value of fabric config") fires when the
+// second test in the process asks for a different one. Reliability is the caller's choice (RELAXED for
+// these structural checks). Returns FABRIC_2D when no custom MGD path is set.
+tt::tt_fabric::FabricConfig fabric_config_for_active_mgd();
 
 }  // namespace tt::tt_fabric::fabric_router_tests

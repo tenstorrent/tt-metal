@@ -2,44 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as bcast_hw_metal2.cpp. Ops ported to Metal 2.0
+// bind the fork; this file serves the consumers still on the legacy API. Until the last of them migrates
+// and this file is retired, changes here likely belong in the fork too.
 
-#include "api/compute/bcast.h"
+#include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    constexpr uint32_t onetile = 1;
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+
+    constexpr auto dfb_lhs_id = tt::CBIndex::c_0;
+    constexpr auto dfb_rhs_id = tt::CBIndex::c_1;
+    constexpr auto dfb_out_id = tt::CBIndex::c_16;
+
+    compute_kernel_hw_startup(dfb_lhs_id, dfb_rhs_id, dfb_out_id);
 
 #ifdef BCAST_SCALAR
-    cb_wait_front(tt::CBIndex::c_1, onetile);
+    constexpr auto rhs_wait = ckl::WaitPolicy::Upfront;
+    constexpr auto rhs_pop = ckl::PopPolicy::None;
+#else
+    constexpr auto rhs_wait = ckl::WaitPolicy::PerTile;
+    constexpr auto rhs_pop = ckl::PopPolicy::PerTile;
 #endif
 
-    for (uint32_t b = 0; b < B; b++) {
-        for (uint32_t h = 0; h < Ht; h++) {
-            for (uint32_t w = 0; w < Wt; w++) {
-#ifndef BCAST_SCALAR
-                cb_wait_front(tt::CBIndex::c_1, onetile);
-#endif
-                cb_reserve_back(tt::CBIndex::c_16, onetile);
-
-                acquire_dst();
-
-                cb_wait_front(tt::CBIndex::c_0, onetile);
-
-                BCAST_OP<BroadcastType::SCALAR>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-                pack_tile(0, tt::CBIndex::c_16);
-
-                cb_pop_front(tt::CBIndex::c_0, onetile);
-#ifndef BCAST_SCALAR
-                cb_pop_front(tt::CBIndex::c_1, onetile);
-#endif
-                release_dst();
-
-                cb_push_back(tt::CBIndex::c_16, onetile);
-            }
-        }
-    }
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(B * Ht * Wt),
+        ckl::BinaryFpu<
+            CHAIN_BCAST_OP,
+            ckl::input(
+                dfb_lhs_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_rhs_id, CHAIN_BCAST_DIM, rhs_wait, rhs_pop, ckl::DataFormatReconfig::Disabled)>{},
+        ckl::PackTile<ckl::output(
+            dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

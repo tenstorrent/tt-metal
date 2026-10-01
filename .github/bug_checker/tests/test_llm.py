@@ -4,6 +4,10 @@
 
 """Tests for LLM tool-use parsing (does not call the API)."""
 
+from types import SimpleNamespace
+
+import pytest
+
 from bug_checker.llm import LLMSession
 
 
@@ -67,11 +71,7 @@ def test_build_findings_multiple():
 def test_build_findings_suggested_fix_empty_string_normalized():
     # Empty string suggested_fix should be normalized to None
     s = _session()
-    tool_input = {
-        "findings": [
-            {"file": "a.cpp", "line": 1, "message": "Bug", "suggested_fix": ""}
-        ]
-    }
+    tool_input = {"findings": [{"file": "a.cpp", "line": 1, "message": "Bug", "suggested_fix": ""}]}
     findings = s._build_findings(tool_input, "rule-1", "blocking")
     assert findings[0].suggested_fix is None
 
@@ -91,3 +91,18 @@ def test_session_has_no_messages_state():
         "LLMSession.messages was re-introduced; each analyze_rule call must be "
         "a fresh single-turn request with no shared history."
     )
+
+
+def test_analyze_rule_raises_when_tool_use_missing():
+    s = _session()
+    s.model = "test-model"
+    s._client = SimpleNamespace(messages=SimpleNamespace(create=lambda **_kwargs: SimpleNamespace(content=[])))
+
+    with pytest.raises(RuntimeError, match="expected tool_use"):
+        s.analyze_rule(
+            rule_content="# Rule",
+            rule_id="test-rule",
+            severity="warning",
+            suggest_fix=False,
+            diff="",
+        )

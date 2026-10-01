@@ -69,7 +69,7 @@ It takes **two required positional parameters** (no defaults):
 
 - ``<assert_output_path>`` — file where the on-timeout triage hook writes the lightweight-assert
   dump (callstacks, template parameters, runtime args, locals).
-- ``<dprint_output_path>`` — file where ``DEVICE_PRINT`` output from all cores is written
+- ``<dprint_output_path>`` — file where ``DPRINT`` output from all cores is written
   (``TT_METAL_DPRINT_FILE``).
 
 The script also requires ``TT_METAL_HOME`` to be set — activating the tt-metal Python
@@ -88,7 +88,7 @@ After the run completes, three artifacts are available for analysis:
 
 - ``test_output.txt`` — pytest stdout/stderr, including the host-side ``RuntimeError`` and stack trace.
 - ``assert.txt`` — the lightweight-assert dump from the device when the hang was detected.
-- ``/tmp/tt_dprint.log`` — ``DEVICE_PRINT`` output (e.g. ``expected: …, actual: …`` values
+- ``/tmp/tt_dprint.log`` — ``DPRINT`` output (e.g. ``expected: …, actual: …`` values
   emitted near a failing ``LLK_ASSERT``).
 
 **How the script is designed to work**
@@ -117,12 +117,10 @@ self-triaged failure:
      - Allows the triage scripts (including ``dump_lightweight_asserts``) to execute even
        when running under CI-like conditions where they are otherwise gated off.
    * - ``TT_METAL_DPRINT_CORES=all``
-     - Subscribes the host dprint server to every core. Without this, ``DEVICE_PRINT``
+     - Subscribes the host dprint server to every core. Without this, ``DPRINT``
        statements on TRISCs would not be captured.
-   * - ``TT_METAL_DEVICE_PRINT=1``
-     - Enables the ``DEVICE_PRINT`` macro at compile-time in JIT-built kernels.
    * - ``TT_METAL_DPRINT_FILE=<dprint_output_path>``
-     - Redirects all ``DEVICE_PRINT`` output to the file you specified instead of stdout,
+     - Redirects all ``DPRINT`` output to the file you specified instead of stdout,
        making it easy to grep/diff after the run.
 
 The end-to-end flow is:
@@ -134,7 +132,7 @@ The end-to-end flow is:
    device, finds the asserting TRISC, recovers callstack, template params, runtime args, and
    locals, and writes them to ``<assert_output_path>``.
 4. ``tt-smi -r`` resets the device so the next test run is clean.
-5. Pytest reports a ``RuntimeError`` to ``test_output.txt``; ``DEVICE_PRINT`` lines emitted
+5. Pytest reports a ``RuntimeError`` to ``test_output.txt``; ``DPRINT`` lines emitted
    before the ``ebreak`` are in ``<dprint_output_path>``.
 
 Together, these three files normally pinpoint the failing kernel, the failing line, and the
@@ -267,20 +265,17 @@ LLK asserts are fully integrated into the tt-metal CI/CD system through the ``en
 
 The following key workflow files accept the ``enable-llk-asserts`` boolean input and can be triggered manually via ``workflow_dispatch`` with the checkbox enabled:
 
-- ``sanity-tests.yaml`` — broad sanity suite (fast dispatch, models, ops, TTNN, profiler)
+- ``sanity-tests.yaml`` — broad sanity suite (fast dispatch, ops, TTNN, profiler)
 - ``sanity-tests-debug.yaml`` — nightly debug run (also the scheduled nightly LLK assert run)
-- ``blackhole-post-commit.yaml`` — Blackhole-specific test matrix (models, ops, TTNN, UMD, multi-card)
 
-Other workflows also accept this parameter (e.g. ``ttnn-post-commit.yaml``, ``ops-post-commit.yaml``, ``models-post-commit.yaml``, ``tt-metal-l2-nightly.yaml``, and others), but the three above are the most useful entry points for validating new asserts.
+Other workflows also accept this parameter (e.g. ``ttnn-post-commit.yaml``, ``ops-post-commit.yaml``, ``tt-metal-l2-nightly.yaml``, and others), but the two above are the most useful entry points for validating new asserts.
 
 **Nightly Runs with LLK Asserts**
 
-The ``sanity-tests-debug.yaml`` workflow runs automatically every night **at 2:00 AM UTC** with LLK asserts enabled. It spawns four test jobs — Wormhole and Blackhole on both Ubuntu 22.04 and Ubuntu 24.04:
+The ``sanity-tests-debug.yaml`` workflow runs automatically every night **at 2:00 AM UTC** with LLK asserts enabled. It spawns Wormhole test jobs on both Ubuntu 22.04 and Ubuntu 24.04:
 
 - ``wormhole-nightly-debug-ubuntu-22`` — runs ``sanity-tests.yaml`` with ``enable-llk-asserts: true``
-- ``blackhole-nightly-debug-ubuntu-22`` — runs ``blackhole-post-commit.yaml`` with ``enable-llk-asserts: true``
 - ``wormhole-nightly-debug-ubuntu-24`` — runs ``sanity-tests.yaml`` with ``enable-llk-asserts: true``
-- ``blackhole-nightly-debug-ubuntu-24`` — runs ``blackhole-post-commit.yaml`` with ``enable-llk-asserts: true``
 
 The same workflow can also be triggered on demand via ``workflow_dispatch`` with the ``enable-llk-asserts`` checkbox.
 
@@ -291,10 +286,9 @@ After adding a new ``LLK_ASSERT`` to the codebase, you must validate it does not
 
 1. **Run CI with LLK asserts enabled**
 
-   Trigger either (or both) of these workflows manually via ``workflow_dispatch`` with the ``enable-llk-asserts`` checkbox enabled:
+   Trigger this workflow manually via ``workflow_dispatch`` with the ``enable-llk-asserts`` checkbox enabled:
 
    - `Sanity tests <https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/sanity-tests.yaml>`_ — exercises a broad set of configurations including fast dispatch, models, ops, TTNN, and profiler regression.
-   - `Blackhole post-commit <https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/blackhole-post-commit.yaml>`_ — validates Blackhole-specific code paths (models, ops, TTNN, UMD, multi-card).
 
 2. **For each test failure, choose one of two resolutions:**
 

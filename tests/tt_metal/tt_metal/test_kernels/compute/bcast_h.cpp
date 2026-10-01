@@ -10,7 +10,8 @@ void kernel_main() {
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    bcast_init<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1);
 
     for (uint32_t b = 0; b < B; b++) {
         for (uint32_t h = 0; h < Ht; h++) {
@@ -22,16 +23,20 @@ void kernel_main() {
 
                 cb_reserve_back(tt::CBIndex::c_16, onetile);
 
-                acquire_dst();
+                tile_regs_acquire();
 
                 cb_wait_front(tt::CBIndex::c_0, onetile);
 
                 BCAST_OP<BroadcastType::ROW>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
+
+                tile_regs_commit();
+                tile_regs_wait();
+
                 pack_tile(0, tt::CBIndex::c_16);
 
                 cb_pop_front(tt::CBIndex::c_0, onetile);
 
-                release_dst();
+                tile_regs_release();
 
                 cb_push_back(tt::CBIndex::c_16, onetile);
                 cb_pop_front(tt::CBIndex::c_1, onetile);

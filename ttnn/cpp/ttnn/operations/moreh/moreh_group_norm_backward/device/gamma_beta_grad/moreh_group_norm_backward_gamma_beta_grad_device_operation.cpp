@@ -14,6 +14,14 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
+namespace {
+
+uint64_t expected_mean_rstd_volume_gamma_beta_grad(const Tensor& output_grad, uint32_t num_groups) {
+    return static_cast<uint64_t>(output_grad.logical_shape()[0]) * num_groups;
+}
+
+}  // namespace
+
 void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
@@ -35,6 +43,7 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     check_tensor(beta_grad, "moreh_group_norm_backward_gamma_beta_grad", "beta_grad");
 
     // output_grad (N, C, H, W)
+    TT_FATAL(num_groups > 0, "num_groups must be greater than 0.");
     auto C = output_grad.padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "output_grad_shape[1] must be divisible by num_groups.");
     // input (N, C, H, W)
@@ -53,8 +62,18 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
 
     // mean (1, 1, N, num_groups)
     TT_FATAL(mean.logical_shape()[-1] == num_groups, "mean_shape[-1] must match num_groups.");
+    TT_FATAL(
+        mean.logical_volume() == expected_mean_rstd_volume_gamma_beta_grad(output_grad, num_groups),
+        "mean must have logical volume {}. Got {}.",
+        expected_mean_rstd_volume_gamma_beta_grad(output_grad, num_groups),
+        mean.logical_volume());
     // rstd (1, 1, N, num_groups)
     TT_FATAL(rstd.logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
+    TT_FATAL(
+        rstd.logical_volume() == expected_mean_rstd_volume_gamma_beta_grad(output_grad, num_groups),
+        "rstd must have logical volume {}. Got {}.",
+        expected_mean_rstd_volume_gamma_beta_grad(output_grad, num_groups),
+        rstd.logical_volume());
 }
 
 void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_miss(
@@ -81,7 +100,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::compute_output_specs(
     auto dtype = tensor_args.output_grad.dtype();
     Layout layout{Layout::TILE};
 
-    std::vector<std::optional<TensorSpec>> result(2);
+    std::vector<std::optional<tt::tt_metal::TensorSpec>> result(2);
     const auto gamma_requires_grad = operation_attributes.are_required_outputs[0];
     const auto beta_requires_grad = operation_attributes.are_required_outputs[1];
 
@@ -89,7 +108,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::compute_output_specs(
         if (tensor_args.gamma_grad.has_value()) {
             result[0] = tensor_args.gamma_grad->tensor_spec();
         } else {
-            result[0] = TensorSpec(
+            result[0] = tt::tt_metal::TensorSpec(
                 dgamma_dbeta_shape,
                 TensorLayout(dtype, PageConfig(layout), operation_attributes.gamma_grad_memory_config));
         }
@@ -99,7 +118,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::compute_output_specs(
         if (tensor_args.beta_grad.has_value()) {
             result[1] = tensor_args.beta_grad->tensor_spec();
         } else {
-            result[1] = TensorSpec(
+            result[1] = tt::tt_metal::TensorSpec(
                 dgamma_dbeta_shape,
                 TensorLayout(dtype, PageConfig(layout), operation_attributes.beta_grad_memory_config));
         }

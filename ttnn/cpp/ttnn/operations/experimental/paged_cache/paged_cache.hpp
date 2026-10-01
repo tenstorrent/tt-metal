@@ -18,7 +18,10 @@ ttnn::Tensor paged_update_cache(
     const std::optional<const Tensor>& page_table,
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> num_kv_heads_override = std::nullopt,
+    std::optional<uint32_t> cache_position_modulo = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> paged_fused_update_cache(
     const Tensor& cache_tensor1,
@@ -40,6 +43,9 @@ ttnn::Tensor paged_fill_cache(
     const std::optional<const Tensor>& batch_idx_tensor,
     uint32_t batch_idx,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> cache_position_modulo = std::nullopt,
+    const std::optional<const Tensor>& valid_seq_len_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental

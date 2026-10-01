@@ -10,3 +10,5 @@ set(TTNN_OP_MATMUL_DECODE_SRCS
     device/gate_up_matmul_decode_device_operation.cpp
     device/gate_up_partial_width_sharded_program_factory.cpp
 )
+
+set(TTNN_OP_MATMUL_DECODE_NANOBIND_SRCS matmul_decode_nanobind.cpp)

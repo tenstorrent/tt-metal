@@ -4,69 +4,54 @@
 
 #include <cstdint>
 
+#include "experimental/kernel_args.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
-    constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
-    constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
+    constexpr auto num_output_tiles = get_arg(args::num_output_tiles);
+    constexpr bool wt_need_bcast = (get_arg(args::wt_need_bcast) == 1);
+    constexpr bool ht_need_bcast = (get_arg(args::ht_need_bcast) == 1);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;  // input
-    constexpr auto cb_in1 = tt::CBIndex::c_1;  // zero tile
-    constexpr auto cb_scalar = tt::CBIndex::c_2;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    DataflowBuffer dfb_zero_obj(dfb::zero);  // zero tile
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
-    cb_wait_front(cb_in1, onetile);
+    compute_kernel_hw_startup(dfb::in, dfb::zero, dfb::out);
+    dfb_zero_obj.wait_front(onetile);
+
+    constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
+    constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
+                               : ht_need_bcast                  ? ckl::BroadcastDim::Row
+                               : wt_need_bcast                  ? ckl::BroadcastDim::Col
+                                                                : ckl::BroadcastDim::None;
+
     for (uint32_t i = 0; i < num_output_tiles; i++) {
-        tile_regs_acquire();
-        cb_wait_front(cb_in0, onetile);
-        if (ht_need_bcast && wt_need_bcast) {
-            add_bcast_scalar_init_short_with_dt(cb_in1, cb_in0);
-            add_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, dst0);
-        } else if (ht_need_bcast) {
-            add_bcast_rows_init_short_with_dt(cb_in1, cb_in0);
-            add_tiles_bcast_rows(cb_in1, cb_in0, 0, 0, dst0);
-        } else if (wt_need_bcast) {
-            add_bcast_cols_init_short_with_dt(cb_in1, cb_in0);
-            add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);
-        } else {
-            copy_tile_init_with_dt(cb_in0);
-            copy_tile(cb_in0, 0, dst0);
-        }
-        tile_regs_commit();
-
-        cb_reserve_back(cb_intermed0, onetile);
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_intermed0);
-        tile_regs_release();
-
-        cb_push_back(cb_intermed0, onetile);
-        cb_pop_front(cb_in0, onetile);
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(onetile),
+            ckl::Optional<
+                has_bcast,
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(dfb::zero, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::input(dfb::in, bcast_dim)>>{},
+            ckl::Optional<!has_bcast, ckl::CopyTile<ckl::input(dfb::in)>>{},
+            ckl::PackTile<ckl::output(dfb::intermed)>{});
 
         // output * (1 / number_of_elements)
-        tile_regs_acquire();
-        cb_wait_front(cb_intermed0, onetile);
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0, cb_scalar);
-        mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
-        tile_regs_commit();
-
-        cb_reserve_back(cb_out0, onetile);
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_out0);
-        tile_regs_release();
-
-        cb_push_back(cb_out0, onetile);
-        cb_pop_front(cb_intermed0, onetile);
+        ckl::mul<
+            ckl::input(dfb::intermed),
+            // 1/num_dim bcast scalar
+            ckl::input(dfb::scalar, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(dfb::out)>(ckl::IterationShape::tiles(onetile));
     }
-    cb_pop_front(cb_in1, onetile);
+    dfb_zero_obj.pop_front(onetile);
 }

@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "datasets/in_memory_dataset.hpp"
@@ -112,12 +113,13 @@ TEST_F(DataLoaderTest, TestCollateFn) {
     // Custom collate function that sums all elements in the vectors and returns the sum as a new batch
     auto custom_collate_fn = [](const std::vector<std::pair<std::vector<float>, int>>& batch) {
         std::vector<std::pair<std::vector<float>, int>> collated_batch;
+        collated_batch.reserve(batch.size());
         for (const auto& sample : batch) {
             std::vector<float> summed_data(sample.first.size(), 0.0F);
             for (size_t i = 0; i < sample.first.size(); ++i) {
                 summed_data[i] += sample.first[i];
             }
-            collated_batch.emplace_back(summed_data, sample.second);
+            collated_batch.emplace_back(std::move(summed_data), sample.second);
         }
         return collated_batch;
     };

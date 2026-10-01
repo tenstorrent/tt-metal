@@ -20,36 +20,67 @@ constexpr bool is_supported_relu_type_v = std::is_same_v<T, float> || std::is_sa
 template <bool APPROXIMATION_MODE>
 inline void _calculate_lrelu_(const int iterations, std::uint32_t slope)
 {
-    TT_SFPLOADI(p_sfpu::LREG2, 10, slope & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG2, 8, slope >> 16);
+    const sfpi::vFloat slope_v = Converter::as_float(slope);
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);        // load from dest into lreg[0]
-        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, 0);                                         // condition - if value in LREG0 is negative //will set cc result reg
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // Multiply LREG0 * LREG2 (x * slope)
-        TTI_SFPENCC(0, 0, 0, 0);                                                      // clear cc result reg
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);       // store from lreg0 into dest register
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v_if (v < 0.0f)
+        {
+            v = v * slope_v;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
 }
 
+// relu_max(x) = max(min(x, threshold), 0): two SFPSWAP min/max folds in place of two predicated
+// blocks (SFPGT/SFPMOV/SFPENCC each), 9 -> 5 instructions per row when `threshold` is a literal or
+// a constant register, 6 when it lives in a general LReg (SFPSWAP writes both operands, so the
+// compiler copies the threshold first).
+//
+// The order is the one the predicated chain had -- threshold first, then the relu clamp -- and
+// it is not interchangeable with min(max(x, 0), threshold): for threshold < 0 this form returns
+// +0.0 on every lane (min(x, t) <= t < 0, then the clamp), the other would return the threshold.
+// SFPSWAP orders FP32 by sign-magnitude, -NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN, so
+//   +NaN -> threshold (outranks every value, the min lands on the threshold)
+//   -NaN -> +0.0      (ranks below every value, survives the min, the clamp takes it)
+//   -0.0 -> +0.0      (ranks below +0.0)
+// which is what the SFPGT/SFPSETCC chain returned as well; measured on Blackhole silicon, see
+// test_eltwise_unary_sfpu_relu_max_threshold.
 sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshold)
 {
-    sfpi::vFloat result = val;
-    v_if (result > threshold)
-    {
-        result = threshold;
-    }
-    v_endif;
-    v_if (result < 0.0f)
-    {
-        result = 0.0f;
-    }
-    v_endif;
-    return result;
+    return sfpi::max(sfpi::min(val, threshold), 0.0f);
 }
 
+// Float relu_max with a per-call scalar threshold. The threshold is parked in vConstFloatPrgm1
+// (LREG13) for the duration of the call: SFPSWAP writes both of its operands, so a threshold held
+// in a general LReg costs an SFPMOV copy per row, while a write to a constant register is dropped.
+// One SFPCONFIG (+2 SFPLOADI) per call buys one instruction per row: 5 instead of 6, 9 before.
+//
+// Prgm1 is call-scoped here. relu_max_init programs nothing, and every production caller runs its
+// init next to its call (ttnn unary chains emit `<op>_init(); <op>(idst);` per op per tile), so no
+// kernel relies on Prgm1 surviving across a relu_max call. A fused kernel that programs Prgm1 in
+// its own init and calls relu_max_tile before its own compute would have to re-init.
+//
+// sfpi 7.83.0 compiles exactly this shape -- max(min(v, Prgm), literal) -- to SFPSWAP against
+// LREG13 and LREG9; the bare min/max/clamp(v, vFloat(vConstFloatPrgmN)) forms hit an internal
+// compiler error (lra-constraints), so do not "simplify" this into _relu_max_body_.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _relu_max_float_impl_(const int iterations, const float threshold)
+{
+    sfpi::vConstFloatPrgm1 = threshold;
+    for (int d = 0; d < iterations; d++)
+    {
+        sfpi::vFloat v   = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = sfpi::max(sfpi::min(v, sfpi::vFloat(sfpi::vConstFloatPrgm1)), 0.0f);
+        sfpi::dst_reg++;
+    }
+}
+
+// Integer relu_max. No production caller on Blackhole (relu_max_tile_int32 uses the metal
+// relu_clamp_int); kept as it was.
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _relu_max_impl_(const int iterations, VecType threshold)
 {
@@ -77,42 +108,128 @@ inline void _relu_max_(T threshold)
 {
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
-    VectorType v_threshold;
-    if constexpr (std::is_same_v<T, float>)
+    static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
+
+    if constexpr (std::is_same_v<VectorType, sfpi::vFloat>)
     {
-        v_threshold = threshold;
-    }
-    else if constexpr (std::is_same_v<T, std::uint32_t>)
-    {
-        if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
+        float f;
+        if constexpr (std::is_same_v<T, float>)
         {
-            v_threshold = static_cast<int>(Converter::as_float(threshold));
+            f = threshold;
         }
         else
         {
-            v_threshold = Converter::as_float(threshold);
+            f = Converter::as_float(threshold);
+        }
+        _relu_max_float_impl_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, f);
+    }
+    else
+    {
+        static_assert(
+            std::is_same_v<T, std::uint32_t>,
+            "A float threshold requires VectorType == sfpi::vFloat: sfpi::vInt has no float constructor, so the conversion below would otherwise be ambiguous");
+        const sfpi::vInt v_threshold = int(Converter::as_float(threshold));
+        _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
+    }
+}
+
+// Dst holds int32 in whatever encoding the caller put there, and ttnn's is two's complement,
+// which is what the compares below assume. Named rather than left to sfpi's default, because
+// that default is per-arch -- I32 here, SM32 (converting) on Wormhole.
+inline constexpr sfpi::DataLayout INT_DEST_LAYOUT = sfpi::DataLayout::I32;
+
+// Sign of an integer threshold. It is uniform across lanes, so it picks which of the integer
+// forms below runs from outside the loop.
+enum class ThresholdSign
+{
+    Negative,
+    Zero,
+    Positive
+};
+
+inline constexpr ThresholdSign threshold_sign_of(const int scalar)
+{
+    return scalar < 0 ? ThresholdSign::Negative : scalar == 0 ? ThresholdSign::Zero : ThresholdSign::Positive;
+}
+
+template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _relu_min_impl_(const int iterations, VecType threshold, const ThresholdSign threshold_sign)
+{
+    if constexpr (std::is_same_v<VecType, sfpi::vInt>)
+    {
+        // A plain `a < threshold` is not a safe compare over the full int32 range: the signed
+        // compare subtracts, so it inverts its answer once the operands are 2^31 or more apart.
+        // Splitting on the sign of the threshold leaves only same-sign operands to it, whose
+        // difference cannot overflow. Wormhole compares differently and needs no split.
+        if (threshold_sign == ThresholdSign::Negative)
+        {
+            for (int d = 0; d < iterations; d++)
+            {
+                sfpi::vInt a = sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>();
+                // a >= 0 > threshold keeps a, so only the negative lanes can lose, and there
+                // both operands are negative.
+                v_if (a < 0)
+                {
+                    v_if (a < threshold)
+                    {
+                        a = threshold;
+                    }
+                    v_endif;
+                }
+                v_endif;
+                sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>() = a;
+                sfpi::dst_reg++;
+            }
+        }
+        else if (threshold_sign == ThresholdSign::Zero)
+        {
+            // The sign test is the whole compare, which is the form relu_tile_int32 takes.
+            for (int d = 0; d < iterations; d++)
+            {
+                sfpi::vInt a = sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>();
+                v_if (a < 0)
+                {
+                    a = threshold;
+                }
+                v_endif;
+                sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>() = a;
+                sfpi::dst_reg++;
+            }
+        }
+        else
+        {
+            for (int d = 0; d < iterations; d++)
+            {
+                sfpi::vInt a = sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>();
+                // Lifting the negative lanes to a positive threshold first is the whole answer
+                // for them, and it leaves only non-negative operands to the compare.
+                v_if (a < 0)
+                {
+                    a = threshold;
+                }
+                v_endif;
+                v_if (a < threshold)
+                {
+                    a = threshold;
+                }
+                v_endif;
+                sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>() = a;
+                sfpi::dst_reg++;
+            }
         }
     }
     else
     {
-        static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
-    }
-
-    _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
-}
-
-template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_impl_(const int iterations, VecType threshold)
-{
-    for (int d = 0; d < iterations; d++)
-    {
-        VecType a = sfpi::dst_reg[0];
-        v_if (a < threshold)
+        for (int d = 0; d < iterations; d++)
         {
-            sfpi::dst_reg[0] = threshold;
+            VecType a = sfpi::dst_reg[0];
+            v_if (a < threshold)
+            {
+                sfpi::dst_reg[0] = threshold;
+            }
+            v_endif;
+            sfpi::dst_reg++;
         }
-        v_endif;
-        sfpi::dst_reg++;
     }
 }
 
@@ -123,15 +240,23 @@ inline void _relu_min_(T threshold)
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
     VectorType v_threshold;
+    // The integer path alone reads this; its compare is the one that splits on the sign.
+    ThresholdSign threshold_sign = ThresholdSign::Zero;
     if constexpr (std::is_same_v<T, float>)
     {
+        static_assert(
+            std::is_same_v<VectorType, sfpi::vFloat>,
+            "A float threshold requires VectorType == sfpi::vFloat: sfpi::vInt has no float constructor, so the assignment below would otherwise fail as an "
+            "ambiguous conversion");
         v_threshold = threshold;
     }
     else if constexpr (std::is_same_v<T, std::uint32_t>)
     {
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
-            v_threshold = static_cast<int>(threshold);
+            const int scalar = static_cast<int>(threshold);
+            v_threshold      = scalar;
+            threshold_sign   = threshold_sign_of(scalar);
         }
         else
         {
@@ -143,7 +268,7 @@ inline void _relu_min_(T threshold)
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
     }
 
-    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
+    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold, threshold_sign);
 }
 
 } // namespace sfpu

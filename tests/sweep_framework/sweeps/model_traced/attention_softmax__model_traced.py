@@ -18,7 +18,6 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
@@ -201,7 +200,11 @@ def run(
     # Do NOT use causal_mask parameter - use the binary mask instead
     start_time = start_measuring_time()
     result = ttnn.transformer.attention_softmax_(input_tensor, attention_mask=mask_tensor, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(result, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        result,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # Check PCC - using 0.999 as in transformer sweep test

@@ -4,4 +4,4 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
+#include <tt-metalium/tensor/spec/layout/alignment.hpp>

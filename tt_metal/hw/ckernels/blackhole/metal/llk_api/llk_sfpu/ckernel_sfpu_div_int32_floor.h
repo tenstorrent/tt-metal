@@ -25,12 +25,12 @@ sfpi_inline void calculate_div_int32_body(
     // Convert inputs to positive values to avoid conversion problems, as the
     // original inputs are two's complement integers.  Note that
     // sfpi::abs(-2**31) will return -2**31, which will give -0.0 when
-    // converted to float via sfpi::int32_to_float.
-    sfpi::vInt b = sfpi::abs(b_orig);
+    // converted to float via sfpi::convert
+    sfpi::vMag b = sfpi::abs(b_orig);
 
     // Convert to floats, but check for the edge case mentioned above.
-    sfpi::vFloat b_f = sfpi::int32_to_float(b, sfpi::RoundMode::NearestEven);
-    v_if(b_f < 0.0f) { b_f = 2147483648.0f; }
+    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
+    v_if(b_f < 0.0f) { b_f = 0x1.0p31f; }
     v_endif;
 
     // Compute 1/b accurate to ~22 bits of precision via Halley's Method.
@@ -38,21 +38,21 @@ sfpi_inline void calculate_div_int32_body(
     // initial approximation.
     // We interleave SFPMAD with the loading and conversion of `a`.
     sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
-    sfpi::vFloat e = -inv_b_f * b_f + sfpi::vConst1;
+    sfpi::vFloat e = -inv_b_f * b_f + 1.0f;
     sfpi::vInt a_orig = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     e = e * e + e;
-    sfpi::vInt a = sfpi::abs(a_orig);
+    sfpi::vMag a = sfpi::abs(a_orig);
     inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, sfpi::RoundMode::NearestEven);
-    v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
+    v_if(a_f < 0.0f) { a_f = 0x1.0p31f; }
     v_endif;
 
     // Initial approximation q = a * 1/b.
     // We add a special mantissa alignment factor 2.0f**(23+10), which shifts
     // the mantissa so that we extract the top 22 bits of the result.
-    sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
+    sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
     sfpi::vInt sign = a_orig ^ b_orig;
-    sfpi::vUInt q = sfpi::exman(q_f);
+    sfpi::vMag q_m = sfpi::exman(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
@@ -60,22 +60,33 @@ sfpi_inline void calculate_div_int32_body(
     // 22 bits, so we can compute qb = (q1<<10 + 0) * (b1<<22 + b0)
     //                               = (q1<<10) * b0
 
-    sfpi::vInt qb = sfpi::fractional_mul(q, b);
-
-    q <<= 10;
+    sfpi::vInt qb{sfpi::fractional_mul(q_m, b)};
+    // Fill the multiply's dependency slot with the independent quotient shift.
+    sfpi::vInt q{q_m << 10};
     qb <<= 10;
 
     // Compute remainder.
     sfpi::vInt r = a - qb;
-    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), sfpi::RoundMode::NearestEven);
+    // Shift before conversion so the valid magnitude 2**31 is representable as
+    // a positive sign-magnitude integer. Dropping the low bit adds at most 1/|b|
+    // to the correction error, on top of reciprocal and FP rounding error.
+    // The single final adjustment relies on the ~22-bit reciprocal accuracy
+    // from the Halley refinement above; do not weaken it without rechecking this
+    // error budget, especially for odd residuals with |b| == 1.
+    // Do not assume the same budget for ckernel_sfpu_binary_remainder.h: it uses
+    // a less accurate reciprocal and retains the low bit (see its Blackhole
+    // counterexample).
+    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r) >> 1, sfpi::RoundMode::Nearest);
+    r_f = sfpi::addexp(r_f, 1 /* delta */);
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
-    sfpi::vInt b1 = b >> 23;
-    sfpi::vInt correction = sfpi::float_to_uint16(correction_f, sfpi::RoundMode::NearestEven);
+    // Split b while the correction multiply completes, before consuming its result.
+    sfpi::vMag b_high = b >> 23;
+    sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
 
     // Compute tmp = correction * b.
-    b1 = sfpi::fractional_mul(correction, b1);
+    sfpi::vInt b1 = sfpi::fractional_mul(correction, b_high);
     sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
     sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
     tmp_hi += b1;
@@ -83,25 +94,31 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt tmp = tmp_lo + tmp_hi;
 
     // Apply correction and adjust remainder.
-    v_if(r < 0) {
-        q -= correction;
-        r += tmp;
-    }
-    v_else {
-        q += correction;
-        r -= tmp;
+    // When q is zero, qb is also zero, so r=INT_MIN represents the valid
+    // positive magnitude 2**31 rather than a negative remainder.
+    // Normalize the correction's sign so q and r can be updated unconditionally.
+    sfpi::vInt cor = correction;
+    v_if(r < 0 && q != 0) {
+        tmp = -tmp;
+        cor = -cor;
     }
     v_endif;
+    // Keep this operand order with the sign updates above: it avoids an extra
+    // move in current Blackhole SFPI allocation. Recheck both rounding modes.
+    q = cor + q;
+    r -= tmp;
 
     // Since the correction might have been rounded, we may need to correct one
-    // additional bit.  The (r - 1) < 0 check is required to handle r=INT_MIN.
-    v_if(r < 0 && (r - 1) < 0) {
+    // additional bit.  The corrected remainder cannot be INT_MIN.
+    // Reuse the subtraction for both the upper comparison and adjusted remainder.
+    sfpi::vInt r_minus_b = r - b;
+    v_if(r < 0) {
         q -= 1;
         r += b;
     }
-    v_elseif(r >= b) {
+    v_elseif(r_minus_b >= 0) {
         q += 1;
-        r -= b;
+        r = r_minus_b;
     }
     v_endif;
 
@@ -127,7 +144,8 @@ sfpi_inline void calculate_div_int32_body(
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_div_int32_floor(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_div_int32_floor(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_div_int32_body<true>(dst_index_in0, dst_index_in1, dst_index_out);
@@ -136,7 +154,8 @@ inline void calculate_div_int32_floor(const uint dst_index_in0, const uint dst_i
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_div_int32_trunc(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_div_int32_trunc(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_div_int32_body<false>(dst_index_in0, dst_index_in1, dst_index_out);

@@ -8,6 +8,8 @@
 #include <functional>
 #include <ostream>
 #include <optional>
+#include <vector>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/strong_type.hpp>
 
 #include <fmt/format.h>
@@ -72,6 +74,57 @@ FabricType operator|(FabricType lhs, FabricType rhs);
 FabricType operator&(FabricType lhs, FabricType rhs);
 bool has_flag(FabricType flags, FabricType test_flag);
 
+// A declared torus dimension realizes a distinct wrap edge only at size three or
+// larger. Size-one and size-two dimensions retain ordinary mesh links.
+constexpr bool is_genuine_torus_dim(uint32_t dim_size) { return dim_size > 2; }
+
+constexpr bool is_genuine_torus_axis(int32_t dim_size) {
+    return dim_size > 0 && is_genuine_torus_dim(static_cast<uint32_t>(dim_size));
+}
+
+// MESH=0, first-dim wrap=1, second-dim wrap=2, both=3. First/second follow the
+// row-major dim order used by PGD flatten variants (TORUSX wraps dims[0]).
+constexpr int torus_variant_priority(bool wrap_first_dim, bool wrap_second_dim) {
+    if (wrap_first_dim && wrap_second_dim) {
+        return 3;
+    }
+    if (wrap_second_dim) {
+        return 2;
+    }
+    if (wrap_first_dim) {
+        return 1;
+    }
+    return 0;
+}
+
+inline std::vector<int32_t> row_major_coords_from_linear_index(
+    uint32_t linear_index, const std::vector<int32_t>& dims) {
+    std::vector<int32_t> coords(dims.size());
+    int32_t remaining = static_cast<int32_t>(linear_index);
+    for (int32_t dim_idx = static_cast<int32_t>(dims.size()) - 1; dim_idx >= 0; --dim_idx) {
+        const int32_t dim_size = dims[static_cast<size_t>(dim_idx)];
+        coords[static_cast<size_t>(dim_idx)] = remaining % dim_size;
+        remaining /= dim_size;
+    }
+    return coords;
+}
+
+inline uint32_t row_major_linear_index_from_coords(
+    const std::vector<int32_t>& coords, const std::vector<int32_t>& dims) {
+    uint32_t linear_index = 0;
+    uint32_t multiplier = 1;
+    for (int32_t dim_idx = static_cast<int32_t>(dims.size()) - 1; dim_idx >= 0; --dim_idx) {
+        linear_index += static_cast<uint32_t>(coords[static_cast<size_t>(dim_idx)]) * multiplier;
+        multiplier *= static_cast<uint32_t>(dims[static_cast<size_t>(dim_idx)]);
+    }
+    return linear_index;
+}
+
+// MeshShape axis 0 (north/south) maps to TORUS_Y; axis 1 (east/west) maps to TORUS_X.
+constexpr FabricType torus_flag_for_axis(uint32_t axis) {
+    return axis == 0 ? FabricType::TORUS_Y : FabricType::TORUS_X;
+}
+
 enum class FabricReliabilityMode : uint32_t {
 
     // When fabric is initialized, user expects live links/devices to exactly match the mesh graph descriptor.
@@ -91,21 +144,34 @@ enum class FabricReliabilityMode : uint32_t {
 
 namespace tt::tt_fabric {
 
-using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
-using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
-using SwitchId = tt::stl::StrongType<uint32_t, struct SwitchIdTag>;
+using MeshId = ttsl::StrongType<uint32_t, struct MeshIdTag>;
+using MeshHostRankId = ttsl::StrongType<uint32_t, struct HostRankTag>;
+using SwitchId = ttsl::StrongType<uint32_t, struct SwitchIdTag>;
 
 // Sentinel value indicating that TT_MESH_HOST_RANK environment variable is unset
 constexpr MeshHostRankId MESH_HOST_RANK_UNSET{UINT32_MAX};
 
+// Mesh-local logical chip id (row-major node within a single mesh), matching FabricNodeId::chip_id. The full
+// FabricNodeId (mesh_id + chip_id) is only known once a logical MeshId is assigned, so pre-assignment contexts
+// carry just the chip id.
+using LogicalChipId = uint32_t;
+
+// Node id within one PGD grouping's adjacency graph (proto Instance.id). Named so it is not
+// conflated with LogicalChipId (a mesh-local MGD chip) or a physical chip id.
+using GroupingChipId = uint32_t;
+
+// Stable numeric handle of one resolved PGD grouping instance (groupings are otherwise identified
+// by their name/type strings).
+using PhysicalGroupingId = uint32_t;
+
 /**
- * @brief Represents a fabric node identifier combining mesh ID and chip ID
+ * @brief Represents a fabric node identifier combining mesh ID and logical chip ID
  */
 class FabricNodeId {
 public:
-    explicit FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val);
+    explicit FabricNodeId(MeshId mesh_id_val, LogicalChipId chip_id_val);
     MeshId mesh_id{0};
-    std::uint32_t chip_id = 0;
+    LogicalChipId chip_id = 0;
 };
 
 bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);
@@ -142,14 +208,26 @@ struct fmt::formatter<tt::tt_fabric::MeshId> {
 
 namespace tt::tt_metal {
 
-using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
-using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
-using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
+// Physical port / cable type for ethernet connections
+enum class PortType {
+    UNKNOWN,
+    TRACE,
+    QSFP_DD,
+    WARP100,
+    WARP400,
+    LINKING_BOARD_1,
+    LINKING_BOARD_2,
+    LINKING_BOARD_3,
+};
+
+using AsicID = ttsl::StrongType<uint64_t, struct AsicIDTag>;
+using TrayID = ttsl::StrongType<uint32_t, struct TrayIDTag>;
+using ASICLocation = ttsl::StrongType<uint32_t, struct ASICLocationTag>;
 using ASICPosition = std::pair<TrayID, ASICLocation>;
-using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
-using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
-using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;
-using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
+using RackID = ttsl::StrongType<uint32_t, struct RackIDTag>;
+using UID = ttsl::StrongType<uint32_t, struct UIDTag>;
+using HallID = ttsl::StrongType<uint32_t, struct HallIDTag>;
+using AisleID = ttsl::StrongType<uint32_t, struct AisleIDTag>;
 
 // Stream operators for StrongType types
 std::ostream& operator<<(std::ostream& os, const AsicID& asic_id);

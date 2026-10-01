@@ -10,6 +10,11 @@ from loguru import logger
 # Import from local reference files
 from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
+from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_deepseek_grouped_gate
+
+# Module-scoped device: these tests all run with the default device config. The device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
 
 TEST_PADDING_VALUE = -42
 
@@ -445,7 +450,7 @@ def test_grouped_gate(device, num_batches, batch_size, seq_len):
     ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_scores = ttnn.fill_implicit_tile_padding(ttnn_scores, TEST_PADDING_VALUE)
     ttnn_bias = ttnn.fill_implicit_tile_padding(ttnn_bias, TEST_PADDING_VALUE)
-    ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_grouped_gate(
+    ttnn_scores, ttnn_top_k_experts_indices = ttnn_deepseek_grouped_gate(
         ttnn_scores,
         ttnn_bias,
         n_groups=n_groups,

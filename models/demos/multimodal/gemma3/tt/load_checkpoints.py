@@ -9,7 +9,27 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 
 
+def _insert_siglip_vision_model_level(state_dict):
+    """Re-insert the SiglipVisionModel `.vision_model` level for transformers 5.x.
+
+    transformers 5.x flattened ``SiglipVisionModel`` — ``embeddings``/``encoder``/
+    ``post_layernorm`` are now direct attributes instead of being nested under a
+    ``.vision_model`` (``SiglipVisionTransformer``) wrapper. So 5.x state-dict keys are
+    ``model.vision_tower.embeddings.…`` whereas <5 (and all the tt vision prefixes /
+    weight-conversion rules) use ``model.vision_tower.vision_model.embeddings.…``.
+    Insert the missing level so the converted state dict keeps the 4.x layout and every
+    downstream prefix keeps matching. Version-tolerant: no-op when it's already present.
+    """
+    out = {}
+    for k, v in state_dict.items():
+        if "vision_tower." in k and "vision_tower.vision_model." not in k:
+            k = k.replace("vision_tower.", "vision_tower.vision_model.", 1)
+        out[k] = v
+    return out
+
+
 def convert_vision_hf_to_meta(state_dict, head_dim):
+    state_dict = _insert_siglip_vision_model_level(state_dict)
     state_dict = split_hf_keys(state_dict)
     state_dict = map_vision_hf_to_meta_keys(state_dict, head_dim)
 

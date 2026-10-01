@@ -201,6 +201,20 @@ def test_distributed_fused_rmsnorm_sweep_fusions(
     use_rope,
     reset_seeds,
 ):
+    if (
+        num_simulated_devices == 8
+        and use_rope
+        and use_weight
+        and num_heads_per_device == 1
+        and hidden_dim == 2048
+        and seqlen in (2048, 2080)
+        and dtype == ttnn.bfloat16
+        and stats_dtype == ttnn.bfloat16
+    ):
+        pytest.skip(
+            reason="Disabled by issue #44858: distributed fused rmsnorm assertion failure for num_simulated_devices8/hidden_dim2048 fusion cases"
+        )
+
     num_heads = num_heads_per_device * num_simulated_devices
     check_hidden_dim_divisible_by_num_heads(hidden_dim, num_heads)
     inp_shape = (1, 1, seqlen, hidden_dim)

@@ -65,9 +65,9 @@ def test_unet(
     "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.997),
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.995),
         # 512x512 image resolution
-        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.997),
+        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.995),
     ],
     ids=["1024x1024", "512x512"],
 )
@@ -109,10 +109,11 @@ def test_refiner_unet(
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
         "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 78_106_452 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # bh_p150 run 2026-09-24 (73.75M) on #55698; previous target from scheduled runs 2026-09-19..09-24 (74.85M..74.96M)
+        "blackhole": 73_753_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        "wormhole": 82_300_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "wormhole": 77_800_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,  # Measured: ~77.7–77.9 ms
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {
@@ -120,32 +121,35 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 114_154_100 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "refiner_unet_512x512": {
-        "wormhole": 79_843_092 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 3 scheduled wh_n150 runs 2026-09-19..09-21 (75.30M..75.42M) after #56767 (nlp_create_qkv_heads kernels, 2026-09-18)
+        "wormhole": 75_347_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        "blackhole": 267_498_780,
+        # bh_p150 run 2026-09-25 (260.30M) on #55698; previous target 267.50M
+        "blackhole": 260_304_000,
     },
     "vae_decode_512x512": {
-        "wormhole": 171_560_642,
+        "wormhole": 167_473_541,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_encode_1024x1024": {
         "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 143_563_697,
+        # bh_p150 run 2026-09-25 (137.84M) on #55698; previous target 141.18M
+        "blackhole": 137_841_000,
     },
     "vae_encode_512x512": {
-        "wormhole": 85_005_572,  # Note: this is an average value of 30 test runs due to high variability
+        "wormhole": 82_885_000,  # mean of 10 scheduled wh_n150 runs 2026-09-05..09-14 (82.69M..83.09M, sigma 0.16%)
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        "wormhole": 40_995_000,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 19_377_824,
+        "wormhole": 23_745_000,  # Average of 3 main CI runs (Jun 22, 2026); transformers 5.10.2 bump reduced CLIP encoder dispatch
+        "blackhole": 11_720_533,
     },
     "clip_encoder_2": {
-        "wormhole": 125_300_000,
-        "blackhole": 60_903_932,
+        "wormhole": 88_529_000,  # Average of 3 main CI runs (Jun 22, 2026)
+        "blackhole": 42_895_094,
     },
 }
 

@@ -4,41 +4,53 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
+    Noc noc;
+
     // WRITER RUNTIME ARGS
-    uint32_t nheads = get_arg_val<uint32_t>(0);                    // This is per core per risc
-    uint32_t start_read_offset_bytes = get_arg_val<uint32_t>(1);   // offset by nheads * in0_HtWt
-    uint32_t start_write_offset_bytes = get_arg_val<uint32_t>(2);  // offset by nheads * in0_Wt
+    uint32_t nheads = get_arg(args::nheads);                                      // This is per core per risc
+    uint32_t start_read_offset_bytes = get_arg(args::start_read_offset_bytes);    // offset by nheads * in0_HtWt
+    uint32_t start_write_offset_bytes = get_arg(args::start_write_offset_bytes);  // offset by nheads * in0_Wt
 
     // COMPILE TIME ARGS
-    // interleaved accessor args
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_h_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t head_dim_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t in0_h_tiles = get_arg(args::in0_h_tiles);
+    constexpr uint32_t head_dim_size_bytes = get_arg(args::head_dim_size_bytes);
     constexpr uint32_t out_row_size_bytes =
-        get_compile_time_arg_val(4);  // total nheads per core * in0_w_tiles * single_tile_size_bytes
-    constexpr uint32_t block_size = get_compile_time_arg_val(5);  // total nheads per core * in0_HtWt
+        get_arg(args::out_row_size_bytes);  // total nheads per core * in0_w_tiles * single_tile_size_bytes
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_out0(dfb::out0);
 
-    cb_reserve_back(cb_id_in0, block_size);  // Redundant
-    cb_reserve_back(cb_id_out0, block_size);
+    const uint32_t single_tile_size_bytes = dfb_in0.get_entry_size();
 
-    uint64_t noc_l1_read_addr = get_noc_addr(get_read_ptr(cb_id_in0)) + start_read_offset_bytes;
-    uint32_t l1_write_addr = get_write_ptr(cb_id_out0) + start_write_offset_bytes;
+    const uint8_t noc_id = noc.get_noc_id();
+    const uint32_t my_noc_x = my_x[noc_id];
+    const uint32_t my_noc_y = my_y[noc_id];
+    UnicastEndpoint src_ep;
+
+    uint32_t src_l1_read_addr = dfb_in0.get_read_ptr() + start_read_offset_bytes;
+    uint32_t l1_write_addr = dfb_out0.get_write_ptr() + start_write_offset_bytes;
 
     for (uint32_t i = 0; i < nheads; ++i) {
         uint32_t curr_l1_write_addr = l1_write_addr;
         for (uint32_t j = 0; j < in0_h_tiles; ++j) {
-            noc_async_read(noc_l1_read_addr, curr_l1_write_addr, head_dim_size_bytes);
-            noc_l1_read_addr += head_dim_size_bytes;
+            noc.async_read(
+                src_ep,
+                CoreLocalMem<uint32_t>(curr_l1_write_addr),
+                head_dim_size_bytes,
+                {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = src_l1_read_addr},
+                {});
+            src_l1_read_addr += head_dim_size_bytes;
             curr_l1_write_addr += out_row_size_bytes;
         }
         l1_write_addr += head_dim_size_bytes;
     }
 
-    noc_async_read_barrier();
-    // cb_push_back(cb_id_out0, block_size);
+    noc.async_read_barrier();
 }

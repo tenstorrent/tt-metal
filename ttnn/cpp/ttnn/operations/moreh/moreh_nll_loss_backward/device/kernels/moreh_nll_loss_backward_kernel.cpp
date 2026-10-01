@@ -5,104 +5,103 @@
 #include <cstdint>
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr auto per_core_tile_cnt = get_arg(args::per_core_tile_cnt);
+    using D = ckl::Dst;
 
-    const uint32_t tile_offset = get_arg_val<uint32_t>(1);
+    DataflowBuffer dfb_output_grad_obj(dfb::output_grad);
+#ifdef DIVISOR
+    // These buffers are bound only for the divisor variant; keep their names out of the other variant.
+    DataflowBuffer dfb_tmp1_obj(dfb::tmp1);
 
-    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
-    constexpr uint32_t cb_output_grad = tt::CBIndex::c_0;
-    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
-    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
-    constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
-    constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
+    compute_kernel_hw_startup(dfb::divisor, dfb::tmp1);
+    ckl::unary<
+        ckl::Recip<D::D0>,
+        ckl::input(dfb::divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckernel::moreh_data_format_reconfig),
+        ckl::output(
+            dfb::tmp1, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckernel::moreh_data_format_reconfig)>(
+        ckl::IterationShape::one_tile());
 
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t onetile = 1;
-
-    init_sfpu(cb_output_grad, tt::CBIndex::c_16);
-
-#if defined(DIVISOR)
-    cb_wait_front(cb_divisor, onetile);
-    cb_reserve_back(cb_tmp1, onetile);
-
-    tile_regs_acquire();
-    copy_tile_init_with_dt(cb_divisor);
-    copy_tile(cb_divisor, 0, dst0);
-    recip_tile_init();
-    recip_tile(dst0);
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, cb_tmp1);
-    tile_regs_release();
-
-    cb_push_back(cb_tmp1, onetile);
-#endif
-
-    cb_wait_front(cb_output_grad, onetile);
-
+    dfb_tmp1_obj.wait_front(1);
+    dfb_output_grad_obj.wait_front(1);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-#if defined(DIVISOR)
-        cb_wait_front(cb_tmp_weight, onetile);
-        cb_reserve_back(cb_tmp2, onetile);
-
-        tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight, cb_output_grad);
-        mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
-        negative_tile_init();
-        negative_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp2);
-        tile_regs_release();
-
-        cb_push_back(cb_tmp2, onetile);
-        cb_pop_front(cb_tmp_weight, onetile);
-
-        cb_reserve_back(cb_input_grad, onetile);
-        cb_wait_front(cb_tmp2, onetile);
-        cb_wait_front(cb_tmp1, onetile);
-
-        tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp2, cb_tmp1);
-        mul_tiles_bcast_scalar(cb_tmp2, cb_tmp1, 0, 0, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_input_grad);
-        tile_regs_release();
-
-        cb_push_back(cb_input_grad, onetile);
-        cb_pop_front(cb_tmp2, onetile);
-
-#else
-        cb_wait_front(cb_tmp_weight, onetile);
-
-        cb_reserve_back(cb_input_grad, onetile);
-
-        tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight, cb_output_grad);
-        mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
-        negative_tile_init();
-        negative_tile(dst0);
-
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_input_grad);
-        tile_regs_release();
-
-        cb_push_back(cb_input_grad, onetile);
-
-        cb_pop_front(cb_tmp_weight, onetile);
-#endif
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(
+                    dfb::tmp_weight,
+                    ckl::WaitPolicy::PerTile,
+                    ckl::PopPolicy::PerTile,
+                    ckernel::moreh_data_format_reconfig),
+                ckl::input(
+                    dfb::output_grad,
+                    ckl::BroadcastDim::Scalar,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Scalar,
+                    ckernel::moreh_data_format_reconfig)>{},
+            ckl::Negative<D::D0>{},
+            ckl::PackTile<ckl::output(
+                dfb::tmp2,
+                ckl::ReservePolicy::PerTile,
+                ckl::PushPolicy::PerTile,
+                ckernel::moreh_data_format_reconfig)>{});
+        ckl::mul<
+            ckl::input(
+                dfb::tmp2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckernel::moreh_data_format_reconfig),
+            ckl::input(
+                dfb::tmp1,
+                ckl::BroadcastDim::Scalar,
+                ckl::WaitPolicy::None,
+                ckl::PopPolicy::None,
+                ckl::InputTileMapping::Scalar,
+                ckernel::moreh_data_format_reconfig),
+            ckl::output(
+                dfb::input_grad,
+                ckl::ReservePolicy::PerTile,
+                ckl::PushPolicy::PerTile,
+                ckernel::moreh_data_format_reconfig)>(ckl::IterationShape::one_tile());
     }
+    dfb_output_grad_obj.pop_front(1);
+    dfb_tmp1_obj.pop_front(1);
+#else
+    compute_kernel_hw_startup(dfb::tmp_weight, dfb::output_grad, dfb::input_grad);
 
-#if defined(DIVISOR)
-    cb_pop_front(cb_divisor, onetile);
+    dfb_output_grad_obj.wait_front(1);
+    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(
+                    dfb::tmp_weight,
+                    ckl::WaitPolicy::PerTile,
+                    ckl::PopPolicy::PerTile,
+                    ckernel::moreh_data_format_reconfig),
+                ckl::input(
+                    dfb::output_grad,
+                    ckl::BroadcastDim::Scalar,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Scalar,
+                    ckernel::moreh_data_format_reconfig)>{},
+            ckl::Negative<D::D0>{},
+            ckl::PackTile<ckl::output(
+                dfb::input_grad,
+                ckl::ReservePolicy::PerTile,
+                ckl::PushPolicy::PerTile,
+                ckernel::moreh_data_format_reconfig)>{});
+    }
+    dfb_output_grad_obj.pop_front(1);
 #endif
 }

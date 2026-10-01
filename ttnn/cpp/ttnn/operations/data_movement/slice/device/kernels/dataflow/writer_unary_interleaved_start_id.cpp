@@ -2,38 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Slice-specific writer using named compile-time args for CB index.
-// Based on eltwise/unary writer but uses get_named_compile_time_arg_val("cb_out")
-// so the CB index can be remapped by the fusion infrastructure.
+// Slice-specific writer. Based on the eltwise/unary writer; kept separate so the fusion
+// infrastructure can remap which dataflow buffer this kernel drains.
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
+    const uint32_t num_pages = get_arg(args::num_pages);
+    const uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
-    constexpr auto dst_args = TensorAccessorArgs<0>();
+    // Create objects for Device 2.0 API
+    DataflowBuffer dfb_out(dfb::out);
 
-    // Create experimental objects for Device 2.0 API
-    experimental::CircularBuffer cb_out(cb_id_out);
-
-    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = cb_out.get_tile_size();
-    experimental::Noc noc;
+    // Get page size from the DFB entry size (works for both TILE and ROW_MAJOR layouts)
+    const uint32_t page_bytes = dfb_out.get_entry_size();
+    Noc noc;
 
 #ifdef OUT_SHARDED
-    cb_out.wait_front(num_pages);
+    dfb_out.wait_front(num_pages);
 #else
 
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;
@@ -42,10 +38,10 @@ void kernel_main() {
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb_out.wait_front(onepage);
-        noc.async_write(cb_out, s, page_bytes, {.offset_bytes = 0}, {.page_id = i});
+        dfb_out.wait_front(onepage);
+        noc.async_write(dfb_out, s, page_bytes, {.offset_bytes = 0}, {.page_id = i});
         noc.async_writes_flushed();
-        cb_out.pop_front(onepage);
+        dfb_out.pop_front(onepage);
     }
     noc.async_write_barrier();
 #endif

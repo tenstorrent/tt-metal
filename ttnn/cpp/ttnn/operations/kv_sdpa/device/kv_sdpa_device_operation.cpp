@@ -70,7 +70,7 @@ KvSdpaDeviceOperation::spec_return_value_t KvSdpaDeviceOperation::compute_output
     const operation_attributes_t&, const tensor_args_t& ta) {
     // Output matches q's shape/dtype, interleaved DRAM (consumed by the downstream o-projection, whose
     // concat-heads matmul_decode reader reshards an interleaved input).
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ta.q.logical_shape(),
         TensorLayout(
             ta.q.dtype(),

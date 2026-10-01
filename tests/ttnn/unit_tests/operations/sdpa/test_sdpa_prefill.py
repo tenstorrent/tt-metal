@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -468,7 +467,7 @@ def run_test_sdpa_sliding_window(
 
 
 def run_test_sdpa_with_attention_sink(
-    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, sink_values=None, rmse_threshold=None
+    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal=True, sink_values=None, rmse_threshold=None
 ):
     """Test SDPA with attention sinks using per-head sink values."""
     program_config = ttnn.SDPAProgramConfig(
@@ -508,7 +507,7 @@ def run_test_sdpa_with_attention_sink(
         tt_Q,
         tt_K,
         tt_V,
-        is_causal=True,
+        is_causal=is_causal,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
         attention_sink=tt_S,
@@ -527,14 +526,14 @@ def run_test_sdpa_with_attention_sink(
         K_repeated,
         V_repeated,
         S_padded,
-        is_causal=True,
+        is_causal=is_causal,
     )
     gt_flash = reference_flash_attention_with_sinks(
         Q,
         K_repeated,
         V_repeated,
         S_padded,
-        is_causal=True,
+        is_causal=is_causal,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
     )
@@ -696,7 +695,10 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
 @pytest.mark.parametrize("k_chunk_size", [256], ids=["k256"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, sliding_window",
-    ([1, 8, 1, 2048, 128, 128],),
+    (
+        [1, 8, 1, 2048, 128, 128],
+        [1, 8, 1, 8192, 128, 512],
+    ),
 )
 def test_sdpa_sliding_window(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_chunk_size, sliding_window):
     """Test sliding window attention functionality in SDPA prefill."""
@@ -711,14 +713,44 @@ def test_sdpa_sliding_window(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_ch
     )
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, q_chunk_size, k_chunk_size, sliding_window, is_causal",
+    (
+        [1, 8, 1, 2048, 128, 256, 256, 130, True],
+        [1, 8, 1, 1024, 128, 256, 256, 130, False],
+    ),
+)
+def test_sdpa_sliding_window_streaming_parity(
+    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, sliding_window, is_causal, dtype
+):
+    """Covers streaming sliding-window cases that previously fell back to legacy compute."""
+    rmse_threshold = 0.01
+    run_test_sdpa_sliding_window(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        sliding_window,
+        is_causal=is_causal,
+        rmse_threshold=rmse_threshold,
+    )
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
     ([1, 8, 1, 256, 32],),
 )
-def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_chunk_size, reset_seeds):
+def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, is_causal, q_chunk_size, k_chunk_size, reset_seeds):
     """Test SDPA with per-head attention sinks on device."""
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
@@ -727,5 +759,61 @@ def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, q_chunk_size,
 
     rmse_threshold = 0.02
     run_test_sdpa_with_attention_sink(
-        device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold
+        device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal=is_causal, rmse_threshold=rmse_threshold
     )
+
+
+# output_concat_heads: SDPA writing [b x 1 x s x nh*d] directly, against SDPA followed by nlp_concat_heads.
+# Rows dropped from the logical length in the view case; not a tile multiple, so the last tile is partial.
+CONCAT_HEADS_VIEW_PAD_ROWS = 27
+
+
+@pytest.mark.parametrize("pad_rows", [0, CONCAT_HEADS_VIEW_PAD_ROWS], ids=["full", "view"])
+@pytest.mark.parametrize(
+    "b, nh, s, d",
+    [(1, 8, 1024, 64), (1, 32, 1824, 64), (2, 4, 512, 128)],
+    ids=["b1_nh8_s1024_d64", "b1_nh32_s1824_d64", "b2_nh4_s512_d128"],
+)
+def test_sdpa_output_concat_heads(device, b, nh, s, d, pad_rows):
+    """The fused layout must be bit-identical to nlp_concat_heads on the valid rows."""
+    torch.manual_seed(0)
+    valid = s - pad_rows
+    dim = nh * d
+    padded = ttnn.Shape([b, nh, s, d])
+    q, k, v = (
+        ttnn.from_torch(torch.randn(b, nh, s, d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    )
+    if valid != s:
+        logical = ttnn.Shape([b, nh, valid, d])
+        q, k, v = (ttnn.reshape(t, logical, padded) for t in (q, k, v))
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=128,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+    )
+    sdpa_kwargs = dict(
+        attn_mask=None, is_causal=False, program_config=program_config, compute_kernel_config=compute_kernel_config
+    )
+
+    ref = ttnn.transformer.scaled_dot_product_attention(q, k, v, **sdpa_kwargs)
+    if valid != s:
+        ref = ttnn.reshape(ref, padded, padded)
+    ref = ttnn.reshape(ttnn.experimental.nlp_concat_heads(ref), (b, s, dim))
+
+    out = ttnn.transformer.scaled_dot_product_attention(q, k, v, output_concat_heads=True, **sdpa_kwargs)
+    assert tuple(out.shape) == (b, 1, valid, dim)
+    if valid != s:
+        full = ttnn.Shape([b, 1, s, dim])
+        out = ttnn.reshape(out, full, full)
+    out = ttnn.reshape(out, (b, s, dim))
+
+    ref_torch, out_torch = ttnn.to_torch(ref), ttnn.to_torch(out)
+    assert out_torch.shape == ref_torch.shape == (b, s, dim)
+    n_diff = int((out_torch[:, :valid] != ref_torch[:, :valid]).sum())
+    assert torch.equal(out_torch[:, :valid], ref_torch[:, :valid]), f"{n_diff} of the valid elements differ"

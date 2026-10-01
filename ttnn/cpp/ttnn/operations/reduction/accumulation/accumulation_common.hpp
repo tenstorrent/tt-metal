@@ -18,7 +18,7 @@ namespace ttnn::operations::reduction::accumulation::common {
 constexpr uint32_t FOUR_DIMENSIONS{4};
 constexpr uint32_t FIRST_DIMENSION{0};
 
-using permutation_t = ttnn::SmallVector<int64_t>;
+using permutation_t = ttsl::SmallVector<int64_t>;
 
 Tensor preprocess_input_tensor(
     const Tensor& input_tensor,
@@ -41,6 +41,7 @@ Tensor accumulation_invoke(
     std::optional<Tensor> optional_out,
     const bool& reverse_order,
     const std::optional<MemoryConfig>& memory_config,
-    ttnn::prim::AccumulationOp op);
+    ttnn::prim::AccumulationOp op,
+    bool disable_compensation = false);
 
 }  // namespace ttnn::operations::reduction::accumulation::common

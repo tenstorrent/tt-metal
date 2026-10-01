@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 
 def run_with_trace(
@@ -68,6 +69,7 @@ def run_all_broadcast_impl(
     trace_mode=False,
     rand_tensor=True,
     mem_config=None,
+    output_mem_config=None,
     input_shard_shape=None,
     input_shard_grid=None,
     output_shard_shape=None,
@@ -83,6 +85,8 @@ def run_all_broadcast_impl(
         )
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
+
+    mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -144,7 +148,8 @@ def run_all_broadcast_impl(
     else:
         assert mem_config is not None
         input_mem_config = mem_config
-        output_mem_config = mem_config
+        if output_mem_config is None:
+            output_mem_config = input_mem_config
     ###
 
     input_tensor_mesh_list = []
@@ -153,7 +158,10 @@ def run_all_broadcast_impl(
     for i in range(num_iters):
         output_tensors = []
         for k in range(num_devices):
-            if rand_tensor:
+            if input_dtype in (ttnn.uint32, ttnn.int32):
+                # Integer rows are checked exactly; keep values below 2**31 so they survive the int32 round trip.
+                output_tensor = torch.randint(0, 2**31 - 1, output_shape, dtype=torch.int32)
+            elif rand_tensor:
                 output_tensor = torch.rand(output_shape).bfloat16()
             else:
                 output_tensor = torch.zeros(output_shape)
@@ -223,7 +231,7 @@ def run_all_broadcast_impl(
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensors[k])):
                 tt_output_tensor = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
                 logger.info(f"Checking for device {t.device().id()}")
-                if input_dtype == ttnn.bfloat16:
+                if input_dtype in (ttnn.bfloat16, ttnn.uint32, ttnn.int32):
                     eq, output = comp_equal(tt_output_tensor, output_tensor)
                 else:
                     eq, output = comp_pcc(tt_output_tensor, output_tensor)
@@ -278,6 +286,16 @@ def run_all_broadcast_impl(
             ttnn.ROW_MAJOR_LAYOUT,
             ttnn.bfloat16,
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ),
+        # Non-bf16 row-major row longer than the fabric max payload (5120 B > 4352 B): the row is split
+        # across packets, and each packet must still leave room for its header in the router slot.
+        (
+            8,
+            1,
+            [1, 1, 1, 1280],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.uint32,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
     ],
 )
@@ -580,3 +598,30 @@ def test_all_broadcast_2x4_non_flat_mesh(mesh_device, input_shape):
         for tt_torch_output_slice in tt_torch_output_slices:
             eq, output = comp_equal(tt_torch_output_slice, torch_reference)
             assert eq, f"Tensor{i} FAILED: {output}"
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["fabric_linear"]
+)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "mem_config, output_mem_config",
+    [
+        (ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1), ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        (ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM), ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+    ],
+    ids=["l1_to_dram", "dram_to_l1"],
+)
+def test_all_broadcast_output_mem_config(mesh_device, function_level_defaults, mem_config, output_mem_config):
+    run_all_broadcast_impl(
+        mesh_device,
+        num_devices=8,
+        output_shape=[1, 1, 32, 32],
+        num_links=1,
+        input_dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        function_level_defaults=function_level_defaults,
+        all_broadcast_topology=ttnn.Topology.Linear,
+        mem_config=mem_config,
+        output_mem_config=output_mem_config,
+    )

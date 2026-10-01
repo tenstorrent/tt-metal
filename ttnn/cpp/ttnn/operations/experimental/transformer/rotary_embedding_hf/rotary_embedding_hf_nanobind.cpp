@@ -28,8 +28,9 @@ void bind_rotary_embedding_hf(nb::module_& mod) {
 
         ``input_tensor``, ``cos_cache``, and ``sin_cache`` must be **device** tensors (host tensors
         are rejected). Tensors must use TILE layout. The padded ``head_dim`` (last dimension of
-        ``input_tensor``, ``cos_cache``, and ``sin_cache``) must be divisible by ``2 * ttnn.TILE_SIZE``
-        (typically ``TILE_SIZE`` is 32, so ``head_dim`` is a multiple of 64).
+        ``input_tensor``, ``cos_cache``, and ``sin_cache``) must be either ``ttnn.TILE_SIZE`` or
+        divisible by ``2 * ttnn.TILE_SIZE`` (typically ``TILE_SIZE`` is 32, so supported values are
+        ``32`` or multiples of ``64``).
 
         Args:
             input_tensor (ttnn.Tensor): Input tensor to apply rotation to (on device)

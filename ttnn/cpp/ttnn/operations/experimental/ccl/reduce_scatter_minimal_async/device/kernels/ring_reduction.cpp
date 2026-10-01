@@ -7,6 +7,8 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_common/kernels/common.hpp"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -18,15 +20,38 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
     constexpr uint32_t input_tensor_B = get_named_compile_time_arg_val("input_tensor_B");
     constexpr uint32_t slice_C = get_named_compile_time_arg_val("slice_C");
+    constexpr uint32_t fuse_op = get_named_compile_time_arg_val("fuse_op");
 
     uint32_t arg_idx = 0;
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
+    // (batch, channel) units this worker owns, as [unit_start, unit_end) with u = b * slice_C + c. All of
+    // them are processed inside every ring step. The page-major split gives every worker every unit and
+    // a fraction of the pages in each; the unit-major split gives it a contiguous group of units and
+    // every page within them.
+    const uint32_t unit_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t unit_end = get_arg_val<uint32_t>(arg_idx++);
+
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_interm(cb_interm_id);
+    CircularBuffer cb_interm2(cb_interm2_id);
+    CircularBuffer cb_compute_output(cb_compute_output_id);
 
     compute_kernel_hw_startup(cb_interm_id, cb_input_id, cb_compute_output_id);
 
-    for (uint32_t b = 0; b < input_tensor_B; ++b) {
+    // Ring step outermost, batches inside, mirroring the reader and writer: every (batch, channel)
+    // unit this worker owns is reduced within each ring step.
+    // Fused with a batched producer (fuse_op, B > 1): one ring traversal per batch, so the reduce-scatter
+    // of batch b overlaps the matmul producing batch b+1, which is what the fused op batches for. In every
+    // other case a single traversal carries all of the worker's units, one ring step at a time.
+    constexpr uint32_t num_traversals = (fuse_op && input_tensor_B > 1) ? input_tensor_B : 1;
+    for (uint32_t t = 0; t < num_traversals; ++t) {
+        // Units of this traversal: the worker's whole range, or its intersection with batch t.
+        const uint32_t t_unit_start =
+            num_traversals == 1 ? unit_start : (unit_start > t * slice_C ? unit_start : t * slice_C);
+        const uint32_t t_unit_end =
+            num_traversals == 1 ? unit_end : (unit_end < (t + 1) * slice_C ? unit_end : (t + 1) * slice_C);
         constexpr uint32_t ring_size_by_2 = ring_size / 2;
         uint32_t num_iters = ring_size_by_2 + 1;
         for (uint32_t i = 0; i < num_iters; ++i) {
@@ -59,19 +84,13 @@ void kernel_main() {
                 reduce_output = false;
             }
 
-            for (uint32_t c = 0; c < slice_C; ++c) {
+            for (uint32_t u = t_unit_start; u < t_unit_end; ++u) {
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t total_tiles_to_read = start_tiles_to_read;
 
-                bool is_even_chunk = true;
                 while (tiles_read < total_tiles_to_read) {
-                    uint32_t tiles_to_read = 0;
-                    uint32_t tiles_remaining = total_tiles_to_read - tiles_read;
-                    if (is_even_chunk) {
-                        tiles_to_read = std::min(tiles_remaining / 2, tile_granularity);
-                    } else {
-                        tiles_to_read = std::min(tiles_remaining, tile_granularity);
-                    }
+                    const auto [is_even_chunk, tiles_to_read] =
+                        reduce_scatter_common::chunk_ring_parity<tile_granularity>(tiles_read, total_tiles_to_read);
 
                     if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
                         // Skip this chunk
@@ -83,20 +102,20 @@ void kernel_main() {
                         if (reduce_interm) {
                             // If reduce_output, add 3 tensors. Else add 2 tensors.
                             if (reduce_output) {
-                                cb_wait_front(cb_interm2_id, tile_granularity);
+                                cb_interm2.wait_front(tile_granularity);
                             }
-                            cb_wait_front(cb_input_id, tile_granularity);
-                            cb_wait_front(cb_interm_id, tile_granularity);
+                            cb_input.wait_front(tile_granularity);
+                            cb_interm.wait_front(tile_granularity);
 
                             tile_regs_acquire();  // acquire DST registers for MATH thread, resets DST to 0
                             if (reduce_output) {
-                                copy_tile_init(cb_interm2_id);
+                                copy_init(cb_interm2_id);
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                     copy_tile(cb_interm2_id, tile_id, tile_id);  // load DST
                                 }
-                                add_tiles_init(cb_interm_id, cb_input_id, true);  // DST = srcA + srcB + DST
+                                add_init(cb_interm_id, cb_input_id, true);  // DST = srcA + srcB + DST
                             } else {
-                                add_tiles_init(cb_interm_id, cb_input_id, false);  // DST = srcA + srcB
+                                add_init(cb_interm_id, cb_input_id, false);  // DST = srcA + srcB
                             }
                             for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                 add_tiles(cb_interm_id, cb_input_id, tile_id, tile_id, tile_id);
@@ -104,27 +123,25 @@ void kernel_main() {
                             tile_regs_commit();  // release lock on DST by MATH thread, signal the PACK thread
 
                             if (reduce_output) {
-                                cb_pop_front(cb_interm2_id, tile_granularity);
+                                cb_interm2.pop_front(tile_granularity);
                             }
-                            cb_pop_front(cb_input_id, tile_granularity);
-                            cb_pop_front(cb_interm_id, tile_granularity);
+                            cb_input.pop_front(tile_granularity);
+                            cb_interm.pop_front(tile_granularity);
 
-                            cb_reserve_back(cb_compute_output_id, tile_granularity);
+                            cb_compute_output.reserve_back(tile_granularity);
                             tile_regs_wait();  // acquire lock on DST for PACK thread
                             for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                 pack_tile(tile_id, cb_compute_output_id, tile_id);  // pack results from DST registers
                                                                                     // to output circular buffers
                             }
                             tile_regs_release();  // release lock on DST by PACK thread
-                            cb_push_back(cb_compute_output_id, tile_granularity);
+                            cb_compute_output.push_back(tile_granularity);
                         }
                         tiles_read += tiles_to_read;
 
                     }  // if skip or process
-
-                    is_even_chunk = !is_even_chunk;
                 }  // while total_tiles_to_read
-            }  // for slice_C
+            }  // for units
         }  // for num_iters
-    }  // for input_tensor_B
+    }  // for traversals
 }

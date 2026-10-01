@@ -19,19 +19,195 @@
     export HF_MODEL={hf_model}
     export TT_CACHE_PATH={tt_cache_path}
     pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
+    pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 10
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      timeout: 20
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
-      timeout: 10
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      timeout: 20
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+      hf_model: meta-llama/Llama-3.1-8B-Instruct
+    bh_quietbox_2:
+      timeout: 20
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p300:
-      timeout: 10
+      timeout: 20
       tt_cache_path: ""
       hf_model: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: device_perf
+
+- name: Llama 3.3-70B device perf tests
+  cmd: |
+    export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+    export HF_MODEL={hf_model}
+    export TT_CACHE_PATH={tt_cache_path}
+    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
+    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
+  model: llama3.3-70b
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+      hf_model: meta-llama/Llama-3.3-70B-Instruct
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  budget_type: device_perf
+
+- name: Qwen3-32B device perf tests
+  cmd: |
+    export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+    export HF_MODEL={hf_model}
+    export TT_CACHE_PATH={tt_cache_path}
+    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-32768-2-2-1-1-False"
+    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-32768-2-10-1-1-False"
+  model: qwen3-32b
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+      hf_model: Qwen/Qwen3-32B
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  budget_type: device_perf
+
+# The base and LoRA perf files used to share one leg that ran both and reported the worst
+# exit code. A hang in the first file left the second one running on a dead card until
+# the job timeout (#57706). Each file is its own leg now, so each starts on reset devices.
+# The old leg's timeout is split between the two (~36 min measured for base, ~4 min for LoRA
+# on wh_n150).
+- name: Stable Diffusion XL device-perf tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 80
+    bh_p150:
+      timeout: 45
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+  budget_type: device_perf
+
+- name: Stable Diffusion XL LoRA device-perf tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+    bh_p150:
+      timeout: 15
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+  budget_type: device_perf
+
+- name: Stable Diffusion XL op device-perf tests
+  cmd: |
+    # Host call-stack sampling off: Tracy teardown 30-110 s -> 5-6 s per test; device timings come from the CSV.
+    export TRACY_NO_SYS_TRACE=1
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -m models_device_performance_bare_metal
+  model: sdxl
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+  budget_type: device_perf
+
+- name: ResNet-50 device perf tests
+  cmd: |
+    pytest --timeout {pytest_timeout} models/demos/vision/classification/resnet50/{arch_dir}/tests/test_perf_device_resnet50.py -m models_device_performance_bare_metal
+  model: resnet50
+  skus:
+    bh_p150b_civ2:
+      timeout: 9
+      pytest_timeout: 240
+      arch_dir: blackhole
+    wh_n150:
+      timeout: 10
+      pytest_timeout: 540
+      arch_dir: wormhole
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: device_perf
+
+- name: ResNet-50 e2e model perf tests
+  cmd: |
+    pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m model_perf_t3000
+  model: resnet50
+  skus:
+    wh_llmbox_perf:
+      timeout: 8
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: device_perf
+
+- name: DeepSeek-V3 decode device perf tests (Galaxy)
+  cmd: |
+    export MESH_DEVICE=TG
+    # Device timings come from CSV; omit the large device-event stream from Tracy.
+    export TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    pytest --timeout=1200 models/demos/deepseek_v3/demo/test_decode_demo_perf.py
+  model: deepseek-v3-tg
+  skus:
+    wh_galaxy_perf:
+      timeout: 20
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+  budget_type: device_perf
+
+- name: DeepSeek-V3 fused-op device perf tests (Galaxy)
+  cmd: |
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    PROFILER_DIR="generated/profiler/deepseek_v3_fused_ops_device_perf"
+    TRACY_TIMEOUT_PORT=5000
+    TRACY_OP_SUPPORT_COUNT=10000
+    # Stop at the first failed case: the Galaxy is not reset between cases, so a hang or an
+    # abort in one case leaves the next ones on devices in an unknown state (#57706).
+    run_tracy_case() {
+      local name="$1"
+      local perf_env_var="$2"
+      local test_target="$3"
+      local k_expr="$4"
+      echo "--- Case: $name | Target: $test_target | Expr: $k_expr"
+      env "${perf_env_var}=1" python3 -m tracy -p -r \
+        -o "$PROFILER_DIR" \
+        --check-exit-code \
+        --op-support-count "$TRACY_OP_SUPPORT_COUNT" \
+        -t "$TRACY_TIMEOUT_PORT" \
+        -a device_kernel_duration \
+        -m "pytest $test_target -k \"$k_expr\"" || { rc=$?; echo "--- Case FAILED (rc=$rc): $name"; exit $rc; }
+      sleep 10
+    }
+    run_tracy_case "embedding decode seq1 + prefill seq128" "DS_EMBEDDING_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding.py::test_ds_embedding" "program_cache and not no_program_cache and real_weights and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "all_gather_embedding decode seq1 + prefill seq128" "DS_ALL_GATHER_EMBEDDING_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_all_gather_embedding.py::test_ds_all_gather_embedding" "program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "lm_head decode seq1 + prefill seq128" "DS_LM_HEAD_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_lm_head.py::test_ds_lm_head" "program_cache and not no_program_cache and real_weights and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "rms_norm decode seq1 + prefill seq128" "DS_RMS_NORM_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_rms_norm.py::test_ds_rms_norm" "program_cache and not no_program_cache and real_weights and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "distributed_norm decode seq1 + prefill seq128" "DS_DISTRIBUTED_NORM_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_distributed_norm.py::test_ds_distributed_norm" "program_cache and not no_program_cache and real_weights and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "ff1_3 decode seq1 + prefill seq128" "DS_FF1_3_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff1_3.py::test_ds_ff1_3" "program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "ff2 decode seq1 + prefill seq128" "DS_FF2_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff2.py::test_ds_ff2" "program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "mul decode seq1 + prefill seq128" "DS_MUL_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_mul.py::test_ds_mul" "program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "reduce_scatter_post_ff2 decode seq1 + prefill seq128" "DS_REDUCE_SCATTER_POST_FF2_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_reduce_scatter_post_ff2.py::test_ds_reduce_scatter_post_ff2" "program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "all_gather_preff1_3 decode seq1 + prefill seq128" "DS_ALL_GATHER_PREFF1_3_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_all_gather_preff1_3.py::test_ds_all_gather_preff1_3" "program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "moe decode seq1 + prefill seq128" "DS_MOE_FORWARD_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe.py::test_ds_moe_forward" "test_ds_moe_forward and real_weights and program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
+    run_tracy_case "mla decode seq1 + prefill seq128" "DS_MLA_FORWARD_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_ds_mla.py::test_ds_mla_forward" "test_ds_mla_forward and real_weights and program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
+  model: deepseek-v3-tg
+  model_family: DeepSeek
+  skus:
+    wh_galaxy_perf:
+      timeout: 45
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+  budget_type: device_perf

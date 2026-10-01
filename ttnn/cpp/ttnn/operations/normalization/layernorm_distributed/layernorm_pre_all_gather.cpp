@@ -5,7 +5,6 @@
 #include "layernorm_pre_all_gather.hpp"
 
 #include "device/layernorm_pre_all_gather_device_operation.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 
@@ -18,7 +17,8 @@ ttnn::Tensor layer_norm_pre_all_gather(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const ttnn::Tensor>& recip_tensor) {
+    const std::optional<const ttnn::Tensor>& recip_tensor,
+    bool fast_and_approximate_mode) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
@@ -37,14 +37,17 @@ ttnn::Tensor layer_norm_pre_all_gather(
             ttnn::prim::LayerNormType::LAYERNORM,
             ttnn::prim::DistributedLayerNormStage::PRE_ALL_GATHER);
     }
+
     return ttnn::prim::layer_norm_pre_all_gather(
-        residual_input_tensor.has_value() ? ttnn::add(input_tensor, residual_input_tensor.value()) : input_tensor,
+        input_tensor,
+        residual_input_tensor,
         recip_tensor,
         ttnn::prim::LayerNormDistributedType::LAYERNORM,
         dtype,
         kernel_config_val,
         program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),
-        std::nullopt);  // use_2d_core_grid
+        std::nullopt,  // use_2d_core_grid
+        fast_and_approximate_mode);
 }
 
 }  // namespace ttnn

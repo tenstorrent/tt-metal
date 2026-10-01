@@ -325,8 +325,8 @@ std::vector<tt_metal::distributed::SocketConnection> generate_random_socket_conn
     tt_fabric::MeshId recv_mesh_id) {
     std::mt19937 gen = std::mt19937(sync_seed_across_ranks(sender_mesh_id, recv_mesh_id));
     auto mesh_device_shape = mesh_device->shape();
-    auto sender_core = CoreCoord(0, 0);
-    auto recv_core = CoreCoord(0, 0);
+    auto sender_core = tt::tt_metal::CoreCoord(0, 0);
+    auto recv_core = tt::tt_metal::CoreCoord(0, 0);
 
     std::set<MeshCoordinate> generated_sender_device_coords;
     std::set<MeshCoordinate> generated_recv_device_coords;

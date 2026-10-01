@@ -8,8 +8,6 @@
 
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -19,6 +17,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -26,6 +25,11 @@
 namespace tt {
 
 class Cluster;
+struct EthCoord;
+
+namespace umd {
+class ClusterDescriptor;
+}
 
 namespace llrt {
 class RunTimeOptions;
@@ -41,12 +45,6 @@ class PhysicalSystemDescriptor;
 
 }  // namespace tt::tt_metal
 
-namespace tt::umd {
-
-class Cluster;
-
-}  // namespace tt::umd
-
 namespace tt::tt_fabric {
 
 class TopologyMapper;
@@ -57,8 +55,8 @@ struct UbbId {
     std::uint32_t asic_id;
 };
 
-uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
-UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id);
+uint16_t get_bus_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
+UbbId get_ubb_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
 
 class FabricContext;
 
@@ -80,13 +78,20 @@ enum class MeshScope {
     GLOBAL,
 };
 
+// Gather record for one physical inter-mesh cable channel. The logical routing direction is
+// intentionally NOT stored here: assignment is deferred to rank 0's round-robin allocator
+// (pair_logical_intermesh_ports), which sees both endpoints of every cable and assigns a
+// port_id on each side. Only physical facts are carried: the cable's connection_hash (its
+// symmetric identity, equal on both endpoint meshes), the exit chip on the sending mesh, and
+// the resolved peer FabricNodeId on the destination mesh.
 struct PortDescriptor {
-    port_id_t port_id = {RoutingDirection::NONE, 0};
     std::size_t connection_hash = 0;
+    ChipId src_chip = 0;
+    FabricNodeId dst_node{MeshId{0}, 0};
 };
 
-// Stores the logical ports (routing direction, logical channel id and connection hash) between the src mesh and its
-// neighbor meshes
+// Stores the gathered inter-mesh cable records between the src mesh and its neighbor meshes.
+// Keyed src_mesh -> neighbor_mesh -> one PortDescriptor per physical cable channel.
 using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<PortDescriptor>>>;
 
 class ControlPlane {
@@ -150,6 +155,8 @@ public:
     FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const;
     // Return physical chip id from fabric node id
     ChipId get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    // Non-fatal variant for optional remote-node metadata.
+    std::optional<ChipId> try_get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
     // Return fabric node id from ASIC id
     FabricNodeId get_fabric_node_id_from_asic_id(uint64_t asic_id) const;
     // Return user physical mesh ids
@@ -217,14 +224,24 @@ public:
     std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
         FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
 
-    size_t get_num_available_routing_planes_in_direction(
-        FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
+    // Number of routing planes usable for workload traffic in a given direction: the live (post-health-check)
+    // routing plane count minus any planes that have been reserved.
+    size_t get_num_usable_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
+
+    // Reserve `num_reserved` routing planes in `routing_direction` from `fabric_node_id` so they are excluded
+    // from the usable count. Not intended as a query API. Set semantics: the latest call wins, so repeated
+    // invocation during fabric re-init is idempotent (reserving 0 is a no-op).
+    void reserve_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction, size_t num_reserved);
 
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
         FabricNodeId fabric_node_id) const;
 
     // Peer fabric node (and its Ethernet channel) connected to `fabric_node_id` on `chan_id` via one physical hop
     // (intra-mesh or inter-mesh).
+    std::optional<std::pair<FabricNodeId, chan_id_t>> try_get_connected_mesh_chip_chan_ids(
+        FabricNodeId fabric_node_id, chan_id_t chan_id) const;
+
+    // Fatal variant for callers that require a complete physical-link mapping.
     std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
         FabricNodeId fabric_node_id, chan_id_t chan_id) const;
 
@@ -257,17 +274,11 @@ public:
     // intended for users to grab available eth cores for testing
     // `skip_reserved_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
     // tunneling
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores = false) const;
-    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(ChipId chip_id) const;
+    std::unordered_set<tt::tt_metal::CoreCoord> get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores = false) const;
+    std::unordered_set<tt::tt_metal::CoreCoord> get_inactive_ethernet_cores(ChipId chip_id) const;
 
     // Collect router port directions map from all hosts via MPI and merge into local map
     void collect_and_merge_router_port_directions_from_all_hosts();
-
-    // Merge inter-mesh exit FabricNodeId sets from all hosts so local queries see every mesh pair.
-    void collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts();
-
-    // Merge inter-mesh exit/peer FabricNodeId pair lists from all hosts (each host only fills edges from its mesh).
-    void collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts();
 
     // Get the mesh graph from the control plane
     const MeshGraph& get_mesh_graph() const;
@@ -323,6 +334,11 @@ private:
 
     void init_control_plane_auto_discovery();
 
+    // Gathers the FabricConfig of every rank and enforces one consistent FabricConfig per logical mesh
+    // and across all meshes connected by the mesh graph descriptor. Must run after the local mesh
+    // binding and distributed contexts are known, and before routing tables or FabricContext are built.
+    void validate_fabric_config_across_ranks();
+
     // Initialize fabric context if fabric is enabled
     void initialize_fabric_context();
 
@@ -334,6 +350,10 @@ private:
 
     // Fabric Settings
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+
+    // FabricConfig that was agreed on by all ranks in validate_fabric_config_across_ranks(). Fabric
+    // initialization is only allowed to proceed with this value.
+    std::optional<tt_fabric::FabricConfig> validated_fabric_config_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being
@@ -362,6 +382,10 @@ private:
     // map[mesh_fabric_id][direction] has the number of live routing planes in that direction
     std::map<FabricNodeId, std::unordered_map<RoutingDirection, size_t>>
         router_port_directions_to_num_routing_planes_map_;
+
+    // map[mesh_fabric_id][direction] has the number of reserved routing planes in that direction
+    std::map<FabricNodeId, std::unordered_map<RoutingDirection, size_t>>
+        router_port_directions_to_num_reserved_planes_map_;
 
     // tables[mesh_fabric_id][eth_chan]
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
@@ -408,6 +432,8 @@ private:
 
     void load_physical_chip_mapping(
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+    // Live routing planes in a given direction: the post-health-check active plane count.
+    // Note: this includes reserved planes as well, as opposed to get_num_usable_routing_planes.
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
     void initialize_dynamic_routing_plane_counts(
         const IntraMeshConnectivity& intra_mesh_connectivity,
@@ -446,7 +472,7 @@ private:
         const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction);
 
     void assign_direction_to_fabric_eth_core(
-        const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction);
+        const FabricNodeId& fabric_node_id, const tt::tt_metal::CoreCoord& eth_core, RoutingDirection direction);
 
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context
@@ -465,17 +491,23 @@ private:
     // and Routing Table Generator.
     void generate_intermesh_connectivity();
 
-    // Propose PortDescriptors per neighbor cable; final maps written after rank-0 pairing.
-    std::vector<PortDescriptor> propose_port_descriptors_for_exit_nodes(
+    // Rebuild the inter-mesh exit/peer maps (intermesh_exit_peer_fabric_node_id_pairs_ and
+    // intermesh_exit_fabric_node_ids_) purely from the shared, broadcast-identical intermesh_connections.
+    // See the definition for why this replaces the old per-rank push + cross-host merge (Finding A fix).
+    void rebuild_intermesh_exit_maps_from_connections(const AnnotatedIntermeshConnections& intermesh_connections);
+
+    // Gather physical inter-mesh cables toward one neighbor host (no port/direction assignment; that
+    // is deferred to rank-0 pairing which sees both endpoints of every cable).
+    std::vector<PortDescriptor> gather_intermesh_cables_for_exit_nodes(
         const std::string& my_host,
         const std::string& neighbor_host,
         bool strict_binding,
-        const std::unordered_set<FabricNodeId>& requested_exit_nodes,
-        std::unordered_set<port_id_t>& assigned_port_ids);
+        const std::unordered_set<FabricNodeId>& requested_exit_nodes);
 
     // Multi-Host Intermesh Connectivity Helper Function:
-    // Fully annotate local physical exit nodes in logical space (src/dst mesh id, direction, channel id)
-    PortDescriptorTable generate_port_descriptors_for_exit_nodes();
+    // Build this mesh's PortDescriptorTable by gathering cables toward every requested neighbor mesh.
+    // Physical facts only; rank-0 pairing assigns logical ports/directions later.
+    PortDescriptorTable generate_port_descriptor_table();
 
     // Multi-Host Intermesh Connectivity Helper Function:
     // If the user has specified the logical devices to connect between meshes, this function will return
@@ -510,10 +542,9 @@ private:
     // Generate intermesh connections for the local host.
     AnnotatedIntermeshConnections generate_intermesh_connections_on_local_host();
 
-    // Validate that the intermesh connections requested in the MGD can be mapped to physical links.
-    void validate_requested_intermesh_connections(
-        const RequestedIntermeshConnections& requested_intermesh_connections,
-        const PortDescriptorTable& port_descriptors);
+    // Validate the resolved inter-mesh pairing: per-mesh-pair counts against the MGD, plus the placement
+    // invariants derivable from the (broadcast-identical) annotated intermesh_connections (direction rules).
+    void validate_requested_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) const;
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;

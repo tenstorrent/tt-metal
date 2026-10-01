@@ -24,7 +24,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     stride_h = patch_size
     stride_w = 1
 
-    folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
+    folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w, collapse_output=True)  # 1568, 1024
     ttnn.deallocate(pixel_values)
     x = ttnn.reallocate(folded_pixel_values)
     folded_pixel_values = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
@@ -304,7 +304,8 @@ def vit_encoder(
     encoder_input = embeddings
 
     encoder_output = None
-    for index, encoder_parameters in enumerate(parameters.layer):
+    encoder_layers = parameters.layer if hasattr(parameters, "layer") else parameters
+    for index, encoder_parameters in enumerate(encoder_layers):
         encoder_output = vit_layer(
             config,
             encoder_input,
@@ -330,7 +331,7 @@ def vit(
         config,
         embeddings_output,
         attention_mask,
-        parameters=parameters.vit.encoder,
+        parameters=parameters.vit.encoder if "encoder" in parameters.vit else parameters.vit.layers,
     )
     # ttnn.deallocate(embeddings_output)
 

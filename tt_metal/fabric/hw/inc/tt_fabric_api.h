@@ -14,7 +14,6 @@
 #include "internal/tt-1xx/risc_common.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <array>
-#include <type_traits>
 
 using namespace tt::tt_fabric;
 
@@ -221,7 +220,7 @@ void fabric_set_mcast_route(volatile tt_l1_ptr HybridMeshPacketHeader* packet_he
 
 uint8_t get_router_direction(uint32_t eth_channel) {
     tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
-        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(FABRIC_CONNECTIONS_BASE);
     return connection_info->read_only[eth_channel].edm_direction;
 }
 

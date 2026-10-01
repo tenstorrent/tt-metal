@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t num_hw_blocks_per_core = get_compile_time_arg_val(0);
@@ -14,35 +18,46 @@ void kernel_main() {
     constexpr uint32_t H_size_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t l1_read_offset_bytes = get_compile_time_arg_val(6);
 
-    constexpr auto cb_out = tt::CBIndex::c_27;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto dfb_out = tt::CBIndex::c_27;
+    constexpr auto dfb_out0 = tt::CBIndex::c_16;
 
     const uint32_t stick_size_bytes = H_size_bytes;
 
-    experimental::CircularBuffer cb_src(cb_out);
-    experimental::CircularBuffer cb_dst(cb_out0);
+    Noc noc;
+    DataflowBuffer dfb_src(dfb_out);
+    DataflowBuffer dfb_dst(dfb_out0);
 
-    uint32_t l1_write_addr = cb_dst.get_write_ptr();
-    uint64_t write_noc_addr = get_noc_addr(l1_write_addr);
+    uint32_t dst_addr = dfb_dst.get_write_ptr();
 
     // temporary fix until pack_untilze is fully fixed
     if constexpr (Ht > 8) {
-        noc_async_write_one_packet_set_state(write_noc_addr, stick_size_bytes);
+        noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            stick_size_bytes,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = dst_addr});
 
         for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
             for (uint32_t w = 0; w < Wt; ++w) {
-                cb_src.wait_front(Ht);
-                uint32_t l1_read_addr = cb_src.get_read_ptr();
+                dfb_src.wait_front(Ht);
+                uint32_t l1_read_addr = dfb_src.get_read_ptr();
                 uint32_t W_curr = w == Wt - 1 ? W_per_tile_last : W_per_tile;
                 for (uint32_t w_datum = 0; w_datum < W_curr; ++w_datum) {
-                    noc_async_write_one_packet_with_state(l1_read_addr, write_noc_addr);
+                    CoreLocalMem<uint32_t> src(l1_read_addr);
+                    noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                        src,
+                        UnicastEndpoint{},
+                        stick_size_bytes,
+                        {.offset_bytes = 0},
+                        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                         .addr = dst_addr});
                     l1_read_addr += l1_read_offset_bytes;
-                    write_noc_addr += stick_size_bytes;
+                    dst_addr += stick_size_bytes;
                 }
-                noc_async_writes_flushed();
-                cb_src.pop_front(Ht);
+                noc.async_writes_flushed();
+                dfb_src.pop_front(Ht);
             }
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     }
 }

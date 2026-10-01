@@ -1,6 +1,10 @@
 name: "(Tier 1) Models Sweep Tests"
 
 on:
+  schedule:
+    # Twice weekly, Wednesdays and Saturdays at 06:00 UTC. (GitHub Actions cron is always UTC;
+    # scheduled runs fire on the default branch only.)
+    - cron: "0 6 * * 3,6"
   workflow_dispatch:
     inputs:
       model:
@@ -12,6 +16,14 @@ on:
           - all
           - llama3.1-8b
           - llama3.3-70b
+          - llama3.3-70b-galaxy
+          - gemma-4-26b-a4b
+          - qwen3.6-27b
+          - qwen3.6-35b-a3b
+          - gpt-oss-120b
+          - sampling-common
+          - tt-transformers-common
+          - deepseek-v3
       sku:
         description: "Select SKU to test"
         required: false
@@ -20,7 +32,17 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
-          - "wh_galaxy (Galaxy)"
+          - "wh_n150_civ2 (N150 CIv2)"
+          - "wh_n300 (N300)"
+          - "wh_llmbox (T3000)"
+          - "wh_llmbox_perf (T3000 perf)"
+          - "wh_galaxy (WH Galaxy)"
+          - "wh_galaxy_perf (WH Galaxy perf)"
+          - "bh_p150 (P150)"
+          - "bh_p150b_civ2 (P150b CIv2)"
+          - "bh_p300 (P300)"
+          - "bh_quietbox_2 (BH QB2)"
+          - "bh_galaxy (BH Galaxy)"
       platform:
         required: false
         type: choice
@@ -45,21 +67,28 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access to populate tensor caches)"
 
 permissions:
   packages: write
   contents: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
     steps:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_galaxy"
+          ALL_SKUS="wh_n150,wh_n150_civ2,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
@@ -69,17 +98,22 @@ jobs:
             echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
           fi
   build-artifact:
+    needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-sweep-tests:
-    needs: [build-artifact, resolve-skus]
+    needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/models-sweep-tests-impl.yaml
     with:
@@ -89,3 +123,5 @@ jobs:
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       tier: "1"
+      # `!= false` so unset inputs on scheduled runs default to read-only (true)
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}

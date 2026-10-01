@@ -5,9 +5,21 @@
 
 #pragma once
 
+#include <bit>
+#include <cstdint>
+#include <limits>
 #include <string_view>
+#include <vector>
+
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+
+namespace tt::tt_metal {
+class Buffer;
+class MeshTensor;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -21,29 +33,169 @@ enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_C
 
 namespace ttnn::prim {
 
+// Tiles the universal reduce reader fetches per NoC barrier.
+inline constexpr uint32_t kReduceReaderTilesPerBatch = 4;
+
+inline uint32_t reduce_reader_batch(uint32_t min_tiles_per_core) {
+    return min_tiles_per_core < kReduceReaderTilesPerBatch ? 1u : kReduceReaderTilesPerBatch;
+}
+
+// Depth is a multiple of the batch so a reserve never straddles fifo_limit.
+inline uint32_t reduce_reader_input_cb_tiles(uint32_t tiles_per_batch) { return 2 * tiles_per_batch; }
+
+// Identity element for the given reduction math op: -inf for MAX, +inf for MIN, 0 otherwise.
+// Used by the dense RM paths to pad partial chunks without disturbing the result.
+inline float get_reduce_pad_value(tt::tt_metal::ReduceOpMath reduce_math) {
+    using tt::tt_metal::ReduceOpMath;
+    return reduce_math == ReduceOpMath::MAX   ? -std::numeric_limits<float>::infinity()
+           : reduce_math == ReduceOpMath::MIN ? std::numeric_limits<float>::infinity()
+                                              : 0.0f;
+}
+
+// Bit pattern of the RM padding identity in the input's data format, ready to load into a CB tile.
+inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::ReduceOpMath op) {
+    const float v = get_reduce_pad_value(op);
+    if (df == tt::DataFormat::Float32) {
+        return std::bit_cast<uint32_t>(v);
+    }
+    const uint16_t bf16 = std::bit_cast<uint16_t>(bfloat16::truncate(v));
+    return static_cast<uint32_t>(bf16);
+}
+
+// True when the reduce uses the SFPU path instead of the FPU GMPOOL/matmul path.
+// Int32 always uses SFPU (FPU has no Int32 support). BFLOAT16 MIN always does too (FPU has no
+// bf16 min pool); it takes no `use_sfpu_reduce` opt-in. Float32 opts in only when the host
+// requests the accurate path (`use_sfpu_reduce`): the FPU truncates fp32 to tf32, so the SFPU
+// preserves full fp32. mean arrives as SUM (the host lowers it to SUM + a 1/N post-mul). Remaining
+// float MIN — bfloat8_b and fast-mode fp32 — arrives as MAX with negate=true via
+// -MAX(-x), so only accurate fp32 MIN and bf16 MIN reach here as MIN.
+inline bool use_sfpu_reduce_path(
+    tt::tt_metal::DataType dtype, tt::tt_metal::ReduceOpMath math_op, bool use_sfpu_reduce = false) {
+    using tt::tt_metal::ReduceOpMath;
+    if (dtype == tt::tt_metal::DataType::INT32) {
+        return math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MIN;
+    }
+    if (dtype == tt::tt_metal::DataType::BFLOAT16) {
+        return math_op == ReduceOpMath::MIN;
+    }
+    return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
+           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN);
+}
+
+// Which slot carries the scalar. This is structural, so it is hashed; the value itself is not.
+enum class ScalerMode : uint8_t { None, ScalerTile, PostMul };
+
+// PostMul is required when the scaler CB cannot apply the scalar correctly.
+// `effective_dim` is the dim of the stage that actually applies the scalar, not the dim the user
+// asked for: a caller decomposing HW into W-then-H applies it on the H stage and must pass H.
+inline ScalerMode derive_scaler_mode(
+    tt::tt_metal::ReduceOpMath math_op,
+    tt::tt_metal::DataType dtype,
+    tt::tt_metal::ReduceOpDim effective_dim,
+    bool use_sfpu_reduce = false) {
+    using tt::tt_metal::ReduceOpMath;
+    if (effective_dim == tt::tt_metal::ReduceOpDim::HW) {
+        return ScalerMode::PostMul;
+    }
+    if (math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN) {
+        return ScalerMode::PostMul;
+    }
+    if (math_op == ReduceOpMath::SUM && dtype == tt::tt_metal::DataType::INT32) {
+        return ScalerMode::PostMul;
+    }
+    const bool sfpu_fp32_scalar = use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
+                                  (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::AVG);
+    return sfpu_fp32_scalar ? ScalerMode::PostMul : ScalerMode::ScalerTile;
+}
+
+// All RM-path locals derived from the input shape, tile geometry, and math op.
+// One instance is populated at the top of the RM branch in each factory and consumed
+// by the build_rm_*_ct_args helpers; both factories see the same field layout.
+struct RmPlan {
+    uint32_t H_logical;
+    uint32_t W_logical;
+    uint32_t Ht_rm;                  // ceil_div(H_logical, rm_rows_per_tile)
+    uint32_t Wt;                     // ceil_div(W_padded,   tile_width)
+    uint32_t rm_rows_per_tile;       // == tile_height
+    uint32_t wt_tiles_per_chunk;     // W-reduce: min(8, max(1, Wt)); H-reduce: 1
+    uint32_t ht_tiles_per_chunk;     // W-reduce: 1;                   H-reduce: min(8, max(1, Ht_rm))
+    uint32_t chunk_row_bytes;        // wt_tiles_per_chunk * tile_width * src_datum_size
+    uint32_t rm_staging_page_size;   // == chunk_row_bytes (one CB page = one chunk-wide RM row)
+    uint32_t padding_identity_bits;  // dense_rm_padding_identity_bits(src_df, math_op)
+    uint32_t src_datum_size;
+    uint32_t dst_datum_size;
+};
+
+// Populate an RmPlan from the input's padded + logical shapes, tile geometry, data formats
+// and the dim being reduced. Dim picks which of {wt,ht}_tiles_per_chunk is the variable
+// chunk size and which is pinned to 1.
+RmPlan make_rm_plan(
+    const tt::tt_metal::Shape& padded_shape,
+    const tt::tt_metal::Shape& logical_shape,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    tt::DataFormat src_cb_data_format,
+    tt::DataFormat dst_cb_data_format,
+    tt::tt_metal::ReduceOpMath math_op,
+    tt::tt_metal::ReduceOpDim dim);
+
+// The factory-level RM preconditions: interleaved I/O, SUM only, no negate, dim is H or W.
+// `dim_label` is "Reduce W" / "Reduce H" for the fatal messages.
+void validate_rm_preconditions(
+    const tt::tt_metal::MeshTensor& input,
+    const tt::tt_metal::MeshTensor& output,
+    tt::tt_metal::ReduceOpMath math_op,
+    bool negate,
+    tt::tt_metal::ReduceOpDim dim,
+    std::string_view dim_label);
+
+// Build the named compile-time args for the RM reader (names match reader_unary_reduce_rm.cpp).
+// Both reduce dims get the full set: the reader's H branch is the only consumer of H_logical and of
+// the H-axis-split geometry (`num_h_slices` / `slice_Ht`; 1 / full Ht_rm = normal reduce), but a
+// compile-time arg costs nothing on the path that ignores it, and emitting it unconditionally is
+// what lets the kernel reference the name from either branch.
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
+    const RmPlan& plan, uint32_t num_h_slices = 1, uint32_t slice_Ht = 0);
+
+// Build the named compile-time args for the RM writer (names match writer_reduce_rm_scalar.cpp).
+// As above, both dims get the full set even though Wt / W_logical / wt_tiles_per_chunk and the
+// H-axis-split fields (tile_output / num_h_slices / out_tile_rows) are read only by the H branch.
+// `tile_output` selects TILE instead of ROW_MAJOR pages on the H path (mirrored by the
+// REDUCE_RM_TILE_OUTPUT define, which is what the kernel actually branches on).
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(
+    const RmPlan& plan, bool tile_output = false, uint32_t num_h_slices = 1);
+
+// Build the named compile-time args for the RM compute kernel (names match reduce_rm.cpp).
+// `Ht_arg` is the per-core ht count (W path) or the global Ht_rm (H path); the helper
+// keeps NC pinned at 1. `fp32_sfpu_reduce` (the enable_fp32_sfpu arg) routes Float32 through the
+// SFPU for full-fp32 accumulation instead of the tf32 FPU path.
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args(
+    const RmPlan& plan, uint32_t Ht_arg, bool fp32_sfpu_reduce);
+
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
-    const tt::tt_metal::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
+    const ttnn::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
 
-// Returns true if the fused-negate H reduce path's CBs fit in available L1.
-// The reduce_h_neg compute kernel pushes ntiles tiles per inner-loop iteration;
-// to make the FIFO write pointer wrap cleanly across all push sizes, c_4 (acc)
-// and c_5 (ineg) are each sized at Ht * lcm(Wt_per_core_g1, Wt_per_core_g2)
-// tiles.  For wide reductions this can exceed L1, in which case callers must
-// fall back to external negation around a non-fused (regular) reduce.
+// True when fused-negate CBs (acc and ineg, each Ht * lcm of the two per-core Wts) fit in L1.
+// Per-core Wt depends on the H factory's width-sharded path, so output_mem_config is required.
 bool h_reduce_negate_fits_in_l1(
-    const tt::tt_metal::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
-// Builds a tilized TensorSpec for a reduction-style op output, given the
-// already shape-adjusted output shape and the dimension that was reduced.
+// Builds a tt::tt_metal::TensorSpec for a reduction-style op output, given the already
+// shape-adjusted output shape and the dimension that was reduced.
+//
+// `output_layout` selects the physical layout of the result (TILE by default;
+// pass ROW_MAJOR for the dense RM reduce paths).
 //
 // Handles all currently supported output memory layouts:
 //   - INTERLEAVED: returns the basic spec.
-//   - WIDTH/HEIGHT/BLOCK_SHARDED: delegates to the corresponding TensorSpec
+//   - WIDTH/HEIGHT/BLOCK_SHARDED: delegates to the corresponding tt::tt_metal::TensorSpec
 //     builder using the grid/orientation taken from `output_mem_config` if
 //     available, otherwise falling back to `input_mem_config`.
-//   - ND_SHARDED: copies the ND shard spec (from `output_mem_config` or, as a
-//     fallback, `input_mem_config`) and sets the shard shape entries for the
-//     reduced dim(s) to 1.
+//   - ND_SHARDED (TILE output only): copies the ND shard spec (from
+//     `output_mem_config` or, as a fallback, `input_mem_config`) and sets the
+//     shard shape entries for the reduced dim(s) to 1.
 //
 // `input_mem_config` is the memory config of the reduction's input tensor and
 // is only consulted as a fallback when the output config omits a shard spec.
@@ -52,15 +204,11 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     tt::tt_metal::DataType output_dtype,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::MemoryConfig& input_mem_config,
-    tt::tt_metal::ReduceOpDim reduce_dim);
+    tt::tt_metal::ReduceOpDim reduce_dim,
+    tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE);
 
-// Enforces the documented contract that, for reduction-style ops, any sharded
-// participant (input or output) must live in L1.  Sharded layouts and DRAM
-// buffers use disjoint coordinate spaces (worker cores vs DRAM bank cores), so
-// silently borrowing a grid across buffer types — as the shard-spec fallback
-// in `build_reduce_output_tensor_spec` would otherwise allow — produces an
-// invalid spec.  Pass an `op_name` (e.g. "reduce", "Std/Var reduction") for a
-// readable error message.
+// Sharded I/O must be L1 or DRAM; DRAM BLOCK_SHARDED is unsupported.
+// Grid borrowing and DRAM's 1D bank grid are checked elsewhere.
 void validate_reduce_sharded_buffer_types(
     const tt::tt_metal::MemoryConfig& input_mem_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,

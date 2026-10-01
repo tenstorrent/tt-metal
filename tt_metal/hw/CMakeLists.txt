@@ -382,6 +382,7 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/llk_io
         -I${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_ALIAS}/common/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_ALIAS}/llk_lib
+        -I${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_ALIAS}/llk_lib/hal
     )
 
     foreach(HW_PAIR IN LISTS HW_OBJ_SRC_PAIRS)
@@ -508,8 +509,8 @@ set_target_properties(
 
 # It's acceptable to use GLOB here because these files are not part of the build and developers aren't generating packages (for now).
 # We may need to revisit later.
-file(GLOB_RECURSE blackhole_kernels ckernels/blackhole/*)
-file(GLOB_RECURSE wormhole_kernels ckernels/wormhole_b0/*)
+file(GLOB_RECURSE blackhole_kernels ckernels/blackhole/*.h)
+file(GLOB_RECURSE wormhole_kernels ckernels/wormhole_b0/*.h)
 
 include(sources.cmake)
 

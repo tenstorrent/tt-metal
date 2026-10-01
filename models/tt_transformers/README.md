@@ -6,6 +6,7 @@ The current version is verified to work with the following models:
 | Model                                                                                            | Hardware                    | <org/model>                                      |
 |--------------------------------------------------------------------------------------------------|-----------------------------|-------------------------------------------------|
 | [DeepSeek R1 Distill Llama 70B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B)| LoudBox / QuietBox / Galaxy | ```deepseek-ai/DeepSeek-R1-Distill-Llama-70B``` |
+| [EXAONE 4.5 33B](https://huggingface.co/LGAI-EXAONE/EXAONE-4.5-33B) (text; host-vision hybrid demo) | P150x8 (BH LoudBox)  | ```LGAI-EXAONE/EXAONE-4.5-33B```                |
 | [Llama 3.1 8B](https://huggingface.co/meta-llama/Llama-3.1-8B)                                   | n150 / p100 / p150          | ```meta-llama/Llama-3.1-8B```                   |
 | [Llama 3.1 70B](https://huggingface.co/meta-llama/Llama-3.1-70B)                                 | LoudBox / QuietBox / Galaxy | ```meta-llama/Llama-3.1-70B```                  |
 | [Llama 3.2 1B](https://huggingface.co/meta-llama/Llama-3.2-1B)                                   | n150                        | ```meta-llama/Llama-3.2-1B```                   |
@@ -187,7 +188,7 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 
 The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
-NOTE: for models that are not listed in [`get_supported_trace_region_size` function](demo/trace_region_config.py#L79), the default trace region size will be used as set in the [`demo/simple_text_demo.py` script](demo/simple_text_demo.py#L704). The default trace region size may not be sufficient for such a model and there will be a helpful error message that informs the required trace region size, which can be overridden by setting the `trace_region_size` argument in the demo.
+NOTE: trace region sizes are declared in [`models/model_trace_region_sizes.yaml`](../model_trace_region_sizes.yaml) and resolved at device-open time via [`get_supported_trace_region_size`](demo/trace_region_config.py) (which delegates to [`resolve_trace_region_size`](../demos/utils/trace_region_sizes.py)). A `(model, SKU)` pair without a YAML entry is not an error: resolution logs an info message and falls back to `TRACE_REGION_SIZE_DYNAMIC` (`0`, dynamic allocation). Add an explicit entry when a model needs a fixed reserved trace region.
 
 ## Details
 
@@ -210,6 +211,7 @@ Huggingface models specify their architecture in the `config.json` file. The fol
 - MistralForCausalLM
 - Mistral3ForConditionalGeneration
 - Phi3ForCausalLM
+- Exaone4_5_ForConditionalGeneration (text decoder only)
 
 At the time of writing this covers the majority of popular HuggingFace text-generation models. If you find another architecture that works or extend TT-Transformers to support one we would love to accept a PR!
 
@@ -233,8 +235,9 @@ The device name used is:
 - `N300` for N300
 - `T3K` for LoudBox / QuietBox
 - `TG` for Galaxy
+- `P150x8` for BH LoudBox
 
-By default tensor parallelism is used to run the model over all available chips. You can instead run on a smaller mesh either for testing or for performance reasons (for very small models the communication overhead of tensor parallelism may be larger than the performance gained). To use a smaller mesh, set `MESH_DEVICE` to one of the supported devices: `N150`, `N300`, `T3K` or `TG`.
+By default tensor parallelism is used to run the model over all available chips. You can instead run on a smaller mesh either for testing or for performance reasons (for very small models the communication overhead of tensor parallelism may be larger than the performance gained). To use a smaller mesh, set `MESH_DEVICE` to one of the supported devices: `N150`, `N300`, `T3K`, `TG` or `P150x8`.
 
 Example: `export MESH_DEVICE=N150`, will enable running one a single chip of a multi-chip system.
 
@@ -293,7 +296,7 @@ To apply the same settings across all decoders, the `optimizations` argument can
 pytest models/tt_transformers/demo/simple_text_demo.py -k "accuracy and batch-1" --optimizations 'precision_cfg = {ff1_3: bfp4, ff2: bfp4, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: mixed}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: lofi, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}'
 ```
 
-Please refer to [model_config.py](models/tt_transformers/tt/model_config.py) for the full list of supported key-value pairs in the `--optimizations` argument. Also, please refer to the [PERF.md](PERF.md) file for performance and accuracy across a select range of configurations for an example Pareto front analysis.
+Please refer to [model_config.py](models/tt_transformers/tt/model_config.py) for the full list of supported key-value pairs in the `--optimizations` argument. Centralized performance and accuracy targets are defined in [models/model_targets.yaml](../model_targets.yaml). The `lt` utility can still export markdown snapshots for local Pareto analysis.
 
 To apply non-uniform settings across the decoders, the user can provide a JSON file using the `decoder_config_file` argument to specify the configuration for each decoder. For example
 
@@ -303,13 +306,11 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 
 When a component is not specified (e.g., FF2 is missing for decoder 2 in `models/tt_transformers/demo/config_16_decoders.json`), the baseline configuration is used for that component.
 
-Using the lt tool (`models/tt_transformers/lt`), the user can also provide multiple JSON configurations in the `models/tt_transformers/tests/configurations` folder and run a Pareto analysis on them using the `pareto_from_json` command.
-
 ---
 
 ### Expected performance and accuracy
 
-See [PERF.md](PERF.md) for expected performance and accuracy across different configurations.
+See [models/model_targets.yaml](../model_targets.yaml) for expected performance and accuracy targets across supported configurations.
 Accuracy of the network architectures is measured by exact token matching using teacher forcing method. During inference the previous token is replaced by the ground truth token while the network generates the next token. This allows to avoid accumulating errors when comparisons on a finer level (tokens) assessed in comparison to other known metrics that compare quality and context of the answer. Token accuracy can be reported by passing the argument shown below:
 
 ```
@@ -337,10 +338,13 @@ Max Prefill Chunk Sizes (text-only):
 
 
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
+- EXAONE-4.5-33B runs on P150x8 (BH LoudBox) only, with a single 128k-token prefill chunk. Its max context length is 128k: the checkpoint advertises 256k, but chunked prefill is not supported on its sliding-window layers.
 
 **Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
 
 **Chunked prefill (Mistral-Small-3.1-24B multimodal)**: Mistral-Small-3.1-24B-Instruct-2503 (Pixtral vision) is currently supported on T3000. On T3000, a max prefill context length of 128k is supported.
+
+**Chunked prefill (EXAONE-4.5-33B multimodal)**: EXAONE-4.5-33B is supported on P150x8 as a text decoder. Image input is experimental: the hybrid demo [exaone_45_vision_hybrid.py](demo/exaone_45_vision_hybrid.py) runs the vision tower on the host (or on device with `--vision-device tt`, using [models/experimental/exaone45_vl](../experimental/exaone45_vl)) and the text decoder on P150x8, with trace disabled for the vision prefill. Vision input is not wired through vLLM.
 
 ---
 

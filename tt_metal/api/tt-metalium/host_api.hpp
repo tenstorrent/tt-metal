@@ -45,6 +45,7 @@ class Buffer;
 class GlobalSemaphore;
 class CoreRange;
 class CoreRangeSet;
+class MeshTensor;
 
 // ==================================================
 //                  HOST API: Device management
@@ -97,6 +98,7 @@ ChipId GetPCIeDeviceID(ChipId device_id);
  * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 // clang-format on
+[[deprecated("Use distributed::MeshDevice::create_unit_mesh instead. This API will be removed after 2026-09-27.")]]
 IDevice* CreateDevice(
     ChipId device_id,
     uint8_t num_hw_cqs = 1,
@@ -117,6 +119,7 @@ IDevice* CreateDevice(
  * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 // clang-format on
+[[deprecated("Use distributed::MeshDevice::create_unit_mesh instead. This API will be removed after 2026-09-27.")]]
 IDevice* CreateDeviceMinimal(
     ChipId device_id, uint8_t num_hw_cqs = 1, const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
 
@@ -131,6 +134,7 @@ IDevice* CreateDeviceMinimal(
  * | device   | Pointer to a device object | IDevice* |             | True     |
  */
 // clang-format on
+[[deprecated("Use MeshDevice RAII or MeshDevice::close instead. This API will be removed after 2026-09-27.")]]
 bool CloseDevice(IDevice* device);
 
 // ==================================================
@@ -275,6 +279,7 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
 void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
+void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor);
 
 // clang-format off
 /**
@@ -292,6 +297,9 @@ void UpdateDynamicCircularBufferAddress(
 // clang-format on
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
+
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size);
 
 // clang-format off
 /**
@@ -318,32 +326,17 @@ uint32_t CreateSemaphore(
  *
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
- * | cores          | Range of the Tensix coordinates using the semaphore    | const CoreRangeSet &                                      |              | Yes      |
- * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
- * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
- */
-// clang-format on
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
-
-// clang-format off
-/**
- * Initializes a global semaphore on all cores within the specified CoreRangeSet.
- * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
- *
- * Return value: GlobalSemaphore
- *
- * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
- * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
+ * | device         | The mesh device to create the semaphore on             | distributed::MeshDevice&                                  |              | Yes      |
  * | cores          | Range of the Tensix coordinates using the semaphore    | CoreRangeSet &&                                           |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
 // clang-format on
 GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+    distributed::MeshDevice& device,
+    CoreRangeSet cores,
+    uint32_t initial_value,
+    BufferType buffer_type = BufferType::L1);
 
 // clang-format off
 /**
@@ -353,10 +346,11 @@ GlobalSemaphore CreateGlobalSemaphore(
 *
 *  | Argument        | Description                                                       | Type                      | Valid Range | Required |
 *  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*  | config          | Config for the buffer                                             | BufferConfig              |             | Yes      |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config);
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config);
 
 // clang-format off
 /**
@@ -366,11 +360,12 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config);
 *
 *  | Argument        | Description                                                       | Type                      | Valid Range | Required |
 *  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*  | config          | Config for the buffer                                             | BufferConfig              |             | Yes      |
 *  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address);
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, DeviceAddr address);
 
 // clang-format off
 /**
@@ -380,11 +375,12 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, Devi
 *
 *  | Argument        | Description                                                       | Type                      | Valid Range | Required |
 *  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | InterleavedBufferConfig   |             | Yes      |
+*  | config          | Config for the buffer                                             | BufferConfig              |             | Yes      |
 *  | sub_device_id   | The sub-device id to allocate on                                  | SubDeviceId               |             | No       |
 */
 // clang-format on
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id);
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, SubDeviceId sub_device_id);
 
 // clang-format off
 /**
@@ -397,6 +393,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubD
 *  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
 */
 // clang-format on
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config);
 
 // clang-format off
@@ -411,6 +408,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config);
 *  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
 */
 // clang-format on
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address);
 
 // clang-format off
@@ -425,6 +423,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAd
 *  | sub_device_id   | The sub-device id to allocate on                                  |                           |             | No       |
 */
 // clang-format on
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id);
 
 // clang-format off
@@ -438,6 +437,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
 *  | buffer   | The buffer to deallocate from device | Buffer & |             | Yes      |
 */
 // clang-format on
+[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
 void DeallocateBuffer(Buffer& buffer);
 
 // clang-format off
@@ -460,7 +460,8 @@ void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program&
 // ==================================================
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
  *
  * Return value: void
  *
@@ -469,19 +470,20 @@ void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program&
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
- * | runtime_args | The runtime args to be written                                         | stl::Span<const uint32_t>                              |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | ttsl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
 // clang-format on
 void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    stl::Span<const uint32_t> runtime_args);
+    ttsl::Span<const uint32_t> runtime_args);
 
 // clang-format off
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
  *
  * Return value: void
  *
@@ -502,7 +504,8 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
  *
  * Return value: void
  *
@@ -523,7 +526,8 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
  *
  * Return value: void
  *
@@ -531,15 +535,16 @@ void SetRuntimeArgs(
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
- * | runtime_args | The runtime args to be written                                         | stl::Span<const uint32_t>                              |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | ttsl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
 // clang-format on
-void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args);
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, ttsl::Span<const uint32_t> runtime_args);
 
 // clang-format off
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
  *
  * Return value: void
  *
