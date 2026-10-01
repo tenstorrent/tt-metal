@@ -119,8 +119,7 @@
 #include "sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
 
-// Test-only SFPU loop wrappers (calculate_sqrt_custom, calculate_expm1_cw) used by the
-// dispatch below.
+// Test-only SFPU loop wrappers (calculate_sqrt_custom, calculate_expm1_cw) used by the dispatch below.
 #include "sfpu_test_helpers.h"
 
 namespace ckernel::sfpu
@@ -2128,8 +2127,7 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::MASK)
     {
-        // float mask: out = (mask != 0) ? data : 0, with data at in0 and mask at in1. The body takes
-        // the two DEST tile indices and writes the result in place (dst_index_out is unused).
+        // float mask: out = (mask != 0) ? data : 0, with data at in0 and mask at in1; the result is written in place.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,

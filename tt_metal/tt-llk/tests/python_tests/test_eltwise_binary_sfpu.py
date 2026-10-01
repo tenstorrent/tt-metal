@@ -794,9 +794,7 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop):
 )
 def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0.
-    # Crafted stimuli so the mask carries real zeros. Every tile pair of the default
-    # dimensions is computed: the body takes the data and the mask tile as DEST indices
-    # (test_sfpu_mask.py places them at non-adjacent indices).
+    # Crafted stimuli so the mask carries real zeros.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _mask_stimuli_specs()

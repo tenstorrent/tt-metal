@@ -2,20 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel for the SFPU ops that fit neither the unary registry sweep nor the binary one: rand, dropout, mask
-// (float and Int32), copy_dest_values, reshuffle_rows, softcap, situ_glu and clamped_silu_glu. The unpack and pack
-// threads and the zones are those of eltwise_unary_sfpu_perf.cpp; the math thread runs the datacopy carrier and one
-// body per tile in the compute API form (four faces of eight rows, VectorMode::RC). The two-operand bodies copy the
-// tile into DEST tiles 0 and 1 and write tile 0; reshuffle_rows accumulates DEST tile 0 into tile 1 with a 32-byte
-// index array the math thread writes into the unused input ring C once, in the INIT zone.
-//   SFPU_MISC_OPERATION   : 0 rand, 1 dropout, 2 mask (float), 3 copy_dest_values, 4 reshuffle_rows, 5 softcap,
-//                           6 situ_glu, 7 clamped_silu_glu, 8 mask (Int32)   (SFPU_MISC_OPERATIONS in
-//                           python_tests/helpers/test_variant_parameters.py)
-//   SFPU_MISC_PARAM       : rand 0 = scale 1.0 (the normalisation folded into the scale, 16 instructions per row),
-//                           1 = scale 2^-100 (the per-row normalise, 17); reshuffle_rows 0 = identity, 1 = reversed,
-//                           2 = every second row skipped
-//   SFPU_MISC_INIT_PER_TILE: re-run the op's init before every tile (the ttnn unary kernel pattern)
-
+// Perf kernel for the SFPU ops outside the unary and binary registry sweeps (SFPU_MISC_OPERATION, numbered as
+// SFPU_MISC_OPERATIONS in python_tests/helpers/test_variant_parameters.py): the datacopy carrier and one body per tile.
+// SFPU_MISC_PARAM: the rand scale form or the reshuffle_rows index pattern; SFPU_MISC_INIT_PER_TILE: the init before every tile.
 
 #include <algorithm>
 #include <cstdint>
@@ -125,14 +114,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 // The bodies that read two DEST tiles (0 and 1) and write tile 0.
 static constexpr bool MISC_BINARY = (SFPU_MISC_OPERATION == 2 || SFPU_MISC_OPERATION == 3 || SFPU_MISC_OPERATION == 6 || SFPU_MISC_OPERATION == 7 || SFPU_MISC_OPERATION == 8);
-// rand: from 0.0f; scale 1.0f (the normalisation folded into the scale, the 16-instruction row) or 2^-100 (SFPU_MISC_PARAM 1: the per-row normalise, 17)
+// rand: from 0.0f; scale 1.0f or, with SFPU_MISC_PARAM 1, 2^-100 (the per-row normalise form)
 static constexpr std::uint32_t RAND_FROM    = 0x00000000u;
 static constexpr std::uint32_t RAND_SCALE   = (SFPU_MISC_PARAM == 1) ? 0x0D800000u : 0x3F800000u;
 static constexpr std::uint32_t DROPOUT_PROBABILITY    = 0x3FFFFFFFu; // 0.5 of INT_MAX
 static constexpr std::uint32_t DROPOUT_SCALE   = 0x40000000u; // 2.0f
 static constexpr std::uint32_t SOFTCAP_BETA = 0x40800000u; // 4.0f
 static constexpr std::uint32_t SOFTCAP_BETA_RECIP  = 0x3E800000u; // 0.25f
-static constexpr std::uint32_t RESHUFFLE_INDEX_L1       = PERF_INPUT_C; // L1 byte address of the reshuffle index array (the unused input ring C); the body reads idx_addr + 16
+static constexpr std::uint32_t RESHUFFLE_INDEX_L1     = PERF_INPUT_C; // the reshuffle index array in the unused input ring C; the body reads idx_addr + 16
 static constexpr DataFormat MISC_MATH_FORMAT_RAW    = static_cast<DataFormat>(formats.math);
 static constexpr DataFormat MISC_MATH_FORMAT        = (MISC_MATH_FORMAT_RAW == DataFormat::Tf32) ? DataFormat::Float32 : MISC_MATH_FORMAT_RAW;
 

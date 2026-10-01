@@ -2,24 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Perf rows for the SFPU kernels that fit neither the unary registry sweep nor the binary one:
-rand, dropout, mask (float and Int32), copy_dest_values, reshuffle_rows, softcap, situ_glu and
-clamped_silu_glu. None of them had a perf row before; the first cycle numbers came from an
-out-of-tree copy of this kernel (tenstorrent/tt-metal#58510).
-
-sources/sfpu_misc_perf.cpp keeps the unpack and pack threads and the zones of
-eltwise_unary_sfpu_perf.cpp and runs one body per tile on the math thread, after the datacopy
-carrier, in the compute API form (four faces of eight rows). The two-operand bodies (mask,
-copy_dest_values, situ_glu, clamped_silu_glu) copy the tile into DEST tiles 0 and 1 and write
-tile 0; reshuffle_rows accumulates into DEST tile 1 with a 32-byte index array the math thread
-writes into an unused input ring once, in the INIT zone. cycles/tile lands in the TILE_LOOP row of
-the .post.csv as mean(MATH_ISOLATE), with the datacopy carrier included as in every SFPU perf test.
-
-misc_param selects the rand scale form (0: the normalisation folded into the scale, the
-16-instruction row the randn and uniform kernels run; 1: a scale below 2^-95, the 17-instruction
-row) and the reshuffle_rows index pattern (0 identity, 1 reversed, 2 every second row skipped).
-misc_init_per_tile re-runs the op's init before every tile, which for rand and dropout is the
-PRNG seed write and its settle wait.
+Perf rows for the SFPU kernels outside the unary and binary registry sweeps: rand, dropout, mask
+(float and Int32), copy_dest_values, reshuffle_rows, softcap, situ_glu and clamped_silu_glu, one
+body per tile after the datacopy carrier (sources/sfpu_misc_perf.cpp). misc_param selects the
+rand scale form or the reshuffle_rows index pattern; misc_init_per_tile re-runs the op's init.
 """
 
 import pytest

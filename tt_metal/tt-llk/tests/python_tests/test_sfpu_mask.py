@@ -1,20 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-Mask SFPU test with the data and the mask tile at arbitrary DEST indices.
-
-mask_tile(idst_data, idst2_mask) zeroes the elements of DEST tile idst_data where DEST tile
-idst2_mask holds a zero; mask_posinf_tile writes +infinity instead. The bodies used to read
-their mask at a fixed one tile after the data and ignored idst2_mask, so a mask placed anywhere
-else left the data unchanged with no error. This test drives sources/sfpu_mask_test.cpp with
-the data tile at MASK_DATA_DST_INDEX and the mask tile at MASK_MASK_DST_INDEX, adjacent and not,
-before and after the data, over the whole half of DEST the sync mode acquires (8 tiles with a
-16-bit DEST, 4 with a 32-bit one).
-
-Float16_b drives calculate_mask (and calculate_mask_posinf), Int32 drives calculate_int_mask.
-The data is non-zero everywhere and about a third of the mask elements are exact zeros, so a
-body that reads the wrong tile fails. The comparison is exact: the result is the data or the
-replacement value, element by element.
+Mask SFPU test with the data and the mask tile at arbitrary DEST indices, adjacent and not,
+before and after the data, over the half of DEST the sync mode acquires. Float16_b drives
+calculate_mask and calculate_mask_posinf, Int32 calculate_int_mask; the comparison is exact.
 """
 
 import torch

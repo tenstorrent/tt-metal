@@ -2060,16 +2060,11 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
         )
 
 
-
 @dataclass
 class SFPU_DROPOUT_PROBE(TemplateParameter):
-    """Dropout parameters for sources/sfpu_dropout_test.cpp.
-
-    ``dropout_probability`` is the 31-bit threshold the body compares the PRNG draw against (0
-    keeps every element, 0x7FFFFFFF drops every element), ``dropout_scale_bits`` the fp32 bit
-    pattern of the scale, ``dropout_binary_init_before`` runs the eltwise binary init between
-    the datacopy and the body in the same DEST section.
-    """
+    """Dropout parameters for sources/sfpu_dropout_test.cpp: the 31-bit PRNG threshold (0 keeps
+    all, 0x7FFFFFFF drops all), the scale as fp32 bits, and whether an eltwise binary init
+    precedes the body."""
 
     dropout_binary_init_before: bool = False
     dropout_probability: int = 0
@@ -2105,8 +2100,7 @@ class SFPU_MASK_PLACEMENT(TemplateParameter):
         )
 
 
-# The misc SFPU perf kernel (sources/sfpu_misc_perf.cpp). The operation names map to the
-# SFPU_MISC_OPERATION values the kernel dispatches on; keep the two in step.
+# SFPU_MISC_OPERATION values of sources/sfpu_misc_perf.cpp; keep the two in step.
 SFPU_MISC_OPERATIONS = {
     "rand": 0,
     "dropout": 1,
@@ -2122,12 +2116,8 @@ SFPU_MISC_OPERATIONS = {
 
 @dataclass
 class SFPU_MISC_OP(TemplateParameter):
-    """Select the body of sources/sfpu_misc_perf.cpp at compile time.
-
-    ``misc_param`` is per op: the rand scale form (0 folds the normalisation into the scale, 1
-    takes the per-row multiply), the reshuffle_rows index pattern (0 identity, 1 reversed,
-    2 every second row skipped); unused otherwise. ``misc_init_per_tile`` re-runs the op's
-    init before every tile, the way the ttnn unary kernel does.
+    """Select the body of sources/sfpu_misc_perf.cpp; ``misc_param`` is the rand scale form or the
+    reshuffle_rows index pattern, ``misc_init_per_tile`` re-runs the op's init before every tile.
     """
 
     misc_mathop: str = "rand"

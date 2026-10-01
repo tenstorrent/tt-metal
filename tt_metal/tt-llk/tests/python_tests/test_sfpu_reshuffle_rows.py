@@ -1,17 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-reshuffle_rows SFPU test: the scatter-add output[idx[i]] += input[i] over the 32 rows of a tile.
-
-sources/sfpu_reshuffle_rows_test.cpp copies buffer_A[0] (the input) into DEST tile 0 and
-buffer_B[1] (the output before the accumulation) into DEST tile 1, runs calculate_reshuffle_rows
-with the 32 destination row indices stored in the first 32 bytes of buffer_B[0] (one byte per
-input row, 255 skips the row) and packs DEST tile 1. The embedding backward kernel is the caller.
-
-The values are small integers, so every partial sum is exact in bf16 and the comparison is
-exact. The index patterns cover the identity and the reversed permutation, a random permutation,
-skipped rows, a row every input row accumulates into (32 additions into one row, in input row
-order) and a mix of skipped and shared rows.
+reshuffle_rows SFPU test: the scatter-add output[idx[i]] += input[i] over the 32 rows of a tile,
+with the destination row indices in the first 32 bytes of buffer_B[0] (255 skips the row). Small
+integers keep every partial sum exact in bf16; the patterns cover permutations, skipped and shared rows.
 """
 
 import torch
@@ -48,12 +40,8 @@ INDEX_PATTERNS = _index_patterns()
 
 
 def _index_tile(indices, torch_format):
-    """A bf16 tile whose first 32 bytes in L1 are the 32 index bytes.
-
-    The kernel reads the indices as bytes at the tile address, so the first 16 elements of the
-    tilized tile (face 0, row 0) carry them: two bytes per 16-bit element, little endian, the byte
-    of row 2k in the low half and the byte of row 2k + 1 in the high half.
-    """
+    """A bf16 tile whose first 32 bytes in L1 are the 32 index bytes: two bytes per 16-bit
+    element, little endian (row 2k in the low half, row 2k + 1 in the high half)."""
     words = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.int16)
     for k in range(TILE_DIM // 2):
         low, high = indices[2 * k], indices[2 * k + 1]
@@ -75,8 +63,7 @@ def _golden(input_rows, output_rows, indices):
 def _run(formats, dest_acc, indices):
     generator = torch.Generator().manual_seed(3)
     torch_format = format_dict[formats.input_format]
-    # Integers in [-4, 4]: up to 32 accumulations into one row stay below 2^8 in magnitude, so
-    # every partial sum is exact in bf16 and the comparison is exact.
+    # Integers in [-4, 4]: 32 accumulations stay below 2^8, so every partial sum is exact in bf16.
     input_rows = torch.randint(-4, 5, (TILE_DIM, TILE_DIM), generator=generator).to(torch.float32)
     output_rows = torch.randint(-4, 5, (TILE_DIM, TILE_DIM), generator=generator).to(torch.float32)
     golden_rows = _golden(input_rows, output_rows, indices)

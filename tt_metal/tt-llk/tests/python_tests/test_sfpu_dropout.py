@@ -1,19 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-Dropout SFPU test with a deterministic outcome, before and after an eltwise binary init.
-
-calculate_dropout keeps an element where the PRNG draw is above the probability and zeroes it
-otherwise, then scales what it keeps. Probability 0 keeps every element (the output is the input
-times the scale, exact in bf16 for a scale of 1.0 or 2.0) and probability INT_MAX drops every
-element, so the outcome does not depend on the draw and the test needs no model of the PRNG.
-
-The binary_init_before variant runs the eltwise binary init between the datacopy and the dropout
-body, in the same DEST section, as a kernel that fuses dropout_tile after add_tiles does. On
-Blackhole that init programs address-modifier slot 3 to a DEST step of 8 rows; a dropout body that
-addressed DEST through that slot read and wrote the wrong rows of the tile (127 of 1024 elements
-came out wrong for an identity dropout) and only passed when a datacopy init had run last. The
-body addresses DEST through the SFPU slot now, and this variant is the regression test.
+Dropout SFPU test with a deterministic outcome: probability 0 keeps every element (times the
+scale), probability INT_MAX drops every element. The binary_init_before variant runs the eltwise
+binary init between the datacopy and the body, as a kernel fusing dropout after add_tiles does.
 """
 
 import torch
@@ -50,8 +40,7 @@ def _golden(src, probability, scale_bits):
 def _run(formats, dest_acc, binary_init_before, probability, scale_bits):
     torch.manual_seed(0)
     torch_format = format_dict[formats.input_format]
-    # Non-zero everywhere and away from the bf16 overflow, so a dropped, misplaced or unscaled
-    # element is visible and the doubling is exact.
+    # Non-zero values in [1, 2): a dropped, misplaced or unscaled element shows, the doubling is exact.
     src_A = torch.empty(ELEMENTS_PER_TILE, dtype=torch.float32).uniform_(1.0, 2.0).to(torch_format)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
     golden = _golden(src_A, probability, scale_bits)

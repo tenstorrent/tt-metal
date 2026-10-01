@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Driver for calculate_dropout (llk_sfpu/ckernel_sfpu_dropout.h) with a deterministic outcome: probability 0
-// keeps every element (the output is the input times the scale) and probability INT_MAX drops every element.
-// DROPOUT_BINARY_INIT_BEFORE runs the eltwise binary init between the datacopy and the dropout body, in the
-// same DEST section, the way a kernel that fuses dropout_tile after add_tiles does. On Blackhole the eltwise
-// binary init programs address-modifier slot 3 to a DEST step of 8 rows; a dropout body that addresses DEST
-// through that slot (the former Blackhole form) then reads and writes the wrong rows and fails this variant.
+// Driver for calculate_dropout (llk_sfpu/ckernel_sfpu_dropout.h) with a deterministic outcome: probability 0 keeps
+// every element, INT_MAX drops every one. DROPOUT_BINARY_INIT_BEFORE runs the eltwise binary init before the body.
 
 #include <cstdint>
 

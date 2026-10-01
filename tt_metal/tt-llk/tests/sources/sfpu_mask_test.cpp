@@ -2,15 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Driver for the mask SFPU bodies (llk_sfpu/ckernel_sfpu_mask.h) with the data and the mask tile at
-// arbitrary DEST indices. buffer_A holds the data tile, buffer_B the mask tile; the math thread copies them
-// into DEST tiles MASK_DATA_DST_INDEX and MASK_MASK_DST_INDEX and runs the body through the binary SFPU
-// params frame, as mask_tile / mask_posinf_tile do. The data tile is packed. A body that ignores its mask
-// index and reads the tile after the data (the former Blackhole and Wormhole form) only passes the (d, d + 1)
-// placements.
-//
-// The Int32 formats drive calculate_int_mask, everything else calculate_mask; MASK_POSINF selects
-// calculate_mask_posinf.
+// Driver for the mask SFPU bodies (llk_sfpu/ckernel_sfpu_mask.h) with the data tile (buffer_A) at DEST index
+// MASK_DATA_DST_INDEX and the mask tile (buffer_B) at MASK_MASK_DST_INDEX; Int32 drives calculate_int_mask, MASK_POSINF calculate_mask_posinf.
 
 #include <cstdint>
 

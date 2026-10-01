@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Driver for calculate_reshuffle_rows (llk_sfpu/ckernel_sfpu_reshuffle_rows.h), the scatter-add
-// output[idx[i]] += input[i] over the 32 rows of a tile. buffer_A[0] is the input tile (DEST tile 0),
-// buffer_B[1] the output tile before the accumulation (DEST tile 1, accumulated in place) and buffer_B[0]
-// carries the 32 destination row indices, one byte per input row, in its first 32 bytes; 255 skips the row.
-// The body expects the indices 16 bytes after the address it is given (a tile header it skips), so the
-// address passed is that of buffer_B[0] minus 16, as the embedding backward kernel does. DEST tile 1 is packed.
+// Driver for calculate_reshuffle_rows (llk_sfpu/ckernel_sfpu_reshuffle_rows.h): buffer_A[0] is the input (DEST tile 0),
+// buffer_B[1] the output accumulated in place (DEST tile 1, packed), buffer_B[0] the 32 index bytes (255 skips the row).
 
 #include <cstdint>
 
@@ -75,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         1 /* dst_index */, formats.math, formats.math);
 
-    // reshuffle_rows_tile_init, then the body: one call per tile, the body walks DEST itself (RC_custom).
+    // reshuffle_rows_tile_init, then the body (RC_custom); the body reads the indices 16 bytes past the address it is given.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::reshuffle_rows>();
     sfpu::reshuffle_rows_init();
     _llk_math_eltwise_unary_sfpu_params_(

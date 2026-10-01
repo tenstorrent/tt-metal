@@ -18,8 +18,6 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_identity() {
-    // Unrolled so the compiler records the load and store pair once per face and replays it; a rolled loop
-    // idled the SFPU about two cycles per row on Blackhole.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
@@ -30,8 +28,6 @@ inline void calculate_identity() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_identity_uint() {
-    // Unrolled so the compiler records the load and store pair once per face and replays it; a rolled loop
-    // idled the SFPU about two cycles per row on Blackhole.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0];

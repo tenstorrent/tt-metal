@@ -27,8 +27,7 @@ ALWI void mask_tile_init() {
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.
  *
- * The data and the mask tile are addressed by their DST indices, so the mask
- * tile can be any tile of the acquired DST register, before or after the data tile.
+ * The mask tile may be any tile of the acquired DST register, before or after the data tile.
  *
  * Return value: None
  *

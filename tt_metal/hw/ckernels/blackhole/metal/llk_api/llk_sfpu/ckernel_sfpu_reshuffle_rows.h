@@ -35,13 +35,7 @@ namespace sfpu {
  * - Employs transpose operations to work around SFPLOAD/SFPSTORE 4-row granularity constraints
  * - Processes both even/odd columns simultaneously using +2 offset addressing
  *
- * Scalar path: the loop runs over the eight 4-row input groups and handles the four rows of a group with
- * compile-time row-in-group constants, so the per-row RISC work is the index byte, the destination group address
- * and thirteen instruction words (four input loads, four output loads, the add, four stores) built with one OR
- * from register-resident constants; the two transposes are immediates. The instruction stream the SFPU executes
- * is the same as before; the RISC work between the instructions is what shrank (about 46 scalar cycles per live
- * row and 27 per skipped row before, measured on Blackhole). The loop body stays small on purpose: a version
- * expanded over all 32 rows was slower, its 8 KB of straight-line code being fetch bound.
+ * The loop runs over the eight 4-row groups; the row within a group is a template constant of reshuffle_row.
  *
  * @param idx_addr: L1 address of the mask tile containing destination row mappings (uint8_t[32])
  */
@@ -51,17 +45,12 @@ namespace reshuffle_rows_detail {
 
 constexpr std::uint32_t output_tile_offset = 64;
 
-// The 4-row group a row belongs to: rows 0-15 live in faces 0/1 at 4-row steps, rows 16-31 in faces 2/3 at
-// +16 (the face pair offset). Bits 0, 1 and 4 of the result are always clear, so the +2, +16 and +18 column and
-// face offsets below can be ORed in.
+// The 4-row group of a row; bits 0, 1 and 4 are clear, so the +2, +16 and +18 column and face offsets can be ORed in.
 constexpr std::uint32_t row_group_addr(const std::uint32_t row) { return (row & ~0x3u) + (row & 0x10u); }
 
 constexpr std::uint32_t word(const int encoding) { return static_cast<std::uint32_t>(encoding); }
 
-// One input row: the group of the row and its neighbours is loaded into LREG0-3 and the destination group into
-// LREG4-7, a transpose isolates the two rows, the add accumulates, a transpose restores the layout and the
-// destination group is stored. ROW_IN_GROUP (0-3) selects the input register at compile time; the input group
-// address and the destination row come at run time.
+// One input row; ROW_IN_GROUP (0-3) selects the input register at compile time.
 template <std::uint32_t ROW_IN_GROUP>
 inline __attribute__((always_inline)) void reshuffle_row(const std::uint32_t input_row_addr, const std::uint32_t idx_word) {
     const std::uint32_t dst_row = (idx_word >> (8 * ROW_IN_GROUP)) & 0xFFu;
@@ -71,7 +60,7 @@ inline __attribute__((always_inline)) void reshuffle_row(const std::uint32_t inp
     }
     const std::uint32_t output_row_addr = output_tile_offset + row_group_addr(dst_row);
     constexpr std::uint32_t input_row_lreg = p_sfpu::LREG0 + ROW_IN_GROUP;
-    // dst = 1.0 * src + dst, on the output register that holds the destination row after the transpose
+    // The SFPADD's VC and VD fields: the output register that holds the destination row after the transpose
     const std::uint32_t output_row_lreg_fields = (dst_row & 0x3u) * ((1u << 8) | (1u << 4));
 
     // load in the input row and output row
