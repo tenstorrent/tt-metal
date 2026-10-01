@@ -2122,6 +2122,25 @@
   "started": "2026-10-01T02:00:02",
   "status": "PASS"
  },
+ "S.sliding_moe.07": {
+  "attempts": 0,
+  "duration_s": 43.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T02:07:13"
+   }
+  ],
+  "last_run": "2026-10-01T02:07:13",
+  "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/logs/S.sliding_moe.07.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999908620078192
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-01T02:06:29",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "sjovic/mimo-llm-perf",
   "created": "2026-09-30T22:59:41",
