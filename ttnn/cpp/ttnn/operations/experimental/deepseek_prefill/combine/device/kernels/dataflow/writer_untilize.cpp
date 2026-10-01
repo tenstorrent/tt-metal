@@ -354,5 +354,9 @@ void kernel_main() {
     // sees an idle command buffer on every path.
     noc_async_write_set_trid(0);
 
-    cb_experts_tok_counter.pop_front(cb_counter_total_pages);
+    // c_1 is not popped: reader_untilize and untilize_combine on this core wait_front on it after
+    // reader_untilize's push, and nothing orders a pop here after those waits (with no tokens to
+    // write, this kernel can reach its end first, and their waits would then never return). The
+    // firmware zeroes every CB's tiles_received/acked between launches (init_sync_registers), so
+    // the next invocation's reserve_back still sees an empty CB.
 }
