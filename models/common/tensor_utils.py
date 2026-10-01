@@ -40,6 +40,52 @@ def num_to_core_range_set(num_cores: int):
     )
 
 
+# Opt-in switch for the multi-core DRAM-sharded decode matmul (num_workers_per_dram_bank >= 2 on a call without
+# bias or fused activation). Unset or "0" leaves the program configs as the model built them.
+DRAM_SHARDED_MULTICORE_ENV = "TT_DRAM_SHARDED_MULTICORE"
+
+
+def dram_sharded_decode_cores_per_bank(m: int, k: int, n: int, num_cores: int, fused_activation=None) -> int:
+    """Cores per DRAM bank for a DRAM-sharded decode matmul, or 0 to leave the program config as built.
+
+    0 unless TT_DRAM_SHARDED_MULTICORE=1, the activation is one tile high and nothing is fused. num_cores is
+    the activation's shard count. The rule was fitted on the served decode shapes (per-shape sweeps in the
+    PR that added the multi-core pipeline):
+      Blackhole: about one core per 8 weight columns of a bank, between 2 and 4, so every core keeps its
+        columns within one or two fp32 Dest passes.
+      Wormhole: 2 cores per bank for 8-32 columns per bank on at most 16 shards when the activation is on
+        more than 8 shards or K >= 2N; otherwise the single-reader path (every core reading the activation
+        from few shards costs more than the multicast it replaces, and extra readers on a bank lower its
+        stream).
+    """
+    import os
+
+    if os.environ.get(DRAM_SHARDED_MULTICORE_ENV, "0") in ("", "0"):
+        return 0
+    if math.ceil(m / TILE_SIZE) != 1 or fused_activation is not None:
+        return 0
+    if "wormhole_b0" in ttnn.get_arch_name():
+        columns_per_bank = math.ceil(n / (TILE_SIZE * 12))
+        if num_cores <= 8 and k < 2 * n:
+            return 0
+        return 2 if (8 <= columns_per_bank <= 32 and num_cores <= 16) else 0
+    columns_per_bank = math.ceil(n / (TILE_SIZE * 8))
+    return max(2, min(4, math.ceil(columns_per_bank / 8)))
+
+
+def with_dram_sharded_cores_per_bank(program_config, m: int, k: int, n: int, num_cores: int):
+    """program_config with num_workers_per_dram_bank from dram_sharded_decode_cores_per_bank (unchanged when 0).
+
+    The multi-core variant streams the weight in blocks of in0_block_w K tiles and reads the activation
+    from its shards directly, so the block width no longer has to fit the activation shard grid; 2 is the
+    measured best on both architectures."""
+    cores = dram_sharded_decode_cores_per_bank(m, k, n, num_cores, program_config.fused_activation)
+    if cores:
+        program_config.num_workers_per_dram_bank = cores
+        program_config.in0_block_w = 2
+    return program_config
+
+
 def get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
     out_subblock_w = 4
     while out_subblock_w > 1:
