@@ -117,7 +117,7 @@ def test_sdpa_recipe_accuracy(device, variant, shape):
     assert l2_pct(actual, reference(q, k, v)) < L2_PCT_BOUND[variant]
 
 
-# Long K with small logits: FAST's BF16 running state swamps (about 3.9%), STANDARD's hi/lo state does not
+# Long K with small logits: FAST's BF16 running state swamps (about 3.9%), STANDARD's FP32 state does not
 # (about 1.7%). The bounds encode that ordering.
 LONG_K_BOUND = {**L2_PCT_BOUND, "fast": 5.0, "standard": 2.2, "low_precision_bf16": 2.6, "low_precision_bfp8": 2.7}
 

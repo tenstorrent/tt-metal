@@ -14,7 +14,8 @@ namespace ttnn::operations::transformer::sdpa::detail {
 enum class Recipe : uint8_t { A, B, C, D, E };
 enum class KVStorage : uint8_t { BF16, BFP8, BFP4 };
 // Online-softmax running state (row max, row sum, output accumulator) between K chunks.
-enum class RecurrentState : uint8_t { BF16, CompensatedBF16, FP32 };
+// ReferenceMaxFP32: BF16 scores against a reference row max, O and l accumulated in FP32 in L1.
+enum class RecurrentState : uint8_t { BF16, ReferenceMaxFP32, FP32 };
 
 struct RecipeSelection {
     Recipe recipe;
@@ -40,10 +41,10 @@ constexpr PrecisionPolicy resolve_precision_policy(RecipeSelection selection) {
     }
     switch (selection.recipe) {
         case Recipe::A: return {selection, Fidelity::HiFi2, false, RecurrentState::BF16};
-        case Recipe::B: return {selection, Fidelity::HiFi2, false, RecurrentState::CompensatedBF16};
+        case Recipe::B: return {selection, Fidelity::HiFi2, false, RecurrentState::ReferenceMaxFP32};
         case Recipe::C: return {selection, Fidelity::HiFi2, true, RecurrentState::FP32};
         case Recipe::D: return {selection, Fidelity::HiFi4, true, RecurrentState::FP32};
-        case Recipe::E: return {selection, Fidelity::LoFi, false, RecurrentState::CompensatedBF16};
+        case Recipe::E: return {selection, Fidelity::LoFi, false, RecurrentState::ReferenceMaxFP32};
     }
     TT_THROW("Unknown SDPA precision recipe");
 }

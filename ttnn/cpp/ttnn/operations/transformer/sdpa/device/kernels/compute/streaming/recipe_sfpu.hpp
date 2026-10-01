@@ -26,7 +26,7 @@ namespace ckernel::sfpu {
 template <uint32_t scale_fp32>
 inline void calculate_sdpa_exp_correction() {
 #ifndef SDPA_RECIPE_FP32
-    // Compensation replays leave automatic DST increment enabled. This
+    // The score exp's SFPU programs may leave a DST increment in ADDR_MOD_7. This
     // routine advances dst_reg explicitly; reset before using the SFPI loop.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
 #endif
