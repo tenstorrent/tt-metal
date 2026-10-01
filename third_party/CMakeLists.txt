@@ -191,10 +191,10 @@ endif()
 #
 # Pinned by commit rather than tag: zoo publishes no tags, only branches.
 #
-# tests/tt_stl/move_only_function_bench/CMakeLists.txt pins a commit too, but for a different
-# reason: it is the commit the published evaluation was measured against. The two are equal today
-# and are allowed to diverge. When bumping this one, re-run that harness against the new commit to
-# confirm the comparison still holds before moving its pin.
+# The evaluation harness (tenstorrent/third-party-evaluations, move_only_function/) pins a commit
+# too, but for a different reason: it is the commit the published evaluation was measured
+# against. The two are equal today and are allowed to diverge. When bumping this one, re-run that
+# harness against the new commit to confirm the comparison still holds before moving its pin.
 #
 # Note zoo does not compile under -fno-rtti, with or without the RTTI affordance -- the typeid
 # tokens in VTablePolicy.h and FunctionPolicy.h are rejected at parse time. That is fine for the
