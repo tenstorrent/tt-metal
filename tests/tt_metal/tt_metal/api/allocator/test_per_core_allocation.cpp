@@ -200,6 +200,7 @@ namespace {
 
 std::shared_ptr<Buffer> make_per_core_buffer(IDevice* device, const std::vector<CoreCoord>& cores, uint32_t pages) {
     std::vector<CoreRange> ranges;
+    ranges.reserve(cores.size());
     for (const auto& core : cores) {
         ranges.emplace_back(core, core);
     }
