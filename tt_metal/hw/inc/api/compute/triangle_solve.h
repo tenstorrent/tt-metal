@@ -32,13 +32,18 @@ namespace ckernel {
  * | Template   | L_FORMAT            | Data format of the L tile in L1; must be cb_l's data format     | DataFormat      | Float32 (default), Float16_b                               | False    |
  * | Template   | L_NEGATED           | The tile holds -L below the diagonal                            | bool            | true, false (default)                                      | False    |
  * | Template   | is_fp32_dest_acc_en | 32-bit destination accumulation is enabled                      | bool            | true (default: the kernel's fp32_dest_acc_en)              | False    |
+ * | Template   | L_CACHED            | Read L through the math RISC's L1 data cache, enabled only for the duration of the call | bool | true (default), false                               | False    |
  * | Function   | cb_l                | Circular buffer holding the L tile                              | uint32_t        | 0 to 31                                                    | True     |
  * | Function   | l_tile_idx          | Index of the L tile within cb_l, relative to its front          | uint32_t        | Less than the number of front-waited tiles                 | True     |
  * | Function   | idst_in             | DST register index of the right-hand side                       | uint32_t        | Less than the size of the DST register buffer              | True     |
  * | Function   | idst_out            | DST register index that receives X                              | uint32_t        | Less than the size of the DST register buffer, not idst_in | True     |
  */
 // clang-format on
-template <DataFormat L_FORMAT = DataFormat::Float32, bool L_NEGATED = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    DataFormat L_FORMAT = DataFormat::Float32,
+    bool L_NEGATED = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool L_CACHED = true>
 ALWI void triangle_solve_tile(
     uint32_t cb_l, uint32_t l_tile_idx, [[maybe_unused]] uint32_t idst_in, [[maybe_unused]] uint32_t idst_out) {
     static_assert(is_fp32_dest_acc_en, "triangle_solve_tile needs 32-bit destination accumulation (fp32_dest_acc_en)");
@@ -56,7 +61,7 @@ ALWI void triangle_solve_tile(
     })
     // UNPACK resolves the tile's L1 address and mailboxes it to MATH and PACK.
     const uint32_t l1_base = get_tile_address(cb_l, l_tile_idx);
-    MATH((llk_math_triangle_solve_sfpu_tile<L_FORMAT, L_NEGATED>(l1_base, idst_in, idst_out)));
+    MATH((llk_math_triangle_solve_sfpu_tile<L_FORMAT, L_NEGATED, L_CACHED>(l1_base, idst_in, idst_out)));
     // MATH reads L from L1 itself, which nothing orders against UNPACK's later cb_pop_front of cb_l: MATH signals
     // when its reads are done and UNPACK waits for that before returning.
     constexpr uint32_t l_reads_done = 1;  // mailbox token; only its arrival matters
