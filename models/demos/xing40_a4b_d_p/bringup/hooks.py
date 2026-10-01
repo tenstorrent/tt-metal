@@ -506,6 +506,10 @@ class _DeviceState:
     def to_torch(self, layer, length):
         return self.blocks[layer].state_torch(length)
 
+    def formats(self):
+        """The KV format the ladder runs on (the served one, tt/attention.py:kv_cache_dtype): name -> ttnn dtype."""
+        return {"kv_latent": next(iter(self.blocks.values())).attn.geom.cache_dtype}
+
     def free(self):
         """Release the device geometries (latent caches, RoPE tables, gather scratch) built for this max_seq."""
         for b in self.blocks.values():

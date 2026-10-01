@@ -14,7 +14,8 @@ models/demos/deepseek_v3_d_p/tt/mla/mla.py:ttMLA's dense chunked path (_kv_stem,
 _chunked_attn -> ttnn.transformer.ring_mla, _o_proj_epilogue) and hy4_preview_d_p/tt/attention.py:TtHy4Attention
 (ttMLA's ops without its fixed CCL buffers; _Geometry.load / read at the harness boundary). Differences to ttMLA:
 
-- bf16 weights (as stored) and a bf16 TILE latent cache, not bfp8; every matmul, the norm, the RoPE and ring_mla at
+- bf16 weights (as stored); the latent cache is bfp8_b TILE (kv_cache_dtype(), the served format, as ttMLA);
+  every matmul, the norm, the RoPE and ring_mla at
   HiFi4 + fp32 dest (owner rule), except the ring_mla matmuls at HiFi2 (owner exception, P.1;
   XING_MLA_SDPA_FIDELITY). ring_mla through the sdpa fork (ttnn.bringup.ring_mla), whose streaming latent-V
   path runs at fp32 dest; XING_MLA_SDPA=source keeps ttnn.transformer.ring_mla at bf16 dest (owner 06:35).
@@ -23,7 +24,7 @@ _chunked_attn -> ttnn.transformer.ring_mla, _o_proj_epilogue) and hy4_preview_d_
 - RoPE tables from the reference's YaRN inv_freq (xing_ref.yarn_inv_freq), interleaved (Meta pair) order, so the
   checkpoint order needs no permutation (known issues: HF's "interleaved" RoPE).
 
-Latent cache: [1, 1, max_seq / 4, 576] bf16 TILE per chip, block-cyclic over the 4 rows with period = the chunk
+Latent cache: [1, 1, max_seq / 4, 576] bfp8_b TILE per chip, block-cyclic over the 4 rows with period = the chunk
 (row r holds [k chunk + r chunk/4, + chunk/4) of every chunk k), replicated over the 2 columns (both columns compute
 the same all-reduced kv and write their own copy). ring_mla gathers the populated prefix around axis 0 into one
 replicated [1, 1, max_seq, 576] scratch and runs causal flash attention for the chip's chunk/4 query rows.
@@ -46,6 +47,15 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder, bloc
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 TILE = 32
+
+
+def kv_cache_dtype():
+    """The model's one KV cache format (serving_contract.md): the MLA latent cache dtype of the ladder's geometry
+    cache, the contract tests and the engine's cache alike (tt/runners/kv_contract.py:cache_dtype). Default bfp8_b
+    TILE (served); XING_KV_CACHE_DTYPE=bf16 switches both back to the K.1 bf16 TILE cache for comparison."""
+    v = os.environ.get("XING_KV_CACHE_DTYPE", "bfp8")
+    assert v in ("bfp8", "bf16"), f"XING_KV_CACHE_DTYPE must be bfp8 or bf16, got {v}"
+    return ttnn.bfloat8_b if v == "bfp8" else ttnn.bfloat16
 
 
 # ring_mla q / k chunk sizes (tokens); XING_MLA_Q_CHUNK / XING_MLA_K_CHUNK override (L1 probing). Each is reduced
@@ -134,8 +144,9 @@ class _Geometry:
             memory_config=dram,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
-        # Latent cache [1, 1, max_seq / sp, 576] bf16 TILE per chip, block-cyclic over the SP rows, replicated over
-        # the TP columns (tp_axis None: the dense ring_mla path reads a TP-replicated cache), zeroed on the device.
+        # Latent cache [1, 1, max_seq / sp, 576] per chip in the served format (kv_cache_dtype(): bfp8_b TILE),
+        # block-cyclic over the SP rows, replicated over the TP columns (tp_axis None: the dense ring_mla path reads
+        # a TP-replicated cache), zeroed on the device.
         self.cache = init_kvpe_cache(
             att.kv_width,
             mesh,
@@ -143,18 +154,18 @@ class _Geometry:
             tuple(mesh.shape),
             att.sp_axis,
             1,
-            dtype=ttnn.bfloat16,
+            dtype=kv_cache_dtype(),
             layout=ttnn.TILE_LAYOUT,
         )
         self._topology = self.cache.tensor_topology()
         self.cache_shape, self.cache_dtype = tuple(self.cache.shape), self.cache.dtype
         # ring_mla's gathered-KV scratch: replicated [1, 1, max_seq, 576], one per (mesh, max_seq) shared by every
         # layer (ring_mla rewrites the gathered prefix each call; layers run one after another). plan.md: 65 MB.
-        key = (id(mesh), max_seq, att.kv_width)
+        key = (id(mesh), max_seq, att.kv_width, self.cache_dtype)
         if key not in _KV_BUFS:
             _KV_BUFS[key] = ttnn.from_torch(
                 torch.zeros(1, 1, max_seq, att.kv_width),
-                dtype=ttnn.bfloat16,
+                dtype=self.cache_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh,
                 memory_config=dram,
@@ -184,7 +195,7 @@ class _Geometry:
         host = nat[p].reshape(1, 1, self.max_seq, width)  # row r's shard = rows [r max_seq/sp, (r+1) max_seq/sp)
         ht = ttnn.from_torch(
             host,
-            dtype=ttnn.bfloat16,
+            dtype=self.cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(2, None)),
         )
