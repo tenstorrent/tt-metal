@@ -141,6 +141,11 @@ void serve()
     {
         wait_all_parked();
         const bool done = kernel_complete(0) && kernel_complete(1) && kernel_complete(2);
+        const bool keep = reg(0x16AFFCU) != 0; // experiment: barrier.h keep_icache_next (warm INIT)
+        if (keep)
+        {
+            reg(0x16AFFCU) = 0;
+        }
         release_all(); // on to the ebreak, or out of the kernel
         if (done)
         {
@@ -159,7 +164,10 @@ void serve()
             asm volatile("lw %0, 0(%1)\n\tandi %0, %0, 0" : "=r"(v) : "r"(addr) : "memory");
         }
 #if !defined(LLK_EXP_DBG_NO_ICINV) // experiment: keep the icaches warm from INIT
-        reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = 0b1110;
+        if (!keep)
+        {
+            reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = 0b1110;
+        }
 #endif
         spin(64);
         for (std::uint32_t t = 0; t < 3; ++t)

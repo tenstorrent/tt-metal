@@ -122,6 +122,10 @@ __attribute__((always_inline)) inline void flip(std::uint8_t sem)
 } // namespace detail
 
 #if defined(LLK_EXP_DBG_BARRIER) && defined(ARCH_WORMHOLE) // experiment: BRISC restarts every thread from a flushed pipeline
+// Experiment: the next rendezvous keeps the instruction caches (BRISC skips its invalidate), for a warm measured INIT.
+inline bool keep_icache_next = false;
+constexpr std::uint32_t KEEP_ICACHE_FLAG_ADDR = 0x16AFFC; // profiler_barrier + 2, unused since the semaphore rendezvous
+
 namespace detail
 {
 // Park at the BRISC barrier server (brisc.cpp dbg_barrier): the resume PC goes into this thread's reset PC, the arrive
@@ -172,11 +176,18 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
         }
         action();
         ckernel::tensix_sync();
+        if (keep_icache_next)
+        {
+            volatile std::uint32_t* flag = reinterpret_cast<volatile std::uint32_t*>(KEEP_ICACHE_FLAG_ADDR);
+            *flag                        = 1;
+            (void)ckernel::load_blocking(flag); // landed before this thread parks, so BRISC sees it
+        }
     }
     else
     {
         ckernel::semaphore_post(ARRIVE_SEM);
     }
+    keep_icache_next = false;
     detail::park();
 #else
     if (is_action_thread)

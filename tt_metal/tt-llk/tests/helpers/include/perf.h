@@ -267,3 +267,8 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
 #define LLK_INIT_BEGIN {
 #define LLK_INIT_END   }
 #endif
+#if defined(LLK_EXP_DBG_BARRIER) && defined(ARCH_WORMHOLE) && defined(LLK_PROFILER)
+#define LLK_KEEP_ICACHE_NEXT_RENDEZVOUS() llk_barrier::keep_icache_next = true;
+#else
+#define LLK_KEEP_ICACHE_NEXT_RENDEZVOUS()
+#endif
