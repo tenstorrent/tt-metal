@@ -162,40 +162,35 @@ size_t hash_hw_config(const std::variant<m2::DataMovementHardwareConfig, m2::Com
     return std::visit(
         ttsl::overloaded{
             [](const m2::DataMovementHardwareConfig& dm) {
-                return std::visit(
-                    ttsl::overloaded{
-                        [](const m2::DataMovementGen1Config& c) {
-                            return ttsl::hash::hash_objects_with_default_seed(0, c.processor, c.noc, c.noc_mode);
-                        },
-                        [](const m2::DataMovementGen2Config& c) {
-                            return ttsl::hash::hash_objects_with_default_seed(
-                                1, c.disable_dfb_implicit_sync_for, c.disable_dfb_implicit_sync_for_all);
-                        }},
-                    dm);
+                size_t hash = ttsl::hash::hash_objects_with_default_seed(0);
+                if (const auto& c = dm.config_1xx) {
+                    ttsl::hash::hash_combine(
+                        hash, ttsl::hash::hash_objects_with_default_seed(1, c->processor, c->noc, c->noc_mode));
+                }
+                if (const auto& c = dm.config_2xx) {
+                    ttsl::hash::hash_combine(
+                        hash,
+                        ttsl::hash::hash_objects_with_default_seed(
+                            2, c->disable_dfb_implicit_sync_for, c->disable_dfb_implicit_sync_for_all));
+                }
+                return hash;
             },
-            [](const m2::ComputeHardwareConfig& compute) {
-                return std::visit(
-                    ttsl::overloaded{
-                        [](const m2::ComputeGen1Config& c) {
-                            return ttsl::hash::hash_objects_with_default_seed(
-                                2,
-                                c.fpu_math_fidelity,
-                                c.sfpu_precision_mode,
-                                c.bfp_pack_precision_mode,
-                                c.enable_32_bit_dest,
-                                c.double_buffer_dest,
-                                c.unpack_modes);
-                        },
-                        [](const m2::ComputeGen2Config& c) {
-                            return ttsl::hash::hash_objects_with_default_seed(
-                                3,
-                                c.fpu_math_fidelity,
-                                c.sfpu_precision_mode,
-                                c.enable_32_bit_dest,
-                                c.double_buffer_dest,
-                                c.unpack_modes);
-                        }},
-                    compute);
+            [](const m2::ComputeHardwareConfig& c) {
+                size_t hash = ttsl::hash::hash_objects_with_default_seed(
+                    3,
+                    c.fpu_math_fidelity,
+                    c.sfpu_precision_mode,
+                    c.enable_32_bit_dest,
+                    c.double_buffer_dest,
+                    c.unpack_modes);
+                if (c.config_1xx) {
+                    ttsl::hash::hash_combine(
+                        hash, ttsl::hash::hash_objects_with_default_seed(4, c.config_1xx->bfp_pack_precision_mode));
+                }
+                if (c.config_2xx) {
+                    ttsl::hash::hash_combine(hash, ttsl::hash::hash_objects_with_default_seed(5));
+                }
+                return hash;
             }},
         hw_config);
 }

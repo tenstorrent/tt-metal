@@ -209,7 +209,7 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
     compute = ttnn.KernelSpec(
         unique_id=K_COMPUTE,
         source=str(KERNEL_DIR / "sharded_compute.cpp"),
-        hw_config=ttnn.ComputeGen1Config(),
+        hw_config=ttnn.ComputeHardwareConfig(),
         dfb_bindings=[
             ttnn.consumer_of(DFB_IN_SHARD, DFB_IN_SHARD),
             ttnn.consumer_of(DFB_SCALER, DFB_SCALER),
