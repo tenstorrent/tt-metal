@@ -13,9 +13,7 @@ on:
           - wormhole
           - blackhole
   schedule:
-    # Sundays at 04:17 UTC -- offset from the TTNOP Injector's 03:17 so the two weekly
-    # hardware sweeps don't contend for the same runners.
-    - cron: "17 4 * * 0"
+    - cron: "17 4 * * 0" # 04:17 UTC
 
 permissions:
   actions: read

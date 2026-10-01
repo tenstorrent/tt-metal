@@ -66,26 +66,15 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 
-// === In-kernel CFG restore (config-pollution pair sweep) ===
-// Runs on EACH thread just before run_kernel (after reset_cfg_state_id, so cfg writes hit
-// state-0 bank). Reads a plan the host wrote to the device-print L1 region (free unless the
-// print build flag is passed -> guarded by #ifndef LLK_DEVICE_PRINT_BUFFER_BASE). Unlike host
-// CFG writes, this thrashes config through the SAME ports the kernel reads: TT_SETC16 reaches
-// thread-private ThreadConfig (addr-mod etc.), cfg_write reaches the shared banked space.
-// Plan @ 0x1A000: [magic][N] then N quads [addr32, value, port, mask] (port 1=SETC16/16b,
-// 0=cfg_write/32b; mask = bits to write, rest preserved via read-modify-write on the shared port).
-// Replays a polluter's captured post-execution residue so the victim's own init runs against
-// that exact residue WITHOUT a per-trial tt-smi -r (CFG persists across launch, so a prior
-// trial's residue would otherwise accumulate in the never-written fields we hunt). No-op unless
-// the magic is present (a fresh reset clears L1, so clean runs don't apply a stale plan).
+// Reconfig testing applies a config space state written into L1 before the kernel runs.
+// The dprint L1 region is reused for this... until we get a better memory map.
 #ifndef LLK_DEVICE_PRINT_BUFFER_BASE
 static constexpr std::uint32_t LLK_RESTORE_PLAN_BASE  = 0x1A000;
-static constexpr std::uint32_t LLK_RESTORE_PLAN_MAGIC = 0x52535431u; // 'RST1'
+static constexpr std::uint32_t LLK_RESTORE_PLAN_MAGIC = 0x52535431u; // "RST1"
 
-// Apply a quad-list plan [magic][N] then N x [addr32, value, port, mask] at `base`. port 1 =
-// SETC16 (thread-private: addr-mod, state id), port 0 = cfg_write RMW (shared banked, state-0
-// bank). mask selects which bits to write; the rest are preserved (firmware-owned bits, or
-// sub-field isolation).
+// Apply the passed config plan that starts at BASE.
+// The plan is stored as [magic][N][data], where data is N x [addr32, value, port, mask].
+// Port 0 goes through RMWCIB, port 1 goes through SETC16.
 static inline void apply_plan_at(std::uint32_t base, std::uint32_t magic)
 {
     volatile std::uint32_t* plan = reinterpret_cast<volatile std::uint32_t*>(base);
@@ -100,18 +89,19 @@ static inline void apply_plan_at(std::uint32_t base, std::uint32_t magic)
         const std::uint32_t v    = plan[2 + 4 * i + 1];
         const std::uint32_t port = plan[2 + 4 * i + 2];
         const std::uint32_t mask = plan[2 + 4 * i + 3];
-        if (port == 1)
-        {
-            TT_SETC16(a, v & mask & 0xFFFF); // thread-private (addr-mod, state id, ...)
-        }
+        if (port == 1) TT_SETC16(a, v & mask & 0xFFFF);
         else
         {
-            // RMW so unmasked bits (e.g. firmware-owned DISABLE_RISC_BP) are preserved.
             const std::uint32_t cur = ckernel::cfg_read(a);
-            ckernel::cfg_write(a, (cur & ~mask) | (v & mask)); // shared banked CFG (state-0 bank)
+            ckernel::cfg_write(a, (cur & ~mask) | (v & mask));
         }
     }
 }
+
+// Addr mods have to be restored. This is ThreadConfig, so each thread has its own values.
+// Plan format is [magic][N][has_ch1x][data], where data is N x [addr32, v_t0, v_t1, v_t2],
+// and, if has_ch1x is set, [adc_ch1x_unpacker][adc_ch1x_packer] at the very end.
+// Most kernels don't touch tile dimension config, so (...).
 
 // Per-thread addr-mod restore: ThreadConfig is banked per-thread (each of the 3 TRISCs compiles
 // to a separate binary and owns a separate bank), so a real captured addr-mod snapshot has up to

@@ -1,8 +1,4 @@
-# Weekly reconfig-escape job: sharded 4 ways per architecture (one shard per machine in the
-# available pool). No pytest-collection sharding here -- the driver is a custom Python sweep
-# (discover_catalog.py + pair_sweep.py), not a pytest suite -- so each shard independently
-# rebuilds the full catalog itself (the weekly seed makes this deterministic across machines)
-# and then sweeps only its own --splits/--group slice of polluters against the full victim set.
+# Weekly reconfig sweep job, sharded across four machines.
 
 - name: reconfig_escape_wormhole group 1/4
   split_group: 1

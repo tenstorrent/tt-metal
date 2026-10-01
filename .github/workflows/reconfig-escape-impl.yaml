@@ -1,5 +1,4 @@
 name: "Reconfig escape sweep test"
-# Entry points: workflow_call only. Schedule / workflow_dispatch live in reconfig-escape.yaml.
 
 on:
   workflow_call:
