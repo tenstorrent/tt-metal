@@ -448,3 +448,22 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   `{"forks_used": 8, "fork_calls": 90, "fork_calls_uncovered": 0, "fork_tests_failed": 0}`.
 - Re-run: the brief's gate command. One fork: `scripts/run_safe_pytest.sh --run-all --no-precompile
   ttnn/ttnn/bringup/sdpa/tests/test_sdpa.py -k xing40`.
+
+## SC.1 serving contract (attempt 1, 2026-10-01)
+- Read: tt-d-gen main @ 93e77b80 (pulled), launch harness + kv_dump_compare from PR #1088 @ 7d4bee4e, disagg_lb @
+  e001a53c (pins tt-d-gen sshon/mistral4-disagg-rebased-260929 @ ba4c33e3: adds `chunk_aligned_start`, main does not).
+- Wrote bringup/serving_contract.md (Input, KV cache, Attention and cache writes, Acks, Adapter and table, Deployment,
+  owner questions), bringup/contract_tests.yaml, tests/bringup/contract/ (server_rules.py = the server's planner,
+  pad, reshuffle, interleave in Python, self-checked against the server's reshuffle test rule).
+- Tests, each run once with run_safe_pytest --no-precompile, all fail cleanly as "not built" on today's model:
+  test_cache_starts / test_pulled_back_chunk (hooks has no embed(start=) / layer(end=)), test_adapter_acks
+  (build_kv_chunk_table lacks first_layer_idx / num_my_layers / stage_layout), test_runner_contract
+  (FABRIC_PAYLOAD_SIZE 3584 < 4352).
+- Machinery checked with temporary shims (deleted): at chunk-aligned starts the part-test read-back scores KV PCC
+  0.99999 at layers 0-1 and the pad check catches today's real-KV pad rows (max |x| 16.8 / 22.9); the adapter path
+  exports a table that passes tables.py's rules, acks come in layer order, replicas match, but the harness decodes
+  the bf16 TILE records as row-major (PCC 0.006; as tiles 0.99999); the full runner dry run builds 40 layers, serves
+  (0, 3000), (0, 5120) and stops at the adapter's chunk-aligned assert on (2944, 8064).
+- Found: the runner SIGFPEs at FABRIC_PAYLOAD_SIZE 3584; the runner child needs TT_METAL_OPERATION_TIMEOUT_SECONDS
+  above 5 s (H2D waits); prefill_producer differs from the server (no reshuffle, real-token pad, 32-aligned follow-ups,
+  no pull-back). Known-issues and repo-map proposals added.

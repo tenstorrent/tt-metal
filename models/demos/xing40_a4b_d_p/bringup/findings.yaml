@@ -14,3 +14,22 @@ findings:
     module-level spec; perf.positions in spec.yaml avoids it). With the fallback in place, the precompile real pass
     measured 0->5120 586 ms, 204800->209920 3132 ms, 409600 5677 ms and 614400 8256 ms, then timed out building the
     819200 state.
+- id: SC1-part-tests-need-device-model
+  task: SC.1
+  kind: FRAMEWORK
+  title: the cache-write part tests gate "attention" but need hooks.device_model (layers 0-1), not just the component
+  detail: >-
+    test_cache_starts.py and test_pulled_back_chunk.py read the KV back through state.to_torch, which only the device
+    model offers (the component interface has no state read-back). In a fresh bring-up they can pass only after M.1;
+    for Xing (retrofit) K.2 runs every contract test. They also need two keywords the interface lacks today:
+    embed(tokens, start=) and layer(..., end=) (serving_contract.md, "Attention and cache writes").
+- id: SC1-runner-fabric-payload
+  task: SC.1
+  kind: MODEL
+  title: Xing40Config.FABRIC_PAYLOAD_SIZE 3584 < an fp32 tile; the prefill runner SIGFPEs building the mHC all_reduce
+  detail: >-
+    Seen in a dry run of the runner test (temporary shim, deleted): runner_utils.open_mesh_device sets the fabric
+    packet payload to model_config.FABRIC_PAYLOAD_SIZE; at 3584 B ttnn.all_reduce -> reduce_scatter divides by 0
+    pages per packet. With 4352 B the runner built all 40 layers, compiled, exported the table and served (0, 3000)
+    and (0, 5120), then rejected (2944, 8064) at the adapter's chunk-aligned assert. The runner test now reports it
+    as "not built" before the mesh opens.
