@@ -143,15 +143,20 @@ class LocalReduce:
     y: row-major bf16 [rows, H]. split (2 mesh rows): own [S, H] (this chip's row) and other [S, H] (the peer's);
     tiled (not split): the [T, H] partials as bf16 tiles (the > 2-row reduce-scatter input). Persistent outputs."""
 
-    def __init__(self, mesh_device, *, tokens, k, hidden, chunk_size_per_chip, split, info, tiled=False):
+    def __init__(
+        self, mesh_device, *, tokens, k, hidden, chunk_size_per_chip, split, info, tiled=False, own_tiled=False
+    ):
+        """``own_tiled`` (split, fused send-back): phase 2 writes ``own`` as tiles (the TP reduce-scatter's input, no
+        tilize pass)."""
         self.T, self.K, self.H, self.S, self.split, self.info = tokens, k, hidden, chunk_size_per_chip, split, info
         self.tiled = tiled and not split
+        self.own_tiled = own_tiled and split
         rows_out = chunk_size_per_chip if split else tokens
         self.own = _dram(
             mesh_device,
             [1, 1, rows_out, hidden],
             ttnn.bfloat16,
-            ttnn.TILE_LAYOUT if self.tiled else ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.TILE_LAYOUT if self.tiled or self.own_tiled else ttnn.ROW_MAJOR_LAYOUT,
         )
         self.other = _dram(mesh_device, [1, 1, rows_out, hidden], ttnn.bfloat16) if split else None
 
@@ -160,7 +165,8 @@ class LocalReduce:
         tokens plus the peer's gathered phase-1 partial (``peer`` [2 S, H]) into ``own``."""
         assert self.split
         out = self.other if phase == 1 else self.own
-        _ops.moe_ag_local_reduce(y, y_slot, w, self.info, self.S, phase=phase, peer=peer, outputs=[out])
+        tiled = phase == 2 and self.own_tiled
+        _ops.moe_ag_local_reduce(y, y_slot, w, self.info, self.S, phase=phase, peer=peer, tiled=tiled, outputs=[out])
         return out
 
     def __call__(self, y, y_slot, w):
@@ -242,6 +248,8 @@ class MoeAgBlock:
             split=split,
             info=self.info,
             tiled=rows > 2 or (rows == 1 and self.tp_mode == "rsag"),
+            # the column partial goes straight into a tiled reduce-scatter (sequence-parallel residual, or rsag)
+            own_tiled=cols > 1 and options.moe_ag_fused_send_back and (options.sp_residual or self.tp_mode == "rsag"),
         )
         if split:
             self.g_sp = _dram(mesh_device, [1, 1, 2 * S, H])

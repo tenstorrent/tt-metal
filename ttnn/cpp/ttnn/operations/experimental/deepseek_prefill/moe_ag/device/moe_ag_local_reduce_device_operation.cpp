@@ -45,7 +45,12 @@ void MoeAgLocalReduceDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!args.tiled || T % 32 == 0, "{}: tiled partials need tokens {} % 32 == 0", op, T);
         TT_FATAL(!t.peer.has_value(), "{}: peer is only used by phase 2", op);
     } else {
-        TT_FATAL(!args.split && !args.tiled, "{}: phases 1 / 2 write row-major [S, H] partials", op);
+        TT_FATAL(!args.split, "{}: phases 1 / 2 write one [S, H] partial", op);
+        TT_FATAL(
+            !args.tiled || (args.phase == 2 && S % 32 == 0),
+            "{}: only phase 2 may write tiles (phase 1's partial is gathered row-major; S {} % 32 == 0)",
+            op,
+            S);
         TT_FATAL(T == 2 * S, "{}: phases 1 / 2 need two mesh rows (tokens {} == 2 x {})", op, T, S);
         TT_FATAL(t.peer.has_value() == (args.phase == 2), "{}: peer is required by (only) phase 2", op);
         if (t.peer.has_value()) {
@@ -84,7 +89,7 @@ std::vector<TensorSpec> MoeAgLocalReduceDeviceOperation::compute_output_specs(
             ttnn::Shape({1, 1, rows, H}), TensorLayout(DataType::BFLOAT16, PageConfig(layout), DRAM_MEMORY_CONFIG));
     };
     if (args.phase != 0) {
-        return {spec(S, Layout::ROW_MAJOR)};
+        return {spec(S, args.phase == 2 && args.tiled ? Layout::TILE : Layout::ROW_MAJOR)};
     }
     if (args.split) {
         return {spec(S, Layout::ROW_MAJOR), spec(S, Layout::ROW_MAJOR)};

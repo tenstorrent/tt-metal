@@ -17,7 +17,7 @@ struct MoeAgLocalReduceParams {
     uint32_t phase = 0;
     uint32_t chunk_size_per_chip = 0;  // S
     bool split = false;                // phase 0, two mesh rows: own [S, H] (this row) and other [S, H] outputs
-    bool tiled = false;                // phase 0, not split: the [T, H] partials as bf16 tiles
+    bool tiled = false;                // phase 0, not split: the [T, H] partials as bf16 tiles; phase 2: own as tiles
     uint32_t pairs_depth = 4;          // (y row, weight) pairs buffered per core
 };
 

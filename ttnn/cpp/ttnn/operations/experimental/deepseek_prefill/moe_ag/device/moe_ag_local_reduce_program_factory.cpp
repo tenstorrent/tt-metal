@@ -21,7 +21,7 @@ ProgramDescriptor MoeAgLocalReduceDeviceOperation::ProgramFactory::create_descri
     const uint32_t H = t.y.logical_shape()[-1], K = t.weights.logical_shape()[-1], T = rm_rows(t.weights);
     const uint32_t S = args.chunk_size_per_chip, D = args.pairs_depth;
     const uint32_t RB = H * 2, TILES = H / 1024;
-    const bool tiled = args.phase == 0 && args.tiled;
+    const bool tiled = args.phase != 1 && args.tiled;  // phase 0 (not split) or phase 2: tilized 32-row blocks
     const auto grid = worker_grid(t.y);
     const auto& crs = grid.range;
     const uint32_t gx = grid.size.x;
@@ -93,10 +93,19 @@ ProgramDescriptor MoeAgLocalReduceDeviceOperation::ProgramFactory::create_descri
     }
     r.push_back(gx);
     reader.emplace_common_runtime_args(r);
-    auto compute = kernel_desc("reduce_compute.cpp", crs, {TILES}, fp32_compute_config());
+    // phase 2 tiled: the same compute / writer as phase 0 tiled (the reader's per-token header + pairs protocol is
+    // shared; the peer's partial is one more pair), the [S, H] own partial as tiles (the TP reduce-scatter input)
+    auto compute =
+        kernel_desc(tiled ? "reduce_compute_t.cpp" : "reduce_compute.cpp", crs, {TILES}, fp32_compute_config());
     compute.emplace_common_runtime_args(rng);
-    auto writer = kernel_desc("reduce_writer.cpp", crs, {RB, TILES, 1, 0}, dm_config(0, 0));
-    writer.emplace_common_runtime_args({outputs[0].buffer(), 0u, 0u, total, per, gx});
+    KernelDescriptor writer;
+    if (tiled) {
+        writer = kernel_desc("reduce_writer_t.cpp", crs, {H / 32}, dm_config(0, 0));
+        writer.emplace_common_runtime_args({outputs[0].buffer(), total, per, gx});
+    } else {
+        writer = kernel_desc("reduce_writer.cpp", crs, {RB, TILES, 1, 0}, dm_config(0, 0));
+        writer.emplace_common_runtime_args({outputs[0].buffer(), 0u, 0u, total, per, gx});
+    }
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(compute));
     desc.kernels.push_back(std::move(writer));
