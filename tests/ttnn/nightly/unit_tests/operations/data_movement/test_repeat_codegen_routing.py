@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Routing coverage: every case below routes to the path the codegen gate and is_demoted() pick for it.
+# Routing-fallback coverage: every case the codegen gate rejects must fall back to native.
+# The generated block below is emitted from the port's coverage ledger; hand-add off-grid
+# regressions beneath it.
 
 import pytest
 import torch
@@ -360,6 +362,7 @@ def test_repeat_codegen_routing_wide_rm_exceeds_l1(device, repeat_dims):
     shape = [1, 2, 2, _L1_OVERFLOW_WIDTH]
     x = _make_input(shape, ttnn.bfloat16)
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    device.clear_program_cache()
     golden = ttnn.to_torch(_force_native(xt, repeat_dims))
     # The golden call warms the native program, so only a codegen route grows the cache.
     entries_before = device.num_program_cache_entries()
@@ -374,6 +377,43 @@ def test_forced_codegen_refuses_a_wide_rm_case_that_exceeds_l1(device, expect_er
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     with expect_error(RuntimeError, "does not support"):
         _force_codegen(xt, ttnn.Shape([1, 1, 1, 3]))
+
+
+def test_repeat_codegen_rm_cb_plan_follows_live_l1(device):
+    # Routing budgets two slots against the static L1 window, but the CB depth comes from the L1 free
+    # at dispatch. A case warmed on a clear device and repeated with the free window pinned between one
+    # and two slots must compile a single-slot program rather than replay the cached double-buffered one,
+    # whose CBs would overlap the pinned buffer.
+    info = ttnn._ttnn.reports.get_device_info(device)
+    # A last-dim x2 repeat makes the output stick the slot, sized to a quarter of the clear window.
+    width = (info.cb_limit // 16) // 32 * 32
+    slot_bytes = 4 * width
+    x = _make_input([1, 1, 4, width], ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    repeat_dims = ttnn.Shape([1, 1, 1, 2])
+    expected = x.repeat(1, 1, 1, 2)
+
+    out, grew = _auto_route_grows_cache(device, xt, repeat_dims)
+    assert_equal(expected, ttnn.to_torch(out))
+    assert grew, "auto served the warm-up on native; expected codegen"
+    entries_after_warmup = device.num_program_cache_entries()
+
+    tiles_per_bank = (info.cb_limit - 3 * slot_bytes // 2) // (32 * 32 * 2)
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        assert slot_bytes <= headroom < 2 * slot_bytes, f"pinned headroom {headroom} B is not 1-2 slots"
+        assert_equal(expected, ttnn.to_torch(ttnn.repeat(xt, repeat_dims)))
+        msg = "the pressured call hit the double-buffered program; the CB plan is not in the cache key"
+        assert device.num_program_cache_entries() > entries_after_warmup, msg
+    finally:
+        ttnn.deallocate(resident)
 
 
 def test_forced_codegen_refuses_out_of_scope_case(device, expect_error):
@@ -409,6 +449,7 @@ def test_repeat_non_default_tile_routes_to_native(device, tile):
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     repeat_dims = ttnn.Shape([1, 1, 3, 1])
     # Primes the cache with the native program, so an unchanged count means native served the call.
+    device.clear_program_cache()
     _force_native(xt, repeat_dims)
     entries_before = device.num_program_cache_entries()
     ttnn.repeat(xt, repeat_dims)
@@ -528,6 +569,50 @@ _DEMOTED = [
             use_height_and_width_as_shard_shape=False,
         ),
     ),
+    (
+        [1, 2, 64, 128],
+        {
+            "repeat_dims": ttnn.Shape([2, 1, 1, 1]),
+            "memory_config": ttnn.create_sharded_memory_config(
+                shape=(2, 2, 64, 128),
+                core_grid=ttnn.CoreGrid(x=4, y=1),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            ),
+        },
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.create_sharded_memory_config(
+            shape=(1, 2, 64, 128),
+            core_grid=ttnn.CoreGrid(x=4, y=1),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=False,
+        ),
+    ),
+    (
+        [1, 2, 64, 128],
+        {
+            "repeat_dims": ttnn.Shape([2, 1, 1, 1]),
+            "memory_config": ttnn.create_sharded_memory_config(
+                shape=(2, 2, 64, 128),
+                core_grid=ttnn.CoreGrid(x=4, y=1),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            ),
+        },
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.create_sharded_memory_config(
+            shape=(1, 2, 64, 128),
+            core_grid=ttnn.CoreGrid(x=4, y=1),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=False,
+        ),
+    ),
 ]
 _DEMOTED_IDS = [
     "[1, 2, 128, 64]@HEIGHT/4x1/ROW_MAJOR/input+output|repeat_dims=[1, 1, 1, 2]|float32|row_major",
@@ -536,6 +621,8 @@ _DEMOTED_IDS = [
     "[1, 2, 64, 128]@WIDTH/4x1/ROW_MAJOR/input|memory_config=BufferType.DRAM&repeat_dims=[2, 1, 1, 1]|float32|row_major",
     "[1, 2, 64, 128]@WIDTH/4x1/ROW_MAJOR/input|memory_config=BufferType.L1&repeat_dims=[2, 1, 1, 1]|bfloat16|row_major",
     "[1, 2, 64, 128]@WIDTH/4x1/ROW_MAJOR/input|memory_config=BufferType.L1&repeat_dims=[2, 1, 1, 1]|float32|row_major",
+    "[1, 2, 64, 128]@WIDTH/4x1/ROW_MAJOR/input+output|repeat_dims=[2, 1, 1, 1]|bfloat16|row_major",
+    "[1, 2, 64, 128]@WIDTH/4x1/ROW_MAJOR/input+output|repeat_dims=[2, 1, 1, 1]|float32|row_major",
 ]
 
 
@@ -543,12 +630,17 @@ _DEMOTED_IDS = [
 def test_repeat_codegen_demotion(device, shape, kwargs, dtype, layout, placement):
     x = _make_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=placement)
+    device.clear_program_cache()
     golden = ttnn.to_torch(_force_native(xt, **kwargs))
     entries_before = device.num_program_cache_entries()
     out = ttnn.repeat(xt, **kwargs)
     assert_equal(golden, ttnn.to_torch(out))
     msg = "auto routed a perf-demoted case to codegen (program cache grew); expected native fallback"
     assert device.num_program_cache_entries() == entries_before, msg
+    expected = x.repeat(*kwargs["repeat_dims"]).to(golden.dtype)
+    assert_equal(expected, ttnn.to_torch(out))
+    # A demotion trades speed only: codegen still serves the case, and correctly.
+    assert_equal(expected, ttnn.to_torch(_force_codegen(xt, **kwargs)))
 
 
 _CACHE_HIT = [
