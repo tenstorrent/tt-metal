@@ -47,6 +47,8 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
     sampling.sub_core_grids = None
     sampling._penalties_active = True
     sampling._trace_states = {}
+    sampling._active_trace_bucket = None
+    sampling._fully_precompiled_trace_buckets = set()
     sampling.tt_sampling = SimpleNamespace(
         log_probs_calculator=log_probs, _force_argmax_sampling=True, _allow_force_argmax_sampling=True
     )
@@ -67,6 +69,7 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
     assert sampling.tt_sampling._force_argmax_sampling is True
     assert log_probs.logprobs_enabled == [False]
     assert log_probs.num_logprobs == [0]
+    assert sampling._fully_precompiled_trace_buckets == ({None} if all_configs else set())
 
 
 def test_sampling_trace_buffer_acknowledgement(monkeypatch):
@@ -76,6 +79,75 @@ def test_sampling_trace_buffer_acknowledgement(monkeypatch):
     _acknowledge_trace_io_corruptible(["trace-output", None, ("input", "output")])
 
     assert marked == ["trace-output", "input", "output"]
+
+
+def test_sampling_trace_log_probs_acknowledgement(monkeypatch):
+    marked = []
+    monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
+    result = LogProbsResult(
+        topk_logprobs="log-probs",
+        topk_indices="indices",
+        topk_logprobs_host=None,
+        topk_indices_host=None,
+    )
+
+    _acknowledge_trace_io_corruptible(result)
+
+    assert marked == ["log-probs", "indices"]
+
+
+def _make_trace_capture_test_generator():
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling.mesh_device = "mesh-device"
+    sampling.cq_id = 0
+    sampling._penalties_active = False
+    sampling._log_probs_active = False
+    sampling._trace_states = {}
+    sampling._active_trace_bucket = None
+    sampling._fully_precompiled_trace_buckets = set()
+    sampling.tt_sampling = SimpleNamespace(force_argmax_sampling=True)
+    sampling._run_sampling = lambda *args, **kwargs: ("tokens", None)
+    return sampling
+
+
+def test_first_sampling_trace_precompiles_all_configurations(monkeypatch):
+    sampling = _make_trace_capture_test_generator()
+    precompile_calls = []
+
+    def precompile(logits, *, tt_out_tok, all_configs):
+        precompile_calls.append((logits, tt_out_tok, all_configs))
+        sampling._fully_precompiled_trace_buckets.add(sampling._active_trace_bucket)
+
+    sampling.precompile = precompile
+    monkeypatch.setattr(ttnn, "begin_trace_capture", lambda *args, **kwargs: len(sampling._trace_states))
+    monkeypatch.setattr(ttnn, "end_trace_capture", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *args, **kwargs: None)
+    monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", lambda value: None)
+
+    sampling.capture_trace("logits")
+    sampling.tt_sampling.force_argmax_sampling = False
+    sampling.capture_trace("logits")
+
+    assert precompile_calls == [("logits", None, True)]
+
+
+def test_sampling_trace_rejects_late_precompile_for_new_bucket(monkeypatch):
+    sampling = _make_trace_capture_test_generator()
+
+    def precompile(logits, *, tt_out_tok, all_configs):
+        sampling._fully_precompiled_trace_buckets.add(sampling._active_trace_bucket)
+
+    sampling.precompile = precompile
+    monkeypatch.setattr(ttnn, "begin_trace_capture", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(ttnn, "end_trace_capture", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *args, **kwargs: None)
+    monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", lambda value: None)
+
+    sampling.capture_trace("logits")
+    sampling.set_trace_bucket(8)
+
+    with pytest.raises(RuntimeError, match=r"precompile\(\.\.\., all_configs=True\)"):
+        sampling.capture_trace("bucket-8-logits")
 
 
 def test_sampling_trace_bucket_isolation():

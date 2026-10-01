@@ -137,6 +137,7 @@ class SamplingGenerator:
 
         self._trace_states: dict[_TraceKey, dict] = {}
         self._active_trace_bucket = None
+        self._fully_precompiled_trace_buckets: set[int | None] = set()
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
         self.seed_manager = SeedManager(
             self.tt_sampling,
@@ -422,6 +423,8 @@ class SamplingGenerator:
             log_probs.set_log_probs_mode(saved_enabled, num_logprobs=saved_num_logprobs)
             self._log_probs_active = log_probs.enable_log_probs
 
+        self._fully_precompiled_trace_buckets.add(self._active_trace_bucket)
+
     def capture_trace(
         self,
         logits: ttnn.Tensor,
@@ -442,21 +445,14 @@ class SamplingGenerator:
 
         key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
 
-        if not skip_precompile:
-            logger.debug(
-                f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
-            )
-            # TTPenalties.apply() rewrites its input in place, so compiling on `logits` itself would
-            # leave the capture buffer already penalized and make the first replay penalize it twice.
-            scratch = self._copy_warmup_logits(logits) if penalties_on else logits
-            self._run_sampling(
-                scratch,
-                penalties_on=penalties_on,
-                tt_out_tok=tt_out_tok,
-                count_tokens=False,
-            )
-            if scratch is not logits:
-                ttnn.deallocate(scratch)
+        if not skip_precompile and self._active_trace_bucket not in self._fully_precompiled_trace_buckets:
+            if any(state["id"] is not None for state in self._trace_states.values()):
+                raise RuntimeError(
+                    "Cannot precompile a new sampling trace configuration after another sampling trace is active. "
+                    "Call precompile(..., all_configs=True) before the first trace capture."
+                )
+            logger.debug("Pre-compiling every sampling path before the first trace capture")
+            self.precompile(logits, tt_out_tok=tt_out_tok, all_configs=True)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         sampled = self._run_sampling(
@@ -483,6 +479,8 @@ class SamplingGenerator:
         # limited lifetime so another keyed sampling trace can replay while they remain allocated.
         _acknowledge_trace_io_corruptible(output)
         if self._active_trace_bucket is not None:
+            # Bucketed callers reuse one underlying decode-output tensor across bucket widths. A
+            # different bucket's trace can overwrite these captured logits before this trace replays.
             _acknowledge_trace_io_corruptible(logits)
 
         return slot["output"]

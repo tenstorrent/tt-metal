@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
@@ -2001,14 +2002,15 @@ class TestTracedSampling:
                 del sg
             safe_sync(mesh_device)
 
-    def test_trace_reuses_greedy_and_regular_sampling_slots(self, mesh_device, device_params):
+    def _run_trace_reuses_greedy_and_regular_sampling_slots(self, mesh_device):
         """Alternating request modes captures each sampling program once.
 
         Greedy and regular sampling have different program graphs, but both bind the same
         persistent logits tensor and keep independent output/trace state. Returning to a mode
         must therefore replay its original trace instead of releasing both traces and capturing
-        again. The regular path uses top-k=2 over two dominant tokens, so correctness is stable
-        without an explicit seed (explicit seeds intentionally bypass sampling traces).
+        again. This uses the default sample() flow so the first capture must compile both programs
+        before it becomes active. The regular path uses top-k=2 over two dominant tokens, so
+        correctness is stable without an explicit seed (explicit seeds intentionally bypass traces).
         """
         args = make_sampling_args(mesh_device)
         args.model_config = {
@@ -2030,14 +2032,13 @@ class TestTracedSampling:
             sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
             sg.seed_manager.reset_seed(None, list(range(BATCH_SIZE)))
             tt_input = make_sharded_logits(padded, mesh_device, args)
-            sg.precompile(tt_input, all_configs=True)
 
             trace_ids = {}
             requests = (("greedy", greedy), ("regular", regular), ("greedy", greedy), ("regular", regular))
             for label, params in requests:
                 sg.reset_sampling_params(format_sampling_params(params, BATCH_SIZE))
                 sg.seed_manager.get_new_values()
-                tt_tokens, _ = sg.sample(tt_input, enable_trace=True, skip_precompile=True)
+                tt_tokens, _ = sg.sample(tt_input, enable_trace=True)
                 ttnn.synchronize_device(mesh_device)
 
                 tokens = extract_tokens(tt_tokens)
@@ -2066,6 +2067,17 @@ class TestTracedSampling:
             if sg is not None:
                 del sg
             safe_sync(mesh_device)
+
+    def test_trace_reuses_greedy_and_regular_sampling_slots(self, mesh_device, device_params):
+        self._run_trace_reuses_greedy_and_regular_sampling_slots(mesh_device)
+
+    @pytest.mark.skipif(
+        not trace_allocation_tracker.TRACE_ALLOC_TRACKING,
+        reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at process startup",
+    )
+    def test_trace_reuses_greedy_and_regular_sampling_slots_with_tracker(self, mesh_device, device_params):
+        assert trace_allocation_tracker.TRACE_ALLOC_TRACKING
+        self._run_trace_reuses_greedy_and_regular_sampling_slots(mesh_device)
 
 
 # --- Test: format_sampling_params lane semantics (host-only, no device) ---
