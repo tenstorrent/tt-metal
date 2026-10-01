@@ -18,7 +18,7 @@ export TT_METAL_CACHE=$V/jit
 cd $W
 echo "[t60] arm=$ARM tree=$(git rev-parse --short HEAD) clock: $(python /home/smarton/tray-stress/hostfmax.py 1150 | tail -1)" | tee $LOG
 test -f "$AB_LATENT" || echo "[t60] WARNING: $AB_LATENT missing, the harness falls back to a random latent" | tee -a $LOG
-timeout 900 python -m pytest -p conftest -c $W/pytest.ini --rootdir=$W -sv --timeout=840 \
+timeout 900 python -m pytest -c $W/pytest.ini --rootdir=$W -sv --timeout=840 \
   models/tt_dit/tests/models/ltx/test_vae_ltx_fold_time_pad_ab.py 2>&1 | tee -a $LOG
 rc=${PIPESTATUS[0]}
 python /home/smarton/tray-stress/hostfmax.py 0 >/dev/null 2>&1
