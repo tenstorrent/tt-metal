@@ -35,3 +35,8 @@
 - Driver stopped after 043 on a false alarm: gate_fail_since() treats "device healthy; no reset needed" and
   "heartbeat: HEALTHY" as failed gates (it only accepts ": OK"). Same bug made wait_health idle ~16 min.
 - Halo unit tests submitted by hand as blx03 job 049 (run78b.sh, log /var/tmp/fasth3/t78/run78b.log, T78B_EXIT).
+- Job 049 (test_conv3d.py -k halo on a 2x4 submesh of the full mesh): exit 0, 2 passed / 33 deselected
+  (rejects_dilation, rejects_undersized_halo). Only the reject cases match -k halo; the functional halo path
+  is covered by the bit-identical A/B. Post-job gate OK, no reboot.
+- Cleaned up on blx03: ~/fasth3/t78 worktree, /var/tmp/fasth3/t78 (jit 972M, yuv 2x109M, logs), ~/fasth3/t78drv,
+  ~/fasth3/setup78.sh, ~/fasth3/t78-setup.log. Trimmed logs in tmp/blx03/t78res/.

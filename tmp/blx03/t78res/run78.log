@@ -1,0 +1,19 @@
+[t78] tree=dd8935fcbb clock: hostfmax chip 31: exit=0 arb_max=1350 MHz (arbiter 7) aiclk=800
+[t78] arm=h0
+AB arm=h0 halo_only_convs=0
+AB arm=h0 convs_with_pad_offset=0
+AB arm=h0 decode_s=2.0580 2.0577 2.0542 min=2.0542
+PASSED
+PASSED models/tt_dit/tests/models/ltx/test_vae_ltx_halo_only_ab.py::test_vae_ltx_halo_only_ab[blackhole-mesh_device0-device_params0]
+=================== 1 passed, 2 warnings in 77.39s (0:01:17) ===================
+T78_EXIT[h0]=0
+[t78] arm=h1
+AB arm=h1 halo_only_convs=42
+AB arm=h1 convs_with_pad_offset=42
+AB arm=h1 decode_s=1.9917 1.9963 1.9937 min=1.9917
+PASSED
+PASSED models/tt_dit/tests/models/ltx/test_vae_ltx_halo_only_ab.py::test_vae_ltx_halo_only_ab[blackhole-mesh_device0-device_params0]
+======================== 1 passed, 2 warnings in 38.18s ========================
+T78_EXIT[h1]=0
+T78_CMP h1_vs_h0 identical=True max_abs_diff=0 shape=(145, 816, 960) dtype=torch.uint8
+T78_EXIT=0

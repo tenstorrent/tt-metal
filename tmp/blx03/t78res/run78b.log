@@ -1,0 +1,7 @@
+[t78b] tree=dd8935fcbb clock: hostfmax chip 31: exit=0 arb_max=1000 MHz (arbiter 10) aiclk=800
+PASSED2026-10-01 16:54:27.688 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+PASSED2026-10-01 16:54:29.044 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+PASSED tests/ttnn/unit_tests/operations/conv/test_conv3d.py::test_conv3d_halo_buffer_rejects_unsupported[mesh_device=(4, 8)-device_params={'fabric_config': FabricConfig.FABRIC_1D}-silicon_arch_name=blackhole-rejects_dilation]
+PASSED tests/ttnn/unit_tests/operations/conv/test_conv3d.py::test_conv3d_halo_buffer_rejects_unsupported[mesh_device=(4, 8)-device_params={'fabric_config': FabricConfig.FABRIC_1D}-silicon_arch_name=blackhole-rejects_undersized_halo]
+====================== 2 passed, 33 deselected in 10.46s =======================
+T78B_EXIT=0
