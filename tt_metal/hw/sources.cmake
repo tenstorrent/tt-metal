@@ -212,6 +212,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/xlogy.h
     inc/api/lock.h
     inc/api/dataflow/noc.h
+    inc/api/dataflow/buf_rw_note.h
     inc/api/dataflow/endpoints.h
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/cross_node_dfb.h
@@ -277,6 +278,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tensor/const.h
     inc/internal/tensor/dspec.h
     inc/internal/tensor/helpers.h
+    inc/internal/tensor/transfer_noc_addr.h
     inc/internal/tt-1xx/cache.h
     inc/internal/tt-1xx/blackhole/c_tensix_core.h
     inc/internal/tt-1xx/blackhole/cfg_defines.h

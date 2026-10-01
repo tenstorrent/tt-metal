@@ -26,7 +26,7 @@ inline constexpr uint32_t WRITE = 2;
 // immediates, so this adds section data only -- no instructions.
 template <uint32_t Slot, uint32_t Kind>
 inline void note() {
-    __asm__ volatile(
+    __asm__ volatile(  // NOLINT(hicpp-no-assembler)
         ".pushsection .tt.BUF_RW,\"\",@note\n\t"
         ".4byte %0\n\t"
         ".4byte %1\n\t"
