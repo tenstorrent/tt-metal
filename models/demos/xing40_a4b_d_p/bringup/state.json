@@ -5142,6 +5142,119 @@
   "status": "PASS",
   "waiting": null
  },
+ "Z.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "a90136396ae25d0754b43d3c31798ff5ef192e33",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "8ff05e2c75d110b5217ca96b7ab3ac389c0eba4b",
+     "dirty": false
+    }
+   },
+   "model": "claude-sonnet-5-5",
+   "session_id": "a53d2f23-fe13-43fd-b3f6-980d09949349"
+  },
+  "agent_runs": [
+   {
+    "agent": "settings-audit",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/Z.1.settings.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "a90136396ae25d0754b43d3c31798ff5ef192e33",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "8ff05e2c75d110b5217ca96b7ab3ac389c0eba4b",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/Z.1.settings.1.jsonl",
+    "model": "claude-sonnet-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "settings",
+    "seconds": 507.1,
+    "session_id": "a53d2f23-fe13-43fd-b3f6-980d09949349",
+    "t": "2026-10-01T16:21:34"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 400.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T16:28:14"
+   }
+  ],
+  "last_run": "2026-10-01T16:28:14",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/Z.1.log",
+  "metrics": {
+   "contract_tests_failed": 0,
+   "pcc_layer_L00": 0.9999880538393454,
+   "pcc_layer_L01": 0.9999779499369215,
+   "pcc_layer_L02": 0.999949949224265,
+   "pcc_layer_L03": 0.9999220343294308,
+   "pcc_layer_L04": 0.9998924179349493,
+   "pcc_layer_L05": 0.9998597026495037,
+   "pcc_layer_L06": 0.9998210431311904,
+   "pcc_layer_L07": 0.9997393453471426,
+   "pcc_layer_L08": 0.9996084256661327,
+   "pcc_layer_L09": 0.9996620374280432,
+   "pcc_layer_L10": 0.9997246685239884,
+   "pcc_layer_L11": 0.9997013639731451,
+   "pcc_layer_L12": 0.9996361598900543,
+   "pcc_layer_L13": 0.9995893322063719,
+   "pcc_layer_L14": 0.9995303118866137,
+   "pcc_layer_L15": 0.9993726792756525,
+   "pcc_layer_L16": 0.9992283272144298,
+   "pcc_layer_L17": 0.9989764332028094,
+   "pcc_layer_L18": 0.9987584244524996,
+   "pcc_layer_L19": 0.9978254041074416,
+   "pcc_layer_L20": 0.9968815428650821,
+   "pcc_layer_L21": 0.9958316096413259,
+   "pcc_layer_L22": 0.9953410962767475,
+   "pcc_layer_L23": 0.9939246432647958,
+   "pcc_layer_L24": 0.9933088121663037,
+   "pcc_layer_L25": 0.9915728401328985,
+   "pcc_layer_L26": 0.9913447710947104,
+   "pcc_layer_L27": 0.9932521714248086,
+   "pcc_layer_L28": 0.994966753958013,
+   "pcc_layer_L29": 0.9954225142572019,
+   "pcc_layer_L30": 0.9962014714562432,
+   "pcc_layer_L31": 0.9964123790501753,
+   "pcc_layer_L32": 0.9966542639496919,
+   "pcc_layer_L33": 0.9970619785900132,
+   "pcc_layer_L34": 0.9975767638078288,
+   "pcc_layer_L35": 0.997622102528734,
+   "pcc_layer_L36": 0.9975531745548561,
+   "pcc_layer_L37": 0.9976421770930479,
+   "pcc_layer_L38": 0.9980452029484679,
+   "pcc_layer_L39": 0.9988203391503029,
+   "pcc_state_min": 0.9996377822106892,
+   "settings_violations": 0,
+   "state_bits_kv_latent": 8,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "settings",
+  "started": "2026-10-01T16:21:34",
+  "status": "PASS",
+  "waiting": null
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-30T03:05:24",

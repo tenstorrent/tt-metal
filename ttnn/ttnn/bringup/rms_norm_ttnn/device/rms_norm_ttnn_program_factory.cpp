@@ -179,7 +179,7 @@ constexpr uint32_t WRITER_RT_OUT = 0;
 // ---------------------------------------------------------------------------
 bool stage_zones() {
     static const bool on = [] {
-        const char* v = std::getenv("RMS_STAGE_ZONES");
+        const char* v = std::getenv("RMS_STAGE_ZONES");  // diagnostic: perf/measurement knob, same result
         return v != nullptr && std::strcmp(v, "") != 0 && std::strcmp(v, "0") != 0;
     }();
     return on;
@@ -190,7 +190,7 @@ const std::vector<std::string>& ablate() {
         static const char* known[] = {
             "READ_X", "WRITE", "COMPUTE", "PER_CHANNEL", "ROOT_SUM", "ROOT_FINALIZE", "RECONFIG", "GATHER_ZERO"};
         std::vector<std::string> out;
-        const char* v = std::getenv("RMS_ABLATE");
+        const char* v = std::getenv("RMS_ABLATE");  // diagnostic: perf/measurement knob, same result
         if (v == nullptr) {
             return out;
         }
@@ -1633,7 +1633,8 @@ ProgramDescriptor create_program_descriptor(
     const bool pc_chunked = (!x_resident) || pc_compact;
     const int64_t pc_tile_pages = pc_chunked ? (PC_RING_CHUNKS * wt_chunk) : x_hold_wt;
 
-    if (std::getenv("RMS_TRACE_BLOCKING") != nullptr && std::strlen(std::getenv("RMS_TRACE_BLOCKING")) > 0) {
+    if (std::getenv("RMS_TRACE_BLOCKING") != nullptr &&
+        std::strlen(std::getenv("RMS_TRACE_BLOCKING")) > 0) {  // diagnostic: perf/measurement knob, same result
         const char* scheme_name =
             plan.scheme == Scheme::Rows ? "rows" : (plan.scheme == Scheme::ShardH ? "shard_h" : "shard_w");
         fmt::print(

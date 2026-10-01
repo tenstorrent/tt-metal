@@ -56,7 +56,7 @@ ttsl::hash::hash_t MhcPreDeviceOperation::compute_program_hash(
     // Everything create_program_descriptor reads except buffer addresses: the input specs, n, the scalars (they are
     // runtime args the cache hit does not re-patch), the compute config fields it copies and the kernel-define env
     // switch. The device (grid, L1 size) is fixed per program cache.
-    const char* defines = std::getenv("MHC_PRE_KERNEL_DEFINES");
+    const char* defines = std::getenv("MHC_PRE_KERNEL_DEFINES");  // diagnostic: perf/measurement knob, same result
     const auto& cc = attrs.compute_config;
     return tt::tt_metal::operation::hash_operation<MhcPreDeviceOperation>(
         attrs.n,
