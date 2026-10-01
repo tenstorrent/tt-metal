@@ -136,3 +136,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Results: BRINGUP_IMPL=reference passes (pcc 0.999998, rel 0.00214, ratio [0.9991, 1.0009]); BRINGUP_IMPL=stub fails on PCC; the device mode (already registered) passes (pcc 0.999997, rel 0.00277, ratio [1.0003, 1.0023], slice rel 0.0027-0.0028).
 - The leading `FAIL ... pcc=0.000000` line in each run is the precompile pass's comp_pcc stub (known issue), not the test.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_mlp_residual.py`
+
+## C.sliding_moe.attn_norm.test.1 (test review)
+- Replaced the rendered one-liner with the cp4 full_dense norm checks (from `test_c_full_dense_ffn_norm.py`), set to layer 1 / attn_norm. The golden is the same as the prior's: s4096 chunk 1, in [2048, 4096] -> attn_norm. Checks: PCC >= 0.99 (gated), finite, rel L2 <= 0.03, per-token norm ratio [0.97, 1.03], worst row rel <= 0.015, rel L2 per CP slice <= 0.01, and the eps check (module on input x0.1 vs the CPU step: rel <= 0.02, worst row <= 0.04).
+- CPU measurements (script /tmp/cp4an1/m.py, not kept): the smallest row mean square is 4.4e-4 (440x eps 1e-6), so eps 0 / 1e-7 / 2e-6 pass on the golden (rel 0.0024). On x0.1 they score rel 0.071 / 0.063 / 0.058. Other cases: sum instead of mean rel 0.98; `1 + w` PCC 0.78; no weight PCC 0.46; last 32 rows zeroed worst row 1.0; CP slices 1/2 swapped PCC 0.989 / rel 0.15; bf16 math rel 0.0027 / worst row 0.0070.
+- Verified: reference passes (pcc 0.999997, rel 0.0024, worst row 0.0053). Stub fails (pcc 0). The device gate already passes with the existing TtRMSNorm registration: pcc 0.999996, rel 0.0027, ratio [0.9937, 1.0062], worst row 0.0070, slices 0.0025-0.0029, x0.1 rel 0.0025 / worst row 0.0057.
+- The first `FAIL pcc=0` line is the precompile collect pass. Ignore it.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_attn_norm.py` (with `BRINGUP_IMPL=reference` / `stub` for the freeze checks).
