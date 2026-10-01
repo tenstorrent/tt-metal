@@ -1390,6 +1390,10 @@ void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
 
         tile_regs_commit();
         dfb_out.pop_front(subblock_h);
+        // In-place: reserve before packing. On Quasar the POP (unpack thread) and PUSH (pack thread)
+        // land on the tile counter asynchronously; without this WAIT_FREE the PUSH can beat the POP
+        // and overflow a DFB sized to exactly subblock_h (the sink path's 1-tile sum_A/sum_B).
+        dfb_out.reserve_back(subblock_h);
 
         tile_regs_wait();
         for (uint32_t i = 0; i < subblock_h; i++) {
@@ -2273,17 +2277,9 @@ void sdpa_inner_loop(
          * Each head has one sink logit value that is broadcast to all query positions in the chunk.
          * The reader kernel replicates the per-head value across all Sq_chunk_t positions.
          *
-         * NOTE (Quasar bring-up): the attention-sink path below is NOT brought up on Quasar and is
-         * currently unverified there. Llama (the model driving this fork's bring-up) has no attention
-         * sinks, so nothing exercises this path today; it is a GPT-OSS-class feature. Two known gaps
-         * remain, to be resolved when a sink-using model is ported to this op:
-         *   1. Code size: with USE_ATTENTION_SINK=1 the compute kernel overflows the Quasar TRISC
-         *      instruction-memory region at -O3 (~32KB kernel vs ~24KB limit), so it does not even
-         *      load. Needs an Os/code-size fix for the sink path before it can run on craq-sim.
-         *   2. Packer retargeting: the bare-pack helpers in this block (e.g. the sub_exp_block below)
-         *      lack a preceding pack_reconfig_out to point the Quasar packer at their output DFB, the
-         *      same class of bug fixed in the flash loop. This is correct-by-audit but unverifiable
-         *      on craq-sim until gap (1) is resolved (and adding the reconfigs worsens the overflow).
+         * NOTE (Quasar): the sink path keeps separate 1-tile sum_A/sum_B DFBs (no merged sum), so
+         * in-place helpers on them must reserve_back before packing (see matmul_reduce). Covered by
+         * tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_sdpa_attention_sink.py.
          */
         if constexpr (use_attention_sink) {
             // Treat attention_sink as scores (already scaled)
@@ -2293,8 +2289,10 @@ void sdpa_inner_loop(
             //    This compares the previous max with the sink logit
             reconfig_data_format(dfb_attention_sink, dfb_identity_scale_in);
 
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_attention_sink, dfb_identity_scale_in, Sq_chunk_t, 1>(
-                alias_cur_max, alias_prev_max, true);
+            // Runtime-cols reduce_c (as in the flash loop above): the compile-time-cols overload copies
+            // prev_max with a within-face-only transpose, which Quasar's unpack-A init rejects.
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_attention_sink, dfb_identity_scale_in, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, 1, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
             //    sub_exp_block packs via a bare pack_tile; on Quasar the packer is still latched to
