@@ -308,6 +308,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = prod_set,
         .compile_time_args = prep_reader_ct,
+        // Size-optimised like the phased prep reader (see chunk_gdn_phased_program_factory.cpp).
+        .opt_level = KernelBuildOptLevel::Os,
         .config = ReaderConfigDescriptor{},
     };
     prep_reader.runtime_args.reserve(P);
