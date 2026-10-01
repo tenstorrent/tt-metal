@@ -5,6 +5,24 @@
 import ttnn
 
 
+def make_aliasing_preprocess(argument_aliases):
+    """Return a golden input preprocess that renames keyword aliases to their canonical golden parameter names.
+    It records the aliases so global comparison applies the same renaming to its cached inputs.
+    """
+
+    def preprocess_golden_function_inputs(function_args, function_kwargs):
+        golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
+            function_args, function_kwargs
+        )
+        for alias, canonical_name in argument_aliases.items():
+            if alias in golden_kwargs and canonical_name not in golden_kwargs:
+                golden_kwargs[canonical_name] = golden_kwargs.pop(alias)
+        golden_kwargs["_ttnn_golden_argument_aliases"] = argument_aliases
+        return golden_args, golden_kwargs
+
+    return preprocess_golden_function_inputs
+
+
 def golden_to_output_dtype(tensor, dtype):
     """Return the values TTNN stores for a golden result written in the requested output dtype."""
 
@@ -50,8 +68,12 @@ def golden_pack_complex_gradient(gradient):
 
 
 def golden_select_optional_outputs(values, required):
-    """Preserve optional output positions, using None for unrequested values."""
+    """Preserve optional output positions, using None for unrequested values.
+    A required of None requests every output.
+    """
 
+    if required is None:
+        return values
     if len(values) != len(required):
         raise ValueError("Output values and requirements must have equal length")
 

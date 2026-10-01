@@ -112,12 +112,14 @@ def _split_complex_outputs(golden_outputs, outputs):
 
 
 def _widen_unsigned_for_indexing(tensor):
-    """Return unsigned 16/32/64-bit tensors as int64 so boolean masks can index them."""
+    """Return unsigned 16/32-bit tensors as int64 so boolean masks can index them."""
 
     import torch
 
-    unsigned_dtypes = {getattr(torch, name) for name in ("uint16", "uint32", "uint64") if hasattr(torch, name)}
-    return tensor.to(torch.int64) if tensor.dtype in unsigned_dtypes else tensor
+    # ttnn.operations is imported after this module, so integer_golden is resolved at call time.
+    if ttnn.operations.integer_golden.is_unsigned_dtype(tensor.dtype):
+        return tensor.to(torch.int64)
+    return tensor
 
 
 def compare_tensors_using_pcc(
@@ -793,10 +795,23 @@ def set_output_tensor_id_decorator(function):
 OPERATION_CALL_STACK = []
 
 
+def _complex_tensor_to_torch(complex_tensor, convert_component):
+    """Rebuild a ComplexTensor as one Torch complex tensor from its converted real and imaginary components."""
+
+    import torch
+
+    real = convert_component(complex_tensor.real)
+    imag = convert_component(complex_tensor.imag)
+    return torch.complex(real.float(), imag.float())
+
+
 def default_preprocess_golden_function_inputs(function_args, function_kwargs):
     def recursive_preprocess_golden_function_inputs(object_value):
         if isinstance(object_value, ttnn.Tensor):
             return to_torch_for_comparison(object_value)
+        elif isinstance(object_value, ttnn._ttnn.operations.complex.ComplexTensor):
+            # ComplexTensor wraps two real device tensors and is not a ttnn.Tensor.
+            return _complex_tensor_to_torch(object_value, to_torch_for_comparison)
         elif isinstance(object_value, (list, tuple)):
             new_object_value = [recursive_preprocess_golden_function_inputs(element) for element in object_value]
             return type(object_value)(new_object_value)
@@ -946,8 +961,6 @@ def _decompose_global_golden_mesh_tensor(input_tensor, golden_tensor):
 def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, mesh_tensors_as_shards=False):
     if ttnn.CONFIG.report_path is None:
         return None
-    import torch
-
     input_index = 0
 
     def recursive_preprocess_golden_function_inputs(object_value):
@@ -976,9 +989,7 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, 
             return tuple(object_value)
         if isinstance(object_value, ttnn._ttnn.operations.complex.ComplexTensor):
             # Complex goldens take one Torch complex tensor rebuilt from the components' retained goldens.
-            real = recursive_preprocess_golden_function_inputs(object_value.real)
-            imag = recursive_preprocess_golden_function_inputs(object_value.imag)
-            return torch.complex(real.float(), imag.float())
+            return _complex_tensor_to_torch(object_value, recursive_preprocess_golden_function_inputs)
         if isinstance(object_value, (list, tuple)):
             new_object_value = [recursive_preprocess_golden_function_inputs(element) for element in object_value]
             return type(object_value)(new_object_value)

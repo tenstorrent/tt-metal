@@ -50,18 +50,15 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(input_tensor: ttnn.Tensor, scale=None, mask=None, *_, scalar=None, attention_mask=None, **__):
+def _golden_function(input_tensor: ttnn.Tensor, scale=None, mask=None, *_, **__):
     import torch
 
-    # The public API names these scale and mask and makes both optional; scalar and attention_mask
-    # remain accepted for direct callers of the older golden spelling.
-    scale = scale if scale is not None else scalar
-    attention_mask = mask if mask is not None else attention_mask
+    # The public API names these scale and mask and makes both optional.
     input_tensor = input_tensor.float()
     if scale is not None:
         input_tensor = input_tensor * scale
-    if attention_mask is not None:
-        input_tensor = input_tensor + attention_mask
+    if mask is not None:
+        input_tensor = input_tensor + mask
     return torch.softmax(input_tensor, dim=-1)
 
 

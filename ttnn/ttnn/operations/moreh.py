@@ -162,7 +162,9 @@ def _golden_norm(input, p, dim=None, *_, keepdim=False, **__):
     import torch
 
     dims, output_shape = _moreh_reduced_dims_and_shape(input.shape, dim, keepdim)
-    return torch.linalg.vector_norm(input, ord=p, dim=dims, keepdim=True).reshape(output_shape)
+    output = torch.linalg.vector_norm(input, ord=p, dim=dims, keepdim=True).reshape(output_shape)
+    # A norm already reduces absolute values, so its own magnitude is the accumulated magnitude.
+    return _with_bfloat16_accumulation_tolerance(output, output.float())
 
 
 ttnn.attach_golden_function(ttnn.moreh_norm, golden_function=_golden_norm)
@@ -338,34 +340,44 @@ ttnn.attach_golden_function(
 )
 
 
-def _moreh_softmax_family(input_tensor, dim, op):
+def _make_softmax_family_golden(default_op, family_function):
+    """Return a softmax-family golden for an operation whose public op argument defaults to default_op.
+    moreh_softmax and moreh_softmin (and their backward operations) share one kernel family, so op overrides the
+    operation's own function.
+    """
+
+    def golden_function(*args, op=None, **kwargs):
+        return family_function(*args, op=default_op if op is None else op, **kwargs)
+
+    return golden_function
+
+
+def _moreh_softmax_family(input_tensor, dim, *_, op, **__):
     """Evaluate the softmax-family function selected by a MorehSoftmaxOp."""
 
     import torch
 
     softmax_op = ttnn._ttnn.operations.moreh.MorehSoftmaxOp
-    if op == softmax_op.SOFTMIN:
-        return torch.nn.functional.softmin(input_tensor, dim=dim)
-    if op == softmax_op.LOGSOFTMAX:
-        return torch.log_softmax(input_tensor, dim=dim)
-    return torch.softmax(input_tensor, dim=dim)
+    functions = {
+        softmax_op.SOFTMAX: torch.softmax,
+        softmax_op.SOFTMIN: torch.nn.functional.softmin,
+        softmax_op.LOGSOFTMAX: torch.log_softmax,
+    }
+    return functions[op](input_tensor, dim=dim)
 
 
-def _golden_softmax(input_tensor, dim, *_, op=None, **__):
-    # moreh_softmax and moreh_softmin share one kernel family; op overrides the operation's default function.
-    op = ttnn._ttnn.operations.moreh.MorehSoftmaxOp.SOFTMAX if op is None else op
-    return _moreh_softmax_family(input_tensor, dim, op)
-
-
-ttnn.attach_golden_function(ttnn.moreh_softmax, golden_function=_golden_softmax)
-
-
-def _golden_softmin(input_tensor, dim, *_, op=None, **__):
-    op = ttnn._ttnn.operations.moreh.MorehSoftmaxOp.SOFTMIN if op is None else op
-    return _moreh_softmax_family(input_tensor, dim, op)
-
-
-ttnn.attach_golden_function(ttnn.moreh_softmin, golden_function=_golden_softmin)
+ttnn.attach_golden_function(
+    ttnn.moreh_softmax,
+    golden_function=_make_softmax_family_golden(
+        ttnn._ttnn.operations.moreh.MorehSoftmaxOp.SOFTMAX, _moreh_softmax_family
+    ),
+)
+ttnn.attach_golden_function(
+    ttnn.moreh_softmin,
+    golden_function=_make_softmax_family_golden(
+        ttnn._ttnn.operations.moreh.MorehSoftmaxOp.SOFTMIN, _moreh_softmax_family
+    ),
+)
 
 
 def _golden_logsoftmax(input_tensor, dim, *_, **__):
@@ -471,9 +483,7 @@ def _golden_matmul_backward(output_grad, input_a, input_b, *_, are_required_outp
     input_a, input_b = golden_prepare_grad_inputs(input_a, input_b)
     forward = torch.matmul(input_a, input_b)
     grads = golden_compute_gradients(forward, (input_a, input_b), output_grad)
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(grads, are_required_outputs)
-    return grads
+    return golden_select_optional_outputs(grads, are_required_outputs)
 
 
 ttnn.attach_golden_function(
@@ -489,9 +499,7 @@ def _golden_bmm_backward(output_grad, input, mat2, *_, are_required_outputs=None
     input, mat2 = golden_prepare_grad_inputs(input, mat2)
     forward = torch.bmm(input, mat2)
     grads = golden_compute_gradients(forward, (input, mat2), output_grad)
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(grads, are_required_outputs)
-    return grads
+    return golden_select_optional_outputs(grads, are_required_outputs)
 
 
 ttnn.attach_golden_function(
@@ -659,49 +667,51 @@ ttnn.attach_golden_function(
 )
 
 
-def _moreh_softmax_family_backward(output_tensor, output_grad_tensor, dim, op):
-    """Evaluate the backward of the softmax-family function selected by a MorehSoftmaxBackwardOp."""
-
-    backward_op = ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp
-    if op == backward_op.SOFTMIN:
-        # softmin(x) = softmax(-x), so its derivative has the opposite sign of softmax.
-        return output_tensor * ((output_grad_tensor * output_tensor).sum(dim=dim, keepdim=True) - output_grad_tensor)
-    if op == backward_op.LOGSOFTMAX:
-        return output_grad_tensor - output_tensor.exp() * output_grad_tensor.sum(dim=dim, keepdim=True)
+def _softmax_derivative(output_tensor, output_grad_tensor, dim):
     # softmax backward: grad = output * (output_grad - sum(output_grad * output, dim, keepdim=True))
     return output_tensor * (output_grad_tensor - (output_grad_tensor * output_tensor).sum(dim=dim, keepdim=True))
 
 
-def _golden_softmax_backward(output_tensor, output_grad_tensor, dim, *_, op=None, **__):
-    # The softmax and softmin backward operations share one kernel family; op overrides the default derivative.
-    op = ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.SOFTMAX if op is None else op
-    return _moreh_softmax_family_backward(output_tensor, output_grad_tensor, dim, op)
+def _softmin_derivative(output_tensor, output_grad_tensor, dim):
+    # softmin(x) = softmax(-x), so its derivative has the opposite sign of softmax.
+    return output_tensor * ((output_grad_tensor * output_tensor).sum(dim=dim, keepdim=True) - output_grad_tensor)
+
+
+def _logsoftmax_derivative(output_tensor, output_grad_tensor, dim):
+    # logsoftmax backward: grad = output_grad - exp(output) * sum(output_grad, dim, keepdim=True)
+    return output_grad_tensor - output_tensor.exp() * output_grad_tensor.sum(dim=dim, keepdim=True)
+
+
+def _moreh_softmax_family_backward(output_tensor, output_grad_tensor, dim, *_, op, **__):
+    """Evaluate the backward of the softmax-family function selected by a MorehSoftmaxBackwardOp."""
+
+    backward_op = ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp
+    derivatives = {
+        backward_op.SOFTMAX: _softmax_derivative,
+        backward_op.SOFTMIN: _softmin_derivative,
+        backward_op.LOGSOFTMAX: _logsoftmax_derivative,
+    }
+    return derivatives[op](output_tensor, output_grad_tensor, dim)
 
 
 ttnn.attach_golden_function(
     ttnn.moreh_softmax_backward,
-    golden_function=_golden_softmax_backward,
+    golden_function=_make_softmax_family_golden(
+        ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.SOFTMAX, _moreh_softmax_family_backward
+    ),
     output_tensor_kwarg_names=("input_grad_tensor",),
 )
-
-
-def _golden_softmin_backward(output_tensor, output_grad_tensor, dim, *_, op=None, **__):
-    op = ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.SOFTMIN if op is None else op
-    return _moreh_softmax_family_backward(output_tensor, output_grad_tensor, dim, op)
-
-
 ttnn.attach_golden_function(
     ttnn.moreh_softmin_backward,
-    golden_function=_golden_softmin_backward,
+    golden_function=_make_softmax_family_golden(
+        ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.SOFTMIN, _moreh_softmax_family_backward
+    ),
     output_tensor_kwarg_names=("input_grad_tensor",),
 )
 
 
 def _golden_logsoftmax_backward(output_tensor, output_grad_tensor, dim, *_, **__):
-    import torch
-
-    # logsoftmax backward: grad = output_grad - exp(output) * sum(output_grad, dim, keepdim=True)
-    return output_grad_tensor - output_tensor.exp() * output_grad_tensor.sum(dim=dim, keepdim=True)
+    return _logsoftmax_derivative(output_tensor, output_grad_tensor, dim)
 
 
 ttnn.attach_golden_function(

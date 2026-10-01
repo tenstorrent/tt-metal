@@ -74,8 +74,6 @@ ttnn.attach_golden_function(ttnn.ones, golden_function=_golden_function)
 def _golden_function_full(shape: ttnn.Shape, fill_value: float, dtype=None, *_, **__):
     import torch
 
-    if isinstance(shape, ttnn.Shape):
-        shape = tuple(shape)
     # TTNN creates BFLOAT16 tensors when dtype is omitted, unlike Torch's float32 default.
     torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.bfloat16
     return torch.full(tuple(shape), fill_value=fill_value, dtype=torch_dtype)

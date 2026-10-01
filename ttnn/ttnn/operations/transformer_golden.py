@@ -479,13 +479,11 @@ def _decode_attention(
 
     outputs = []
     for batch_index in range(batch):
-        position = int(positions[batch_index % len(positions)])
-        if is_causal and position < 0:
+        # The non-causal decode reader attends the whole cache; cur_pos only bounds causal decode.
+        position = int(positions[batch_index % len(positions)]) if is_causal else input_tensor_k.shape[-2] - 1
+        if position < 0:
             outputs.append(query.new_zeros((1, num_heads, 1, input_tensor_v.shape[-1])))
             continue
-        if not is_causal:
-            # The non-causal decode reader attends the whole cache; cur_pos only bounds causal decode.
-            position = input_tensor_k.shape[-2] - 1
         cache_batch = 0 if share_cache or input_tensor_k.shape[0] == 1 else batch_index
         key = input_tensor_k[cache_batch : cache_batch + 1, :, : position + 1]
         value = input_tensor_v[cache_batch : cache_batch + 1, :, : position + 1]

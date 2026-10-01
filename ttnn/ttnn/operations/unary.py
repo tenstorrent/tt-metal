@@ -68,14 +68,9 @@ def _get_unary_golden_table():
             return torch.nn.functional.hardsigmoid(x.to(torch.float32)).view(x.dtype)
         return torch.nn.functional.hardswish(x)
 
-    def torch_bitcast(x, dtype):
-        # Tensor.view requires the torch dtype corresponding to the TTNN output dtype.
-        return x.view(ttnn.ttnn_dtype_to_torch_dtype(dtype))
-
     name_to_golden_function = {
         "abs": torch.abs,
         "atan": torch.atan,
-        "bitcast": torch_bitcast,
         "cos": torch.cos,
         "erfinv": torch.erfinv,
         "exp2": torch.exp2,
@@ -142,8 +137,6 @@ def _get_unary_golden_table():
         "sinh": torch.sinh,
         "softsign": torch.nn.functional.softsign,
         "swish": torch.nn.functional.silu,
-        "tril": torch.tril,
-        "triu": torch.triu,
     }
 
     golden_keys = set(name_to_golden_function.keys())
@@ -155,13 +148,10 @@ def _get_unary_golden_table():
 
 
 def register_ttnn_cpp_unary_function(unary_function):
-    def _golden_function(input_tensor: ttnn.Tensor, *args, diagonal=None, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, *args, **_):
         # PyTorch is optional; resolve its functions only when a golden is called.
         name_to_golden_function = _get_unary_golden_table()
         torch_function = name_to_golden_function[unary_function.__name__.split(".")[-1]]
-        if diagonal is not None:
-            # tril and triu bind diagonal as keyword-only, so it must survive the kwarg filtering below.
-            return torch_function(input_tensor, *args, diagonal=diagonal)
         # Preserve operation-specific positional parameters while discarding TTNN-only kwargs.
         return torch_function(input_tensor, *args)
 
@@ -171,7 +161,6 @@ def register_ttnn_cpp_unary_function(unary_function):
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.abs,
     ttnn.atan,
-    ttnn.bitcast,
     ttnn.cos,
     ttnn.erfinv,
     ttnn.exp2,
@@ -235,18 +224,44 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.sinh,
     ttnn.softsign,
     ttnn.swish,
-    ttnn.tril,
-    ttnn.triu,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
 
+
+def _torch_bitcast(input_tensor, dtype):
+    # Tensor.view requires the torch dtype corresponding to the TTNN output dtype.
+    return input_tensor.view(ttnn.ttnn_dtype_to_torch_dtype(dtype))
+
+
+def _golden_function_bitcast(input_tensor, dtype, *args, **_):
+    return _torch_bitcast(input_tensor, dtype)
+
+
 # bitcast returns the requested dtype, so its fallback output must not be converted back to the input dtype.
 ttnn.attach_golden_function(
     ttnn.bitcast,
-    golden_function=ttnn.bitcast.golden_function,
+    golden_function=_golden_function_bitcast,
     postprocess_golden_function_outputs=ttnn.decorators.dtype_preserving_postprocess_golden_function_outputs,
 )
+
+
+def _golden_function_tril(input_tensor, diagonal=0, *args, **_):
+    import torch
+
+    return torch.tril(input_tensor, diagonal=diagonal)
+
+
+ttnn.attach_golden_function(ttnn.tril, golden_function=_golden_function_tril)
+
+
+def _golden_function_triu(input_tensor, diagonal=0, *args, **_):
+    import torch
+
+    return torch.triu(input_tensor, diagonal=diagonal)
+
+
+ttnn.attach_golden_function(ttnn.triu, golden_function=_golden_function_triu)
 
 
 def _golden_function_tanh(input_tensor, *args, fast_and_approximate_mode=False, **kwargs):
@@ -1099,7 +1114,7 @@ def _unary_chain_torch_ops():
     function_names normalizes edge-case enum members whose canonical unary golden table key
     is not the lowercase enum member name; every other no-param op resolves via
     op_type.name.lower(). param_ops covers the parameterized SFPU ops, which have no
-    standalone named ttnn function.
+    standalone named ttnn function, and the dtype-changing ops, whose params encode their dtypes.
     """
     import torch
 
@@ -1119,8 +1134,26 @@ def _unary_chain_torch_ops():
         ttnn.UnaryOpType.RSUB: lambda x, p: p - x,
         ttnn.UnaryOpType.RDIV: lambda x, p: p / x,
         ttnn.UnaryOpType.POWER: lambda x, p: torch.pow(x, p),
+        ttnn.UnaryOpType.TYPECAST: _unary_chain_typecast,
+        ttnn.UnaryOpType.BITCAST: _unary_chain_bitcast,
     }
     return function_names, param_ops
+
+
+def _decode_unary_chain_dtypes(params):
+    # Dtype-changing chain ops encode their source and target DataType values as float params.
+    input_dtype, output_dtype = (ttnn.DataType(int(value)) for value in params[:2])
+    return input_dtype, output_dtype
+
+
+def _unary_chain_typecast(input_tensor, *params):
+    input_dtype, output_dtype = _decode_unary_chain_dtypes(params)
+    return ttnn.get_golden_function(ttnn.typecast)(input_tensor, input_dtype=input_dtype, output_dtype=output_dtype)
+
+
+def _unary_chain_bitcast(input_tensor, *params):
+    _, output_dtype = _decode_unary_chain_dtypes(params)
+    return _torch_bitcast(input_tensor, output_dtype)
 
 
 def _get_unary_chain_torch_op(op_type):
@@ -1156,17 +1189,6 @@ def _get_unary_chain_torch_op(op_type):
 def _golden_function_unary_chain(input_tensor, ops_chain, *args, **kwargs):
     output = input_tensor
     for op in ops_chain:
-        if op.op_type in (ttnn.UnaryOpType.TYPECAST, ttnn.UnaryOpType.BITCAST):
-            # Dtype-changing chain ops encode their source and target DataType values as float params,
-            # so they are dispatched to the standalone typecast and bitcast goldens with decoded dtypes.
-            input_dtype, output_dtype = (ttnn.DataType(int(value)) for value in op.params[:2])
-            if op.op_type == ttnn.UnaryOpType.TYPECAST:
-                output = ttnn.get_golden_function(ttnn.typecast)(
-                    output, input_dtype=input_dtype, output_dtype=output_dtype
-                )
-            else:
-                output = _get_unary_golden_table()["bitcast"](output, output_dtype)
-            continue
         torch_op, takes_param = _get_unary_chain_torch_op(op.op_type)
         params = list(op.params) if takes_param else []
         output = torch_op(output, *params)

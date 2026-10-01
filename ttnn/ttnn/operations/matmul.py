@@ -173,6 +173,17 @@ def _golden_function_matmul_batched_weights(input_tensor_a, input_tensors_b, *_,
 ttnn.attach_golden_function(ttnn.matmul_batched_weights, golden_function=_golden_function_matmul_batched_weights)
 
 
+def _pairwise_group_matmul(a, b):
+    """Multiply every batch block of A with every group block of B; the result has A's batch dims, then B's."""
+
+    import torch
+
+    a_batch, b_batch = a.shape[:-2], b.shape[:-2]
+    a_exp = a.reshape(*a_batch, *([1] * len(b_batch)), *a.shape[-2:])
+    b_exp = b.reshape(*([1] * len(a_batch)), *b_batch, *b.shape[-2:])
+    return torch.matmul(a_exp, b_exp.to(a.dtype))
+
+
 def _sparse_matmul_golden_result(
     input_tensor_a,
     input_tensor_b,
@@ -190,30 +201,21 @@ def _sparse_matmul_golden_result(
     a, b = input_tensor_a, input_tensor_b
     if not is_input_a_sparse and not is_input_b_sparse:
         raise ValueError("sparse_matmul requires at least one sparse input")
-    k = a.shape[-1]
     if indices is not None:
         # Indexed mode gathers the listed groups of B into a compact group axis, in index order,
         # and never reads sparsity. A sparse A is already compact, with one block per listed group.
         b_selected = b.index_select(-3, indices.reshape(-1).to(torch.int64)).to(a.dtype)
         if is_input_a_sparse:
             return torch.matmul(a, b_selected)
-        a_batch, b_batch = a.shape[:-2], b_selected.shape[:-2]
-        a_exp = a.reshape(*a_batch, *([1] * len(b_batch)), a.shape[-2], k)
-        b_exp = b_selected.reshape(*([1] * len(a_batch)), *b_batch, k, b.shape[-1])
-        return torch.matmul(a_exp, b_exp)
+        return _pairwise_group_matmul(a, b_selected)
 
     if is_input_a_sparse:
         dense = torch.matmul(a, b.to(a.dtype))
-        mask = (sparsity != 0).reshape(dense.shape[:-2])
-        expanded_output = dense * mask.unsqueeze(-1).unsqueeze(-1).to(dense.dtype)
     else:
         # Dense-A/sparse-B mode forms every pair from A's batch dims and B's sparse-group dims.
-        a_batch, b_batch = a.shape[:-2], b.shape[:-2]
-        a_exp = a.reshape(*a_batch, *([1] * len(b_batch)), a.shape[-2], k)
-        b_exp = b.reshape(*([1] * len(a_batch)), *b_batch, k, b.shape[-1])
-        dense = torch.matmul(a_exp, b_exp.to(a.dtype))
-        mask = (sparsity != 0).reshape(*a_batch, *b_batch)
-        expanded_output = dense * mask.unsqueeze(-1).unsqueeze(-1).to(dense.dtype)
+        dense = _pairwise_group_matmul(a, b)
+    mask = (sparsity != 0).reshape(dense.shape[:-2])
+    expanded_output = dense * mask.unsqueeze(-1).unsqueeze(-1).to(dense.dtype)
 
     if optional_output_tensor is not None and optional_output_tensor.shape != expanded_output.shape:
         compact_shape = (1, nnz, a.shape[-2], b.shape[-1])

@@ -8,7 +8,7 @@ import sys
 
 import ttnn
 from ttnn.operations import integer_golden
-from ttnn.operations.golden_common import golden_to_output_dtype
+from ttnn.operations.golden_common import golden_to_output_dtype, make_aliasing_preprocess
 
 __all__ = []
 
@@ -18,6 +18,14 @@ _DEGENERATE_SCALAR_ADD_ULP_THRESHOLD = 1
 # degenerate-output bound shared with squared_difference.
 _DEGENERATE_SCALAR_ARITHMETIC_ULP_THRESHOLD = 3
 
+_preprocess_binary_argument_aliases = make_aliasing_preprocess(
+    {
+        "input_a": "input_tensor_a",
+        "input_b": "input_tensor_b",
+        "value": "input_tensor_b",
+    }
+)
+
 
 def _preprocess_binary_golden_function_inputs(function_args, function_kwargs):
     """Normalize binary golden arguments and retain TT dtype metadata.
@@ -26,19 +34,7 @@ def _preprocess_binary_golden_function_inputs(function_args, function_kwargs):
 
     function_args = tuple(function_args)
     original_kwargs = function_kwargs
-    golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
-        function_args, function_kwargs
-    )
-
-    argument_aliases = {
-        "input_a": "input_tensor_a",
-        "input_b": "input_tensor_b",
-        "value": "input_tensor_b",
-    }
-    for alias, canonical_name in argument_aliases.items():
-        if alias in golden_kwargs and canonical_name not in golden_kwargs:
-            golden_kwargs[canonical_name] = golden_kwargs.pop(alias)
-    golden_kwargs["_ttnn_golden_argument_aliases"] = argument_aliases
+    golden_args, golden_kwargs = _preprocess_binary_argument_aliases(function_args, function_kwargs)
 
     input_tensor_a = (
         function_args[0] if function_args else original_kwargs.get("input_tensor_a", original_kwargs.get("input_a"))
@@ -116,6 +112,19 @@ def _copy_inplace_golden_result(input_tensor_a, output_tensor):
     elif hasattr(input_tensor_a, "_ttnn_comparison_config"):
         del input_tensor_a._ttnn_comparison_config
     return input_tensor_a
+
+
+def _make_inplace_golden_function(golden_function):
+    """Wrap an out-of-place binary golden for its positional in-place form.
+    The global golden of the mutated first operand must follow the caller-visible alias.
+    """
+
+    def inplace_golden_function(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
+        output_tensor = golden_function(input_tensor_a, input_tensor_b, *args, **kwargs)
+        return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
+
+    inplace_golden_function._ttnn_mutates_global_inputs = True
+    return inplace_golden_function
 
 
 # The scalar overloads take std::variant<uint32_t, int32_t, float>, so a Python int outside the
@@ -378,14 +387,6 @@ def _golden_function_add(
     )
 
 
-def _golden_function_add_(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
-    output_tensor = _golden_function_add(input_tensor_a, input_tensor_b, *args, **kwargs)
-    return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
-
-
-_golden_function_add_._ttnn_mutates_global_inputs = True
-
-
 ttnn.attach_golden_function(
     ttnn.add,
     golden_function=_golden_function_add,
@@ -393,7 +394,7 @@ ttnn.attach_golden_function(
 )
 ttnn.attach_golden_function(
     ttnn.add_,
-    golden_function=_golden_function_add_,
+    golden_function=_make_inplace_golden_function(_golden_function_add),
     preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
 )
 
@@ -435,14 +436,6 @@ def _golden_function_subtract(
     )
 
 
-def _golden_function_subtract_(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
-    output_tensor = _golden_function_subtract(input_tensor_a, input_tensor_b, *args, **kwargs)
-    return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
-
-
-_golden_function_subtract_._ttnn_mutates_global_inputs = True
-
-
 ttnn.attach_golden_function(
     ttnn.subtract,
     golden_function=_golden_function_subtract,
@@ -450,7 +443,7 @@ ttnn.attach_golden_function(
 )
 ttnn.attach_golden_function(
     ttnn.subtract_,
-    golden_function=_golden_function_subtract_,
+    golden_function=_make_inplace_golden_function(_golden_function_subtract),
     preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
 )
 
@@ -492,14 +485,6 @@ def _golden_function_rsub(
     )
 
 
-def _golden_function_rsub_(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
-    output_tensor = _golden_function_rsub(input_tensor_a, input_tensor_b, *args, **kwargs)
-    return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
-
-
-_golden_function_rsub_._ttnn_mutates_global_inputs = True
-
-
 ttnn.attach_golden_function(
     ttnn.rsub,
     golden_function=_golden_function_rsub,
@@ -507,7 +492,7 @@ ttnn.attach_golden_function(
 )
 ttnn.attach_golden_function(
     ttnn.rsub_,
-    golden_function=_golden_function_rsub_,
+    golden_function=_make_inplace_golden_function(_golden_function_rsub),
     preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
 )
 
@@ -549,14 +534,6 @@ def _golden_function_multiply(
     )
 
 
-def _golden_function_multiply_(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
-    output_tensor = _golden_function_multiply(input_tensor_a, input_tensor_b, *args, **kwargs)
-    return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
-
-
-_golden_function_multiply_._ttnn_mutates_global_inputs = True
-
-
 ttnn.attach_golden_function(
     ttnn.multiply,
     golden_function=_golden_function_multiply,
@@ -564,7 +541,7 @@ ttnn.attach_golden_function(
 )
 ttnn.attach_golden_function(
     ttnn.multiply_,
-    golden_function=_golden_function_multiply_,
+    golden_function=_make_inplace_golden_function(_golden_function_multiply),
     preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
 )
 
@@ -698,19 +675,6 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.logical_xor_, golden_function=_golden_function)
 
 
-def _make_inplace_golden_function(golden_function):
-    """Wrap an out-of-place binary golden for its positional in-place form.
-    The global golden of the mutated first operand must follow the caller-visible alias.
-    """
-
-    def inplace_golden_function(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
-        output_tensor = golden_function(input_tensor_a, input_tensor_b, *args, **kwargs)
-        return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
-
-    inplace_golden_function._ttnn_mutates_global_inputs = True
-    return inplace_golden_function
-
-
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
@@ -817,14 +781,6 @@ def _golden_function_divide(
     )
 
 
-def _golden_function_divide_(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
-    output_tensor = _golden_function_divide(input_tensor_a, input_tensor_b, *args, **kwargs)
-    return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
-
-
-_golden_function_divide_._ttnn_mutates_global_inputs = True
-
-
 ttnn.attach_golden_function(
     ttnn.divide,
     golden_function=_golden_function_divide,
@@ -832,7 +788,7 @@ ttnn.attach_golden_function(
 )
 ttnn.attach_golden_function(
     ttnn.divide_,
-    golden_function=_golden_function_divide_,
+    golden_function=_make_inplace_golden_function(_golden_function_divide),
     preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
 )
 
@@ -920,14 +876,6 @@ def _golden_function_squared_difference(
     return output_tensor
 
 
-def _golden_function_squared_difference_(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
-    output_tensor = _golden_function_squared_difference(input_tensor_a, input_tensor_b, *args, **kwargs)
-    return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
-
-
-_golden_function_squared_difference_._ttnn_mutates_global_inputs = True
-
-
 ttnn.attach_golden_function(
     ttnn.squared_difference,
     golden_function=_golden_function_squared_difference,
@@ -935,7 +883,7 @@ ttnn.attach_golden_function(
 )
 ttnn.attach_golden_function(
     ttnn.squared_difference_,
-    golden_function=_golden_function_squared_difference_,
+    golden_function=_make_inplace_golden_function(_golden_function_squared_difference),
     preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
 )
 

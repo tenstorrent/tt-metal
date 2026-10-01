@@ -10,6 +10,7 @@ from ttnn.operations.golden_common import (
     golden_pack_complex_gradient,
     golden_prepare_grad_inputs,
     golden_select_optional_outputs,
+    make_aliasing_preprocess,
 )
 
 
@@ -17,11 +18,17 @@ THIS_MODULE = sys.modules[__name__]
 
 __all__ = []
 
-
-def _first_given(*aliases):
-    """Return the operand passed under whichever of its public names the overload uses."""
-
-    return next((value for value in aliases if value is not None), None)
+# The tensor overloads name their operands input_tensor and other_tensor, the scalar overloads name the second operand
+# scalar, the scalar-bias bias_gelu overloads name it bias, and the single-operand assign overload names its operand
+# input_tensor; the goldens take them as input_tensor_a and input_tensor_b.
+_preprocess_binary_backward_golden_inputs = make_aliasing_preprocess(
+    {
+        "input_tensor": "input_tensor_a",
+        "other_tensor": "input_tensor_b",
+        "scalar": "input_tensor_b",
+        "bias": "input_tensor_b",
+    }
+)
 
 
 def _complex_binary_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *, op_kwargs=None):
@@ -50,17 +57,11 @@ def _golden_function_backward(
         return _golden_function_backward_overload(
             torch_op, grad_tensor, input_tensor_a, input_tensor_b, are_required_outputs=are_required_outputs
         )
-    if torch_op == "torch.squared_difference":
-        pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
-    else:
-        pyt_y = torch_op(input_tensor_a, input_tensor_b)
+    pyt_y = torch_op(input_tensor_a, input_tensor_b)
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(golden_tensor, are_required_outputs)
-    return golden_tensor
+    return golden_select_optional_outputs([input_tensor_a.grad, input_tensor_b.grad], are_required_outputs)
 
 
 def _golden_function_backward_overload(
@@ -75,10 +76,7 @@ def _golden_function_backward_overload(
         if input_tensor_b is None:
             golden_tensor = [input_tensor_a.grad]
             return golden_tensor
-        golden_tensor = [input_tensor_a.grad, input_tensor_a.grad]
-        if are_required_outputs is not None:
-            return golden_select_optional_outputs(golden_tensor, are_required_outputs)
-        return golden_tensor
+        return golden_select_optional_outputs([input_tensor_a.grad, input_tensor_a.grad], are_required_outputs)
     pyt_y = torch_op(input_tensor_a, input_tensor_b)
     if isinstance(input_tensor_b, (float, int)):
         input_tensor_a.retain_grad()
@@ -88,10 +86,7 @@ def _golden_function_backward_overload(
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(golden_tensor, are_required_outputs)
-    return golden_tensor
+    return golden_select_optional_outputs([input_tensor_a.grad, input_tensor_b.grad], are_required_outputs)
 
 
 def _golden_function_backward_with_dim(
@@ -112,10 +107,7 @@ def _golden_function_backward_with_dim(
     else:
         pyt_y = torch.concat((input_tensor_a, input_tensor_b), dim=dimension)
     pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(golden_tensor, are_required_outputs)
-    return golden_tensor
+    return golden_select_optional_outputs([input_tensor_a.grad, input_tensor_b.grad], are_required_outputs)
 
 
 def _golden_function_backward_with_float(
@@ -130,10 +122,7 @@ def _golden_function_backward_with_float(
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(golden_tensor, are_required_outputs)
-    return golden_tensor
+    return golden_select_optional_outputs([input_tensor_a.grad, input_tensor_b.grad], are_required_outputs)
 
 
 def _golden_function_backward_with_string(
@@ -163,181 +152,54 @@ def _golden_function_backward_with_string(
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(golden_tensor, are_required_outputs)
-    return golden_tensor
+    return golden_select_optional_outputs([input_tensor_a.grad, input_tensor_b.grad], are_required_outputs)
 
 
-def _golden_function_bw(
-    grad_tensor,
-    input_tensor=None,
-    other_tensor=None,
-    *args,
-    input_tensor_a=None,
-    input_tensor_b=None,
-    scalar=None,
-    **kwargs,
+def _torch_squared_difference(input_tensor_a, input_tensor_b):
+    import torch
+
+    return torch.square(torch.sub(input_tensor_a, input_tensor_b))
+
+
+def _make_binary_bw_golden(torch_op, reference=_golden_function_backward):
+    """Return a binary backward golden that differentiates torch_op through reference.
+    torch_op is a callable or the name of a Torch function, resolved at call time because PyTorch is optional.
+    """
+
+    def golden_function(grad_tensor, input_tensor_a, input_tensor_b=None, *args, **kwargs):
+        import torch
+
+        torch_function = getattr(torch, torch_op) if isinstance(torch_op, str) else torch_op
+        return reference(torch_function, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs)
+
+    return golden_function
+
+
+for _operation, _torch_op, _reference in (
+    (ttnn.add_bw, "add", _golden_function_backward),
+    (ttnn.sub_bw, "sub", _golden_function_backward),
+    (ttnn.mul_bw, "mul", _golden_function_backward),
+    (ttnn.atan2_bw, "atan2", _golden_function_backward),
+    (ttnn.xlogy_bw, "xlogy", _golden_function_backward),
+    (ttnn.hypot_bw, "hypot", _golden_function_backward),
+    (ttnn.ldexp_bw, "ldexp", _golden_function_backward),
+    (ttnn.logaddexp_bw, "logaddexp", _golden_function_backward),
+    (ttnn.logaddexp2_bw, "logaddexp2", _golden_function_backward),
+    (ttnn.squared_difference_bw, _torch_squared_difference, _golden_function_backward),
+    (ttnn.rsub_bw, "rsub", _golden_function_backward),
+    (ttnn.min_bw, "min", _golden_function_backward),
+    (ttnn.max_bw, "max", _golden_function_backward),
+    (ttnn.remainder_bw, "remainder", _golden_function_backward_overload),
+    (ttnn.fmod_bw, "fmod", _golden_function_backward_overload),
+    (ttnn.assign_bw, "clone", _golden_function_backward_overload),
+    (ttnn.subalpha_bw, "sub", _golden_function_backward_with_float),
+    (ttnn.addalpha_bw, "add", _golden_function_backward_with_float),
 ):
-    import torch
-
-    # The tensor overload names its operands input_tensor and other_tensor, the scalar overload uses
-    # input_tensor_a and scalar, and the complex overload uses input_tensor_a and input_tensor_b.
-    return _golden_function_backward(
-        torch.sub,
-        grad_tensor,
-        _first_given(input_tensor, input_tensor_a),
-        _first_given(other_tensor, input_tensor_b, scalar),
-        *args,
-        **kwargs,
+    ttnn.attach_golden_function(
+        _operation,
+        golden_function=_make_binary_bw_golden(_torch_op, _reference),
+        preprocess_golden_function_inputs=_preprocess_binary_backward_golden_inputs,
     )
-
-
-ttnn.attach_golden_function(ttnn.sub_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(
-    grad_tensor,
-    input_tensor=None,
-    other_tensor=None,
-    *args,
-    input_tensor_a=None,
-    input_tensor_b=None,
-    scalar=None,
-    **kwargs,
-):
-    import torch
-
-    return _golden_function_backward(
-        torch.add,
-        grad_tensor,
-        _first_given(input_tensor, input_tensor_a),
-        _first_given(other_tensor, input_tensor_b, scalar),
-        *args,
-        **kwargs,
-    )
-
-
-ttnn.attach_golden_function(ttnn.add_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b=None, *args, scalar=None, **kwargs):
-    import torch
-
-    return _golden_function_backward_overload(
-        torch.remainder, grad_tensor, input_tensor_a, _first_given(input_tensor_b, scalar), *args, **kwargs
-    )
-
-
-ttnn.attach_golden_function(ttnn.remainder_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b=None, *args, scalar=None, **kwargs):
-    import torch
-
-    return _golden_function_backward_overload(
-        torch.fmod, grad_tensor, input_tensor_a, _first_given(input_tensor_b, scalar), *args, **kwargs
-    )
-
-
-ttnn.attach_golden_function(ttnn.fmod_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward(torch.atan2, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs)
-
-
-ttnn.attach_golden_function(ttnn.atan2_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward(torch.xlogy, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs)
-
-
-ttnn.attach_golden_function(ttnn.xlogy_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward(torch.hypot, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs)
-
-
-ttnn.attach_golden_function(ttnn.hypot_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward(torch.ldexp, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs)
-
-
-ttnn.attach_golden_function(ttnn.ldexp_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward(torch.logaddexp, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs)
-
-
-ttnn.attach_golden_function(ttnn.logaddexp_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward(torch.logaddexp2, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs)
-
-
-ttnn.attach_golden_function(ttnn.logaddexp2_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    return _golden_function_backward(
-        "torch.squared_difference", grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs
-    )
-
-
-ttnn.attach_golden_function(ttnn.squared_difference_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, alpha=None, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward_with_float(
-        torch.sub, grad_tensor, input_tensor_a, input_tensor_b, alpha, *args, **kwargs
-    )
-
-
-ttnn.attach_golden_function(ttnn.subalpha_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, alpha=None, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward_with_float(
-        torch.add, grad_tensor, input_tensor_a, input_tensor_b, alpha, *args, **kwargs
-    )
-
-
-ttnn.attach_golden_function(ttnn.addalpha_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor=None, input_tensor_b=None, *args, input_tensor_a=None, **kwargs):
-    import torch
-
-    # The single-operand overload names its operand input_tensor, the two-operand overload input_tensor_a.
-    return _golden_function_backward_overload(
-        torch.clone, grad_tensor, _first_given(input_tensor, input_tensor_a), input_tensor_b, *args, **kwargs
-    )
-
-
-ttnn.attach_golden_function(ttnn.assign_bw, golden_function=_golden_function_bw)
 
 
 def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, dim=None, *args, **kwargs):
@@ -348,35 +210,14 @@ def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, dim=None, *
     )
 
 
-ttnn.attach_golden_function(ttnn.concat_bw, golden_function=_golden_function_bw)
+ttnn.attach_golden_function(
+    ttnn.concat_bw,
+    golden_function=_golden_function_bw,
+    preprocess_golden_function_inputs=_preprocess_binary_backward_golden_inputs,
+)
 
 
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward(torch.rsub, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs)
-
-
-ttnn.attach_golden_function(ttnn.rsub_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(
-    grad_tensor,
-    input_tensor_a=None,
-    input_tensor_b=None,
-    variant=None,
-    approximate=None,
-    *args,
-    input_tensor=None,
-    bias=None,
-    **kwargs,
-):
-    import torch
-
-    # The tensor-bias overloads name the operands input_tensor_a and input_tensor_b, the scalar-bias ones input_tensor
-    # and bias.
-    input_tensor_a = _first_given(input_tensor_a, input_tensor)
-    input_tensor_b = _first_given(input_tensor_b, bias)
+def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, variant=None, approximate=None, *args, **kwargs):
     if approximate is None:
         approximate = kwargs.pop("value", variant)
     if approximate is None:
@@ -388,38 +229,15 @@ def _golden_function_bw(
     )
 
 
-ttnn.attach_golden_function(ttnn.bias_gelu_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward(torch.min, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs)
-
-
-ttnn.attach_golden_function(ttnn.min_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    return _golden_function_backward(torch.max, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs)
-
-
-ttnn.attach_golden_function(ttnn.max_bw, golden_function=_golden_function)
+ttnn.attach_golden_function(
+    ttnn.bias_gelu_bw,
+    golden_function=_golden_function_bw,
+    preprocess_golden_function_inputs=_preprocess_binary_backward_golden_inputs,
+)
 
 
 def _golden_function_bw(
-    grad_tensor,
-    input_tensor=None,
-    other_tensor=None,
-    rounding_mode=None,
-    *args,
-    input_tensor_a=None,
-    input_tensor_b=None,
-    scalar=None,
-    are_required_outputs=None,
-    **kwargs,
+    grad_tensor, input_tensor_a, input_tensor_b, rounding_mode=None, *args, are_required_outputs=None, **kwargs
 ):
     import torch
 
@@ -427,39 +245,18 @@ def _golden_function_bw(
     return _golden_function_backward_with_string(
         torch.div,
         grad_tensor,
-        _first_given(input_tensor, input_tensor_a),
-        _first_given(other_tensor, input_tensor_b, scalar),
+        input_tensor_a,
+        input_tensor_b,
         rounding_mode,
         are_required_outputs=are_required_outputs,
     )
 
 
-ttnn.attach_golden_function(ttnn.div_bw, golden_function=_golden_function_bw)
-
-
-def _golden_function_bw(
-    grad_tensor,
-    input_tensor=None,
-    other_tensor=None,
-    *args,
-    input_tensor_a=None,
-    input_tensor_b=None,
-    scalar=None,
-    **kwargs,
-):
-    import torch
-
-    return _golden_function_backward(
-        torch.mul,
-        grad_tensor,
-        _first_given(input_tensor, input_tensor_a),
-        _first_given(other_tensor, input_tensor_b, scalar),
-        *args,
-        **kwargs,
-    )
-
-
-ttnn.attach_golden_function(ttnn.mul_bw, golden_function=_golden_function_bw)
+ttnn.attach_golden_function(
+    ttnn.div_bw,
+    golden_function=_golden_function_bw,
+    preprocess_golden_function_inputs=_preprocess_binary_backward_golden_inputs,
+)
 
 
 __all__ = []
