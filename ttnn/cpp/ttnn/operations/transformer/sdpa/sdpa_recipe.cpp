@@ -53,7 +53,7 @@ uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_co
 }
 
 uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles) {
-    const bool paired = policy.recurrent_state == RecurrentState::CompensatedBF16;
+    const bool paired = policy.recurrent_state == RecurrentState::ReferenceMaxFP32;
     return paired && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
 }
 
@@ -79,8 +79,8 @@ ProgramDescriptor recipe_compute_program(
     uint32_t d_tiles) {
     TT_FATAL(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1, "SDPA recipes require tile-aligned chunks and head dims");
     const bool fp32 = policy.fp32_destination;
-    const bool compensated = policy.recurrent_state == RecurrentState::CompensatedBF16;
-    const uint32_t stride = compensated ? 2 : 1;
+    // COMPENSATED and LOW_PRECISION keep a reference-max state in Float32 L1 (O in CB 9, l in CB 13).
+    const bool ref_max = policy.recurrent_state == RecurrentState::ReferenceMaxFP32;
     const auto state_format = fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t state_bytes = fp32 ? 4096 : 2048;
     const auto kv_type = policy.selection.kv_storage == KVStorage::BF16   ? DataType::BFLOAT16
@@ -109,14 +109,24 @@ ProgramDescriptor recipe_compute_program(
     add_cb(4, 1, 2048, tt::DataFormat::Float16_b);
     add_cb(5, 1, state_bytes, state_format);
     add_cb(6, q_tiles * k_tiles, state_bytes, state_format);
-    for (uint8_t index : {8, 9}) {
-        add_cb(index, q_tiles * d_tiles * stride, state_bytes, state_format);
+    if (ref_max) {
+        // CB 8: one BF16 tile, the denominator rounded for the normalization matmul.
+        // CB 9: per Q row, the numerator plane, then a rescaled group's chunk PV.
+        // CB 12: this chunk's BF16 row sums. CB 13: the denominator.
+        add_cb(8, 1, 2048, tt::DataFormat::Float16_b);
+        add_cb(9, q_tiles * d_tiles * 2, 4096, tt::DataFormat::Float32);
+        add_cb(12, q_tiles, 2048, tt::DataFormat::Float16_b);
+        add_cb(13, q_tiles, 4096, tt::DataFormat::Float32);
+    } else {
+        for (uint8_t index : {8, 9}) {
+            add_cb(index, q_tiles * d_tiles, state_bytes, state_format);
+        }
+        for (uint8_t index : {12, 13}) {
+            add_cb(index, q_tiles, state_bytes, state_format);
+        }
     }
     for (uint8_t index : {10, 11}) {
         add_cb(index, q_tiles, 2048, tt::DataFormat::Float16_b);
-    }
-    for (uint8_t index : {12, 13}) {
-        add_cb(index, q_tiles * stride, state_bytes, state_format);
     }
     add_cb(14, q_tiles, state_bytes, state_format);
     add_cb(16, (fp32 ? 2 : 4) * d_tiles, 2048, tt::DataFormat::Float16_b);
@@ -125,7 +135,7 @@ ProgramDescriptor recipe_compute_program(
         .fp32_dest_acc_en = fp32,
         .dst_full_sync_en = false,
         .math_approx_mode = true,
-        // B-E record their exp and compensation programs in the SFPU replay buffer once and replay them
+        // B-E record their exp programs in the SFPU replay buffer once and replay them
         // per tile from other functions; the SFPI compiler's replay optimization would overwrite them
         // (tenstorrent/tt-metal#58433). FAST is the legacy kernel and keeps its build.
         .disable_sfpu_replay_optimization = policy.selection.recipe != Recipe::A};
