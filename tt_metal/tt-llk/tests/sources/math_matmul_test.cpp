@@ -245,6 +245,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     LLK_INIT_END
+    // Experiment: 1 nop(s) after INIT and before the TILE_LOOP zone, outside both: they run once and move
+    // the measured pack loop by 4 bytes.
+    asm volatile("nop");
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
