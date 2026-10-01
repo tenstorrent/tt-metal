@@ -348,3 +348,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   - Device gate: PASS with the existing TtRMSNorm registration. pcc 0.999996, rel 0.0028, ratio [0.9967, 1.0031], worst row 0.0054, slices 0.0028-0.0029, x0.1 rel 0.0023 / worst row 0.0040.
 - The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_ffn_norm.py`
+
+## C.full_moe.router.test.1
+- Replaced the rendered test with the prior bring-up's frozen test (`models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_router.py`), set to layer 5. It uses the same golden ([2048, 256]) and reference, so its limits and mutation study still apply. Added the same deferred / CPU-bridge guards as the cp4 sliding router test.
+- Checks: PCC >= 0.99 (gated), exactly 8 nonzeros per row, weights >= 0, mean selection overlap >= 0.985, matched-row weight rel L2 <= 0.005, row sums 1 +- 0.01. Layer 5 needs these extra checks: a bf16 correction bias still passes PCC (0.9937) but fails overlap (0.952).
+- Reference: PCC 0.998186, overlap 0.99573, matched 1978/2048, rel L2 0.00154, row sums 1.0. Stub: PCC 0, fails.
+- Device gate: already PASSES with the existing `tt/router.py` registration: pcc_router_L05 0.998111, overlap 0.99536, matched 1973/2048, rel L2 0.00107, row sums [0.9976, 1.0023]. The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_router.py` (or with BRINGUP_IMPL=reference|stub).
