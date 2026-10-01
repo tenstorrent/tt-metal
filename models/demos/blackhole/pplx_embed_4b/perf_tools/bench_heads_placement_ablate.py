@@ -1,6 +1,7 @@
 # Fused heads op at the model's batched placement: v3 compute, QKV input in L1, Q out DRAM (HQ_L1=1: L1), K / V out
 # L1, preallocated outputs (bs32: a quarter-batch chunk writing into bs32 Q / K / V, B_in 8 B_out 32). Ablations reuse
 # bench_heads_bs16_ablate's scratch kernel variants; HV_ONLY=full,"compute only" picks variants.
+# HB1=1: the bs1 call instead (resident cos / sin / rotation / scaler / eps shard, Q in L1, outputs allocated per call).
 # Usage: bench_heads_placement_ablate.py <B_in> <B_out>
 import os
 import statistics
@@ -45,9 +46,14 @@ try:
     x = ttnn.from_torch(
         torch.randn(B_IN, 1, S, (NH + 2 * NKV) * DH), dtype=B8, layout=ttnn.TILE_LAYOUT, device=D, memory_config=L1
     )
-    qmc = L1 if os.getenv("HQ_L1", "0") == "1" else DR
+    HB1 = os.getenv("HB1", "0") == "1"
+    qmc = L1 if HB1 or os.getenv("HQ_L1", "0") == "1" else DR
     alloc = lambda shp, mc: ttnn.allocate_tensor_on_device(ttnn.Shape(shp), B8, ttnn.TILE_LAYOUT, D, mc)
-    outs = (alloc([B_OUT, NH, S, DH], qmc), alloc([B_OUT, NKV, S, DH], L1), alloc([B_OUT, NKV, S, DH], L1))
+    outs = (
+        None
+        if HB1
+        else (alloc([B_OUT, NH, S, DH], qmc), alloc([B_OUT, NKV, S, DH], L1), alloc([B_OUT, NKV, S, DH], L1))
+    )
     for vname, (r, c, w) in variants.items():
         if ONLY and vname not in ONLY.split(","):
             continue
@@ -68,17 +74,17 @@ try:
             q_dtype=B8,
             kv_dtype=B8,
             norm_eps=EPS,
-            out_tensors=outs,
-            batch_offset=0,
             use_v3=True,
+            **(dict(resident=True) if HB1 else dict(out_tensors=outs, batch_offset=0)),
         )
+        free = lambda r: [ttnn.deallocate(t) for t in r] if HB1 else None
         for _ in range(2):
-            fn()
+            free(fn())
         ttnn.synchronize_device(D)
         n = 8
         tid = ttnn.begin_trace_capture(D, cq_id=0)
         for _ in range(n):
-            fn()
+            free(fn())
         ttnn.end_trace_capture(D, tid, cq_id=0)
         ttnn.execute_trace(D, tid, cq_id=0, blocking=True)
         ts = []
