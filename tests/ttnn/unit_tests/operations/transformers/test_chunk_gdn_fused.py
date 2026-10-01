@@ -270,7 +270,7 @@ def _cost_model_path(device, bh, nc):
     from ttnn._ttnn.operations import transformer as _t
 
     grid = device.compute_with_storage_grid_size()
-    nv, np_, pl, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(grid.x, grid.y, bh, nc, VDIM // 32)
+    nv, np_, pl, nbuf, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(grid.x, grid.y, bh, nc, VDIM // 32)
     return "fused" if (nv >= 1 and pays) else "phased"
 
 
@@ -289,8 +289,8 @@ def test_fused_default_dispatch(device, num_k_heads, num_v_heads, nc):
     """With NO program config, the dispatcher must pick what the calibrated cost model says: fused
     iff a fused geometry fits this grid and beats the phased reference. The choice depends on NC (the
     fill cost is amortized over the chunks), so both a short and the production chunk count run: on
-    QB2 (11x10) the model picks fused for BH=48 at NC=8 and for BH in {4, 12, 48} at NC=64, and phased
-    for the rest. Since fused and phased are bit-exact, torch.equal cannot discriminate paths: the
+    QB2 (11x10) the model picks fused for BH in {12, 48} at NC=8 and for BH in {4, 12, 48} at NC=64, and
+    phased for the rest. Since fused and phased are bit-exact, torch.equal cannot discriminate paths: the
     proof that the default took the expected path is a program-cache delta of ZERO after warming
     exactly that path with an explicit config (any other path would compile at least one new prim
     program)."""
@@ -786,14 +786,14 @@ def test_fused_nv_row_major_placement_bit_exact(device, hk, hv, nv, np_producers
 )
 def test_fused_default_geometry_repeats(device, hk, hv):
     """A fused config with every field free, so the op
-    uses the cost model's pick (on QB2 at BH=12: NV=2, NP=7, row-local). Bit-exact vs phased, then 8
-    repeats against the first fused result — a handshake race is timing-dependent, so one comparison
-    has little power."""
+    uses the cost model's pick (on QB2 at BH=12: NV=2, NP=7, row-local, hand-off depth 3). Bit-exact vs
+    phased, then 8 repeats against the first fused result — a handshake race is timing-dependent, so one
+    comparison has little power."""
     nc = 64
     grid = device.compute_with_storage_grid_size()
     from ttnn._ttnn.operations import transformer as _t
 
-    nv, np_producers, placement, _, _, _ = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)
+    nv, np_producers, placement, nbuf, _, _, _ = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)
     if nv == 0:
         pytest.skip(f"no fused geometry for BH={hv} on the {grid.x}x{grid.y} grid")
     _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20260931 + hv)
@@ -803,7 +803,7 @@ def test_fused_default_geometry_repeats(device, hk, hv):
     n_phased = device.num_program_cache_entries()
     o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused())
     assert device.num_program_cache_entries() - n_phased == 1, "the fused run did not compile the fused prim"
-    geom = f"BH={hv} NV={nv} NP={np_producers} placement={placement}"
+    geom = f"BH={hv} NV={nv} NP={np_producers} placement={placement} depth={nbuf}"
     bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
     assert not bad, f"fused {geom}: o differs from phased in (head, vblock) slices {bad}"
     assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), f"fused {geom} differs from phased"
@@ -822,7 +822,7 @@ def test_fused_config_pinned_geometry_matches_free(device):
     grid = device.compute_with_storage_grid_size()
     from ttnn._ttnn.operations import transformer as _t
 
-    nv, np_producers, placement, _, _, _ = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)
+    nv, np_producers, placement, _, _, _, _ = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)
     if nv == 0:
         pytest.skip(f"no fused geometry for BH={hv} on the {grid.x}x{grid.y} grid")
     _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20260933)
