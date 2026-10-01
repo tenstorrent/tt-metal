@@ -2,14 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sender of a link worker (terms: fabric_all_gather_chunk_walk.hpp):
-//   1. fence: signal the downstream link worker that sends back into this chip (ready counter), then wait for our own
-//      downstream's signal;
-//   2. send every chunk of the send list one fabric hop into the same pages of the next chip's output (a chunk is one
-//      packet; only a single page larger than the payload takes several); the last packet of each entry (or a bare
-//      packet, if the entry has no chunk on this worker's banks) increments the downstream arrival counter;
-//   3. wait until all of upstream's entries have landed (the output is complete when the op ends) and reset the
-//      arrival counter for the next call.
+// Sender of a fabric link worker (terms: fabric_all_gather_chunk_walk.hpp):
+//   1. fence: tell the downstream link worker that sends back into this chip that this chip has started (its
+//      downstream-started counter), then wait for our own downstream's signal;
+//   2. send every fabric chunk of the outgoing shards one fabric hop into the same pages of the next chip's output (a
+//      chunk is one packet; only a single page larger than the payload takes several); the last packet of each
+//      outgoing shard (or a bare packet, if the shard has no chunk on this worker's banks) increments the downstream
+//      shards-arrived counter;
+//   3. wait until every shard expected from upstream has landed (the output is complete when the op ends) and reset
+//      the shards-arrived counter for the next call.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -34,131 +35,146 @@ FORCE_INLINE void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* header, u
 }
 
 void kernel_main() {
-    constexpr uint32_t cb = get_compile_time_arg_val(0);
+    constexpr uint32_t chunk_cb = get_compile_time_arg_val(0);
     constexpr uint32_t metadata_cb = get_compile_time_arg_val(1);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t pages_per_chunk = get_compile_time_arg_val(3);
-    constexpr uint32_t num_banks = get_compile_time_arg_val(4);
-    constexpr uint32_t batch_chunks = get_compile_time_arg_val(5);
-    constexpr bool kPrefixFromMetadata = get_compile_time_arg_val(6) != 0;
-    constexpr uint32_t packet_bytes = get_compile_time_arg_val(7);  // fabric payload
+    constexpr uint32_t pages_per_fabric_chunk = get_compile_time_arg_val(3);
+    constexpr uint32_t num_dram_banks = get_compile_time_arg_val(4);
+    constexpr uint32_t chunks_per_cb_batch = get_compile_time_arg_val(5);
+    constexpr bool kValidPrefixFromMetadata = get_compile_time_arg_val(6) != 0;
+    constexpr uint32_t fabric_payload_bytes = get_compile_time_arg_val(7);  // max bytes per fabric packet
     constexpr auto output_args = TensorAccessorArgs<8>();
-    constexpr auto prefix_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    constexpr uint32_t chunk_bytes = pages_per_chunk * page_bytes;
-    constexpr uint32_t cb_chunks = 2 * batch_chunks;
+    constexpr auto valid_prefix_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr uint32_t fabric_chunk_bytes = pages_per_fabric_chunk * page_bytes;
+    constexpr uint32_t chunk_slots_in_cb = 2 * chunks_per_cb_batch;
 
-    // Common args: [0] output [1] arrival counter [2] ready counter, then the shard geometry.
-    const ShardGeometry shard = read_shard_geometry<kPrefixFromMetadata>(get_write_ptr(metadata_cb), prefix_args);
+    // Common args: [0] output [1] shards-arrived counter [2] downstream-started counter, then the chip shard geometry.
+    const ChipShardGeometry geometry =
+        read_chip_shard_geometry<kValidPrefixFromMetadata>(get_write_ptr(metadata_cb), valid_prefix_args);
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(0), page_bytes);
-    const uint32_t arrival_addr = get_common_arg_val<uint32_t>(1);
-    const uint32_t ready_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t shards_arrived_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t downstream_started_addr = get_common_arg_val<uint32_t>(2);
 
-    // Per-core args: [0] first bank [1] bank stride [2] send ready [3, 4] ready target core (downstream's link worker
-    // of the opposite direction) [5, 6] downstream link worker core [7] downstream mesh id [8] downstream chip id
-    // [9] upstream entries [10] entries, then the send list, then the fabric connection.
+    // Per-core args: [0] first owned bank [1] owned bank stride [2] signal started to downstream? [3, 4] the core that
+    // gets that signal (downstream's link worker of the opposite direction) [5, 6] downstream link worker core (same
+    // direction: gets our data and shards-arrived increments) [7] downstream mesh id [8] downstream chip id [9] shards
+    // expected from upstream [10] number of outgoing shards, then the outgoing shards, then the fabric connection.
     size_t arg = 0;
-    const uint32_t first_bank = get_arg_val<uint32_t>(arg++);
-    const uint32_t bank_stride = get_arg_val<uint32_t>(arg++);
-    const bool send_ready = get_arg_val<uint32_t>(arg++) != 0;
-    const uint32_t ready_x = get_arg_val<uint32_t>(arg++);
-    const uint32_t ready_y = get_arg_val<uint32_t>(arg++);
-    const uint32_t downstream_x = get_arg_val<uint32_t>(arg++);
-    const uint32_t downstream_y = get_arg_val<uint32_t>(arg++);
+    const uint32_t first_owned_bank = get_arg_val<uint32_t>(arg++);
+    const uint32_t owned_bank_stride = get_arg_val<uint32_t>(arg++);
+    const bool signal_started_to_downstream = get_arg_val<uint32_t>(arg++) != 0;
+    const uint32_t started_signal_x = get_arg_val<uint32_t>(arg++);
+    const uint32_t started_signal_y = get_arg_val<uint32_t>(arg++);
+    const uint32_t downstream_worker_x = get_arg_val<uint32_t>(arg++);
+    const uint32_t downstream_worker_y = get_arg_val<uint32_t>(arg++);
     const uint16_t mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
     const uint16_t chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
-    const uint32_t upstream_entries = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_entries = get_arg_val<uint32_t>(arg++);
-    const uint32_t entries_arg = arg;
-    arg += num_entries;
+    const uint32_t shards_expected_from_upstream = get_arg_val<uint32_t>(arg++);
+    const uint32_t num_outgoing_shards = get_arg_val<uint32_t>(arg++);
+    const uint32_t outgoing_shards_arg = arg;
+    arg += num_outgoing_shards;
 
-    if (num_entries > 0 || send_ready) {
+    if (num_outgoing_shards > 0 || signal_started_to_downstream) {
         auto connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
-        // one header per chunk in flight: a header must not change until its packet has left L1
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* headers[batch_chunks];
-        for (uint32_t i = 0; i < batch_chunks; ++i) {
+        // one header per chunk in a CB batch: a header must not change until its packet has left L1
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* headers[chunks_per_cb_batch];
+        for (uint32_t i = 0; i < chunks_per_cb_batch; ++i) {
             headers[i] = PacketHeaderPool::allocate_header();
             route_one_hop(headers[i], chip_id, mesh_id);
         }
         connection.open();
 
-        // 1. fence
-        if (send_ready) {
-            headers[0]->to_noc_unicast_atomic_inc(
-                NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_x, ready_y, ready_addr), 1, true});
+        // 1. fence (one round trip per call)
+        if (signal_started_to_downstream) {
+            headers[0]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+                get_noc_addr(started_signal_x, started_signal_y, downstream_started_addr), 1, true});
             connection.wait_for_empty_write_slot();
             connection.send_payload_flush_blocking_from_address(
                 reinterpret_cast<uint32_t>(headers[0]), sizeof(PACKET_HEADER_TYPE));
         }
-        if (num_entries > 0) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr), 1);
-            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
+        if (num_outgoing_shards > 0) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(downstream_started_addr), 1);
+            noc_semaphore_inc(get_noc_addr(downstream_started_addr), 0u - 1u);
             noc_async_atomic_barrier();
         }
 
-        // 2. send, in the reader's batches (full, at the end of the CB, at the end of an entry)
-        const uint64_t downstream_arrivals = get_noc_addr(downstream_x, downstream_y, arrival_addr);
-        uint32_t cb_offset = 0, next_header = 0, unflushed_headers = 0;
-        auto take_header = [&]() {  // flush before a header is reused
-            if (unflushed_headers == batch_chunks) {
+        // 2. send, in CB batches (full, at the end of the CB, at the end of an outgoing shard)
+        const uint64_t downstream_shards_arrived =
+            get_noc_addr(downstream_worker_x, downstream_worker_y, shards_arrived_addr);
+        uint32_t cb_chunk_offset = 0, next_header = 0, unflushed_headers = 0;
+        auto next_free_header = [&]() {  // flush before a header is reused
+            if (unflushed_headers == chunks_per_cb_batch) {
                 noc_async_writes_flushed();
                 unflushed_headers = 0;
             }
             ++unflushed_headers;
             auto* header = headers[next_header];
-            next_header = (next_header + 1) % batch_chunks;
+            next_header = (next_header + 1) % chunks_per_cb_batch;
             return header;
         };
-        for (uint32_t k = 0; k < num_entries; ++k) {
-            const uint32_t entry = get_arg_val<uint32_t>(entries_arg + k);
-            const uint32_t entry_chunks =
-                count_chunks(shard, num_banks, pages_per_chunk, first_bank, bank_stride, entry_half(entry));
-            uint32_t batch = 0, sent = 0;
-            auto pop = [&]() {
-                noc_async_writes_flushed();  // the batch's chunks and headers have left L1
+        for (uint32_t outgoing_index = 0; outgoing_index < num_outgoing_shards; ++outgoing_index) {
+            const uint32_t outgoing_shard = get_arg_val<uint32_t>(outgoing_shards_arg + outgoing_index);
+            const uint32_t shard_fabric_chunks = count_fabric_chunks(
+                geometry,
+                num_dram_banks,
+                pages_per_fabric_chunk,
+                first_owned_bank,
+                owned_bank_stride,
+                outgoing_shard_bank_half(outgoing_shard));
+            uint32_t chunks_in_batch = 0, chunks_sent = 0;
+            auto pop_batch = [&]() {
+                noc_async_writes_flushed();  // the CB batch's chunks and headers have left L1
                 unflushed_headers = 0;
-                cb_pop_front(cb, pages_per_chunk * batch);
-                cb_offset = (cb_offset + batch) % cb_chunks;
-                batch = 0;
+                cb_pop_front(chunk_cb, pages_per_fabric_chunk * chunks_in_batch);
+                cb_chunk_offset = (cb_chunk_offset + chunks_in_batch) % chunk_slots_in_cb;
+                chunks_in_batch = 0;
             };
-            for_each_chunk(
-                shard,
-                num_banks,
-                pages_per_chunk,
-                first_bank,
-                bank_stride,
-                entry_half(entry),
-                [&](uint32_t stripe, uint32_t page, uint32_t num_pages) {
-                    cb_wait_front(cb, pages_per_chunk * (batch + 1));
-                    const uint64_t dst = output.get_noc_addr(output_page(shard, entry_rank(entry), stripe, page), 0, 0);
-                    const uint32_t src = get_read_ptr(cb) + batch * chunk_bytes;
-                    const uint32_t bytes = num_pages * page_bytes;
-                    const bool last_chunk = ++sent == entry_chunks;
-                    for (uint32_t offset = 0; offset < bytes; offset += packet_bytes) {
-                        const uint32_t size = bytes - offset < packet_bytes ? bytes - offset : packet_bytes;
-                        auto* header = take_header();
-                        if (last_chunk && offset + size == bytes) {
+            for_each_fabric_chunk(
+                geometry,
+                num_dram_banks,
+                pages_per_fabric_chunk,
+                first_owned_bank,
+                owned_bank_stride,
+                outgoing_shard_bank_half(outgoing_shard),
+                [&](uint32_t outer_slice, uint32_t page_in_slice, uint32_t num_pages) {
+                    cb_wait_front(chunk_cb, pages_per_fabric_chunk * (chunks_in_batch + 1));
+                    const uint64_t dst_noc_addr = output.get_noc_addr(
+                        output_page_index(geometry, outgoing_shard_rank(outgoing_shard), outer_slice, page_in_slice),
+                        0,
+                        0);
+                    const uint32_t chunk_slot = get_read_ptr(chunk_cb) + chunks_in_batch * fabric_chunk_bytes;
+                    const uint32_t chunk_payload_bytes = num_pages * page_bytes;
+                    const bool last_chunk_of_shard = ++chunks_sent == shard_fabric_chunks;
+                    for (uint32_t offset = 0; offset < chunk_payload_bytes; offset += fabric_payload_bytes) {
+                        const uint32_t packet_bytes = chunk_payload_bytes - offset < fabric_payload_bytes
+                                                          ? chunk_payload_bytes - offset
+                                                          : fabric_payload_bytes;
+                        auto* header = next_free_header();
+                        if (last_chunk_of_shard && offset + packet_bytes == chunk_payload_bytes) {
                             header->to_noc_fused_unicast_write_atomic_inc(
-                                NocUnicastAtomicIncFusedCommandHeader{dst + offset, downstream_arrivals, 1, true},
-                                size);
+                                NocUnicastAtomicIncFusedCommandHeader{
+                                    dst_noc_addr + offset, downstream_shards_arrived, 1, true},
+                                packet_bytes);
                         } else {
-                            header->to_noc_unicast_write(NocUnicastCommandHeader{dst + offset}, size);
+                            header->to_noc_unicast_write(NocUnicastCommandHeader{dst_noc_addr + offset}, packet_bytes);
                         }
                         connection.wait_for_empty_write_slot();
                         connection.send_current_slot_non_blocking(
-                            src + offset, size, reinterpret_cast<uint32_t>(header));
+                            chunk_slot + offset, packet_bytes, reinterpret_cast<uint32_t>(header));
                     }
-                    const uint32_t batch_cap =
-                        batch_chunks < cb_chunks - cb_offset ? batch_chunks : cb_chunks - cb_offset;
-                    if (++batch == batch_cap) {
-                        pop();
+                    const uint32_t batch_capacity = chunks_per_cb_batch < chunk_slots_in_cb - cb_chunk_offset
+                                                        ? chunks_per_cb_batch
+                                                        : chunk_slots_in_cb - cb_chunk_offset;
+                    if (++chunks_in_batch == batch_capacity) {
+                        pop_batch();
                     }
                 });
-            if (batch > 0) {
-                pop();
+            if (chunks_in_batch > 0) {
+                pop_batch();
             }
-            if (entry_chunks == 0) {  // none of this entry is on our banks: still count it downstream
-                auto* header = take_header();
-                header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{downstream_arrivals, 1, true});
+            if (shard_fabric_chunks == 0) {  // none of this shard is on our banks: still count it downstream
+                auto* header = next_free_header();
+                header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{downstream_shards_arrived, 1, true});
                 connection.wait_for_empty_write_slot();
                 connection.send_payload_flush_blocking_from_address(
                     reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
@@ -167,10 +183,11 @@ void kernel_main() {
         connection.close();
     }
 
-    // 3. everything from upstream has landed; reset the arrival counter
-    if (upstream_entries > 0) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr), upstream_entries);
-        noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - upstream_entries);
+    // 3. everything from upstream has landed; reset the shards-arrived counter
+    if (shards_expected_from_upstream > 0) {
+        noc_semaphore_wait_min(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(shards_arrived_addr), shards_expected_from_upstream);
+        noc_semaphore_inc(get_noc_addr(shards_arrived_addr), 0u - shards_expected_from_upstream);
         noc_async_atomic_barrier();
     }
 }
