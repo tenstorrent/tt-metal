@@ -2165,6 +2165,16 @@ class ModelArgs:
         if mode == Mode.DECODE:
             if self.is_galaxy:
                 return None
+            elif self.device_name == "P150" and self.dim // ttnn.TILE_SIZE == 120:
+                # Sweep on P150 (WO 32x4096x3840): per_core_N=15 (8 workers), in0_block_w=8,
+                # 3 readers per bank ran 55.8 us vs 58.8 us, bit-exact.
+                return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=8,
+                    per_core_M=math.ceil(self.tile_padded_batch_rows / ttnn.TILE_SIZE),
+                    per_core_N=15,
+                    fused_activation=None,
+                    num_workers_per_dram_bank=3,
+                )
             else:
                 return self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
