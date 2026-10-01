@@ -29,6 +29,7 @@
 #include "tt_metal/distributed/host_d2h_leg.hpp"
 #include "tt_metal/distributed/host_l1_map.hpp"
 #include "tt_metal/distributed/host_region.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "hostdevcommon/uva_frame.h"
 #include "hostdevcommon/uva_layout.h"
 
@@ -204,7 +205,7 @@ public:
         dc.payload_bytes = page_bytes_;
         dc.ring_pages = ring_pages_;
         dc.consumed_addr = 0;  // no far device, so nothing credits and tt_uva_sync() is unused
-        HostRegion& region = HostRegion::storage();
+        HostRegion& region = mesh_->impl().host_region();
         std::string err;
         try {
             // Kept for the verify path: reserved_base() is the only accessor for the
@@ -240,7 +241,7 @@ public:
     // Unpin before the leg's destructor puts anonymous pages back over the arenas.
     void TearDown(benchmark::State& state) override {
         (void)state;
-        HostRegion& region = HostRegion::storage();
+        HostRegion& region = mesh_->impl().host_region();
         if (region.is_provisioned()) {
             region.release();
         }

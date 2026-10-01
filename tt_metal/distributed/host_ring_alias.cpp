@@ -25,6 +25,7 @@ uint64_t arena_offset_for(AliasArena a, uint32_t core) {
 }  // namespace
 
 struct RingAlias::Impl {
+    HostRegion* region = nullptr;
     AliasArena arena = AliasArena::Tx;
     std::vector<uint8_t*> base;
     std::vector<size_t> bytes;
@@ -32,7 +33,10 @@ struct RingAlias::Impl {
     void unmap() {
         // This arena only, and unconditionally: it also runs from map()'s rollback, where a
         // half-declared set leaves provision() skipping bytes nothing is mapped over.
-        HostRegion::storage().clear_aliases(arena);
+        // Null only if map() failed before binding the region, which declares nothing.
+        if (region != nullptr) {
+            region->clear_aliases(arena);
+        }
         for (size_t c = 0; c < base.size(); ++c) {
             if (base[c] == nullptr || bytes[c] == 0) {
                 continue;
@@ -58,7 +62,8 @@ RingAlias::RingAlias() : impl_(std::make_unique<Impl>()) {}
 RingAlias::~RingAlias() { impl_->unmap(); }
 
 std::unique_ptr<RingAlias> RingAlias::map(
-    uint8_t* region_base, AliasArena arena, const std::vector<Slot>& slots, std::string& err) {
+    HostRegion& region_in, uint8_t* region_base, AliasArena arena, const std::vector<Slot>& slots,
+    std::string& err) {
     err.clear();
     if (region_base == nullptr) {
         err = "ring-alias: no region base; there is nothing to overlay onto";
@@ -66,7 +71,7 @@ std::unique_ptr<RingAlias> RingAlias::map(
     }
     // Pinning captures the physical pages; MAP_FIXED afterwards swaps them out from under
     // both the pin and the MR, with nothing reporting it.
-    HostRegion& region = HostRegion::storage();
+    HostRegion& region = region_in;  // named for readability below
     if (region.is_provisioned()) {
         err =
             "ring-alias: the region is already provisioned and therefore pinned; the overlay "
@@ -83,6 +88,8 @@ std::unique_ptr<RingAlias> RingAlias::map(
 
     std::unique_ptr<RingAlias> a(new RingAlias());
     Impl& im = *a->impl_;
+    // Before anything below can fail: the rollback path runs unmap(), which needs it.
+    im.region = &region;
     im.arena = arena;
     im.base.assign(slots.size(), nullptr);
     im.bytes.assign(slots.size(), 0);

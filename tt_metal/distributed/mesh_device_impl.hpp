@@ -48,6 +48,7 @@ class SystemMemoryManager;
 
 namespace experimental {
 class DispatchContext;
+class HostRegion;
 }  // namespace experimental
 
 namespace program_cache::detail {
@@ -192,6 +193,11 @@ private:
     // to experimental::StartTensorPrefetcher; torn down in close_impl() before the
     // rest of the mesh shutdown so any in-flight kernel completes against live resources.
     std::unique_ptr<TensorPrefetcherManager> tensor_prefetcher_;
+
+    // The one pinned host region backing this mesh's D2H2H2D's D2H sockets. Lazily constructed on the
+    // first host_region() call; torn down in close_impl() so the pin is released while the
+    // cluster is still live, which a process-lifetime singleton could not guarantee.
+    std::unique_ptr<experimental::HostRegion> host_region_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -364,6 +370,9 @@ public:
     // the manager bound to this mesh device; subsequent calls return the same instance.
     // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
     TensorPrefetcherManager& tensor_prefetcher(MeshDevice* mesh_device);
+    // Created on first use. One per mesh: the region is provisioned against this device's
+    // PCIe endpoint, so two meshes cannot share one.
+    experimental::HostRegion& host_region();
 
     // Returns the logical DRAM core for `bank_id` on `device` whose physical NoC coord isn't
     // already claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one

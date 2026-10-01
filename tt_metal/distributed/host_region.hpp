@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// The one region: a 2 MiB-aligned span holding the credit array and every core's arenas,
-// mapped at runtime for the cores a run asks for, pinned once, exposed in the RMA window.
+// A 2 MiB-aligned span holding the credit array and every core's arenas, mapped at runtime
+// for the cores a run asks for, pinned once, exposed in the RMA window. One per mesh device,
+// which owns it -- so the pin is released at close() rather than at process exit.
 #pragma once
 
 #include <cstdint>
@@ -12,10 +13,6 @@
 #include "hostdevcommon/uva_layout.h"
 #include "hostdevcommon/uva.h"
 
-namespace ttsl {
-template <typename T>
-class Indestructible;
-}
 namespace tt::tt_metal::distributed {
 class MeshDevice;
 }
@@ -35,12 +32,11 @@ public:
         uint32_t height = 0;
     };
 
-    // The one instance, bound by the first provision() to that mesh and no other -- see
-    // owner_. Public because a caller needs the region before it can ask it for anything.
-    static HostRegion& storage();
+    // Owned by MeshDeviceImpl, one per mesh; reach it through mesh->impl().host_region().
+    HostRegion() = default;
 
-    // storage() hands out a reference and the private default ctor does NOT make the copy
-    // ctor private: dropping the & would fork provisioned_ and the pin off the singleton.
+    // Copying would fork provisioned_ and the pin off the original, leaving two objects
+    // believing they own the same pages.
     HostRegion(const HostRegion&) = delete;
     HostRegion& operator=(const HostRegion&) = delete;
 
@@ -95,17 +91,12 @@ public:
     static constexpr uint8_t kArenaFill = 0xA5;
 
 private:
-    HostRegion() = default;
-    // Constructs the one instance in place; see storage(). Needed because the ctor above
-    // is private and the destructor must never run -- the pin outlives the cluster.
-    friend class ttsl::Indestructible<HostRegion>;
-
     // Complement-fills the arenas this region owns, so an unwritten byte always differs
     // and a test cannot pass by accident. Private: provision() is the only safe moment.
     void reset_arenas(uint8_t fill = kArenaFill);
 
-    // Off region_, set at reservation. Callers must have reserved: storage() is public, so
-    // being mapped is not something these three can assume.
+    // Off region_, set at reservation. These three cannot assume the region is mapped: a
+    // caller holding the object has not necessarily called reserved_base() yet.
     RegionHeader* header() const { return reinterpret_cast<RegionHeader*>(region_); }
     uint8_t* tx_arena(uint32_t core) const { return region_ + tx_arena_offset(core); }
     uint8_t* rx_arena(uint32_t core) const { return region_ + rx_arena_offset(core); }
@@ -121,9 +112,6 @@ private:
     uint64_t region_bytes_ = 0;
     uint32_t reserved_cores_ = 0;
     bool provisioned_ = false;
-    // The one mesh this process-wide region belongs to. Kept across release(): the aliases
-    // are declared before provision(), so a later mesh would inherit the first one's.
-    const tt::tt_metal::distributed::MeshDevice* owner_ = nullptr;
 
     // What each overlay left this region free to write: fill_ is where a socket's own
     // metadata starts, mapped_ where the overlay ends. The gap between them is not ours.
