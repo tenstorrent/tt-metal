@@ -154,7 +154,7 @@ The server is ready only when the log says:
 Application startup complete
 ```
 
-Once the environment and weights are available, a normal server start takes about 6 minutes for
+Once the environment and weights are available, a normal server start takes about 3 minutes for
 Laguna-S-2.1 and about 10 minutes for Laguna-XS-2.1. The first Laguna-S-2.1 start also converts the
 weights for the device (about 20 minutes, cached under `~/.cache/ttnn/laguna_s_2_1`).
 
