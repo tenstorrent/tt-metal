@@ -6,6 +6,8 @@
 // These tests require a real device (slow dispatch).
 
 #include "impl/buffers/buffer_impl.hpp"
+#include "impl/allocator/allocator.hpp"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -19,6 +21,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tests/tt_metal/tt_metal/api/allocator/hybrid_allocator_fixture.hpp"
+#include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
@@ -479,6 +482,115 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreEndToEndTransfer) {
             landing_buffer->address());
         EXPECT_EQ(src, readback) << "payload mismatch on iteration " << i;
     }
+}
+
+// ================== Occupied-range query ==================
+
+namespace {
+
+bool covers(const per_core::AddressRanges& ranges, DeviceAddr begin, DeviceAddr end) {
+    return std::any_of(
+        ranges.begin(), ranges.end(), [&](const auto& r) { return r.first <= begin && end <= r.second; });
+}
+
+bool overlaps_any(const per_core::AddressRanges& ranges, DeviceAddr begin, DeviceAddr end) {
+    return std::any_of(ranges.begin(), ranges.end(), [&](const auto& r) { return r.first < end && begin < r.second; });
+}
+
+}  // namespace
+
+TEST_F(PerCoreAllocationTest, OccupiedRangesCoverLockstepAndPerCore) {
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
+    const distributed::MeshCoordinate coord(0, 0);
+    ASSERT_GE(device->compute_with_storage_grid_size().x, 3);
+
+    const CoreCoord in_grid(0, 0);
+    const CoreCoord out_of_grid(2, 0);
+    const auto baseline_in = per_core::get_l1_occupied_ranges(mesh_device, coord, in_grid);
+    const auto baseline_out = per_core::get_l1_occupied_ranges(mesh_device, coord, out_of_grid);
+
+    {
+        CoreRange core_range(CoreCoord(0, 0), CoreCoord(1, 0));
+        ShardSpecBuffer shard_spec(CoreRangeSet(core_range), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
+        auto per_core_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+        per_core::set_per_core_allocation(per_core_args, true);
+        auto per_core_buf = BufferImpl::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, per_core_args);
+        auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+        auto lockstep_buf = BufferImpl::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args);
+
+        const DeviceAddr size = per_core_buf->aligned_size_per_bank();
+        const DeviceAddr per_core_addr = per_core::get_per_core_address(*per_core_buf, in_grid);
+        const DeviceAddr lockstep_addr = lockstep_buf->address();
+
+        const auto in = per_core::get_l1_occupied_ranges(mesh_device, coord, in_grid);
+        EXPECT_TRUE(covers(in, per_core_addr, per_core_addr + size));
+        EXPECT_TRUE(covers(in, lockstep_addr, lockstep_addr + size));
+
+        // Lockstep reserves every core; a per-core buffer only its own grid.
+        const auto out = per_core::get_l1_occupied_ranges(mesh_device, coord, out_of_grid);
+        EXPECT_TRUE(covers(out, lockstep_addr, lockstep_addr + size));
+        EXPECT_FALSE(overlaps_any(baseline_out, per_core_addr, per_core_addr + size));
+        EXPECT_FALSE(overlaps_any(out, per_core_addr, per_core_addr + size));
+    }
+
+    EXPECT_EQ(per_core::get_l1_occupied_ranges(mesh_device, coord, in_grid), baseline_in);
+    EXPECT_EQ(per_core::get_l1_occupied_ranges(mesh_device, coord, out_of_grid), baseline_out);
+}
+
+TEST_F(PerCoreAllocationTest, OccupiedRangesIncludePersistentL1) {
+    auto& mesh_device = *this->devices_[0];
+    const distributed::MeshCoordinate coord(0, 0);
+    ASSERT_GE(mesh_device.compute_with_storage_grid_size().x, 2);
+
+    const CoreCoord sender(0, 0);
+    const CoreCoord receiver(1, 0);
+    auto space = experimental::CreatePrefetcherPipeSpace(
+        mesh_device,
+        experimental::PrefetcherPipeSpaceConfig{
+            .sender_cores = CoreRangeSet(CoreRange(sender)),
+            .receiver_domain = CoreRangeSet(CoreRange(receiver)),
+            .ring_size = 1024,
+            .max_receivers_per_pipe = 1,
+        });
+    auto pipe = space.create_pipe(sender, CoreRangeSet(CoreRange(receiver)));
+
+    for (const auto& core : {sender, receiver}) {
+        const auto ranges = per_core::get_l1_occupied_ranges(mesh_device, coord, core);
+        EXPECT_TRUE(covers(ranges, pipe.buffer_address(), pipe.buffer_address() + pipe.ring_size())) << core.str();
+        EXPECT_TRUE(covers(ranges, pipe.config_address(), pipe.config_address() + pipe.config_page_size()))
+            << core.str();
+    }
+}
+
+TEST_F(PerCoreAllocationTest, OccupiedRangesWholeDeviceMatchesPerCore) {
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
+    const distributed::MeshCoordinate coord(0, 0);
+
+    CoreRange core_range(CoreCoord(0, 0), CoreCoord(1, 0));
+    ShardSpecBuffer shard_spec(CoreRangeSet(core_range), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
+    auto per_core_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(per_core_args, true);
+    auto per_core_buf = BufferImpl::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, per_core_args);
+
+    const auto by_core = per_core::get_l1_occupied_ranges(mesh_device, coord);
+    EXPECT_EQ(by_core.size(), device->allocator()->get_num_banks(BufferType::L1));
+    for (const auto& [core, ranges] : by_core) {
+        EXPECT_EQ(ranges, per_core::get_l1_occupied_ranges(mesh_device, coord, core)) << core.str();
+    }
+}
+
+using OccupiedRangesLockstepModeTest = MeshDeviceSingleCardBufferFixture;
+
+TEST_F(OccupiedRangesLockstepModeTest, OccupiedRangesRequireHybrid) {
+    auto& mesh_device = *this->devices_[0];
+    if (mesh_device.allocator_impl()->get_config().allocator_mode == AllocatorMode::HYBRID) {
+        GTEST_SKIP() << "Device opened in HYBRID mode";
+    }
+    const distributed::MeshCoordinate coord(0, 0);
+    EXPECT_ANY_THROW(per_core::get_l1_occupied_ranges(mesh_device, coord, CoreCoord(0, 0)));
+    EXPECT_ANY_THROW(per_core::get_l1_occupied_ranges(mesh_device, coord));
 }
 
 }  // namespace tt::tt_metal
