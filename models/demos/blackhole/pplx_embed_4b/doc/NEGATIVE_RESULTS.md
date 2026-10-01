@@ -1297,3 +1297,282 @@ post-attention norm) gets the room without the trade: the lowest L1 buffer durin
 6,40,8 still misses by 4 KB. STS-B 0.8119 / 0.8147 / 0.8152 (bs8 / 16 / 32). sustained_run.sh, 3 alternating rounds per
 batch, chip 0, cold / sustained ms: bs8 82.5 / 102.0 → 78.5 / 99.5, bs16 157.1 / 201.7 → 148.8 / 196.1, bs32 322.8 /
 400.1 → 303.1 / 388.7.
+
+## 61. bs1 fused SwiGLU with K_block 40: the SwiGLU is not what is exposed at M=512 (2026-09-29)
+
+§60's K_block 40 hides the pack-thread SwiGLU at bs8 / 16 / 32, so bs1 (`QWEN_FUSE_SWIGLU_BS1=1`; §58: 214.4 µs, 15.7 →
+16.0 ms e2e) was retried against the legacy FF1 + FF3 + mul it replaces (69.7 + 69.7 + 52.3 ≈ 192 µs per layer in the
+7dbf479 device profile). `bench_ff13_sweep.py 1` over M 1 / 2 / 4, K 20 / 40 / 80, N 2 / 4 / 6 / 8 / 16, 1×W subblocks
+(99 configs, LoFi without fp32 dest as bs1's FF1 / FF3): best per K block 4,20,8 1×2 214.6 µs, 2,40,6 1×2 228.8,
+4,80,6 1×6 238.9 (12 K_block-80 configs clash with L1). Nothing reaches 192.
+
+`bench_ff13_fused_ablate.py 1` (µs) shows why:
+
+| blocks | full | no SFPU | SFPU ×2 | compute only | compute only, no SFPU, no add |
+|---|---|---|---|---|---|
+| 4,20,8 1×2 | 212.3 | 204.9 | 253.3 | 165.7 | 137.3 |
+| 2,40,6 1×2 | 223.6 | 221.1 | 232.9 | 158.6 | 144.9 |
+
+At K_block 20 the SwiGLU is 7 µs exposed (3%, against 15-17% batched): with 16 rows of tiles the per-core output is
+small and the SFPU pass already fits under the last K block's math. The gap is data movement (reads / writes cost 47 µs,
+22%); K_block 40 only halves the SwiGLU's 7 µs and loses more in the K loop. e2e, sustained_run.sh, 2 alternating
+rounds, chip 1, cold / sustained ms: default 15.6-15.7 / 15.8, fused 4,20,8 1×2 16.1 / 16.2, fused 2,20,8 1×2 16.1 /
+16.2-16.3. bs1 stays unfused. Note that `QWEN_FUSE_SWIGLU_BS1=1` alone is a no-op: the demo defaults
+`QWEN_FUSE_SWIGLU=0` at bs1, so the packed weight is never built; both must be set.
+
+## 62. Fused FF1+FF3: a SiLU sized for the bfp8 output, a third of the SFPU time (landed) (2026-09-29)
+
+**What a free SiLU would buy.** At the K_block-40 blocks the pack-thread SwiGLU is mostly hidden:
+`bench_ff13_fused_ablate.py <batch>` with `MM_BLOCKS=4,40,8,1,8`, µs:
+
+| | full | no SFPU | SFPU ×2 | no partials add | no SFPU, no add | compute only, no SFPU, no add |
+|---|---|---|---|---|---|---|
+| bs16 | 1700.4 | 1641.9 | 2290.3 | 1630.0 | 1569.0 | 1454.8 |
+| bs32 | 3259.6 | 3125.0 | 4524.9 | 3106.2 | 2966.0 | 2861.9 |
+
+One pass is 590 / 1265 µs of pack-thread work and 58 / 135 of it exposed (3.4 / 4.1%); at K_block 40 the partial-sum
+add (70 / 153) costs as much. e2e with the SFPU call removed (wrong output, `sustained_run.sh`, 2 alternating rounds,
+chips 0 / 1): bs16 cold / sustained 148.8 / 195.1 → 146.7 / 188.7 ms, bs32 302.0 / 403.6 → 292.2 / 388.4, i.e. a
+ceiling of −3.3 / −3.8% sustained, more than cold as the power-cap argument predicts.
+
+**Nothing to borrow from tt-blaze.** `dram_streaming_swiglu`'s SILU modes call the stock `calculate_silu` /
+`_sfpu_sigmoid_`; its fork's sigmoid / exp / recip headers are identical to ours. Its PACK-side SFPU, single init and
+math / pack semaphores are what §58 already does. The one idea, `sdpa_exp_unclamped` (no upper clamp for inputs ≤ 0),
+does not apply to a sigmoid's two-sided input.
+
+**Blackhole's `sfpi::approx_exp` (SFPARECIP mode 2) is not an exp.** Probed through the fused kernel's output, it
+returns ~sign(x)·e^|x| for |x| < 2 (0.4-0.7% median error) and saturates at 4.0 beyond; usable only after a range
+reduction that costs what `exp_21f` does.
+
+**Variants** (`perf_tools/bench_swiglu_variants.py 16 [1 4]`: the pass patched into `swiglu_sfpu.hpp`, error against
+torch's fp32 SwiGLU of the device's own bf16 pre-activations, relative L2 at gate std ~1 / ~4; pass cost from
+`SW_REPEAT=3`, (3 passes − 1) / 2):
+
+| exp(−gate) / reciprocal | µs per call | pass cost µs | rel err ×1 / ×4 |
+|---|---|---|---|
+| silu_tile + mul (`exp_21f`, 1 Newton step, bf16 roundings) | 1701.5 | 637 | 0.01283 / 0.01229 |
+| `exp_21f`, 1 Newton step, no roundings | 1700.9 | 578 | 0.01166 / 0.01105 |
+| `exp_21f`, bare SFPARECIP | 1689.4 | 483 | 0.01190 / 0.01099 |
+| Schraudolph, 1 Newton step | 1687.7 | 282 | 0.01383 / 0.01098 |
+| Schraudolph, bare SFPARECIP | 1685.7 | 188 | 0.01391 / 0.01096 |
+| Schraudolph centred, bare SFPARECIP | 1692.1 | 208 | 0.01228 / 0.01101 |
+| same, loop unrolled 8× (landed) | 1686.8 | 184 | 0.01228 / 0.01101 |
+
+Schraudolph (Neural Computation 11(4), 1999) is `_sfpu_exp_21f_bf16_` without its degree-2 mantissa polynomial:
+`(x / ln2 + 127) · 2^23` reinterpreted as a float is 2^int · (1 + frac), within 6.1% of e^x, always over. Shifting
+the bias by 0.043 (half of log2 1.061; a back-of-envelope choice, Schraudolph's own RMS-optimal shift is ~0.058)
+centres the error at ~±3%. Every variant sits at the bfp8 output's ~1.2% floor; the bf16 roundings the old pass copied
+from silu_tile + mul cost more accuracy than the cheaper exp does. With `fp32_dest_acc_en` the pass keeps the accurate
+sigmoid.
+
+**Where the exposed time is not.** The landed pass cuts the pack-thread work by 71% but the exposed time only from 58
+to ~45 µs (bs16 1700 → 1687 against 1642 with no SFPU). Every binary SFPU call opens with `STALLWAIT(STALL_SFPU,
+MATH)` (`_llk_math_eltwise_sfpu_start_`), redundant on the pack thread after the MATH_PACK semaphore wait; calling
+the pass without it: 1703.2 → 1700.6 (bs16), 3271.3 → 3267.8 (bs32). Not the stall.
+
+**Half of it is each output block's last subblock.** Skipping the pass on one subblock per output block
+(`SW_SKIP=first|last|all`, 4 subblocks per block at 4,40,8 1×8, so each skip removes 25% of the work), µs:
+
+| | full | skip first | skip last | skip all | exposed | saved by first / last |
+|---|---|---|---|---|---|---|
+| bs16 landed | 1688.0 | 1685.0 | 1668.2 | 1646.2 | 41.8 | 3.0 / 19.8 (7 / 47%) |
+| bs16 silu_tile + mul | 1702.6 | 1699.7 | 1671.3 | 1646.2 | 56.4 | 2.9 / 31.3 (5 / 55%) |
+| bs32 landed | 3225.8 | 3210.6 | 3182.3 | 3127.4 | 98.4 | 15.2 / 43.5 (15 / 44%) |
+| bs32 silu_tile + mul | 3267.1 | 3246.9 | 3177.2 | 3128.6 | 138.5 | 20.2 / 89.9 (15 / 65%) |
+
+The first subblock's pass hides behind the next subblock's math; the last one's, which should hide behind the next
+output block's K block 0 in the other DST half, half does not (~0.45 µs per block at bs16, about half of one
+subblock's pass). Why is open: the pack thread's next-block setup (intermediate reserve, L1-acc / format reconfig)
+queued behind the tail, or a CB handoff at the block boundary; device-profiler zones on the math and pack threads
+around the boundary would say which. (It was the output writer's deferred write, §63.)
+
+**e2e**, sustained_run.sh, 3 alternating rounds per batch, chips 2 / 0 / 1 concurrently, medians of 3, cold /
+sustained ms: bs8 78.5 / 101.2 → 78.3 / 99.4 (−0.3 / −1.8%), bs16 148.9 / 194.9 → 148.1 / 194.4 (−0.5 / −0.3%),
+bs32 300.5 / 403.7 → 297.8 / 401.8 (−0.9 / −0.5%); the new pass is faster in all 9 pairs, cold and sustained. STS-B
+0.8119 / 0.8147 / 0.8152 → 0.8110 / 0.8132 / 0.8156 (bs8 / 16 / 32; the batch paths alone spread 0.8121-0.8159),
+per-text embedding cosine vs the old pass mean 0.995 (p1 0.955-0.962). ttnn nightly `test_minimal_matmul.py -k
+swiglu` (4) and `test_minimal_matmul_split.py -k swiglu` (6) pass; their relative RMSE vs torch 0.0078-0.0085 before
+and after.
+
+## 63. minimal_matmul: the output writer held the next block's in1 behind the previous block's tail (landed) (2026-09-30)
+
+Following §62's tail finding, bs16 fused FF13, `bench_swiglu_variants.py` with `SW_SKIP`, µs:
+
+| blocks | full | skip first | skip last | skip all | exposed | saved by skip last |
+|---|---|---|---|---|---|---|
+| 4,40,4 1×4 (2 K blocks) | 1805.5 | 1803.3 | 1756.0 | 1737.8 | 67.7 | 49.5 (73%) |
+| 4,80,4 1×4 (1 K block, no partials, no add) | 1664.9 | 1660.5 | 1651.4 | 1627.2 | 37.7 | 13.5 (36%) |
+| 4,40,4, partial-sum packs skipped | 1814.4 | — | 1751.9 | 1737.9 | 76.5 | 62.5 |
+| 4,40,8 1×8, partial-sum packs skipped | 1684.5 | — | 1660.1 | 1637.1 | 47.4 | 24.4 |
+| 4,40,4, partial-sum add skipped | 1749.3 | 1742.3 | 1696.3 | 1691.1 | 58.2 | 53.0 (91%) |
+| 4,40,8 1×8, partial-sum add skipped | 1616.1 | 1606.6 | 1594.3 | 1573.8 | 42.3 | 21.8 |
+
+**Not the partial-sum packs** (K block 0's packs queued on the pack thread behind the previous block's SwiGLU): skipping
+them leaves the tail as exposed. **Not the partial-sum add** either, though it is a cost of its own, 66-69 µs (4%) of
+math-thread throughput at bs16. **K_block 80** (one K block: no packs, no add) only fits small blocks
+(`bench_ff13_sweep.py`, 32 K-80 configs per batch): bs16 4,80,4 1×4 1664.7 vs 4,40,8 1×8 1685.2; bs8 best 4,80,6 965.8
+vs 8,40,6 857.7; bs32 best 4,80,2 3386.1 vs 4,40,8 3227.8. Not taken.
+
+**The cause.** The in1 reader (`dm_in1_sender_out_metal2.cpp`, likewise `dm_in0_sender_metal2.cpp` where it writes)
+writes an output block during the next block's K loop, at `k_block_iter == defer_write_k_block`, and waits for that
+output (`dfb_out.wait_front`) before reading (and forwarding) that K block's in1. The descriptor set
+`defer_write_k_block = min(core.y * k_blocks_per_core, K_blocks - 1)`: with 2 K blocks, 0 on row 0, so those writers
+stalled the next block's first K block behind the previous block's last subblock and its write; and injector cores never
+deferred (`defer_write && !is_injector_core`), writing each block synchronously before injecting the next block's in1,
+which holds every core down the forwarding chain. Kernel-patch variants (µs, bs16 / bs32 fused FF13 at 4,40,8 1×8,
+bs8 at 8,40,6 1×6): base 1686.3 / 3236.3 / 872.2; injectors defer (at their `core.y` K block) 1693.3 / 3234.5 / 869.9;
+defer point never K block 0 (injectors still synchronous) 1692.5 / 3228.2; both 1654.4 / 3132.1; everything deferred
+to the last K block 1649.2 / 3129.0 / 871.0. With the SwiGLU skipped entirely too 1644.1 → 1616.2 (bs16), 3126.1 →
+3060.8 (bs32): the synchronous write cost more than the SwiGLU tail.
+
+**Landed:** the descriptor never defers to K block 0 when there is a later K block (`defer_write_k_block_for`; the
+`core.y` stagger for large-K matmuls is kept), and injectors defer like the other writers. The model's other matmuls
+(`bench_mm_ablate.py <preset> <batch>`, full variant, µs, base → fix):
+
+| | bs8 | bs16 | bs32 |
+|---|---|---|---|
+| FF13 fused | 872.2 → 871.0 | 1686.3 → 1649.9 | 3236.3 → 3139.4 |
+| QKV | 266.3 → 266.3 | 559.9 → 534.1 | 1125.2 → 1072.4 |
+| FF2 | 373.1 → 373.0 | 732.2 → 724.3 | 1502.2 → 1474.1 |
+| WO | 174.3 → 173.3 | 333.4 → 325.3 | 660.9 → 638.5 |
+
+Outputs unchanged (the variant bench's error vs torch identical to 5 digits). ttnn nightly `test_minimal_matmul.py` +
+`test_minimal_matmul_split.py`: 216 passed, 276 skipped (`test_performance` excluded: it shells out to tracy with the
+system python). e2e, sustained_run.sh, 3 alternating rounds (rebuilt between arms), chips 2 / 0 / 1, medians, cold /
+sustained ms: bs8 78.2 / 100.0 → 78.3 / 100.4 (the sustained +0.4% repeats in all 3 pairs, with the new arm first;
+standalone bs8 is unchanged), bs16 148.0 / 194.1 → 145.3 / 192.8 (−1.8 / −0.7%), bs32 298.3 / 401.9 → 292.0 / 399.6
+(−2.1 / −0.6%).
+
+## 64. SDPA's DRAM round-trip: only K / V matter; K / V in L1 landed at bs8 / 16, bs32 does not fit (2026-09-30)
+
+WIP_HANDOFF item 3. `bench_sdpa_bs16_ablate.py <bs> l1`, the shipped reuse_kv q128 config (12×8 at bs8, 12×10 at
+bs16 / 32) with each operand moved from DRAM to L1 interleaved, µs per call, PCC 1.00000 vs the shipped config
+throughout:
+
+| placement | bs8 | bs16 | bs32 |
+|---|---|---|---|
+| all DRAM (shipped) | 237.0 | 355.8 | 624.4 |
+| Q in L1 | 222.5 | 338.0 | 592.0 |
+| **K / V in L1** | **201.2** | **308.7** | **563.0** |
+| Q + K / V in L1 | 200.9 | 306.1 | clash |
+| output in L1 | 225.9 | 350.1 | 604.6 |
+| Q + K / V + output in L1 | 195.0 | 304.4 | OOM |
+
+K / V are 74 / 148 / 297 KB per core (K + V) at bs8 / 16 / 32; Q is twice that and adds little on top. **Landed** at
+bs8 / 16 as `QWEN_HEADS_KV_L1=1` (the heads op's `kv_memory_config`; POSITIVE_RESULTS). bs1 already holds Q / K / V in
+L1 (`l1_map_first_layer.py 1`: 19 / 5 / 5 KB per core, SDPA reads them there).
+
+**bs32 does not fit.** `l1_map_first_layer.py 32` with the knob: the first half-batch QKV matmul (the first op after
+K / V are allocated) clashes, `L1 buffer allocated at 405120 and static dataflow buffer region ends at 595072`. Live at
+that matmul, per core: the two preallocated half-batch norm outputs (2 × 181 KB, top of L1), K and V (2 × 145 KB) and
+the matmul's L1 output (446 KB), ~1.1 MB against ~945 KB above the matmul's CBs: 190 KB short. Ruled out: K alone in L1
+(still ~41 KB short); K / V allocated after chunk 0's matmul (they land where chunk 1's matmul CBs go); chunk 0's QKV
+output to DRAM (its heads op then reads half the batch from DRAM, ~80 µs per layer, more than the 61 µs SDPA saves).
+
+**Open: 4 QKV chunks at bs32** (quarter-batch norm outputs 4 × 90 KB + K / V 290 KB + a 223 KB QKV output ≈ 880 KB,
+fits). The matmul side is roughly neutral since §63 (4 × 266 = 1064 µs vs 2 × 534 = 1068 µs per layer), so the gain
+would be SDPA's 61 µs per layer minus two more heads-op launches. It needs `fused_add_rmsnorm_split` to write four
+output tensors (its writer has two accessors) and `decoder_fusion.py` / `qkv_chunks.py` to allow `QWEN_QKV_CHUNKS=4`.
+Not tried.
+
+## 65. Batched SDPA: compute-bound with data movement close behind; the pack thread paced the softmax; row sums moved to the math thread (landed) (2026-09-30)
+
+Tools: `sdpa_kernel_variants.py` (patched kernel trees), `bench_sdpa_floors.py` (traced, optional device-profiler
+parse), `bench_sdpa_zones.py` (per-unit zones). Run them from a directory with no `ttnn/` tree: kernel lookup tries the
+cwd before `TT_METAL_KERNEL_PATH`, and from the repo root every variant silently compiles the repo's kernels (the first
+attempt here timed all variants equal to the control).
+
+**Floors.** Traced replays under the device profiler, µs of 1.35 GHz device cycles, at the in-model placements (eager
+back-to-back runs of the data-movement-only variant swing between ~484 and ~640 µs at bs32; traced ones do not):
+
+| | control | compute only (no NoC reads / writes) | data movement only (compute stubbed) |
+|---|---|---|---|
+| bs8, K / V in L1 | 178.5 | 164.9 | 102.0 |
+| bs16, K / V in L1 | 284.7 | 268.2 | 183.3 |
+| bs32, all DRAM | 596.8 | 519.4 | 483.1 |
+
+Compute is the larger floor everywhere; at bs32 data movement is within 7% of it, and the kernel runs 6-12% above the
+larger floor because the two do not fully overlap. All DRAM at bs8 / 16: DM-only 145.0 / 257.1 against compute 164.9 /
+268.2. The device-profile artifact's SDPA rows now use these floors as the roofline ("compute + DM").
+
+**Where a unit goes** (one q128 chunk of one head against its KV head's 512 tokens; math-thread zones at the bs8 shape,
+compute only, cycles): Q·Kᵀ 5,528 (2 × 128 tile matmuls), x − max + exp not hidden 5,175, P·V 5,934, normalize 2,887,
+row max 466, other 312; 20,302 total, 15.0 µs. The matmuls run at 71% of the LoFi peak (8,192). Data waits add 1,249
+cycles with K / V in L1 and 3,926 all DRAM (next Q chunk before the first Q·Kᵀ, V in the drain).
+
+**Why MATH waits on PACK's exp.** Dest holds two 8-tile halves. Per column block of the second row group MATH does x −
+max (half A) and a 2×4 Q·Kᵀ subblock (half B, ~690 cycles); PACK does exp on half A (500-540 cycles, SFPU from the pack
+thread), packs it back in place and L1-accumulates the 8 row-sum packs (455-465 together), then packs half B. PACK is
+the slower thread, so MATH blocks in `tile_regs_acquire` (its "SUB" zone reads 725-750 cycles for an 8-tile subtract).
+Probes (compute only, wrong output): no row-sum packs 18,004 cycles per unit (−11%), no exp 16,517 (−19%, so almost
+none of the exp overlapped anything).
+
+**Row sums on the math thread (landed).** With one K chunk (no online-softmax correction), `sub_exp` skips the row-sum
+packs and normalize computes each row group's sums from the exp'd scores still in `cb_qkt_im`:
+
+| normalize's row sum | unit (cycles) | normalize |
+|---|---|---|
+| L1-accumulated by the pack thread (before) | 20,302 | 2,887 |
+| `reduce_tile<SUM, REDUCE_ROW>`, 16 tiles per tile row | 20,007 | 4,852 |
+| 1×1 matmul against `col_identity` per score tile | 20,059 | ~4,850 |
+| **one matmul per score column over the row group** (`rt_dim` 2, `col_identity` unpacked once) | **18,766** | 3,615 |
+
+Re-reading a score tile through unpack costs ~57 cycles either way (the main matmuls reach ~22 per tile-product by
+reusing unpacked operands across an 8-tile subblock); batching the row group halves the calls and puts both rows'
+reciprocals in one dest acquire. `matmul_block` on Blackhole has no MOP over K (`kt_dim` is only in0's row stride), so a
+16-tile `col_identity` would not have streamed. The batched init has to be followed by a 1×1 `matmul_block_init`: the
+next row group's V matmul only re-inits short and hung on the leftover `rt_dim` / `kt_dim` (every q_chunk ≥ 256 shape;
+q128 never runs a V matmul after a normalize in the same unit, so the model shapes did not show it). Scope: Blackhole,
+single K chunk, not ring / in-place V / attention sink; `SDPA_SUM_ON_PACK` restores the old path; the recip scratch CB
+grows to the normalize row-group height (2 tiles).
+
+Traced, device µs per call: bs8 179.3 → 168.7 (−5.9%), bs16 286.1 → 266.1 (−7.0%), bs32 600.4 → 566.2 (−5.7%). PCC vs
+torch at the model config 0.999248 → 0.999234 (max error unchanged; causal, padded-Sk and two-K-chunk cases also
+match). ttnn SDPA unit tests pass (reuse_kv 97, pack_gqa_heads 29, windowed 68, prefill 8, output_heads_concat 8).
+STS-B through `eval_accuracy_batched.py` bs8 / 16 / 32: 0.8110 / 0.8132 / 0.8156 → 0.8120 / 0.8174 / 0.8148; per-text
+cosine new vs old mean 0.9946 (min 0.86), inside the model's own spread (old kernel bs8 vs bs16: mean 0.9942, min 0.80).
+End to end SDPA is ~8% of the replay: cold bs8 77.0 → 76.7 ms, bs16 144.0 → 143.1, bs32 within noise (same chip, 2
+alternating rounds).
+
+**No cheaper exp.** `exp_approx_mode` already runs the replay-buffer `SFPLOADMACRO` Schraudolph pipeline (load, MAD by
+scale / ln 2 plus bias, round to int, shift into the exponent, store; `ckernel_sfpu_exp.h`, rated ~68 cycles a tile) and
+measures ~64 cycles a tile (EXP zone 500-540 per 8 tiles, unchanged by the row-sum change, which cut PACK SUB_EXP from
+455-465 to 121-168 and MATH's acquire wait from 725-750 to 265-420). Unlike the SwiGLU sigmoid (§62) there is no
+heavier formulation to strip. Splitting the exp over MATH and PACK would have both threads drive the one SFPU (shared
+LREG / addrmod state). SDPA compute stops here.
+
+**What the data movement at bs32 is.** Floors on these kernels (traced, device µs): control 566.6, compute only 480.9,
+data movement only 482.8 (178 MB, ~369 GB/s, ~90% of what streaming ops reach), reads only 335.2, writes only 247.4.
+CB-wait zones at bs16 all DRAM (`sdpa_kernel_variants.py` + wait zones) put nearly all the waiting on each core's first
+unit: 58,900 cycles (~44 µs) while all 120 cores pull their first head's K + V (16.7 MB) at once, against 2,950
+cycles per core for every later KV-head switch together; the output CB never back-pressures (47 cycles). A next-head
+K / V prefetch in the reader (the next head's slots reserved from a head's second Q chunk on, its tiles issued a Q
+chunk's worth per Q chunk) only added contention: bs16 all DRAM 325.1 -> 371.1 µs, bs32 566.6 -> 619.7, first-unit wait
+65,975 cycles; reverted. Streaming K into compute would not shorten the start either (V is needed ~6 µs later). The
+lever is fewer K / V bytes in DRAM: K / V in L1 cut the first-unit wait to 19,300 cycles (§66).
+
+## 66. bs32 QKV in four quarter-batch chunks: K / V fit in L1 (landed) (2026-09-30)
+
+§64's open item. `fused_add_rmsnorm_split` writes its normalised output as 2 or 4 equal row parts (the writer has four
+output accessors), `decoder_fusion.py` preallocates `QWEN_QKV_CHUNKS` parts, and the attention's chunk hooks (already
+chunk-count generic) run QKV + the heads op per quarter batch into full-batch Q / K / V, with K / V in L1. Live per core
+at the first chunk: 4 × 90 KB norm outputs (the same 362 KB as two halves), K / V 290 KB, a 223 KB QKV output (was
+446): it fits. `test_qkv_chunks.py 4`: the 4-part add+norm and the 4-chunk heads op are bit-identical to one tensor /
+one full-batch call.
+
+Device profile (bs32 replay, ms):
+
+| | 2 chunks (was) | 1 chunk + K / V L1 | 4 chunks | **4 chunks + K / V L1** |
+|---|---|---|---|---|
+| QKV matmuls | 37.72 (71 calls) | 38.73 (36) | 36.95 (141) | 36.92 |
+| heads op | 15.26 (71) | 21.00 (36, DRAM input) | 16.74 (141) | 16.73 |
+| SDPA | 19.77 | 17.99 | 19.74 | **17.97** |
+| replay | 280.00 | 285.08 | 280.64 | **278.88** |
+
+SDPA −50 µs per layer (549 -> 499), quarter QKV matmuls slightly faster than halves; the heads op pays ~10 µs of fixed
+cost per call (115.3 µs per quarter vs 209.7 per half). sustained_run.sh, 2 alternating rounds per chip, cold /
+sustained: chip 0 294.2 / 374.5 -> 293.5 / 373.8 ms, chip 1 296.7 / 382.4 -> 295.2 / 376.6. STS-B bs32 0.8148 ->
+0.8155; not bit-identical, and not because of the chunking ops: `minimal_matmul` itself differs across M (the QKV
+matmul at M = 4096 vs M = 8192 with the same config: 7.5% of elements on every row, max 0.094, bfp8 rounding), while K /
+V in L1 alone and 2 chunks vs 1 are bit-identical and the eval is deterministic. Default at bs32
+(`QWEN_QKV_CHUNKS=4`, `QWEN_HEADS_KV_L1=1`); `QWEN_QKV_CHUNKS=2` restores the old path.

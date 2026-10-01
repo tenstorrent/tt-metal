@@ -148,6 +148,7 @@ tensors). End-of-model hidden-state cosines are not an equivalence test on this 
 | `bench_ff13_sweep.py <batch> [top_n]` (`SWEEP=`, `FF13_FP32=1`) | fused-SwiGLU FF13 block / subblock sweep at the model's operands, one device session |
 | `bench_ff13_fused_ablate.py <batch>` (`MM_BLOCKS=`, `ABL_ONLY=`) | fused-SwiGLU FF13 at the model's blocks with the pack-thread SwiGLU skipped / doubled, the partial-sum add skipped, and / or reads and writes skipped |
 | `bench_swiglu_epilogue.py [batch …]` (`EPI_PRESET=ff13fused`, `EPI_ONLY=`) | fused-SwiGLU epilogue variants (their `swiglu_block` patches apply to the kernel before §58; the landed in-loop path is `base`) with PCC vs base and vs an fp32 torch SwiGLU |
+| `bench_swiglu_variants.py <batch> [xscale …]` (`MM_BLOCKS=`, `SW_ONLY=`, `SW_REPEAT=3`) | pack-thread SwiGLU SFPU pass variants (`swiglu_sfpu.hpp` patched) timed at the model's blocks, with their error vs an fp32 SwiGLU of the device's own pre-activations; `SW_REPEAT=3` exposes a pass's cost |
 | `test_qkv_chunks.py` | bit-identity of the chunked bs32 path's ops: add+norm half-batch output pair, heads op per half batch at a batch offset |
 | `test_heads_qsplit.py`, `test_sdpa_concat_out.py` | bit-identity + timing of the fused-heads Q split and the concat-free SDPA output |
 | `parse_smi2.py <dev> <log>` | aligns tt-smi clock/power samples (`/tmp/smi_samples/*.json`) with iteration timestamps |
