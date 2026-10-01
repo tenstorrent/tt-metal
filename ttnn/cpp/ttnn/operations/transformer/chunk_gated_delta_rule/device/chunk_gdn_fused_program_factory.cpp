@@ -474,7 +474,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // (chunk_gdn_scan.cpp): holding chunk c-1's q_decay/intra one step longer still leaves the receiver
     // reader room to reserve chunk c+1 once c-1 is popped. At depth 1 (and on the phased scan, whose CBs
     // are single-buffered) the reader's reserve for chunk c would wait on that pop forever: no pipelining.
-    if (kHandoffNbuf >= 2) {
+    // Not on the SPLIT layout (the P300 SP dies, producer-bound with 4 producers per head): there the pipelined o only
+    // delays the hand-off credit, which needs chunk c-1's q_decay / intra popped a step later (the credit for chunk c+2
+    // waits for the whole step of chunk c), and the credit chain of the far producers is the critical path of the op
+    // (-0.7 us per round on the credit wait, -2.6 us per call); the receivers idle ~1/3 of the time, so the 0.1 us
+    // longer step costs nothing. Bit-identical either way (same blocks, same operands).
+    if (kHandoffNbuf >= 2 && !any_dn) {  // any_dn: the SPLIT layout
         scan_compute.defines = {{"GDN_SCAN_PIPE_O", "1"}};
     }
     const tt::tt_metal::ComputeConfigDescriptor scan_compute_cfg =

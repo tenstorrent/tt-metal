@@ -42,12 +42,8 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cbout(cb_out);
 
-    // o [BH, NC, C, V]: scatter this V-block back — row stride Vt_full, column offset vb*Vt.
-    for (uint32_t c = 0; c < NC; c++) {
-        {
-            DeviceZoneScopedN("ow_wait_cb");
-            cbout.wait_front(cv);
-        }
+    // Writes chunk c's o slab (rows of this V-block at row stride Vt_full) from the front of cb_out.
+    auto write_o = [&](uint32_t c) {
         DeviceZoneScopedN("ow_write");
         const uint32_t row_base = (h * NC + c) * Ct * Vt_full;
         auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbout);
@@ -57,21 +53,47 @@ void kernel_main() {
                 noc.async_write(src, o_acc, tb_o, {.offset_bytes = (r * Vt + vt) * tb_o}, {.page_id = dst + vt});
             }
         }
+    };
+
+    // o [BH, NC, C, V]: scatter this V-block back — row stride Vt_full, column offset vb*Vt. Chunks 0 .. NC-2 first,
+    // each with its own barrier (frees its cb_out slot for compute).
+    for (uint32_t c = 0; c + 1 < NC; c++) {
+        {
+            DeviceZoneScopedN("ow_wait_cb");
+            cbout.wait_front(cv);
+        }
+        write_o(c);
         noc.async_write_barrier();
         cbout.pop_front(cv);
     }
 
-    // final_state [BH, K, V]: same V-block slicing (row stride Vt_full over K rows).
+    // final_state [BH, K, V]: same V-block slicing (row stride Vt_full over K rows). The state's rows are pushed during
+    // the last chunk's S_new, before that chunk's o, so they go out BEFORE the last o (each K row as soon as it is
+    // packed), and the last o and the whole final state share ONE barrier at the end of the op instead of two
+    // serialized write + ack round trips (the state used to wait for the last o).
     CircularBuffer cbfs(cb_final);
-    cbfs.wait_front(kv);
-    const uint32_t row_base = h * Kt * Vt_full;
-    auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbfs);
-    for (uint32_t r = 0; r < Kt; r++) {
-        const uint32_t dst = row_base + r * Vt_full + vb * Vt;
-        for (uint32_t vt = 0; vt < Vt; vt++) {
-            noc.async_write(src, fs_acc, tb_fs, {.offset_bytes = (r * Vt + vt) * tb_fs}, {.page_id = dst + vt});
+    {
+        DeviceZoneScopedN("ow_fs");
+        const uint32_t row_base = h * Kt * Vt_full;
+        auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbfs);
+        for (uint32_t r = 0; r < Kt; r++) {
+            cbfs.wait_front((r + 1) * Vt);  // rows of the state arrive one K tile-row at a time
+            const uint32_t dst = row_base + r * Vt_full + vb * Vt;
+            for (uint32_t vt = 0; vt < Vt; vt++) {
+                noc.async_write(src, fs_acc, tb_fs, {.offset_bytes = (r * Vt + vt) * tb_fs}, {.page_id = dst + vt});
+            }
         }
     }
+    if (NC > 0) {
+        {
+            DeviceZoneScopedN("ow_wait_cb");
+            cbout.wait_front(cv);
+        }
+        write_o(NC - 1);
+    }
     noc.async_write_barrier();
+    if (NC > 0) {
+        cbout.pop_front(cv);
+    }
     cbfs.pop_front(kv);
 }
