@@ -204,10 +204,7 @@ def build_and_serialize_kv_chunk_table(
             # single-rank synthesized stage carries the real local hostname instead.
             host_name = stage.get("host_name") or f"host-{stage['host_tag']:08x}"
             first = stage["first_layer"]
-            if label == "index_k" and index_k_layers is not None:
-                layer_ids = [first + i for i in range(stage["count"]) if first + i in index_k_layers]
-            else:
-                layer_ids = [first + i for i in range(stage["count"])]
+            filter_layers = label == "index_k" and index_k_layers is not None
             for global_row in range(sp):
                 fabric_node_ids = [stage["fnids"][global_row][c] for c in group_cols]
                 group_idx = table.add_device_group(fabric_node_ids)
@@ -229,27 +226,21 @@ def build_and_serialize_kv_chunk_table(
                 for slot in range(num_users):
                     for local_layer in range(stage["count"]):
                         global_layer = first + local_layer
-                        if global_layer not in layer_ids:
-                            # No row on a layer without index_k, but advance the bank walk past this
-                            # layer's region so later layers keep their real addresses.
-                            for _ in range(
-                                num_chunks_per_seq_len * tokens_per_chunk_local // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-                            ):
-                                curr_bank_id = (curr_bank_id + 1) % num_banks
-                                if curr_bank_id == 0:
-                                    curr_bank_offset += chunk_bytes
-                            continue
+                        # A layer without index_k gets no rows, but still walks its region so later
+                        # layers keep their real addresses.
+                        publish = not filter_layers or global_layer in index_k_layers
                         for seq_chunk in range(num_chunks_per_seq_len):
                             chunk_token_start = seq_chunk * chunk_size + global_row * tokens_per_chunk_local
                             chunk_token_end = chunk_token_start + tokens_per_chunk_local
                             for position in range(
                                 chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
                             ):
-                                location = ttnn.experimental.disaggregation.KvCacheLocation()
-                                location.noc_addr = (curr_bank_id << 32) | (base_addr + curr_bank_offset)
-                                location.size_bytes = chunk_bytes
-                                location.device_group_index = group_idx
-                                table.set(global_layer, position, slot, location, config_id)
+                                if publish:
+                                    location = ttnn.experimental.disaggregation.KvCacheLocation()
+                                    location.noc_addr = (curr_bank_id << 32) | (base_addr + curr_bank_offset)
+                                    location.size_bytes = chunk_bytes
+                                    location.device_group_index = group_idx
+                                    table.set(global_layer, position, slot, location, config_id)
 
                                 curr_bank_id = (curr_bank_id + 1) % num_banks
                                 if curr_bank_id == 0:
