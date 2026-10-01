@@ -358,12 +358,16 @@ namespace ttnn::prim::qsr::dram_sharded_helpers {
 tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord);
 
 void get_max_page_size_and_num_pages(
-    tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages);
+    tt::tt_metal::distributed::MeshDevice& device,
+    uint32_t num_tiles,
+    uint32_t tile_size,
+    uint32_t& page_size,
+    uint32_t& num_pages);
 
 void move_common_entries(std::vector<tt::tt_metal::CoreCoord>& v1, std::vector<tt::tt_metal::CoreCoord>& v2, std::vector<tt::tt_metal::CoreCoord>& commons);
 
 void get_optimal_dram_bank_to_reader_assignment(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
     CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);

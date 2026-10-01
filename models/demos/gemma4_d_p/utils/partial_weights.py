@@ -23,14 +23,14 @@ _LAYER_PREFIXES = ("model.language_model.layers.", "model.layers.")
 _EMBED_KEYS = ("model.language_model.embed_tokens.weight", "model.embed_tokens.weight")
 
 
-def resolve_checkpoint_dir(model_path) -> Path:
+def resolve_checkpoint_dir(hf_model_id) -> Path:
     """Return the local directory holding the checkpoint's safetensors shards.
 
     Accepts either a local checkpoint directory or a HuggingFace repo id; for a
     repo id the already-downloaded snapshot is located through the HF cache with
     ``local_files_only=True``, so this never reaches the network.
     """
-    path = Path(model_path)
+    path = Path(hf_model_id)
     if path.is_dir():
         return path
 
@@ -38,13 +38,13 @@ def resolve_checkpoint_dir(model_path) -> Path:
 
     for filename in (_INDEX_FILE, _SINGLE_FILE):
         try:
-            resolved = hf_hub_download(str(model_path), filename, local_files_only=True)
+            resolved = hf_hub_download(str(hf_model_id), filename, local_files_only=True)
         except Exception:  # not in the cache under this name — try the next one
             continue
         return Path(resolved).parent
 
     raise FileNotFoundError(
-        f"No local checkpoint for {model_path!r}: it is neither a directory nor a HuggingFace "
+        f"No local checkpoint for {hf_model_id!r}: it is neither a directory nor a HuggingFace "
         f"snapshot containing {_INDEX_FILE} or {_SINGLE_FILE}. Point HF_HOME at the populated "
         f"cache (and set HF_HUB_OFFLINE=1), or pass a checkpoint directory."
     )
@@ -76,7 +76,7 @@ def _weight_map(checkpoint_dir: Path) -> dict[str, str]:
     return weight_map
 
 
-def load_state_dict_subset(model_path, key_filter) -> dict[str, torch.Tensor]:
+def load_state_dict_subset(hf_model_id, key_filter) -> dict[str, torch.Tensor]:
     """Load only the tensors whose key satisfies ``key_filter``.
 
     Each shard is opened once and only the selected tensors are materialized, so
@@ -86,7 +86,7 @@ def load_state_dict_subset(model_path, key_filter) -> dict[str, torch.Tensor]:
     """
     from safetensors import safe_open
 
-    checkpoint_dir = resolve_checkpoint_dir(model_path)
+    checkpoint_dir = resolve_checkpoint_dir(hf_model_id)
     weight_map = _weight_map(checkpoint_dir)
 
     by_shard: dict[str, list[str]] = defaultdict(list)
@@ -107,7 +107,7 @@ def _is_text_layer_scalar(key: str) -> bool:
     return key.endswith(".layer_scalar") and key.startswith(_LAYER_PREFIXES)
 
 
-def load_cache_completion_state(model_path) -> dict[str, torch.Tensor]:
+def load_cache_completion_state(hf_model_id) -> dict[str, torch.Tensor]:
     """The state-dict entries a cache-only ``Gemma4Model`` build still needs.
 
     Returns every text-decoder ``layer_scalar`` plus the token embedding weight.
@@ -115,7 +115,7 @@ def load_cache_completion_state(model_path) -> dict[str, torch.Tensor]:
     from the tensor cache with an empty sub-state.
     """
     state = load_state_dict_subset(
-        model_path,
+        hf_model_id,
         lambda k: _is_text_layer_scalar(k) or k in _EMBED_KEYS,
     )
 
@@ -123,12 +123,12 @@ def load_cache_completion_state(model_path) -> dict[str, torch.Tensor]:
     embed = [k for k in state if k in _EMBED_KEYS]
     if not scalars:
         raise ValueError(
-            f"No text-decoder layer_scalar tensors found in {model_path}. Without them every "
+            f"No text-decoder layer_scalar tensors found in {hf_model_id}. Without them every "
             f"layer silently falls back to layer_scalar=1.0, which is wrong for Gemma4."
         )
     if not embed:
         raise ValueError(
-            f"No token embedding weight found in {model_path} (looked for {_EMBED_KEYS}). "
+            f"No token embedding weight found in {hf_model_id} (looked for {_EMBED_KEYS}). "
             f"Gemma4Model skips building embedding + lm_head when it is absent."
         )
 

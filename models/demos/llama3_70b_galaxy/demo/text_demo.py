@@ -1197,13 +1197,15 @@ def test_demo_text(
 
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-        # when doing repeating batches, set kv-caches to zero, to avoid context leaking
-        if batch_idx != 0:
-            model.switch_mode("prefill")
-            for layer in model.layers:
-                k_cache, v_cache = layer.attention.layer_past
-                k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+        # when doing repeating batches, set kv-caches to zero, to avoid context leaking.
+        # Also run it on the first batch, where it is a no-op on freshly allocated caches: it
+        # compiles the multiply here, before any trace is captured, instead of on batch 1 when
+        # the prefill traces are already live.
+        model.switch_mode("prefill")
+        for layer in model.layers:
+            k_cache, v_cache = layer.attention.layer_past
+            k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+            v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
         temperature = sampling_params["temperature"]
@@ -1403,6 +1405,7 @@ def test_demo_text(
                 # Save logits only for PCC check when tracing is disabled
                 tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
                 decode_async_read = not token_accuracy
+                reload_decode_inputs = iteration == 0 or not is_enable_trace or device_sampling_params is None
                 decode_output = generator.decode_forward(
                     out_tok,
                     current_pos,
@@ -1412,12 +1415,15 @@ def test_demo_text(
                     read_from_device=True,
                     async_read=decode_async_read,
                     sampling_params=device_sampling_params,
-                    reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
                     is_cur_pos_sharded=is_cur_pos_sharded,
                     is_page_table_sharded=is_page_table_sharded,
                     prompt_tokens=input_tokens_prefill_pt,
                     output_tokens=prefilled_token,
+                    reload_inputs=reload_decode_inputs,
+                    reload_page_table=False,
+                    reload_sampling_params=(device_sampling_params is not None and reload_decode_inputs),
+                    reset_sampling_state=(device_sampling_params is not None and iteration == 0),
                 )
                 if decode_async_read:
                     tt_out_tok, read_event = decode_output

@@ -85,4 +85,28 @@ void kernel_main() {
 #if TEST_NUM_DFBS > 15
     touch_one<implicit_sync>(dfb::dfb_15);
 #endif
+#if TEST_NUM_DFBS > 16
+    touch_one<implicit_sync>(dfb::dfb_16);
+#endif
+#if TEST_NUM_DFBS > 17
+    touch_one<implicit_sync>(dfb::dfb_17);
+#endif
+#if TEST_NUM_DFBS > 18
+    touch_one<implicit_sync>(dfb::dfb_18);
+#endif
+#if TEST_NUM_DFBS > 19
+    touch_one<implicit_sync>(dfb::dfb_19);
+#endif
+#if TEST_NUM_DFBS > 20
+    touch_one<implicit_sync>(dfb::dfb_20);
+#endif
+#if TEST_NUM_DFBS > 21
+    touch_one<implicit_sync>(dfb::dfb_21);
+#endif
+#if TEST_NUM_DFBS > 22
+    touch_one<implicit_sync>(dfb::dfb_22);
+#endif
+#if TEST_NUM_DFBS > 23
+    touch_one<implicit_sync>(dfb::dfb_23);
+#endif
 }

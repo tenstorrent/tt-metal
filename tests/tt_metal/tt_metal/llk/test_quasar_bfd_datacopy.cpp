@@ -109,7 +109,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
             .num_threads = 1,
             .dfb_bindings = {experimental::ProducerOf(dfb, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
     experimental::KernelSpec reader0_spec = make_reader_spec(IN0_DFB);
@@ -125,7 +125,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec compute_spec{
@@ -158,7 +158,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"num_cycles", NUM_CYCLES}, {"num_loops", NUM_LOOPS}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{

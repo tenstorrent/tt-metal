@@ -42,6 +42,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -625,6 +626,32 @@ void device_module(nb::module_& m_device) {
         // Release GIL: sync can block a long time; other threads need it to run Python (e.g. real-time profiler
         // callbacks).
         nb::call_guard<nb::gil_scoped_release>());
+    m_device.def(
+        "is_trace_capture_active",
+        [](MeshDevice* device) {
+            if (!device->is_initialized()) {
+                return false;
+            }
+            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+                if (device->mesh_command_queue(cq_id).trace_id().has_value()) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        nb::arg("device"),
+        R"doc(
+                Returns True if a metal trace is currently being captured on any command queue of the device.
+
+                Operations that synchronize with host (event recording, reads, writes) are not supported while a
+                trace is being captured, so callers that would otherwise synchronize must skip doing so.
+
+                Args:
+                    device (ttnn.MeshDevice): The device to query.
+
+                Returns:
+                    `bool`: whether a trace capture is in progress.
+            )doc");
     m_device.def(
         "ReadDeviceProfiler",
         [](MeshDevice* mesh_device) {

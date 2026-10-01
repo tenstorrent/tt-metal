@@ -3,9 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import struct
+
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns, flush_subnormal_values_to_zero
+from mpmath import cosh as mp_cosh
+from mpmath import mp
+
+from tests.ttnn.utils_for_testing import (
+    flush_subnormal_values_to_zero,
+    generate_all_bfloat16_bitpatterns,
+)
 
 
 def generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=False):
@@ -44,10 +51,11 @@ def generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=False):
 
 
 SMALLEST_NORMAL_BF16 = 2.0 ** (-126)
+MAX_BF16 = float(torch.finfo(torch.bfloat16).max)
 
 
 def flush_to_zero(tensor):
-    """Flush values at or below the smallest normal bfloat16 to zero."""
+    """Flush values at or below the smallest normal bfloat16 to zero. |x| ≤ 2^{-126}"""
     tensor[torch.abs(tensor) <= SMALLEST_NORMAL_BF16] = 0.0
     return tensor
 
@@ -93,6 +101,131 @@ def generate_bfloat16_bits_in_range(low, high, dtype=torch.bfloat16, ftz=True):
     return padded.reshape(rows, cols)
 
 
+# Mantissa codes for the binary-op sweep grid (7-bit):
+#   0000000 = exact power of 2 (1.0 × 2^e)  — includes 0.5 = 2^{-1}, 1.0 = 2^0, …
+#   0000001 = next value after the power of 2
+#   0001000 = 1.0625 × 2^e
+#   1111111 = largest value in the binade
+BF16_BINARY_GRID_MANTISSAS = (0b0000000, 0b0000001, 0b0001000, 0b1111111)
+BF16_BINARY_GRID_SIZE = 2048
+# Fill 2032 → 2048: extra mantissa 1000000 (1.5 × 2^e) near 1.0, both signs
+_BF16_BINARY_GRID_EXTRA_MANTISSA = 0b1000000
+_BF16_BINARY_GRID_EXTRA_EXPONENTS = range(-3, 5)  # 8 exponents × 2 signs = 16
+# +0, -0, +inf, -inf, canonical qNaN (0x7FC0)
+_BF16_SPECIAL_BITS = (0x0000, 0x8000, 0x7F80, 0xFF80, 0x7FC0)
+
+
+def _bf16_binary_grid_extra_bits():
+    """16 unique 1.5 × 2^e encodings used to fill the grid to exactly 2048."""
+    extra = []
+    for sign in (0, 1):
+        for exponent in _BF16_BINARY_GRID_EXTRA_EXPONENTS:
+            stored_exp = exponent + 127
+            extra.append((sign << 15) | (stored_exp << 7) | _BF16_BINARY_GRID_EXTRA_MANTISSA)
+    return extra
+
+
+def generate_bfloat16_binary_grid(dtype=torch.bfloat16, include_spl_values=False, include_zero=False):
+    """
+    Generate a stratified bfloat16 grid for pairwise (binary) op testing.
+
+    Every finite-normal exponent e ∈ [-126, 127] (stored exponents 1..254) is
+    included with 4 mantissa codes and both signs:
+
+        254 exponents × 4 mantissas × 2 signs = 2032 unique finite values.
+
+    Mantissa 0000000 is 1.0 × 2^e, so every finite-normal power of 2
+    (±2^{-126} … ±2^{127}) is present — including 0.5 = 2^{-1} and 1.0 = 2^0.
+    Subnormal powers of 2 (2^{-133} … 2^{-127}) and 2^{128} (overflows to inf)
+    are not.
+
+    The remaining 16 slots (2032 → 2048) are 1.5 × 2^e at e ∈ [-3, 4], both
+    signs. When include_spl_values is True, the last 5 of those extras are
+    replaced by +0, -0, +inf, -inf, and one canonical qNaN, keeping the length
+    at exactly 2048 unique encodings. When include_zero is True (and
+    include_spl_values is False), only +0 replaces one fill value.
+
+    Args:
+        dtype (torch.dtype, optional): Target dtype. Defaults to torch.bfloat16.
+        include_spl_values (bool, optional): If True, replace 5 fill values with
+            ±0, ±inf, and one NaN. Defaults to False.
+        include_zero (bool, optional): If True and include_spl_values is False,
+            replace one fill value with +0. Defaults to False.
+
+    Returns:
+        torch.Tensor: 1D tensor of length 2048, all unique bit patterns.
+    """
+    bits = []
+    for sign in (0, 1):
+        for stored_exp in range(1, 255):  # unbiased e = -126 .. 127
+            for mantissa in BF16_BINARY_GRID_MANTISSAS:
+                bits.append((sign << 15) | (stored_exp << 7) | mantissa)
+
+    extra = _bf16_binary_grid_extra_bits()
+    if include_spl_values:
+        bits.extend(extra[: len(extra) - len(_BF16_SPECIAL_BITS)])
+        bits.extend(_BF16_SPECIAL_BITS)
+    elif include_zero:
+        bits.extend(extra[:-1])
+        bits.append(0x0000)  # +0
+    else:
+        bits.extend(extra)
+
+    assert len(bits) == BF16_BINARY_GRID_SIZE
+    assert len(set(bits)) == BF16_BINARY_GRID_SIZE
+
+    return torch.tensor(bits, dtype=torch.uint16).view(torch.bfloat16).to(dtype)
+
+
+def binary_grid_values(
+    low=-float("inf"), high=float("inf"), min_magnitude=0.0, include_zero=True, dtype=torch.bfloat16
+):
+    """Binary-grid values restricted to a domain, for ops that are only defined
+    (or only well-conditioned) on part of the bfloat16 range.
+
+    Keeps the grid's stratification. An exponent that lies wholly inside
+    [low, high] still carries all 4 mantissa codes and both signs. A bound
+    that cuts a binade keeps only the codes that fall inside it — the
+    mantissas are 1.0, 1.0078, 1.0625, 1.9922, so ±80, ±100, and ±1e19 each
+    drop a code at the edge. The filter is by value, not by exponent. An
+    outer product of two restricted sets stays a few million elements
+    instead of the billions an exhaustive in-range sweep would need.
+
+    Args:
+        low, high (float, optional): Inclusive value bounds. Default unbounded.
+        min_magnitude (float, optional): Drop values with |v| below this, e.g.
+            operands whose square would underflow. Defaults to 0.0.
+        include_zero (bool, optional): Keep +0 when it is inside [low, high],
+            exempting it from min_magnitude. Defaults to True.
+        dtype (torch.dtype, optional): Target dtype. Defaults to torch.bfloat16.
+
+    Returns:
+        torch.Tensor: 1D tensor of the surviving values, in grid order.
+    """
+    values = generate_bfloat16_binary_grid(dtype=dtype, include_zero=include_zero)
+    in_range = (values >= low) & (values <= high)
+    keep = in_range & (values.abs() >= min_magnitude)
+    if include_zero:
+        keep |= in_range & (values == 0)
+    return values[keep].contiguous()
+
+
+def pairwise_from_values(values_a, values_b=None):
+    """Outer product of two value sets: A[i, j] = values_a[i], B[i, j] = values_b[j]."""
+    if values_b is None:
+        values_b = values_a
+    a, b = torch.meshgrid(values_a, values_b, indexing="ij")
+    return a.contiguous(), b.contiguous()
+
+
+def pairwise_inputs(include_spl_values=False, include_zero=False, dtype=torch.bfloat16):
+    """Outer product of the 2048-value binary grid: A[i, j] = v[i], B[i, j] = v[j]."""
+    values = generate_bfloat16_binary_grid(
+        dtype=dtype, include_spl_values=include_spl_values, include_zero=include_zero
+    )
+    return pairwise_from_values(values)
+
+
 def to_tt_tensor(
     input_tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
 ):
@@ -104,6 +237,34 @@ def to_tt_tensor(
         layout=layout,
         memory_config=memory_config,
     )
+
+
+def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kwargs):
+    """Run a tensor-tensor ttnn binary op and return ``(golden, result)``.
+
+    Ops whose ``__name__`` ends in ``_`` (``ttnn.add_``, ``ttnn.multiply_``, …)
+    are inplace: they write into lhs and the result is read back from that
+    tensor rather than the return value.
+
+    Inputs are uploaded as ``ttnn.bfloat16``. ``op_kwargs`` (e.g.
+    ``fast_and_approximate_mode``) are forwarded only to the device op.
+    Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``) go in
+    ``golden_kwargs`` and are also passed to the device op.
+    """
+    tt_a = to_tt_tensor(input_a, device)
+    tt_b = to_tt_tensor(input_b, device)
+
+    golden_kwargs = golden_kwargs or {}
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden = golden_function(input_a, input_b, **golden_kwargs)
+
+    device_kwargs = {**golden_kwargs, **op_kwargs}
+    if ttnn_op.__name__.endswith("_"):
+        ttnn_op(tt_a, tt_b, **device_kwargs)
+        result = ttnn.to_torch(tt_a)
+    else:
+        result = ttnn.to_torch(ttnn_op(tt_a, tt_b, **device_kwargs))
+    return golden, result
 
 
 def float_to_bf16_bits(f: float) -> int:
@@ -181,3 +342,18 @@ def bf16_quantize_rne(x: float) -> float:
     the device input — uses round-to-nearest-even. For test points that are not
     exact BF16 values (e.g., 2.9, 3.01), truncation and RNE diverge."""
     return float(torch.tensor([x], dtype=torch.bfloat16).item())
+
+
+def sech2_exact(x: float) -> float:
+    """
+    Exact tanh derivative using mpmath 256-bit precision.
+
+    tanh'(x) = sech²(x) = 1 / cosh²(x)
+
+    Uses 1/cosh²(x) form (not 1 - tanh²(x)) to avoid the catastrophic cancellation
+    in the latter. Shared golden for test_tanh_bw_ulp.py and test_tanh_bw_fp32_ulp.py,
+    which apply their own input rounding and flushing around it.
+    """
+    mp.prec = 256
+    cosh_x = mp_cosh(mp.mpf(x))
+    return float(1 / (cosh_x * cosh_x))

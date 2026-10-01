@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Device performance tests for DeepSeekv3/KimiK2.6/GLM5.2 MoE dispatch and combine operations.
+Device performance tests for DeepSeekv3/KimiK2.6/GLM5.3 MoE dispatch and combine operations.
 
 Runs test_prefill_dispatch_combine.py::test_ttnn_dispatch_combine[perf_captured_<model>_chunk]
-(<model> in {dsv3, kimi26, glm52}) on the existing LB 8x1 proxy migrated to Fabric2D TorusY. It replays the hottest
+(<model> in {dsv3, kimi26, glm53}) on the existing LB 8x1 proxy migrated to Fabric2D TorusY. It replays the hottest
 (layer, col) pairs from a real prefill capture. The operation sequence is the same as the
 production workflow.
 Tests that were ran in order to capture the routing data:
@@ -37,7 +37,7 @@ _KIMI_CHUNK_PICKS = [
     (30, 3),  # 25.0%
     (32, 1),  # 25.0%
 ]
-_GLM52_CHUNK_PICKS = [
+_GLM53_CHUNK_PICKS = [
     (3, 0),  # 47.3%
     (8, 0),  # 38.5%
     (14, 2),  # 25.0%
@@ -70,13 +70,13 @@ _COMBINE_KIMI_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
     (32, 1): 848_981,
 }
 
-_DISPATCH_GLM52_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
+_DISPATCH_GLM53_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
     (3, 0): 1_247_679,
     (8, 0): 815_378,
     (14, 2): 493_043,
     (10, 0): 473_592,
 }
-_COMBINE_GLM52_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
+_COMBINE_GLM53_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
     (3, 0): 1_576_451,
     (8, 0): 1_218_739,
     (14, 2): 692_124,
@@ -88,7 +88,7 @@ _MODELS = {
     "dsv3": (_DS_CHUNK_PICKS, _DISPATCH_DS_CHUNK_EXPECTED_NS, _COMBINE_DS_CHUNK_EXPECTED_NS),
     # https://github.com/tenstorrent/tt-metal/issues/54972
     "kimi26": (_KIMI_CHUNK_PICKS, _DISPATCH_KIMI_CHUNK_EXPECTED_NS, _COMBINE_KIMI_CHUNK_EXPECTED_NS),
-    "glm52": (_GLM52_CHUNK_PICKS, _DISPATCH_GLM52_CHUNK_EXPECTED_NS, _COMBINE_GLM52_CHUNK_EXPECTED_NS),
+    "glm53": (_GLM53_CHUNK_PICKS, _DISPATCH_GLM53_CHUNK_EXPECTED_NS, _COMBINE_GLM53_CHUNK_EXPECTED_NS),
 }
 
 
