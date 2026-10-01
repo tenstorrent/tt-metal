@@ -3,6 +3,9 @@
 
 import csv
 import json
+import os
+
+import pytest
 
 from models.demos.gemma4_d_p.demo import layer_perf_report as lpr
 
@@ -225,3 +228,29 @@ def test_manifest_rank_zero_only(tmp_path, monkeypatch):
     monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
     assert lpr.write_manifest("run", []) is None
     assert not (tmp_path / lpr.MANIFEST_DIR).exists()
+
+
+def test_main_writes_nothing_on_non_zero_rank(tmp_path, monkeypatch):
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    monkeypatch.delenv("OMPI_COMM_WORLD_RANK", raising=False)
+    cells = [_cell("global", 0, 5, 9.0)]
+    lpr.write_manifest("run", cells, context_len=262144, chunk_size=8192, mesh_shape=(8, 4))
+    _write_ops_csv(tmp_path / "profiler", cells)
+    before = sorted(p.name for p in (tmp_path / lpr.MANIFEST_DIR).iterdir())
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
+    monkeypatch.setattr(lpr, "run_tt_perf_report", lambda *_: pytest.fail("non-zero rank ran a report"))
+    assert lpr.main(["--profiler-dir", str(tmp_path / "profiler")]) == 0
+    assert sorted(p.name for p in (tmp_path / lpr.MANIFEST_DIR).iterdir()) == before
+    assert not (tmp_path / "perf").exists()
+
+
+def test_main_rejects_ops_csv_older_than_manifest(tmp_path, monkeypatch):
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    monkeypatch.delenv("OMPI_COMM_WORLD_RANK", raising=False)
+    cells = [_cell("global", 0, 5, 9.0)]
+    stale = _write_ops_csv(tmp_path / "profiler", cells)
+    manifest = lpr.write_manifest("run", cells, context_len=262144, chunk_size=8192, mesh_shape=(8, 4))
+    os.utime(stale, (manifest.stat().st_mtime - 60,) * 2)
+    monkeypatch.setattr(lpr, "run_tt_perf_report", lambda *_: pytest.fail("reported a stale ops CSV"))
+    assert lpr.main(["--profiler-dir", str(tmp_path / "profiler")]) == 1
+    assert not (tmp_path / "perf").exists()
