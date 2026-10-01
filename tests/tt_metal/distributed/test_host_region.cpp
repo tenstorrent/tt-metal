@@ -14,12 +14,15 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
-// One region per process, and reserved_base() refuses to resize, so the suite fixes a core
-// count once and every case works against that same mapping.
+// One region for the suite, and reserved_base() refuses to resize, so the core count is
+// fixed once and every case works against that same mapping.
 constexpr uint32_t kTestCores = 4;
 
 HostRegion& reserved() {
-    HostRegion& r = HostRegion::storage();
+    // Owned here rather than taken from a MeshDeviceImpl: these cases are host-only and open
+    // no device. Safe as a plain static because nothing below provisions, so nothing is
+    // pinned -- that is the only part of HostRegion whose teardown order matters.
+    static HostRegion r;
     static uint8_t* const base = r.reserved_base(kTestCores);
     EXPECT_NE(base, nullptr);
     return r;
