@@ -1,0 +1,45 @@
+{
+ "metrics": {
+  "pcc_attention_L05": {
+   "t": "2026-10-01T02:16:58",
+   "value": 0.9999964837193331
+  },
+  "rel_l2_attention_L05": {
+   "t": "2026-10-01T02:16:58",
+   "value": 0.003005739999935031
+  },
+  "rel_l2_cp_slice0_attention_L05": {
+   "t": "2026-10-01T02:16:58",
+   "value": 0.0029807155951857567
+  },
+  "rel_l2_cp_slice1_attention_L05": {
+   "t": "2026-10-01T02:16:58",
+   "value": 0.00308971107006073
+  },
+  "rel_l2_cp_slice2_attention_L05": {
+   "t": "2026-10-01T02:16:58",
+   "value": 0.0029558734968304634
+  },
+  "rel_l2_cp_slice3_attention_L05": {
+   "t": "2026-10-01T02:16:58",
+   "value": 0.0029915496706962585
+  },
+  "rel_l2_head_rows_attention_L05": {
+   "t": "2026-10-01T02:16:58",
+   "value": 0.0030706238467246294
+  },
+  "row_norm_ratio_max_attention_L05": {
+   "t": "2026-10-01T02:16:58",
+   "value": 1.0031481981277466
+  },
+  "row_norm_ratio_min_attention_L05": {
+   "t": "2026-10-01T02:16:58",
+   "value": 0.9997988343238831
+  },
+  "worst_row_rel_l2_attention_L05": {
+   "t": "2026-10-01T02:16:58",
+   "value": 0.004401546902954578
+  }
+ },
+ "task": "C.full_moe.attention"
+}

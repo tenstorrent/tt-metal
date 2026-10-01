@@ -296,3 +296,22 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   - Device gate (the existing TtRMSNorm registration): PASS. pcc 0.999996, rel 0.0028, ratio [0.9969, 1.0027], worst row 0.0050, slices 0.0028-0.0029, x0.1 rel 0.0023 / worst row 0.0038.
 - The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_attn_norm.py`
+
+## C.full_moe.attention.test.1 (test review)
+- Replaced the rendered one-liner with the prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_full_moe_attention.py` (same golden: s4096 chunk 1, attn_norm [2048, 4096] -> attn_out, layer 5).
+  - Kept its checks: PCC >= 0.99 (gated), finite output, rel L2 <= 0.015, first 128 rows <= 0.015, per-token norm ratio in [0.97, 1.03], and worst row rel L2 <= 0.06.
+  - Kept its asserts that layer 5 is full attention and has no sink.
+- Added the cp4 full_dense check: rel L2 per CP slice (4 x 512 rows) <= 0.012, recorded as `rel_l2_cp_slice{r}_attention_L05`.
+- CPU measurements on layer 5 (script /tmp/cp4fma/m.py, not kept; the layer-0 /tmp/cp4m/measure.py with L=5). Values are PCC / rel / worst slice rel:
+  - Reference: 1.0 / 0.0017 / 0.0017.
+  - Ring of one hop only: 0.99995 / 0.0113 / 0.0192, worst row 0.037. Only the per-slice check catches it.
+  - RoPE positions restarting per slice: 0.9997 / 0.0258 / 0.0358.
+  - No ring: 0.99961 / 0.0296 / 0.0412.
+  - Non-causal across slices: 0.99965 / 0.0275 / 0.0407.
+  - Slices 0 and 1 swapped: PCC 0.983.
+- Results:
+  - Reference: PASS (pcc 0.999999, slices 0.0017).
+  - Stub: FAIL (pcc 0).
+  - Device gate: PASS with the existing attention registration. pcc 0.999996, rel 0.0030, first 128 rows 0.0031, ratio [0.9998, 1.0031], worst row 0.0044, slices 0.0030-0.0031.
+- The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_attention.py`

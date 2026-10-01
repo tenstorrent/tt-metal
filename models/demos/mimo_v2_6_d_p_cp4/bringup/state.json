@@ -591,6 +591,81 @@
   "started": "2026-10-01T00:04:00",
   "status": "PASS"
  },
+ "C.full_moe.attention": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "7fe7ca41-2886-4b57-9bff-9ce73b8d3b6a"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/briefs/C.full_moe.attention.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/agents/C.full_moe.attention.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 168.3,
+    "session_id": "7fe7ca41-2886-4b57-9bff-9ce73b8d3b6a",
+    "t": "2026-10-01T02:15:41"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 23.8,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T02:17:01"
+   }
+  ],
+  "last_run": "2026-10-01T02:17:01",
+  "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/logs/C.full_moe.attention.log",
+  "metrics": {
+   "pcc_attention_L05": 0.9999964837193331,
+   "rel_l2_attention_L05": 0.003005739999935031,
+   "rel_l2_cp_slice0_attention_L05": 0.0029807155951857567,
+   "rel_l2_cp_slice1_attention_L05": 0.00308971107006073,
+   "rel_l2_cp_slice2_attention_L05": 0.0029558734968304634,
+   "rel_l2_cp_slice3_attention_L05": 0.0029915496706962585,
+   "rel_l2_head_rows_attention_L05": 0.0030706238467246294,
+   "row_norm_ratio_max_attention_L05": 1.0031481981277466,
+   "row_norm_ratio_min_attention_L05": 0.9997988343238831,
+   "worst_row_rel_l2_attention_L05": 0.004401546902954578
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-01T02:16:38",
+  "status": "PASS"
+ },
  "C.full_moe.attn_norm": {
   "agent": {
    "defs": {
