@@ -188,6 +188,83 @@ class TableReader:
 
 
 # ---------------------------------------------------------------- table rules (CPU, on the exported .pb)
+def table_entries(t, config_idx: int = 0) -> dict:
+    """{(slot, layer, position): (noc_addr, size_bytes, device_group_index)} for one config of a parsed
+    KvChunkAddressTable, as the KV Manager sees it. The KVM loads the table with tt-metal's import_from_protobuf_file
+    (kv_manager/src/control_plane/maps/proto_kv_chunk_table.cpp:103); for a STRIDED_ROWS config that import
+    (tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp:498-560) takes the runs only, rejects a
+    malformed row, and resolves chunk c of a row to the run of residue r = c % chunk_step at
+    base_noc_addr + addr_stride * (c / chunk_step) (kv_chunk_address_table.cpp StridedRowMap::lookup). Raises
+    ValueError with the import's reason when the runs would not load."""
+    cfg = t.configs[config_idx]
+    if cfg.compression == 0:  # UNROLLED: explicit entries, a later one replaces an earlier one
+        return {
+            (e.slot, e.layer, e.position): (e.noc_addr, e.size_bytes, e.device_group_index)
+            for e in t.entries
+            if e.config_idx == config_idx
+        }
+    if cfg.compression != 1:
+        raise ValueError(f"unknown chunk compression {cfg.compression} (the import fails closed)")
+    npc = -(-cfg.max_sequence_length // cfg.chunk_n_tokens)
+    rows = {}
+    for r in t.runs:
+        if r.config_idx != config_idx:
+            continue
+        where = f"run (slot {r.slot}, layer {r.layer}, residue {r.start_chunk})"
+        if not 1 <= r.chunk_step <= npc:
+            raise ValueError(f"{where}: chunk_step {r.chunk_step} out of [1, {npc}]")
+        if r.count == 0:
+            raise ValueError(f"{where}: count 0")
+        if r.layer >= cfg.num_layers or r.slot >= cfg.num_slots:
+            raise ValueError(f"{where}: layer / slot out of range")
+        if r.start_chunk >= r.chunk_step:
+            raise ValueError(f"{where}: start_chunk >= chunk_step {r.chunk_step}")
+        if r.count != -(-(npc - r.start_chunk) // r.chunk_step):
+            raise ValueError(f"{where}: count {r.count} does not tile the {npc}-chunk row")
+        row = rows.setdefault((r.slot, r.layer), {})
+        if row and any(o.chunk_step != r.chunk_step or o.size_bytes != r.size_bytes for o in row.values()):
+            raise ValueError(f"{where}: chunk_step / size_bytes differ from the row's other runs")
+        if r.start_chunk in row:
+            raise ValueError(f"{where}: duplicate residue")
+        row[r.start_chunk] = r
+    if not rows:
+        raise ValueError("tagged STRIDED_ROWS but has no runs")
+    out = {}
+    for (slot, layer), row in rows.items():
+        step = next(iter(row.values())).chunk_step
+        if set(row) != set(range(step)):
+            raise ValueError(f"row (slot {slot}, layer {layer}): runs do not cover residues 0..{step - 1}")
+        for c in range(npc):
+            r = row[c % step]
+            addr = (r.base_noc_addr + r.addr_stride * (c // step)) & 0xFFFFFFFFFFFFFFFF  # uint64 wrap, as in C++
+            out[(slot, layer, c * cfg.chunk_n_tokens)] = (addr, r.size_bytes, r.device_group_index)
+    return out
+
+
+def bank_overlaps(entries: dict) -> list[str]:
+    """No two records in one DRAM bank of one device group overlap. noc_addr = (bank << 32) | local address
+    (tt_metal/impl/internal/disaggregation/noc_addr.hpp addr_channel / addr_local); a record must also stay in its
+    bank (local + size <= 2**32)."""
+    fails, banks = [], {}
+    for k, (addr, size, dg) in entries.items():
+        if not size:
+            continue
+        lo = addr & 0xFFFFFFFF
+        if lo + size > 1 << 32:
+            fails.append(f"record {k} [{lo:#x}, +{size}) runs past the end of bank {addr >> 32}")
+        banks.setdefault((dg, addr >> 32), []).append((lo, lo + size, k))
+    for (dg, bank), iv in banks.items():
+        iv.sort()
+        for (a0, a1, ka), (b0, b1, kb) in zip(iv, iv[1:]):
+            if b0 < a1:
+                fails.append(
+                    f"records {ka} [{a0:#x}, {a1:#x}) and {kb} [{b0:#x}, {b1:#x}) overlap in device group {dg} "
+                    f"bank {bank}"
+                )
+                break
+    return fails
+
+
 def table_rules(table_path: str, num_layers: int, num_users: int) -> tuple[list[str], dict]:
     """The launch harness's table rules (tables.read_table / paired_tables / layout) and the KV Manager's migration
     plan rules (migration_strategy_builder.cpp:103-170) on the exported table. Returns (failures, geometry)."""
@@ -214,25 +291,26 @@ def table_rules(table_path: str, num_layers: int, num_users: int) -> tuple[list[
 
     t = KvChunkAddressTable()
     t.ParseFromString(Path(table_path).read_bytes())
-    if t.configs[0].compression:
-        fails.append("config 0 uses strided runs; this check reads explicit entries only")
-        return fails, geom
+    try:
+        entries = table_entries(t, 0)
+    except ValueError as e:
+        return fails + [f"config 0: {e}"], geom
     cbytes = t.configs[0].chunk_size_bytes
-    entries = {(e.slot, e.layer, e.position): e for e in t.entries if e.config_idx == 0}
     want = [(s, l, p) for s in range(num_users) for l in range(num_layers) for p in range(0, R.MAX_SEQ, 32)]
     missing = [k for k in want if k not in entries]
     if missing:
         fails.append(f"{len(missing)} (slot, layer, pos) records missing, e.g. {missing[:3]}")
-    wrong = [k for k, e in entries.items() if e.size_bytes != cbytes]
+    wrong = [k for k, e in entries.items() if e[1] != cbytes]
     if wrong:
         fails.append(f"{len(wrong)} records with size != chunk_size_bytes {cbytes}, e.g. {wrong[:3]}")
     seen = {}
-    for k, e in entries.items():
-        a = (e.device_group_index, e.noc_addr)
+    for k, (addr, _, dg) in entries.items():
+        a = (dg, addr)
         if a in seen:
             fails.append(f"records {seen[a]} and {k} alias one DRAM address (slots / layers must not share a region)")
             break
         seen[a] = k
+    fails += bank_overlaps(entries)
     return fails, geom
 
 
