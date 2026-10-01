@@ -166,7 +166,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
         AttnRes seals every `ATTN_RES_BLOCK_SIZE` layers, and a rank starting at layer `F` inherits
         exactly `F // 12` sealed snapshots from upstream. Constraining `F` to a multiple of 12 makes
         that count static, which is what lets the cross-rank activation handoff have a fixed width
-        instead of one that depends on where the split landed. GLM-5.2 constrains its splits for the
+        instead of one that depends on where the split landed. GLM-5.3 constrains its splits for the
         same class of reason.
         """
         block = KimiK3Config.ATTN_RES_BLOCK_SIZE

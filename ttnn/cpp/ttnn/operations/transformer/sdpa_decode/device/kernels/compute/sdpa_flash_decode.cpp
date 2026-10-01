@@ -68,6 +68,11 @@ void kernel_main() {
     constexpr uint32_t original_block_size = get_compile_time_arg_val(26);
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
+    // get_workload_for_core assigns at most one chunk per participating core when
+    // the fixed non-causal chunk count does not exceed num_cores_per_head. Its
+    // local online-softmax correction is then unreachable; tree reduction still runs.
+    constexpr bool single_local_chunk = !is_causal && sliding_window_size == 0 && Sk_chunk_t > 0 &&
+                                        ((St + Sk_chunk_t - 1) / Sk_chunk_t <= num_cores_per_head);
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool untilize_output = tilize_q;
@@ -216,11 +221,10 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
         matmul_init(cb_q_in, cb_k_in);
-        // #49266: The Q tilize runs on SrcA; on galaxy Q is a half-tile (num_faces=2), and
-        // tilize_uninit correctly restores SrcA to Q's geometry. But the QK matmul reads operands
-        // REVERSED (SrcA <- in1 = cb_k_in, num_faces=4), and the per-k_chunk reconfig below is
-        // IGNORE (format-only). Reprogram SrcA/SrcB tile geometry ONCE here for the matmul
-        // operands (is_tile_dim_reconfig_en=true) so K is unpacked with the correct num_faces.
+        // #49266: the Q tilize runs on SrcA, and on galaxy Q is a half-tile (num_faces=2).
+        // tilize_uninit leaves SrcA at Q's geometry, but the QK matmul reads operands reversed
+        // (SrcA <- cb_k_in, num_faces=4) and the per-chunk reconfig below is format-only.
+        // Reprogram SrcA/SrcB geometry once here so K is unpacked with the right num_faces.
         // One-time, not per-chunk: nothing after this re-establishes Q's geometry on SrcA (K and V
         // are both full tiles), so the per-chunk reconfig can stay IGNORE. Without this, SrcA stays
         // at num_faces=2 and the matmul reads K wrong -> Top-1 0%. (Full-tile Q: this is a no-op
@@ -462,7 +466,7 @@ void kernel_main() {
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk == k_chunk_start) {
                     cb_out_mm = cb_out_im;
-                } else {
+                } else if constexpr (!single_local_chunk) {
                     // When there is more than 1 chunk, we perform Lazy Softmax
                     // Reconfig register DF
                     reconfig_data_format(cb_prev_max, cb_cur_max);

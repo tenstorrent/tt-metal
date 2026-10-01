@@ -5,6 +5,7 @@
 
 import json
 import math
+import os
 from pathlib import Path
 
 import torch
@@ -241,3 +242,65 @@ def write_pcc_summary(report, root):
         for r in rows
     )
     (directory / f"{name}.md").write_text("\n".join(text) + "\n")
+
+
+def prefill_runner_scenario():
+    """Resolve the common runner's deterministic two-slot acceptance workload from the model manifest."""
+    manifest = Path(__file__).resolve().parents[1] / "tt/runners/manifests/llama_3p1_8b.json"
+    env = json.loads(manifest.read_text())["env"]
+    capacity = int(os.environ.get("PREFILL_MAX_SEQ_LEN", env["PREFILL_MAX_SEQ_LEN"]))
+    if capacity not in (2048, 4096, 8192, 16384, 32768, 65536):
+        raise ValueError("runner acceptance capacity must be 2K, 4K, 8K, 16K, 32K or 64K")
+    users, layers, chunk_size = (
+        int(env[key]) for key in ("PREFILL_NUM_USERS", "PREFILL_NUM_LAYERS", "PREFILL_CHUNK_SIZE")
+    )
+    if int(os.environ.get("PREFILL_NUM_USERS", users)) != users:
+        raise ValueError(f"runner acceptance requires the model's {users} slots")
+    active_users = int(os.environ.get("PREFILL_PRODUCER_NUM_USERS", "1"))
+    if not 1 <= active_users <= users:
+        raise ValueError(f"producer must use between 1 and {users} slots")
+    env.update(
+        PREFILL_MAX_SEQ_LEN=str(capacity),
+        PREFILL_LAYER_ACK_D2H="0",
+        PREFILL_USE_TRACE="0",
+        PREFILL_KV_ONLY_LAST_LAYER="0",
+        PREFILL_STANDALONE_CHUNKED_PCC="0.99",
+    )
+    return {
+        "users": users,
+        "layers": layers,
+        "max_seq_len": capacity,
+        "expected_slots": active_users,
+        "env": env,
+        "producer": {
+            "PREFILL_NUM_USERS": str(active_users),
+            "PREFILL_PRODUCER_CHUNKS": str(capacity // chunk_size),
+            "PREFILL_PRODUCER_MAX_REQUESTS": str(active_users),
+            "PREFILL_PRODUCER_DURATION_S": "inf",
+            "PREFILL_PRODUCER_WARMUP_CHUNKS": "0",
+            "PREFILL_PRODUCER_MULTI_TURN_PROB": "0",
+            "PREFILL_PCC_GOLDEN_LEN": str(capacity),
+            "PREFILL_PRODUCER_INTERLEAVE": "round_robin",
+            "PREFILL_PRODUCER_P_GAP": "0",
+            "PREFILL_PRODUCER_P_BURST": "0",
+            "PREFILL_SEND_SHUTDOWN": "1",
+        },
+    }
+
+
+def validate_prefill_slot_traces(spec, scenario):
+    """Require a complete prefix per active slot; one trace may be shared by all slots."""
+    from models.demos.common.prefill.adapter import get_adapter
+    from models.demos.common.prefill.runners.trace_utils import validate_gqa_trace
+
+    spec = spec or os.environ.get("PREFILL_TRACE_DIR", get_adapter("llama_3p1_8b").prefill_trace_default)
+    paths = [Path(path.strip()) for path in spec.split(",") if path.strip()]
+    if len(paths) not in (1, scenario["expected_slots"]):
+        raise ValueError(
+            f"set one or {scenario['expected_slots']} golden trace directories in PREFILL_PRODUCER_SLOT_TRACES"
+        )
+    ids = [json.loads((path / "metadata.json").read_text())["token_ids"] for path in paths]
+    if any(len(tokens) < scenario["max_seq_len"] for tokens in ids):
+        raise ValueError(f"goldens must contain at least {scenario['max_seq_len']} tokens")
+    for path in paths:
+        validate_gqa_trace(path, scenario["max_seq_len"], num_layers=scenario["layers"], num_kv_heads=8, head_dim=128)

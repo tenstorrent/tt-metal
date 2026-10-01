@@ -71,7 +71,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     const bool cos_sin_sharded = cos.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool trans_mat_sharded = trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
-    tt_metal::IDevice* device = tensor_args.input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = tensor_args.input_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -202,11 +202,11 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
 
     // hw_config — Style B (see the interleaved factory for the rationale).
     ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
     if (device->arch() == tt::ARCH::QUASAR) {
-        // Gen2 copies the fields the Gen1 config sets (gen2_hardware_configs.md shape 4).
-        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
-        compute_hw_config = ComputeGen2Config{
+        // Quasar sets the same common fields (gen2_hardware_configs.md shape 4).
+        // TODO(#52269): Quasar unpack_modes are copied from TT-1.x.x and not yet optimized for Quasar.
+        compute_hw_config = ComputeHardwareConfig{
             .fpu_math_fidelity = math_fidelity,
             .enable_32_bit_dest = fp32_dest_acc_en,
         };
@@ -260,7 +260,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
              {"sin_Ht", sin_seq_len_t},
              {"rotary_Ht", rotary_seq_len_t}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
-        .hw_config = create_reader_datamovement_config(device->arch())};
+        .hw_config = create_reader_datamovement_config()};
 
     // Writer / compute — identical to the interleaved factory (shared kernel sources).
     const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
@@ -277,7 +277,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         .compile_time_args =
             {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
-        .hw_config = create_writer_datamovement_config(device->arch())};
+        .hw_config = create_writer_datamovement_config()};
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,

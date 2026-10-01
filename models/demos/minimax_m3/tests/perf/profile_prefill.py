@@ -63,7 +63,7 @@ way run_prefill_perf.sh does:
 
 Manual equivalent:
   cd $TT_METAL_HOME && source python_env/bin/activate && export PYTHONPATH=$TT_METAL_HOME
-  export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref
+  export HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
   PROFILE_CACHE=25600 PREFILL_TRACE_DIR=<golden> \
     python3 -m tracy -v -r -p models/demos/minimax_m3/tests/perf/profile_prefill.py

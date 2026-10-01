@@ -303,6 +303,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 uint32_t block_h = program_config.block_h * tile_height;
                 const auto shard_spec = a.shard_spec().value();
                 // check dims
+                // subblock_w == 0 would make the divisibility check below a modulo by zero on the host,
+                // which kills the process with SIGFPE instead of raising, so it is rejected first.
+                TT_FATAL(program_config.subblock_w > 0, "subblock_w must be greater than 0.");
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
                     "block_w must be divisible by subblock_w.");

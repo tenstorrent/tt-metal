@@ -154,7 +154,11 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
-OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
+OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<EnumT>,
+    std::optional<DataType> dtype,
+    const std::optional<binary::BinaryOpParams>& op_params) :
     binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
@@ -226,10 +230,16 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
         // (a-b)**2
         case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
         // gelu(a+b)
-        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::BIAS_GELU: {
             binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::GELU;
+            const auto* gelu_params =
+                op_params.has_value() ? std::get_if<binary::BiasGeluParams>(&op_params.value()) : nullptr;
+            const bool fast_and_approximate = gelu_params != nullptr && gelu_params->fast_and_approximate;
+            // The parameter is required: without it this reaches gelu_tile's default template
+            // argument, which is the approximate variant, where ttnn.gelu defaults to exact.
+            postprocess = unary::EltwiseUnaryWithParam{unary::UnaryOpType::GELU, fast_and_approximate ? 1.0f : 0.0f};
             break;
+        }
         case BinaryOpType::LOGICAL_AND:
             process_lhs = unary::UnaryOpType::NEZ;
             process_rhs = unary::UnaryOpType::NEZ;
@@ -699,8 +709,16 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
         scalar);
 }
 
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<FpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<SfpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {

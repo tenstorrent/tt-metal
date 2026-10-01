@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
 
@@ -338,8 +339,11 @@ def make_kimi_k3_device_case(
     )
     selected_program_config = program_config or kimi_k3_program_config(
         active_seq_len_local=case.hidden.shape[1] // tuple(mesh_device.shape)[sequence_parallel_axis],
+        # Match production: ring the TP axis wherever the opened fabric wraps it (Galaxy torus).
         tp_ccl_topology=(
-            ttnn.Topology.Ring if tuple(mesh_device.shape)[sequence_parallel_axis] == 1 else ttnn.Topology.Linear
+            ttnn.Topology.Ring
+            if tuple(mesh_device.shape)[sequence_parallel_axis] == 1
+            else per_axis_topology()[tensor_parallel_axis]
         ),
     )
     if summary_group_chunks is not None:
@@ -518,7 +522,7 @@ def assert_matches_reference(
 
     assert_accurate(
         expected_output,
-        natural_output,
+        natural_output[:, : expected_output.shape[1]],
         name=f"{label} output",
         pcc_threshold=pcc_threshold,
         rmse_threshold=0.05,

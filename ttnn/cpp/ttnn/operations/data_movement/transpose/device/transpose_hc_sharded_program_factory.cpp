@@ -30,7 +30,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t shard_height = shard_spec.shape[0];
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 
@@ -98,7 +98,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t shard_height = shard_spec.shape[0];
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 

@@ -26,6 +26,7 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
 
     const auto& backing = tensor_args.backing;
     Tensor& tokens_out = outputs[0];
+    const bool has_overhang = args.overhang_size_bytes > 0;
     const bool has_metadata = args.metadata_size_bytes > 0;
 
     // Per-coord service-core targeting (logical -> physical NoC coord).
@@ -52,7 +53,8 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
 
     auto* backing_buffer = backing.buffer();
     auto* tokens_buffer = tokens_out.buffer();
-    Buffer* metadata_buffer = has_metadata ? outputs[1].buffer() : nullptr;
+    Buffer* overhang_buffer = has_overhang ? outputs[1].buffer() : nullptr;
+    Buffer* metadata_buffer = has_metadata ? outputs[has_overhang ? 2 : 1].buffer() : nullptr;
 
     ProgramDescriptor desc;
 
@@ -76,9 +78,11 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
         args.scratch_cb_index,
         args.metadata_size_bytes,
         static_cast<uint32_t>(args.metadata_l1_addr),
+        args.overhang_size_bytes,
     };
     TensorAccessorArgs(*backing_buffer).append_to(ct_args);
     TensorAccessorArgs(*tokens_buffer).append_to(ct_args);
+    TensorAccessorArgs(*(has_overhang ? overhang_buffer : tokens_buffer)).append_to(ct_args);
     if (has_metadata) {
         TensorAccessorArgs(*metadata_buffer).append_to(ct_args);
     }
@@ -114,8 +118,15 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
             start_page,                             // arg 5
             end_page,                               // arg 6
         };
+        if (has_overhang) {
+            rt_args.emplace_back(overhang_buffer);  // arg 7: overhang output base address
+        } else {
+            rt_args.emplace_back(uint32_t{0});
+        }
         if (has_metadata) {
-            rt_args.emplace_back(metadata_buffer);  // arg 7: metadata output base address
+            rt_args.emplace_back(metadata_buffer);  // arg 8: metadata output base address
+        } else {
+            rt_args.emplace_back(uint32_t{0});
         }
         writer.emplace_runtime_args(workers[i], rt_args);
     }

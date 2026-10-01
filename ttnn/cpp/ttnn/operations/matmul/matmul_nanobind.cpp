@@ -1234,7 +1234,25 @@ void py_module(nb::module_& mod) {
             "compute_program_hash",
             &ttnn::prim::MatmulDeviceOperation::compute_descriptor_program_hash,
             nb::arg("operation_attributes"),
-            nb::arg("tensor_args"));
+            nb::arg("tensor_args"))
+        .def_static(
+            "invoke",
+            [](const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::Tensor>& bias,
+               const ttnn::prim::MatmulParams& attributes) {
+                return ttnn::prim::matmul(input_tensor_a, input_tensor_b, bias, std::nullopt, attributes);
+            },
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::arg("bias") = nb::none(),
+            nb::arg("attributes"),
+            R"doc(
+        Testing only, not part of the public API; use ttnn.matmul or ttnn.linear instead.
+
+        Calls ttnn::prim::matmul directly so tests can exercise fused bias where ttnn.matmul /
+        ttnn.linear would not fuse it (they add bias as a separate op when in1 is batched).
+    )doc");
 
     // Bind select_program_factory for Python-side factory dispatch
     mod.def(

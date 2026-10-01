@@ -94,7 +94,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/prefetcher_pipe.hpp
+    api/tt-metalium/experimental/sender_core_type.hpp
     api/tt-metalium/experimental/profiler.hpp
+    api/tt-metalium/experimental/program_preparation.hpp
     api/tt-metalium/experimental/streaming_profiler.hpp
     api/tt-metalium/experimental/program_descriptor_patching.hpp
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
@@ -137,6 +139,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/cluster.hpp
     api/internal/cluster_noc_helpers.hpp
     api/internal/disaggregation/kv_chunk_address_table.hpp
+    api/internal/disaggregation/kv_chunk_table_cache.hpp
     api/internal/fabric.hpp
     api/internal/graph_function_abort.hpp
     api/tt-metalium/kernel_types.hpp
@@ -159,7 +162,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/program.hpp
     api/tt-metalium/program_cache.hpp
     api/tt-metalium/program_descriptors.hpp
-    api/tt-metalium/queue_id.hpp
     api/tt-metalium/runtime_args_data.hpp
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
