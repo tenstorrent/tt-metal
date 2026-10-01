@@ -87,7 +87,7 @@ def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
 
 def want_ops(s) -> bool:
     """The per-op breakdown (spec perf.op_profile or BRINGUP_PROFILE_OPS=1; the final X.3 sets it)."""
-    return bool(s.get("perf.op_profile", False)) or os.environ.get("BRINGUP_PROFILE_OPS") == "1"
+    return bool(s.get("perf.op_profile")) or os.environ.get("BRINGUP_PROFILE_OPS") == "1"
 
 
 def op_layers(s, layers: list[int]) -> list[int]:
@@ -271,7 +271,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     metrics.record("host_transfers_per_layer", max(host))
     # The full-target prefill takes minutes; it is for a final number, not for every perf iteration (spec perf.full_prefill
     # or BRINGUP_FULL_PREFILL=1).
-    want_full = s.get("perf.full_prefill", False) or os.environ.get("BRINGUP_FULL_PREFILL") == "1"
+    want_full = s.get("perf.full_prefill") or os.environ.get("BRINGUP_FULL_PREFILL") == "1"
     full = full_prefill(s, model, state, layers, rung, g.tokens()) if want_full else None
 
     reload()

@@ -90,7 +90,7 @@ def divisor(placement: str, mesh: list[int]) -> int:
 def check_plan(spec: Spec, plan: dict, tensors: dict[str, list[int]], hf_config: dict | None = None) -> dict:
     """Returns {errors, per_chip_bytes (by group), total_gb, capacity_gb, fits, unplaced, rows}."""
     mesh, chips = spec.mesh, spec.mesh[0] * spec.mesh[1]
-    cap_gb = float(spec.get("box.chip_dram_gb", 32))
+    cap_gb = float(spec.get("box.chip_dram_gb"))
     headroom = float(plan.get("headroom_frac", 0.15))
     errs = []
     placements = plan.get("placements") or []
