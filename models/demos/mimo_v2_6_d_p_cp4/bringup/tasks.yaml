@@ -498,6 +498,13 @@ tasks:
     kind: norm
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-01T00:08:23'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_attn_norm.py: 4a31cb46b69f829f0424d836abb661fc760c30860ac4f9073cc304642fff8b2f
+      /home/sjovic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 16e0ef60439c47052a9bf2543ea23258b17ea715224d1f9e30e037294a43e9bd
 - id: S.sliding_moe.01
   title: 'sliding_moe block with steps 1-1 on device (last: attn_norm)'
   step: implement
