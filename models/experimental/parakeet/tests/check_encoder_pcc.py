@@ -77,9 +77,9 @@ def main():
     for h in hooks:
         h.remove()
 
-    import backend as be
-
+    import models.experimental.parakeet.tt as be
     import ttnn
+    from models.experimental.parakeet.tt import create_backend as _create
 
     device = ttnn.open_device(device_id=0, **be.DEVICE_OPTIONS)
     try:

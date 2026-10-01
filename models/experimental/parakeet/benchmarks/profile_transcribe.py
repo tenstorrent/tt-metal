@@ -63,8 +63,7 @@ def main():
     ap.add_argument("--precision", default="bf16")
     ap.add_argument("--repeats", type=int, default=5)
     args = ap.parse_args()
-    import backend as be
-
+    import models.experimental.parakeet.tt as be
     import ttnn
 
     data = np.load(os.path.join(args.input, "inputs.npz"))

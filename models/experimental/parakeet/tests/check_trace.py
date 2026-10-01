@@ -25,9 +25,9 @@ def main():
     ap.add_argument("--cases", default="short,long,short")
     ap.add_argument("--precision", default="bf16")
     args = ap.parse_args()
-    import backend as be
-
+    import models.experimental.parakeet.tt as be
     import ttnn
+    from models.experimental.parakeet.tt import create_backend as _create
 
     data = np.load(os.path.join(args.input, "inputs.npz"))
     with open(os.path.join(args.weights, "config.json")) as f:

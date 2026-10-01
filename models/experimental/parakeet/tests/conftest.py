@@ -1,24 +1,33 @@
 # SPDX-FileCopyrightText: © 2026 Abror Shopulatov
 
 # SPDX-License-Identifier: Apache-2.0
-"""Shared fixtures. Paths come from PARAKEET_WEIGHTS (default /weights) and PARAKEET_INPUT (default /input).
+"""Shared fixtures for Parakeet tests.
 
-Device tests skip cleanly when ttnn is not importable or no TT device is present; CPU tests skip
-when the pinned checkpoint is not available.
+Checkpoint resolved from PARAKEET_WEIGHTS env var or the CI HF cache.
+Device tests skip cleanly when ttnn is not importable or no TT device is present.
 """
 
 import json
 import os
-import sys
 
+import numpy as np
 import pytest
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
 
-WEIGHTS = os.environ.get("PARAKEET_WEIGHTS", "/weights")
-INPUT = os.environ.get("PARAKEET_INPUT", "/input")
+def _resolve_checkpoint():
+    env = os.environ.get("PARAKEET_WEIGHTS")
+    if env and os.path.exists(os.path.join(env, "config.json")):
+        return env
+    ci = "/mnt/MLPerf/huggingface/hub/models--nvidia--parakeet-tdt-0.6b-v3/snapshots"
+    if os.path.isdir(ci):
+        for snap in sorted(os.listdir(ci)):
+            path = os.path.join(ci, snap)
+            if os.path.exists(os.path.join(path, "config.json")):
+                return path
+    return None
+
+
+WEIGHTS = _resolve_checkpoint()
 
 
 def pytest_configure(config):
@@ -36,10 +45,19 @@ def _num_tt_devices():
         return 0
 
 
+def make_deterministic_mels():
+    """Synthetic mel spectrograms for numerics tests (no real speech needed)."""
+    rng = np.random.default_rng(0)
+    mel = rng.standard_normal((2, 300, 128)).astype(np.float32)
+    lens = np.array([300, 181], dtype=np.int64)
+    mel[1, 181:] = 0.0
+    return {"synthetic_b2": (mel, lens)}
+
+
 @pytest.fixture(scope="session")
 def weights_path():
-    if not os.path.exists(os.path.join(WEIGHTS, "config.json")):
-        pytest.skip(f"pinned checkpoint not found at {WEIGHTS} (set PARAKEET_WEIGHTS)")
+    if WEIGHTS is None:
+        pytest.skip("checkpoint not found (set PARAKEET_WEIGHTS)")
     return WEIGHTS
 
 
@@ -52,7 +70,7 @@ def hf_config(weights_path):
 @pytest.fixture(scope="session")
 def reference(weights_path):
     pytest.importorskip("transformers")
-    from reference import ParakeetReference
+    from models.experimental.parakeet.reference.torch_parakeet import ParakeetReference
 
     return ParakeetReference(weights_path)
 
@@ -61,9 +79,8 @@ def reference(weights_path):
 def device():
     if _num_tt_devices() == 0:
         pytest.skip("no TT device available")
-    from tt import DEVICE_OPTIONS
-
     import ttnn
+    from models.experimental.parakeet.tt import DEVICE_OPTIONS
 
     dev = ttnn.open_device(device_id=0, **DEVICE_OPTIONS)
     yield dev
@@ -72,6 +89,6 @@ def device():
 
 @pytest.fixture(scope="session")
 def tt_model(weights_path, hf_config, device):
-    from tt import create_backend
+    from models.experimental.parakeet.tt import create_backend
 
     return create_backend(weights_path, hf_config, device, precision="bf16")
