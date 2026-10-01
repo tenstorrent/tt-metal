@@ -373,3 +373,20 @@ def test_served_kv_dtype_is_required_on_every_ladder_rung(fx):
     s.data["serving"].pop("kv_dtype")
     t = {x["id"]: x for x in generate(s, Reference())["tasks"]}
     assert not any(k.startswith("state_bits_") for k in t["L.s256"]["gate"]["metrics"])
+
+
+def test_settings_gate_commit_stages_the_model_code(fx):
+    """Z.1's gate commit carries tt/ and hooks.py (it missed them on Xing: the role's paths are computed, not listed)."""
+    from models.demos.common.bringup.core.gate import stage_paths
+
+    s = Spec.load(fx())
+    s.repo.mkdir(exist_ok=True)
+    (s.model_dir / "tt").mkdir(parents=True)
+    (s.model_dir / "tt/settings.py").write_text("x = 1\n")
+    (s.bringup_dir).mkdir(parents=True, exist_ok=True)
+    (s.bringup_dir / "hooks.py").write_text("x = 1\n")
+    led = Ledger(s.bringup_dir)
+    led.write_tasks(generate(s, Reference()))
+    z = next(t for t in generate(s, Reference())["tasks"] if t["id"] == "Z.1")
+    got = stage_paths(s, led, z)
+    assert any(p.endswith("/tt") for p in got) and any(p.endswith("bringup/hooks.py") for p in got)
