@@ -655,15 +655,16 @@ def run_neighbor_pad_2d_combined_impl(
     logical_h=None,
     input_dtype=ttnn.bfloat16,
     use_persistent_output_buffer=False,
+    logical_w=0,
 ):
     """
-    2D neighbor pad with optional logical_h masking and t_front_pad fusion.
+    2D neighbor pad with optional logical_h/logical_w masking and t_front_pad fusion.
 
     logical_h=None means no masking (equivalent to logical_h=input_shape[h_dim]).
-    t_front_pad=0 means no T-frame prepend. Covers all 2D feature combinations.
+    logical_w=0 means no W masking. t_front_pad=0 means no T-frame prepend.
 
-    Golden: zero input rows >= logical_h, apply 2D spatial padding, prepend
-    t_front_pad zero T-frames.
+    Golden: zero input rows >= logical_h and columns >= logical_w, apply 2D spatial
+    padding, prepend t_front_pad zero T-frames.
     """
     torch.manual_seed(7)
     mesh_shape = tuple(mesh_device.shape)
@@ -687,6 +688,10 @@ def run_neighbor_pad_2d_combined_impl(
     slices = [slice(None)] * input_tensor.ndim
     slices[h_dim] = slice(logical_h, None)
     masked[tuple(slices)] = 0.0
+    if logical_w:
+        slices = [slice(None)] * input_tensor.ndim
+        slices[w_dim] = slice(logical_w, None)
+        masked[tuple(slices)] = 0.0
     goldens_2d = compute_2d_pad_golden(masked, mesh_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, "zeros")
     goldens = {}
     for key, padded in goldens_2d.items():
@@ -745,6 +750,7 @@ def run_neighbor_pad_2d_combined_impl(
         persistent_output_buffer=persistent_output_buffer,
         logical_h=logical_h,
         t_front_pad=t_front_pad,
+        logical_w=logical_w,
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
 
@@ -1321,4 +1327,49 @@ def test_np_bh_combined(
         t_front_pad=t_front_pad,
         num_links=2,
         use_persistent_output_buffer=use_persistent_output_buffer,
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_np_bh_logical_w_2d_submesh — W pad-column masking (logical_w) on a 2x4 submesh
+# ---------------------------------------------------------------------------
+
+_BH_LW_2D = [
+    # (input_shape, logical_h, logical_w, t_front_pad, persistent)
+    ([1, 21, 18, 32, 128], None, 30, 0, True),  # LTX 544x960 latent conv: 2 pad cols on the last W chip
+    ([1, 21, 18, 32, 128], 17, 30, 0, True),  # + H pad rows
+    ([1, 5, 18, 32, 64], None, 20, 0, False),  # pad cols span 1.5 W chips: masked sticks cross a W halo
+    ([1, 5, 18, 32, 64], None, 16, 0, False),  # pad starts on a W chip boundary
+    ([1, 5, 18, 32, 64], 17, 20, 2, False),  # + logical_h + t_front_pad
+    ([1, 5, 18, 32, 64], None, 32, 0, False),  # logical_w == full width: no-op
+]
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("input_shape, logical_h, logical_w, t_front_pad, use_persistent_output_buffer", _BH_LW_2D)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_np_bh_logical_w_2d_submesh(
+    mesh_device, input_shape, logical_h, logical_w, t_front_pad, use_persistent_output_buffer, device_params
+):
+    """Fused 2D pad with logical_w must equal padding the input with W columns >= logical_w zeroed.
+
+    Opens the full galaxy mesh and runs on a 2x4 submesh: a bare 2x4 open fails fabric init on BH galaxy.
+    """
+    if not is_blackhole():
+        pytest.skip("Sized for a BH galaxy")
+    run_neighbor_pad_2d_combined_impl(
+        mesh_device.create_submesh(ttnn.MeshShape(2, 4)),
+        input_shape=list(input_shape),
+        h_dim=2,
+        w_dim=3,
+        h_axis=0,
+        w_axis=1,
+        pH=1,
+        pW=1,
+        t_front_pad=t_front_pad,
+        num_links=2,
+        logical_h=logical_h,
+        use_persistent_output_buffer=use_persistent_output_buffer,
+        logical_w=logical_w,
     )

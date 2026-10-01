@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 
 
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
-    """Cached mask that zeros width-padding columns beyond logical_w (neighbor_pad has no W mask)."""
+    """Cached mask that zeros width-padding columns beyond logical_w (when neighbor_pad does not mask them)."""
     sharded_w = x_BTHWC.shape[3]
     key = (sharded_w, logical_w)
     if key not in cache:
@@ -153,6 +153,9 @@ class LTXCausalConv3d(Module):
             and internal_padding[1] == 0
             and internal_padding[2] == 0
         )
+        # Opt-in: neighbor_pad zeros the W pad columns itself (logical_w), replacing the mask multiply over
+        # the whole activation. Only the fused 2D halo (H and W both sharded) supports it.
+        self.fold_w_mask = os.environ.get("LTX_VAE_FOLD_W_MASK", "0") == "1"
 
         dims_T, dims_H, dims_W = (conv_dims.T, conv_dims.H, conv_dims.W) if conv_dims is not None else (0, 0, 0)
         self.conv_config = get_conv3d_config(
@@ -259,12 +262,14 @@ class LTXCausalConv3d(Module):
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
-        # Width pre-conv mul-mask: zero pad columns before the halo (neighbor_pad has no W-mask).
-        if (
+        # Width pre-conv mul-mask: zero pad columns before the halo, unless neighbor_pad masks them.
+        w_mask_needed = (
             logical_w > 0
             and self.parallel_config.width_parallel.factor > 1
             and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
-        ):
+        )
+        fold_w_mask = w_mask_needed and self.fold_w_mask and h_pad_needed and w_pad_needed
+        if w_mask_needed and not fold_w_mask:
             x_BTHWC = ttnn.mul(
                 x_BTHWC,
                 _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
@@ -303,6 +308,7 @@ class LTXCausalConv3d(Module):
                 num_links=links,
                 logical_h=(logical_h if h_pad_needed else 0),
                 t_front_pad=0,
+                logical_w=(logical_w if fold_w_mask else 0),
             )
 
         x_BTHWC = ttnn.experimental.conv3d(
