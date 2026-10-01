@@ -53,7 +53,7 @@ bool residual_aliases_input(const RmsNormInputs& t) {
 
 // The env switches that change the kernels' defines (read by the builder).
 std::string env_or_empty(const char* name) {
-    const char* v = std::getenv(name);
+    const char* v = std::getenv(name);  // diagnostic: perf/measurement knob, same result
     return v == nullptr ? std::string() : std::string(v);
 }
 }  // namespace

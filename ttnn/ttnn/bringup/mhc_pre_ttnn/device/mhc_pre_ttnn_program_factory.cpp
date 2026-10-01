@@ -157,7 +157,7 @@ NOC reader_noc_of(int64_t group_y0, int64_t flip_rows) {
 // Extra preprocessor defines for all three kernels (MHC_PRE_KERNEL_DEFINES="A=1;B"), as the Python reads them.
 KernelDescriptor::Defines kernel_defines() {
     KernelDescriptor::Defines defines;
-    const char* v = std::getenv("MHC_PRE_KERNEL_DEFINES");
+    const char* v = std::getenv("MHC_PRE_KERNEL_DEFINES");  // diagnostic: perf/measurement knob, same result
     if (v == nullptr) {
         return defines;
     }
