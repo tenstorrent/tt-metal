@@ -5,15 +5,16 @@
 import os
 import re
 from pathlib import Path
-from typing import Annotated, Dict, List, Optional, Tuple
+from typing import Annotated, Dict, List, Literal, Optional, Tuple, Union
 
 import pytest
 import yaml
 from helpers.data_format_inference import is_format_combination_outlier
-from helpers.format_config import DataFormat
+from helpers.format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.logger import logger
 from helpers.stimuli_generator import resolve_intervals
+from helpers.stimuli_generator.utils import _get_integer_bounds, _special_interval_point
 from helpers.tile_constants import validate_tile_dimensions
 from pydantic import (
     BaseModel,
@@ -101,7 +102,10 @@ def format_validation_error(error: ValidationError) -> str:
     return "\n".join(messages)
 
 
-Interval = Annotated[Tuple[float, float], Field(min_length=2, max_length=2)]
+StimuliValue = Union[float, Literal["INT_MIN", "INT_MAX"]]
+Interval = Annotated[
+    Tuple[StimuliValue, StimuliValue], Field(min_length=2, max_length=2)
+]
 
 
 class StimuliDefinition(BaseModel):
@@ -113,7 +117,7 @@ class StimuliDefinition(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def expand_shorthand(cls, value):
-        if type(value) in (int, float):
+        if type(value) in (int, float, str):
             return {"include": [value]}
         if isinstance(value, (list, tuple)):
             return {"include": [value]}
@@ -124,18 +128,65 @@ class StimuliDefinition(BaseModel):
     def expand_points(cls, intervals):
         if not isinstance(intervals, (list, tuple)):
             return intervals
-        return [
-            (interval, interval) if type(interval) in (int, float) else interval
-            for interval in intervals
-        ]
+
+        def parse(value):
+            if isinstance(value, str):
+                value = value.replace("−", "-")
+                if value.upper() in ("INT_MIN", "INT_MAX"):
+                    return value.upper()
+                return float(value)
+            return value
+
+        expanded = []
+        for interval in intervals:
+            if type(interval) in (int, float, str):
+                interval = (interval, interval)
+            if isinstance(interval, (list, tuple)):
+                interval = tuple(parse(value) for value in interval)
+            expanded.append(interval)
+        return expanded
 
     @model_validator(mode="after")
     def validate_domain(self) -> "StimuliDefinition":
-        self.resolved()
+        if not any(
+            isinstance(v, str) for pair in self.include + self.exclude for v in pair
+        ):
+            self.resolved()
         return self
 
-    def resolved(self) -> List[Tuple[float, float]]:
-        return resolve_intervals(self.include, self.exclude)
+    def resolved(self, data_format=None) -> List[Tuple[float, float]]:
+        def bound(value):
+            if isinstance(value, str):
+                if (
+                    data_format is None
+                    or not data_format.is_integer()
+                    or data_format.name.startswith("UInt")
+                ):
+                    raise ValueError("INT_MIN/INT_MAX require a signed integer operand")
+                low, high = _get_integer_bounds(data_format)
+                return low if value == "INT_MIN" else high
+            return value
+
+        included = [(bound(lo), bound(hi)) for lo, hi in self.include]
+        excluded = [(bound(lo), bound(hi)) for lo, hi in self.exclude]
+        resolved = resolve_intervals(included, excluded)
+        points = {_special_interval_point(lo, hi) for lo, hi in resolved} - {None}
+        if data_format is not None and data_format.is_integer():
+            if points:
+                raise ValueError(
+                    "NaN, infinity and negative-zero points require a floating-point operand"
+                )
+        if data_format == DataFormat.Fp8_e4m3:
+            if points & {"inf", "-inf"}:
+                raise ValueError("Fp8_e4m3 cannot represent infinity points")
+            limit = MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P]
+            resolved = [
+                (max(lo, -limit), min(hi, limit)) if lo < hi else (lo, hi)
+                for lo, hi in resolved
+            ]
+        if data_format == DataFormat.Bfp8_b and "-0" in points:
+            raise ValueError("Bfp8_b packing does not preserve negative zero")
+        return resolved
 
 
 class OperandDefinition(BaseModel):
@@ -192,6 +243,12 @@ class OperandDefinition(BaseModel):
             except KeyError:
                 pass
         return v
+
+    @model_validator(mode="after")
+    def validate_stimuli_format(self) -> "OperandDefinition":
+        if self.stimuli is not None:
+            self.stimuli.resolved(self.format)
+        return self
 
 
 class FuserConfigSchema(BaseModel):
@@ -308,7 +365,9 @@ class FuserConfigSchema(BaseModel):
                 dimensions=op_def.dims,
                 data_format=op_def.format,
                 intervals=(
-                    op_def.stimuli.resolved() if op_def.stimuli is not None else None
+                    op_def.stimuli.resolved(op_def.format)
+                    if op_def.stimuli is not None
+                    else None
                 ),
                 tile_dims=op_def.tile_dims,
             )

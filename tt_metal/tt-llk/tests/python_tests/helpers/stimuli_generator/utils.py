@@ -102,25 +102,51 @@ def integer_face_bounds_or_constant(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _special_interval_point(low, high):
+    if math.isnan(low) or math.isnan(high):
+        if not (math.isnan(low) and math.isnan(high)):
+            raise ValueError("NaN is only valid as a standalone value")
+        return "nan"
+    if low == high and math.isinf(low):
+        return str(low)
+    if low == high == 0 and math.copysign(1, low) == math.copysign(1, high) == -1:
+        return "-0"
+    return None
+
+
 def resolve_intervals(
     included: List[Tuple[float, float]],
     excluded: Optional[List[Tuple[float, float]]] = None,
 ) -> List[Tuple[float, float]]:
-    """Subtract closed exclusions from a union of finite, closed intervals."""
     if not included:
         raise ValueError("included intervals must be non-empty")
+
+    special = {}
+    regular = []
+    for low, high in included:
+        key = _special_interval_point(low, high)
+        if key:
+            special[key] = (low, high)
+        else:
+            regular.append((low, high))
+    exclusions = []
     for low, high in excluded or []:
-        if low == high:
-            raise ValueError(
-                "excluded intervals must have positive width; "
-                "exclude a neighbourhood around the value instead"
-            )
+        key = _special_interval_point(low, high)
+        if key:
+            special.pop(key, None)
+        else:
+            exclusions.append((low, high))
+            special = {
+                key: point
+                for key, point in special.items()
+                if not low <= point[0] <= high
+            }
 
     def _normalize(intervals):
         normalized = []
         for low, high in sorted(intervals):
-            if not math.isfinite(low) or not math.isfinite(high):
-                raise ValueError("interval bounds must be finite")
+            low = 0.0 if low == 0 else low
+            high = 0.0 if high == 0 else high
             if low > high:
                 raise ValueError(
                     f"interval lower bound {low} exceeds upper bound {high}"
@@ -131,8 +157,8 @@ def resolve_intervals(
                 normalized.append((low, high))
         return normalized
 
-    remaining = _normalize(included)
-    for excluded_low, excluded_high in _normalize(excluded or []):
+    remaining = _normalize(regular)
+    for excluded_low, excluded_high in _normalize(exclusions):
         next_remaining = []
         for low, high in remaining:
             if excluded_high < low or excluded_low > high:
@@ -145,6 +171,7 @@ def resolve_intervals(
                 next_remaining.append((math.nextafter(excluded_high, math.inf), high))
         remaining = next_remaining
 
+    remaining.extend(special.values())
     if not remaining:
         raise ValueError(
             f"excluded intervals {excluded or []} remove all included intervals {included}"
@@ -199,6 +226,33 @@ def _sample_uniform_intervals(
     """
     if not intervals:
         raise ValueError("intervals must be a non-empty list")
+    points, finite = [], []
+    for lo, hi in intervals:
+        if _special_interval_point(lo, hi):
+            points.append(lo)
+        else:
+            finite.append((lo, hi))
+    if points:
+        choices = torch.randint(
+            len(points) + bool(finite), (size,), generator=generator
+        )
+        result = torch.empty(size, dtype=dtype)
+        for index, point in enumerate(points):
+            result[choices == index] = point
+        if finite:
+            mask = choices == len(points)
+            result[mask] = _sample_uniform_intervals(
+                finite, int(mask.sum()), dtype, generator
+            )
+        return result
+    limit = torch.finfo(dtype).max
+    intervals = [
+        (
+            max(lo, -limit) if math.isinf(lo) else lo,
+            min(hi, limit) if math.isinf(hi) else hi,
+        )
+        for lo, hi in intervals
+    ]
     lows = torch.tensor([lo for lo, _ in intervals], dtype=torch.float64)
     highs = torch.tensor([hi for _, hi in intervals], dtype=torch.float64)
     lengths = torch.clamp(highs - lows, min=0.0)
@@ -226,7 +280,8 @@ def _sample_uniform_intervals(
     lo_sel = rounded_lows[idx]
     hi_sel = rounded_highs[idx]
     values = (lo_sel.double() + u_inner * (hi_sel.double() - lo_sel.double())).to(dtype)
-    return values.clamp(min=lo_sel, max=hi_sel)
+    values = values.clamp(min=lo_sel, max=hi_sel)
+    return torch.where(values == 0, torch.zeros_like(values), values)
 
 
 def _sample_log_uniform_intervals(
@@ -279,6 +334,9 @@ def _sample_integer_intervals(
     clamped = []
     counts = []
     for lo_f, hi_f in intervals:
+        if math.isnan(lo_f) or math.isnan(hi_f) or lo_f == hi_f and math.isinf(lo_f):
+            raise ValueError("NaN and infinity points require a floating-point operand")
+        lo_f, hi_f = max(lo_f, int_min), min(hi_f, int_max)
         lo_i = max(math.ceil(lo_f), int_min)
         hi_i = min(math.floor(hi_f), int_max)
         if hi_i >= lo_i:
@@ -289,17 +347,18 @@ def _sample_integer_intervals(
             f"No valid integer exists in any interval after clamping to "
             f"[{int_min}, {int_max}]: {intervals}"
         )
-    lengths = torch.tensor(counts, dtype=torch.float32)
+    lengths = torch.tensor(counts, dtype=torch.float64)
     cdf = (lengths / lengths.sum()).cumsum(dim=0)
-    u = torch.rand(size, dtype=torch.float32, generator=generator)
+    cdf[-1] = 1.0
+    u = torch.rand(size, dtype=torch.float64, generator=generator)
     idx = torch.searchsorted(cdf, u, right=False)
-    lows = torch.tensor([lo for lo, _ in clamped], dtype=torch.int64)
-    ranges = torch.tensor(counts, dtype=torch.int64)
-    lo_sel = lows[idx]
-    range_sel = ranges[idx]
-    u_inner = torch.rand(size, dtype=torch.float32, generator=generator)
-    offsets = (u_inner * range_sel.to(torch.float32)).to(torch.int64)
-    return (lo_sel + offsets).to(dtype)
+    result = torch.empty(size, dtype=torch.int64)
+    for index, (low, high) in enumerate(clamped):
+        mask = idx == index
+        result[mask] = torch.randint(
+            low, high + 1, (int(mask.sum()),), dtype=torch.int64, generator=generator
+        )
+    return result.to(dtype)
 
 
 def _sample_gaussian_intervals(
