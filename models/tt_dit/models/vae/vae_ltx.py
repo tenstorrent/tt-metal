@@ -142,6 +142,18 @@ class LTXCausalConv3d(Module):
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 
+        # Opt-in: conv3d repeats the edge frames itself, replacing the slice+concat copy of the whole
+        # activation. Its "replicate" mode clamps every dim, so this is exact only when H/W carry no
+        # internal pad (both sharded: the halo exchange pads them). Symmetric T pad only, so causal
+        # calls keep the concat.
+        self.fold_time_pad = (
+            os.environ.get("LTX_VAE_FOLD_TIME_PAD", "0") == "1"
+            and self.time_pad > 0
+            and self.time_pad % 2 == 0
+            and internal_padding[1] == 0
+            and internal_padding[2] == 0
+        )
+
         dims_T, dims_H, dims_W = (conv_dims.T, conv_dims.H, conv_dims.W) if conv_dims is not None else (0, 0, 0)
         self.conv_config = get_conv3d_config(
             self.in_channels,
@@ -222,8 +234,15 @@ class LTXCausalConv3d(Module):
         # logical_h/logical_w: pre-pad full spatial dims for pad masking (0 = no masking).
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
+        fold_time_pad = self.fold_time_pad and not causal
+        conv_padding = self.internal_padding
+        conv_padding_mode = "zeros"
+        if fold_time_pad:
+            conv_padding = (self.time_pad // 2, *self.internal_padding[1:])
+            conv_padding_mode = "replicate"
+
         # Temporal padding (T is not sharded — local op on every device).
-        if self.time_pad > 0:
+        if self.time_pad > 0 and not fold_time_pad:
             first_frame = x_BTHWC[:, :1, :, :, :]
             if causal:
                 padding_frames = [first_frame] * self.time_pad
@@ -295,8 +314,8 @@ class LTXCausalConv3d(Module):
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
             stride=self.stride,
-            padding=self.internal_padding,
-            padding_mode="zeros",
+            padding=conv_padding,
+            padding_mode=conv_padding_mode,
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -406,8 +425,8 @@ class LTXResnetBlock3D(Module):
     ) -> ttnn.Tensor:
         residual = x_BTHWC
 
-        # Main path: (norm+silu fused) → conv → (norm+silu fused) → conv. The fused norm outputs
-        # TILE; conv3d needs ROW_MAJOR.
+        # Main path: (norm+silu fused) → conv → (norm+silu fused) → conv. The fused norm tilizes and
+        # untilizes in-kernel, so ROW_MAJOR in gives ROW_MAJOR out and these to_layout calls are no-ops.
         h = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
         h = self.conv1(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
