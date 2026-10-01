@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from dataclasses import dataclass
+
 import torch
 from loguru import logger
 
@@ -16,6 +18,16 @@ from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
+
+
+@dataclass(frozen=True)
+class DecodeHostRows:
+    tensor: ttnn.Tensor
+    batch_per_row: int
+    row_start: int
+    sample_rows: tuple[int, ...]
+    # Keep the temporary slice allocated until the async read has completed.
+    device_tensor: ttnn.Tensor
 
 
 def compute_per_device_vocab(vocab_size, num_tp):
@@ -1236,6 +1248,25 @@ class Model:
             tt_chunk_start_idx,
         )
 
+    def read_output_decode(self, tt_out, sample_rows, blocking=True):
+        """Read the active slot range in one transfer without changing the trace tensor."""
+        config = self.mesh_config.get_config(Mode.DECODE)
+        batch_per_row = tt_out.shape[-2]
+        num_rows = len(ttnn.get_device_tensors(tt_out)) // config.tp if self.users_row_sharded else 1
+        if (
+            not sample_rows
+            or len(set(sample_rows)) != len(sample_rows)
+            or any(row < 0 or row >= num_rows * batch_per_row for row in sample_rows)
+        ):
+            raise ValueError(f"Invalid selective readback rows {sample_rows} for capacity {num_rows * batch_per_row}")
+        row_start = min(row % batch_per_row for row in sample_rows)
+        row_end = max(row % batch_per_row for row in sample_rows) + 1
+        if row_start != 0 or row_end != batch_per_row:
+            starts, ends = [0] * len(tt_out.shape), list(tt_out.shape)
+            starts[-2], ends[-2] = row_start, row_end
+            tt_out = ttnn.slice(tt_out, starts, ends)
+        return DecodeHostRows(tt_out.cpu(blocking=blocking), batch_per_row, row_start, tuple(sample_rows), tt_out)
+
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False, sample_rows=None):
         """Process decode output and convert to torch tensors.
 
@@ -1249,6 +1280,14 @@ class Model:
 
         # Host-side TP gather: concatenate TP shards per row, then DP rows.
         config = self.mesh_config.get_config(Mode.DECODE)
+        if isinstance(tt_out, DecodeHostRows):
+            if sample_rows is None or tuple(sample_rows) != tt_out.sample_rows:
+                raise ValueError(f"Sampling rows {sample_rows} differ from readback rows {tt_out.sample_rows}")
+            sample_rows = [
+                (row // tt_out.batch_per_row) * tt_out.tensor.shape[-2] + row % tt_out.batch_per_row - tt_out.row_start
+                for row in sample_rows
+            ]
+            tt_out = tt_out.tensor
         if config.tp > 1:
             device_tensors = ttnn.get_device_tensors(tt_out)
             tp = config.tp
@@ -1270,7 +1309,9 @@ class Model:
                 width = first.shape[-1]
                 shape = list(first.shape)
                 shape[-2], shape[-1] = B, self.vocab_size
-                torch_out = torch.empty(shape, dtype=first.dtype, device=first.device)
+                # vLLM samples in FP32. Cast while copying the selected shards
+                # instead of writing and then converting a full BF16 buffer.
+                torch_out = torch.empty(shape, dtype=torch.float32, device=first.device)
                 for r in range(num_rows):
                     selected = [
                         (i, row % batch_per_row) for i, row in enumerate(sample_rows) if row // batch_per_row == r
@@ -1293,7 +1334,9 @@ class Model:
                                 shard[..., local_rows[0] : local_rows[-1] + 1, :valid]
                             )
                         else:
-                            torch_out[..., output_rows, start : start + valid] = shard[..., local_rows, :valid]
+                            torch_out[..., output_rows, start : start + valid] = shard[..., local_rows, :valid].to(
+                                torch_out.dtype
+                            )
                 return torch_out.reshape(B, S, self.vocab_size)
             first = self._decode_host_shard(device_tensors[0])
             shard_width = first.shape[-1]
@@ -1332,7 +1375,6 @@ class Model:
             and tensor.storage_type() == ttnn.StorageType.HOST
             and tuple(tensor.shape) == tuple(tensor.padded_shape)
             and tensor.shape[-1] % 32 == 0
-            and tensor.shape[-2] % 32 == 0
         ):
             return tensor.to_torch_with_padded_shape()
         return ttnn.to_torch(tensor)

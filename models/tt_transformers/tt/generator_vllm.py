@@ -1251,6 +1251,7 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
         "supports_compact_host_logits": True,
+        "supports_selective_host_readback": True,
     }
 
     def __init__(self, *args, **kwargs):
