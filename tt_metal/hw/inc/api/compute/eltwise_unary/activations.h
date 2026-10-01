@@ -167,9 +167,9 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_hardshrink,
-        (APPROX, 8 /* ITERATIONS */),
+        (APPROX, DST_ACCUM_MODE ? 8 : 32, DST_ACCUM_MODE),
         idst,
-        VectorMode::RC,
+        DST_ACCUM_MODE ? VectorMode::RC : VectorMode::None,
         param0));
 }
 
