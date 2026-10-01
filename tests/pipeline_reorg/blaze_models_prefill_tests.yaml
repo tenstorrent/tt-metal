@@ -694,87 +694,80 @@
 
 # ===== GLM-5.3-744B ====================================================================================
 
-- name: "(GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k"
+- name: "(GLM-5.3-744B) sparse MLA, prefill block, MTP and MoE accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
-    export MESH_DEVICE=TG
-    export GLM52_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
-    export DS_SPARSE_FABRIC=fabric2d
-    # Still GLM-5.2, not GLM-5.3: this compares against a cached MLACPU reference and only GLM-5.2 has a
-    # populated one. Same architecture and random weights, so it covers the GLM-5.3 sparse path too.
-    # GLM-5.2 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. The glm_5_2 variant sweep at the
-    # 8x4 anchor already includes the indexer-reuse equivalence case (SPARSE_REUSE_CASES is glm_5_2-only),
-    # so no separate -k clause is needed. Random weights + on-the-fly CPU truth -> no staged weights.
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and shape-8x4 and not kv_only" -vvv --tb=short
-    '
-  test_type: dsa_mla_glm
-  test_tags: [glm_5_3, mla, determinism]
+    glm_dsa_mla() (
+      export MESH_DEVICE=TG
+      export GLM52_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
+      export DS_SPARSE_FABRIC=fabric2d
+      # Still GLM-5.2, not GLM-5.3: this compares against a cached MLACPU reference and only GLM-5.2 has a
+      # populated one. Same architecture and random weights, so it covers the GLM-5.3 sparse path too.
+      # GLM-5.2 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. The glm_5_2 variant sweep at the
+      # 8x4 anchor already includes the indexer-reuse equivalence case (SPARSE_REUSE_CASES is glm_5_2-only),
+      # so no separate -k clause is needed. Random weights + on-the-fly CPU truth -> no staged weights.
+      timeout -k 2m 32m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and shape-8x4 and not kv_only" -vvv --tb=short
+      '
+    )
+
+    glm_prefill_block() (
+      export MESH_DEVICE=TG
+      export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
+      export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
+      # Fused GLM-5.3 decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 6) vs the
+      # composed CPU reference on the fabric2d transport. The CI ttnn cache dir is empty, so both blocks build
+      # RANDOM weights (never rebuilds): the dense block matches directly, and the MoE block runs at the first
+      # FULL-indexer layer (6; GLM-5.3 layers 3-5 reuse a prior layer's indexer top-k, which an isolated block
+      # cannot supply) where the non-degenerate random gate agrees with the reference. -k glm53 runs both the
+      # dense and MoE parametrizations.
+      timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm53" -vvv --tb=short --timeout=600
+      '
+    )
+
+    glm_mtp() (
+      export MESH_DEVICE=TG
+      export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
+      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+        test -f "$GLM53_HF_MODEL/config.json" || { echo "MTP leg: GLM53_HF_MODEL=$GLM53_HF_MODEL has no config.json on this worker; the pretrained parametrization would skip and leave the leg green on random weights alone"; exit 1; }
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py -k "torus-xy-8x4 and not levels7 and (fused or pretrained)" -vvv --tb=short
+      '
+    )
+
+    glm_moe() (
+      export MESH_DEVICE=TG
+      # GLM-5.3 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
+      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe -k "torus-xy-8x4" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/4] (GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k ====="
+    glm_dsa_mla || exit $?
+    echo "===== [2/4] (GLM-5.3-744B) prefill block accuracy 5k ====="
+    glm_prefill_block || exit $?
+    echo "===== [3/4] (GLM-5.3-744B) MTP module + predictor accuracy 5k ====="
+    glm_mtp || exit $?
+    echo "===== [4/4] (GLM-5.3-744B) MoE accuracy + perf 5k ====="
+    glm_moe || exit $?
+    echo "===== all 4 sections passed ====="
+  test_type: glm_components_suite
+  test_tags: [glm_5_3, mla, determinism, block, mtp, moe, dsa_mla_glm, glm_prefill_block, glm_mtp, glm_moe]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 32
+      timeout: 157
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
   budget_type: demo
   sp_config: sc1
-
-
-- name: "(GLM-5.3-744B) MoE accuracy + perf 5k"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    # GLM-5.3 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe -k "torus-xy-8x4" -vvv --tb=short
-    '
-  test_type: glm_moe
-  test_tags: [glm_5_3, moe]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 40
-      tier: 2
-      release_ready: false
-  owner_id: U09LK84G4TF  # Nikola Milicevic
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
-- name: "(GLM-5.3-744B) prefill block accuracy 5k"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
-    export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
-    # Fused GLM-5.3 decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 6) vs the
-    # composed CPU reference on the fabric2d transport. The CI ttnn cache dir is empty, so both blocks build
-    # RANDOM weights (never rebuilds): the dense block matches directly, and the MoE block runs at the first
-    # FULL-indexer layer (6; GLM-5.3 layers 3-5 reuse a prior layer's indexer top-k, which an isolated block
-    # cannot supply) where the non-degenerate random gate agrees with the reference. -k glm53 runs both the
-    # dense and MoE parametrizations.
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm53" -vvv --tb=short --timeout=600
-    '
-  test_type: glm_prefill_block
-  test_tags: [glm_5_3, block]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 60
-      tier: 2
-      release_ready: false
-  owner_id: U09LK84G4TF  # Nikola Milicevic
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
 
 # TRACED twin of the accuracy job above. It asserts FEWER checks than its untraced twin, by construction:
 # both modes assert the KVPE and DSA indexer-K CACHE PCCs (read back after the run), but the per-layer
@@ -808,7 +801,11 @@
   budget_type: demo
   sp_config: sc1
 
-- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k"
+# TRACED twin of the perf job above: identical config except the use_trace axis, so the two are directly
+# comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
+# replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
+# time than its untraced twin.
+- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k, no-trace and traced"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -819,71 +816,18 @@
     export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
+      export DS_PREFILL_REUSE_MODEL=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
     '
-  test_type: glm_chunked
-  test_tags: [glm_5_3, transformer, glm_chunked_untraced_perf]
+  test_type: glm_chunked_perf_suite
+  test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 116
+      timeout: 166
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
-# TRACED twin of the perf job above: identical config except the use_trace axis, so the two are directly
-# comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
-# replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
-# time than its untraced twin.
-- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k, traced"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export LOGURU_LEVEL=INFO
-    export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
-    export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and traced" -xvs
-    '
-  test_type: glm_chunked
-  test_tags: [glm_5_3, transformer]
-  test_group: module
-  skus:
-    bh_sc1_high_power:
-      timeout: 50
-      tier: 2
-      release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
-- name: "(GLM-5.3-744B) MTP module + predictor accuracy 5k"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      test -f "$GLM53_HF_MODEL/config.json" || { echo "MTP leg: GLM53_HF_MODEL=$GLM53_HF_MODEL has no config.json on this worker; the pretrained parametrization would skip and leave the leg green on random weights alone"; exit 1; }
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py -k "torus-xy-8x4 and not levels7 and (fused or pretrained)" -vvv --tb=short
-    '
-  test_type: glm_mtp
-  test_tags: [glm_5_3, mtp]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 25
-      tier: 2
-      release_ready: false
-  owner_id: U09L76N1MAT  # Nenad Babin
   team: models
   budget_type: demo
   sp_config: sc1
