@@ -273,7 +273,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "rows (2 reserved for the MUX row and its spacer).",
             user_grid.x,
             user_grid.y);
-        // Here sdpa_grid.x = user_grid.x, and the factory needs sdpa_grid.x >= 3.
+        // Factory needs 2 MUX-writer columns + 1 SDPA column.
         TT_FATAL(
             user_grid.x >= 3,
             "Program config grid ({}x{}) too narrow: needs at least 3 columns (2 MUX-writer columns "
@@ -281,7 +281,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             user_grid.x,
             user_grid.y);
     } else {
-        // Here sdpa_grid.x = user_grid.x - 1 (last column is the MUX), and the factory needs sdpa_grid.x >= 3.
+        // Factory needs 1 fabric MUX column + 2 MUX-writer columns + 1 SDPA column.
         TT_FATAL(
             user_grid.x >= 4,
             "Program config grid ({}x{}) too narrow: needs at least 4 columns (1 fabric MUX column "
