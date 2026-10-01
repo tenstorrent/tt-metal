@@ -1633,6 +1633,8 @@ static void sdpa_inner_loop_step(
 
         {
             for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
+                // Softmax of the previous row group for this column block (needs that group's max).
+                auto sub_exp_prev_block = [&]() {
                 if (q_subblock > 0) {
                     uint32_t prev_q_subblock = q_subblock - 1;
 #ifndef SDPA_RECIPE_FP32
@@ -1662,6 +1664,9 @@ static void sdpa_inner_loop_step(
 #endif
 #endif
                 }
+                };
+                // QK of the current row group for this column block.
+                auto qk_block = [&]() {
                 {
                     MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
                     blocked_matmul_and_pack<true, KT_stride, KT_stride>(
@@ -1702,6 +1707,15 @@ static void sdpa_inner_loop_step(
 #endif
                     kt_index_offset += actual_sbw;
                 }
+                };
+#ifdef SDPA_QK_FIRST
+                // Issue the QK first so the FPU works while the previous group's max lands.
+                qk_block();
+                sub_exp_prev_block();
+#else
+                sub_exp_prev_block();
+                qk_block();
+#endif
             }
         }
         // The FP32 max-reduce helper configures its own input views.
