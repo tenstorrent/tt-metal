@@ -31,7 +31,7 @@ def pytest_runtest_protocol(item, nextitem):
     """Destroy the tt_transformers objects a module built, after its last test.
 
     Their destructors free device resources, so they must run before the next
-    module's ``ttml.reset_metal_env`` destroys the ``MetalEnv``, or they segfault.
+    module's mesh fixture destroys the ``MetalEnv``, or they segfault.
     Several of them, including ``Attention`` layers and ``ModelArgs``, sit in
     reference cycles, so only ``gc.collect()`` frees them.
 

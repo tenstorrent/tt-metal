@@ -5,6 +5,7 @@
 """Pytest configuration for TTML Python tests."""
 
 import contextlib
+import gc
 import math
 import os
 import pathlib
@@ -123,9 +124,19 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _reset_metal_env_quietly() -> None:
+def _release_metal_env() -> None:
+    """Close the device mesh and release ownership of the process-global ``MetalEnv``."""
+    # Device tensors caught in reference cycles (e.g. a test frame held by a caught exception's
+    # traceback) must be freed while the MetalEnv is alive. This may be due to a use-after-free
+    # bug in ReleaseOwnership() https://github.com/tenstorrent/tt-metal/issues/57798.
+    gc.collect()
+    ttml.close_device_mesh()
+    ttml.core.distributed.release_metal_env()
+
+
+def _release_metal_env_quietly() -> None:
     try:
-        ttml.reset_metal_env()
+        _release_metal_env()
     except Exception:  # noqa: BLE001
         pass
 
@@ -138,15 +149,15 @@ def _fresh_device_mesh(
     what: str,
     require_mgd: bool = False,
 ) -> Iterator["ttml.Mesh"]:
-    """Open a ``shape`` mesh on a new ``MetalEnv``, which is reset on exit along with the MGD path.
+    """Open a ``shape`` mesh on a new ``MetalEnv``, which is released on exit along with the MGD path.
 
     Skips when the host has too few devices for ``shape``, or, with ``require_mgd``, when
     the host arch is known but there is neither a bundled descriptor for it nor a
     user-provided one. Any other failure to open the mesh will raise an exception.
 
-    A failure inside the ``with`` body (or while opening) resets the ``MetalEnv`` quietly
+    A failure inside the ``with`` body (or while opening) releases the ``MetalEnv`` quietly
     and re-raises, so a cleanup error can't replace the original failure as the reported
-    error. On a normal exit, a failure to reset is raised rather than ignored, because the
+    error. On a normal exit, a failure to release is raised rather than ignored, because the
     failure usually means live device references blocked ``ReleaseOwnership``, and the
     stale ``MetalEnv`` left behind would break later modules.
     """
@@ -165,13 +176,13 @@ def _fresh_device_mesh(
         try:
             # A MetalEnv reads TT_MESH_GRAPH_DESC_PATH only when it is created, and the
             # host-size check above has already created one.
-            ttml.reset_metal_env()
+            _release_metal_env()
             ttml.open_device_mesh(ttml.Mesh(tuple(shape), tuple(axis_names)) if axis_names else tuple(shape))
             yield ttml.mesh()
         except BaseException:
-            _reset_metal_env_quietly()
+            _release_metal_env_quietly()
             raise
-        ttml.reset_metal_env()
+        _release_metal_env()
     finally:
         _restore_mgd_path(previous_mgd)
 
