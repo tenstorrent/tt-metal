@@ -1,125 +1,159 @@
 # Gated model bring-up
 
-A framework for bringing up chunked prefill of a transformer on Tenstorrent hardware in fixed, gated steps. Agents do
-the creative work, one fresh `claude -p` per step. Tests that were written, checked against the CPU reference and frozen
-before any implementation exists decide whether a step passed. Overview: `docs/pipeline_design.html`, published at https://claude.ai/artifact/L5rXDnJoEpjsEL33s3wmSC.
-The ERNIE-4.5 bring-up (`models/demos/ernie45_d_p/`) is the run the design came from.
+Brings up chunked prefill of a Hugging Face transformer on Tenstorrent hardware in fixed, gated steps, built from the
+start for the way the inference server (tt-d-gen) drives it. Agents do the creative work, one fresh `claude -p` per
+step; tests that were frozen before any implementation existed decide whether a step passed.
+
+**What it is and how it works** (roles, the step loop, the serving contract, perf, runs so far):
+https://claude.ai/artifact/L5rXDnJoEpjsEL33s3wmSC. This file is the how-to.
+
+## Before you start
+
+- Run from the repo root with `export PYTHONPATH=$PWD` (the shell's default points at another checkout) and
+  `source python_env/bin/activate`.
+- A clone of tt-d-gen at `/localdev/$USER/tt-d-gen` (the serving-contract step reads it at its latest commit).
+  Optional: `github.com/AleksKnezevic/disagg_lb` next to it, for the settings proven on LoudBoxes.
+- Large files go under `/localdev/$USER/bringup/<model>/` (checkpoint, goldens, weight cache, runs). If your home
+  quota is small, run the orchestrator with `TT_METAL_CACHE=/localdev/$USER` so JIT builds land there too.
+- To use the skill as `/bringup`, link `skill/bringup` into `~/.claude/skills/`; link the files in `agents/` into
+  `~/.claude/agents/` to start them by name from a session.
 
 ## Start
 
-Use the `/bringup` intake skill (`skill/bringup/SKILL.md`), or by hand:
+In Claude Code type `/bringup` and name the model: the skill interviews you, writes the spec, launches the run and
+supervises it. By hand:
 
 ```bash
-export PYTHONPATH=$PWD          # the shell's default points at another checkout
 B="python -m models.demos.common.bringup"
-$B new --model <slug> --hf-id <org/name>                 # scaffold models/demos/<slug>/bringup/
-# fill models/demos/<slug>/bringup/spec.yaml (template comments say what each field is)
-$B approve intake --spec models/demos/<slug>/bringup/spec.yaml
+O="python -m models.demos.common.bringup.orchestrator"
+$B new --model <slug> --hf-id <org/name>       # or: $B new --prior <slug> --mesh R,C (same checkpoint, new mesh)
+# fill models/demos/<slug>/bringup/spec.yaml (the template's comments say what each field is)
+$B approve intake --spec <spec>
 python -m models.demos.common.bringup.plan.ledger_gen --spec <spec> --early --write
-python -m models.demos.common.bringup.orchestrator run --spec <spec>
+$B init-run run1 --spec <spec>
+$O run --spec <spec> >> /localdev/$USER/bringup/<slug>/runs/run1/orchestrator.log 2>&1 &
+python -m models.demos.common.bringup.dashboard.export --spec <spec>   # dashboard/index.html (+ teletext.html)
 ```
 
-The orchestrator stops with exit 3 when a person is needed (approve the plan, pick performance items, decide a pick) and exit 1 when a
-task is STOPPED after the implementer and the debugger both failed three times. `orchestrator resume` continues. A run
-whose only unfinished tasks are DEFERRED ends with exit 0, "complete with N deferred" (below).
+Exit codes: 0 done (or "complete with N deferred"), 3 waiting for a person, 1 a task STOPPED after its retries.
+`$O resume --spec <spec>` continues after any of them; `$O pause --spec <spec>` stops before the next task.
+
+## When the run waits for you
+
+| Point | What you decide | Command |
+|---|---|---|
+| intake | the spec | `$B approve intake --spec <spec>` (any spec edit voids it) |
+| after SC.1 | the serving contract's questions (KV dtype for the decode side, slots, prefix reuse) | answer in the spec's `serving:` section, re-approve the intake |
+| PL.1 | the sharding plan | `$B approve plan --spec <spec>` |
+| X.2 | which perf opportunities to try | add `P.*` tasks (one per pick, with `ab.env` / `ab.change`), `$B approve perf` |
+| each P.* | apply or not, from its A/B table (`runs/<run>/ab/<task>/table.md`) | `$O decide --task P.1 --accept\|--reject\|--rerun --spec <spec>` |
+| a DEFERRED step | launch op-gen for it | below |
+| a board hang | reset the board | then `$O resume` |
+
+Other commands: `$B status`, `$B rerun --from <task>` (resets it and everything after it), `$B fork --from <task>
+--name <run>`, `$B compare --spec <a> --other <b>`.
 
 ## Steps and task ids
 
 | Step | Tasks | Who | Gate |
 |---|---|---|---|
 | intake | spec.yaml | person + `/bringup` | `approve intake` |
-| reference | R.1 checkpoint, R.2 HF parity, R.3 chunked + graph replay | agent (reference role) | PCC vs HF >= 0.9999, chunked == one-shot, graph replays exactly |
-| trim | R.4 (layer subsets only) | script | after the HF sanity and parity passed: only layers 0..last subset layer stay on disk, tensors byte-identical (F47) |
+| reference | R.1 checkpoint, R.2 HF parity, R.3 chunked + graph replay | agent | PCC vs HF >= 0.9999, chunked == one-shot, graph replays exactly |
+| trim | R.4 (layer subsets only) | script | only layers 0..last subset layer kept, tensors byte-identical (F47) |
 | goldens | G.<rung> | script | manifest with content hash, every layer and chunk |
 | box | B.1 | script | mesh opens, collectives exact |
-| plan | PL.0 ledger, PL.1 plan | agent (plan role) + person | memory computed from the checkpoint fits per-chip DRAM, every step mapped, approved |
-| implement | C.<block>.<step>, S.<block>.<nn> | agent (test role, freeze, implement role) | frozen component test, then the swap order; a C task may end DEFERRED (op request accepted by the checker) |
-| integrate | L.<rung> | script (fix agent on failure) | per-layer trail, state, final hidden, top-5 |
-| contract | K.1 | agent (contract role) | engine API: layout, table, ack timing, engine input, producer read-back |
-| perf | X.1 profile, X.2 opportunities, picked items | script + person | warm profile; each pick: the owner decides on its A/B report, then its gate (below) |
+| serving | SC.1 | `serving-contract` agent | `serving_contract.md` has every section and the tt-d-gen sha; every listed contract test exists; a runner test is listed (F58) |
+| plan | PL.0 ledger, PL.1 plan | agent + person | memory fits per-chip DRAM, every step mapped, a `## Serving contract` section, approved |
+| implement | C.<block>.<step>, S.<block>.<nn> | agent | frozen component test plus the step's contract tests, then the swap order; a C task may end DEFERRED |
+| assemble | M.1 | agent | the all-device model, hidden state on the device |
+| integrate | L.<rung> | script (fix agent on failure) | per-layer trail, state, final hidden, top-5, and the served KV format (`state_bits_*`) |
+| contract | K.1 | agent | engine API (layout, table, acks, input, read-back) plus the runner contract tests |
+| perf | X.1, X.2, P.*, X.3 | script + person + agent | profile; each pick decided by the owner on its A/B report; final 56k check |
+| fork tests | O.1 | agent | a test case for every `ttnn.bringup` call the model makes |
+| settings | Z.1 | `settings-audit` agent (smaller model) | settings lint over the whole model, an accuracy rung, all contract tests |
 
-## Steps TTNN has no op for (F46)
+## Switches: one place each
 
-An implement agent that finds no proper TTNN op for a component step (no op, no composition, no fork fits) may defer it
-to the op code generator (op-gen, `tt_metal/third_party/tt_ops_code_gen`); the plan may also tag it `OPGEN` in
-components.yaml. The agent writes `<bringup_dir>/op_requests/<op>/` (`plan/op_request.py new`: request.yaml with the
-evidence, op_prompt.txt, feature_spec.py, reference.py, bind.py); when its gate fails and `plan/op_request.py check`
-passes, the task becomes DEFERRED: dependents run, the step stays on the CPU reference, and a device model calls it
-through `testing/cpu_bridge.py`, whose transfers are not `host_transfers_per_layer` (metrics `deferred_cpu_steps`,
-`deferred_cpu_ms`). A rejected request is a failed attempt. Launching op-gen is always the owner's call:
+- **Framework**: `defaults.yaml` holds every framework switch with its default (component and swap review, retry
+  policy, thresholds, timeouts, contract and profile options). A model overrides a key in its `spec.yaml` under the same
+  name, e.g. `agents.component_review: all`. Change a default only in that file; `selftest/test_defaults.py` fails on a
+  module that keeps its own.
+- **Model**: `models/demos/<model>/tt/settings.py`, a `Settings` table (`core/model_settings.py`): every fidelity,
+  chunk size, dtype and implementation choice with its default, allowed values and the owner decision behind it.
+  `<PREFIX><NAME>` environment variables override it for experiments and A/B reports. The orchestrator fails an agent
+  step that reads the environment anywhere else in the model's code (`testing/settings_lint.py`); Z.1 moves anything
+  left over. A value a gate checks (`serving.kv_dtype`) lives in the spec.
+- **Forks** (`ttnn/ttnn/bringup`): behaviour comes in as op arguments set from the model's settings; an environment
+  knob only for diagnostics, marked `diagnostic` on its line.
 
-```bash
-$B op-requests --spec <spec>                                  # requests and their status
-$B approve op-request <op> --spec <spec>                      # the owner's approval (an edit voids it)
-$B op-export <op> --spec <spec>                               # prompt + golden suite into the op-gen tree; prints the
-                                                              # next steps (submodule commit, gitlink, push, run_eval.py)
-$B op-ready <op> [<op> ...] --from <clone>/ttnn/ttnn/operations --spec <spec>   # ttnn.bringup.<op>, tasks reset
-python -m models.demos.common.bringup.orchestrator resume --spec <spec>
-```
+## Serving contract (F58)
 
-## Perf picks: the owner decides on an A/B report (F57)
+SC.1's agent (`agents/serving-contract.md`) writes, per model: `bringup/serving_contract.md` (a how-to per part of the
+model, every rule cited to the tt-d-gen file it comes from), `bringup/contract_tests.yaml` (each test and the step whose
+gate runs it: a component step name, or `adapter` for K.1) and the frozen tests in `tests/bringup/contract/`.
+`ledger_gen` adds each test to its step's gate, and each step's brief carries its how-to section. To run them by hand:
+`python -m models.demos.common.bringup.testing.serving --run <step|adapter|all>`.
 
-A pick (step `perf`, role `perf`) has no gate before or after its agent. The agent makes the change behind a switch
-and runs the gate's frozen tests once, accuracy first: at the first failure it stops and writes the failing metrics
-into BREADCRUMBS (`testing/profile.py` refuses to profile a pick whose frozen test failed in the attempt,
-`testing/accuracy_guard.py`). Then the orchestrator measures the change off (the task's `ab.env`, the old path) and
-on: every frozen test of the gate, the ladder at `ab_rungs` (default: the gate's rung and the spec's last rung) and
-one plain profile, each with its own results dir under `runs/<run>/ab/<task>/<old|new>/`. It writes `table.md` there
-(component checks, min layer PCC, final hidden, logits PCC, top1, top5, device ms total and of the gated section,
-whether the gate would pass) and the record to state.json, and waits for the owner (exit 3):
+## Perf picks (F57)
 
-```bash
-O="python -m models.demos.common.bringup.orchestrator"
-$O decide --task P.3 --accept --spec <spec>   # resume runs the gate (as tasks.yaml has it) and commits on PASS
-$O decide --task P.3 --reject --spec <spec>   # resume reverts the change under the task's paths: REJECTED, dependents run
-$O decide --task P.3 --rerun --spec <spec>    # resume measures again (e.g. after a board reset)
-$O resume --spec <spec>
-```
-
-If the owner accepts a change that fails a frozen test, dropping that test from the pick's gate in tasks.yaml is
-their edit (as for Xing P.1). A new `brief` or `ab` voids the report: the agent runs again.
+A pick has no gate before or after its agent. The agent makes the change behind a `tt/settings.py` switch and runs the
+gate's frozen tests once; at the first failure it stops (nothing is profiled while a frozen test fails). The
+orchestrator then measures the change off (`ab.env`) and on (`ab.change`), both set explicitly: every frozen test, the
+ladder at `ab_rungs` (default: the gate's rung and the last rung) and one plain profile. It writes `table.md` and waits.
+`decide --accept` runs the gate and commits; `--reject` reverts the task's files (REJECTED counts as done). Per-op
+profiling runs on the representative layers only (`BRINGUP_PROFILE_LAYERS` picks others).
 
 ```yaml
 - id: P.3
   step: perf
   role: perf
-  ab: {env: {XING_EXPERTS_FIDELITY: hifi4}}   # the old path
-  ab_rungs: [last, s56320]                     # optional
+  ab: {env: {XING_EXPERTS_FIDELITY: hifi4}, change: {XING_EXPERTS_FIDELITY: hifi2}}
+  ab_rungs: [last, s56320]   # optional
+```
+
+## Steps TTNN has no op for (F46)
+
+An implement agent that finds no TTNN op, composition or fork for a component step may defer it to op-gen
+(`tt_metal/third_party/tt_ops_code_gen`): it writes `<bringup_dir>/op_requests/<op>/`, the task becomes DEFERRED, and
+the step runs on the CPU through `testing/cpu_bridge.py`. Launching op-gen is always the owner's call:
+
+```bash
+$B op-requests --spec <spec>                          # requests and their status
+$B approve op-request <op> --spec <spec>              # an edit voids it
+$B op-export <op> --spec <spec>                       # prompt + golden suite into the op-gen tree; prints next steps
+$B op-ready <op> --from <clone>/ttnn/ttnn/operations --spec <spec>   # ttnn.bringup.<op>, tasks reset
+$O resume --spec <spec>
 ```
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `core/` | spec, ledger (tasks.yaml + state.json + lock), gate runner, metrics, freeze, runs (resume, rerun, fork, compare) |
-| `reference/` | reference interface and block-graph runner, HF parity, chunked check, golden generator and reader |
-| `testing/` | component and swap tests, ladder, serving contract, profiler, test templates |
-| `tests/` | generic pytest entry points (box, ladder, contract, profile); they read `BRINGUP_SPEC` |
-| `plan/` | memory check, components map, approvals, ledger generator, opportunity list, op requests and their export |
-| `intake/` | checkpoint check |
-| `knowledge/` | repo map and known issues every agent reads first, and their format check |
-| `orchestrator.py`, `agents/`, `briefs/` | the run loop, the agent definition (passed with `--agents`), brief templates |
-| `dashboard/` | the dashboard exporter and page |
-| `skill/bringup/SKILL.md` | the intake skill (install under `.claude/skills/` to use it as `/bringup`) |
-| `selftest/` | the framework's own tests (CPU only, run with `scripts/run_safe_pytest.sh --no-precompile`) |
-| `dev/` | the ledger of the framework's own build (`[bringup][F<n>]` commits) |
-
-Everything outside git lives under `/localdev/$USER/bringup/<model>/`: `hf/`, `golden/`, `tt_cache/<mesh>/<version>/`,
-`profiles/`, `runs/<run>/` (logs, briefs, agent transcripts).
+| `defaults.yaml` | every framework switch and its default |
+| `orchestrator.py` | the run loop |
+| `agents/` | `bringup-engineer.md` (every step), `serving-contract.md` (SC.1), `settings-audit.md` (Z.1) |
+| `briefs/` | the brief template and the per-role text |
+| `core/` | spec, defaults, ledger, gate runner, metrics, freeze, runs, model settings helper |
+| `reference/` | reference interface, block-graph runner, HF parity, golden generator and reader |
+| `testing/` | component and swap tests, ladder, contract, serving contract, settings lint, profiler, templates |
+| `tests/` | generic pytest entry points (box, ladder, contract, profile, positions); they read `BRINGUP_SPEC` |
+| `plan/` | memory check, components map, approvals, ledger generator, opportunity list, op requests |
+| `intake/`, `knowledge/` | checkpoint check; the repo map and known issues every agent reads first |
+| `dashboard/` | the dashboard exporter and pages |
+| `skill/bringup/SKILL.md` | the `/bringup` skill (intake and supervision) |
+| `selftest/` | the framework's own tests, CPU only: `python -m pytest -q models/demos/common/bringup/selftest/` |
+| `dev/BREADCRUMBS.md` | how the framework was built (F1 to F58) |
 
 ## Rules the runner enforces
 
-- A gate passes only if deps passed, frozen files are unchanged, a device gate uses `scripts/run_safe_pytest.sh` or
-  `scripts/tt-probe.sh`, the command exits 0, every metric meets its threshold and every artifact exists.
-- A task with tests fails until its tests are frozen; freezing requires PASS with the CPU reference and FAIL with a zero stub.
-- A swap test gates every swapped step vs the CPU step on the same inputs (`checks="steps"`, F49), so swap tests are
-  frozen without a test-role review unless `agents.swap_review` names the block type. `BRINGUP_IMPL=mutate:<kind>`
-  (testing/mutate.py) proves on the CPU that a test catches a wrong module.
-- A component test runs built-in checks chosen by its output kind, on the golden and on second inputs
-  (`checks="auto"`, F56, testing/component_checks.py). It is frozen without a test-role review only when
-  `agents.component_review` leaves its block type out (default `none` since 2026-10-01: not reviewed when the sweep passes) and its CPU mistake sweep
-  (`BRINGUP_IMPL=mutations`) catches every standard mistake; otherwise the review starts with the sweep's log.
-- An agent step fails if the tree changed outside the brief's paths, if any command reached the device without a safe
-  runner, or if the known-issues file lost its format.
+- A gate passes only if deps passed, frozen files are unchanged, the device was used only through
+  `scripts/run_safe_pytest.sh` or `scripts/tt-probe.sh`, the command exits 0, every metric meets its threshold and
+  every artifact exists.
+- A test freezes only after it passes with the CPU reference and fails on its mistake sweep. Component and swap tests
+  freeze without a review agent when their sweep passes (`agents.component_review`, `agents.swap_review`).
+- An agent step fails if the tree changed outside the brief's paths, a command reached the device without a safe
+  runner, the known-issues file lost its format, or a changed file reads the environment outside `tt/settings.py`.
+- With `serving.kv_dtype` set, every ladder rung must run on that KV format: one cache format for the ladder, the
+  contract and serving.
 - Commits stage only the task's paths; formatting runs before testing and hashing, so the tested bytes are committed.
-- The plan gate recomputes memory from the checkpoint's tensor shapes; approvals are voided by any edit to what was approved.
+- Approvals are voided by any edit to what was approved.
