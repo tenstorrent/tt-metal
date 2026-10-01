@@ -1,23 +1,23 @@
 {
  "upstream_sha": "ca961d76773a26a7e8c1d35e7a0fc60eaf646461",
  "tests": {
-  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_offset_cumsum::test_offset_cumsum[blackhole-torus-y-4x1-256]": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_offset_cumsum::test_offset_cumsum[blackhole-torus-y-4x1-256-dram]": {
    "original": "passed",
    "fork": "passed"
   },
-  "models.demos.deepseek_v3_d_p.tests.pcc.test_moe_routing_setup::test_prep_dispatch_combine[blackhole-pad0-predictable-fabric2d-mesh-2x2-640-7168-64-2-2]": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_offset_cumsum::test_offset_cumsum[blackhole-torus-y-4x1-256-l1]": {
    "original": "passed",
    "fork": "passed"
   },
-  "models.demos.deepseek_v3_d_p.tests.pcc.test_moe_routing_setup::test_prep_dispatch_combine[blackhole-pad0-random-fabric2d-mesh-2x2-640-7168-64-2-2]": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_offset_cumsum::test_offset_cumsum[blackhole-torus-y-4x1-264-dram]": {
    "original": "passed",
    "fork": "passed"
   },
-  "models.demos.deepseek_v3_d_p.tests.pcc.test_moe_routing_setup::test_prep_dispatch_combine[blackhole-pad50-predictable-fabric2d-mesh-2x2-640-7168-64-2-2]": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_offset_cumsum::test_offset_cumsum[blackhole-torus-y-4x1-32-dram]": {
    "original": "passed",
    "fork": "passed"
   },
-  "models.demos.deepseek_v3_d_p.tests.pcc.test_moe_routing_setup::test_prep_dispatch_combine[blackhole-pad50-random-fabric2d-mesh-2x2-640-7168-64-2-2]": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_offset_cumsum::test_offset_cumsum[blackhole-torus-y-4x1-32-l1]": {
    "original": "passed",
    "fork": "passed"
   },
@@ -33,7 +33,7 @@
    "original": "passed",
    "fork": "passed"
   },
-  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-glm_51-640-avg]": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-glm_53-640-avg]": {
    "original": "passed",
    "fork": "passed"
   },
@@ -65,7 +65,7 @@
    "original": "passed",
    "fork": "passed"
   },
-  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-glm_51-640-avg]": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-glm_53-640-avg]": {
    "original": "passed",
    "fork": "passed"
   },
@@ -82,6 +82,22 @@
    "fork": "passed"
   },
   "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-mistral4-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.pcc.test_moe_routing_setup::test_prep_dispatch_combine[blackhole-pad0-predictable-fabric2d-mesh-2x2-640-7168-64-2-2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.pcc.test_moe_routing_setup::test_prep_dispatch_combine[blackhole-pad0-random-fabric2d-mesh-2x2-640-7168-64-2-2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.pcc.test_moe_routing_setup::test_prep_dispatch_combine[blackhole-pad50-predictable-fabric2d-mesh-2x2-640-7168-64-2-2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.pcc.test_moe_routing_setup::test_prep_dispatch_combine[blackhole-pad50-random-fabric2d-mesh-2x2-640-7168-64-2-2]": {
    "original": "passed",
    "fork": "passed"
   }
