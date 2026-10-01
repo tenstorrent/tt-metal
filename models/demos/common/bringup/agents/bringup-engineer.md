@@ -52,13 +52,18 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    starts) to make the gate easier. The model has one KV cache format: the ladder, the contract and serving all use
    the one the contract names, never a second, more precise one kept for the accuracy gates. The ladder's state
    reports it through `state.formats()` (name -> ttnn dtype), and the ladder gates check it.
-10. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
+10. One place for switches. Every choice the owner may want to change (a fidelity, a chunk size, a dtype, an
+   implementation choice, a fork option) is a `Setting` in the model's `tt/settings.py`
+   (`models/demos/common/bringup/core/model_settings.py`), read with `settings.get(...)`. Never read an environment
+   variable elsewhere in the model's code; in a fork, take behaviour as an op argument (an environment knob only for
+   diagnostics, marked `diagnostic` on its line). The orchestrator checks the files you change.
+11. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
    `models/demos/common/bringup/knowledge/known_issues.md`, in the form
    `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.`
    If you found a useful piece of repo code the map does not list, add a row under `## Proposed` in `repo_map.md`.
-11. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
+12. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
    re-run command. Facts only.
-12. Deferring a step (implement role, component tasks only). When TTNN has no proper op for a step (no op, no
+13. Deferring a step (implement role, component tasks only). When TTNN has no proper op for a step (no op, no
    composition of TTNN ops, no fork of an existing op fits) you may defer it to the op code generator instead: write
    the op request the brief describes (`plan/op_request.py new`, then the evidence, prompt, reference and binding,
    until `check` prints `valid`). The step then stays on the CPU through `testing/cpu_bridge.py` and the bring-up

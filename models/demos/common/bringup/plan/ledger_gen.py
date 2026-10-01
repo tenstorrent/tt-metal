@@ -17,6 +17,7 @@ Task ids by pipeline step:
     L.<rung>         ladder rung on device                               (integrate)
     K.1              serving contract through the engine API             (contract)
     X.1 profile      X.2 opportunity list                                (perf)
+    Z.1              settings audit: every switch in tt/settings.py      (settings, last)
 The plan agent may add, split or annotate tasks (e.g. a hooks-only task, a model-level embedding task) before the
 plan is approved; the generator only writes the skeleton.
 """
@@ -242,6 +243,9 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         }
         return {f"state_bits_{n}": f"== {bits}" for n in sorted(names)}
 
+    def contract_cmds_all() -> str:
+        return f" && {PY}.testing.serving --run all" if SV.tests(spec) else ""
+
     def contract_cmds(gate: str) -> str:
         """The serving contract tests a step's gate runs too (contract_tests.yaml, written by SC.1)."""
         return "".join(f" && {SAFE} --no-precompile {t['test']}" for t in SV.tests_for(spec, gate))
@@ -404,6 +408,19 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         role="optests",
         paths=["ttnn/ttnn/bringup"],
         device=True,
+    )
+    # Every switch of the model and its forks in one place (tt/settings.py), behaviour unchanged (agents/settings-audit.md)
+    last = next((r for r in ladder if r.get("prefix_from_golden")), ladder[-1])
+    add(
+        "Z.1",
+        "Settings audit: every switch of the model and its forks in tt/settings.py, behaviour unchanged",
+        "settings",
+        ["O.1"],
+        f"{PY}.testing.settings_lint && BRINGUP_RUNG={last['name']} {SAFE} --no-precompile"
+        " models/demos/common/bringup/tests/test_ladder.py" + contract_cmds_all(),
+        {"settings_violations": "== 0", "pcc_layer_L*": thr(spec, "layer"), "pcc_state_min": thr(spec, "state")},
+        device=True,
+        role="settings",
     )
     return {"model": spec.data["hf_id"], "target": spec.data["target"], "tasks": tasks}
 
