@@ -122,7 +122,7 @@
 // emitted, `if constexpr`-ed off -- and measured a 4-5% regression on plans that never
 // engage (focus 5363 -> 5577, BLOCK 22881 -> 23975).  `check_off_identity.py` in this
 // directory re-derives the shipped text from this file and diffs it against k_base.
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #endif
 
 namespace {
@@ -1055,10 +1055,15 @@ void kernel_main() {
     const uint32_t pc_role = get_arg_val<uint32_t>(12);
     [[maybe_unused]] const uint32_t g_tb = HAS_G ? get_tile_size(cb_gamma_tiles) : 0;
     [[maybe_unused]] const uint32_t b_tb = HAS_B ? get_tile_size(cb_bias_tiles) : 0;
-    // The receiver pipe is built ONCE (its Counter form has no ctor side effect and
-    // its `signals_seen_` must not restart), and it is what `pc_finish` drains.
-    auto pc_receiver = pc_args.receiver(pc_noc);
-    auto pc_sender = pc_args.sender(pc_noc);
+    // The receiver pipe is built ONCE (its Flag form's ctor is the documented INVALID
+    // init), and it is what `pc_finish` drains.  #57547: the pipes are optionals, empty
+    // off-role (an injector has no receiver face, a receiver no sender face), and the
+    // pipe no longer counts the signals it has seen: a Counter receive(round) waits for
+    // the counter to reach round + 1, so this kernel passes the ABSOLUTE number of
+    // signals it has consumed (`pc_round`).  A Flag receive ignores it (one sender).
+    auto pc_receiver = pc_args.optional_receiver(pc_noc);
+    auto pc_sender = pc_args.optional_sender(pc_noc);
+    uint32_t pc_round = 0;
     bool pc_pending = false;
     // `pc_finish` is the RECEIVER's half, split out so PC_LATE can run it after the
     // first activation read instead of before it.  Self-guarded, so the eager path
@@ -1070,11 +1075,11 @@ void kernel_main() {
         pc_pending = false;
         MaybeDeviceZoneScope("reader_pc_recv");
         if constexpr (HAS_G) {
-            pc_receiver.receive();
+            pc_receiver->receive(pc_round++);
             cb_push_back(cb_gamma_tiles, WT_CHUNK);
         }
         if constexpr (HAS_B) {
-            pc_receiver.receive();
+            pc_receiver->receive(pc_round++);
             cb_push_back(cb_bias_tiles, WT_CHUNK);
         }
     };
@@ -1099,7 +1104,7 @@ void kernel_main() {
             };
             if (pc_role != 0) {
                 MaybeDeviceZoneScope("reader_pc_inject");
-                auto sender = pc_args.sender(pc_noc);
+                auto& sender = *pc_sender;
                 for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
                     const uint32_t first_wt = w_start + c * WT_CHUNK;
                     if constexpr (HAS_G) {
@@ -1135,12 +1140,12 @@ void kernel_main() {
                 for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
                     if constexpr (HAS_G) {
                         cb_reserve_back(cb_gamma_tiles, WT_CHUNK);
-                        pc_receiver.receive();
+                        pc_receiver->receive(pc_round++);
                         cb_push_back(cb_gamma_tiles, WT_CHUNK);
                     }
                     if constexpr (HAS_B) {
                         cb_reserve_back(cb_bias_tiles, WT_CHUNK);
-                        pc_receiver.receive();
+                        pc_receiver->receive(pc_round++);
                         cb_push_back(cb_bias_tiles, WT_CHUNK);
                     }
                 }
@@ -1151,8 +1156,6 @@ void kernel_main() {
             constexpr uint32_t PC_REM = WT_CHUNK % PC_N;
             auto pc_off = [](uint32_t i) { return i * PC_BASE + ((i < PC_REM) ? i : PC_REM); };
             auto pc_cnt = [](uint32_t i) { return PC_BASE + ((i < PC_REM) ? 1u : 0u); };
-            auto sender = pc_args.sender(pc_noc);
-            auto& receiver = pc_receiver;
             for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
                 const uint32_t first_wt = w_start + c * WT_CHUNK;
                 // The reserve happens on EVERY core before any round: the landing
@@ -1189,25 +1192,26 @@ void kernel_main() {
                         }
                         noc_async_read_barrier();
                         if constexpr (HAS_G) {
-                            sender.send(gl1 + off * g_tb, gl1 + off * g_tb, cnt * g_tb);
+                            pc_sender->send(gl1 + off * g_tb, gl1 + off * g_tb, cnt * g_tb);
                         }
                         if constexpr (HAS_B) {
-                            sender.send(bl1 + off * b_tb, bl1 + off * b_tb, cnt * b_tb);
+                            pc_sender->send(bl1 + off * b_tb, bl1 + off * b_tb, cnt * b_tb);
                         }
                     }
                 }
                 {
                     MaybeDeviceZoneScope("reader_pc_recv");
+                    // #57547: a rotating Counter sender also counts its OWN send on its own
+                    // counter, so the counter reaches every non-empty slice's signal, mine
+                    // included (my own slice is already in my L1); wait for that total.
                     for (uint32_t r = 0; r < PC_N; ++r) {
-                        if (r + 1 == pc_role || pc_cnt(r) == 0) {
-                            continue;  // my own slice is already in my L1
+                        if (pc_cnt(r) == 0) {
+                            continue;
                         }
-                        if constexpr (HAS_G) {
-                            receiver.receive(r);
-                        }
-                        if constexpr (HAS_B) {
-                            receiver.receive(r);
-                        }
+                        pc_round += (HAS_G ? 1u : 0u) + (HAS_B ? 1u : 0u);
+                    }
+                    if (pc_round != 0) {
+                        pc_receiver->receive(pc_round - 1);
                     }
                 }
                 if constexpr (HAS_G) {
@@ -1246,7 +1250,7 @@ void kernel_main() {
                 const uint32_t l1 = get_write_ptr(cb_gamma_tiles);
                 pc_issue_slice_reads<WT, GAMMA_ELEM_BYTES, PC_GTRIM>(g_acc, first_wt, WT_CHUNK, l1, g_tb);
                 noc_async_read_barrier();
-                pc_sender.send(l1, l1, WT_CHUNK * g_tb);
+                pc_sender->send(l1, l1, WT_CHUNK * g_tb);
                 cb_push_back(cb_gamma_tiles, WT_CHUNK);
             }
             if constexpr (HAS_B) {
@@ -1255,19 +1259,19 @@ void kernel_main() {
                 const uint32_t l1 = get_write_ptr(cb_bias_tiles);
                 pc_issue_slice_reads<WT, BIAS_ELEM_BYTES, PC_BTRIM>(b_acc, first_wt, WT_CHUNK, l1, b_tb);
                 noc_async_read_barrier();
-                pc_sender.send(l1, l1, WT_CHUNK * b_tb);
+                pc_sender->send(l1, l1, WT_CHUNK * b_tb);
                 cb_push_back(cb_bias_tiles, WT_CHUNK);
             }
         } else {
             MaybeDeviceZoneScope("reader_pc_recv");
             if constexpr (HAS_G) {
                 cb_reserve_back(cb_gamma_tiles, WT_CHUNK);
-                pc_receiver.receive();
+                pc_receiver->receive(pc_round++);
                 cb_push_back(cb_gamma_tiles, WT_CHUNK);
             }
             if constexpr (HAS_B) {
                 cb_reserve_back(cb_bias_tiles, WT_CHUNK);
-                pc_receiver.receive();
+                pc_receiver->receive(pc_round++);
                 cb_push_back(cb_bias_tiles, WT_CHUNK);
             }
         }
@@ -1527,7 +1531,7 @@ void kernel_main() {
     }
 
     // EXIT FENCE -- same obligation as the writer's, for the per-channel multicast.
-    // `pc_sender.send()` fences on DEPARTED (mcast_pipe's send_data_), and a
+    // `pc_sender->send()` fences on DEPARTED (mcast_pipe's send_data_), and a
     // stage_per_channel() can be the last thing this kernel does, so the ACKs can still
     // be outstanding at exit.  A kernel that exits that way desynchronises the NEXT
     // kernel on this core: noc_local_state_init snapshots NIU_MST_WR_ACK_RECEIVED, the
