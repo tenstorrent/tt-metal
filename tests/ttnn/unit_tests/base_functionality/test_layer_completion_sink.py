@@ -14,6 +14,8 @@ and map the span onto their protocol's wire format (v1: one message per
 covered layer; v2: one self-describing message per span).
 """
 
+import time
+
 import pytest
 
 from models.demos.common.prefill.runners import layer_completion_sink as lcs
@@ -73,8 +75,11 @@ def test_v2_sink_pushes_full_fields():
     producer = FakeProducer()
     sink = lcs.build_layer_completion_sink_v2(producer, source_rank=RANK, num_layers=NUM_LAYERS)
 
+    before_ns = time.time_ns()
     sink.layers_completed(**EVENT)
+    after_ns = time.time_ns()
 
+    assert before_ns <= producer.attempts[0].pop("host_ts_ns") <= after_ns
     assert producer.attempts == [
         dict(
             seq=7 * NUM_LAYERS + 14,  # request_id * num_layers + layer_start

@@ -18,9 +18,9 @@
 //   in-order consumption (head-of-line blocking — issue #54632). This
 //   format is FROZEN: the static asserts below make byte-compat executable.
 //
-//   V2 (LayerCompletionMessageV2, 40B, magic 'LCQ2'): each completion is
+//   V2 (LayerCompletionMessageV2, 48B, magic 'LCQ2'): each completion is
 //   fully self-describing — (request_id, slot_id, position range, layer
-//   range) — so the master forwards as-arrived (no reorder) into a
+//   range, source-host timestamp) — so the master forwards as-arrived (no reorder) into a
 //   scheduler-facing structured ring and the consumer keys work on content,
 //   not arrival order. One message per completion EVENT at whatever span
 //   the model reports: per-layer hooks emit [l, l+1); a whole-stage
@@ -29,6 +29,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -95,10 +96,15 @@ struct LayerCompletionMessageV2 {
     uint32_t layer_end = 0;
     // 0 for real completions; kLayerCompletionSentinel marks end-of-stream.
     uint32_t flags = 0;
+    // Source-rank host wall clock (system_clock, ns since the Unix epoch) at
+    // the moment the completion was observed. Wall clock rather than steady
+    // so stamps from different hosts share an epoch; cross-host deltas are
+    // only as good as the hosts' clock sync. The router forwards it untouched.
+    uint64_t host_ts_ns = 0;
 };
 
 // V2 wire contract — pinned for the same reason as v1.
-static_assert(sizeof(LayerCompletionMessageV2) == 40, "LayerCompletionMessageV2 wire size changed");
+static_assert(sizeof(LayerCompletionMessageV2) == 48, "LayerCompletionMessageV2 wire size changed");
 static_assert(alignof(LayerCompletionMessageV2) == 8, "LayerCompletionMessageV2 alignment changed");
 static_assert(std::is_trivially_copyable_v<LayerCompletionMessageV2>);
 static_assert(std::is_standard_layout_v<LayerCompletionMessageV2>);
@@ -111,9 +117,16 @@ static_assert(offsetof(LayerCompletionMessageV2, pos_end) == 24);
 static_assert(offsetof(LayerCompletionMessageV2, layer_start) == 28);
 static_assert(offsetof(LayerCompletionMessageV2, layer_end) == 32);
 static_assert(offsetof(LayerCompletionMessageV2, flags) == 36);
+static_assert(offsetof(LayerCompletionMessageV2, host_ts_ns) == 40);
 static_assert(
-    offsetof(LayerCompletionMessageV2, flags) + sizeof(uint32_t) == sizeof(LayerCompletionMessageV2),
+    offsetof(LayerCompletionMessageV2, host_ts_ns) + sizeof(uint64_t) == sizeof(LayerCompletionMessageV2),
     "LayerCompletionMessageV2 has tail padding");
+
+inline uint64_t layer_completion_host_ts_ns() noexcept {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
+}
 
 // A message whose sentinel slot equals this is an end-of-stream SENTINEL, not a real completion:
 // a subordinate router sends exactly one as its final message at teardown so the master knows no more

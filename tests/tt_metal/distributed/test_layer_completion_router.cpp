@@ -70,7 +70,8 @@ LayerCompletionMessageV2 v2_msg(uint64_t seq, uint32_t request_id, uint32_t laye
         /*pos_end=*/100u * request_id + 50u,
         layer_start,
         layer_end,
-        /*flags=*/0u};
+        /*flags=*/0u,
+        /*host_ts_ns=*/1'000'000u + seq};
 }
 
 }  // namespace
@@ -135,6 +136,7 @@ TEST(LayerCompletionRouter, V2MasterForwardsAsArrived) {
     EXPECT_EQ(out.seq, 1u);
     EXPECT_EQ(out.layer_start, 5u);
     EXPECT_EQ(out.layer_end, 6u);
+    EXPECT_EQ(out.host_ts_ns, 1'000'001u);
 
     // Interleaved requests, out of order: arrival order is preserved end to end.
     ASSERT_TRUE(producer->try_push(v2_msg(7, /*request_id=*/3, 0, 1)));

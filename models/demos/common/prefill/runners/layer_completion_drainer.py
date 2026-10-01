@@ -46,7 +46,7 @@ layer_completion bindings are imported lazily inside the connect helpers) so
 the drainer is unit testable without the device stack. The v2 ring is any
 object with `try_pop() -> tuple | None` in the v2 wire order
 (seq, source_rank, request_id, slot_id, pos_start, pos_end, layer_start,
-layer_end) — the ttnn._experimental.layer_completion.LayerCompletionQueueV2 binding qualifies.
+layer_end, host_ts_ns) — the ttnn._experimental.layer_completion.LayerCompletionQueueV2 binding qualifies.
 """
 
 import os
@@ -56,7 +56,9 @@ from collections import deque, namedtuple
 from loguru import logger
 
 # Wire order of LayerCompletionQueueV2.try_pop() (ttnn/cpp/ttnn-nanobind/layer_completion.cpp).
-Completion = namedtuple("Completion", "seq source_rank request_id slot_id pos_start pos_end layer_start layer_end")
+Completion = namedtuple(
+    "Completion", "seq source_rank request_id slot_id pos_start pos_end layer_start layer_end host_ts_ns"
+)
 
 
 def current_protocol() -> int:

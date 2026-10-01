@@ -4,7 +4,7 @@
 //
 // Host-only tests for the layer-completion SHM ring, covering both protocol
 // versions: v1 (LayerCompletionMessage, 24B packed cells, magic 'LCQ1') and
-// v2 (LayerCompletionMessageV2, 40B self-describing messages, cache-line
+// v2 (LayerCompletionMessageV2, 48B self-describing messages, cache-line
 // cells, magic 'LCQ2'). No device or MPI needed — owner and connector are
 // two LayerCompletionQueueT objects in this process sharing /dev/shm.
 
@@ -77,10 +77,11 @@ TEST(LayerCompletionLayout, V1GeometryIsFrozen) {
 }
 
 TEST(LayerCompletionLayout, V2Geometry) {
-    EXPECT_EQ(sizeof(LayerCompletionMessageV2), 40u);
+    EXPECT_EQ(sizeof(LayerCompletionMessageV2), 48u);
+    EXPECT_EQ(offsetof(LayerCompletionMessageV2, host_ts_ns), 40u);
     EXPECT_EQ(alignof(LayerCompletionMessageV2), 8u);
     EXPECT_TRUE(std::is_trivially_copyable_v<LayerCompletionMessageV2>);
-    // One cache line per cell — a packed 48B cell would straddle lines.
+    // One cache line per cell — a packed 56B cell would straddle lines.
     EXPECT_EQ(sizeof(LayerCompletionCellV2), kLayerCompletionCacheLine);
     EXPECT_EQ(alignof(LayerCompletionCellV2), kLayerCompletionCacheLine);
     EXPECT_EQ(layer_completion_cells_offset<LayerCompletionMessageV2>() % kLayerCompletionCacheLine, 0u);
@@ -262,7 +263,8 @@ TEST(LayerCompletionQueueV2, AllFieldsRoundTrip) {
         /*pos_end=*/10213u,
         /*layer_start=*/14u,
         /*layer_end=*/15u,
-        /*flags=*/0u};
+        /*flags=*/0u,
+        /*host_ts_ns=*/1'790'000'000'123'456'789u};
     ASSERT_TRUE(owner->try_push(in));
 
     LayerCompletionMessageV2 out{};
@@ -276,6 +278,7 @@ TEST(LayerCompletionQueueV2, AllFieldsRoundTrip) {
     EXPECT_EQ(out.layer_start, in.layer_start);
     EXPECT_EQ(out.layer_end, in.layer_end);
     EXPECT_EQ(out.flags, in.flags);
+    EXPECT_EQ(out.host_ts_ns, in.host_ts_ns);
     owner->shutdown();
 }
 
