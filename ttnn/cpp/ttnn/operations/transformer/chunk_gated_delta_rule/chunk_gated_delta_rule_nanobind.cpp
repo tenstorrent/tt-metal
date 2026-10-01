@@ -230,8 +230,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         R"doc(chunk_gated_delta_rule on the fused path: one program in which, per head, NP producer
         cores run prep and NoC-write the seven intermediates into NV receiver cores' CBs.
         The geometry fields default to the calibrated cost model's pick for
-        (grid, BH, NC, Vt) (see chunk_gdn_fused_geometry); pinning one of num_producers /
-        num_receivers makes the model fill the other so the pair still fits the grid.
+        (grid, BH, NC, Vt) (see chunk_gdn_fused_geometry); pinning some of num_producers /
+        num_receivers / handoff_depth makes the model fill the others so the pair still fits the grid.
 
         Keyword Args:
             num_producers (int, optional): NP per head, clamped to the chunk count.
@@ -240,8 +240,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 its receivers, so no two heads share a NoC link. False: row-major 1xNV receiver
                 rectangles with the producers on the remaining cores. None: row-local whenever the
                 geometry has such a layout.
-            handoff_depth (int): default 2. Hand-off ring slots per CB (1..8): how many chunks a
-                producer may run ahead of its receivers.
+            handoff_depth (int, optional): hand-off ring slots per CB (1..8): how many chunks a
+                producer may run ahead of its receivers. None: the model's pick (2 or 3).
             unicast (bool): default True. Per-receiver unicast writes; False sends the linked
                 multicast chain.
             posted (bool): default False. Posted unicast data writes with the VALID flag ordered by
@@ -258,7 +258,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 std::optional<uint32_t>,
                 std::optional<uint32_t>,
                 std::optional<bool>,
-                uint32_t,
+                std::optional<uint32_t>,
                 bool,
                 bool,
                 bool,
@@ -267,7 +267,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
             nb::arg("row_local") = nb::none(),
-            nb::arg("handoff_depth") = 2,
+            nb::arg("handoff_depth") = nb::none(),
             nb::arg("unicast") = true,
             nb::arg("posted") = false,
             nb::arg("producer_pool") = false,
@@ -287,7 +287,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
-                c.handoff_depth,
+                py_opt(c.handoff_depth),
                 py_bool(c.unicast),
                 py_bool(c.posted),
                 py_bool(c.producer_pool),
