@@ -129,3 +129,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - hooks.py: `_mlp_module`, `device_component("mlp")` via `_cp_host_fn` (CP split in, concat out), and the hybrid builds an `mlp` override. `mlp` added to `DEVICE_STEPS["full_dense"]`.
 - Gate: pcc 0.999998, rel L2 0.0019, row norm ratio [0.9978, 1.0027], worst row 0.0040, per-slice rel [0.00196, 0.00193, 0.00193, 0.00196]. The first "FAIL pcc=0" line is the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_mlp.py`
+
+## C.full_dense.mlp_residual.test.1
+- Replaced the rendered PCC-only test with the frozen cp4 attn_residual pattern (the prior mimo_v2_6_d_p mlp_residual limits, same golden): PCC >= spec 0.99 (gated), plus output size, finite, rel L2 <= 0.01, per-token norm ratio in [0.99, 1.01], and rel L2 <= 0.01 per CP=4 row slice. Records rel_l2 / row_norm_ratio_{min,max} / rel_l2_slice_max as informational metrics.
+- Why: PCC misses scale (2x scores 0.999998) and zeroed rows (0.9998); the prior's CPU mutation table is in the test docstring.
+- Results: BRINGUP_IMPL=reference passes (pcc 0.999998, rel 0.00214, ratio [0.9991, 1.0009]); BRINGUP_IMPL=stub fails on PCC; the device mode (already registered) passes (pcc 0.999997, rel 0.00277, ratio [1.0003, 1.0023], slice rel 0.0027-0.0028).
+- The leading `FAIL ... pcc=0.000000` line in each run is the precompile pass's comp_pcc stub (known issue), not the test.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_mlp_residual.py`
