@@ -166,6 +166,7 @@ def causal_lm_collate_fn(
     examples: list,
     seq_len: int,
     mapper: Optional[Any] = None,
+    batch_split: Optional[int] = None,
 ) -> Batch:
     """Collate causal-LM examples — every position contributes to the loss.
 
@@ -177,6 +178,15 @@ def causal_lm_collate_fn(
 
     When ``mapper`` is given (typically ``mesh.axis_mapper("dp", tdim=0)``)
     all three tensors are sharded across the dp axis.
+
+    ``batch_split`` (HSDP, two data-parallel mesh axes) stacks the batch as
+    ``[batch_split, B / batch_split, ...]`` before mapping, so a mapper that
+    shards dim 0 along one data axis and dim 1 along the other gives every
+    device a unique slice while the tensor's topology states one Shard per
+    data axis — what gradient synchronisation reads to decide which axes to
+    reduce. A single flat Shard(0) over the whole mesh would read as sharded
+    on *every* axis. The per-device tensors are reshaped on device back to
+    the standard shapes; the topology label travels with them unchanged.
     """
     batch_size = len(examples)
 
@@ -197,23 +207,43 @@ def causal_lm_collate_fn(
     if total > 0:
         loss_mask_np *= (batch_size * seq_len) / total
 
-    return Batch(
-        input_ids=ttml.autograd.Tensor.from_numpy(
-            input_ids_np,
-            ttnn.Layout.ROW_MAJOR,
-            ttnn.DataType.UINT32,
-            mapper,
-        ),
-        labels=ttml.autograd.Tensor.from_numpy(
-            labels_np,
-            ttnn.Layout.ROW_MAJOR,
-            ttnn.DataType.UINT32,
-            mapper,
-        ),
-        loss_mask=ttml.autograd.Tensor.from_numpy(
-            loss_mask_np.astype(ml_dtypes.bfloat16),
-            ttnn.Layout.TILE,
-            ttnn.DataType.BFLOAT16,
-            mapper,
-        ),
+    stacked = batch_split is not None and batch_split > 1
+    if stacked:
+        if batch_size % batch_split != 0:
+            raise ValueError(f"batch_split ({batch_split}) must divide the batch size ({batch_size}).")
+        rows = batch_size // batch_split
+        input_ids_np = input_ids_np.reshape(batch_split, rows, 1, seq_len)
+        labels_np = labels_np.reshape(batch_split, rows, seq_len)
+        loss_mask_np = loss_mask_np.reshape(batch_split, rows, seq_len, 1)
+
+    input_ids = ttml.autograd.Tensor.from_numpy(
+        input_ids_np,
+        ttnn.Layout.ROW_MAJOR,
+        ttnn.DataType.UINT32,
+        mapper,
     )
+    labels = ttml.autograd.Tensor.from_numpy(
+        labels_np,
+        ttnn.Layout.ROW_MAJOR,
+        ttnn.DataType.UINT32,
+        mapper,
+    )
+    loss_mask = ttml.autograd.Tensor.from_numpy(
+        loss_mask_np.astype(ml_dtypes.bfloat16),
+        ttnn.Layout.TILE,
+        ttnn.DataType.BFLOAT16,
+        mapper,
+    )
+
+    if stacked:
+        # Per device the two leading dims are what the mapper left of [batch_split, rows]; fold them back into the
+        # batch dim of the standard shapes. ttnn.reshape keeps the topology label as is.
+        def _unstack(tensor, standard_shape):
+            value = tensor.get_value()
+            return ttml.autograd.create_tensor(ttnn.reshape(value, standard_shape(list(value.shape))))
+
+        input_ids = _unstack(input_ids, lambda s: [s[0] * s[1], 1, 1, s[3]])
+        labels = _unstack(labels, lambda s: [s[0] * s[1], s[2]])
+        loss_mask = _unstack(loss_mask, lambda s: [s[0] * s[1], 1, s[2], s[3]])
+
+    return Batch(input_ids=input_ids, labels=labels, loss_mask=loss_mask)

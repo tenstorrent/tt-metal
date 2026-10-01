@@ -512,6 +512,7 @@ def run_training(
     # Shard the batch across the data-parallel axes (dp and/or fsdp): one axis → shard along it;
     # HSDP (both) → each device gets a unique B/(D*F) slice; HSDP+TP is unsupported.
     data_axes, data_parallel_size = resolve_data_parallel_axes(mesh)
+    batch_split = None
     if len(data_axes) == 1:
         mapper = mesh.axis_mapper(data_axes[0], tdim=0)
     elif len(data_axes) >= 2:
@@ -522,11 +523,19 @@ def run_training(
                 f"HSDP batch sharding requires batch_size ({training_cfg.batch_size}) to be "
                 f"divisible by D*F ({data_parallel_size}); got data_axes={data_axes}."
             )
+        # The collate stacks the batch as [D, B/D, ...]; dim 0 is sharded along the first data axis and dim 1 along
+        # the second, so the batch's topology says Shard on each data axis separately. A flat Shard(0) over the whole
+        # mesh would read as sharded on every mesh axis (including a TP one) and the label would be wrong per axis.
+        # The collate reshapes the per-device [1, B/(D*F), ...] back to the standard shapes.
         device = ttml.autograd.AutoContext.get_instance().get_device()
-        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, None)
+        placements = [ttnn.PlacementReplicate() for _ in mesh.shape]
+        placements[mesh.axis_index(data_axes[0])] = ttnn.PlacementShard(0)
+        placements[mesh.axis_index(data_axes[1])] = ttnn.PlacementShard(1)
+        mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(placements))
+        batch_split = mesh.axis_size(data_axes[0])
     else:
         mapper = None
-    collate = partial(causal_lm_collate_fn, seq_len=seq_len, mapper=mapper)
+    collate = partial(causal_lm_collate_fn, seq_len=seq_len, mapper=mapper, batch_split=batch_split)
     dataloader = InMemoryDataloader(
         dataset, collate, batch_size=training_cfg.batch_size, shuffle=True, drop_last=True, seed=training_cfg.seed
     )
