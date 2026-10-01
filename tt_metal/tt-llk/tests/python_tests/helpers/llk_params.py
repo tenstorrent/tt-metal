@@ -390,6 +390,15 @@ class ReducePool(Enum):
         return f"PoolType::{self.value}"
 
 
+class ReduceOrder(Enum):
+    """Order of the chained SFPU reduce passes in sources/sfpu_reduce_multidim_test.cpp, all under one
+    shared init_reduce. Mirrors the REDUCE_ORDER_* constants there."""
+
+    ColRow = 0  # column, then row: the multi-axis lowering (ttir.max dim=[1,2])
+    RowCol = 1  # row, then column: a column reduce after a row reduce (MAX/MIN only)
+    ColRowCol = 2  # column, row, column: both transitions in one kernel (MAX/MIN only)
+
+
 class DestAccumulation(Enum):
     Yes = True
     No = False

@@ -107,6 +107,29 @@ def load_gdn_layer(ckpt_dir, layer_idx):
     )
 
 
+def random_gdn_state_dict(args, seed=0):
+    """One GDN layer's linear_attn.* weights with the checkpoint's keys, shapes and dtype but random values, for
+    tests of device mechanics (trace safety, buffer reuse) that need the model's config.json and nothing else.
+    Magnitudes follow the trained weights so activations stay in bf16 range."""
+    g = torch.Generator().manual_seed(seed)
+
+    def w(*shape, scale=0.02):
+        return (torch.randn(*shape, generator=g) * scale).to(torch.bfloat16)
+
+    dim, nv = args.dim, args.gdn_nv
+    return {
+        "linear_attn.in_proj_qkv.weight": w(args.gdn_qkv_dim, dim),
+        "linear_attn.in_proj_z.weight": w(args.gdn_z_dim, dim),
+        "linear_attn.in_proj_a.weight": w(nv, dim),
+        "linear_attn.in_proj_b.weight": w(nv, dim),
+        "linear_attn.out_proj.weight": w(dim, args.gdn_value_dim),
+        "linear_attn.conv1d.weight": w(args.gdn_qkv_dim, 1, args.gdn_conv_kernel_size, scale=0.3),
+        "linear_attn.A_log": w(nv, scale=1.0),
+        "linear_attn.dt_bias": w(nv, scale=1.0),
+        "linear_attn.norm.weight": (1 + w(args.gdn_dv, scale=0.1).float()).to(torch.bfloat16),
+    }
+
+
 def load_mlp_layer(ckpt_dir, layer_idx):
     """SwiGLU MLP layer weights — keys ``gate_proj.weight``/``up_proj.weight``/``down_proj.weight``."""
     return load_layer_weights(

@@ -382,10 +382,11 @@ def test_token_type_ids_must_be_zero(config, tt_model, expect_error):
 
 @pytest.mark.parametrize("batch, seqlen", MODEL_SHAPES)
 def test_no_mask_matches_an_all_ones_mask(config, tt_model, batch, seqlen):
-    """forward(attention_mask=None) skips building a (B, 1, S, S) mask, so it must be equivalent.
+    """forward skips building a (B, 1, S, S) mask when there is none or it keeps every token.
 
-    The saving is real, 1 MB at B=2 S=512 plus the SDPA work, and the equivalence is what
-    test_an_all_ones_mask_is_a_no_op established at module level. This holds the model to it.
+    The saving is real: a mask doubled SDPA's time at 8x512, read by every head of every call.
+    The equivalence is what test_an_all_ones_mask_is_a_no_op established at module level. This
+    holds the model to it.
     """
     input_ids, _ = random_input_ids(batch, seqlen, config)
 

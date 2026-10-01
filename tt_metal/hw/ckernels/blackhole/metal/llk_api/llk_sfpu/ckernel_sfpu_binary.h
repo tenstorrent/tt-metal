@@ -36,15 +36,16 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     // Normalize base to calculation range
     sfpi::vFloat x = sfpi::setexp(base, 127);  // set exp to exp bias (put base in range of 1-2)
 
-    // 3rd order polynomial approx - determined using rminimax over [1,2]
-    sfpi::vFloat series_result = x * (x * (x * 0x2.44734p-4f - 0xd.e712ap-4f) + 0x2.4f5388p+0f) - 0x1.952992p+0f;
+    // 3rd order polynomial approx - determined using rminimax over [1,2], see LogPolyNoInit
+    sfpi::vFloat series_result =
+        x * (x * (x * LogPolyNoInit::A - LogPolyNoInit::B) + LogPolyNoInit::C) - LogPolyNoInit::D;
 
     // Convert exponent to float
     sfpi::vSMag exp = sfpi::convert<sfpi::vSMag>(exexp(base));
     sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
 
     // De-normalize to original range
-    sfpi::vFloat vConstLn2 = 0.692871f;
+    sfpi::vFloat vConstLn2 = LogPolyNoInit::LN2;
     sfpi::vFloat log_result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
 
     // Base case when input is 0. ln(0) = -inf
@@ -103,6 +104,16 @@ template <
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    // XLOGY: the log body's two polynomial constants are bound here and held in LREGs across the
+    // loop; as literals inside the loop they would be re-materialised on every row.
+    // Declared for every op but loaded only for XLOGY: sfpi does not drop an unused SFPLOADI.
+    // Unassigned for every other op, so do not read them outside the XLOGY branch.
+    sfpi::vFloat log_c;
+    sfpi::vFloat log_d;
+    if constexpr (BINOP == BinaryOp::XLOGY) {
+        log_c = LogPoly::C;
+        log_d = LogPoly::D;
+    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -127,7 +138,7 @@ inline void calculate_sfpu_binary(
             v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
             v_else {
                 sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
-                _calculate_log_body_<false>(0, dst_index_out);
+                _calculate_log_body_(log_c, log_d, dst_index_out);
                 result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
             }
             v_endif;

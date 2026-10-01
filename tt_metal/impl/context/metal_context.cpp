@@ -177,6 +177,17 @@ void MetalContext::initialize(
         if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
             fw_compile_hash != fw_compile_hash_) {
+            // The legacy implicit context keeps tearing down underneath open devices; an explicit MetalEnv refuses.
+            const bool devices_open = device_manager_ && device_manager_->is_initialized() &&
+                                      !device_manager_->get_all_active_devices().empty();
+            TT_FATAL(
+                env_owned_ || !devices_open,
+                "Cannot change num_command_queues ({} -> {}), dispatch_core_config or worker_l1_size ({} -> {}) of a "
+                "MetalEnv while MeshDevices created from it are open. Close them first.",
+                num_hw_cqs_,
+                num_hw_cqs,
+                worker_l1_size_,
+                worker_l1_size);
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
             teardown();
         } else {
@@ -427,7 +438,7 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
     MetalEnvDescriptor desc{};
     if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
         log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-        desc = MetalEnvDescriptor(*mock_cluster_desc);
+        desc.mock_cluster_desc_path = std::move(*mock_cluster_desc);
     }
     g_default_env = new MetalEnv(std::move(desc));
     MetalContext* instance = new MetalContext(DEFAULT_CONTEXT_ID, *g_default_env);

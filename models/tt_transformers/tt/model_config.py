@@ -7,6 +7,7 @@ import inspect
 import json
 import math
 import os
+import re
 from enum import Enum, auto
 from functools import lru_cache
 from pathlib import Path
@@ -47,11 +48,14 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_meta_to_hf_no_qkv_permute,
     convert_vision_hf_to_meta,
     convert_vision_hf_to_meta_no_qkv_permute,
+    load_hf_state_dict_for_layers,
     reverse_permute,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
 )
 from models.tt_transformers.tt.prefetcher import Prefetcher
+
+_HF_LAYER_KEY_RE = re.compile(r"^model\.layers\.(\d+)\.")
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -3484,7 +3488,38 @@ class ModelArgs:
 
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")
 
-    # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
+    def _load_hf_state_dict_for_configured_layers(self):
+        """Read only the decoder layers this ModelArgs was trimmed to (plus embeddings, norm and lm_head)
+        straight from the safetensors shards, instead of materialising the whole checkpoint through
+        from_pretrained. Returns None when the full HF model is needed or the checkpoint cannot be
+        read that way, and the caller falls back to from_pretrained.
+        """
+        full_n_layers = getattr(self, "full_model_n_layers", self.n_layers)
+        if self.n_layers >= full_n_layers:
+            return None
+        # The HF model object itself is needed for reference modules, custom (remote-code) layouts and
+        # the multimodal key remapping; those keep the from_pretrained path.
+        if self.cache_hf_flag or self.trust_remote_code_hf or self.is_multimodal or self.force_text_only:
+            return None
+        try:
+            state_dict = load_hf_state_dict_for_layers(
+                self.CKPT_DIR, self.n_layers, local_files_only=os.getenv("CI") == "true"
+            )
+        except (OSError, KeyError, ValueError, ImportError) as exc:
+            logger.warning(f"Per-layer safetensors load of {self.CKPT_DIR} failed ({exc}); loading the full model")
+            return None
+        if not any(_HF_LAYER_KEY_RE.match(k) for k in state_dict):
+            logger.warning(
+                f"Per-layer safetensors load of {self.CKPT_DIR} found no decoder layers; loading the full model"
+            )
+            return None
+        # from_pretrained materialises the tied lm_head; raw shards only carry the embedding.
+        if "lm_head.weight" not in state_dict and getattr(self.hf_config, "tie_word_embeddings", False):
+            if "model.embed_tokens.weight" in state_dict:
+                state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
+        logger.info(f"Loaded {len(state_dict)} weights for {self.n_layers} of {full_n_layers} layers from safetensors")
+        return state_dict
+
     def load_state_dict(self):
         # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
         if self.dummy_weights:
@@ -3530,19 +3565,21 @@ class ModelArgs:
             state_dict = model.state_dict()
         else:
             # Always HuggingFace since we only support HF_MODEL now
-            model_cls = self.get_hf_model_cls()
-            model = model_cls.from_pretrained(
-                self.CKPT_DIR,
-                torch_dtype="auto",
-                trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true",
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
-            )
-            if self.cache_hf_flag:
-                self.cached_hf_model = model
-            state_dict = model.state_dict()
+            state_dict = self._load_hf_state_dict_for_configured_layers()
+            if state_dict is None:
+                model_cls = self.get_hf_model_cls()
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
+                    # Note that the default setting is torch.dtype.float32, but model weights are
+                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                    # unnecessary cast.
+                )
+                if self.cache_hf_flag:
+                    self.cached_hf_model = model
+                state_dict = model.state_dict()
             self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.is_multimodal:
