@@ -364,10 +364,46 @@ Tensor scatter_native(
         /*force_row_major=*/true);
 }
 
+// The TILE program factories split per-core work by tile ROW (one row's full index/src scan per
+// core), so a low tile-row count underfills the grid no matter how wide each row is -- e.g. Ht==2
+// leaves all but 2 cores idle regardless of core-grid size. Below this threshold, converting to
+// ROW_MAJOR and letting the RM factory split by STICK instead reaches far more cores; at or above
+// it, the TILE dispatch already fills the grid and the extra untilize/tilize round trip this
+// reroute pays would only add cost on top of an already-parallel dispatch.
+constexpr uint32_t kRowMajorRerouteMaxHt = 32;
+
+// Whether a TILE call should take the same untilize -> per-stick ROW_MAJOR scatter -> tilize detour
+// around prim::scatter_codegen that this file's own force_row_major branch takes around the native
+// prim, rather than dispatching the (correct, but at this row count far slower) TILE factory
+// directly. Reduction is never requested here: supported_by_codegen() already rejects any non-zero
+// reduction_mode on a TILE layout, so the RM plan this reroutes to never needs the FP32 accumulator
+// factory's extra residency.
+bool should_reroute_to_row_major(const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& src_tensor) {
+    if (input_tensor.layout() != Layout::TILE) {
+        return false;
+    }
+    const auto geometry = ttnn::prim::compute_scatter_tile_geometry(input_tensor, index_tensor, src_tensor);
+    if (geometry.Ht > kRowMajorRerouteMaxHt) {
+        return false;
+    }
+    // Only take the detour when the destination RM plan can actually fit L1 once untilized -- the
+    // TILE dispatch's own footprint is a small, fixed number of tile pages regardless of row width,
+    // so it remains the safe fallback whenever the untilized sticks would not fit.
+    const uint32_t stick_elems = input_tensor.logical_shape()[-1];
+    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, stick_elems);
+    return ttnn::prim::scatter_rm_min_plan_fits_l1(
+        ttnn::prim::scatter_static_l1(input_tensor),
+        input_page_bytes,
+        index_tensor.element_size(),
+        src_tensor.element_size(),
+        /*bf16_reduce=*/false);
+}
+
 // The generated implementation. Unlike scatter_native, this keeps the caller's own layout through the
 // transpose/4D-fold sandwich (the TILE and ROW_MAJOR program factories each address that layout
 // directly), so a TILE input never pays native's forced untilize -> scatter(ROW_MAJOR) -> tilize
-// round trip.
+// round trip -- except for the low-tile-row reroute below, which pays the equivalent round trip
+// deliberately because the TILE factories' per-row work split leaves most cores idle at that width.
 Tensor scatter_codegen_dispatch(
     const Tensor& input_tensor,
     const int32_t& dim,
@@ -389,10 +425,12 @@ Tensor scatter_codegen_dispatch(
     check_support(input_tensor, index_tensor, source_tensor, normalized_dim);
     validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
 
-    const auto& original_index_tensor_lshape = index_tensor.logical_shape();
-    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
-        return input_tensor;
-    }
+    // No empty-shape passthrough here: supported_by_codegen() already rejects rank <= 0 (an empty
+    // ttnn::Shape{} has rank 0), so an empty-shape call never reaches this function through the
+    // auto route's codegen_can_serve() gate, and scatter_force_codegen() must TT_FATAL on it rather
+    // than silently answering from host state -- a passthrough here would swallow that forced call
+    // without ever invoking ttnn::prim::scatter_codegen. The passthrough itself lives in
+    // scatter_native() only.
     const auto original_layout = input_tensor.layout();
 
     const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
@@ -412,6 +450,14 @@ Tensor scatter_codegen_dispatch(
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
     const uint32_t reduction_mode = scatter_reduction_mode(opt_reduction_string);
 
+    const bool rerouted_to_row_major =
+        should_reroute_to_row_major(transformed_input_tensor, transformed_index_tensor, transformed_source_tensor);
+    if (rerouted_to_row_major) {
+        transformed_input_tensor = ttnn::to_layout(transformed_input_tensor, Layout::ROW_MAJOR);
+        transformed_index_tensor = ttnn::to_layout(transformed_index_tensor, Layout::ROW_MAJOR);
+        transformed_source_tensor = ttnn::to_layout(transformed_source_tensor, Layout::ROW_MAJOR);
+    }
+
     auto params = ttnn::prim::build_scatter_codegen_params(
         transformed_input_tensor,
         transformed_index_tensor,
@@ -421,6 +467,9 @@ Tensor scatter_codegen_dispatch(
         sub_core_grid);
     Tensor output = ttnn::prim::scatter_codegen(
         params, transformed_input_tensor, transformed_index_tensor, transformed_source_tensor, std::nullopt);
+    if (rerouted_to_row_major) {
+        output = ttnn::to_layout(output, Layout::TILE);
+    }
     return post_scatter_transform_tensor(
         output,
         normalized_dim,
