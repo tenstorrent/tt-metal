@@ -6,9 +6,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
-
-namespace sched = ttnn::ccl::schedule;  // the neighbour-first ring slice walk
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
@@ -60,11 +57,14 @@ void kernel_main() {
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t semaphore_target_val = 0;
-    // The shared neighbour-first slice walk (same cursor as the writer and reduction kernel).
-    auto slice_cursor = sched::RingSliceCursor::starting_at(
-        sched::ring_neighbour_first_slice(my_chip_id, direction), ring_size, direction);
+    int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
-        const uint32_t actual_slice_idx = slice_cursor.wrap();
+        uint32_t actual_slice_idx;
+        if (direction) {
+            actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+        } else {
+            actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+        }
 
         bool do_reduce = i != 0;
         uint32_t input_slice_cb_id = input_slice_cb_ids[actual_slice_idx];
@@ -89,7 +89,12 @@ void kernel_main() {
             tiles_read += tile_granularity;
         }
 
-        slice_cursor.advance();
+        // next slice idx
+        if (direction) {
+            slice_idx--;
+        } else {
+            slice_idx++;
+        }
     }
 
     // reset the semaphore
