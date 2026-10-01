@@ -374,53 +374,7 @@ def sliding_ring_prefill_attention(
     num_layers=1,
     slot_idx=0,
 ):
-    """Attend sliding layers using separate K and V ring caches."""
-    return prefill_metadata.sliding.attention(
-        attention_fn=_ring_prefill_attention,
-        tt_q=tt_q,
-        cache_k=cache_k,
-        cache_v=cache_v,
-        mesh_config=mesh_config,
-        ccl_manager=ccl_manager,
-        prefill_metadata=prefill_metadata,
-        num_local_kv_heads=num_local_kv_heads,
-        head_dim=head_dim,
-        max_seq_len=max_seq_len,
-        logical_n=logical_n,
-        kv_actual_global=kv_actual_global,
-        sliding_window_size=sliding_window_size,
-        scale=scale,
-        compute_kernel_config=compute_kernel_config,
-        program_config=program_config,
-        layer_idx=layer_idx,
-        num_layers=num_layers,
-        slot_idx=slot_idx,
-        gather_buffer_key=gather_buffer_key,
-    )
-
-
-def _ring_prefill_attention(
-    tt_q,
-    cache_k,
-    cache_v,
-    mesh_config,
-    ccl_manager,
-    prefill_metadata,
-    num_local_kv_heads,
-    head_dim,
-    max_seq_len,
-    logical_n,
-    kv_actual_global,
-    sliding_window_size=None,
-    scale=1.0,
-    compute_kernel_config=None,
-    program_config=None,
-    layer_idx=0,
-    num_layers=1,
-    slot_idx=0,
-    gather_buffer_key=None,
-):
-    """Attend this rank's Q shard over the whole cached prefix, via the CP ring.
+    """Attend this rank's Q shard over the cached prefix via the CP ring, with separate K and V caches.
 
     ``logical_n`` fixes the cache capacity at capture. Device metadata supplies
     the valid prefix on each replay; ``kv_actual_global`` is the prefix before
@@ -440,7 +394,8 @@ def _ring_prefill_attention(
     # k chunks.
     k_chunk = program_config.k_chunk_size
     halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
-    gather_seq = max(halo_tokens, TILE_HEIGHT)
+    halo_slots = 2 if halo_tokens <= tt_q.shape[-2] else 1
+    gather_seq = halo_slots * max(halo_tokens, TILE_HEIGHT)
     buffer_k = ccl_manager.get_ring_gather_buffer(
         (gather_buffer_key, "ring_k"), num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
     )

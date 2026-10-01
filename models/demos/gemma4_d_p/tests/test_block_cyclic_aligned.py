@@ -18,7 +18,6 @@ from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.demo.text_demo_prefill import _text_token_stream
 from models.demos.gemma4_d_p.tests.test_block_cyclic_golden import prefill_chunk
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
-from models.demos.gemma4_d_p.tt.attention.sliding_chunk import SlidingChunkMode
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model import _cp_chunk_major_row_order
 
@@ -48,8 +47,8 @@ def test_block_cyclic_matches_aligned_256k():
         l1_small_size=16384,
         trace_region_size=int(os.getenv("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000)),
     )
-    trace_ids = {}
-    trace_outputs = []
+    trace_id = None
+    trace_output = None
     try:
         mesh_config = MeshConfig(mesh_device)
         _, model, caches, _ = create_tt_model(
@@ -64,17 +63,13 @@ def test_block_cyclic_matches_aligned_256k():
             mesh_mapper=token_mapper,
         )
         model._prefill_metadata_external = True
-        for mode in SlidingChunkMode:
-            model.prefill_metadata.update(slot_idx=0, actual_start=0, actual_end=chunk_size, sliding_mode=mode)
-            output = model(model.transform_and_embed_prefill_inputs_device(device_tokens))
-            ttnn.synchronize_device(mesh_device)
-            output.deallocate(True)
-            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            trace_ids[mode] = trace_id
-            trace_outputs.append(model(model.transform_and_embed_prefill_inputs_device(device_tokens)))
-            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-            ttnn.synchronize_device(mesh_device)
-            logger.info("Captured {} trace", mode.value)
+        output = model(model.transform_and_embed_prefill_inputs_device(device_tokens))
+        ttnn.synchronize_device(mesh_device)
+        output.deallocate(True)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace_output = model(model.transform_and_embed_prefill_inputs_device(device_tokens))
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
 
         row_order = _cp_chunk_major_row_order(context_len, mesh_config.cp_degree, chunk_size).argsort()
         composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_config.mesh_shape, dims=(2, 1))
@@ -100,12 +95,12 @@ def test_block_cyclic_matches_aligned_256k():
                     model.prefill_metadata.update(slot_idx=0, actual_start=start, actual_end=end)
                     ttnn.synchronize_device(mesh_device)
                     begin = time.perf_counter()
-                    ttnn.execute_trace(mesh_device, trace_ids[SlidingChunkMode.ALIGNED], cq_id=0, blocking=False)
+                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                     ttnn.synchronize_device(mesh_device)
                     elapsed_ms = (time.perf_counter() - begin) * 1000
                 else:
                     elapsed_ms = prefill_chunk(
-                        model, token_ids, start, end, device_tokens=device_tokens, trace_ids=trace_ids
+                        model, token_ids, start, end, device_tokens=device_tokens, trace_id=trace_id
                     )
                 logger.info("{} [{}, {}): device={:.3f} ms", name, start, end, elapsed_ms)
 
@@ -116,9 +111,9 @@ def test_block_cyclic_matches_aligned_256k():
         logger.info("Final-layer KV cache, block-cyclic vs aligned TT: PCC {:.8f}", pcc)
         assert passed, f"Block-cyclic vs aligned TT KV cache PCC {pcc:.8f} < 0.9999"
     finally:
-        for trace_id in trace_ids.values():
+        if trace_id is not None:
             ttnn.release_trace(mesh_device, trace_id)
-        for output in trace_outputs:
-            output.deallocate(True)
+        if trace_output is not None:
+            trace_output.deallocate(True)
         ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

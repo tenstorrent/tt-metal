@@ -12,161 +12,22 @@ import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.attention import ring_prefill
-from models.demos.gemma4_d_p.tt.attention.sliding_chunk import SlidingChunk, SlidingChunkMode
 from models.demos.gemma4_d_p.tt.ccl import CCLManager
 from models.demos.gemma4_d_p.tt.model import Gemma4Model, _cp_chunk_major_row_order
 from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata, chunk_positions
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("mode", [SlidingChunkMode.SINGLE_GROUP, SlidingChunkMode.TWO_GROUPS])
 @pytest.mark.parametrize("cp", [4, 8])
 @pytest.mark.parametrize("start", [0, 32, 1024, 1056, 7008, 8192, 14368, 32736])
-def test_chunk_mapping_and_sliding_groups(cp, start, mode, monkeypatch):
-    chunk, capacity = 8192, 32768
+def test_chunk_mapping(cp, start):
+    chunk = 8192
     local = chunk // cp
     positions = chunk_positions(start, chunk, cp)
     # Enumerate ownership from absolute tokens, independently of the writer formula.
     tokens = torch.arange(start, start + chunk)
     expected = torch.stack([tokens[(tokens // local) % cp == rank] for rank in range(cp)])
     torch.testing.assert_close(positions, expected)
-
-    monkeypatch.setattr(
-        SlidingChunk, "_stage", lambda self, name, values, seq_dim=None: self._buffers.setdefault(name, values)
-    )
-    sliding = SlidingChunk(SimpleNamespace(cp_degree=cp), chunk, capacity)
-    sliding.update(start, positions, mode=mode)
-    restore = sliding._buffers["output"].reshape(cp, local)
-    for rank in range(cp):
-        q = positions[rank]
-        results = []
-        for group, origin in enumerate(sliding.group_starts):
-            idx = sliding._buffers[f"q{group}"].reshape(cp, local)[rank]
-            # Encode both the supplied Q identity and the absolute SDPA row.
-            results.append(torch.stack((q[idx], origin.item() + rank * local + torch.arange(local)), dim=-1))
-        restored = torch.cat(results)[restore[rank]]
-        end = min(capacity, (start // chunk + 1) * chunk) if mode == SlidingChunkMode.SINGLE_GROUP else capacity
-        valid = positions[rank] < end
-        torch.testing.assert_close(restored[valid, 0], q[valid])
-        torch.testing.assert_close(restored[valid, 1], q[valid])
-
-
-@pytest.mark.parametrize(
-    "start,end,expected",
-    [
-        (0, 4300, SlidingChunkMode.ALIGNED),
-        (8192, 16384, SlidingChunkMode.ALIGNED),
-        (1024, 7000, SlidingChunkMode.ALIGNED),
-        (7168, 8192, SlidingChunkMode.ALIGNED),
-        (9216, 15000, SlidingChunkMode.ALIGNED),
-        (1024, 8193, SlidingChunkMode.TWO_GROUPS),
-        (7168, 9000, SlidingChunkMode.TWO_GROUPS),
-        (32, 64, SlidingChunkMode.SINGLE_GROUP),
-        (3168, 8192, SlidingChunkMode.SINGLE_GROUP),
-        (3168, 8193, SlidingChunkMode.TWO_GROUPS),
-        (3168, 9270, SlidingChunkMode.TWO_GROUPS),
-        (8352, 13591, SlidingChunkMode.SINGLE_GROUP),
-        (15392, 16381, SlidingChunkMode.SINGLE_GROUP),
-    ],
-)
-def test_sliding_mode_uses_only_real_query_groups(start, end, expected):
-    sliding = SlidingChunk(SimpleNamespace(cp_degree=8), 8192, 16384)
-    assert sliding.select_mode(start, end) == expected
-
-
-@pytest.mark.parametrize("cp", [4, 8])
-@pytest.mark.parametrize("group", [0, 1, 3])
-@pytest.mark.parametrize("block", [0, 1, 3])
-def test_aligned_sliding_has_one_call_and_no_gathers(cp, group, block, monkeypatch):
-    chunk, local = 8192, 8192 // cp
-    start = group * chunk + block * local
-    end = min((group + 1) * chunk, start + local + 17)
-    sliding = SlidingChunk(SimpleNamespace(cp_degree=cp), chunk, 32768)
-    monkeypatch.setattr(sliding, "_stage", lambda name, values, seq_dim=None: sliding._buffers.setdefault(name, values))
-    monkeypatch.setattr(sliding, "_gather_rows", lambda *a, **k: pytest.fail("Aligned SWA must not gather Q"))
-    positions = chunk_positions(start, chunk, cp)
-    mode = sliding.select_mode(start, end)
-    assert mode == SlidingChunkMode.ALIGNED
-    sliding.update(start, positions, mode=mode)
-    assert set(sliding._buffers) == {"start0"}
-    assert not sliding._expanded_indices
-    native_rows = group * chunk + torch.arange(chunk).reshape(cp, local)
-    torch.testing.assert_close(positions[positions < end], native_rows[positions < end])
-    calls = []
-    query, output = object(), object()
-    metadata = SimpleNamespace(slot_idx=object(), kv_actual_global=torch.tensor([start]))
-
-    def attention(**kwargs):
-        calls.append(kwargs)
-        return output
-
-    assert sliding.attention(query, metadata, attention, scale=0.5) is output
-    assert len(calls) == 1
-    assert calls[0]["tt_q"] is query
-    assert calls[0]["scale"] == 0.5
-    assert calls[0]["prefill_metadata"].slot_idx is metadata.slot_idx
-    assert calls[0]["prefill_metadata"].kv_actual_global.item() == group * chunk
-    assert metadata.kv_actual_global.item() == start
-
-
-def test_sliding_gather_indices_shared_across_layers_and_refreshed_in_place(monkeypatch):
-    sliding = SlidingChunk(SimpleNamespace(cp_degree=8), 8192, 32768)
-    repeats = []
-
-    def stage(name, values, seq_dim=None):
-        sliding._buffers[name] = values
-        return values
-
-    def repeat(indices, shape, optional_output_tensor=None):
-        repeats.append(indices)
-        result = indices.repeat(tuple(shape))
-        if optional_output_tensor is not None:
-            optional_output_tensor.copy_(result)
-            return optional_output_tensor
-        return result
-
-    monkeypatch.setattr(sliding, "_stage", stage)
-    monkeypatch.setattr(ttnn, "repeat", repeat)
-    monkeypatch.setattr(ttnn, "gather", lambda tensor, dim, index, **kw: torch.gather(tensor, dim, index))
-    tensors = [torch.randn(1, heads, 16384, width) for heads, width in [(2, 4), (1, 8)]]
-    addresses = None
-    for start, end in [(1056, 9000), (7008, 8192), (2048, 7000), (7008, 9000)]:
-        mode = sliding.select_mode(start, end)
-        sliding.update(start, chunk_positions(start, 8192, 8), mode=mode)
-        if mode == SlidingChunkMode.ALIGNED:
-            continue
-        names = [f"q{group}" for group in range(len(sliding.group_starts))] + ["output"]
-        for layer in range(3):
-            previous_repeats = len(repeats)
-            for tensor in tensors:
-                for name in names:
-                    actual = sliding._gather_rows(tensor, name)
-                    expected = torch.gather(
-                        tensor, 2, sliding._buffers[name].expand(1, tensor.shape[1], -1, tensor.shape[3])
-                    )
-                    torch.testing.assert_close(actual, expected)
-            if layer or addresses is not None:
-                assert len(repeats) == previous_repeats, "Each layer must reuse the staged indices"
-        current_addresses = {key: tensor.data_ptr() for key, tensor in sliding._expanded_indices.items()}
-        if addresses is not None:
-            assert current_addresses == addresses
-        addresses = current_addresses
-
-
-@pytest.mark.parametrize(
-    "start,end,mode,match",
-    [
-        (32, 1056, SlidingChunkMode.ALIGNED, "CP-block-aligned"),
-        (1024, 8193, SlidingChunkMode.ALIGNED, "within one group"),
-        (7008, 9000, SlidingChunkMode.SINGLE_GROUP, "cannot span two"),
-    ],
-)
-def test_incompatible_sliding_trace_rejected_before_device_writes(start, end, mode, match, expect_error):
-    metadata = object.__new__(PrefillMetadata)
-    metadata.num_users, metadata.chunk_size, metadata.max_seq_len = 2, 8192, 16384
-    metadata.sliding = SlidingChunk(SimpleNamespace(cp_degree=8), 8192, 16384)
-    with expect_error(ValueError, match):
-        metadata.update(slot_idx=0, actual_start=start, actual_end=end, sliding_mode=mode)
 
 
 @pytest.mark.parametrize(
@@ -186,6 +47,63 @@ def test_invalid_request_rejected_before_device_writes(slot, start, end, match, 
     metadata.num_users, metadata.chunk_size, metadata.max_seq_len = 2, 8192, 16384
     with expect_error(ValueError, match):
         metadata.update(slot_idx=slot, actual_start=start, actual_end=end)
+
+
+@pytest.mark.parametrize("cp,chunk", [(8, 2048), (8, 4096), (4, 2048)])
+def test_multi_hop_sliding_rejects_wrapped_queries_before_device_writes(cp, chunk, monkeypatch, expect_error):
+    metadata = object.__new__(PrefillMetadata)
+    metadata.mesh_config = SimpleNamespace(cp_degree=cp)
+    metadata.num_users, metadata.chunk_size, metadata.max_seq_len = 1, chunk, 32768
+    writes = []
+    monkeypatch.setattr(metadata, "_stage", lambda name, values, seq_dim=None: writes.append(name))
+    with expect_error(ValueError, "multi-hop halos do not support wrapped Q"):
+        metadata.update(slot_idx=0, actual_start=32, actual_end=chunk)
+    assert not writes
+    metadata.update(slot_idx=0, actual_start=chunk // cp, actual_end=chunk + 17)
+    assert writes == ["slot", "start", "end", "positions"]
+
+
+@pytest.mark.parametrize("local_chunk,halo_rows", [(256, 1024), (512, 1024), (1024, 2048), (2048, 2048)])
+def test_native_sliding_uses_request_metadata_and_required_halo(monkeypatch, local_chunk, halo_rows):
+    from unittest.mock import Mock
+
+    query = SimpleNamespace(shape=(1, 8, local_chunk, 256))
+    cache = SimpleNamespace(dtype=ttnn.bfloat8_b, memory_config=lambda: ttnn.DRAM_MEMORY_CONFIG)
+    metadata = SimpleNamespace(slot_idx=object(), kv_actual_global=object())
+    ccl = SimpleNamespace(
+        get_ring_gather_buffer=Mock(return_value=object()),
+        ring_attention_ccl_semaphore_handles=object(),
+        num_links=2,
+        ring_attention_ccl_core_grid_offset=(11, 0),
+    )
+    expected = object()
+    sdpa = Mock(return_value=(expected, None, None))
+    monkeypatch.setattr(ttnn.transformer, "ring_joint_scaled_dot_product_attention", sdpa)
+    output = ring_prefill.sliding_ring_prefill_attention(
+        tt_q=query,
+        cache_k=cache,
+        cache_v=cache,
+        mesh_config=SimpleNamespace(device=object(), cp_degree=8, cp_axis=0),
+        ccl_manager=ccl,
+        prefill_metadata=metadata,
+        num_local_kv_heads=4,
+        head_dim=256,
+        max_seq_len=16384,
+        logical_n=16384,
+        kv_actual_global=0,
+        gather_buffer_key=3,
+        sliding_window_size=1024,
+        program_config=SimpleNamespace(k_chunk_size=128),
+    )
+    assert output is expected
+    sdpa.assert_called_once()
+    assert sdpa.call_args.args[0] is query
+    assert sdpa.call_args.kwargs["kv_actual_isl_tensor"] is metadata.kv_actual_global
+    assert sdpa.call_args.kwargs["slot_id"] is metadata.slot_idx
+    assert [call.args[:3] for call in ccl.get_ring_gather_buffer.call_args_list] == [
+        ((3, "ring_k"), 4, halo_rows),
+        ((3, "ring_v"), 4, halo_rows),
+    ]
 
 
 @pytest.mark.parametrize("global_cache", [False, True])
@@ -307,17 +225,13 @@ def test_device_block_cyclic_cache_attention_replay(mesh_device, global_cache):
             )
         return out, rope
 
-    traces = {}
-    for mode in SlidingChunkMode:
-        metadata.update(slot_idx=0, actual_start=0, actual_end=chunk, sliding_mode=mode)
-        compiled = forward()
-        ttnn.synchronize_device(mesh_device)
-        for tensor in compiled:
-            tensor.deallocate(True)
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output, rope_output = forward()
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        traces[mode] = (trace_id, output, rope_output)
+    compiled = forward()
+    ttnn.synchronize_device(mesh_device)
+    for tensor in compiled:
+        tensor.deallocate(True)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    output, rope_output = forward()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     # Warmup wrote zero K/V into user 0's first chunk.
     expected_k[0, :, :chunk] = 0
     if expected_v is not None:
@@ -328,11 +242,10 @@ def test_device_block_cyclic_cache_attention_replay(mesh_device, global_cache):
         if cache is not None:
             previous[label] = [ttnn.to_torch(shard).float() for shard in ttnn.get_device_tensors(cache)[::tp]]
     buffer_addresses = {key: value.buffer_address() for key, value in metadata._buffers.items()}
-    sliding_addresses = {key: value.buffer_address() for key, value in metadata.sliding._buffers.items()}
-    expanded_addresses = {key: value.buffer_address() for key, value in metadata.sliding._expanded_indices.items()}
     try:
         for slot, start, end in [
             (0, 0, 1056),
+            (1, 32, 64),
             (1, 1056, 9000),
             (0, local, 7000),
             (1, chunk - local, 8192),
@@ -349,18 +262,11 @@ def test_device_block_cyclic_cache_attention_replay(mesh_device, global_cache):
             k = torch.randn(1, kv_heads, chunk, cache_width).bfloat16() * 0.1
             v = None if global_cache else torch.randn(1, kv_heads, chunk, width).bfloat16()
             metadata.update(slot_idx=slot, actual_start=start, actual_end=end)
-            trace_id, output, rope_output = traces[metadata.sliding.mode]
             for src, dst in ((q, tt_q), (k, tt_k), (v, tt_v)):
                 if src is not None:
                     ttnn.copy_host_to_device_tensor(host_tensor(src), dst)
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
             assert buffer_addresses == {key: value.buffer_address() for key, value in metadata._buffers.items()}
-            assert sliding_addresses == {
-                key: value.buffer_address() for key, value in metadata.sliding._buffers.items()
-            }
-            assert expanded_addresses == {
-                key: value.buffer_address() for key, value in metadata.sliding._expanded_indices.items()
-            }
             written = flat < ((end + 31) // 32 * 32)
             expected_k[slot, :, flat[written]] = k[0, :, written]
             if v is not None:
@@ -407,7 +313,6 @@ def test_device_block_cyclic_cache_attention_replay(mesh_device, global_cache):
                 actual = ttnn.to_torch(output_shards[device_index])[:, :, sample].float()
                 assert_with_pcc(expected, actual, 0.995)
     finally:
-        for trace_id, output, rope_output in traces.values():
-            ttnn.release_trace(mesh_device, trace_id)
-            output.deallocate(True)
-            rope_output.deallocate(True)
+        ttnn.release_trace(mesh_device, trace_id)
+        output.deallocate(True)
+        rope_output.deallocate(True)
