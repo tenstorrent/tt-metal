@@ -489,8 +489,8 @@
         export LOGURU_LEVEL=INFO
         export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
         export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-        export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-        export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+        export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+        export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
         python3 -m pytest -vvv --tb=short \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_golden_contract.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_layer_schedule.py \
@@ -521,7 +521,7 @@
     )
 
     k3_mla_trace() (
-      export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
 
       timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -631,9 +631,9 @@
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-      export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
       export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
       timeout -k 2m 70m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -645,9 +645,9 @@
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-      export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
       export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
       timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -659,9 +659,9 @@
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-      export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
       export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
       timeout -k 2m 45m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
