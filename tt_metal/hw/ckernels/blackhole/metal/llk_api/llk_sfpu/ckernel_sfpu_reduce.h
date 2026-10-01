@@ -211,19 +211,13 @@ inline void perform_float_average() {
     TTI_SFPMUL(p_sfpu::LREG0, AVG_RECIP_REG, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 }
 
-// Dest addresses of the four column SUM/AVG groups: group i reduces the even (i = 0, 2) or odd (i = 1, 3) columns of
-// the face pair 0+2 (i = 0, 1) or 1+3 (i = 2, 3); the group's 32 rows are the upper face (rows 0-15) and the lower face.
+// Dest addresses of the four column SUM/AVG groups.
 constexpr std::uint32_t COL_SUM_UPPER_FACE_ADDRS[NUM_FACES] = {0, 0, 16, 16};    // Face 0, 0, 1, 1
 constexpr std::uint32_t COL_SUM_LOWER_FACE_ADDRS[NUM_FACES] = {32, 32, 48, 48};  // Face 2, 2, 3, 3
 constexpr std::uint32_t COL_SUM_COLUMN_OFFSETS[NUM_FACES] = {0, 2, 0, 2};        // even, odd, even, odd
 
 /**
- * @brief Load one 4-row group of a face into LREG (an immediate-encoded SFPLOAD), masking the garbage high bits of a
- *        UInt16 datum in a 32-bit dest as load_and_clear_high_bits does.
- *
- * The column kernel issues every load, add and store as a TTI_ immediate rather than a TT_ runtime word: a TT_ push costs
- * the issuing RISC an address computation and a store per instruction, and with the half tree issued inline the RISC
- * would otherwise need more cycles per tile than the SFPU (the Int32 column sum was already bound by it).
+ * @brief Load one 4-row group of a face into LREG, masking the high bits of a UInt16 datum in a 32-bit dest.
  */
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, std::uint32_t LREG, std::uint32_t ADDR>
 inline void col_sum_load() {
@@ -235,8 +229,6 @@ inline void col_sum_load() {
 
 /**
  * @brief One add of the column half-reduce: DST = DST + SRC (SFPIADD for integer modes, SFPADD otherwise).
- *        The same instruction the recorded tree reduce uses, issued inline so the column kernel can place
- *        other work between the dependent adds.
  */
 template <bool is_integer_mode, std::uint32_t DST, std::uint32_t SRC>
 inline void half_reduce_add() {
@@ -248,11 +240,8 @@ inline void half_reduce_add() {
 }
 
 /**
- * @brief One column group of perform_reduce_col_sum_avg (see there). The lower face of this group is already in
- *        LREG4-7; the upper face is loaded here, and the next group's lower face is loaded between the dependent
- *        instructions of the half tree.
- *
- * @tparam GROUP Column group 0 to 3 (COL_SUM_* tables).
+ * @brief One column group of perform_reduce_col_sum_avg. The lower face is already in LREG4-7; the upper face is
+ *        loaded here and the next group's lower face between the dependent adds of the half tree.
  */
 template <
     PoolType pool_type,
@@ -279,7 +268,6 @@ inline void perform_reduce_col_sum_avg_group() {
     // Step 1: Tree-reduce across registers (LREG0-3→LREG0, LREG4-7→LREG4) without transpose.
     // After this, each of the 4 positions in LREG0 holds the sum of rows at that position
     // across all 4 loaded LREGs (e.g., LREG0[i] = sum of row[i], row[i+4], row[i+8], row[i+12]).
-    // The lower face (LREG4-7) was loaded ahead of this group; only the upper face is loaded here.
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG0, UPPER>();
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG1, UPPER + ROWS_PER_LOAD>();
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG2, UPPER + 2 * ROWS_PER_LOAD>();
@@ -299,9 +287,8 @@ inline void perform_reduce_col_sum_avg_group() {
     // Step 3: Transpose to rearrange the 4 partial sums for final reduction
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed), issued inline as
-    // LREG2 += LREG3, LREG1 += LREG2, LREG0 += LREG1 so that the next group's lower-face loads can
-    // sit between the dependent adds. This sums the 4 partial sums into LREG0[0] = total column sum.
+    // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed), issued inline so that the next
+    // group's lower-face loads can sit between the dependent adds; LREG0[0] = total column sum.
     half_reduce_add<is_integer_mode, p_sfpu::LREG2, p_sfpu::LREG3>();
     if constexpr (HAS_NEXT) {
         col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4, NEXT_LOWER>();
@@ -343,20 +330,8 @@ inline void perform_reduce_col_sum_avg() {
     // across registers, then add upper+lower faces (all 4 positions carry meaningful partial sums),
     // then transpose, then do a final half-reduce on LREG0-3 only. This eliminates one transpose
     // and halves the second reduction pass, saving 4 instructions per iteration.
-    //
-    // Scheduling: on Blackhole a result of the multiply-add unit (SFPADD, SFPMUL) that the very next
-    // instruction reads costs one stall cycle; a result read two instructions later costs nothing
-    // (SFPIADD results are available to the next instruction, so the integer path never stalls).
-    // The half-reduce is a chain of three dependent adds followed by the store (and the AVG multiply),
-    // so the float path paid a stall on every one of them. LREG4-7 are free once the transpose has run,
-    // and the next column group needs its lower face loaded into exactly those registers, so those four
-    // loads are issued between the dependent instructions of the current group instead of at the start
-    // of the next one. Same instructions, same operand order, same results; only the issue order
-    // changes. The last group has no next lower face and keeps its stalls.
-    //
-    // The four groups are instantiated at compile time so that every load, add and store is an immediate
-    // (TTI_) push: the issuing RISC then keeps ahead of the SFPU, which the runtime-encoded (TT_) pushes of the
-    // loop form did not allow once the half tree was no longer replayed.
+    // On Blackhole a multiply-add result read by the very next instruction costs a stall cycle, so the next group's
+    // lower-face loads sit between the dependent adds; every push is a TTI_ immediate to keep the RISC ahead.
     constexpr std::uint32_t LOWER0 = COL_SUM_LOWER_FACE_ADDRS[0] + COL_SUM_COLUMN_OFFSETS[0];
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4, LOWER0>();
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG5, LOWER0 + ROWS_PER_LOAD>();
@@ -507,28 +482,15 @@ inline void horizontal_reduce_max() {
  * 4. Use horizontal_reduce_max to fold the 8 SFPU columns; every column then holds the row max
  * 5. Store the per-row max, reading column 0
  *
- * On the LOADMACRO path (float and UInt32 formats, LOADMACRO enabled) steps 1 to 3 are fused: the four
- * compare-and-swaps that pair a freshly loaded register with an accumulator run inside the SFPLOADMACRO
- * sequences 0 to 3 that init_reduce_max_min records, so they take no issue slot and no stall cycle. The
- * accumulators LREG0, LREG1 (rows r..r+3) and LREG4, LREG5 (rows r+4..r+7) are loaded with plain SFPLOADs;
- * the right-face operands are loaded into LREG2 and LREG3 with SFPLOADMACRO, whose sequence compares the
- * loaded register with its accumulator one cycle later (SFPLOADMACRO only loads LREG0-3 at an even dest
- * address, which is why the fresh operands and not the accumulators go through it). A scheduled SFPSWAP
- * holds the SFPU's simple sub-unit for two cycles and silently drops a regular instruction that meets it
- * there, so the loads alternate accumulator, macro, accumulator, macro, which keeps the four scheduled swaps
- * two cycles apart, and two SFPNOPs let the last one finish before the first explicit swap. The two swaps
- * that combine the accumulators depend on the scheduled results and stay explicit. The register a
- * scheduled swap loads is only ever reloaded after that swap has completed (two instructions later at the
- * earliest, four here). Every dependency in the sequence is on an earlier instruction, so a stall of the
- * issuing RISC anywhere in the sequence can only delay a consumer, never a scheduled swap.
+ * On the LOADMACRO path the four compare-and-swaps with a freshly loaded register run inside SFPLOADMACRO sequences
+ * 0 to 3 (SFPLOADMACRO loads LREG0-3 only); a scheduled SFPSWAP holds the simple sub-unit for two cycles.
  *
  * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
  * @param tile_row_offset Base row offset for this tile in the dest register
  */
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
 inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint32_t result_store_mode) {
-    // The fused path needs the LOADMACRO sequences (not recorded under DISABLE_SFPLOADMACRO) and cannot mask
-    // the high bits of a UInt16 operand between its load and its compare.
+    // The fused path cannot mask the high bits of a UInt16 operand between its load and its compare.
 #ifdef DISABLE_SFPLOADMACRO
     constexpr bool fused_vertical_swap = false;
 #else
@@ -548,16 +510,14 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
                 const std::uint32_t first = tile_row_offset + face_pair_base + row_offset_first;
                 const std::uint32_t second = tile_row_offset + face_pair_base + row_offset_second;
 
-                // Rows r..r+3: left face even columns into LREG0, right face even columns into LREG2 with
-                // sequence 2 (LREG0 = extreme of LREG0 and LREG2), then the odd columns the same way into
-                // LREG1 and LREG3 with sequence 3.
+                // Rows r..r+3: sequence 2 leaves the extreme of LREG0 and LREG2 in LREG0, sequence 3 that of LREG1
+                // and LREG3 in LREG1.
                 TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, first);
                 TT_SFPLOADMACRO((2 << 2) | p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, first + ROWS_PER_FACE);
                 TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, first + 2);
                 TT_SFPLOADMACRO((3 << 2) | p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, first + ROWS_PER_FACE + 2);
 
-                // Rows r+4..r+7: accumulators LREG4 and LREG5, fresh operands again through LREG2 and LREG3
-                // with sequences 0 and 1 (LREG4 = extreme of LREG4 and LREG2, LREG5 = extreme of LREG5 and LREG3).
+                // Rows r+4..r+7: sequences 0 and 1 with the accumulators LREG4 and LREG5.
                 TT_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, second);
                 TT_SFPLOADMACRO((0 << 2) | p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, second + ROWS_PER_FACE);
                 TT_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, second + 2);
@@ -1264,14 +1224,8 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     TTI_SFPLOADI(0, 0x8, 0x0000);
     TTI_SFPCONFIG(0, 5, 0);
 
-    // Setup LOADMACRO sequences 2 and 3 for the row MAX/MIN kernel (perform_reduce_row_max_tile). They are the
-    // same fused load-and-compare as sequences 0 and 1: the instruction template is an SFPSWAP whose srcC is
-    // the accumulator (LREG0 for sequence 2, LREG1 for sequence 3) and whose dest is replaced by the register
-    // the SFPLOADMACRO loads, so the accumulator keeps the extreme and the loaded register receives the other
-    // value. The sequence word puts the swap on the simple sub-unit one cycle after the load (0x80: the loaded
-    // register is the swap's dest; 0x06 / 0x07: instruction template 2 / 3; delay 0) and an SFPNOP on the MAD
-    // sub-unit at the same time, which the ISA asks for next to a scheduled SFPSWAP. The row kernel uses
-    // sequences 0 and 1 (accumulators LREG4 and LREG5) for its second row group.
+    // Setup LOADMACRO sequences 2 and 3 for the row MAX/MIN kernel: the fused load-and-compare of sequences 0 and 1
+    // with accumulators LREG0 and LREG1 (0x80: the loaded register is the swap's dest; 0x06 / 0x07: template 2 / 3).
     TTI_SFPSWAP(0, p_sfpu::LREG0, 0xE /* instruction template 2 */, 1);
     TTI_SFPLOADI(0, 0xA, 0x0286);
     TTI_SFPLOADI(0, 0x8, 0x0000);
@@ -1309,8 +1263,7 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
  * @brief Initialization for SFPU reduce SUM and AVG kernels.
  *        Records the replay buffer for the vertical tree reduction:
  *        - Positions 0-5: Full tree reduce for both LREG groups (used by both col and row reduce)
- *        The column kernel's half tree reduce (LREG0-3 only) is issued inline by perform_reduce_col_sum_avg so
- *        that loads can be scheduled between its dependent adds; it is no longer recorded.
+ *        The column kernel's half tree reduce is issued inline by perform_reduce_col_sum_avg.
  *
  * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, LO16, DEFAULT
  * (FP32, FP16B)
@@ -1335,8 +1288,6 @@ inline void init_reduce_sum_avg() {
     // Record one replay buffer:
     // Positions 0-5: Full tree reduce (both LREG groups, interleaved for latency hiding)
     //   - Used by column reduce (first pass) and row reduce
-    // The column kernel's half tree reduce (LREG0-3 only, after the cross-face add and transpose) is issued
-    // inline by perform_reduce_col_sum_avg, which interleaves the next group's loads with its dependent adds.
 
     if constexpr (is_integer_mode) {
         lltt::record(0, 6);

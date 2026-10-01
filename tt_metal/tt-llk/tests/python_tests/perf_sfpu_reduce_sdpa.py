@@ -30,7 +30,7 @@ TILE_DIM = 32
     dest_acc=[DestAccumulation.No],
     mathop=[MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max],  # Only MAX is supported for SDPA reduce
-    loop_factor=[16, 128],  # as perf_sfpu_reduce.py: the plain value and the amortised one
+    loop_factor=[16, 128],  # as perf_sfpu_reduce.py
 )
 def test_perf_sfpu_reduce_sdpa(
     perf_report,
@@ -41,20 +41,8 @@ def test_perf_sfpu_reduce_sdpa(
     loop_factor,
 ):
     """
-    Performance test for the SFPU column MAX reduce over a block of tiles, the shape SDPA softmax uses.
-
-    The kernel (sources/sfpu_reduce_sdpa_perf.cpp) runs the generic calculate_reduce<MAX, REDUCE_COL,
-    Float16_b> over a block height of four tiles on the math thread; it is the block-height path of
-    calculate_reduce_max_min, not the 4x2 sub-block reduce of sfpu_reduce_sdpa_test.cpp and not the
-    pack-thread issue the SDPA kernels use. The input is one column of four 32x32 tiles (128x32).
-
-    MATH_ISOLATE issues one four-tile reduce per tile count per loop iteration and the report divides the
-    window by loop_factor x tile_cnt, so its column is cycles per four-tile call (divide by four for cycles
-    per tile). L1_TO_L1 unpacks and copies the four tiles into dest, reduces the block once and packs the
-    four tiles, so its column is per tile.
-
-    The test runs on every architecture the kernel compiles for; the earlier Blackhole skip had no
-    recorded reason and the module passes there.
+    Performance test for the SFPU column MAX reduce over a block of four tiles, the shape SDPA softmax uses.
+    MATH_ISOLATE reads as cycles per four-tile call (divide by four for cycles per tile), L1_TO_L1 as cycles per tile.
     """
 
     input_dimensions = [4 * TILE_DIM, TILE_DIM]
@@ -64,8 +52,8 @@ def test_perf_sfpu_reduce_sdpa(
         "sources/sfpu_reduce_sdpa_perf.cpp",
         formats,
         run_types=[
-            PerfRunType.MATH_ISOLATE,  # the SFPU body over the four-tile block
-            PerfRunType.L1_TO_L1,  # unpack, copy into dest, reduce, pack
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.L1_TO_L1,
         ],
         templates=[
             MATH_OP(mathop=mathop),

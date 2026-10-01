@@ -2,27 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Performance sweep of the generic SFPU reduce (sources/sfpu_reduce_row_max_perf.cpp, the kernel behind
-sfpu_reduce / calculate_reduce) over every configuration ttnn dispatches to it: pool {SUM, AVG, MAX, MIN},
-dimension {ROW, COL}, Float16_b in a 16-bit and in a 32-bit dest, Float32 and Int32 (32-bit inputs are
-unpacked straight into dest, as ttnn does), one and four tiles per call, and the run types MATH_ISOLATE
-(the SFPU body alone), L1_TO_L1 (unpack, copy into dest, reduce, pack) and PACK_ISOLATE.
-
-How the harness column reads. The kernel's MATH_ISOLATE loop issues one calculate_reduce over the whole
-block per call and TILE_CNT calls per loop iteration, and the report divides the TILE_LOOP window by
-loop_factor x tile_cnt, so for a multi-tile block the MATH_ISOLATE column is cycles per call (one call
-reduces tile_cnt tiles); divide by tile_cnt for cycles per tile. In L1_TO_L1 the kernel copies tile_cnt
-tiles, reduces the block once and packs tile_cnt tiles per iteration, so that column is per tile.
-
-Which tile counts are swept. A row reduce over four tiles (block_ct_dim 4) combines the per-tile row
-results across the tiles; a column MAX or MIN over four tiles (block_rt_dim 4) is the block-height path of
-calculate_reduce_max_min. The column SUM and AVG kernels reduce one tile per call whatever the block
-dimensions, and the Int32 column MAX and MIN kernel is a single-tile kernel, so those run at one tile only.
-Row AVG exists for float formats only (see calculate_reduce).
-
-Two loop factors: 16, the value the other SFPU perf modules use, and 128, where the per-iteration zone
-entry and exit is amortised (the 10 to 200 sweep this module used to run spans about 3 percent between its
-ends and buys nothing else).
+Performance sweep of the generic SFPU reduce (sources/sfpu_reduce_row_max_perf.cpp) over the configurations ttnn
+dispatches to it. MATH_ISOLATE reads as cycles per call (one call reduces tile_cnt tiles), L1_TO_L1 as cycles per tile.
 """
 
 import pytest
@@ -89,8 +70,7 @@ def get_tile_counts(formats, mathop, reduce_pool):
 def test_perf_sfpu_reduce(
     perf_report, formats, dest_acc, mathop, reduce_pool, tile_count, loop_factor
 ):
-    # A row reduce spans tile_count tiles along the row (block_ct_dim), a column reduce stacks them
-    # (block_rt_dim); generate_input_dim derives both block dimensions from the shape.
+    # A row reduce spans tile_count tiles along the row, a column reduce stacks them.
     if mathop == MathOperation.ReduceRow:
         input_dimensions = [TILE_DIM, TILE_DIM * tile_count]
     else:
