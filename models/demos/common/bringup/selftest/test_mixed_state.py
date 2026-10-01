@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""F48: mixed per-layer state. Layers of different block types carry different state tensors (spec
+"""F50: mixed per-layer state. Layers of different block types carry different state tensors (spec
 state.by_block_type), and fixed-size tensors (state.fixed: a recurrent state, a conv tail) are snapshotted at chunk
 starts, because the state at a chunk start cannot be sliced out of the final one (GLM-5.3: KDA + sparse MLA).
 CPU only, on the fixture with layer 1 as a linear recurrence."""
@@ -78,7 +78,7 @@ def test_hf_parity_with_a_recurrent_layer(fx):
 
 
 def test_graph_replay_starts_from_the_recurrent_state_before_the_last_chunk(fx):
-    """Before F48 the replay's prefix was sliced from the final state: exact for a KV cache, wrong for a recurrence."""
+    """Before F50 the replay's prefix was sliced from the final state: exact for a KV cache, wrong for a recurrence."""
     check_reference.main(["--spec", fx(**MIXED), "--seq", "256", "--chunk", "64"])
     m = got()
     assert m["pcc_hidden"] > 0.999999 and m["pcc_state_min"] > 0.999999

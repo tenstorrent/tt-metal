@@ -24,7 +24,7 @@ state:
   format: separate_k_v
   # by_block_type: {<block type>: [names]}   # layer types with different state (e.g. MLA latent vs recurrent state)
   # fixed: [names]                           # tensors that do not grow along the sequence (recurrent state, conv
-  #                                          #   tail): goldens snapshot them at chunk starts (F48)
+  #                                          #   tail): goldens snapshot them at chunk starts (F50)
 thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
                                    # swap tests (F49) also gate each swapped step vs the CPU step on the same inputs:
                                    #   swap_step_rel 0.02 (rel L2; tightened to 2x the step's component-gate error,

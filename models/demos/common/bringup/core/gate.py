@@ -235,13 +235,33 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     if task.get("step") == "contract":
         paths.append("models/demos/common/prefill")  # orchestrator.CONTRACT_SHARED: the contract agent may change it
         paths.append(rel(ledger.dir / "hooks.py"))  # and the model's hooks (contract_state_pcc)
-    # Shared paths every step may change (orchestrator.BRINGUP_OPS and common_paths): fork edits and knowledge entries.
-    paths += [
-        "ttnn/ttnn/bringup",
-        "models/demos/common/bringup/knowledge/known_issues.md",
-        "models/demos/common/bringup/knowledge/repo_map.md",
-    ]
-    return [p for p in paths if (repo / p).exists() or _tracked(repo, p)]
+    # F48: every agent may write the shared knowledge files and ttnn/ttnn/bringup (a fork, or a change to one behind
+    # an option); one agent runs at a time, so what changed there is this task's. Only changed files, so the gate's
+    # formatting pass does not touch the other forks.
+    paths += _dirty_under(repo, [*SHARED_KNOWLEDGE, BRINGUP_OPS])
+    return list(dict.fromkeys(p for p in paths if (repo / p).exists() or _tracked(repo, p)))
+
+
+SHARED_KNOWLEDGE = (
+    "models/demos/common/bringup/knowledge/known_issues.md",
+    "models/demos/common/bringup/knowledge/repo_map.md",
+)
+BRINGUP_OPS = "ttnn/ttnn/bringup"
+
+
+def _dirty_under(repo: Path, prefixes: list[str]) -> list[str]:
+    """Modified or untracked files (not deleted, no __pycache__) at or under any prefix."""
+    out = subprocess.run(
+        ["git", "status", "--porcelain", "-uall", "-z", "--", *prefixes], cwd=repo, capture_output=True, text=True
+    ).stdout
+    files = []
+    for entry in out.split("\0"):
+        if len(entry) < 4:
+            continue
+        p = entry[3:]
+        if "__pycache__" not in p and (repo / p).is_file():
+            files.append(p)
+    return sorted(files)
 
 
 def _tracked(repo: Path, p: str) -> bool:
