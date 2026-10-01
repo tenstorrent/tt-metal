@@ -23,6 +23,25 @@ REPO = __file__.rsplit("/models/", 1)[0]
 ISL, CLK, CORES, FLOP_CYC = 512, 1.35e9, 120, 4096
 PEAK = CLK * CORES * FLOP_CYC
 BW, BW_DATASHEET = 450e9, 512e9
+# Ideal at the device's specs (the "ideal" fields): Blackhole's 13x10 worker grid (the 14x10 die harvests one column;
+# ttnn ops here get 12x10, the 13th column runs dispatch) at the rated 1.35 GHz, the datasheet 512 GB/s, analytic only
+# (no softmax / vector cost, no measured floors)
+SPEC_CORES = 130
+PEAK_SPEC = CLK * SPEC_CORES * FLOP_CYC
+# pplx-embed-4B per layer: QKV [2560, 6144], WO [4096, 2560], FF1 + FF3 [2560, 2 x 9728], FF2 [9728, 2560], bfp4
+N_LAYERS, WEIGHT_PARAMS_PER_LAYER = 36, 2560 * 6144 + 4096 * 2560 + 2560 * 2 * 9728 + 9728 * 2560
+GROUPS = (("QKV", "QKV"), ("WO", "WO"), ("FF1 + FF3", "FF1"), ("FF2", "FF2"), ("SDPA", "SDPA"),
+          ("heads + QK-norm + RoPE", "heads"), ("add + RMSNorm", "add + RMSNorm"))  # fmt: skip
+
+
+def group_of(s):
+    lab = s["label"] if s["op"] != "SDPA" else "SDPA"
+    for name, key in GROUPS:
+        if lab.startswith(key) or (key == "FF1" and "FF1" in lab) or (key == "heads" and lab.startswith("heads")):
+            return name
+    return "other"
+
+
 FID = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}
 BYTES = {"BFLOAT16": 2, "BFLOAT8_B": 1088 / 1024, "BFLOAT4_B": 576 / 1024, "FLOAT32": 4, "UINT32": 4, "INT32": 4}
 
@@ -297,6 +316,7 @@ def add_roofs(b, measured):
         x["fpu_us"] += t_fpu
         x["dram_us"] += t_dram
         x["roof_us"] += max(t_fpu, t_dram)
+        x["ideal_us"] += max(t_fpu * CORES / SPEC_CORES, t_dram * BW / BW_DATASHEET)
         x["fpu_calls"] += t_fpu >= t_dram and flops > 0
         if qkv_rows and qkv_rows < act_rows and (lab == "QKV" or lab.startswith("heads")):
             x["work_frac"] = round(qkv_rows / act_rows, 3)  # bs32's chunked QKV + heads calls
@@ -305,13 +325,14 @@ def add_roofs(b, measured):
         o["roof_us"] = 0.0
         for s in o["sigs"]:
             for k in ("roof_us", "flops", "dram_bytes", "bound", "work_frac", "floor_compute_us", "floor_dm_us",
-                      "model_fpu_us", "model_dram_us"):  # fmt: skip
+                      "model_fpu_us", "model_dram_us", "ideal_us"):  # fmt: skip
                 s.pop(k, None)
             x = R.get((s["op"], s["label"], json.dumps(s["inputs"]), s["cores"], json.dumps(s["impl"])))
             if x is None or x["calls"] != s["calls"]:
                 miss += 1
                 continue
             s["roof_us"] = round(x["roof_us"], 2)
+            s["ideal_us"] = round(x["ideal_us"], 2)
             s["flops"] = x["flops"]
             s["dram_bytes"] = round(x["dram_bytes"])
             s["bound"] = "FPU" if x["fpu_calls"] * 2 >= x["calls"] else "DRAM"
@@ -330,6 +351,29 @@ def add_roofs(b, measured):
             o["roof_us"] += s["roof_us"]
         o["roof_us"] = round(o["roof_us"], 2)
     b["roof_ms"] = round(sum(o["roof_us"] for o in b["ops"]) / 1e3, 3)
+    sigs = [s for o in b["ops"] for s in o["sigs"] if "ideal_us" in s]
+    groups = {}
+    for s in sigs:
+        g = groups.setdefault(group_of(s), {"measured_ms": 0.0, "practical_ms": 0.0, "ideal_ms": 0.0})
+        g["measured_ms"] += s["total_us"] / 1e3
+        g["practical_ms"] += s["roof_us"] / 1e3
+        g["ideal_ms"] += s["ideal_us"] / 1e3
+    flops = sum(s["flops"] for s in sigs)  # every matmul / SDPA here is LoFi (one fidelity phase)
+    # whole-model bound: the FLOPs at peak vs the bytes that must cross DRAM once (the weights, the gathered embedding
+    # rows), every activation kept on chip
+    must_bytes = N_LAYERS * WEIGHT_PARAMS_PER_LAYER * BYTES["BFLOAT4_B"] + b["bs"] * ISL * 2560 * 2
+    b["ideal"] = {
+        "cores": SPEC_CORES,
+        "tflops": round(PEAK_SPEC / 1e12, 1),
+        "dram_gbs": BW_DATASHEET / 1e9,
+        "ops_ms": round(sum(s["ideal_us"] for s in sigs) / 1e3, 3),
+        "flops": flops,
+        "model_fpu_ms": round(flops / PEAK_SPEC * 1e3, 3),
+        "model_dram_ms": round(must_bytes / BW_DATASHEET * 1e3, 3),
+        "model_bytes": round(must_bytes),
+        "groups": {k: {kk: round(vv, 3) for kk, vv in v.items()} for k, v in groups.items()},
+    }
+    b["ideal"]["model_ms"] = max(b["ideal"]["model_fpu_ms"], b["ideal"]["model_dram_ms"])
     return miss
 
 
