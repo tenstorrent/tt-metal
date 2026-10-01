@@ -260,7 +260,11 @@ not its selection or generation of an analysis channel.
 
 Token budgets drive completion, even after EOS. Blocking readback keeps scheduler
 and asynchronous execution outside this suite. Layout changes pass complete
-surviving histories. Paged adapters require the generator's public
+surviving histories. Decode follows the version-1 decode update contract
+(`models/common/sampling/README.md`) the way the SGLang bridge does: the adapter is
+host-authoritative, so `reload_inputs` is commanded every step, while
+`reload_sampling_params` and `reset_sampling_state` are commanded only on a layout
+change, together with those histories. Paged adapters require the generator's public
 `release_request(slot)` hook at completion, as serving does; tests do not reset private KV or
 sampler state between requests. Traced decode must create a model trace. Unseeded decode also requires
 a sampler trace unless the model explicitly disables that path in production
