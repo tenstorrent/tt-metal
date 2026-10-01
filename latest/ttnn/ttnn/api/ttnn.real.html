@@ -463,8 +463,16 @@
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p>
+<p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration of the returned component. Defaults to <cite>None</cite>, which leaves the component where it is.</span></p>
 </dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The result is the component of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> itself, so a request the component already
+satisfies returns it without a copy. A host component cannot be moved by a device operation and
+is returned unchanged whatever is requested.</p>
+</div>
+<dl class="field-list simple">
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
