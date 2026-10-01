@@ -176,7 +176,7 @@ public:
         }
 
         const uint32_t l1_base = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
-        l1_ = L1MapNew::compute(l1_base, static_cast<uint32_t>(device->l1_size_per_core()), page_bytes_, false);
+        l1_ = L1MapUVA::compute(l1_base, static_cast<uint32_t>(device->l1_size_per_core()), page_bytes_, false);
         if (const std::string e = l1_.fits(page_bytes_); !e.empty()) {
             fail(state, e);
             return;
@@ -274,7 +274,7 @@ protected:
 
     std::shared_ptr<dist::MeshDevice> mesh_;
     std::unique_ptr<D2HLeg> d2h_;
-    L1MapNew l1_{};
+    L1MapUVA l1_{};
     CoreRangeSet cores_set_;
     std::vector<CoreCoord> core_list_;
     uint8_t* region_base_ = nullptr;

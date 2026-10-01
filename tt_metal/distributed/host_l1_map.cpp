@@ -15,8 +15,8 @@ constexpr uint32_t align64(uint32_t v) { return (v + 0x3Fu) & ~0x3Fu; }
 
 // 64 B alignment throughout: the NOC needs source and destination to agree in bits [3:0].
 // Both slots are sized for a whole FRAME; under !bidirectional they are the same bytes.
-L1MapNew L1MapNew::compute(uint32_t l1_base, uint32_t l1_size, uint32_t payload_bytes, bool bidirectional) {
-    L1MapNew m;
+L1MapUVA L1MapUVA::compute(uint32_t l1_base, uint32_t l1_size, uint32_t payload_bytes, bool bidirectional) {
+    L1MapUVA m;
     m.l1_size = l1_size;
     m.l1_base = l1_base;
     m.bidirectional = bidirectional;
@@ -40,7 +40,7 @@ L1MapNew L1MapNew::compute(uint32_t l1_base, uint32_t l1_size, uint32_t payload_
 
 // Bounds the map's top, not just the payload span: every word above the payload is written
 // by someone -- the sender kernel, the pull kernel, or host delivery.
-std::string L1MapNew::fits(uint32_t payload_bytes) const {
+std::string L1MapUVA::fits(uint32_t payload_bytes) const {
     if (end() <= l1_size && deliver_addr + tt_uva_frame_page_size(payload_bytes) <= l1_size) {
         return {};
     }
@@ -53,7 +53,7 @@ std::string L1MapNew::fits(uint32_t payload_bytes) const {
         l1_size);
 }
 
-std::string L1MapNew::describe() const {
+std::string L1MapUVA::describe() const {
     return fmt::format(
         "payload {:#x} stage {:#x} stop {:#x} verify {:#x} consumed {:#x} dest_word {:#x} deliver {:#x} "
         "(L1 {} B, payload span {} B)",

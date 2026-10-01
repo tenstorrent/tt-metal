@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-
-// Per-core L1 layout. Smaller than the register-file era: the sockets' own bytes_sent /
-// bytes_acked pair replaces rdma_signal and rdma_completion.
+//
+// L1 layout for the UVA kernels. Identical on every core, which is what lets a sender ship
+// a wire offset relative to l1_base and the receiver resolve it against its own.
 #pragma once
 
 #include <cstdint>
@@ -12,7 +12,7 @@
 
 namespace tt::tt_metal::experimental {
 
-struct L1MapNew {
+struct L1MapUVA {
     // A word a kernel polls gets its own line, so setting one never disturbs a neighbour.
     static constexpr uint32_t kDoorbellBytes = 64;
     // The pull kernel reads this back as one uint64_t, so 8 is exact, not a round-up.
@@ -35,7 +35,7 @@ struct L1MapNew {
     bool bidirectional = false;
     uint32_t deliver_end = 0;
 
-    static L1MapNew compute(uint32_t l1_base, uint32_t l1_size, uint32_t payload_bytes, bool bidirectional = false);
+    static L1MapUVA compute(uint32_t l1_base, uint32_t l1_size, uint32_t payload_bytes, bool bidirectional = false);
 
     uint32_t payload_copies() const { return bidirectional ? 2u : 1u; }
     uint32_t end() const { return bidirectional ? deliver_end : (verify_addr + kDoorbellBytes); }
