@@ -175,7 +175,10 @@ Tensor pre_scatter_transform_tensor(
     }
 
     Tensor processed_tensor = input_tensor;
-    if (index_shape.has_value()) {
+    // Only materialize the source-prefix slice when source is actually wider than index on some
+    // axis -- when the shapes already match this is an identity slice that would still dispatch a
+    // real data-movement kernel over the whole tensor for no effect.
+    if (index_shape.has_value() && processed_tensor.logical_shape() != index_shape.value()) {
         const ttsl::SmallVector<uint32_t> start(index_shape->rank(), 0);
         const ttsl::SmallVector<uint32_t> steps(index_shape->rank(), 1);
         const ttsl::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
@@ -372,6 +375,15 @@ Tensor scatter_native(
 // reroute pays would only add cost on top of an already-parallel dispatch.
 constexpr uint32_t kRowMajorRerouteMaxHt = 32;
 
+// Longest stick the reroute's untilize will materialize -- bounds how wide the one-shot RM
+// transport is allowed to get before the TILE dispatch (whose per-core footprint is a small, fixed
+// tile count regardless of row width) is the safer choice.
+constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
+
+// The untilized RM stick becomes the reader/writer's per-page transfer size with no further
+// rounding, so it must already land on the hardware NOC transaction boundary.
+constexpr uint32_t kRowMajorRerouteNocAlign = 32;
+
 // Whether a TILE call should take the same untilize -> per-stick ROW_MAJOR scatter -> tilize detour
 // around prim::scatter_codegen that this file's own force_row_major branch takes around the native
 // prim, rather than dispatching the (correct, but at this row count far slower) TILE factory
@@ -386,10 +398,22 @@ bool should_reroute_to_row_major(const Tensor& input_tensor, const Tensor& index
     if (geometry.Ht > kRowMajorRerouteMaxHt) {
         return false;
     }
+    const uint32_t stick_elems = input_tensor.logical_shape()[-1];
+    const uint32_t index_w = index_tensor.logical_shape()[-1];
+    if (stick_elems > kRowMajorRerouteMaxStickElems || index_w > kRowMajorRerouteMaxStickElems) {
+        return false;
+    }
+    // Checked against the RAW (unaligned) byte width, not the device-aligned page: the untilized
+    // stick is exactly this many bytes wide on the wire, and a width that isn't already NOC-aligned
+    // makes the detour's transport unsafe regardless of how the destination buffer pads it.
+    const uint64_t raw_input_page_bytes = static_cast<uint64_t>(stick_elems) * input_tensor.element_size();
+    const uint64_t raw_index_page_bytes = static_cast<uint64_t>(index_w) * index_tensor.element_size();
+    if (raw_input_page_bytes % kRowMajorRerouteNocAlign != 0 || raw_index_page_bytes % kRowMajorRerouteNocAlign != 0) {
+        return false;
+    }
     // Only take the detour when the destination RM plan can actually fit L1 once untilized -- the
     // TILE dispatch's own footprint is a small, fixed number of tile pages regardless of row width,
     // so it remains the safe fallback whenever the untilized sticks would not fit.
-    const uint32_t stick_elems = input_tensor.logical_shape()[-1];
     const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, stick_elems);
     return ttnn::prim::scatter_rm_min_plan_fits_l1(
         ttnn::prim::scatter_static_l1(input_tensor),
