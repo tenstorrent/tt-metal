@@ -39,6 +39,7 @@ from fuser.validator import (
     OperationSchemaBase,
     PackSchema,
     TernarySfpuMathSchema,
+    TopKSfpuMathSchema,
     UnarySfpuMathSchema,
     eltwise_unpacker_rules,
     forced_unpackers,
@@ -66,6 +67,7 @@ from .packer.packer import Packer
 from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
 from .sfpu.ternary import TernarySfpu
+from .sfpu.topk import TopKSfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
@@ -426,12 +428,17 @@ class QuasarTernarySfpuMathSchema(TernarySfpuMathSchema):
     _sfpu_ops: ClassVar = TERNARY_SFPU_OPS
 
 
+class QuasarTopKSfpuMathSchema(TopKSfpuMathSchema):
+    _sfpu_cls: ClassVar = TopKSfpu
+
+
 MathSchema = Annotated[
     Union[
         FpuMathSchema,
         QuasarUnarySfpuMathSchema,
         QuasarBinarySfpuMathSchema,
         QuasarTernarySfpuMathSchema,
+        QuasarTopKSfpuMathSchema,
     ],
     Field(discriminator="type"),
 ]
@@ -445,6 +452,7 @@ PackEntrySchema = Union[
     QuasarUnarySfpuMathSchema,
     QuasarBinarySfpuMathSchema,
     QuasarTernarySfpuMathSchema,
+    QuasarTopKSfpuMathSchema,
     QuasarPackSchema,
 ]
 
