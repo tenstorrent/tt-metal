@@ -156,7 +156,7 @@ def _fresh_device_mesh(
     mgd = _bundled_mgd(arch, shape)
     if require_mgd and not previous_mgd and mgd is None and arch is not None:
         pytest.skip(
-            f"{what} need a mesh graph descriptor for arch={arch!r} shape={tuple(shape)}; "
+            f"{what} needs a mesh graph descriptor for arch={arch!r} shape={tuple(shape)}; "
             f"add one under tt-train/configs/mgd/ or export {_MGD_ENV}"
         )
     if mgd and not previous_mgd:
