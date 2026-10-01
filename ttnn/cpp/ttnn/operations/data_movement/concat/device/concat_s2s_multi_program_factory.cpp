@@ -194,28 +194,61 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
             num_blocks);
     }
 
-    const KernelDescriptor::CompileTimeArgs compile_time_args = {
-        cb_dst_id, page_size, output_stride, num_input_tensors, num_blocks, output_block_stride};
+    // Divide the work between the two RISCs on whichever axis balances better.
+    //
+    // Neither axis dominates. Splitting sticks within a block leaves one RISC with nothing when a
+    // block is one stick tall -- div_up(1, 2) is 1, so the writer gets 1 - 1 = 0 -- and skews for
+    // any odd stick count. Splitting blocks is just as lopsided for an odd block count whose
+    // sticks already halve evenly: 3 blocks of 4 sticks goes 8/4 by block but 6/6 by stick.
+    //
+    // So cost both and take the lower critical path, counting the busier RISC's sticks summed
+    // over the inputs. Each block's copy is independent, so any partition of blocks is correct,
+    // and the sticks within a block were already free to split.
+    uint32_t total_sticks_per_block = 0;
+    uint32_t halved_sticks_per_block = 0;
+    for (uint32_t i = 0; i < num_input_tensors; i++) {
+        total_sticks_per_block += input_num_sticks_per_block[i];
+        halved_sticks_per_block += tt::div_up(input_num_sticks_per_block[i], 2);
+    }
+    const uint32_t block_split_critical = tt::div_up(num_blocks, 2) * total_sticks_per_block;
+    const uint32_t stick_split_critical = num_blocks * halved_sticks_per_block;
+    const bool split_blocks = block_split_critical < stick_split_critical;
+    const uint32_t reader_block_count = split_blocks ? tt::div_up(num_blocks, 2) : num_blocks;
+    const uint32_t writer_block_start = split_blocks ? reader_block_count : 0;
+    const uint32_t writer_block_count = num_blocks - (split_blocks ? reader_block_count : 0);
+
+    // Each kernel carries its own block range as compile-time args so its loop bound is constant.
+    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
+        cb_dst_id, page_size, output_stride, num_input_tensors, output_block_stride, 0, reader_block_count};
+    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
+        cb_dst_id,
+        page_size,
+        output_stride,
+        num_input_tensors,
+        output_block_stride,
+        writer_block_start,
+        writer_block_count};
 
     std::vector<uint32_t> runtime_args_0;
     std::vector<uint32_t> runtime_args_1;
     runtime_args_0.reserve(num_input_tensors * 5);
     runtime_args_1.reserve(num_input_tensors * 5);
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-        // Split this input's rows *within one block* across the two RISCs, and let each RISC walk
-        // every block. Splitting the whole shard instead would hand one RISC entire leading
-        // indices and put the block boundary in the middle of its range.
         const uint32_t sticks_per_block = input_num_sticks_per_block[input_id];
-        const auto input_num_sticks_per_risc = tt::div_up(sticks_per_block, 2);
+        // When the blocks are split each RISC copies every stick of its own blocks; when they are
+        // not, the sticks of the single block are halved and the writer starts after the reader.
+        const uint32_t reader_sticks = split_blocks ? sticks_per_block : tt::div_up(sticks_per_block, 2);
+        const uint32_t writer_sticks = split_blocks ? sticks_per_block : sticks_per_block - reader_sticks;
+        const uint32_t writer_stick_offset = split_blocks ? 0 : reader_sticks;
         runtime_args_0.push_back(input_num_pages_per_stick[input_id]);
-        runtime_args_0.push_back(input_num_sticks_per_risc);
+        runtime_args_0.push_back(reader_sticks);
         runtime_args_0.push_back(input_write_offsets[input_id]);
         runtime_args_0.push_back(0);
         runtime_args_0.push_back(input_block_strides[input_id]);
         runtime_args_1.push_back(input_num_pages_per_stick[input_id]);
-        runtime_args_1.push_back(sticks_per_block - input_num_sticks_per_risc);
-        runtime_args_1.push_back(input_write_offsets[input_id] + (output_stride * input_num_sticks_per_risc));
-        runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_risc);
+        runtime_args_1.push_back(writer_sticks);
+        runtime_args_1.push_back(input_write_offsets[input_id] + (output_stride * writer_stick_offset));
+        runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * writer_stick_offset);
         runtime_args_1.push_back(input_block_strides[input_id]);
     }
 
@@ -232,7 +265,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = compile_time_args;
+    reader_desc.compile_time_args = reader_compile_time_args;
     reader_desc.runtime_args.reserve(all_cores.num_cores());
     for (const auto& range : all_cores.ranges()) {
         for (const CoreCoord& core : range) {
@@ -246,7 +279,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = compile_time_args;
+    writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.runtime_args.reserve(all_cores.num_cores());
     for (const auto& range : all_cores.ranges()) {
         for (const CoreCoord& core : range) {
