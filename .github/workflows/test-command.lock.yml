@@ -1891,6 +1891,7 @@ jobs:
                           "hunyuan-image-3.0",
                           "panoptic-deeplab",
                           "bevformer",
+                          "diffusiondrive",
                           "mistral-small-3.1-24b",
                           "sd35",
                           "mochi",
@@ -2007,7 +2008,7 @@ jobs:
                     "properties": {
                       "additional_test_categories": {
                         "default": "",
-                        "description": "Additional test categories to run (comma-separated, e.g., conv,pool,sdpa,eltwise,kernel_lib,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)\n",
+                        "description": "Additional test categories to run (comma-separated, e.g., conv,pool,sdpa,eltwise,kernel_lib,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused,dp_op_unit_tests)\n",
                         "type": "string"
                       },
                       "build-type": {
@@ -2903,47 +2904,6 @@ jobs:
                     "type": "object"
                   },
                   "name": "vllm_model_tests"
-                },
-                {
-                  "_workflow_name": "metal-run-microbenchmarks",
-                  "description": "Dispatch the 'metal-run-microbenchmarks' workflow with workflow_dispatch trigger. This workflow must support workflow_dispatch and be in .github/workflows/ directory in the same repository. Use the 'ref' parameter to target a specific branch or tag (allowed patterns: **).",
-                  "inputSchema": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "build-type": {
-                        "default": "Release",
-                        "description": "Build type configuration",
-                        "enum": [
-                          "Release",
-                          "Debug",
-                          "RelWithDebInfo",
-                          "ASan",
-                          "TSan"
-                        ],
-                        "type": "string"
-                      },
-                      "enable-lto": {
-                        "default": false,
-                        "description": "Enable Link Time Optimization (LTO)",
-                        "type": "boolean"
-                      },
-                      "platform": {
-                        "default": "Ubuntu 22.04",
-                        "description": "Platform to build and test",
-                        "enum": [
-                          "Ubuntu 22.04",
-                          "Ubuntu 24.04"
-                        ],
-                        "type": "string"
-                      },
-                      "ref": {
-                        "description": "The git ref (branch, tag, or SHA) to dispatch the workflow on. Must match one of the configured allowed ref patterns: **. If omitted, the dispatching workflow's ref is used.",
-                        "type": "string"
-                      }
-                    },
-                    "type": "object"
-                  },
-                  "name": "metal_run_microbenchmarks"
                 },
                 {
                   "_workflow_name": "runtime-sanity-tests",
