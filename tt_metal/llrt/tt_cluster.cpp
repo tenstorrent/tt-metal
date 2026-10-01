@@ -442,6 +442,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
                 .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
+                .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
             });
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
@@ -449,6 +450,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
                 .num_host_mem_ch_per_mmio_device = 1,
                 .target_devices = {0},
                 .simulator_directory = rtoptions_.get_simulator_path(),
+                .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
             });
         }
     } else if (this->target_type_ == TargetDevice::Mock) {

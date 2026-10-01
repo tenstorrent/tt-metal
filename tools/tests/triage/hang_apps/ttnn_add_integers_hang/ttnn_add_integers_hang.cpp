@@ -17,12 +17,17 @@
 #include <tt-metalium/distributed.hpp>
 
 #include "add_integers_hang_op.hpp"
+#include "stop_simulation_on_termination.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/types.hpp"
 
 int main() {
+    // Killed while hung -- which is the whole point of this app -- we still have to release the
+    // simulator, so exit rather than die on SIGTERM.
+    tt::tt_metal::triage_hang_apps::stop_simulation_on_termination();
+
     auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0);
 
     constexpr uint32_t M = tt::constants::TILE_HEIGHT;
@@ -45,6 +50,11 @@ int main() {
         // Reading back will block until the op finishes or times out.
         std::cout << "Number of elements: " << result.to_vector<bfloat16>().size() << std::endl;
     } catch (const std::runtime_error& e) {
+        // Being torn down: teardown has closed the link to the simulator, so this failure is the
+        // expected end of the wait, not a fault to report.
+        if (tt::tt_metal::triage_hang_apps::termination_requested()) {
+            tt::tt_metal::triage_hang_apps::park_until_process_exits();
+        }
         std::string error_msg = e.what();
         if (error_msg.find("device timeout") != std::string::npos || error_msg.find("Timeout (") != std::string::npos) {
             printf("Device timeout detected as expected.\n");
