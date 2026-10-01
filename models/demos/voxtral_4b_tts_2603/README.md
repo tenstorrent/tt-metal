@@ -177,5 +177,11 @@ kernel to HiFi2: 60.7 ms per frame, MOS 3.62 and WER pass, but it fails `test_pe
   matmuls (fp32 accumulation does not fit their current block configuration). Decode reads every prompt
   position's keys and values from the KV cache, so these positions do feed the output; the checks downstream of
   them (decode hidden states, codes, waveform, WER and MOS) all pass.
+- **Very long texts.** With 32 different 244-token texts (a ~400-token prompt), the worst sentence's prefill
+  hidden PCC is ~0.988 and its decode hidden ~0.984, below the tests' 0.99 (measured on a p150). The previous
+  revision of this code measures the same, and one such text run alone, without the shared-prefix prefill,
+  measures the same as in the batch (0.990 / 0.999), so it comes from the prompt length -- the bfloat16
+  accumulation noted above -- not from the batching. The package's texts and every preset voice with texts up
+  to ~94 tokens are well inside the tested range.
 - **Single segment.** Long-form multi-segment TTS (as in vLLM-Omni) is not implemented; the safety cap is 256
   frames (20.5 s).
