@@ -274,7 +274,7 @@ template <typename DopeFn>
 auto warmup_and_replay(
     distributed::MeshDevice& md,
     distributed::MeshCommandQueue& cq,
-    std::vector<distributed::MeshWorkload*> wls,
+    const std::vector<distributed::MeshWorkload*>& wls,
     DopeFn dope_fn) {
     for (auto* wl : wls) {
         distributed::EnqueueMeshWorkload(cq, *wl, /*blocking=*/true);  // warm-up: compile + cache
@@ -614,6 +614,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
     std::vector<MeshTensor> tensors;
     std::vector<std::pair<std::string, const MeshTensor*>> bound;
     tensors.reserve(dram_names.size() + 3);
+    bound.reserve(dram_names.size() + 3);
     for (size_t i = 0; i < dram_names.size(); ++i) {
         tensors.push_back(alloc(*md, BufferType::DRAM));
     }

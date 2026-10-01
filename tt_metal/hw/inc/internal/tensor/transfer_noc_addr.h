@@ -9,8 +9,7 @@
 template <typename DSpecT>
 struct TensorAccessor;
 
-namespace tensor_accessor {
-namespace detail {
+namespace tensor_accessor::detail {
 // The only way in to TensorAccessor's private, un-noted address members (it befriends this).
 struct TransferAccess {
     template <typename Accessor>
@@ -46,5 +45,4 @@ inline uint64_t transfer_shard_noc_addr(
     return TransferAccess::shard(accessor, shard_id, offset, noc);
 }
 
-}  // namespace detail
-}  // namespace tensor_accessor
+}  // namespace tensor_accessor::detail
