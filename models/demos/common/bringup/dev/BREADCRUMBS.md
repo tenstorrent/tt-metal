@@ -599,7 +599,11 @@ limits, finiteness, "not a CPU bridge", and downstream / block-out rel limits.
   `[S.x] swap test frozen without review (F49)`, unless `agents.swap_review: all | [block types]` names it; a failed
   unreviewed freeze starts the test role with the failure. Component tasks keep their test agent.
 - `dev/f49_mutation_proof.py` / `.md`: the proof (below). Selftests: test_swap_checks.py.
-## F48 (2026-09-28): mixed per-layer state (GLM-5.3 intake)
+
+Merged from dnijemcevic/glm53_prefill on 2026-09-30; renumbered F48-F52 -> F50-F54; their commit messages keep the
+old numbers. (The selftest counts in F50-F54 are the glm53 branch's own, 197 -> 218, before the merge.)
+
+## F50 (2026-09-28): mixed per-layer state (GLM-5.3 intake)
 GLM-5.3-Flash has sparse-MLA layers (latent cache + pooled indexer keys, growing along the sequence) and KDA layers
 (recurrent state [heads, 128, 128] + conv tail, fixed size). The framework assumed one list of state names for every
 layer and stored only the final state, which every "prefix at chunk start" consumer sliced to `start`: exact for a
@@ -623,9 +627,10 @@ KV cache, wrong for a recurrence (the final state already includes the chunk und
 - Dashboard: any `pcc_state_<name>_L<i>` is per-layer.
 - Device-model contract (harness docstring): `layer(i, h, 0, state)` starts a new sequence, so a fixed state resets.
 - Selftests: 197 -> 212 (test_mixed_state.py adds 15; the fixture gains `fixture.recurrent_layers`, a linear
-  recurrence with an HF twin). 14 of the 15 fail on the pre-F48 code.
+  recurrence with an HF twin). 14 of the 15 fail on the pre-F50 code.
 
-## F49 (2026-09-29): gate commits carry the shared paths agents may change (GLM-5.3 run)
+## F51 (2026-09-29): gate commits carry the shared paths agents may change (GLM-5.3 run)
+superseded by F48 (this branch); code not taken, see merge commit
 
 - Symptom: GLM-5.3 C.dsa_moe.attention extended the ttnn.bringup sdpa fork (`high_precision` for sparse_sdpa: C++,
   CHANGELOG, INDEX, source.yaml/baseline, a new unit test) and its gate passed, but the gate commit 3ef3d142602 held
@@ -636,11 +641,11 @@ KV cache, wrong for a recurrence (the final state already includes the chunk und
 - Fix: stage_paths appends `ttnn/ttnn/bringup` and the two knowledge files when they exist. `git add -A -- <dir>` also
   picks up new files under the fork (the new unit test).
 - Selftests 212 -> 214 (test_fork_cases: the shared paths are staged and committed, including an untracked test
-  file; missing shared paths are skipped). The first fails on the pre-F49 gate.py.
+  file; missing shared paths are skipped). The first fails on the pre-F51 gate.py.
 - Recovered by hand for GLM: the sdpa fork change and the knowledge entries committed after C.dsa_moe.attention
   (supervision.md).
 
-## F50 (2026-09-29): state.json keeps only the gated metrics of a test that records many (GLM-5.3 run)
+## F52 (2026-09-29): state.json keeps only the gated metrics of a test that records many (GLM-5.3 run)
 
 - Symptom: the S.kda_moe.10 gate passed but its commit failed: the repo's pre-commit `check-large-files` refused
   `models/demos/glm53_flash_d_p/bringup/state.json (506 KB) exceeds the 500 KB limit`; the orchestrator exited 1.
@@ -650,20 +655,20 @@ KV cache, wrong for a recurrence (the final state already includes the chunk und
   thresholds match. results/<task>.json still holds every metric (the dashboard trails, prior view and profile read
   those); state.json metrics feed only the ladder row detail and runs.compare deltas, which use gated metrics.
 - Selftests 214 -> 216 (test_core: many metrics -> gated only, results keep all; few metrics -> all kept). The first
-  fails on the pre-F50 gate.py. The GLM state.json was migrated in place with the same rule (518 KB -> see commit).
+  fails on the pre-F52 gate.py. The GLM state.json was migrated in place with the same rule (518 KB -> see commit).
 
-## F51 (2026-09-29): the contract step may change the model's hooks.py (GLM-5.3 run)
+## F53 (2026-09-29): the contract step may change the model's hooks.py (GLM-5.3 run)
 
 - Symptom: GLM K.1 failed twice on "fixed-size state ['kda_recurrent', 'kda_conv'] unchecked: hooks.contract_state_pcc is
   missing". The agent had written the read-back in tt/runners/adapter.py, but K.1's allowed paths (task paths
   [tt] + prefill engine + forks + knowledge) left bringup/hooks.py read-only, so it could not register the hook; it
   rightly refused to monkeypatch the hooks module at run time.
-- Cause: F48 made the contract gate require a `contract_state_pcc` hook for spec state.fixed, but the contract role's
+- Cause: F50 made the contract gate require a `contract_state_pcc` hook for spec state.fixed, but the contract role's
   allowed paths and the gate's stage_paths never included the model's hooks.py.
 - Fix: allowed_paths adds `<bringup>/hooks.py` for the contract step; stage_paths commits it for that step.
-- Selftests 216 -> 217 (test_orchestrator: the contract step may change and commits hooks.py). Fails on the pre-F51 code.
+- Selftests 216 -> 217 (test_orchestrator: the contract step may change and commits hooks.py). Fails on the pre-F53 code.
 
-## F52 (2026-09-29): profile gates size the device profiler for large models (GLM-5.3 run)
+## F54 (2026-09-29): profile gates size the device profiler for large models (GLM-5.3 run)
 
 - Symptom: GLM X.3 failed only `timeline_ok = 0`: "device programs per chip 1281 != op-mode counts 1319 (profiler
   buffer too small?)"; the log said "Profiler DRAM buffers were full, markers were dropped".
@@ -672,7 +677,6 @@ KV cache, wrong for a recurrence (the final state already includes the chunk und
 - Fix: ledger_gen.PROFILE_ENV adds TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 (the X.3 fix agent confirmed 3000
   gives timeline_ok 1: 423.7 ms device timeline, 0.7 ms gaps). GLM's tasks.yaml profile commands (X.1, P.1, X.3)
   patched the same way.
-- Selftests 217 -> 218 (test_plan: PROFILE_ENV sizes the profiler; fails on the pre-F52 ledger_gen).
 - Selftests 217 -> 218 (test_plan: PROFILE_ENV sizes the profiler; fails on the pre-F54 ledger_gen).
 
 ## F56 (2026-09-30): component tests check themselves by output kind; freeze sweep; optional review skip
