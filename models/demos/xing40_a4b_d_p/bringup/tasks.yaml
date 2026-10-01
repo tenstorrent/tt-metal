@@ -1950,6 +1950,9 @@ tasks:
       pcc_final_hidden: '>= 0.97'
       top5_overlap: '>= 0.9'
   device: true
+  paths:
+  - models/demos/xing40_a4b_d_p/tt
+  - models/demos/xing40_a4b_d_p/bringup/hooks.py
 - id: O.1
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
   step: optests
