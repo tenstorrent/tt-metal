@@ -73,13 +73,13 @@ jobs:
       tracy: ${{ inputs.tracy }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
-      # BRANCH-LOCAL: set this to the run id of an earlier build of the commit under test, and the
-      # dispatch skips both the compile and the manylinux wheel job. It is hardcoded rather than
-      # exposed as a dispatch input because workflow_dispatch validates inputs against the default
-      # branch, whose copy of this file has no such input. Empty means build normally, which is
-      # what the first dispatch of a new head must do: a build of a different commit would measure
-      # that commit's kernels. Artifacts expire 90 days after their run.
-      use-artifacts-from-run: ""
+      # BRANCH-LOCAL: run 36881299813 built f4f2e974, this branch's head before this commit, whose
+      # only difference is this file, so its artifacts are this tree's device code. Reusing them
+      # skips the compile and the manylinux wheel job. Hardcoded rather than exposed as a dispatch
+      # input because workflow_dispatch validates inputs against the default branch, whose copy of
+      # this file has no such input. Re-point it at a fresh build of any commit that touches
+      # anything outside models/; the artifacts expire 2026-12-30.
+      use-artifacts-from-run: "36881299813"
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
