@@ -209,6 +209,13 @@ string generate_cached_semaphore_list(const JitBuildSettings& settings) {
 void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
     const string path = out_dir + "kernel_bindings_generated.h";
 
+    // Represent a static object instantiation of a given binding entry.
+    //
+    // Models:
+    // constexpr BindingType<template_args...> <name>(<args...>);
+    //
+    // Note that this allows "novel" binding entries:
+    // e.g. constexpr auto <name>(std::make_tuple(....));. // args = {"std::make_tuple(....)"}
     struct BindingEntry {
         string name;
         vector<string> args;
@@ -230,22 +237,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                                                          uint8_t prefetcher_pipe_id,
                                                          const std::optional<LLKMetadata>& metadata) {
         if (is_relay) {
-            vector<string> args;
-            args.push_back(std::to_string(id));
+            BindingEntry entry{.name = name, .args = {std::to_string(id)}};
             // PrefetcherPipe relays bake the persistent slot into the token so the TRISC
             // constructor can O(1)-align to the durable checkpoint; CrossNode relays
             // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
             if (prefetcher_pipe_id != 0xFF) {
-                args.push_back(std::to_string(static_cast<uint32_t>(prefetcher_pipe_id)));
+                entry.args.push_back(std::to_string(static_cast<uint32_t>(prefetcher_pipe_id)));
             }
-            relay_dfb_entries.push_back({name, std::move(args)});
+            relay_dfb_entries.push_back(std::move(entry));
         } else {
-            vector<string> args;
-            args.push_back(std::to_string(id));
+            BindingEntry entry{.name = name, .args = {std::to_string(id)}};
             if (metadata.has_value()) {
-                args.push_back(serialize_llk_metadata(*metadata));
+                entry.args.push_back(serialize_llk_metadata(*metadata));
             }
-            general_dfb_entries.push_back({name, std::move(args)});
+            general_dfb_entries.push_back(std::move(entry));
         }
     });
     // TODO: fix this.
@@ -308,15 +313,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // sort(pipe_entries.begin(), pipe_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
-    struct TensorBindingSequenceEntry {
-        string name;
-        vector<string> members;
-    };
-    vector<TensorBindingSequenceEntry> tensor_binding_sequence_entries;
-    settings.process_tensor_binding_sequences(
-        [&tensor_binding_sequence_entries](const string& name, const vector<string>& members) {
-            tensor_binding_sequence_entries.push_back({name, members});
-        });
+    vector<BindingEntry> tensor_binding_sequence_entries;
+    settings.process_tensor_binding_sequences([&](const string& name, const vector<string>& members) {
+        tensor_binding_sequence_entries.push_back(BindingEntry{
+            .name = name,
+            .args = {
+                fmt::format("std::make_tuple({})", fmt::join(members, ", ")),
+            }});
+    });
 
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
@@ -439,9 +443,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // emit_programmatic_binding_token_getter(content, ta_entries, "::tensor_accessor::NullTensorBindingToken");
 
     // Emit TensorBindingToken sequences
-    for (const auto& sequence : tensor_binding_sequence_entries) {
-        content << fmt::format(
-            "constexpr auto {} = std::make_tuple({});\n", sequence.name, fmt::join(sequence.members, ", "));
+    for (const auto& entry : tensor_binding_sequence_entries) {
+        // Here entry.args only have a single element.
+        content << fmt::format("constexpr auto {}({})", entry.name, fmt::join(entry.args, ", "));
     }
 
     content << "}  // namespace tensor\n";
