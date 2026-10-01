@@ -1,0 +1,19 @@
+[project]
+name = "tt-metal-voxcpm2"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.5,<3",
+    "numpy>=1.26,<3",
+    "loguru>=0.7,<1",
+    "safetensors>=0.4,<1",
+]
+
+[project.optional-dependencies]
+reference = [
+    "voxcpm @ git+https://github.com/OpenBMB/VoxCPM.git@f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629",
+    "soundfile>=0.12,<1",
+]
+
+[tool.uv]
+package = false
