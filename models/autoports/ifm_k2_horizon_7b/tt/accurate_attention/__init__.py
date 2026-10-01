@@ -62,6 +62,8 @@ def accurate_attention(
     k_chunk_size=128,
     fp32_output_accumulator=True,
     packed_gqa=False,
+    grid=(8, 8),
+    math_fidelity="HiFi4",
 ):
     """Same paged causal tensor contract as chunked_scaled_dot_product_attention.
 
@@ -100,6 +102,9 @@ def accurate_attention(
         offsets,
         packed_gqa,
         str(Path(kernel).with_name("writer_packed_gqa.cpp")) if packed_gqa else "",
+        grid[0],
+        grid[1],
+        {"LoFi": 0, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}[math_fidelity],
     )
 
 

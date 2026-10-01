@@ -26,6 +26,12 @@ class MultichipDecoder(OptimizedDecoder):
     accurate_decode_kernel = "flash"
     flash_decode_k_chunk = 256
     flash_decode_max_cores_per_head = 64  # tree reduction limit; B1 uses all 55 per KV head
+    # Accurate long prefill: causal SDPA assigns Q chunks in pairs, so a 4096-token chunk at Q128
+    # (256 chunks) needs 4 per core on 64 or 110 cores. Q64 fills all 110 workers (at most 6 per core);
+    # large K blocks amortize the FP32 recurrence. HiFi4 retained (HiFi2 triples the error).
+    accurate_prefill_grid = (11, 10)
+    accurate_prefill_q_chunk = 64
+    accurate_prefill_max_k_chunk = 1024
 
     @classmethod
     def from_state_dict(
@@ -674,14 +680,22 @@ class MultichipDecoder(OptimizedDecoder):
                 ),
             )
         else:
+            # Chunked SDPA requires start_pos to be a multiple of both chunk sizes.
+            q_chunk = self.accurate_prefill_q_chunk
+            if physical % q_chunk or start_pos % q_chunk:
+                q_chunk = 32
+            k_chunk = self.accurate_prefill_max_k_chunk
+            while start_pos % k_chunk:
+                k_chunk //= 2
             attention = self._attention(
                 q,
                 kv_cache[0],
                 kv_cache[1],
                 page_table,
                 chunk_start_idx=start_pos,
-                q_chunk_size=sdpa_chunk,
-                k_chunk_size=sdpa_chunk,
+                q_chunk_size=q_chunk,
+                k_chunk_size=max(k_chunk, 32),
+                grid=self.accurate_prefill_grid,
             )
         attention = ttnn.experimental.nlp_concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Prefill assembles chunks and decode-assisted prefix tokens in one public
