@@ -47,21 +47,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "unit"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ALL_SKUS_IN_TESTS \
-            ./.github/sku_config.yaml
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: ALL_SKUS_IN_TESTS
+          sku-config: ./.github/sku_config.yaml
       - name: Apply model filter
         id: apply-model-filter
         run: |

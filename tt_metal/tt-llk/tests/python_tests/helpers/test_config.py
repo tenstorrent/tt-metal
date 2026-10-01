@@ -30,7 +30,11 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
-from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    quasar_arch_variant,
+)
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
     CHIP_DEFAULT_BOOT_MODES,
@@ -126,7 +130,6 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
-    ARCH_SPECIFIC_OPTIONS: ClassVar[str] = ""
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -362,6 +365,11 @@ class TestConfig:
                 )
 
     @staticmethod
+    def _quasar_variant_suffix() -> str:
+        variant = quasar_arch_variant()
+        return f"-{variant}" if variant else ""
+
+    @staticmethod
     def resolve_artefacts_path() -> Path:
         """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
         runner_temp = os.environ.get("RUNNER_TEMP")
@@ -397,11 +405,15 @@ class TestConfig:
             (TestConfig.TOOL_PATH / "riscv-tt-elf-gcov-tool").absolute()
         )
 
-        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared"
+        # A Quasar IP variant compiles the shared objects differently, so it gets its own directory.
+        variant_suffix = TestConfig._quasar_variant_suffix()
+        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / f"shared{variant_suffix}"
         TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
         TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
         # Profiler builds need separate shared artefacts (trisc.cpp compiles differently with -DLLK_PROFILER)
-        TestConfig.PROFILER_SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared-profiler"
+        TestConfig.PROFILER_SHARED_DIR = (
+            TestConfig.ARTEFACTS_DIR / f"shared-profiler{variant_suffix}"
+        )
         TestConfig.PROFILER_SHARED_OBJ_DIR = TestConfig.PROFILER_SHARED_DIR / "obj"
         TestConfig.PROFILER_SHARED_ELF_DIR = TestConfig.PROFILER_SHARED_DIR / "elf"
         TestConfig.COVERAGE_INFO_DIR = TestConfig.ARTEFACTS_DIR / "coverage_info"
@@ -531,10 +543,10 @@ class TestConfig:
             in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE)
             else ""
         )
-        # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs:
-        # with asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
-        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel,
-        # so a single run can enumerate every (fn_name, shape) pair exercised.
+        # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs
+        # and for perf jobs (set TT_LLK_DISABLE_ASSERTS=1 in the runner).
+        # With asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
+        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel.
         llk_assert_define = (
             ""
             if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
@@ -707,15 +719,24 @@ class TestConfig:
         """``-I`` dirs for one ``tt_llk_<arch>`` tree. ``-I`` is not recursive.
 
         Headers are spelled ``"ckernel.h"``, ``"experimental/foo.h"``,
-        ``"sfpu/..."`` — the same three roots ``setup_compilation_options``
+        ``"cfg.h"``, ``"sfpu/..."`` — the same four roots ``setup_compilation_options``
         already adds for the in-tree copy.
+
+        For a ``tt_llk_quasar`` tree, prepend the selected variant's header root.
         """
         root = Path(arch_root)
-        return [
+        roots = [
             root / "llk_lib",
+            root / "llk_lib" / "hal",
             root / "common" / "inc",
             root / "common" / "inc" / "sfpu",
         ]
+        if root.name == "tt_llk_quasar":
+            variant = quasar_arch_variant()
+            if variant:
+                # First, so the variant's headers shadow the base Quasar ones.
+                roots.insert(0, root / "arch" / variant)
+        return roots
 
     @staticmethod
     def add_include_dirs(*dirs, prepend: bool = True) -> None:
@@ -1751,7 +1772,6 @@ class TestConfig:
                 compile_command = TestConfig._argv(
                     [TestConfig.GXX],
                     TestConfig.ARCH_COMPUTE,
-                    TestConfig.ARCH_SPECIFIC_OPTIONS,
                     TestConfig.OPTIONS_ALL,
                     [f"-I{TestConfig.TESTS_WORKING_DIR}"],
                     src_include_prepend,
@@ -1828,8 +1848,12 @@ class TestConfig:
         # Extracting coverage stream from device, for all kernel parts, for all their compilation units
         coverage_stream = b""
         for trisc_name in TestConfig.KERNEL_COMPONENTS:
-            temp_elf = parse_elf(VARIANT_DIR / f"elf/{trisc_name}.elf")
-            coverage_start = temp_elf.symbols["__coverage_start"].value
+            # ttexalens.parse_elf takes `elf_path: str`; its native ElfFile binding
+            # rejects a PosixPath outright, so stringify rather than relying on
+            # pathlib duck-typing.
+            temp_elf = parse_elf(str(VARIANT_DIR / f"elf/{trisc_name}.elf"))
+            coverage_symbol = temp_elf.find_symbol_by_name("__coverage_start")
+            coverage_start = coverage_symbol.value if coverage_symbol else None
             if not coverage_start:
                 raise TTException(
                     f"__coverage_start not found in variant's {trisc_name}.elf"

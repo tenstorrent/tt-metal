@@ -32,7 +32,7 @@ void kernel_main() {
     }
 
     overlay::FdsNeo::fds_clear_de_status(go_inst);
-    overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenArmed);
+    overlay::FdsNeo::fds_done(kTokenArmed);
 
     uint32_t result = kComplete;
     uint32_t observed = fds_kernel::lane_nonzero(go_inst, silence_iterations);
@@ -41,7 +41,7 @@ void kernel_main() {
     }
 
     if (result == kComplete) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenSilenceChecked);
+        overlay::FdsNeo::fds_done(kTokenSilenceChecked);
         bool matched = false;
         for (uint32_t i = 0; i < poll_iterations && !matched; i++) {
             observed = overlay::FdsNeo::fds_read_de_status(go_inst);
@@ -61,6 +61,6 @@ void kernel_main() {
     fds_kernel::finish(status, l1_address, kNumSlots, result);
 
     if (result == kComplete) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenDelivered);
+        overlay::FdsNeo::fds_done(kTokenDelivered);
     }
 }

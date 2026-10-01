@@ -27,4 +27,12 @@ constexpr bool is_gqa_grouped_kv_head_mode(bool v_shares_k_buffer, uint32_t nqh,
 // GQA with one local KV head still has NHK == 1, but it must use grouped KV-head transport.
 constexpr bool uses_shared_k_batch_chain(bool gqa_grouped_kv, uint32_t nkh) { return !gqa_grouped_kv && (nkh == 1); }
 
+// The per-head chain carries MHA K/V, or separate-V's V. Latent-V never streams V through it (V
+// rides the mcast K^T) and is validated to NKH == 1, so K already uses the batch chain and this
+// chain carried nothing -- skipping it also frees its 3 semaphores for the rotated-Q-split handoff.
+// Shared so the factory and reader cannot disagree: a mismatch shifts compile-time arg offsets.
+constexpr bool uses_v_head_chain(bool enable_kv_chains, bool gqa_grouped_kv, bool v_shares_k_buffer) {
+    return enable_kv_chains && !gqa_grouped_kv && !v_shares_k_buffer;
+}
+
 }  // namespace ttnn::operations::transformer::sdpa::ring_joint

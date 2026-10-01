@@ -96,9 +96,11 @@ def distinct_dest_accumulation_modes(formats, modes):
     return list(modes)
 
 
-def get_valid_math_fidelities(format, operation, PERF_RUN: bool = False):
+def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
     """
     Base constraints for Math Fidelity modes.
+
+    ``operation`` is optional: ops with no MathOperation member (matmul) pass only a format.
 
     - Regular mode:
         - Math fidelity must be LoFi for ElwAdd and ElwSub operations
@@ -106,10 +108,36 @@ def get_valid_math_fidelities(format, operation, PERF_RUN: bool = False):
 
     - Performance mode:
         - Ignores Math fidelity settings that are higher than necessary for full precision
+
+    Constraints (Quasar only):
+        - Int8, Float16_b and the MX formats are already exact at LoFi, in both modes.
+          The ceiling is architecture-specific, which is why it is its own branch: Float16_b
+          reaches full precision at LoFi on Quasar but only at HiFi2 on Wormhole/Blackhole.
     """
 
     if operation in [MathOperation.Elwadd, MathOperation.Elwsub]:
         return [MathFidelity.LoFi]
+
+    if get_chip_architecture() == ChipArchitecture.QUASAR:
+        # Int8 is an exact integer op -- it has no mantissa phases at all.
+        #
+        # Float16_b's 7-bit mantissa occupies the high bits of Quasar's TF32 source register, so
+        # the HiFi low-3 phases add nothing. On WH/BH the SrcA layout is narrower and the same
+        # format needs HiFi2 to reach full precision, so this cap must not leak to those arches.
+        #
+        # MX formats live only in L1; the unpacker decodes them to Float16_b in SrcA/SrcB, and no
+        # MX element type is wider than that (MxFp4 e2m1 = 2 significand bits, MxFp8R = 3,
+        # MxInt4 = 3, MxFp8P = 4, MxInt8 = 7), so they inherit the Float16_b cap.
+        #
+        # MxFp4_2x_A/B is included rather than excepted. A fidelity phase re-runs the multiply over
+        # the next mantissa group, so HiFi2 doubles the MVMUL count -- which cancels the
+        # 8-instead-of-16 MVMULs the 2x format exists to deliver. 2x above LoFi is slower than not
+        # using 2x at all, so it is a configuration nothing would ship.
+        if (
+            format.input in (DataFormat.Int8, DataFormat.UInt8, DataFormat.Float16_b)
+            or format.input.is_mx_format()
+        ):
+            return [MathFidelity.LoFi]
 
     # HiFi2 will multiply BFP8 and BFP8_b in full precision, skip HiFi3 and HiFi4
     if PERF_RUN and format.input in [DataFormat.Bfp8_b, DataFormat.Bfp8]:
