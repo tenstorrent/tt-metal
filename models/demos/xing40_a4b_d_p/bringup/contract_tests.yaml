@@ -1,4 +1,5 @@
-# Serving-contract tests (SC.1), from serving_contract.md. gates: the step whose gate runs the test.
+# Serving-contract tests (SC.1), from serving_contract.md. gates: the step whose gate runs the test; kind: runner_smoke
+# marks the runner smoke (it records smoke_runner_ok and its answer).
 tests:
 - test: models/demos/xing40_a4b_d_p/tests/bringup/contract/test_cache_starts.py
   checks: KV written at the server's starts (cold mid-record end, 64-aligned and 32-aligned follow-ups) vs golden; rows below start untouched; pad rows zero
@@ -20,3 +21,4 @@ tests:
   checks: real runner prefills the smoke prompt; the KV below the migration boundary read through the table is decode's prefix on the device model; tail recompute + greedy answer contains "Paris"
   section: Adapter and table
   gates: adapter
+  kind: runner_smoke
