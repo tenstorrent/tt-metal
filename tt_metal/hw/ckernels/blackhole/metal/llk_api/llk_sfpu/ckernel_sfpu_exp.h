@@ -326,6 +326,10 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
     return k;
 }
 
+constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
+constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
+constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
+
 /*
  * The _sfpu_exp_fp32_accurate_ code is derived from code by Norbert Juffa.
  *
@@ -414,6 +418,88 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
     return _sfpu_exp_fp32_accurate_<true>(x);
+}
+
+// The constants of _sfpu_exp_fp32_accurate_<false> as _sfpu_exp_fp32_accurate_tti_ holds them: LREG12..14 are
+// programmed by exp_init<false, scale, clamp, true>, LREG4..7 are loaded per call, r0 stays an fp16 immediate.
+constexpr float EXP_FP32_LN2_RECIP = 1.442695f;         // LREG12, 0x3FB8AA3B
+constexpr float EXP_FP32_NEG_LN2_HI = -6.93145752e-1f;  // LREG13, 0xBF317200
+constexpr float EXP_FP32_NEG_LN2_LO = -1.42860677e-6f;  // LREG14, 0xB5BFBE8E
+constexpr float EXP_FP32_C1 = 8.37312452e-3f;           // LREG4, 0x3C092F6E
+constexpr float EXP_FP32_C2 = 4.16695364e-2f;           // LREG5, 0x3D2AADAD
+constexpr float EXP_FP32_C3 = 1.66664720e-1f;           // LREG6, 0x3E2AAA28
+constexpr float EXP_FP32_C4 = 4.99999851e-1f;           // LREG7, 0x3EFFFFFB
+constexpr std::uint16_t EXP_FP32_R0_FP16A = 0x15A5;     // 1.37805939e-3f, exact in fp16
+
+/**
+ * @brief _sfpu_exp_fp32_accurate_<false> over ITERATIONS vectors as one recorded instruction stream.
+ *
+ * Same instructions, operand roles and order as the sfpi form, so the result is bit-identical to it; the constants
+ * come from LREG4..7 and LREG12..14 instead of per-vector SFPLOADIs, the sign-magnitude to two's complement step
+ * is one SFPCAST, the body is recorded into replay slot 0 and replayed, and the store advances DEST by ADDR_MOD_6.
+ *
+ * @tparam SCALE_EN: Multiply the input by exp_base_scale_factor first
+ * @tparam ITERATIONS: Vectors per call
+ * @param exp_base_scale_factor: fp16b scale, read when SCALE_EN.
+ * @note Requires exp_init<false, scale, clamp, true> (LREG12..14 and ADDR_MOD_6). Writes LREG0..7 and replay slot 0.
+ */
+template <bool SCALE_EN, int ITERATIONS>
+inline void _sfpu_exp_fp32_accurate_tti_(const std::uint32_t exp_base_scale_factor) {
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_LOWER, lo16(EXP_FP32_C1));
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_UPPER, hi16(EXP_FP32_C1));
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, lo16(EXP_FP32_C2));
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, hi16(EXP_FP32_C2));
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, lo16(EXP_FP32_C3));
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, hi16(EXP_FP32_C3));
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, lo16(EXP_FP32_C4));
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, hi16(EXP_FP32_C4));
+
+    constexpr int BODY_LEN = 24 + (SCALE_EN ? 1 : 0);
+    TTI_REPLAY(0, BODY_LEN, 1, 1);
+    // LREG1 = a; LREG3 = j = a / ln2; LREG0 = r0
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
+    if constexpr (SCALE_EN) {
+        TT_SFPMULI(exp_base_scale_factor, p_sfpu::LREG1, 0);
+    }
+    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATA, EXP_FP32_R0_FP16A);
+    // LREG3 = sm = round(j) as a sign-magnitude int16; LREG2 = j = float(sm)
+    TTI_SFP_STOCH_RND(
+        sfpi::SFPSTOCHRND_RND_NEAREST,
+        0,
+        p_sfpu::LREG0,
+        p_sfpu::LREG3,
+        p_sfpu::LREG3,
+        sfpi::SFPSTOCHRND_MOD1_FP32_TO_SMAG16);
+    TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    // LREG1 = f = a - j ln2, two parts
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG1, p_sfpu::LREG1, 0);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG1, 0);
+    // LREG0 = r = (((r0 f + c1) f + c2) f + c3) f + c4; LREG3 = i = two's complement of sm, in the chain's shadow
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+    TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPCAST_MOD1_INT32_TO_SM32);
+    // LREG0 = y = r f + 1; LREG1 = r = y f + 1; y *= inf
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+    TTI_SFPMULI(0x7F80, p_sfpu::LREG0, 0);
+    // LREG2 = e = biased exponent of r + i; lanes with e < 255: y = setexp(r, e); lanes with e < 1: y = 0
+    TTI_SFPEXEXP(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_NODEBIAS);
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0xF01 /* -255 */, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPIADD(0xFFF /* -1 */, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_6, 0);
+
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        TTI_REPLAY(0, BODY_LEN, 0, 0);
+    }
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -512,12 +598,16 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             // effectively free (no other instruction to interleave with SFPMAD).
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         } else {
+#ifdef DISABLE_SFPLOADMACRO
             for (int d = 0; d < ITERATIONS; d++) {
                 sfpi::vFloat val = sfpi::dst_reg[0];
                 sfpi::dst_reg[0] =
                     _ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);
                 sfpi::dst_reg++;
             }
+#else
+            _sfpu_exp_fp32_accurate_tti_<SCALE_EN, ITERATIONS>(exp_base_scale_factor);
+#endif
         }
     } else if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
 #ifdef DISABLE_SFPLOADMACRO
@@ -730,10 +820,6 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
     }
 #endif
 }
-
-constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
-constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
-constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
 template <
     bool APPROXIMATION_MODE,
@@ -1084,10 +1170,19 @@ void exp_init() {
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
             TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
         } else {
+#ifdef DISABLE_SFPLOADMACRO
             // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
             // reciprocal LLK for negative inputs, so its constants must be
             // primed here.
             sfpu_reciprocal_init<false>();
+#else
+            // _sfpu_exp_fp32_accurate_tti_: DEST advances by 2 on its store; LREG12..14 hold 1/ln2 and -ln2 in two
+            // parts.
+            addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+            _sfpu_load_config32_(p_sfpu::LREG12, hi16(EXP_FP32_LN2_RECIP), lo16(EXP_FP32_LN2_RECIP));
+            _sfpu_load_config32_(p_sfpu::LREG13, hi16(EXP_FP32_NEG_LN2_HI), lo16(EXP_FP32_NEG_LN2_HI));
+            _sfpu_load_config32_(p_sfpu::LREG14, hi16(EXP_FP32_NEG_LN2_LO), lo16(EXP_FP32_NEG_LN2_LO));
+#endif
         }
     }
 }
