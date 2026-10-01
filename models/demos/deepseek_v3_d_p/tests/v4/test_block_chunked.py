@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tests.v4.test_block import _pack_streams, _tes
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Block
+from models.demos.deepseek_v3_d_p.tt.v4.weights import v4_layer_from_checkpoint
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
 
@@ -88,7 +89,7 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, variant, layer_i
         f"[v4 chunked] {variant.__name__} layer {layer_idx}: {attn_kind} / {mlp_kind} / " f"{n_chunks} x {CHUNK} tokens"
     )
 
-    ref = golden.v4_layer_from_checkpoint(config, layer_idx, checkpoint)
+    ref = v4_layer_from_checkpoint(config, layer_idx, checkpoint)
     block = TtV4Block(
         mesh_device=mesh_device,
         config=config,
