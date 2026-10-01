@@ -20,8 +20,12 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t output_stride = get_compile_time_arg_val(2);
     constexpr uint32_t num_input_tensors = get_compile_time_arg_val(3);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(4);
-    constexpr uint32_t output_block_stride = get_compile_time_arg_val(5);
+    constexpr uint32_t output_block_stride = get_compile_time_arg_val(4);
+    // This RISC's share of the leading blocks, baked in per kernel so the loop bound stays a
+    // compile-time constant; as a runtime arg it cost a few percent on small copies.
+    constexpr uint32_t block_start = get_compile_time_arg_val(5);
+    constexpr uint32_t block_count = get_compile_time_arg_val(6);
+    constexpr uint32_t block_end = block_start + block_count;
 
     Noc noc;
     DataflowBuffer output_dfb(output_dfb_id);
@@ -29,7 +33,8 @@ void kernel_main() {
 
     uint32_t arg_idx = 0;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-        // input_num_sticks is this RISC's share of one block's sticks, not of the whole shard.
+        // input_num_sticks is this RISC's sticks per block: every stick when the blocks are
+        // split, half of them when there is only one block.
         const uint32_t input_num_pages_per_stick = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t input_num_sticks = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t input_write_offset = get_arg_val<uint32_t>(arg_idx++);
@@ -51,7 +56,7 @@ void kernel_main() {
              .noc_y = (uint32_t)my_y[noc.get_noc_id()],
              .addr = input_base_read_addr});
 
-        for (uint32_t block_idx = 0; block_idx < num_blocks; block_idx++) {
+        for (uint32_t block_idx = block_start; block_idx < block_end; block_idx++) {
             uint32_t l1_write_addr = output_base_write_addr + block_idx * output_block_stride;
             uint32_t l1_read_addr = input_base_read_addr + block_idx * input_block_stride;
 
