@@ -49,7 +49,9 @@ def kda_channel_chunk_size(channels, cap=512):
     raise ValueError(f"no tile-aligned channel chunk divides {channels}")
 
 
-def kda_conv_prefill(qkv, T, history, taps, widths, actual_start, xin_memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def kda_conv_prefill(
+    qkv, T, history, taps, widths, actual_start, xin_memory_config=ttnn.DRAM_MEMORY_CONFIG, emit_state=True
+):
     """Depthwise causal conv (K=4) + SiLU + q/k/v split in ONE program (ttnn.experimental.kda.qkv_causal_conv1d_silu).
 
     qkv:          [1, T, C] bf16 TILE, the projection's conv columns (q | k | v).
@@ -61,6 +63,7 @@ def kda_conv_prefill(qkv, T, history, taps, widths, actual_start, xin_memory_con
     actual_start: uint32 [1] device tensor holding 0, allocated once before any trace capture.
     Returns q [1,T,Q], k [1,T,K], v [1,T,V] bf16 TILE DRAM, and new_state [1, 3, C] bf16 TILE DRAM: the chunk's
     last three INPUT rows, i.e. the next chunk's history (the op does not emit it).
+    emit_state=False skips new_state (returned as None), for callers that keep their own carry (the spec verify).
     """
     C = qkv.shape[-1]
     n_hist = history.shape[1]  # K - 1 = 3 rows, the op's fixed history depth
@@ -83,6 +86,9 @@ def kda_conv_prefill(qkv, T, history, taps, widths, actual_start, xin_memory_con
     )
     if hist is not history:
         ttnn.deallocate(hist)
+    if not emit_state:
+        ttnn.deallocate(xin)
+        return q, k, v, None
     # Next chunk's history: the last three input rows, taken from the row-major copy (page reads, no
     # untilize), then re-tiled because the layer-wide carry (conv_carry, decode seeding, per-user assembly)
     # is TILE.
@@ -216,31 +222,6 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Conv taps (4), sharded per Q/K/V head grouping
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
-    # Depthwise conv1d weight [qkv_dim, 1, K], host-held mesh-sharded (dim=0) for prepare_conv_weights /
-    # _conv1d_window: the spec-decode conv for row counts the KDA op rejects (T=1 seed, T=K+1 verify).
-    # When gdn_conv_channel_chunks > 1 it is a list of per-device channel-chunk weights.
-    W1d = torch.stack(taps, dim=-1).reshape(args.gdn_qkv_dim, 1, args.gdn_conv_kernel_size).contiguous()
-    n_cc = getattr(args, "gdn_conv_channel_chunks", 1)
-
-    def _shard_conv_w(w):
-        return ttnn.from_torch(
-            w.contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-        )
-
-    if n_cc > 1:
-        C_dev = args.gdn_qkv_dim // tp
-        assert C_dev % n_cc == 0, f"GDN per-device channels {C_dev} not divisible by gdn_conv_channel_chunks {n_cc}"
-        cw = C_dev // n_cc
-        Wd = W1d.reshape(tp, C_dev, 1, args.gdn_conv_kernel_size)  # per-device channel block
-        tw["conv_w1d"] = [
-            _shard_conv_w(Wd[:, i * cw : (i + 1) * cw].reshape(tp * cw, 1, args.gdn_conv_kernel_size))
-            for i in range(n_cc)
-        ]
-    else:
-        tw["conv_w1d"] = _shard_conv_w(W1d)
     return tw
 
 
@@ -348,7 +329,6 @@ class TPGatedDeltaNet:
         # the op's actual_start scalar and the row-major zero history of a from-scratch chunk.
         self._kda_actual_start = None
         self._kda_zero_history = None
-        self._conv1d_wprep = None  # prepared depthwise weight for _conv1d_window (populated on first call)
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
         self._zero_conv0 = None
         self._zero_conv_carry = None
@@ -443,127 +423,6 @@ class TPGatedDeltaNet:
             self.args.dim,
             decode_out_memory_config=out_memory_config,
         )
-
-    def _conv1d_prefill(self, qkv, T, conv_state):
-        """Depthwise causal conv1d + SiLU via ttnn.conv1d. Returns (out [1,T,C], new_state [1,K-1,C]) DRAM TILE.
-
-        Prepends K-1 carry rows with padding=0 so one program serves every chunk (native pad only zeros,
-        so it can't inject cross-chunk carry into a shared trace).
-        """
-        dev, K, C = self.mesh, self.K, self.qkv_dim_tp
-        _dram = ttnn.DRAM_MEMORY_CONFIG
-        # new_state: last K-1 real input tokens (for the next chunk's carry), TILE/DRAM.
-        # A chunk SHORTER than the register (T < K-1) has no K-1 rows of its own -- the spec-decode
-        # seed/commit calls this with T=1. Take the tail of [conv_state ; qkv] instead, which IS the
-        # register after T shifts; slicing qkv alone would ask for a negative start and TT_FATAL.
-        if T >= K - 1:
-            new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
-        else:
-            _w = ttnn.concat([conv_state, qkv], dim=1, memory_config=_dram) if conv_state is not None else qkv
-            _n = _w.shape[1]
-            new_state = ttnn.slice(_w, (0, max(0, _n - (K - 1)), 0), (1, _n, C))
-            if _w is not qkv:
-                ttnn.deallocate(_w)
-        new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
-        if conv_state is None:
-            pad = ttnn.zeros(
-                [1, K - 1, C], device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=_dram
-            )
-            xin = ttnn.concat([pad, qkv], dim=1, memory_config=_dram)
-            ttnn.deallocate(pad)
-        else:
-            xin = ttnn.concat([conv_state, qkv], dim=1, memory_config=_dram)
-        return self._conv1d_window(xin, T), new_state
-
-    def _conv1d_verify(self, win, T):
-        """``_conv1d_prefill`` for the fullbatch verify: the [carry ; tokens] window is already built
-        (it is the same tensor the state stash needs) and the new_state return is dead there.
-
-        Byte-identical conv output — same op, same weights, same input — for two ops/layer less: the
-        duplicate window concat (~0.11 ms/layer) and the discarded new_state's tile-unaligned row
-        slice + relayout. Both were pure waste in the verify, ~7 ms/iteration over 48 GDN layers."""
-        return self._conv1d_window(win, T)
-
-    def _conv1d_window(self, xin, T):
-        """The ttnn.conv1d call itself, over an already-concatenated [1, K-1+T, C] TILE window."""
-        dev, K, C = self.mesh, self.K, self.qkv_dim_tp
-        _dram = ttnn.DRAM_MEMORY_CONFIG
-        Lin = (K - 1) + T
-        xin = ttnn.to_layout(xin, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
-        xin = ttnn.reshape(xin, (1, Lin, 1, C))
-        cc = ttnn.init_device_compute_kernel_config(
-            dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
-        )
-        # Needs l1_small_size on the device (prefill/demo set 24576); matches the validated A/B config.
-        conv_cfg = ttnn.Conv1dConfig(
-            weights_dtype=ttnn.bfloat16,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        )
-        # Depthwise conv over channel chunks (per-channel-independent → concatenation is exact);
-        # n_cc=1 (27B) is the original single call. Weights prepped once per chunk (warmup) so trace
-        # replay stays device-only.
-        w1d_chunks = self.tw["conv_w1d"] if isinstance(self.tw["conv_w1d"], list) else [self.tw["conv_w1d"]]
-        n_cc = len(w1d_chunks)
-        assert C % n_cc == 0, f"GDN conv channels {C} not divisible by n_cc {n_cc}"
-        cw = C // n_cc
-        if self._conv1d_wprep is None:
-            self._conv1d_wprep = [
-                ttnn.prepare_conv_weights(
-                    weight_tensor=w,
-                    input_memory_config=_dram,
-                    input_layout=ttnn.ROW_MAJOR_LAYOUT,
-                    weights_format="OIHW",
-                    in_channels=cw,
-                    out_channels=cw,
-                    batch_size=1,
-                    input_height=1,
-                    input_width=Lin,
-                    kernel_size=(1, K),
-                    stride=(1, 1),
-                    padding=(0, 0),
-                    dilation=(1, 1),
-                    has_bias=False,
-                    groups=cw,
-                    device=dev,
-                    input_dtype=ttnn.bfloat16,
-                    conv_config=conv_cfg,
-                    compute_config=cc,
-                )
-                for w in w1d_chunks
-            ]
-        conv_outs = []
-        for i, wprep in enumerate(self._conv1d_wprep):
-            xin_i = xin if n_cc == 1 else ttnn.slice(xin, (0, 0, 0, i * cw), (1, Lin, 1, (i + 1) * cw))
-            out_i = ttnn.conv1d(
-                input_tensor=xin_i,
-                weight_tensor=wprep,
-                device=dev,
-                in_channels=cw,
-                out_channels=cw,
-                batch_size=1,
-                input_length=Lin,
-                kernel_size=K,
-                stride=1,
-                padding=0,
-                dilation=1,
-                groups=cw,
-                dtype=ttnn.bfloat16,
-                conv_config=conv_cfg,
-                compute_config=cc,
-                # L1_FULL slice: keep the conv in L1 instead of DRAM-width-slicing. The DRAM-slice path does
-                # host reads that begin_trace_capture rejects (see uniad); L1_FULL is trace-safe (as UNet).
-                slice_config=ttnn.Conv2dL1FullSliceConfig,
-                return_output_dim=False,
-                return_weights_and_bias=False,
-            )
-            if n_cc > 1:
-                ttnn.deallocate(xin_i)
-            conv_outs.append(ttnn.reshape(ttnn.sharded_to_interleaved(out_i, _dram), (1, T, cw)))
-        ttnn.deallocate(xin)
-        out = conv_outs[0] if n_cc == 1 else ttnn.concat(conv_outs, dim=-1, memory_config=_dram)
-        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=_dram)
-        # SiLU stays separate (folding via conv_config.activation drops PCC to ~0.84 on this depthwise).
-        return ttnn.silu(out, memory_config=_dram)
 
     def _ensure_kda_consts(self):
         """Allocate the KDA conv path's constant tensors once. Host writes: reset_state calls this (the model
@@ -721,7 +580,7 @@ class TPGatedDeltaNet:
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
         _cstate = self.conv_carry if carry else None
         kd = self.key_dim_tp
-        if self._gdn_kda_conv and valid_len is None and T % tpc.TILE_SIZE == 0:
+        if self._gdn_kda_conv and valid_len is None:
             # KDA op: conv + SiLU + q/k/v split in one program; its outputs are already the three
             # token-major tensors the flat-qkv path wants (masked buckets keep the MAC FIR below).
             q, k, v, conv_new_state = self._kda_conv_prefill(qkv, T, _cstate)
@@ -734,25 +593,20 @@ class TPGatedDeltaNet:
                 v = ttnn.reshape(v, (1, T, Nv, Dv))
                 _qkv_head_dims = None
         else:
-            if self._gdn_kda_conv and valid_len is None:
-                # The KDA op needs tile-aligned T; the spec-decode seed/commit (T=1) takes the native
-                # depthwise ttnn.conv1d, the same op as the spec verify (_conv1d_verify).
-                conv, conv_new_state = self._conv1d_prefill(qkv, T, _cstate)
-            else:
-                # The MAC FIR: masked buckets (their one-hot new_state selection) and QWEN_GDN_CONV=fir.
-                conv, conv_new_state = _causal_conv1d_fir(
-                    qkv,
-                    None,
-                    None,
-                    self.K,
-                    self.mesh,
-                    # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    conv_state=_cstate,
-                    weight_taps=tw["conv_taps"],
-                    bias_dev=None,
-                    valid_len=valid_len,
-                )
+            # The MAC FIR: masked buckets (their one-hot new_state selection) and QWEN_GDN_CONV=fir.
+            conv, conv_new_state = _causal_conv1d_fir(
+                qkv,
+                None,
+                None,
+                self.K,
+                self.mesh,
+                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                conv_state=_cstate,
+                weight_taps=tw["conv_taps"],
+                bias_dev=None,
+                valid_len=valid_len,
+            )
             ttnn.deallocate(qkv)
             if self._gdn_flat_qkv:
                 # Flat q/k/v: adapter splits heads inside untilize
@@ -1534,11 +1388,10 @@ class TPGatedDeltaNet:
         # -> 2.3 ms). The ~18 ms/candidate is ~50 device ops per token per GDN layer at a few us each
         # — launch-bound with no hot spot — so the only fix is to stop launching them. Three pieces
         # make that possible without any sliding-window slicing:
-        #   conv    -> the NATIVE depthwise ttnn.conv1d (_conv1d_window), the same op as the T=1 seed
-        #              (prefill's KDA op needs tile-aligned T), which takes all T rows at once and is
-        #              trace-safe (weights prepared on the first, eager, seed/verify call);
-        #   q/k/v   -> sliced out of the batched conv output on the FEATURE dim (contiguous columns,
-        #              not tiled rows) and repeat_interleaved once for all T;
+        #   conv    -> the KDA op (kda_conv_prefill), the T tokens right-padded to a multiple of 32
+        #              (causal: rows [0, T) exact);
+        #   q/k/v   -> split by the KDA op itself; the padded rows are sliced off and q/k
+        #              repeat_interleaved once for all T;
         #   beta/g  -> a_all/b_all are already [1,T,Nv], so the gating is one sigmoid / softplus pass;
         #   recur.  -> the C++ fused_recurrent_gated_delta_rule kernel consumes [B,T,Nv,D] for all T
         #              tokens in ONE dispatch and emits per-token state for slot acceptance.
@@ -1712,24 +1565,30 @@ class TPGatedDeltaNet:
         _L1, mc, rm = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
         kd, C, rf = self.key_dim_tp, self.qkv_dim_tp, Nv // Nk
         self._ensure_conv_win()  # no-op after the first (eager) call; never allocates inside a trace
+        self._ensure_kda_consts()  # same: allocated on the eager seed, before any trace capture
 
         # 1) Causal conv over all T tokens. The carry is the shift register's previous K-1 inputs,
         #    i.e. conv_states[1:] (conv_states[K-1] is the most recent input). Constant-offset slice
         #    of the persistent shift register — trace-safe (fixed address, fixed offsets) and what
         #    lets commit write ONE buffer.
         carry = ttnn.slice(self._conv_win_buf, (0, 1, 0), (1, self.K, C))
-        # ONE window E = [carry(K-1) ; tokens(T)], shared by the conv and the state stash in step 5.
-        # _conv1d_prefill built this very concat a second time as its own input, and a concat costs
-        # ~0.11 ms/layer — ~5 ms/iteration over the 48 GDN layers for nothing.
+        # Window E = [carry(K-1) ; tokens(T)]: the state stash in step 5 slices commit windows out of it.
         E = ttnn.concat([carry, qkv_all], dim=1, memory_config=mc)  # [1, K-1+T, C]
+        # The KDA op (conv + SiLU + q/k/v split) needs tile-aligned rows: right-pad the T tokens to Tp.
+        # The conv is causal, so rows [0, T) are exact and the padded tail is sliced off below.
+        Tp = -(-T // tpc.TILE_SIZE) * tpc.TILE_SIZE
+        xin = qkv_all if Tp == T else ttnn.pad(qkv_all, [(0, 0), (0, Tp - T), (0, 0)], 0.0)
+        q_all, k_all, v_all, _ = kda_conv_prefill(
+            xin, Tp, carry, tw["conv_taps"], (kd, kd, self.value_dim_tp), self._kda_actual_start, emit_state=False
+        )
         ttnn.deallocate(carry)
-        conv_all = self._conv1d_verify(E, T)  # [1,T,C], SiLU applied
+        if xin is not qkv_all:
+            ttnn.deallocate(xin)
 
-        # 2) q/k/v for all T: FEATURE-dim slices (contiguous columns) + one repeat_interleave each.
-        q_all = ttnn.reshape(ttnn.slice(conv_all, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
-        k_all = ttnn.reshape(ttnn.slice(conv_all, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
-        v_all = ttnn.reshape(ttnn.slice(conv_all, (0, 0, 2 * kd), (1, T, C)), (1, T, Nv, Dv))
-        ttnn.deallocate(conv_all)
+        # 2) q/k/v for all T: drop the padded rows, then one repeat_interleave each.
+        q_all = ttnn.reshape(ttnn.slice(q_all, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
+        k_all = ttnn.reshape(ttnn.slice(k_all, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
+        v_all = ttnn.reshape(ttnn.slice(v_all, (0, 0, 0), (1, T, self.value_dim_tp)), (1, T, Nv, Dv))
         if rf != 1:
             q_all = ttnn.repeat_interleave(q_all, rf, dim=2)
             k_all = ttnn.repeat_interleave(k_all, rf, dim=2)

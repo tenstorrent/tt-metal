@@ -1175,6 +1175,33 @@ def test_kda_carry_across_chunks(mesh_device, reset_seeds, ensure_gc, request):
         history = ns  # TILE: chunk 2 takes the TILE -> ROW_MAJOR branch of kda_conv_prefill
 
 
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("T", [1, 4, 8, 12])
+def test_kda_conv_padded_rows_match_reference(mesh_device, T, reset_seeds, ensure_gc, request):
+    """The spec verify's conv (tp._verify_fullbatch): T non-tile-aligned tokens (seed T=1, verify T=K+1),
+    right-padded to 32 rows for the KDA op. The conv is causal, so rows [0, T) must match the reference
+    built from the T real rows alone; the padded tail is never read."""
+    mesh = mesh_device
+    kd, vd = 512, 1536  # 27B at TP4
+    C = 2 * kd + vd
+    x, hist, w = _random_inputs(T, C, seed=225)
+    ref = [r.contiguous() for r in _split_qkv(_ref_conv(x, hist, w), kd, vd)]
+
+    x_l1 = _to_l1(mesh, x)
+    qkv = ttnn.pad(x_l1, [(0, 0), (0, 32 - T), (0, 0)], 0.0)  # same pad call as the verify
+    ttnn.deallocate(x_l1)
+    carry = replicate_to_device(mesh, hist)  # TILE DRAM, like _conv_win_buf's slice
+    q, k, v, ns = kda_conv_prefill(qkv, 32, carry, _taps(mesh, w), (kd, kd, vd), _actual_start(mesh), emit_state=False)
+    assert ns is None, "emit_state=False must not return new_state"
+    for label, t, r in zip("qkv", (q, k, v), ref):
+        p = _pcc(r, _dev0(t).float()[:, :T])
+        logger.info(f"T={T} {label}: pcc {p:.6f}")
+        assert p >= CONV_PCC_VS_REF, f"T={T} {label}: pcc {p:.6f} < {CONV_PCC_VS_REF}"
+    for t in (qkv, q, k, v):
+        ttnn.deallocate(t)
+
+
 @pytest.mark.parametrize(
     "channels, expected",
     [(2560, 512), (1280, 320), (5120, 512), (96, 96), (64, 64)],
