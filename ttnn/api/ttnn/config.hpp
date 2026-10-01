@@ -30,6 +30,11 @@ struct Config {
         // The cache-miss build path always validates. Off by default; CI turns it on.
         bool validate_program_args = false;
         bool throw_exception_on_fallback = false;
+        // The CCL output-topology helpers (ttnn/operations/ccl/common/host/ccl_topology_utils.hpp) TT_FATAL on a
+        // TensorTopology they cannot label honestly when this is on. Off, they log and return no label, so the op
+        // returns {} from compute_output_topologies and the output keeps the union default (the input's label).
+        // Off by default; intended to be enabled in CI (TTNN_CONFIG_OVERRIDES) as a follow-up.
+        bool strict_ccl_topology = false;
         bool enable_logging = false;
         bool enable_graph_report = false;
         bool enable_graph_python_stack_traces = false;

@@ -12,7 +12,6 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::ccl::common {
-namespace {
 
 std::optional<uint32_t> normalize_tensor_dim(int dim, uint32_t rank) {
     const int normalized_dim = dim < 0 ? static_cast<int>(rank) + dim : dim;
@@ -21,8 +20,6 @@ std::optional<uint32_t> normalize_tensor_dim(int dim, uint32_t rank) {
     }
     return static_cast<uint32_t>(normalized_dim);
 }
-
-}  // namespace
 
 ttnn::MeshCoordinate snake_ring_coordinate(
     uint32_t transport_rank,
@@ -382,10 +379,10 @@ MeshRingPosition get_mesh_ring_position(
     return MeshRingPosition{
         .transport_rank = transport_rank,
         .tensor_rank = transport_rank,
-        .forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            tensor, coordinate, 1, topology, plan.cluster_axis),
-        .backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            tensor, coordinate, -1, topology, plan.cluster_axis)};
+        .forward_coord =
+            ttnn::ccl::get_physical_neighbor_from_physical_coord(tensor, coordinate, 1, topology, plan.cluster_axis),
+        .backward_coord =
+            ttnn::ccl::get_physical_neighbor_from_physical_coord(tensor, coordinate, -1, topology, plan.cluster_axis)};
 }
 
 }  // namespace ttnn::operations::ccl::common

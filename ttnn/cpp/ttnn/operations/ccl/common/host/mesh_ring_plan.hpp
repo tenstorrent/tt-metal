@@ -51,6 +51,10 @@ ttnn::MeshCoordinate snake_ring_coordinate(
     const tt::tt_metal::distributed::MeshShape& shape,
     ttnn::ccl::snake_ring::Orientation orientation);
 
+// Normalises a possibly-negative tensor dim against `rank`; nullopt when out of range in either direction, so a
+// stale Shard dim left behind by a rank-changing op never matches anything (and never throws).
+std::optional<uint32_t> normalize_tensor_dim(int dim, uint32_t rank);
+
 bool has_row_major_mesh_coordinates(const ttnn::Tensor& tensor);
 
 bool placement_shards_tensor_dim(
