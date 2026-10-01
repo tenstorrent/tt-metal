@@ -1725,3 +1725,34 @@ block-sharded output resharded once onto 10 cores (512 × 256 each, 1.6 µs devi
 E2e chip 4, `ab_one.sh` 2 rounds: cold 14.8 / 14.8 → 14.1 / 14.1 ms (−4.7%); `sustained_run.sh` 2 alternating rounds:
 14.9 / 14.9 → 14.3 / 14.3 ms. STS-B unchanged (0.8159 bucketed, 0.8117 fixed ISL). QKV (192 N tiles: 2 per core
 fills 96 cores) and WO / FF2 (80) gain nothing from 120 cores.
+
+## 70. bs1 SDPA: compute-bound at one unit per core; more cores need ragged row groups and multi-row K / V delivery (diagnostic) (2026-10-01)
+
+The bs1 call (profile attributes at 3164ba1): Q [1, 32, 512, 128], K / V [1, 8, 512, 128] bfp8 in L1, `pack_gqa_heads`,
+`output_heads_concat`, q192 / k512 on 11×8 = 88 units of 6 Q row tiles, one per core, LoFi, exp approx; 27.1 µs
+in-model. `perf_tools/bench_sdpa_bs1_floors.py` with the `sdpa_kernel_variants.py` trees, device µs (chip 5):
+
+| q192 / k512, 11×8 | full | compute only | DM only | DM reads only / writes only |
+|---|---|---|---|---|
+| µs | 27.6 | 25.2 | 11.7 | 12.0 / 10.2 |
+
+Compute-bound at 91% of the compute floor; §52's "mostly fixed data-movement cost" (a wall-clock fit) does not hold on
+device time. (The compute-only output still matches torch: each core reads the same chunk every call and its CBs keep
+the previous run's data, so the PCC check cannot prove that variant; its patch counts are asserted.)
+
+**Where a unit goes** (`zones` / `zconly` trees, math thread, compute only, cycles): row groups of 2 rows; Q·Kᵀ + exp
+7,709 / 4,651 / 4,798, row max 3 × ~236, P·V 4,591 (with the last exp) / 2,673 / 2,414, normalize 1,848 / 1,790 /
+1,796; unit 32,856 (24.3 µs) of the 25.3 µs kernel, against 12,288 cycles of LoFi FPU work. Per row group this is
+§65's bs8 cost (~5k cycles per 2-row group, exp at its rated speed, subtract and row sums already on the math thread),
+so nothing new there. The pack thread's normalize zones read ~4,000 cycles because it packs the P·V output inside them
+(its P·V zones read ~200); per-thread unit totals match (32,856 / 32,902). bs1-specific: the first row group carries
+~3,000 cycles (~2.2 µs) of per-unit startup that one unit per core cannot amortise.
+
+**More cores lose** (device µs, full / compute only / DM only where measured): 8×8 q256 33.6; 12×9 q160 36.8 /
+35.1 / 26.0; 12×10 q160 36.8 / 35.1 / 26.0; 11×10 q160 37.9; 12×8 q160 46.2; 12×10 q128 43.7 / 40.1 / 31.5 (8 cores
+take two units); 12×10 q96 45.7; k256 31.4 (q192) / 35.8 (q160). Two causes at q160, both structural:
+`determine_largest_subblock_size(Sq_chunk_t = 5, 16, 8)` finds no 2- or 4-row subblock and picks 1×8, so a 5-row unit
+runs five 1-row groups (compute only 35.1 against 25.2 for six rows in three groups), and a head's 13 chunks span two
+grid rows, which turns the K / V chain multicast off (DM only 26.0 against 11.7). Fixing both (ragged 2 + 2 + 1 row
+groups in the streaming compute; K / V delivery for heads spanning grid rows) bounds bs1 SDPA at ~23 µs: ≈ −0.17 ms
+(1.2%) of bs1 for two tt-metal changes. Not pursued; bs1 stays on q192 / 11×8.
