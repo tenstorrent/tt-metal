@@ -42,9 +42,10 @@ Contract:
 
 from __future__ import annotations
 
+import re
 import warnings
 from enum import Enum
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Sequence, Tuple, Union
 
 import ttnn
 
@@ -138,6 +139,10 @@ class FSDPState:
         # ones it resolves after :func:`ttml.materialize_module` runs. Order
         # is stable across unshard/reshard so reducing/gathering pairs line up.
         self.managed: List[Tuple[Parameter, int]] = []
+
+        # Params kept replicated by ``replicate=``: name -> the patterns that matched it.
+        # ``ttml.sync_gradients`` averages their grads.
+        self.replicated: dict[str, List[str]] = {}
 
         # id(autograd_tensor) -> cached sharded ttnn::Tensor, populated lazily
         # during the first pre-forward and reused across forwards to avoid a
@@ -678,6 +683,7 @@ def fully_shard(
     shard_dim: Union[int, Literal["auto"]] = "auto",
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
+    replicate: Sequence[str] = (),
 ) -> AbstractModuleBase:
     """Wrap ``module`` with torch-style FSDP in place.
 
@@ -697,11 +703,22 @@ def fully_shard(
             are resharded between forward and backward (after forward) to keep peak memory
             low; the backward-pre callback re-gathers just in time. If ``False``, weights stay gathered.
             # TODO: Try this on the last block
+        replicate: Regex patterns of parameters to keep replicated instead of sharding,
+            for params too small to shard into whole tiles. Each is searched for
+            (``re.search``) in the parameter's dotted name relative to ``module``.
+            The training loop must average their gradients over ``mesh_axis`` with
+            ``ttml.sync_gradients``; ``SFTTrainer`` and ``GRPOTrainer`` already do.
     Returns:
         ``module`` (modified in place).
     """
     if _is_fsdp_wrapped_module(module):
         raise RuntimeError(f"Module {module.get_name()!r} already wrapped with fully_shard.")
+    if isinstance(replicate, str):
+        raise TypeError(f"fully_shard: replicate must be a list of regex patterns, not a string: {replicate!r}")
+    try:
+        replicate_res = [re.compile(p) for p in replicate]
+    except re.error as e:
+        raise ValueError(f"fully_shard: invalid replicate pattern {e.pattern!r}: {e}") from e
 
     mesh = ttml.mesh()
     if not mesh.has_axis(mesh_axis):
@@ -732,6 +749,10 @@ def fully_shard(
         # Already FSDP-managed somewhere else (e.g. tied weight claimed by
         # an inner block's FSDPState).
         if getattr(parameter, "_fsdp_managed", False):
+            continue
+        matched = _matching_replicate_patterns(rel_name, replicate_res)
+        if matched:
+            state.replicated[rel_name] = matched
             continue
 
         shape = _param_shape(parameter)
@@ -822,6 +843,21 @@ def _mark_fsdp_managed(parameter: Parameter, shard_dim: int, axis_index: int) ->
     parameter.add_post_materialize_callback(_mirror_to_tensor)
 
 
+def _matching_replicate_patterns(name: str, patterns: Sequence[re.Pattern]) -> List[str]:
+    """Return the patterns found in ``name`` by ``re.search``."""
+    return [p.pattern for p in patterns if p.search(name)]
+
+
+def replicated_parameters(module: AbstractModuleBase) -> dict[str, List[str]]:
+    """Return ``{name: matching patterns}`` for every parameter kept replicated under ``module``."""
+    out: dict[str, List[str]] = {}
+    for prefix, mod in module.named_modules():
+        if _is_fsdp_wrapped_module(mod):
+            for name, patterns in mod._fsdp_state.replicated.items():
+                out[f"{prefix}.{name}" if prefix else name] = list(patterns)
+    return out
+
+
 def is_fsdp_managed(param_tensor: Any) -> bool:
     """Return True if ``param_tensor`` was sharded by an ``fully_shard`` call."""
     if getattr(param_tensor, "_fsdp_managed", False):
@@ -840,5 +876,6 @@ __all__ = [
     "fully_shard",
     "FSDPState",
     "is_fsdp_managed",
+    "replicated_parameters",
     "fsdp_axis_of",
 ]

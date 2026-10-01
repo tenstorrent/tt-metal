@@ -81,6 +81,20 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             higher peak memory.
     """
 
+    @staticmethod
+    def _fully_shard(tt_model: Any, replicate: list[str]) -> None:
+        """Wrap each block, then the root, with FSDP; params matching ``replicate`` are not sharded."""
+        for block in tt_model.blocks:
+            ttml.fsdp.fully_shard(block, reshard_after_forward=True, replicate=replicate)
+        ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True, replicate=replicate)
+        replicated = ttml.fsdp.replicated_parameters(tt_model)
+        if replicated:
+            logging.info("FSDP: %d parameter(s) kept replicated", len(replicated))
+        matched = {p for ps in replicated.values() for p in ps}
+        unmatched = [p for p in replicate if p not in matched]
+        if unmatched:
+            logging.warning("fsdp_replicate_params: no parameter matches %s", unmatched)
+
     def setup_device(self, device_config: DeviceConfig) -> Any:
         """Open a named device mesh (with an ``"fsdp"`` axis when enabled)."""
         mesh = build_mesh(device_config)
@@ -167,9 +181,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             )
             with ttml.lazy_init():
                 tt_model = Qwen3(qwen_config)
-            for block in tt_model.blocks:
-                ttml.fsdp.fully_shard(block, reshard_after_forward=True)
-            ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True)
+            self._fully_shard(tt_model, device_config.fsdp_replicate_params)
             ttml.materialize_module(tt_model)
 
             # Weights are uploaded already-sharded to match each materialized
@@ -190,9 +202,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                     "Applying FSDP fully_shard across the 'fsdp' axis " "(size=%d, reshard_after_forward=True)",
                     self._mesh.axis_size("fsdp"),
                 )
-                for block in tt_model.blocks:
-                    ttml.fsdp.fully_shard(block, reshard_after_forward=True)
-                ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True)
+                self._fully_shard(tt_model, device_config.fsdp_replicate_params)
 
         ctx._tokenizer = tokenizer
         if ctx._pad_token is None:
