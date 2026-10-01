@@ -104,10 +104,14 @@ class TtDecoderLayer:
         r = ttnn.add(x, a)
         a.deallocate(True)
         h = self.post_attn_norm(r)
-        hf = all_gather_tp(h, self.mesh_device)
-        h.deallocate(True)
-        f = self.ffn(hf, tp_out="scattered")
-        hf.deallocate(True)
+        if getattr(self.ffn, "takes_scattered_input", lambda: False)():
+            f = self.ffn(h, tp_out="scattered", tp_in="scattered")
+            h.deallocate(True)
+        else:
+            hf = all_gather_tp(h, self.mesh_device)
+            h.deallocate(True)
+            f = self.ffn(hf, tp_out="scattered")
+            hf.deallocate(True)
         out = ttnn.add(r, f)
         r.deallocate(True)
         f.deallocate(True)

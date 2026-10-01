@@ -284,6 +284,21 @@ class MoeAgBlock:
         """x [1, 1, S, H] bf16 TILE -> the row-major layout the gather takes ([1, 1, S xppr, H / xppr])."""
         return untilize_x(x) if self.xppr > 1 else ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
+    def gather_tp(self, x_rm, idx, w):
+        """Sequence-parallel residual input: this col's S / TP rows (x_rm ``to_rm``, idx / w TILE) -> the chip's S rows
+        (gathered over the TP cols in col order = row order), into persistent buffers. Lets the router and the untilize
+        run on S / TP rows and replaces the block-input all-gather of the normed tiles."""
+        if self.cols == 1:
+            return x_rm, idx, w
+        if not hasattr(self, "gx_c"):
+            self.gx_c = _dram(self.dev, [1, 1, self.S * self.xppr, self.H // self.xppr])
+            self.gidx_c = _dram(self.dev, [1, 1, self.S, self.K], ttnn.uint16, ttnn.TILE_LAYOUT)
+            self.gw_c = _dram(self.dev, [1, 1, self.S, self.K], ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        self._ag(x_rm, self.gx_c, 1)
+        self._ag(idx, self.gidx_c, 1)
+        self._ag(w, self.gw_c, 1)
+        return self.gx_c, self.gidx_c, self.gw_c
+
     def gather(self, x_rm, idx, w):
         """x_rm (``to_rm``), idx [1, 1, S, K] uint16, w [1, 1, S, K] bf16 (RM, or TILE with ``tile_topk``) -> the
         column's T tokens (idx / w row major)."""

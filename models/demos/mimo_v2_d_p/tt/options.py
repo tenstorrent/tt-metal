@@ -46,6 +46,9 @@ class MiMoRuntimeOptions:
     moe_ag_rs_links: int | None = None  # MIMO_MOE_AG_RS_LINKS
     # Sequence-parallel residual over TP (norms / adds on S/TP rows; blocks all-gather in, reduce-scatter out).
     sp_residual: bool = True  # MIMO_SP_RESIDUAL
+    # Sequence-parallel residual: the MoE block takes this col's normed rows and gathers x / top-k over TP itself
+    # (router + untilize on S/TP rows, no block-input all-gather).
+    moe_ag_tp_in_gather: bool = True  # MIMO_MOE_AG_TP_IN_GATHER
     # Per-layer static expert placement (JSON, tests/perf/expert_placement.py; all-gather block only). None: the EP table.
     expert_placement: str | None = None  # MIMO_EXPERT_PLACEMENT
     # Gather the top-k idx / w as tiles and untilize after the gather (high_bw_all_gather costs per page).
@@ -120,6 +123,7 @@ class MiMoRuntimeOptions:
         kw["moe_ag_tile_topk"] = flag("MIMO_MOE_AG_TILE_TOPK", True)
         kw["expert_placement"] = env.get("MIMO_EXPERT_PLACEMENT") or None
         kw["sp_residual"] = flag("MIMO_SP_RESIDUAL", True)
+        kw["moe_ag_tp_in_gather"] = flag("MIMO_MOE_AG_TP_IN_GATHER", True)
         kw["untilize_width"] = int(env.get("MIMO_UA_W", "32"))
         root = env.get("MIMO_TTNN_CACHE")
         kw["ttnn_cache"] = root not in ("0", "off", "none", "")

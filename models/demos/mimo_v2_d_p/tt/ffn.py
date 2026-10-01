@@ -185,6 +185,7 @@ class TtGate:
         # tuned 2D config (bit-identical logits; 32 / 90 us vs 105 / 234 us default at 640 / 2048 tokens per chip).
         # HiFi4 stays: the matmul is x-read bound (HiFi2 is no faster and flips ~4% of tokens' top-8)
         self._pcs = {}
+        self._bias = {self.bias.shape[2]: self.bias}
         self.mesh_device = mesh_device
 
     def __call__(self, x, row_major=False, tiles=False):
@@ -194,9 +195,11 @@ class TtGate:
         if M not in self._pcs:
             self._pcs[M] = router_mm_config(self.mesh_device, M, N=self.E)
         logits = ttnn.linear(x, self.w, dtype=ttnn.float32, compute_kernel_config=self.cfg, program_config=self._pcs[M])
+        if M not in self._bias:  # the bias is pre-broadcast to the rows; S/TP-row calls (sequence parallel) slice it
+            self._bias[M] = ttnn.slice(self.bias, [0, 0, 0, 0], [1, 1, M, self.bias.shape[3]])
         w, idx = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
             logits,
-            self.bias,
+            self._bias[M],
             n_groups=1,
             summed_experts_per_group=1,
             topk_groups=1,
@@ -461,22 +464,34 @@ class TtMoE:
             hybrid_token_threshold=self.options.re_hybrid_threshold,
         )
 
-    def _call_ag(self, x, tp_out="replicated"):
+    def _call_ag(self, x, tp_out="replicated", tp_in="replicated"):
         """All-gather block: x [1,1,S,H] TILE -> [1,1,S,H] TILE (replicated over TP; ``tp_out="scattered"``: this col's
-        [1,1,S/TP,H] rows)."""
-        tiles = self.ag.tile_topk and self.ag.rows > 1
-        idx4, w_rm = self.gate(x, row_major=not tiles, tiles=tiles)
-        x_rm = self.ag.to_rm(x)
+        [1,1,S/TP,H] rows). ``tp_in="scattered"``: x is this col's [1,1,S/TP,H] rows (the router and the untilize run
+        on them; x / top-k are gathered over the TP cols inside the block)."""
+        own = []  # this call's transient tensors (not the block's persistent gather buffers)
+        if tp_in == "scattered":
+            idx_s, w_s = self.gate(x, tiles=True)
+            x_s = self.ag.to_rm(x)
+            x_rm, idx4, w_rm = self.ag.gather_tp(x_s, idx_s, w_s)
+            if x_rm is not x_s:
+                own += [x_s, idx_s, w_s]
+        else:
+            tiles = self.ag.tile_topk and self.ag.rows > 1
+            idx4, w_rm = self.gate(x, row_major=not tiles, tiles=tiles)
+            x_rm = self.ag.to_rm(x)
         gx, _, _ = self.ag.gather(x_rm, idx4, w_rm)
         gathered = self.ag.rows > 1  # one mesh row: gather returns x_rm / idx / w themselves (used until the reduce)
-        if gathered:
+        if tp_in == "scattered":
+            for t in own:
+                ttnn.deallocate(t)
+        elif gathered:
             ttnn.deallocate(x_rm)
             ttnn.deallocate(w_rm)
         counts, regions, token_index, _ = self.ag.plan(self.lmap)
         y = self.expert_indexed(gx, counts, regions, token_index)
         out = self.ag.reduce(y, scatter=tp_out == "scattered")
         ttnn.deallocate(y)
-        if not gathered:
+        if not gathered and tp_in != "scattered":
             ttnn.deallocate(x_rm)
             ttnn.deallocate(w_rm)
         return out
@@ -496,10 +511,16 @@ class TtMoE:
             gx2, counts, regions, token_index=token_index, x_pages_per_row=self.ag.xppr, y_row_major=self.ag.y_rm
         )
 
-    def __call__(self, x, tp_out="replicated"):
-        """x [1,1,S,H] (post-attention-normed, replicated over TP) -> [1,1,S,H] (``tp_out="scattered"``: [1,1,S/TP,H])."""
+    def takes_scattered_input(self):
+        """The block can take this col's S/TP normed rows itself (sequence-parallel residual, no input all-gather)."""
+        return self.ag is not None and self.ag.tile_topk and self.options.moe_ag_tp_in_gather
+
+    def __call__(self, x, tp_out="replicated", tp_in="replicated"):
+        """x [1,1,S,H] (post-attention-normed, replicated over TP) -> [1,1,S,H] (``tp_out="scattered"``: [1,1,S/TP,H];
+        ``tp_in="scattered"``: x is [1,1,S/TP,H], see ``takes_scattered_input``)."""
         if self.ag is not None:
-            return self._call_ag(x, tp_out)
+            return self._call_ag(x, tp_out, tp_in)
+        assert tp_in == "replicated", tp_in
         if tp_out == "scattered":
             full = self.__call__(x)
             out = partition_tp(full, self.mesh_device)
