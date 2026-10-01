@@ -411,17 +411,20 @@ def test_fused_np_cache_identity(device):
     n3 = device.num_program_cache_entries()
     assert n3 - n2 == 1, f"np 2->3 compiled {n3 - n2} programs (expected 1)"
 
-    _run_op(device, tensors, const_tiles, s0, _fused(np_producers=2))
+    o2b, fs2b = _run_op(device, tensors, const_tiles, s0, _fused(np_producers=2))
     n4 = device.num_program_cache_entries()
     assert n4 - n3 == 0, f"np 3->2 (already compiled) compiled {n4 - n3} programs (expected 0: cache hit)"
 
-    _run_op(device, tensors, const_tiles, s0, _fused())
+    o1b, fs1b = _run_op(device, tensors, const_tiles, s0, _fused())
     n5 = device.num_program_cache_entries()
     assert n5 - n4 == 0, f"np 2->free (the model's pick, already compiled) compiled {n5 - n4} programs (expected 0)"
 
-    # All NP variants of the same head must agree bit-for-bit with each other.
+    # All NP variants of the same head must agree bit-for-bit with each other, and a cached program's
+    # second launch with its first.
     assert torch.equal(o1, o2) and torch.equal(o1, o3), "o differs across NP values"
     assert torch.equal(fs1, fs2) and torch.equal(fs1, fs3), "final_state differs across NP values"
+    assert torch.equal(o2, o2b) and torch.equal(fs2, fs2b), "the cached NP=2 program's second launch differs"
+    assert torch.equal(o1, o1b) and torch.equal(fs1, fs1b), "the cached free-NP program's second launch differs"
 
 
 def test_fused_vs_torch_golden(device):
@@ -1040,6 +1043,30 @@ def test_fused_pool_extra_share_bit_exact(device, share):
     assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), f"pooled fused share={share} differs from phased"
 
 
+@pytest.mark.parametrize(
+    "hk, hv, nv, pool, nc, kwargs",
+    [
+        (4, 16, 2, 78, 8, dict(unicast=False)),  # the linked multicast chain to each item's head
+        (4, 16, 2, 78, 8, dict(posted=True)),  # posted unicast writes, VALID ordered by delivery
+        (4, 16, 2, 78, 8, dict(handoff_depth=3)),  # two hand-offs in flight per receiver
+        (4, 12, 2, 86, 9, dict(unicast=False, handoff_depth=3)),  # NC not a multiple of the ring
+        (1, 4, 4, 94, 32, dict(posted=True, handoff_depth=3)),  # NV=4, most items on the extras
+    ],
+    ids=lambda v: str(sorted(v.items())) if isinstance(v, dict) else str(v),
+)
+def test_fused_pool_transport_bit_exact(device, hk, hv, nv, pool, nc, kwargs):
+    """The pool's item map under the other transports and a deeper ring — the linked multicast chain
+    (unicast=False), posted unicast writes (posted=True), hand-off depth 3 — is bit-identical to phased."""
+    _skip_unless_pool_fits(device, hv, nv, pool, nc)
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, hk, hv, nc, nv, pool, 20261005 + hv + pool, producer_pool=True, **kwargs
+    )
+    assert delta == 1, f"pooled fused(NV={nv},P={pool},{kwargs}) compiled {delta} programs (expected 1)"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"pooled fused BH={hv} NV={nv} P={pool} {kwargs}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), f"pooled fused {kwargs} differs from phased"
+
+
 def test_fused_pool_cache_identity(device):
     """producer_pool and pool_extra_share must reach the hashed attributes: per-head -> pool compiles one
     program, a different share another, and every revisit is a cache hit. Pinning the model's own pool
@@ -1063,13 +1090,15 @@ def test_fused_pool_cache_identity(device):
     o_s, fs_s = _run_op(device, tensors, const_tiles, s0, _fused(nv, pool, producer_pool=True, pool_extra_share=0.5))
     n2 = device.num_program_cache_entries()
     assert n2 - n1 == 1, f"pool_extra_share compiled {n2 - n1} programs (expected 1: the share must be hashed)"
-    _run_op(device, tensors, const_tiles, s0, _fused(nv, producer_pool=True))  # the model's P == pool
-    _run_op(device, tensors, const_tiles, s0, _fused(nv, 3))
-    _run_op(device, tensors, const_tiles, s0, _fused(nv, pool, producer_pool=True))
+    o_f, fs_f = _run_op(device, tensors, const_tiles, s0, _fused(nv, producer_pool=True))  # the model's P == pool
+    o_h2, fs_h2 = _run_op(device, tensors, const_tiles, s0, _fused(nv, 3))
+    o_p2, fs_p2 = _run_op(device, tensors, const_tiles, s0, _fused(nv, pool, producer_pool=True))
     n3 = device.num_program_cache_entries()
     assert n3 - n2 == 0, f"revisits compiled {n3 - n2} programs (expected 0: cache hits, free P == pinned {pool})"
     assert torch.equal(o_h, o_p) and torch.equal(o_h, o_s), "o differs between the per-head and pool forms"
     assert torch.equal(fs_h, fs_p) and torch.equal(fs_h, fs_s), "final_state differs between the forms"
+    for tag, (o_b, fs_b) in (("pool, free P", (o_f, fs_f)), ("per-head", (o_h2, fs_h2)), ("pool", (o_p2, fs_p2))):
+        assert torch.equal(o_p, o_b) and torch.equal(fs_p, fs_b), f"the cached {tag} program's second launch differs"
 
 
 def test_fused_pool_infeasible_raises(device, expect_error):
@@ -1084,3 +1113,5 @@ def test_fused_pool_infeasible_raises(device, expect_error):
         _run_op(device, tensors, const_tiles, s0, _fused(2, grid.x * grid.y, producer_pool=True))
     with expect_error(RuntimeError, "pool_extra_share must be in"):
         _run_op(device, tensors, const_tiles, s0, _fused(2, None, producer_pool=True, pool_extra_share=1.5))
+    with expect_error(RuntimeError, "pool_extra_share must be in"):  # a pool with no extras (P = BH*NPH)
+        _run_op(device, tensors, const_tiles, s0, _fused(2, 3 * hv, producer_pool=True, pool_extra_share=-0.1))
