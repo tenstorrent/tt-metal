@@ -31,22 +31,26 @@ sequence, which doubles its length.
 traced, starting from a natural-language prompt. Each figure is the median of 8 generations after 2
 untimed ones, as `models/tt_dit/tests/models/fibo/test_performance_fibo.py` reports them.
 
-| System                     | CFG | SP  | TP  | Image   | Throughput      |
-| -------------------------- | --- | --- | --- | ------- | --------------- |
-| Galaxy (4x8 Blackhole)     | 2   | 4   | 4   | 10.35 s | 0.0966 images/s |
-| QuietBox 2 (2x2 Blackhole) | 2   | 1   | 2   | 25.16 s | 0.0397 images/s |
-| T3000 (2x4 Wormhole)       | 2   | 2   | 2   | 41.16 s | 0.0243 images/s |
+Prompt expansion generates a different number of tokens on each system and its runtime is
+proportional to that count, so the figures here are normalized to 600 tokens using the measured time
+per token.
+
+| System                     | CFG | SP  | TP  | Image   |
+| -------------------------- | --- | --- | --- | ------- |
+| Galaxy (4x8 Blackhole)     | 2   | 4   | 4   | 10.63 s |
+| QuietBox 2 (2x2 Blackhole) | 2   | 1   | 2   | 24.63 s |
+| T3000 (2x4 Wormhole)       | 2   | 2   | 2   | 36.63 s |
 
 Per stage, in seconds:
 
-| Stage                  | Galaxy           | QuietBox 2        | T3000             |
-| ---------------------- | ---------------- | ----------------- | ----------------- |
-| vlm (prompt expansion) | 5.81             | 8.44              | 13.69             |
-| encoder (SmolLM3)      | 0.59             | 0.22              | 0.66              |
-| prepare                | 0.08             | 0.07              | 0.19              |
-| denoising (30 steps)   | 3.81 (7.87 it/s) | 16.15 (1.86 it/s) | 26.15 (1.15 it/s) |
-| vae                    | 0.07             | 0.28              | 0.39              |
-| **total**              | **10.35**        | **25.16**         | **41.16**         |
+| Stage                | Galaxy                | QuietBox 2            | T3000                  |
+| -------------------- | --------------------- | --------------------- | ---------------------- |
+| VLM (600 tokens)     | 6.27 (10.46 ms/token) | 7.58 (12.63 ms/token) | 10.56 (17.60 ms/token) |
+| encoder (SmolLM3)    | 0.43                  | 0.18                  | 0.26                   |
+| prepare              | 0.09                  | 0.09                  | 0.09                   |
+| denoising (30 steps) | 3.78 (7.93 it/s)      | 16.50 (1.82 it/s)     | 25.36 (1.18 it/s)      |
+| VAE                  | 0.06                  | 0.28                  | 0.36                   |
+| **total**            | **10.63**             | **24.63**             | **36.63**              |
 
 ## How to Run
 
