@@ -255,7 +255,7 @@ def test_custom_loader_moves_the_sanity_into_r2(fx):
 
 
 def test_profile_gates_size_the_profiler_for_large_models():
-    """F52: the timeline dropped programs past the profiler's default 1000 per core (GLM: 1319 per chunk)."""
+    """F54: the timeline dropped programs past the profiler's default 1000 per core (GLM: 1319 per chunk)."""
     from models.demos.common.bringup.plan.ledger_gen import PROFILE_ENV
 
     counts = [
