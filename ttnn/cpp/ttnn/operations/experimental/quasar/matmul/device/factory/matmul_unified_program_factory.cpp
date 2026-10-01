@@ -157,7 +157,7 @@ UnifiedMatmulPlan size_dfbs(
 }  // namespace
 
 UnifiedMatmulPlan plan_unified_matmul(
-    tt::tt_metal::IDevice& device,
+    const tt::tt_metal::IDevice& device,
     const ttnn::Tensor& A,
     const ttnn::Tensor& B,
     const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
@@ -535,10 +535,10 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const tt::tt_metal::MeshTensor& A = A_tensor.mesh_tensor();
     const tt::tt_metal::MeshTensor& B = B_tensor.mesh_tensor();
     const tt::tt_metal::MeshTensor& C = tensor_return_value.at(0).mesh_tensor();
-    tt::tt_metal::IDevice* device = &A.mutable_device();
+    const tt::tt_metal::IDevice& device = A.device();
 
     const UnifiedMatmulPlan plan =
-        plan_unified_matmul(*device, A_tensor, B_tensor, config, operation_attributes, tensor_return_value.at(0));
+        plan_unified_matmul(device, A_tensor, B_tensor, config, operation_attributes, tensor_return_value.at(0));
 
     // ---- Tensor parameters: the kernels' tensor accessors are generated from these specs ----
     Group<TensorParameter> tensor_parameters = {
@@ -685,9 +685,9 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), plan.cores.size(), compute_defines_map);
+        device.arch(), plan.cores.size(), compute_defines_map);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), plan.cores.size(), compute_defines_map, throttle_level);
+        device.arch(), plan.cores.size(), compute_defines_map, throttle_level);
     KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
 
     ComputeHardwareConfig compute_hw_config =

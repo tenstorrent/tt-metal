@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "global_semaphore_impl.hpp"
+#include "impl/dispatch/host_device_transfer.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
@@ -69,7 +70,7 @@ void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
             if (!mesh_device.is_local(coord)) {
                 continue;
             }
-            tt::tt_metal::detail::WriteToBuffer(*buffer_->get_device_buffer(coord), host_buffer);
+            tt::tt_metal::slow_dispatch::WriteToBuffer(*buffer_->get_device_buffer(coord), host_buffer);
         }
     }
 }

@@ -26,8 +26,8 @@ import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_mla_weights
-from models.demos.deepseek_v3_d_p.reference.glm_5_1 import glm_decoder_layer_reference
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3.block import glm_decoder_layer_reference
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
@@ -645,7 +645,7 @@ def test_mistral4_prefill_block(
 
 
 # ---------------------------------------------------------------------------
-# GLM-5.1 block test
+# GLM-5.3 block test
 # ---------------------------------------------------------------------------
 # Every GLM layer runs sparse DSA (lightning-indexer top-2048 + sparse SDPA); "dense"/"moe" here refers
 # only to the FFN — layers 0-2 have a dense FFN, layers 3-77 a 256-expert MoE. Both block types exercise
@@ -653,7 +653,7 @@ def test_mistral4_prefill_block(
 #
 # GLM has no runnable HF reference model wired (adapter reference_model_cls is None), so it can't use
 # run_model()/create_hf_model() like the DeepSeek/Kimi block tests. Instead it COMPOSES the CPU
-# references GLM already owns (reference.glm_5_1.glm_decoder_layer_reference): x + MLA_cpu(attn_norm(x))
+# references GLM already owns (reference.glm_5_3.block.glm_decoder_layer_reference): x + MLA_cpu(attn_norm(x))
 # then + FFN(ffn_norm(x+mla_out)) — exactly TtPrefillBlock.forward.
 # Why not generalize run_model to take this composed ref? run_model's PCC path is built around
 # create_hf_model() + a single HF module; GLM's only full HF module (GlmMoeDsaModel) is non-absorbed
@@ -670,8 +670,7 @@ GLM_BLOCK_OUTPUT_PCC = 0.98
 def _first_full_moe_layer(config):
     # First MoE layer (>= first_k_dense_replace) that OWNS a full indexer. A GLM-5.3 "shared" indexer
     # layer reuses a prior full layer's top-k, which an isolated single block cannot supply; a full
-    # layer computes its own. glm_5_1 has no indexer_types -> every layer is full -> returns
-    # first_k_dense_replace (3). glm_5_3 layers 3-5 are shared -> returns 6.
+    # layer computes its own. glm_5_3 layers 3-5 are shared -> returns 6.
     idx = config.first_k_dense_replace
     while indexer_layer_is_reused(config, idx):
         idx += 1
@@ -725,7 +724,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     attn_norm_w = norms[f"{prefix}input_layernorm.weight"].to(torch.bfloat16)
     ffn_norm_w = norms[f"{prefix}post_attention_layernorm.weight"].to(torch.bfloat16)
     if is_moe:
-        routed, shared = load_moe_weights_from_hf(model_dir, layer_idx, GLM51Config.NUM_ROUTED_EXPERTS)
+        routed, shared = load_moe_weights_from_hf(model_dir, layer_idx, GLM53Config.NUM_ROUTED_EXPERTS)
         g = load_hf_state_dict_filtered(model_dir, [f"{prefix}mlp.gate."])
         gate_weights = {
             "weight": g[f"{prefix}mlp.gate.weight"].to(torch.bfloat16),
@@ -758,7 +757,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             ),
             2,
@@ -772,7 +771,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
 # KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
 # in tests/sparse_mla/).
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_block(
@@ -793,7 +792,7 @@ def test_glm_prefill_block(
     config.max_seq_len = seq_len
     # MoE runs at the first FULL-indexer MoE layer so the block owns its top-k: a GLM-5.3 "shared"
     # indexer layer reuses a prior full layer's indices, which an isolated single block cannot supply
-    # (ReuseIndexer.forward raises). glm_5_1 -> first_k_dense_replace (3); glm_5_3 -> 6 (3-5 shared).
+    # (ReuseIndexer.forward raises). glm_5_3 -> 6 (3-5 shared).
     layer_idx = _first_full_moe_layer(config) if is_moe else 0
     hidden = config.hidden_size
     sp_axis, tp_axis = 0, 1
@@ -803,7 +802,7 @@ def test_glm_prefill_block(
     # LOADS from the cache; reference uses matching host weights from the checkpoint). Else RANDOM for both.
     # Never (re)build the cache here.
     sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
-    experts_per_chip = GLM51Config.NUM_ROUTED_EXPERTS // (sp_factor * tp_factor)
+    experts_per_chip = GLM53Config.NUM_ROUTED_EXPERTS // (sp_factor * tp_factor)
     effective_cache = (weight_cache_path / f"{sp_factor}x{tp_factor}") if weight_cache_path is not None else None
     # The isolated MoE block is only meaningful on RANDOM weights, so it never consults the ttnn cache:
     # a random block input drives GLM's trained near-degenerate top-8 gate to pick different experts on
@@ -833,7 +832,7 @@ def test_glm_prefill_block(
         attn_norm_w, ffn_norm_w = _glm_norm_weight(hidden, 1), _glm_norm_weight(hidden, 2)
         if is_moe:
             gate_weights, routed, shared = _glm_random_moe_weights(
-                hidden, GLM51Config.MOE_INTERMEDIATE_SIZE, GLM51Config.NUM_ROUTED_EXPERTS, seed=3
+                hidden, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, seed=3
             )
             moe_weights = {
                 "gate_weights": gate_weights,
@@ -862,7 +861,7 @@ def test_glm_prefill_block(
     block = TtPrefillBlock(
         mesh_device=mesh_device,
         config=config,
-        model_cfg=GLM51Config,
+        model_cfg=GLM53Config,
         state_dict=device_state_dict,
         layer_idx=layer_idx,
         seq_len=seq_len,
@@ -890,7 +889,7 @@ def test_glm_prefill_block(
     # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.
     # GLM attention is always sparse, so this is unconditional here. The cache is strided by the compacted
     # full-indexer count (num_full_indexer_layers) — >1 for glm_5_3 cross-layer reuse — matching the
-    # indexer's cache_batch stride; falls back to 1 when there is no indexer_types map (glm_5_1).
+    # indexer's cache_batch stride; falls back to 1 when there is no indexer_types map.
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=seq_len, chunk_size_global=seq_len
     )
@@ -931,8 +930,10 @@ def test_glm_prefill_block(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
     ).to(torch.bfloat16)
 
-    # --- composed reference (reference/glm_5_1): assembles MLA + norm/residual + FFN ---
-    logger.info(f"[glm block {layer_type}] composing CPU reference via reference.glm_5_1.glm_decoder_layer_reference")
+    # --- composed reference (reference/glm_5_3): assembles MLA + norm/residual + FFN ---
+    logger.info(
+        f"[glm block {layer_type}] composing CPU reference via reference.glm_5_3.block.glm_decoder_layer_reference"
+    )
     ref, _ = glm_decoder_layer_reference(
         config, mla_weights, attn_norm_w, ffn_norm_w, x, seq_len, ffn_weights=ffn_weights, moe_weights=moe_weights
     )
