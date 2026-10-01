@@ -605,7 +605,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // fabric safety. Validate against a fabric-enabled run with concurrent CCL before
     // trusting this in production. Set DS_NO_WRITER_MCAST=1 to fall back to the reader's
     // NoC-0 multicast.
-    const bool kWriterMcastsIn1 = std::getenv("DS_NO_WRITER_MCAST") == nullptr;
+    const bool kWriterMcastsIn1 =
+        std::getenv("DS_NO_WRITER_MCAST") == nullptr;  // diagnostic: perf/measurement knob, same result
     const uint32_t mcast_go_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t mcast_done_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
 

@@ -1452,7 +1452,7 @@ WIDTH_SPLIT_MIN_GAIN = 4
 # hard `TT_THROW` on every profiler read and a process `terminate` at the next device
 # open.  See the header for the full argument and the measured collision.
 #   RMS_STAGE_ZONES=1 scripts/run_safe_pytest.sh --profile <test>
-STAGE_ZONES = os.environ.get("RMS_STAGE_ZONES", "0") not in ("", "0")
+STAGE_ZONES = os.environ.get("RMS_STAGE_ZONES", "0") not in ("", "0")  # diagnostic: perf/measurement knob, same result
 
 
 # Perf 3 -- THE ABLATION SWITCHES ARE DEFINES, NOT SOURCE EDITS.
@@ -1481,7 +1481,9 @@ _ABLATE_NAMES = (
     "GATHER_ZERO",
 )
 ABLATE = tuple(
-    n for n in (t.strip().upper() for t in os.environ.get("RMS_ABLATE", "").split(",")) if n in _ABLATE_NAMES
+    n
+    for n in (t.strip().upper() for t in os.environ.get("RMS_ABLATE", "").split(","))
+    if n in _ABLATE_NAMES  # diagnostic: perf/measurement knob, same result
 )
 
 
@@ -4191,7 +4193,7 @@ def create_program_descriptor(
     # A one-line, env-gated dump of the blocking solve.  Not a knob and not read by
     # anything -- it exists so a perf round can see WHICH regime and WHICH chunk a
     # shape resolved to without re-deriving the solve by hand.
-    if os.environ.get("RMS_TRACE_BLOCKING"):
+    if os.environ.get("RMS_TRACE_BLOCKING"):  # diagnostic: perf/measurement knob, same result
         print(
             f"RMS_BLOCKING scheme={plan.scheme} cores={len(assignment)} "
             f"wt_per_core={wt_per_core} BLOCK_ROWS={block_rows} WT_CHUNK={wt_chunk} "
@@ -4524,7 +4526,7 @@ def create_program_descriptor(
                 pc_mcast = ttnn.Mcast2D(device, all_cores, pick[0], cfg, 0, sender_grid)
                 order = {(c.x, c.y): i for i, c in enumerate(sorted(pick, key=lambda c: (c.y, c.x)))}
                 pc_role = {(c.x, c.y): (order.get((c.x, c.y), -1) + 1) for c in cores}
-    if os.environ.get("RMS_PC_TRACE"):
+    if os.environ.get("RMS_PC_TRACE"):  # diagnostic: perf/measurement knob, same result
         print(
             f"PC_MCAST mode={PC_MCAST_MODE} engaged={pc_mcast is not None} "
             f"cores={len(_cores_in(all_cores))} "
