@@ -9,6 +9,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
+#include <utility>
+
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
 constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7;
 // Three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10) packed into one [1,1,32,96] tensor.
@@ -18,6 +20,26 @@ constexpr uint32_t cb_mask = 17;
 // of cb_mask (the fused u slot holds max(cv,3)+1 tiles with the credit tile last, so tile 3 is free
 // when cv >= 4) — no extra CB, so the CB region does not grow. Valid
 // because every fused producer core serves exactly one head (wi = h*NC + j + i*NP).
+
+// Compile-time-unrolled one-word stores: constant offsets, so each store is a single instruction.
+// i-th element (row-major) of the lower triangle (diagonal included) of a 16x16 face.
+constexpr uint32_t tril_face_index(uint32_t i) {
+    uint32_t r = 0;
+    while ((r + 1) * (r + 2) / 2 <= i) {
+        ++r;
+    }
+    return r * 16 + (i - r * (r + 1) / 2);
+}
+template <uint32_t... I>
+inline __attribute__((always_inline)) void store_tril_lower(
+    volatile tt_l1_ptr uint32_t* face, std::integer_sequence<uint32_t, I...>) {
+    ((face[tril_face_index(I)] = 0x3F800000u), ...);
+}
+template <uint32_t... R>
+inline __attribute__((always_inline)) void store_diag(
+    volatile tt_l1_ptr uint32_t* face, std::integer_sequence<uint32_t, R...>) {
+    ((face[R * 17] = 0x3F800000u), ...);
+}
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
@@ -175,8 +197,10 @@ void kernel_main() {
         }
     };
 
-    // P15 C1 (GDN_COLD_PREFETCH): issue item 0's five input reads BEFORE the constant synthesis and wait for them with
-    // the constants' own read barriers, so the DRAM latency overlaps the constant build. Production flat layout only.
+    // P15 C1 (GDN_COLD_PREFETCH): item 0's input reads overlap the constant build instead of following it. g/beta
+    // (needed first: the head select) are issued before the constants and covered by the constants' own read barrier;
+    // v/k/q (needed >= 2 us into the item) are issued after the constants are pushed, so the first item's compute
+    // starts as soon as the constants and g/beta are in. Production flat layout only.
     constexpr bool kColdPrefetch =
 #ifdef GDN_COLD_PREFETCH
         (Ct == 1) && QK_FLAT && V_FLAT && GB_FLAT;
@@ -184,28 +208,26 @@ void kernel_main() {
         false;
 #endif
     const bool prefetched = kColdPrefetch && (wi_count > 0);
-    if constexpr (kColdPrefetch) {
-        if (prefetched) {
-            const uint32_t hc0 = wi_start;
-            read_qk_flat(q_acc, cb_q, hc0, false);
-            read_qk_flat(k_acc, cb_k, hc0, false);
-            read_v_flat(hc0, false);
-            read_gb_flat(g_acc, cb_g, hc0, false);
-            read_gb_flat(b_acc, cb_beta, hc0, false);
-        }
-    }
 
     // constants (once)
     if constexpr (Ct == 1) {
         // P3_FLAPREP: at chunk 32 every constant is a fixed 0/1 fp32 pattern (the host builds exactly these:
         // build_fused_const_tiles / make_head_selectors), so build them in L1 instead of reading them from DRAM:
-        // every producer core read the same few DRAM pages here (~23 us per call at BH=16, NP=5). RISC-V stores
-        // are slow (~6 cycles), so only ~560 words are stored: one face of ones is replicated by local NoC
-        // copies, and the zero words come from the MEM_ZEROS loopback.
+        // every producer core read the same few DRAM pages here (~23 us per call at BH=16, NP=5). The zero words come
+        // from the MEM_ZEROS loopback, one face of ones is replicated by local NoC copies, and the remaining one-words
+        // are single stores (fully unrolled: constant offsets).
         constexpr uint32_t kOne = 0x3F800000u;  // 1.0f
         constexpr uint32_t kTileBytes = 4096;   // fp32 32x32 = 4 faces of 16x16
         constexpr uint32_t kFaceBytes = 1024;
         constexpr uint32_t n_mask = GB_FLAT ? 4 : 3;
+#if defined(GDN_RD_NO_QMASKS)
+        // GDN_TINV_SFPU producers never read the Horner quadrant masks (mask tiles 0-2); only the head selector (tile
+        // 3).
+        static_assert(GB_FLAT, "GDN_RD_NO_QMASKS needs the gb_flat head selector in mask tile 3");
+        constexpr bool kQMasks = false;
+#else
+        constexpr bool kQMasks = true;
+#endif
         CircularBuffer c_eye(cb_eye), c_tril(cb_tril), c_ones(cb_ones), c_mask(cb_mask);
         c_eye.reserve_back(1);
         c_tril.reserve_back(1);
@@ -215,54 +237,79 @@ void kernel_main() {
         const uint32_t tril_l1 = c_tril.get_write_ptr();
         const uint32_t ones_l1 = c_ones.get_write_ptr();
         const uint32_t mask_l1 = c_mask.get_write_ptr();
+        if constexpr (kColdPrefetch) {
+            if (prefetched) {
+                read_gb_flat(g_acc, cb_g, wi_start, false);
+                read_gb_flat(b_acc, cb_beta, wi_start, false);
+            }
+        }
+        // Zero-fill (loopback reads). tril face 2 (all ones) is a NoC copy below, so it is not zeroed: the copy needs
+        // no barrier against the zero-fill.
         noc.async_write_zeros(c_eye, kTileBytes);
-        noc.async_write_zeros(c_tril, kTileBytes);
-        noc.async_write_zeros(c_mask, n_mask * kTileBytes);
+        noc.async_write_zeros(c_tril, 2 * kFaceBytes);                                // faces 0, 1
+        noc.async_write_zeros(c_tril, kFaceBytes, {.offset_bytes = 3 * kFaceBytes});  // face 3
+        if constexpr (kQMasks) {
+            noc.async_write_zeros(c_mask, n_mask * kTileBytes);
+        } else {
+            noc.async_write_zeros(c_mask, kTileBytes, {.offset_bytes = 3 * kTileBytes});  // selector tile only
+        }
         volatile tt_l1_ptr uint32_t* ones = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones_l1);
+#pragma GCC unroll 256
         for (uint32_t i = 0; i < kFaceBytes / 4; i++) {
             ones[i] = kOne;  // face 0 of the ones tile, while the zero-fill runs
         }
         (void)ones[kFaceBytes / 4 - 1];  // read back: the stores have landed before the NoC reads the face
-        noc.async_read_barrier();        // zero-fill done before any copy or store into the zeroed tiles
-        // Replicate the ones face: ones faces 1-3, tril face 2, Qtl face 0, Qbr face 3, Q10 (bottom-left) face 2.
+        // Replicate the ones face: ones faces 1-3, tril face 2 (and, unless skipped, Qtl face 0, Qbr face 3, Q10 face
+        // 2).
         const uint64_t ones_face = get_noc_addr(ones_l1);
         noc_async_read(ones_face, ones_l1 + 1 * kFaceBytes, kFaceBytes);
         noc_async_read(ones_face, ones_l1 + 2 * kFaceBytes, kFaceBytes);
         noc_async_read(ones_face, ones_l1 + 3 * kFaceBytes, kFaceBytes);
         noc_async_read(ones_face, tril_l1 + 2 * kFaceBytes, kFaceBytes);
-        noc_async_read(ones_face, mask_l1 + 0 * kTileBytes + 0 * kFaceBytes, kFaceBytes);
-        noc_async_read(ones_face, mask_l1 + 1 * kTileBytes + 3 * kFaceBytes, kFaceBytes);
-        noc_async_read(ones_face, mask_l1 + 2 * kTileBytes + 2 * kFaceBytes, kFaceBytes);
-        // Stores into words no copy touches: the lower triangles of tril faces 0 and 3, the eye diagonal
-        // (faces 0 and 3), the head selector (mask tile 3).
-        volatile tt_l1_ptr uint32_t* tril = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tril_l1);
-        volatile tt_l1_ptr uint32_t* eye = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye_l1);
-        for (uint32_t r = 0; r < 16; r++) {
-            for (uint32_t c = 0; c <= r; c++) {
-                tril[r * 16 + c] = kOne;
-                tril[768 + r * 16 + c] = kOne;
-            }
-            eye[r * 17] = kOne;
-            eye[768 + r * 17] = kOne;
+        if constexpr (kQMasks) {
+            noc_async_read(ones_face, mask_l1 + 0 * kTileBytes + 0 * kFaceBytes, kFaceBytes);
+            noc_async_read(ones_face, mask_l1 + 1 * kTileBytes + 3 * kFaceBytes, kFaceBytes);
+            noc_async_read(ones_face, mask_l1 + 2 * kTileBytes + 2 * kFaceBytes, kFaceBytes);
         }
+        noc.async_read_barrier();  // zero-fill, copies and (cold prefetch) g/beta have landed
+        // The first item's first stage needs only the head selector and g/beta: push them now, the rest of the
+        // constants follow (the compute waits for tril / ones at its second stage, for eye at its fifth).
         if constexpr (GB_FLAT) {
             // Head selector: one-hot at (row hv, col 0) — make_head_selectors' tile hv (face 0 or 2).
             const uint32_t hv = (wi_start / NC) % HV;
             volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_l1 + 3 * kTileBytes);
             sel[((hv >> 4) << 9) + ((hv & 15) << 4)] = kOne;
         }
-        noc.async_read_barrier();
-        c_eye.push_back(1);
-        c_tril.push_back(1);
-        c_ones.push_back(1);
         c_mask.push_back(n_mask);
         if constexpr (kColdPrefetch) {
-            if (prefetched) {  // the barrier above also covered item 0's input reads
-                CircularBuffer(cb_q).push_back(ck);
-                CircularBuffer(cb_k).push_back(ck);
-                CircularBuffer(cb_v).push_back(cv);
+            if (prefetched) {
                 CircularBuffer(cb_g).push_back(Ct);
                 CircularBuffer(cb_beta).push_back(Ct);
+            }
+        }
+        // Stores into words no copy touches: the lower triangles of tril faces 0 and 3, the eye diagonal (faces 0 and
+        // 3). The zero-fill has landed (barrier above).
+        {
+            volatile tt_l1_ptr uint32_t* tril = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tril_l1);
+            volatile tt_l1_ptr uint32_t* eye = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye_l1);
+            store_tril_lower(tril, std::make_integer_sequence<uint32_t, 136>{});
+            store_tril_lower(tril + 768, std::make_integer_sequence<uint32_t, 136>{});
+            store_diag(eye, std::make_integer_sequence<uint32_t, 16>{});
+            store_diag(eye + 768, std::make_integer_sequence<uint32_t, 16>{});
+        }
+        c_tril.push_back(1);
+        c_ones.push_back(1);
+        c_eye.push_back(1);
+        if constexpr (kColdPrefetch) {
+            if (prefetched) {
+                // v, k, q of item 0 (needed in that order), landing while the first item's compute starts.
+                read_v_flat(wi_start, false);
+                read_qk_flat(k_acc, cb_k, wi_start, false);
+                read_qk_flat(q_acc, cb_q, wi_start, false);
+                noc.async_read_barrier();
+                CircularBuffer(cb_v).push_back(cv);
+                CircularBuffer(cb_k).push_back(ck);
+                CircularBuffer(cb_q).push_back(ck);
             }
         }
     } else {

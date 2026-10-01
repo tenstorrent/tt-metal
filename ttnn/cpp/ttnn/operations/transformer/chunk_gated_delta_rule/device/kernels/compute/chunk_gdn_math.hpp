@@ -740,15 +740,20 @@ inline void gdn_decay_sfpu_p2(const GdnPrepCbs& cb, uint32_t cb_eg) {
 // (s3/final_s/scr1-as-g_sum/scr2-as-D/scr3-as-D*tril of the FPU chain are not used for decay); S3/S4 keep only the
 // q/k-norm work, S5 keeps k_beta and k*decayfac, S6 the kk/qk matmuls, S7 the k_dec_t transposes. Decay outputs are
 // bit-identical to prep_chunk_generic's GDN_DECAY_SFPU path.
+// first: the first item of this core. The constants eye / tril / ones are NOT waited for by the kernel's start (only
+// the head selector is): the first item waits for each where it first needs it, so the reader can push g/beta +
+// constants first and v / k / q after. Every input is waited for at its first use (q, k also at the top when qk_norm
+// squares them).
 template <uint32_t Kt, uint32_t Vt, bool qk_norm, bool gb_flat>
-inline void prep_chunk_c1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_bits) {
+inline void prep_chunk_c1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_bits, bool first = false) {
     static_assert(Kt <= 4 && Vt <= 4, "prep_chunk_c1: a Kt/Vt-tile op must fit one fp32 DST half (4 tiles)");
     constexpr uint32_t ck = Kt;
     constexpr uint32_t cv = Vt;
 
-    WAIT(cb.q, ck);
-    WAIT(cb.k, ck);
-    WAIT(cb.v, cv);
+    if constexpr (qk_norm) {
+        WAIT(cb.q, ck);
+        WAIT(cb.k, ck);
+    }
     WAIT(cb.g, 1);
     WAIT(cb.beta, 1);
 
@@ -864,6 +869,10 @@ inline void prep_chunk_c1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t ep
     // ---- S2: decay = tril@G and g_sum = ones@G (one acquire); q/k sum of squares; v_beta ----
     {
         GDN_ZONE("c1 S2 decay+ss");
+        if (first) {
+            WAIT(cb.tril, 1);
+            WAIT(cb.ones, 1);
+        }
         WAIT(G, 1);
 #if defined(GDN_DECAY_SFPU)
         // SFPU decay pass 1 (shared with prep_chunk_generic): decay, decay_exp, decayfac, exp(g_sum) -> s2 (s2 is
@@ -914,6 +923,7 @@ inline void prep_chunk_c1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t ep
             POP(cb.stmp, ck);
         }
         WAIT(B, 1);
+        WAIT(cb.v, cv);
         bcast_cols_mul_n(cb.v, B, cb.vbeta, cv);  // v_beta (output)
         POP(cb.v, cv);
     }
@@ -1019,6 +1029,9 @@ inline void prep_chunk_c1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t ep
     // ---- S5: D*tril; k_beta; k*decayfac; dl column = decayfac*decay_exp ----
     {
         GDN_ZONE("c1 S5 L2+kb");
+        if (first) {
+            WAIT(cb.eye, 1);
+        }
 #if !defined(GDN_DECAY_SFPU)
         WAIT(cb.scr2, 1);
         ew1(cb.scr2, cb.tril, cb.scr3, 2);
@@ -1200,11 +1213,11 @@ template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool qk_norm, bool gb_flat = fa
 inline void prep_chunk_generic(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_bits);
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool qk_norm, bool gb_flat = false>
-inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_bits) {
+inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_bits, bool first = false) {
     // Both bodies implement GDN_DECAY_SFPU (same two helper passes); c1 covers Ct == 1 with Kt, Vt <= 4.
     constexpr bool kUseC1 = (Ct == 1 && Kt <= 4 && Vt <= 4);
     if constexpr (kUseC1) {
-        prep_chunk_c1<Kt, Vt, qk_norm, gb_flat>(cb, scale_bits, eps_bits);
+        prep_chunk_c1<Kt, Vt, qk_norm, gb_flat>(cb, scale_bits, eps_bits, first);
     } else {
         prep_chunk_generic<Ct, Kt, Vt, qk_norm, gb_flat>(cb, scale_bits, eps_bits);
     }

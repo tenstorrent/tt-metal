@@ -99,9 +99,15 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_q, cb_k, cb_u);
 
     // Constants (loaded once by reader). Initial state is in cb_S (reader pushed it).
-    WAIT(cb_eye, cc);
-    WAIT(cb_tril, cc);
-    WAIT(cb_ones, cc);
+    // Ct == 1 (prep_chunk_c1): the head selector (mask) is the first thing the first item needs; eye / tril / ones are
+    // waited for where the first item first uses them (prep_chunk_c1's `first`), so the reader can push the constants
+    // and the first inputs in order of need. Every other shape waits for all constants here.
+    constexpr bool kJitConsts = (Ct == 1 && Kt <= 4 && Vt <= 4);
+    if constexpr (!kJitConsts) {
+        WAIT(cb_eye, cc);
+        WAIT(cb_tril, cc);
+        WAIT(cb_ones, cc);
+    }
     WAIT(cb_mask, GB_FLAT ? 4 : 3);  // Qtl, Qbr, Q10 (invert_block) [+ gb_flat head selector]
 
     // PHASE A (prep): state-independent per-chunk quantities. No recurrent state here; the
@@ -109,9 +115,10 @@ void kernel_main() {
     // q_decay, intra, dl are pushed to their CBs and streamed to DRAM by the prep writer.
     for (uint32_t c = 0; c < NC; c++) {
 #if defined(PROFILE_KERNEL)
-        {
+        if (c > 0) {
             // Diagnostic only (Tracy device runs): wait for the item's inputs up front so the zone
             // below measures pure prep math (w_p). Idempotent waits; absent from production binaries.
+            // Not for item 0, whose inputs arrive in order of need while its compute is already running.
             DeviceZoneScopedN("prep_wait_in");
             WAIT(cb_q, Ct * Kt);
             WAIT(cb_k, Ct * Kt);
@@ -122,7 +129,7 @@ void kernel_main() {
 #endif
         {
             DeviceZoneScopedN("prep_item");
-            prep_chunk<Ct, Kt, Vt, QK_NORM != 0, GB_FLAT != 0>(CBS, SCALE_BITS, EPS_BITS);
+            prep_chunk<Ct, Kt, Vt, QK_NORM != 0, GB_FLAT != 0>(CBS, SCALE_BITS, EPS_BITS, c == 0);
         }
     }
 }
