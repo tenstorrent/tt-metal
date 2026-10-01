@@ -76,6 +76,14 @@ uint64_t scatter_output_aligned_page_size(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<Tensor>& output_tensor);
 
+// The ALIGNED per-page byte stride a ROW_MAJOR stick of `stick_elems` elements occupies in `tensor`'s
+// buffer type -- the single formula both the feasibility gate (evaluated pre-transpose, before the
+// stick's own buffer exists) and the RM program factories (post-transpose, reading an already-
+// allocated buffer) must agree on, since Buffer::aligned_page_size() rounds page_size() up to a
+// BufferType-only device alignment (tt_metal/impl/buffers/buffer.cpp) with no dependence on which
+// dimension the stick was drawn from.
+uint64_t scatter_rm_stick_page_bytes(const Tensor& tensor, uint32_t stick_elems);
+
 // The device's STATIC per-core CB budget (the allocator-managed L1 window, ignoring what is live in
 // it). The only budget a routing gate may plan against: supported_by_codegen() is evaluated at the
 // router and again at the codegen prim's validate, with this call's own create_output_tensors() in
