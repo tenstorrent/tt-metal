@@ -32,6 +32,15 @@ def _norm_module(mesh, spec, layer, step, loader=None):
     return TtRMSNorm(mesh, loader.get(f"model.layers.{layer}.{_NORM_WEIGHTS[step]}"), eps=1e-6)
 
 
+def _mlp_module(mesh, spec, layer, loader=None):
+    """TtDenseMLP (TP=1, local to each CP slice) for the dense layer; fp8 + 128x128 block scale dequantized at load."""
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
+    from models.demos.mimo_v2_6_d_p_cp4.tt.mlp import build_mlp
+
+    return build_mlp(mesh, loader or WeightLoader(hf_path(spec)), layer)
+
+
 def _cp_host_fn(mesh, module):
     """Wrap a device module as fn(ctx, x_host [S, H]) -> host [S, H]: the input is split into the 4 CP slices
     (chip c gets rows [c*S/4, (c+1)*S/4)) and the outputs are concatenated back (component/swap harness boundary)."""
@@ -147,6 +156,8 @@ def device_component(mesh, spec, layer, step):
         return _cp_host_fn(mesh, _norm_module(mesh, spec, layer, step))
     if step in _RESIDUAL_STEPS:
         return _residual_host_fn(mesh)
+    if step == "mlp":
+        return _cp_host_fn(mesh, _mlp_module(mesh, spec, layer))
     if step == "attention":
         from models.demos.mimo_v2_6_d_p_cp4.tt.ccl import RingCCL
 
@@ -173,7 +184,7 @@ def device_component(mesh, spec, layer, step):
 # Device steps of the hybrid harness, per block type: each passed its component gate on the device (CP slices).
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "full_dense": {"attn_norm", "attention", "attn_residual"},
+    "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
     "sliding_moe": set(),
     "full_moe": set(),
 }
@@ -221,6 +232,8 @@ class HybridDeviceModel:
             steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
             ov = {s: _cp_host_fn(mesh, _norm_module(mesh, spec, i, s, loader)) for s in steps if s in _NORM_WEIGHTS}
             ov.update({s: _residual_host_fn(mesh) for s in steps if s in _RESIDUAL_STEPS})
+            if "mlp" in steps:
+                ov["mlp"] = _cp_host_fn(mesh, _mlp_module(mesh, spec, i, loader))
             if "attention" in steps:
                 from models.demos.mimo_v2_6_d_p_cp4.tt.ccl import RingCCL
 

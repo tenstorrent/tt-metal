@@ -116,3 +116,16 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Verified: reference passes (pcc 0.999997, rel 0.0023, slices 0.0023 each); stub fails (pcc 0). The device gate already passes with the existing TtRMSNorm registration: pcc 0.999996, rel 0.0028, ratio [0.9941, 1.0057], worst row 0.0062, slices 0.0027-0.0030, x0.1 rel 0.0024 / worst row 0.0056.
 - The first `FAIL pcc=0` line is the precompile collect pass. Ignore it.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_ffn_norm.py`
+
+## C.full_dense.mlp.test.1 (test review)
+- Ported the prior's frozen test (`mimo_v2_6_d_p/tests/bringup/test_c_full_dense_mlp.py`, same golden: s4096 chunk 1, ffn_norm [2048, 4096] -> mlp_out). It gates on PCC >= 0.99 and also asserts: finite output, output size, rel L2 <= 0.015, per-token norm ratio in [0.98, 1.02], and worst per-token rel L2 <= 0.05 (the prior's mutation table is in the docstring). New for CP=4: rel L2 <= 0.015 per CP slice (rows [r*512, (r+1)*512)). Metric: `rel_l2_slice_max_mlp_L00`.
+- The reference MiMo dense MLP has no clamp (grep of `mimo_v2_6_d_p/reference`), so the Hy4 x30 clamp rerun is not needed. gelu_tanh already fails PCC here (0.911).
+- Measured: reference PCC 0.999998, rel 0.00175, ratio [0.9986, 1.0015], worst row 0.0024, slices 0.00174-0.00175. Stub fails (PCC 0).
+- Device mode fails with NotImplementedError (no device module yet). The implement step supplies it. The "FAIL pcc=0" line comes from the precompile collect pass. Ignore it.
+- Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_mlp.py` (and `BRINGUP_IMPL=stub`, and without BRINGUP_IMPL for the device).
+
+## C.full_dense.mlp implement (attempt 1)
+- `tt/mlp.py`: `TtDenseMLP` + `build_mlp`, copied from the prior's `tt/mlp.py` / `tt/model.py:build_mlp`, now TP=1. Every chip holds the whole gate/up [4096, 16384] and down [16384, 4096] (bf16, replicated, 0.38 GiB per chip). Each chip runs silu-fused gate linear, up linear, mul, down linear on its own CP slice [1, 1, S/4, 4096]. The prior's all_reduce is gone. All matmuls are HiFi4 + fp32 acc, DRAM interleaved, default program configs. Weights are fp8 + 128x128 block scale, dequantized in fp32 at load and then cast to bf16.
+- hooks.py: `_mlp_module`, `device_component("mlp")` via `_cp_host_fn` (CP split in, concat out), and the hybrid builds an `mlp` override. `mlp` added to `DEVICE_STEPS["full_dense"]`.
+- Gate: pcc 0.999998, rel L2 0.0019, row norm ratio [0.9978, 1.0027], worst row 0.0040, per-slice rel [0.00196, 0.00193, 0.00193, 0.00196]. The first "FAIL pcc=0" line is the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_mlp.py`
