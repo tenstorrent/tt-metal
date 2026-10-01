@@ -1910,8 +1910,9 @@ static void sdpa_inner_loop_step(
             }
             PACK((llk_pack_reconfig_l1_acc(0)));
             pack_reconfig_data_format(cb_qkt_im);
-            MATH((llk_math_matmul_init_no_mop<MATH_FIDELITY, MM_THROTTLE>(
-                cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h)));
+            // Full no-MOP PV init on all threads: the MOP matmul above replaced unpack and math state that
+            // the short PV reinit does not restore.
+            recipe_mm_init(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, KT_stride);
         }
 #endif
 
