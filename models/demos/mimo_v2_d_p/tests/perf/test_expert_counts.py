@@ -5,8 +5,8 @@ block), and after every MoE layer the route plan's on-device counts read back (t
 each chip). Saved as counts[chunk, moe_layer, device, local_expert] (+ gids) to MIMO_EC_OUT; a short per-layer
 summary (per-chip load spread, hottest expert) is logged.
 
-Run with --profile to also get each chunk's per-chip FlatRoutedExpert kernel times (signpost chunk{c}); the device
-profiler is drained after every chunk.
+Run with --profile (a few chunks: MIMO_EC_SEQ=8192) to also get each chunk's per-chip FlatRoutedExpert kernel times
+(signpost chunk{c}).
 
     MIMO_EC_SEQ (57344), MIMO_EC_CHUNK (4096), MIMO_EC_LAYERS (48), MIMO_EC_PROMPT (text file; default the golden
     docs_prompt.txt), MIMO_EC_OUT (generated/mimo_expert_counts/counts_<mesh>.pt)
@@ -82,7 +82,7 @@ def test_expert_counts(mesh_device, device_params):
         out.deallocate(True)
         ttnn.synchronize_device(mesh_device)
         signpost(f"chunk{c}_end")
-        if os.environ.get("TT_METAL_DEVICE_PROFILER"):
+        if os.environ.get("MIMO_EC_DRAIN"):  # long --profile runs; tracy -r post-processing rejects a mid-run read
             ttnn.ReadDeviceProfiler(mesh_device)
         tot = counts[c].sum((1, 2))
         assert torch.all(tot == CHUNK * cfg.num_experts_per_tok), (c, tot)  # every (token, k) pair landed once
