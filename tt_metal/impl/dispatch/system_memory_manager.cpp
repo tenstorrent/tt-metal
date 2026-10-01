@@ -903,9 +903,10 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     if (dispatch_mem_map.prefetch_q_snoop()) {
         constexpr uint32_t phase_bit = PrefetchConstants::PREFETCH_Q_PHASE_BIT;
         TT_ASSERT(entry_bytes == 4, "Snooped fetch queue entries must be 4 bytes");
-        TT_ASSERT(
-            (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < (1u << phase_bit),
-            "FetchQ command too large to leave room for the phase bit");
+        // The entry holds a uint32_t size shifted down by PREFETCH_Q_LOG_MINSIZE, so it never reaches the phase bit.
+        static_assert(
+            sizeof(command_size_B) * 8 - DispatchSettings::PREFETCH_Q_LOG_MINSIZE <= phase_bit,
+            "FetchQ entry size field would overlap the phase bit");
         entry_val |= this->prefetch_q_phases[cq_id] << phase_bit;
 
         // Rewrite the whole 16B beat holding this entry. Its other entries get back what was last written there,

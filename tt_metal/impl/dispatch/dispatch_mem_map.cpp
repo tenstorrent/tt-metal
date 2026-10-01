@@ -152,21 +152,15 @@ DispatchMemMap::DispatchMemMap(
 
     uint32_t prefetch_dispatch_unreserved_base =
         device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
-    // Snooped fetch queue writes cover whole 16B beats (QUAS-4226), so the beats must line up with the queue.
-    // The last beat can run past the queue end, into the padding before cmddat_q.
+    // Snooped fetch queue writes cover whole 16B beats (QUAS-4226). The queue base and cmddat_q are both aligned to
+    // pcie_alignment, so when that is a multiple of the beat, the beats line up with the queue and the last one ends
+    // in the padding before cmddat_q.
     TT_FATAL(
-        !prefetch_q_snoop_ || prefetch_dispatch_unreserved_base % PREFETCH_Q_SNOOP_BEAT_BYTES == 0,
-        "Fetch queue base {:#x} is not aligned to a {} B snoop beat",
-        prefetch_dispatch_unreserved_base,
+        !prefetch_q_snoop_ || pcie_alignment % PREFETCH_Q_SNOOP_BEAT_BYTES == 0,
+        "PCIe alignment {} B is not a multiple of the {} B snoop beat",
+        pcie_alignment,
         PREFETCH_Q_SNOOP_BEAT_BYTES);
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
-    TT_FATAL(
-        !prefetch_q_snoop_ ||
-            align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, PREFETCH_Q_SNOOP_BEAT_BYTES) <=
-                cmddat_q_base_,
-        "The last {} B snoop beat of the fetch queue would overlap cmddat_q at {:#x}",
-        PREFETCH_Q_SNOOP_BEAT_BYTES,
-        cmddat_q_base_);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
     if (cq_layout.fd_kernels_on_same_core) {
         // All FD kernels share one core (Quasar), so dispatch_buffer must not alias
