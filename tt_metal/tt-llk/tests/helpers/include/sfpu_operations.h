@@ -1897,11 +1897,7 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::MUL && MATH_FORMAT != static_cast<std::uint32_t>(DataFormat::Int32))
     {
-        // Route float MUL to the dedicated production kernel (calculate_sfpu_binary_mul), matching
-        // what mul_binary_tile() dispatches. With a bf16 Dest it narrows with software
-        // round-to-nearest-even and forces 0 * x = 0 (FPU parity); the generic
-        // calculate_sfpu_binary MUL arm below does neither, so measuring it would not guard the
-        // kernel ttnn runs.
+        // Float MUL runs the production kernel calculate_sfpu_binary_mul, as mul_binary_tile() does.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,

@@ -210,7 +210,7 @@ inline void calculate_sfpu_binary(
     };
 
     if constexpr (BINOP == BinaryOp::POW) {
-        // The pow arm keeps its RISC loop over the rows: unrolled, its long body idles 3 cycles per tile more, measured.
+        // Not unrolled: the long pow body is slower unrolled.
         for (int d = 0; d < ITERATIONS; d++) {
             row();
         }
@@ -237,8 +237,6 @@ inline void calculate_sfpu_binary_mul(
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:
             result = float32_to_bf16_rne(result);
-            // No zero guard: the SFPU multiply already returns +0 for a zero times any finite value (a denormal
-            // counts as zero), so the only products a guard would change are 0 * inf and 0 * NaN, which are NaN.
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -271,9 +269,7 @@ inline void calculate_sfpu_binary_div(
             v_endif;
         }
 
-        // Zero divisor: NaN for 0 / 0, a signed infinity otherwise. The two constants come from the programmable
-        // constant registers that sfpu_binary_init<DIV> loads (vConstFloatPrgm1 = inf, vConstFloatPrgm2 = NaN), so
-        // the arm loads no immediate per row; the values written are the same as before.
+        // Zero divisor: vConstFloatPrgm1 = inf and vConstFloatPrgm2 = NaN, loaded by sfpu_binary_init<DIV>.
         v_if(in1 == 0) {
             result = sfpi::copysgn(sfpi::vFloat(sfpi::vConstFloatPrgm1), in0);
             v_if(in0 == 0) { result = sfpi::vConstFloatPrgm2; }
@@ -294,8 +290,7 @@ inline void calculate_sfpu_binary_div(
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV) {
-        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV (vConstFloatPrgm0 = 2.0), and the two answers of
-        // the zero-divisor arm of calculate_sfpu_binary_div.
+        // Initialisation for sfpu_reciprocal_iter<2> in DIV and the zero-divisor constants of the div arm.
         sfpu_reciprocal_init<false>();
         sfpi::vConstFloatPrgm1 = std::numeric_limits<float>::infinity();
         sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();

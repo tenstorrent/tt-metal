@@ -27,12 +27,8 @@ inline constexpr bool is_fp32_compare_v = is_fp32_equal_compare_v<Op> || is_fp32
 template <SfpuType>
 inline constexpr bool unsupported_fp32_compare_v = false;
 
-// The three float bodies below compare in the SFPU's total order (-NaN < -inf < ... < -0 < +0 < ... < +inf < +NaN)
-// after passing each operand through one MAD, 1.0 * x + 0: the multiply-add returns +0 for -0 and for a denormal
-// input (a denormal counts as zero), the operand unchanged otherwise, and the canonical positive NaN for any NaN.
-// After that, the total order agrees with the IEEE order for every pair except the NaN ones, and a NaN can only
-// sit at the top: one compare of the second operand against +inf rejects it. The result rows keep the store of the
-// default value followed by one predicated store of the other value.
+// The float bodies canonicalize each operand with one MAD (1.0 * x + 0): -0 and denormals become +0, any NaN becomes
+// the canonical +NaN, which the SFPU total order puts above +inf, so one compare against inf rejects it.
 template <int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_fp32_equal(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(is_fp32_equal_compare_v<RELATIONAL_OP>, "Supported operation types: eq, ne");
@@ -53,16 +49,15 @@ inline void calculate_binary_comp_fp32_equal(const uint dst_index_in0, const uin
         TT_SFPLOAD(a, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
 
-        // ca = a + 0, cb = b + 0: -0 and denormals become +0, a NaN becomes the canonical +NaN
         TTI_SFPMAD(p_sfpu::LCONST_1, a, p_sfpu::LCONST_0, ca, 0);
         TTI_SFPMAD(p_sfpu::LCONST_1, b, p_sfpu::LCONST_0, cb, 0);
         TT_SFPSTORE(default_result, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * dst_tile_size);
 
-        // if total-order ca == cb (two canonical NaNs are equal here and rejected below)
-        TTI_SFPLE(0, ca, cb, 1); // SFPLE_MOD1_SET_CC: LaneFlags = (ca >= cb)
-        TTI_SFPLE(0, cb, ca, 1); // SFPLE_MOD1_SET_CC: LaneFlags &= (cb >= ca)
+        // if total-order ca == cb
+        TTI_SFPLE(0, ca, cb, 1);  // SFPLE_MOD1_SET_CC
+        TTI_SFPLE(0, cb, ca, 1);  // SFPLE_MOD1_SET_CC
         // if inf >= cb; rejects NaN
-        TTI_SFPLE(0, inf, cb, 1); // SFPLE_MOD1_SET_CC: LaneFlags = (inf >= cb)
+        TTI_SFPLE(0, inf, cb, 1);  // SFPLE_MOD1_SET_CC
         TT_SFPSTORE(equal_result, InstrModLoadStore::DEFAULT, ADDR_MOD_6, dst_index_out * dst_tile_size);
 
         TTI_SFPENCC(0, 0, 0, 0);
@@ -92,15 +87,14 @@ inline void calculate_binary_comp_fp32_strict_ordered(
         TT_SFPLOAD(a, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_a * dst_tile_size);
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_b * dst_tile_size);
 
-        // ca = a + 0, cb = b + 0: -0 and denormals become +0, a NaN becomes the canonical +NaN
         TTI_SFPMAD(p_sfpu::LCONST_1, a, p_sfpu::LCONST_0, ca, 0);
         TTI_SFPMAD(p_sfpu::LCONST_1, b, p_sfpu::LCONST_0, cb, 0);
         TT_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * dst_tile_size);
 
-        // if total-order ca < cb; a NaN ca is the largest value, so it never passes
-        TTI_SFPGT(0, ca, cb, 1); // SFPGT_MOD1_SET_CC: LaneFlags = (ca < cb)
-        // if inf >= cb; rejects a NaN cb
-        TTI_SFPLE(0, inf, cb, 1); // SFPLE_MOD1_SET_CC: LaneFlags = (inf >= cb)
+        // if total-order ca < cb
+        TTI_SFPGT(0, ca, cb, 1);  // SFPGT_MOD1_SET_CC
+        // if inf >= cb; rejects NaN
+        TTI_SFPLE(0, inf, cb, 1);  // SFPLE_MOD1_SET_CC
         TT_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_6, dst_index_out * dst_tile_size);
 
         TTI_SFPENCC(0, 0, 0, 0);
@@ -130,15 +124,14 @@ inline void calculate_binary_comp_fp32_weak_ordered(
         TT_SFPLOAD(a, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_a * dst_tile_size);
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_b * dst_tile_size);
 
-        // ca = a + 0, cb = b + 0: -0 and denormals become +0, a NaN becomes the canonical +NaN
         TTI_SFPMAD(p_sfpu::LCONST_1, a, p_sfpu::LCONST_0, ca, 0);
         TTI_SFPMAD(p_sfpu::LCONST_1, b, p_sfpu::LCONST_0, cb, 0);
         TT_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * dst_tile_size);
 
-        // if total-order cb >= ca; a NaN ca is the largest value, so it passes only against a NaN cb
-        TTI_SFPLE(0, cb, ca, 1); // SFPLE_MOD1_SET_CC: LaneFlags = (cb >= ca)
-        // if inf >= cb; rejects a NaN cb, and with it the NaN pair
-        TTI_SFPLE(0, inf, cb, 1); // SFPLE_MOD1_SET_CC: LaneFlags = (inf >= cb)
+        // if total-order ca <= cb
+        TTI_SFPLE(0, cb, ca, 1);  // SFPLE_MOD1_SET_CC
+        // if inf >= cb; rejects NaN
+        TTI_SFPLE(0, inf, cb, 1);  // SFPLE_MOD1_SET_CC
         TT_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_6, dst_index_out * dst_tile_size);
 
         TTI_SFPENCC(0, 0, 0, 0);
