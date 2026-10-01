@@ -62,13 +62,13 @@ extern "C" __attribute__((noinline, used)) void write_ordered_constant_operation
 }
 
 // CHECK-LABEL: <write_ordered_constant_operations>:
-// CHECK-NEXT: ttrmwcib0 15,1,0
+// The two word-0 fields merge across both GPR transfers at their first occurrence.
+// CHECK-NEXT: ttrmwcib0 239,65,0
+// CHECK-NEXT: ttrmwcib1 1,0,0
 // CHECK-NEXT: ttwrcfg 4,0,76
 // CHECK-NEXT: ttwrcfg 5,0,80
 // CHECK-NEXT: ttnop
 // CHECK-NEXT: ttrmwcib0 1,1,5
-// CHECK-NEXT: ttrmwcib0 224,64,0
-// CHECK-NEXT: ttrmwcib1 1,0,0
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_deferred_gpr_sequence()

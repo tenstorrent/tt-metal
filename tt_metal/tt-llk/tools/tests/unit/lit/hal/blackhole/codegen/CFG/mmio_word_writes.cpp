@@ -5,6 +5,7 @@
 // RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -S %s -o %t.s
 // RUN: FileCheck %s --enable-var-scope < %t.s
 
+#include <array>
 #include <cstdint>
 
 #include "hal/cfg.h"
@@ -16,9 +17,9 @@ namespace cfg = hal::cfg;
 // calls, or register read-modify-write operations, matching the former batch API.
 extern "C" __attribute__((noinline, used)) void write_pack_words_constant()
 {
-    constexpr std::uint32_t counters[] = {0x100}; // pack_reads_per_xy_plane = 1; other bits zero.
-    constexpr std::uint32_t edges[]    = {0xffff};
-    constexpr std::uint32_t mappings[] = {0};
+    constexpr std::array<std::uint32_t, 1> counters = {0x100}; // pack_reads_per_xy_plane = 1; other bits zero.
+    constexpr std::array<std::uint32_t, 1> edges    = {0xffff};
+    constexpr std::array<std::uint32_t, 1> mappings = {0};
 
     cfg::write<cfg::Access::MMIO, cfg::PackCounters::pack_per_xy_plane, cfg::Sec::S0, 1>(counters);
     cfg::write<cfg::Access::MMIO, cfg::PckEdgeOffsetSec0::mask, cfg::Sec::S0, 1>(edges);
@@ -45,9 +46,9 @@ extern "C" __attribute__((noinline, used)) void write_pack_words_constant()
 // Runtime values must also pass directly to the three stores without a batch.
 extern "C" __attribute__((noinline, used)) void write_pack_words_runtime(std::uint32_t counter, std::uint32_t edge, std::uint32_t mapping)
 {
-    const std::uint32_t counters[] = {counter};
-    const std::uint32_t edges[]    = {edge};
-    const std::uint32_t mappings[] = {mapping};
+    const std::array<std::uint32_t, 1> counters = {counter};
+    const std::array<std::uint32_t, 1> edges    = {edge};
+    const std::array<std::uint32_t, 1> mappings = {mapping};
 
     cfg::write<cfg::Access::MMIO, cfg::PackCounters::pack_per_xy_plane, cfg::Sec::S0, 1>(counters);
     cfg::write<cfg::Access::MMIO, cfg::PckEdgeOffsetSec0::mask, cfg::Sec::S0, 1>(edges);
