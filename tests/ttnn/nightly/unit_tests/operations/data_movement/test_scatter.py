@@ -144,6 +144,92 @@ def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, ind
         assert_allclose(torch_result_from_ttnn, torch_result)
 
 
+# Any zero extent used to reach the program factories, which size their work split as
+# logical_volume() / input_shape[-1] and divide 0 by 0 - a SIGFPE that killed the host process
+# rather than an error the caller could catch. The scatter axis is transposed last before that
+# division, so a zero interior dim reaches it too whenever dim points elsewhere. An empty index
+# against a non-empty input failed differently, on dfb.entry_size > 0. torch returns the input
+# unchanged for all of these. See issue #56881.
+@pytest.mark.parametrize(
+    "input_shape, dim, index_shape",
+    [
+        ([2, 3, 0], -1, [2, 3, 0]),  # zero last dim - SIGFPE
+        ([0], -1, [0]),  # rank-1 empty - SIGFPE
+        ([0], 0, [0]),  # same, positive dim
+        ([2, 0, 3], -1, [2, 0, 3]),  # zero interior, dim elsewhere - threw from the program builder
+        ([2, 0, 4], 1, [2, 0, 4]),  # zero interior transposed onto the scatter axis - SIGFPE
+        ([0, 3, 4], 0, [0, 3, 4]),  # zero leading dim - SIGFPE
+        ([2, 3, 4], -1, [2, 3, 0]),  # empty index, non-empty input - dfb.entry_size > 0
+        ([2, 3, 4], -1, [2, 0, 4]),  # empty index on an interior dim
+        ([2, 3, 4], 1, [2, 0, 4]),  # same, transposed
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.Layout.ROW_MAJOR, ttnn.Layout.TILE])
+def test_scatter_zero_volume(input_shape, dim, index_shape, layout, device):
+    # The op bails out early only for an empty input or an empty scatter axis. An index that is
+    # empty on some *other* axis is left to the device op on purpose - it returns a correct,
+    # freshly allocated result there - but that route converts layout on the way in, and
+    # ttnn.to_layout currently fails on any zero-volume tensor with
+    # TT_FATAL "DFB 'mci_out' has no producer" out of untilize_with_unpadding. That is a defect in
+    # to_layout, not in scatter, and it is not specific to this op: to_layout(TILE -> ROW_MAJOR)
+    # fails on [2,0,4], [2,3,0] and [0,3,4] with no scatter involved. ROW_MAJOR keeps the coverage
+    # and is where the result is asserted; drop the skip once to_layout handles empty tensors.
+    index_is_empty_off_axis = (
+        layout == ttnn.Layout.TILE and 0 not in input_shape and index_shape[dim] != 0 and 0 in index_shape
+    )
+    if index_is_empty_off_axis:
+        pytest.skip("to_layout fails on zero-volume tensors (untilize_with_unpadding); ROW_MAJOR covers this case")
+
+    torch.manual_seed(0)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    # randint needs a non-empty range even when it produces no elements
+    torch_index = torch.randint(0, max(input_shape[dim], 1), index_shape, dtype=torch.int64)
+    torch_src = torch.randn(index_shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=layout, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=layout, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=ttnn.bfloat16, layout=layout, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+    result = ttnn.to_torch(ttnn_result)
+    assert result.shape == torch_result.shape
+    assert result.dtype == torch_result.dtype
+    if result.numel():
+        assert_allclose(result, torch_result)
+
+
+# The reduction path reaches the same division through its own program factory.
+@pytest.mark.parametrize(
+    "input_shape, dim, index_shape",
+    [
+        ([2, 3, 0], -1, [2, 3, 0]),
+        ([2, 0, 4], 1, [2, 0, 4]),
+        ([2, 3, 4], -1, [2, 3, 0]),
+    ],
+)
+def test_scatter_add_zero_volume(input_shape, dim, index_shape, device):
+    torch.manual_seed(0)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_index = torch.randint(0, max(input_shape[dim], 1), index_shape, dtype=torch.int64)
+    torch_src = torch.randn(index_shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_result = torch.scatter_add(torch_input, dim, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter_add(ttnn_input, dim, ttnn_index, ttnn_src)
+
+    result = ttnn.to_torch(ttnn_result)
+    assert result.shape == torch_result.shape
+    if result.numel():
+        assert_allclose(result, torch_result)
+
+
 @pytest.mark.parametrize(
     "input_shape, dim, index_shape, source_shape, input_dtype, index_dtype, layout, expected_num_cache_entries",
     [
