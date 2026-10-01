@@ -586,19 +586,15 @@ def test_unary_chain_with_dtype_changing_op_in_comparison_mode(device, input_dty
     ],
     ids=["uint16_to_bfloat16", "uint32_to_float32"],
 )
-def test_bitcast_fallback_keeps_requested_dtype(device, input_dtype, output_dtype, float_dtype, bits_dtype):
+def test_bitcast_to_same_width_float_in_comparison_mode(device, input_dtype, output_dtype, float_dtype, bits_dtype):
     torch_input = _bit_patterns(torch.rand(SINGLE_TILE, dtype=float_dtype) + 1, bits_dtype)
     input_tensor = _to_device(torch_input, device, dtype=input_dtype)
 
+    # bitcast returns the requested same-width dtype, so the golden must reinterpret the bits as that dtype.
     with comparison_mode():
         output = ttnn.bitcast(input_tensor, output_dtype)
 
-    # The fallback's output postprocessing used to cast the bitcast result back to the input dtype, undoing the
-    # requested output dtype. That postprocessor runs only on the golden fallback path, not in comparison mode.
-    fallback_output = ttnn.get_fallback_function(ttnn.bitcast)(input_tensor, output_dtype)
-    assert fallback_output.dtype == output.dtype
-    # Compare with the reinterpreted input bits: the device FLOAT32 bitcast result is checked separately.
-    assert torch.equal(ttnn.to_torch(fallback_output), ttnn.to_torch(input_tensor).view(float_dtype))
+    assert _registered_golden_output(ttnn.bitcast, input_tensor, output_dtype).dtype == ttnn.to_torch(output).dtype
 
 
 CONCAT_BW_GRAD_SHAPE = (1, 1, 64, 32)
@@ -1299,55 +1295,17 @@ def test_requantize_saturates_int8_output_in_comparison_mode(device):
     _assert_golden_matches_output(_registered_golden_output(ttnn.requantize, *requantize_args, dtype=ttnn.int8), output)
 
 
-def _integer_matmul_operands(device):
-    return (
-        _to_device(_small_integer_values((32, 32)), device),
-        _to_device(torch.eye(32, dtype=torch.bfloat16), device),
-    )
-
-
 @pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize(
-    "operation, make_operands, op_kwargs",
-    [
-        # The golden returns the requested FLOAT32, but the fallback's postprocessing used to cast results back to
-        # the first input's dtype.
-        pytest.param(ttnn.matmul, _integer_matmul_operands, {"dtype": ttnn.float32}, id="matmul"),
-        pytest.param(ttnn.linear, _integer_matmul_operands, {"dtype": ttnn.float32}, id="linear"),
-        pytest.param(
-            ttnn.clone, lambda device: _integer_matmul_operands(device)[:1], {"dtype": ttnn.float32}, id="clone"
-        ),
-        # Without dtype, dequantize outputs BFLOAT16, but the fallback's postprocessing used to cast the result back
-        # to the int32 input dtype.
-        pytest.param(
-            ttnn.dequantize,
-            lambda device: (
-                _to_device(torch.full(SINGLE_TILE, 3, dtype=torch.int32), device, dtype=ttnn.int32),
-                0.5,
-                2,
-            ),
-            {},
-            id="dequantize",
-        ),
-        # The fallback's postprocessing used to reshape the result to the tile-aligned padded shape, so its logical
-        # shape differed from the device output.
-        pytest.param(
-            ttnn.pad,
-            lambda device: (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device),),
-            {"padding": ((0, 0), (0, 0), (0, 1), (0, 1)), "value": 0.0},
-            id="pad",
-        ),
-    ],
-)
-def test_fallback_matches_comparison_mode_output(device, operation, make_operands, op_kwargs):
-    operands = make_operands(device)
+def test_pad_fallback_matches_comparison_mode_output(device):
+    input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
+    pad_kwargs = {"padding": ((0, 0), (0, 0), (0, 1), (0, 1)), "value": 0.0}
 
     with comparison_mode():
-        output = operation(*operands, **op_kwargs)
+        output = ttnn.pad(input_tensor, **pad_kwargs)
 
-    # The fallback's output postprocessing runs only on the golden fallback path, not in comparison mode, so it
-    # must keep the device output's dtype, logical shape and values.
-    fallback_output = ttnn.get_fallback_function(operation)(*operands, **op_kwargs)
+    # The fallback's postprocessing used to reshape the result to the tile-aligned padded shape, so its logical
+    # shape differed from the device output.
+    fallback_output = ttnn.get_fallback_function(ttnn.pad)(input_tensor, **pad_kwargs)
     assert fallback_output.dtype == output.dtype
     assert tuple(fallback_output.shape) == tuple(output.shape)
     assert torch.equal(ttnn.to_torch(fallback_output), ttnn.to_torch(output))

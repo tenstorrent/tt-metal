@@ -188,7 +188,7 @@ def _integer_path_scalars(input_tensor_a, input_tensor_b):
 
 def _integral_float_scalars_as_int(input_tensor_a, input_tensor_b):
     """Integral float scalars against a 32-bit integer tensor, converted to the integers the device packs.
-    Without this, Torch promotes the addition to float32, which changes the dtype and loses exactness.
+    Without this, Torch promotes the arithmetic to float32, which changes the dtype and loses exactness.
     """
     import torch
 
@@ -414,6 +414,7 @@ def _golden_function_subtract(
 ):
     # Captured before activations, which materialize a scalar operand into a tensor.
     has_scalar_operand = _is_scalar_like(input_tensor_a) or _is_scalar_like(input_tensor_b)
+    input_tensor_a, input_tensor_b = _integral_float_scalars_as_int(input_tensor_a, input_tensor_b)
     input_tensor_a, input_tensor_b = _integer_path_scalars(input_tensor_a, input_tensor_b)
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
@@ -463,6 +464,7 @@ def _golden_function_rsub(
 ):
     # Captured before activations, which materialize a scalar operand into a tensor.
     has_scalar_operand = _is_scalar_like(input_tensor_a) or _is_scalar_like(input_tensor_b)
+    input_tensor_a, input_tensor_b = _integral_float_scalars_as_int(input_tensor_a, input_tensor_b)
     input_tensor_a, input_tensor_b = _integer_path_scalars(input_tensor_a, input_tensor_b)
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
@@ -955,59 +957,47 @@ def _golden_function_clamped_silu_glu(gate, up, limit, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.clamped_silu_glu, golden_function=_golden_function_clamped_silu_glu)
 
 
-def _golden_function_maximum(input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
+def _make_extremum_golden(torch_name):
+    def golden_function(
+        input_tensor_a,
+        input_tensor_b,
+        *args,
+        activations=None,
+        input_tensor_a_activations=None,
+        input_tensor_b_activations=None,
+        **kwargs,
+    ):
+        import torch
 
-    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
-        # Evaluate unsupported unsigned min/max in int64 and restore the input dtype.
-        return integer_golden.binary(input_tensor_a, input_tensor_b, torch.maximum)
-    if not torch.is_tensor(input_tensor_b):
-        # PyTorch maximum requires two tensors even though TTNN accepts a scalar operand.
-        input_tensor_b = torch.tensor(input_tensor_b, dtype=input_tensor_a.dtype, device=input_tensor_a.device)
-    return torch.maximum(input_tensor_a, input_tensor_b)
+        torch_function = getattr(torch, torch_name)
+        if not torch.is_tensor(input_tensor_b):
+            # The scalar overload runs on the unary path, which accepts activations but never applies them.
+            activations = input_tensor_a_activations = input_tensor_b_activations = None
+        # The tensor overload shares the binary kernel contract: operand activations first, result activations last.
+        input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
+        input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
+        if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+            # Evaluate unsupported unsigned min/max in int64 and restore the input dtype.
+            output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, torch_function)
+        else:
+            if not torch.is_tensor(input_tensor_b):
+                # PyTorch min/max requires two tensors even though TTNN accepts a scalar operand.
+                input_tensor_b = torch.tensor(input_tensor_b, dtype=input_tensor_a.dtype, device=input_tensor_a.device)
+            output_tensor = torch_function(input_tensor_a, input_tensor_b)
+        return apply_activations(output_tensor, activations)
+
+    return golden_function
 
 
 ttnn.attach_golden_function(
     ttnn.maximum,
-    golden_function=_with_binary_output_dtype(_golden_function_maximum),
+    golden_function=_with_binary_output_dtype(_make_extremum_golden("maximum")),
     preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
 )
 
-
-def _golden_function_minimum(
-    input_tensor_a,
-    input_tensor_b,
-    *args,
-    activations=None,
-    input_tensor_a_activations=None,
-    input_tensor_b_activations=None,
-    dtype=None,
-    _ttnn_output_tensor_dtype=None,
-    **kwargs,
-):
-    import torch
-
-    if not torch.is_tensor(input_tensor_b):
-        # The scalar overload runs on the unary path, which accepts activations but never applies them.
-        activations = input_tensor_a_activations = input_tensor_b_activations = None
-    # minimum shares the binary kernel contract: operand activations first, result activations last.
-    input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
-    input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
-    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
-        # Evaluate unsupported unsigned min/max in int64 and restore the input dtype.
-        output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, torch.minimum)
-    else:
-        if not torch.is_tensor(input_tensor_b):
-            # PyTorch minimum requires two tensors even though TTNN accepts a scalar operand.
-            input_tensor_b = torch.tensor(input_tensor_b, dtype=input_tensor_a.dtype, device=input_tensor_a.device)
-        output_tensor = torch.minimum(input_tensor_a, input_tensor_b)
-    output_tensor = apply_activations(output_tensor, activations)
-    return _apply_binary_output_dtype(output_tensor, dtype, _ttnn_output_tensor_dtype)
-
-
 ttnn.attach_golden_function(
     ttnn.minimum,
-    golden_function=_golden_function_minimum,
+    golden_function=_with_binary_output_dtype(_make_extremum_golden("minimum")),
     preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
 )
 

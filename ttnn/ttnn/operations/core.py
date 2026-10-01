@@ -732,11 +732,7 @@ def _golden_function(tensor, *args, dtype=None, **kwargs):
     return golden_to_output_dtype(tensor, dtype)
 
 
-ttnn.attach_golden_function(
-    ttnn.clone,
-    golden_function=_golden_function,
-    postprocess_golden_function_outputs=ttnn.decorators.requested_dtype_postprocess_golden_function_outputs,
-)
+ttnn.attach_golden_function(ttnn.clone, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor, *args, **kwargs):

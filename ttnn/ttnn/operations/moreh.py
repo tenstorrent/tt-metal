@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
+
 import ttnn
 import ttnn._ttnn
 from ttnn.operations.golden_common import (
@@ -340,18 +342,8 @@ ttnn.attach_golden_function(
 )
 
 
-def _make_softmax_family_golden(default_op, family_function):
-    """Return a softmax-family golden for an operation whose public op argument defaults to default_op.
-    moreh_softmax and moreh_softmin (and their backward operations) share one kernel family, so op overrides the
-    operation's own function.
-    """
-
-    def golden_function(*args, op=None, **kwargs):
-        return family_function(*args, op=default_op if op is None else op, **kwargs)
-
-    return golden_function
-
-
+# The softmax-family operations share one kernel family and default op to their own function, but an explicit op
+# argument selects any member of the family.
 def _moreh_softmax_family(input_tensor, dim, *_, op, **__):
     """Evaluate the softmax-family function selected by a MorehSoftmaxOp."""
 
@@ -368,25 +360,16 @@ def _moreh_softmax_family(input_tensor, dim, *_, op, **__):
 
 ttnn.attach_golden_function(
     ttnn.moreh_softmax,
-    golden_function=_make_softmax_family_golden(
-        ttnn._ttnn.operations.moreh.MorehSoftmaxOp.SOFTMAX, _moreh_softmax_family
-    ),
+    golden_function=functools.partial(_moreh_softmax_family, op=ttnn._ttnn.operations.moreh.MorehSoftmaxOp.SOFTMAX),
 )
 ttnn.attach_golden_function(
     ttnn.moreh_softmin,
-    golden_function=_make_softmax_family_golden(
-        ttnn._ttnn.operations.moreh.MorehSoftmaxOp.SOFTMIN, _moreh_softmax_family
-    ),
+    golden_function=functools.partial(_moreh_softmax_family, op=ttnn._ttnn.operations.moreh.MorehSoftmaxOp.SOFTMIN),
 )
-
-
-def _golden_logsoftmax(input_tensor, dim, *_, **__):
-    import torch
-
-    return torch.log_softmax(input_tensor, dim=dim)
-
-
-ttnn.attach_golden_function(ttnn.moreh_logsoftmax, golden_function=_golden_logsoftmax)
+ttnn.attach_golden_function(
+    ttnn.moreh_logsoftmax,
+    golden_function=functools.partial(_moreh_softmax_family, op=ttnn._ttnn.operations.moreh.MorehSoftmaxOp.LOGSOFTMAX),
+)
 
 
 def _golden_nll_loss(input_tensor, target_tensor, reduction, *_, weight_tensor=None, ignore_index=-100, **__):
@@ -696,27 +679,23 @@ def _moreh_softmax_family_backward(output_tensor, output_grad_tensor, dim, *_, o
 
 ttnn.attach_golden_function(
     ttnn.moreh_softmax_backward,
-    golden_function=_make_softmax_family_golden(
-        ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.SOFTMAX, _moreh_softmax_family_backward
+    golden_function=functools.partial(
+        _moreh_softmax_family_backward, op=ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.SOFTMAX
     ),
     output_tensor_kwarg_names=("input_grad_tensor",),
 )
 ttnn.attach_golden_function(
     ttnn.moreh_softmin_backward,
-    golden_function=_make_softmax_family_golden(
-        ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.SOFTMIN, _moreh_softmax_family_backward
+    golden_function=functools.partial(
+        _moreh_softmax_family_backward, op=ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.SOFTMIN
     ),
     output_tensor_kwarg_names=("input_grad_tensor",),
 )
-
-
-def _golden_logsoftmax_backward(output_tensor, output_grad_tensor, dim, *_, **__):
-    return _logsoftmax_derivative(output_tensor, output_grad_tensor, dim)
-
-
 ttnn.attach_golden_function(
     ttnn.moreh_logsoftmax_backward,
-    golden_function=_golden_logsoftmax_backward,
+    golden_function=functools.partial(
+        _moreh_softmax_family_backward, op=ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.LOGSOFTMAX
+    ),
     output_tensor_kwarg_names=("input_grad_tensor",),
 )
 

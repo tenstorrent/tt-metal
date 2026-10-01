@@ -234,16 +234,12 @@ def _torch_bitcast(input_tensor, dtype):
     return input_tensor.view(ttnn.ttnn_dtype_to_torch_dtype(dtype))
 
 
+# The unary table golden drops keyword arguments, so it would lose a dtype passed by keyword.
 def _golden_function_bitcast(input_tensor, dtype, *args, **_):
     return _torch_bitcast(input_tensor, dtype)
 
 
-# bitcast returns the requested dtype, so its fallback output must not be converted back to the input dtype.
-ttnn.attach_golden_function(
-    ttnn.bitcast,
-    golden_function=_golden_function_bitcast,
-    postprocess_golden_function_outputs=ttnn.decorators.dtype_preserving_postprocess_golden_function_outputs,
-)
+ttnn.attach_golden_function(ttnn.bitcast, golden_function=_golden_function_bitcast)
 
 
 def _golden_function_tril(input_tensor, diagonal=0, *args, **_):

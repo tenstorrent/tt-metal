@@ -694,11 +694,7 @@ def _golden_function_dequantize(input_tensor, scale, zero_point, *_, axis=None, 
     return output.to(ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.bfloat16)
 
 
-ttnn.attach_golden_function(
-    ttnn.dequantize,
-    golden_function=_golden_function_dequantize,
-    postprocess_golden_function_outputs=ttnn.decorators.dtype_preserving_postprocess_golden_function_outputs,
-)
+ttnn.attach_golden_function(ttnn.dequantize, golden_function=_golden_function_dequantize)
 
 
 def _golden_function_requantize(

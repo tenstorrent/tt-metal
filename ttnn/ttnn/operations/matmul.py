@@ -64,7 +64,6 @@ def _golden_function(
 ttnn.attach_golden_function(
     ttnn.matmul,
     golden_function=_golden_function,
-    postprocess_golden_function_outputs=ttnn.decorators.requested_dtype_postprocess_golden_function_outputs,
 )
 
 
@@ -112,7 +111,6 @@ def _golden_function(
 ttnn.attach_golden_function(
     ttnn.linear,
     golden_function=_golden_function,
-    postprocess_golden_function_outputs=ttnn.decorators.requested_dtype_postprocess_golden_function_outputs,
 )
 
 

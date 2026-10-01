@@ -222,13 +222,10 @@ def compare_tensors_using_pcc(
     use_comparison_config = comparison_config is not None and (comparison_config.scope == "all" or pcc_is_degenerate)
     # Operation goldens opt into non-PCC metrics only where their numerical contract requires it.
     # Unmarked outputs retain the existing PCC and degenerate allclose behavior without relaxation.
-    if use_comparison_config and comparison_config.method == "skip":
-        if same_shape:
-            return []
-        # Skipped outputs, such as uninitialized allocations, have no meaningful values, but a
-        # logical-shape mismatch is still a wrong result.
-        matches = False
-        actual_pcc = 0.0
+    # Skipped outputs, such as uninitialized allocations, have no meaningful values, but a
+    # logical-shape mismatch still fails below.
+    if use_comparison_config and comparison_config.method == "skip" and same_shape:
+        return []
     elif use_comparison_config and same_shape:
         nonfinite_masks_match = True
         if comparison_config.nonfinite == "mask" and (
@@ -857,9 +854,7 @@ def prepare_backward_golden_inputs(function_args_and_kwargs):
     return prepare(args), prepare(kwargs)
 
 
-def default_postprocess_golden_function_outputs(
-    output, function_args, function_kwargs, *, keep_golden_dtype=False, output_dtype=None
-):
+def default_postprocess_golden_function_outputs(output, function_args, function_kwargs):
     input_tensors = get_ttnn_tensors((function_args, function_kwargs))
 
     input_dtype = None
@@ -867,17 +862,16 @@ def default_postprocess_golden_function_outputs(
     input_device = None
     if input_tensors:
         input_tensor, *_ = input_tensors
-        input_dtype = None if keep_golden_dtype else input_tensor.dtype
+        input_dtype = input_tensor.dtype
         input_layout = input_tensor.layout
         if ttnn.is_tensor_storage_on_device(input_tensor):
             input_device = input_tensor.device()
-    dtype = output_dtype if output_dtype is not None else input_dtype
 
     def recursive_postprocess_golden_function_outputs(output):
         import torch
 
         if isinstance(output, torch.Tensor):
-            return ttnn.from_torch(output, dtype=dtype, layout=input_layout, device=input_device)
+            return ttnn.from_torch(output, dtype=input_dtype, layout=input_layout, device=input_device)
         elif isinstance(output, (list, tuple)):
             new_output = [recursive_postprocess_golden_function_outputs(element) for element in output]
             return type(output)(new_output)
@@ -886,24 +880,6 @@ def default_postprocess_golden_function_outputs(
 
     output = recursive_postprocess_golden_function_outputs(output)
     return output
-
-
-def dtype_preserving_postprocess_golden_function_outputs(output, function_args, function_kwargs):
-    """Convert golden outputs with their own dtype.
-    Operations that change dtype would otherwise be cast back to the first input's dtype.
-    """
-
-    return default_postprocess_golden_function_outputs(output, function_args, function_kwargs, keep_golden_dtype=True)
-
-
-def requested_dtype_postprocess_golden_function_outputs(output, function_args, function_kwargs):
-    """Convert golden outputs to the dtype requested through a dtype argument.
-    Without one they follow the first input's dtype, so block-float inputs are not widened to the golden's dtype.
-    """
-
-    return default_postprocess_golden_function_outputs(
-        output, function_args, function_kwargs, output_dtype=function_kwargs.get("dtype")
-    )
 
 
 TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
