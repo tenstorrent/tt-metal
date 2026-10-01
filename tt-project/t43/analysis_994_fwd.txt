@@ -1,0 +1,73 @@
+per-device total ms: {0.0: 2304.2, 1.0: 2304.0, 2.0: 2304.5, 3.0: 2304.5, 4.0: 2303.2, 5.0: 2303.0, 6.0: 2305.2, 7.0: 2304.3}
+
+slowest device 6.0: 2305.2 ms, 468 ops
+                                                                ms      %  count
+cls
+conv3d                                                     1785.18  77.44     42
+layout (tilize/untilize/permute/reshape/concat/slice/pad)   256.35  11.12    271
+halo/neighbor-pad CCL                                       117.69   5.11     42
+eltwise                                                      96.16   4.17     75
+norm (pixel/group/rms)                                       46.88   2.03     37
+other                                                         2.90   0.13      1
+
+                                                                                                     ms      %  count   mean_us
+OP CODE                              cls
+Conv3dDeviceOperation                conv3d                                                     1785.18  77.44     42  42504.37
+ReshapeViewDeviceOperation           layout (tilize/untilize/permute/reshape/concat/slice/pad)   155.83   6.76      6  25971.31
+NeighborPadAsyncDeviceOperation      halo/neighbor-pad CCL                                       117.69   5.11     42   2802.12
+BinaryNgDeviceOperation              eltwise                                                      88.79   3.85     62   1432.02
+PermuteDeviceOperation               layout (tilize/untilize/permute/reshape/concat/slice/pad)    59.80   2.59      5  11960.71
+LayerNormDeviceOperation             norm (pixel/group/rms)                                       46.88   2.03     37   1266.89
+ConcatDeviceOperation                layout (tilize/untilize/permute/reshape/concat/slice/pad)    38.35   1.66     42    913.15
+UnaryDeviceOperation                 eltwise                                                       7.38   0.32     13    567.39
+RgbToYuvDeviceOperation              other                                                         2.90   0.13      1   2901.55
+SliceDeviceOperation                 layout (tilize/untilize/permute/reshape/concat/slice/pad)     1.64   0.07     87     18.82
+UntilizeWithUnpaddingDeviceOperation layout (tilize/untilize/permute/reshape/concat/slice/pad)     0.42   0.02     44      9.58
+TilizeWithValPaddingDeviceOperation  layout (tilize/untilize/permute/reshape/concat/slice/pad)     0.24   0.01     44      5.37
+TypecastDeviceOperation              layout (tilize/untilize/permute/reshape/concat/slice/pad)     0.08   0.00     43      1.75
+
+=== non-conv3d ops in the forward, by shape (dev 6), top 18 ===
+                                                                         count      ms
+OP CODE                         in             out            lay
+ReshapeViewDeviceOperation      1x1x32071680x1 1x1x221184x145 ROW_MAJOR      1  139.15
+BinaryNgDeviceOperation         21x9x8x128     21x9x8x128     ROW_MAJOR     42   67.26
+NeighborPadAsyncDeviceOperation 147x72x64x128  147x74x66x128  ROW_MAJOR      9   56.68
+PermuteDeviceOperation          3x1x4x4        64x4x145x1     ROW_MAJOR      1   54.61
+NeighborPadAsyncDeviceOperation 147x36x32x256  147x38x34x256  ROW_MAJOR     13   41.91
+ConcatDeviceOperation           1x72x64x128    147x72x64x128  ROW_MAJOR      9   24.36
+BinaryNgDeviceOperation         19x9x8x1024    19x9x8x1024    ROW_MAJOR     18   21.47
+LayerNormDeviceOperation        145x72x64x128  145x72x64x128  ROW_MAJOR      9   20.66
+                                145x36x32x256  145x36x32x256  ROW_MAJOR     12   16.79
+NeighborPadAsyncDeviceOperation 75x36x32x512   75x38x34x512   ROW_MAJOR      9   15.75
+ReshapeViewDeviceOperation      1x1x668160x64  1x1x8017920x4  ROW_MAJOR      1   14.54
+ConcatDeviceOperation           1x36x32x256    147x36x32x256  ROW_MAJOR     13    9.36
+LayerNormDeviceOperation        73x36x32x512   73x36x32x512   ROW_MAJOR      8    7.80
+ConcatDeviceOperation           1x36x32x512    75x36x32x512   ROW_MAJOR      9    4.22
+UnaryDeviceOperation            147x74x66x128  147x74x66x128  ROW_MAJOR      2    3.82
+PermuteDeviceOperation          1x2x2x128      2x32x2x128     ROW_MAJOR      1    3.74
+RgbToYuvDeviceOperation         3x288x256x145  1x288x256x145  ROW_MAJOR      1    2.90
+NeighborPadAsyncDeviceOperation 39x18x16x512   39x20x18x512   ROW_MAJOR      5    2.38
+non-conv3d total ms: 520.0
+
+=== last 12 ops (output path) ===
+                                   OP CODE              in             out        lay      ms
+5351                 ConcatDeviceOperation     1x72x64x128   147x72x64x128  ROW_MAJOR    2.71
+5359   TilizeWithValPaddingDeviceOperation        1x1x64x1       1x1x64x32  ROW_MAJOR    0.00
+5367               TypecastDeviceOperation       1x1x64x32       1x1x64x32       TILE    0.00
+5375  UntilizeWithUnpaddingDeviceOperation       1x1x64x32        1x1x64x1       TILE    0.01
+5383               BinaryNgDeviceOperation      21x9x8x128      21x9x8x128  ROW_MAJOR    4.19
+5385       NeighborPadAsyncDeviceOperation   147x72x64x128   147x74x66x128  ROW_MAJOR    6.24
+5399                 Conv3dDeviceOperation   147x74x66x128    145x72x64x64  ROW_MAJOR   11.81
+5407            ReshapeViewDeviceOperation   1x1x668160x64   1x1x8017920x4  ROW_MAJOR   14.54
+5415                PermuteDeviceOperation         3x1x4x4      64x4x145x1  ROW_MAJOR   54.61
+5423            ReshapeViewDeviceOperation  1x1x32071680x1  1x1x221184x145  ROW_MAJOR  139.15
+5431                  UnaryDeviceOperation   3x288x256x145   3x288x256x145  ROW_MAJOR    1.06
+5439               RgbToYuvDeviceOperation   3x288x256x145   1x288x256x145  ROW_MAJOR    2.90
+
+=== BinaryNg in forward (dev 6) ===
+                                         count     ms
+op  INPUT_0     INPUT_1     OUTPUT_0
+ADD 19x9x32x128 1x1x32x128  19x9x32x128      1   0.03
+    19x9x8x1024 19x9x8x1024 19x9x8x1024     18  21.47
+MUL 19x9x32x128 1x1x32x128  19x9x32x128      1   0.03
+    21x9x8x128  1x1x8x1     21x9x8x128      42  67.26
