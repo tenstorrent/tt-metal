@@ -656,6 +656,7 @@ def run_neighbor_pad_2d_combined_impl(
     input_dtype=ttnn.bfloat16,
     use_persistent_output_buffer=False,
     logical_w=0,
+    padding_mode="zeros",
 ):
     """
     2D neighbor pad with optional logical_h/logical_w masking and t_front_pad fusion.
@@ -692,7 +693,7 @@ def run_neighbor_pad_2d_combined_impl(
         slices = [slice(None)] * input_tensor.ndim
         slices[w_dim] = slice(logical_w, None)
         masked[tuple(slices)] = 0.0
-    goldens_2d = compute_2d_pad_golden(masked, mesh_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, "zeros")
+    goldens_2d = compute_2d_pad_golden(masked, mesh_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, padding_mode)
     goldens = {}
     for key, padded in goldens_2d.items():
         zero_shape = list(padded.shape)
@@ -740,7 +741,7 @@ def run_neighbor_pad_2d_combined_impl(
         [h_dim, w_dim],
         [pH, pW],
         [pH, pW],
-        "zeros",
+        padding_mode,
         [h_axis, w_axis],
         [h_neighbor_sem, w_neighbor_sem],
         [barrier_sem],
@@ -1343,14 +1344,29 @@ _BH_LW_2D = [
     ([1, 5, 18, 32, 64], 17, 20, 2, False),  # + logical_h + t_front_pad
     ([1, 5, 18, 32, 64], None, 32, 0, False),  # logical_w == full width: no-op
 ]
+_BH_LW_2D_REPLICATE = [
+    # replicate edges read the masked column; logical_h stays off (its H self-pad does not mask)
+    ([1, 5, 18, 32, 64], None, 30, 0, False),
+    ([1, 5, 18, 32, 64], None, 20, 0, False),
+]
 
 
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-@pytest.mark.parametrize("input_shape, logical_h, logical_w, t_front_pad, use_persistent_output_buffer", _BH_LW_2D)
+@pytest.mark.parametrize(
+    "input_shape, logical_h, logical_w, t_front_pad, use_persistent_output_buffer, padding_mode",
+    [(*c, "zeros") for c in _BH_LW_2D] + [(*c, "replicate") for c in _BH_LW_2D_REPLICATE],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_np_bh_logical_w_2d_submesh(
-    mesh_device, input_shape, logical_h, logical_w, t_front_pad, use_persistent_output_buffer, device_params
+    mesh_device,
+    input_shape,
+    logical_h,
+    logical_w,
+    t_front_pad,
+    use_persistent_output_buffer,
+    padding_mode,
+    device_params,
 ):
     """Fused 2D pad with logical_w must equal padding the input with W columns >= logical_w zeroed.
 
