@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 ##
-import os
 from itertools import combinations
 from math import prod
 from time import sleep
@@ -30,10 +29,7 @@ TEST_SHAPES = [
     (1, 1, 32, 7168),
 ]
 
-# HW ADAPTATION (4-chip Blackhole QuietBox): the upstream pin is (2, 4) = 8 devices.
-# This box has 4x p150a, so the default is the 1-D line (1, 4); override with
-# CCL_HW_MESH_SHAPE=2,2 to also cover the column-direction fabric route.
-MESH_SHAPE = tuple(int(x) for x in os.environ.get("CCL_HW_MESH_SHAPE", "1,4").split(","))
+MESH_SHAPE = (2, 4)
 
 
 def _linear_coord(coord, mesh_shape):
