@@ -1671,6 +1671,10 @@
 # ----------------------------------------------------------------------------
 - name: TT-DiT Wan2.2-A14B transformer block unit tests
   cmd: |
+    # Multihost jobs skip setup-job's watcher env; DISABLE_ETH avoids the ACTIVE_ETH overflow.
+    # tt-run forwards TT_* variables to every rank, so all four galaxies are watched.
+    export TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1
+    export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"

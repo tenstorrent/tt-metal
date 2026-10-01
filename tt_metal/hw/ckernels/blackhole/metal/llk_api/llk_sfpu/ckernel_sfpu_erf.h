@@ -57,7 +57,7 @@ void calculate_erf_bf16();
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en>
 inline void calculate_erf() {
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
         calculate_erf_bf16<ITERATIONS>();
         return;
     }

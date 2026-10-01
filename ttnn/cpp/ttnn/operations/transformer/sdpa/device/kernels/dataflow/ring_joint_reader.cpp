@@ -18,6 +18,7 @@
 #include "ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -497,6 +498,11 @@ void kernel_main() {
     // read it from there rather than tracking a per-kernel index into the block above.
     constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
+    constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
+    constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
+    constexpr bool ksplit_enabled = ksplit_count > 1;
+    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window));
+    [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
     // Common runtime args: metadata block first when present, then the logical-length pair.
@@ -741,8 +747,13 @@ void kernel_main() {
     // The fused all-gather wrote the active slot to gathered slot 0, so address it as batch-1.
     const uint32_t gathered_kv_batch_dim = indexed_kv_cache ? 1 : B;
     const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
-    const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, DHt);
-    const auto gathered_k_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHK, gathered_padded_Nt, DHt);
+    // Packed KV: K/V rows can be wider than the head dims; V is the last vDHt columns of its row.
+    constexpr uint32_t k_row_Wt = get_named_compile_time_arg_val("k_row_Wt");
+    constexpr uint32_t v_row_Wt = get_named_compile_time_arg_val("v_row_Wt");
+    constexpr uint32_t v_col_offset_t = v_row_Wt - vDHt;
+    const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, k_row_Wt);
+    const auto gathered_k_input_tile_logical =
+        TensorTileShape(gathered_kv_batch_dim, NHK, gathered_padded_Nt, k_row_Wt);
     // Joint K/V addressing: full gathered length (Lt rows). Used for the gathered joint buffer on the
     // sharded path and for the local full-L joint tensor on the replicated path.
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
@@ -754,9 +765,10 @@ void kernel_main() {
     const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
     const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
     const auto local_v_reader = TensorAccessor(v_args, v_addr);
-    const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, vDHt);
+    const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, v_row_Wt);
     const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
-    const auto gathered_v_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHV, gathered_padded_Nt, vDHt);
+    const auto gathered_v_input_tile_logical =
+        TensorTileShape(gathered_kv_batch_dim, NHV, gathered_padded_Nt, v_row_Wt);
     const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
     const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
     [[maybe_unused]] const auto v_generators =
@@ -793,6 +805,17 @@ void kernel_main() {
             fused_op_receiver.get_next_ring_id_and_consume_one_signal();
         }
     }
+    // K chunks past this device's last Q row are fully masked; compute skips the same ones.
+    const uint32_t causal_end_nt = dense_causal_skip
+                                       ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
+                                             logical_nt,
+                                             ring_index,
+                                             ring_size,
+                                             qmap.q_pre_wrap_start_tile,
+                                             qmap.q_pre_wrap_tile_count,
+                                             qmap.q_post_wrap_start_tile,
+                                             qmap.q_valid_tile_count)
+                                       : logical_nt;
     constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const bool ring_iter_is_active = has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
@@ -828,6 +851,20 @@ void kernel_main() {
 
         uint32_t KV_chunks_processed_in_iter = 0;
         uint32_t iter_num_kv_chunks = num_kv_chunks;
+
+        // K split: this core's slice of the iteration's local K chunks, as compute derives it. Idle cores in a split
+        // row use the row's index too, since they must skip exactly the chunks the row's multicast skips.
+        ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
+        if constexpr (ksplit_enabled) {
+            const uint32_t num_valid = ring_joint::ksplit_valid_local_k_chunks<
+                kv_pad_rotation_enabled,
+                chunked_enabled,
+                kv_local_padded_Nt,
+                chunk_size_t,
+                q_local_padded_Nt,
+                Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
+            ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
+        }
 
         // In causal balanced case processing KV received from other devices:
         //
@@ -1011,14 +1048,21 @@ void kernel_main() {
                  * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
                  */
                 const bool kv_chunk_is_joint = !has_sliding_window && has_joint_k && k_chunk >= num_local_k_chunks;
-                const bool kv_chunk_is_beyond_logical_n =
-                    !has_sliding_window && !kv_chunk_is_joint &&
-                    !kv_chunk_starts_before_logical_end<
+                const bool kv_chunk_is_beyond_logical_n = [&]() {
+                    if (has_sliding_window || kv_chunk_is_joint) {
+                        return false;
+                    }
+                    if (!ksplit_k_range.contains(source_k_chunk)) {
+                        return true;
+                    }
+                    // causal_end_nt is logical_nt when the causal skip is off.
+                    return !chunked_kv_chunk_is_live<
                         kv_pad_rotation_enabled,
                         chunked_enabled,
                         kv_local_padded_Nt,
                         chunk_size_t,
-                        q_local_padded_Nt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt);
+                        q_local_padded_Nt>(source_ring_id, source_k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
+                }();
 
                 // Sharded joint: this ring iteration serves shard `ring_id`, whose global joint tile
                 // range starts at ring_id * Lt_local. A joint K chunk whose global start tile is
@@ -1257,7 +1301,8 @@ void kernel_main() {
                 } else if constexpr (!v_shares_k_buffer) {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
-                    const Slice v_slice(k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, 0, vDHt);
+                    const Slice v_slice(
+                        k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, v_col_offset_t, v_col_offset_t + vDHt);
                     CircularBuffer cb_v(cb_v_in);
                     cb_v.reserve_back(v_cb_entry_tiles);
                     uint32_t cb_v_start_address = cb_v.get_write_ptr();
