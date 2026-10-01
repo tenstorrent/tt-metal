@@ -243,7 +243,13 @@ def make_kda_conv1d_fn(
     _tiled_ckc = _kda_ckc
     if _conv_qknorm:
         assert (C // 32) % 4 == 0, f"channels={C}: fused_qk_l2_norm needs 4-tile blocks"
-        tiled_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128, fused_qk_l2_norm=True)
+        # qk_early_drain (QWEN36_GDN_CONV_EARLY_DRAIN, default on; 0 = off): the fast kernel drains its q/k epilogue
+        # pipeline 3 steps before the end of a core's range, so the last fp32 q/k outputs of all cores do not hit the
+        # NoC at the same moment. Bit-identical outputs, ~3 us faster per call at the SP-die shape (T=1024, C=6144).
+        _early_drain = os.environ.get("QWEN36_GDN_CONV_EARLY_DRAIN", "1") != "0"
+        tiled_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(
+            channel_chunk_size=128, fused_qk_l2_norm=True, qk_early_drain=_early_drain
+        )
         # QWEN36_CONV_FID (LoFi|HiFi2|HiFi3|HiFi4; unset = HiFi4): math fidelity of the fused-qknorm conv's FPU work
         # (tap ELWMULs, sum-of-squares, row-sum matmul, rsqrt broadcast multiply). fp32 dest etc. unchanged.
         _conv_fid_name = os.environ.get("QWEN36_CONV_FID", "HiFi4")
