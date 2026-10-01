@@ -171,4 +171,6 @@ void kernel_main() {
             ++round;
         }
     }
+    // The semaphore bumps are non-posted NoC atomics; the kernel must not exit with them in flight.
+    noc.async_atomic_barrier();
 }

@@ -778,7 +778,8 @@ class LinearDecode(DeepSeekV4Module):
             spec = x.memory_config().shard_spec
             if spec.grid == grid and spec.shape[1] == k:
                 return x
-        m = x.memory_config().shard_spec.shape[0] if self._is_replicated_rm_hs(x) else x.shape[-2]
+        replica = self._is_replicated_rm_hs(x)
+        m = x.memory_config().shard_spec.shape[0] if replica else x.shape[-2]
         num_cores = grid.num_cores()
         mem_cfg = ttnn.create_sharded_memory_config(
             (m, k),
@@ -789,6 +790,11 @@ class LinearDecode(DeepSeekV4Module):
         )
         if x.is_sharded():
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        if replica:
+            # A replica on another grid is ``source cores * M`` rows tall: keep one before repeating.
+            ends = list(x.shape)
+            ends[-2] = m
+            x = ttnn.slice(x, [0] * len(ends), ends)
         if x.layout != ttnn.ROW_MAJOR_LAYOUT:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         repeats = [1] * len(x.shape)
@@ -1043,7 +1049,6 @@ class LinearDecode(DeepSeekV4Module):
         :meth:`set_output_core_grid` has been called. ``mesh_coords`` selects this chip's
         coordinates on a mesh.
         """
-        print(f"Linear Decode with cache_file_name: {self.cache_file_name}")
         x, m = self._checked_decode_activation(x)
         if self.fused_rms_norm_eps is not None and not self.use_rm_hs:
             # The epilogue's statistic is a scalar reduction over a whole tile, so it is this

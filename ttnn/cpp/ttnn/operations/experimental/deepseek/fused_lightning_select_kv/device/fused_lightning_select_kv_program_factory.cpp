@@ -344,7 +344,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              {"num_tiles_per_block_of_key", num_tiles_per_block_of_key},
              {"kv_stage_rows", kKvStageRows}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_index", "num_cores"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     const KernelSpec writer{
@@ -427,7 +427,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
                   "mcast_x_end",
                   "mcast_y_end",
                   "num_mcast_dests"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         // NoC (x, y) of every core, in core_index order.
         .advanced_options = {.num_common_runtime_varargs = 2 * cores_in_grid},
     };
@@ -467,13 +467,14 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              {"d_tiles", d_tiles},
              {"num_weight_tiles", num_weight_tiles},
              {"chunks_per_block", chunks_per_block}},
-        .hw_config = ComputeHardwareConfig{ComputeGen1Config{
-            // The score matmul uses custom_mm, which only supports LoFi.
-            .fpu_math_fidelity = MathFidelity::LoFi,
-            .sfpu_precision_mode = math_approx_mode ? Precision::Approximate : Precision::Precise,
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !dst_full_sync_en,
-        }},
+        .hw_config =
+            ComputeHardwareConfig{
+                // The score matmul uses custom_mm, which only supports LoFi.
+                .fpu_math_fidelity = MathFidelity::LoFi,
+                .sfpu_precision_mode = math_approx_mode ? Precision::Approximate : Precision::Precise,
+                .enable_32_bit_dest = fp32_dest_acc_en,
+                .double_buffer_dest = !dst_full_sync_en,
+            },
     };
 
     ProgramSpec spec{

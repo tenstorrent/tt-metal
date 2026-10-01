@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""End-to-end demo: prefill real prompts with the prefill model, then generate with the traced decode model.
+"""End-to-end demo: prefill real prompts with the traced prefill model, then generate with the traced decode model.
 
 Each prompt is prefilled in 128-aligned chunks by :class:`DeepSeekV4PrefillModel`; its per-layer attention state is
 then committed into the decode model's own buffers on device (:meth:`DeepSeekV4Model.commit_prefill_state`: same
@@ -16,32 +16,40 @@ ring / compressed KV / CSA overlap window / paged HCA pool that decode fills its
   models, each loaded once. It reports each question's generated letter against ``answer`` and the accuracy. The
   passages are far past 2048 tokens, so the CSA lightning indexer is on; it runs inside the prefill traces.
 
-The prefill is traced and pipelined by default, as in ``test_full_model_prefill_demo.py``
+The prefill is traced and pipelined, as in ``test_full_model_prefill_demo.py``
 (:class:`~models.experimental.deepseek_v4_flash.tt.model.TracedPrefill`): one trace per stage replayed for every
 chunk, the replays posted ahead from a thread, each chunk's packet pushed over an H2D socket, the streams handed on
 over device-to-device sockets and the logits streamed back over a D2H socket, so the 8 stages work on 8 consecutive
 chunks at once. Every prompt's prefill perf table and summary (that demo's) are logged after its prefill, and a
-closing table covers every prompt's prefill and decode. ``DEEPSEEK_V4_PREFILL_TRACED=0`` prefills eagerly instead.
+closing table covers every prompt's prefill and decode.
 
-Chips (Galaxy 8 x 4): eight ``1 x 4`` TP4 pipeline stages, one per mesh row, all 32 chips. Prefill runs first on
-the same stages (one layer per decode layer's submesh, with its own weights), and is freed before the decode model
-is built there, so the two never hold weights at the same time (the decode model's resident L1 -- its prefetch
-buffers -- leaves prefill's ops no room). So the models are loaded once each, in two phases, rather than
-alternating per prompt:
+Chips (Galaxy 8 x 4): eight ``1 x 4`` TP4 pipeline stages, one per mesh row, all 32 chips. Both models live on
+those stages at once and are loaded once each: the prefill model is built by
+:meth:`DeepSeekV4Model.build_prefill`, one layer on each decode layer's submesh, sharing decode's routed experts,
+embedding table and ``lm_head``. Both are captured once, then every prompt alternates between the two:
 
 1. tokenizer, config and the prompts;
-2. the prefill model, built on the 8 stages before anything of decode exists;
-3. (traced) once, on otherwise empty devices: persistent buffers sized for the longest prompt, sockets, the
-   chunk step compiled and captured, one trace per stage; not timed. Then per prompt: its 128-aligned part
-   prefilled by replaying those traces (timed) and its per-layer states parked on the host. The traces are
-   released after the last prompt;
-4. the prefill model freed, the decode model built on the same submeshes, its static state prepared (sized for the
-   longest prompt), a session opened and one throw-away decode step run, which captures the decode traces;
-5. per prompt: the session rewound, the prompt's states uploaded and committed into the decode buffers on device,
-   the ragged tail replayed through decode, and up to ``DEEPSEEK_V4_MAX_NEW_TOKENS`` tokens generated.
+2. the decode model, built with the DRISC prefetcher off (no GCBs; every projection copies its weight DRAM -> L1
+   per call), its static state prepared (sized for the longest conversation), a session opened, and every decode
+   variant compiled (:meth:`DeepSeekV4Model.compile_traces`) so the buffers its ops keep for themselves exist
+   before prefill lays out its memory;
+3. prefill compile: decode's resident L1 tensors parked on the host
+   (:meth:`DeepSeekV4Model.release_prefetch_buffers`) so prefill's circular buffers can take that L1, the prefill
+   model built, and its persistent buffers (sized for the longest prompt), sockets and compile run
+   (:meth:`DeepSeekV4PrefillModel.compile_traced_prefill`); not timed;
+4. decode capture, then prefill capture: decode's L1 tensors uploaded again
+   (:meth:`DeepSeekV4Model.restore_prefetch_buffers`) and one throw-away decode step run, which captures the decode
+   traces; then those L1 tensors parked once more while prefill captures one trace per stage
+   (:meth:`DeepSeekV4PrefillModel.capture_traced_prefill`), and put back at the addresses the decode traces
+   recorded (checked). They sat under prefill's capture, so they are copied to the host
+   (:meth:`DeepSeekV4Model.snapshot_resident_state`);
+5. per prompt, prefill execute: its 128-aligned part prefilled by replaying the prefill traces (timed), then
+   decode's overwritten tensors written back in place (:meth:`DeepSeekV4Model.reload_resident_state`);
+6. per prompt, decode execute: the session rewound, the prompt's states committed into the decode buffers on
+   device, the ragged tail replayed through decode, and up to ``DEEPSEEK_V4_MAX_NEW_TOKENS`` tokens generated.
 
-Only one prompt's state is on device at a time; the parked states cost host memory (roughly
-``prompt tokens x 25 KB`` for the full model).
+The prefetcher stays off because a prefill replay would also overwrite the GCB config pages (credit counters and
+read pointers), which cannot be snapshot from Python; see ``PREFILL_DECODE_INTERLEAVE_NOTES.md``.
 
 Limits: ``test_prefill_decode_demo`` leaves the lightning indexer off, so the conversation (prompt + generated
 tokens) must stay below ``index_topk * 4 = 2048`` tokens. The longbench test turns the indexer on and prefills
@@ -63,12 +71,12 @@ runs), ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (128), ``DEEPSEEK_V4_E2E_CHUNK`` (1024 = p
 ``tests/decode/test_full_model_decode_demo.py``, exactly 128 tokens),
 ``DEEPSEEK_V4_DECODE_LAYERS`` (bring-up: first N layers in both models; the text is then gibberish, the flow is not),
 ``DEEPSEEK_V4_PREFILL_PROMPT`` (another prompt file), ``DEEPSEEK_V4_PREFILL_HEARTBEAT`` / ``_STALL_SECS``,
-``DEEPSEEK_V4_PREFILL_TRACED`` (1, the default: the traced, pipelined prefill; 0: eager),
 ``DEEPSEEK_V4_E2E_MAX_INPUT`` (0 = off: keep only a prompt's first N tokens),
-``DEEPSEEK_V4_E2E_TRACE_CHECK`` (1: prefill the first prompt traced, then eagerly, compare, and stop),
-``DEEPSEEK_V4_E2E_COMPARE`` (1: also run each prompt through decode only and compare the next-token logits),
-``DEEPSEEK_V4_TRACE_REGION_SIZE`` (bytes to reserve for the captured traces; unset keeps the ttnn default -- set it,
-e.g. 500000000, if a capture reports the trace region too small).
+``DEEPSEEK_V4_E2E_COMPARE`` (1: also run each prompt through decode only, before its prefill, and compare the
+next-token logits),
+``DEEPSEEK_V4_TRACE_REGION_SIZE`` (bytes to reserve for the captured traces -- the 8 prefill stage traces and
+decode's together; unset keeps the ttnn default -- set it, e.g. 500000000, if a capture reports the trace region too
+small), ``DEEPSEEK_V4_L1_SMALL_SIZE`` (bytes of L1_SMALL for the CCL semaphores, 4096 by default).
 LongBench: ``DEEPSEEK_V4_LONGBENCH`` (the question file), ``DEEPSEEK_V4_LONGBENCH_COUNT`` (8),
 ``DEEPSEEK_V4_LONGBENCH_SEED`` (0), ``DEEPSEEK_V4_LONGBENCH_MAX_TOKENS`` (65536: a question whose prompt plus the new
 tokens is longer is skipped and another drawn), ``DEEPSEEK_V4_LONGBENCH_INDICES`` (comma-separated question indices
@@ -79,7 +87,6 @@ instead of a random draw, e.g. ``1`` for the one question the test used to run),
 from __future__ import annotations
 
 import contextlib
-import gc
 import json
 import math
 import os
@@ -120,7 +127,7 @@ from models.experimental.deepseek_v4_flash.tt.model import (
     prefill_bias_slots,
 )
 from models.experimental.deepseek_v4_flash.tt.prefill.attention import ALIGNMENT, PrefillAttentionState
-from models.experimental.deepseek_v4_flash.tt.prefill.weights import checkpoint_expert_provider, checkpoint_weights
+from models.experimental.deepseek_v4_flash.tt.prefill.weights import checkpoint_weights
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config, set_active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
@@ -131,6 +138,10 @@ _LONGBENCH_FILE = Path(os.path.expanduser(os.environ.get("DEEPSEEK_V4_LONGBENCH"
 _DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
     "num_command_queues": 2,
+    # The CCL ops' global semaphores go here instead of L1. Decode's are allocated when its traces are captured,
+    # after prefill's, so in L1 they could sit under prefill's circular buffers and be overwritten by every replay.
+    # It comes out of L1, where prefill's widest stage has only ~7 KB to spare.
+    "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "4096")),
     # Like the prefill demo: only reserve a trace region when asked (the ttnn default otherwise).
     **(
         {"trace_region_size": int(os.environ["DEEPSEEK_V4_TRACE_REGION_SIZE"])}
@@ -138,16 +149,6 @@ _DEVICE_PARAMS = {
         else {}
     ),
 }
-# The tensors of a PrefillAttentionState, parked on the host between the prefill and the decode phase.
-_STATE_TENSORS = (
-    "kv_tail",
-    "compressed_kv",
-    "csa_prev_kv",
-    "csa_prev_gate",
-    "idx_keys",
-    "idx_prev_kv",
-    "idx_prev_gate",
-)
 
 
 @dataclass
@@ -344,130 +345,6 @@ def _eos_ids(config) -> set[int]:
     return {int(eos)} if isinstance(eos, int) else {int(e) for e in (eos or [])}
 
 
-def _park_states(states: list[PrefillAttentionState]) -> list[dict]:
-    """Copy a prefill's per-layer states to the host, with where each tensor lives, so the device can be reused."""
-    parked = []
-    for state in states:
-        entry: dict = {"seq_len": state.seq_len}
-        for name in _STATE_TENSORS:
-            tensor = getattr(state, name)
-            if tensor is not None:
-                entry[name] = (ttnn.from_device(tensor), tensor.memory_config(), tensor.device())
-        parked.append(entry)
-    return parked
-
-
-def _upload_states(parked: list[dict]) -> list[PrefillAttentionState]:
-    """:func:`_park_states` undone: the states back on the submeshes they came from (the decode layers' own)."""
-    states = []
-    for entry in parked:
-        state = PrefillAttentionState(seq_len=entry["seq_len"])
-        for name in _STATE_TENSORS:
-            if name in entry:
-                host, memory_config, device = entry[name]
-                setattr(state, name, ttnn.to_device(host, device, memory_config=memory_config))
-        states.append(state)
-    return states
-
-
-def _free_states(states: list[PrefillAttentionState]) -> None:
-    """Deallocate the uploaded states once committed, before decode replays any trace over the device again."""
-    for state in states:
-        for name in _STATE_TENSORS:
-            tensor = getattr(state, name)
-            if tensor is not None:
-                ttnn.deallocate(tensor)
-                setattr(state, name, None)
-
-
-def _shards(host: ttnn.Tensor) -> list[torch.Tensor]:
-    return [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(host)]
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a, b = a.reshape(-1).double(), b.reshape(-1).double()
-    if a.std() == 0 or b.std() == 0:
-        return 1.0 if torch.equal(a, b) else float("nan")
-    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
-
-
-def _check_traced_against_eager(prefill, prompt, result, traced_row, traced_parked, chunk_size, tokenizer) -> None:
-    """``DEEPSEEK_V4_E2E_TRACE_CHECK=1``: prefill the first prompt again eagerly (the traces are released by now, so
-    it may allocate) and log, per layer and state tensor, how far the traced run's result is from the eager one."""
-    aligned = result.prefilled
-    traced = prefill._traced
-    last_start = (aligned - 1) // chunk_size * chunk_size
-    sent = traced._packet(torch.tensor(prompt.ids[last_start:aligned]), last_start).reshape(-1)
-    for stage in traced.stages:
-        for rank, shard in enumerate(_shards(ttnn.from_device(stage.pkt))):
-            got = shard.reshape(-1).to(torch.int64)
-            wrong = (got != sent.to(torch.int64)).nonzero().flatten()
-            logger.info(
-                f"[trace check] stage {stage.index} rank {rank} packet: {wrong.numel()}/{sent.numel()} int32 slots "
-                "differ" + (f", slots {int(wrong[0])}..{int(wrong[-1])}" if wrong.numel() else "")
-            )
-    if aligned == chunk_size:  # one chunk: stage k's received streams must be the eager output of its first layer - 1
-        outs = {}
-
-        def on_layer(li, out, dev):
-            outs[li] = _shards(ttnn.from_device(out))[0].float()
-
-        ids = torch.tensor(prompt.ids[:aligned], dtype=torch.long).unsqueeze(0)
-        ttnn.deallocate(prefill._stack(prefill._host_ids(ids), prefill.new_state(), on_layer=on_layer))
-        for stage in traced.stages[1:]:
-            before = stage.layers[0] - 1
-            got = _shards(ttnn.from_device(stage.io.streams_in))[0].float().reshape(outs[before].shape)
-            rows = (got - outs[before]).abs().reshape(aligned, -1).amax(dim=-1)
-            bad = (rows > 0.05 * outs[before].abs().max()).nonzero().flatten()
-            logger.info(
-                f"[trace check] stage {stage.index} streams_in vs eager layer {before} out: PCC "
-                f"{_pcc(got, outs[before]):.5f}, {bad.numel()}/{aligned} token rows off (first {bad[:6].tolist()}, "
-                f"last {bad[-3:].tolist()}); nonfinite {int((~torch.isfinite(got)).sum())}"
-            )
-    logger.info(f"[trace check] eager prefill of {prompt.name}'s {aligned} tokens, to compare with the traced run")
-    ids = torch.tensor(prompt.ids[:aligned], dtype=torch.long).unsqueeze(0)
-    logits, states = prefill.prefill(ids, chunk_size=chunk_size)
-    eager_row = prefill.to_host(logits, prefill.head_device).reshape(-1).float()
-    eager_parked = _park_states(states)
-    del states, logits
-    gc.collect()
-    _log_top5(tokenizer, "[trace check] eager  next token", eager_row)
-    _log_top5(tokenizer, "[trace check] traced next token", traced_row.float())
-    logger.info(f"[trace check] logits PCC {_pcc(traced_row.float(), eager_row):.5f}")
-    for li, (t_entry, e_entry) in enumerate(zip(traced_parked, eager_parked)):
-        parts = []
-        for name in _STATE_TENSORS:
-            if (name in t_entry) != (name in e_entry):
-                parts.append(f"{name}: traced {'has' if name in t_entry else 'lacks'} it, eager does not")
-                continue
-            if name not in t_entry:
-                continue
-            ts, es = _shards(t_entry[name][0]), _shards(e_entry[name][0])
-            if [t.shape for t in ts] != [e.shape for e in es]:
-                parts.append(f"{name}: shape {tuple(ts[0].shape)} vs {tuple(es[0].shape)}")
-                continue
-            pccs = [_pcc(t, e) for t, e in zip(ts, es)]
-            diff = max(float((t - e).abs().max()) for t, e in zip(ts, es))
-            zero = all(float(t.abs().max()) == 0 for t in ts)
-            parts.append(
-                f"{name} {min(pccs):.4f}{' ZERO' if zero else ''} (max|d| {diff:.3g}; |traced| max "
-                f"{max(float(t.abs().max()) for t in ts):.3g}, |eager| max {max(float(e.abs().max()) for e in es):.3g})"
-            )
-            if min(pccs) < 0.99:
-                logger.info(
-                    f"[trace check] layer {li:2d} {name} per rank: PCC {[round(p, 4) for p in pccs]}, "
-                    f"|traced| max {[float(t.abs().max()) for t in ts]}"
-                )
-            if min(pccs) < 0.99 and ts[0].dim() >= 2:
-                t, e = ts[0].reshape(-1, ts[0].shape[-1]), es[0].reshape(-1, es[0].shape[-1])
-                bad = ((t - e).abs().amax(dim=-1) > 0.5 * e.abs().amax(dim=-1).clamp(min=1e-3)).nonzero().flatten()
-                logger.info(
-                    f"[trace check] layer {li:2d} {name}: {bad.numel()}/{t.shape[0]} rows off; "
-                    f"first bad rows {bad[:12].tolist()}, last {bad[-4:].tolist()}"
-                )
-        logger.info(f"[trace check] layer {li:2d}: " + ", ".join(parts))
-
-
 def _log_top5(tokenizer, what: str, row: torch.Tensor) -> None:
     top = row.topk(5)
     logger.info(
@@ -490,13 +367,14 @@ def _run(
 ) -> list[_Result]:
     max_new = _env_int("DEEPSEEK_V4_MAX_NEW_TOKENS", 128)
     chunk_size = _env_int("DEEPSEEK_V4_E2E_CHUNK", 1024)
-    traced = os.environ.get("DEEPSEEK_V4_PREFILL_TRACED", "1") == "1"
     compare = os.environ.get("DEEPSEEK_V4_E2E_COMPARE", "0") == "1"
     if chunk_size <= 0 or chunk_size % ALIGNMENT:
         raise ValueError(f"DEEPSEEK_V4_E2E_CHUNK={chunk_size} must be a positive multiple of {ALIGNMENT}")
+    if os.environ.get("DEEPSEEK_V4_PREFILL_TRACED", "1") != "1":
+        raise ValueError("this demo captures prefill before decode and replays it; eager prefill is not supported")
 
     # --- tokenizer, config, prompts ----------------------------------------------------------------- #
-    progress.step("[1/5] tokenizer, config and prompts")
+    progress.step("[1/6] tokenizer, config and prompts")
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
     loader = DeepseekV4WeightLoader(_DEFAULT_MODEL_DIR)
@@ -535,7 +413,7 @@ def _run(
         logger.info(f"  starts : {tokenizer.decode(prompt.ids[:24])!r}")
         logger.info(f"  ends   : {tokenizer.decode(prompt.ids[-80:])!r}")
 
-    # --- the 8 x TP4 stages (all 32 chips), shared by the prefill model and then the decode model ------- #
+    # --- the 8 x TP4 stages (all 32 chips), shared by the decode and the prefill model ---------------- #
     system_config = load_system_config(mesh_device=mesh_device)
     set_active_system_config(system_config)
     num_layers = min(
@@ -549,77 +427,9 @@ def _run(
     max_seq = round_context(_traced_max_seq(config, needed), set(config.compress_rates.values()), _PAGE_BLOCK_SIZE)
     rope = _build_rope(config, max_seq)
 
-    # --- phase 1: the prefill model, loaded once; every prompt prefilled, its states parked on the host ---- #
-    # The traces are captured once, for the longest prompt, on devices that hold nothing else of decode; every
-    # prompt replays them, and they are released before decode allocates anything.
-    rows: list[Optional[torch.Tensor]] = [None] * len(prompts)
-    parked: list[Optional[list[dict]]] = [None] * len(prompts)
-    bias_slots = None
-    prepare_seconds = 0.0
-    if any(r.prefilled for r in results):
-        progress.step(f"[2/5] prefill model on {_NUM_STAGES} x TP{_TP_SIZE} stages (its own routed experts)")
-        cache = WeightCache(os.path.join(_CACHE_DIR, os.path.basename(_DEFAULT_MODEL_DIR))) if _CACHE_DIR else None
-        t0 = time.perf_counter()
-        layer_devices = [submeshes[k] for k in placement]
-        prefill = DeepSeekV4PrefillModel(
-            config,
-            checkpoint_weights(loader, config, num_layers),
-            layer_devices[0],
-            rope,
-            expert_provider=checkpoint_expert_provider(loader),
-            num_layers=num_layers,
-            cache=cache,
-            weight_dtype=_ATTENTION_WEIGHT_DTYPE,
-            expert_dtype=system_config.decode.ttnn_weight_dtype,
-            tp_size=_TP_SIZE,
-            layer_devices=layer_devices,
-            dense_csa=True,
-            # CSA lightning indexer. Traced prefill runs it too.
-            lightning_indexer=indexer_on,
-            progress=progress,
-        )
-        prefill.synchronize("uploads")
-        build_seconds = time.perf_counter() - t0
-        logger.info(f"prefill model built in {build_seconds:.1f}s")
-        num_stages = len(dict.fromkeys(placement))
-        if traced:
-            max_len = max(r.prefilled for r in results)
-            progress.step(
-                f"[3/5] traced prefill plan for prompts of up to {max_len} tokens: persistent buffers, H2D / D2D / "
-                f"D2H sockets, compile the {chunk_size}-token chunk step, capture one trace per stage (once; not timed)"
-            )
-            t0 = time.perf_counter()
-            prefill.prepare_traced_prefill(max_len, chunk_size)
-            prepare_seconds = time.perf_counter() - t0
-            logger.info(f"traced prefill prepared in {prepare_seconds:.1f}s")
-        for k, (prompt, result) in enumerate(zip(prompts, results)):
-            if result.prefilled:
-                tag = f"[3/5] prefill {k + 1}/{len(prompts)} {prompt.name}"
-                rows[k], parked[k] = _prefill_one(
-                    prefill,
-                    prompt,
-                    result,
-                    tag,
-                    progress,
-                    tokenizer,
-                    traced,
-                    chunk_size,
-                    num_stages,
-                    build_seconds,
-                    prepare_seconds,
-                )
-        # Keep only the parked states; every prefill tensor goes before decode allocates.
-        prefill.release_traced_prefill()  # a no-op when eager
-        if traced and os.environ.get("DEEPSEEK_V4_E2E_TRACE_CHECK", "0") == "1" and results[0].prefilled:
-            _check_traced_against_eager(prefill, prompts[0], results[0], rows[0], parked[0], chunk_size, tokenizer)
-            pytest.skip("DEEPSEEK_V4_E2E_TRACE_CHECK=1: traced vs eager prefill compared; decode not run")
-        bias_slots = prefill_bias_slots(prefill)  # the one thing the commit needs of the prefill model
-        prefill.synchronize("before release")
-        del prefill
-        gc.collect()
-
-    # --- phase 2: the decode model on the same stages, loaded once; static state, session, trace capture -- #
-    progress.step(f"[4/5] decode model ({_NUM_STAGES} x TP{_TP_SIZE} stages) - a warm weight cache just uploads")
+    # --- the decode model, prefetcher off: static state and session, before anything of prefill exists ---- #
+    # Everything allocated here, in DRAM and in L1, is live while prefill is captured, so prefill keeps off it.
+    progress.step(f"[2/6] decode model ({_NUM_STAGES} x TP{_TP_SIZE} stages, prefetcher off)")
     t0 = time.perf_counter()
     decode, lm_head, loader, config = _construct_model(
         mesh_device,
@@ -630,6 +440,7 @@ def _run(
         config=config,
         num_stages=_NUM_STAGES,
         submeshes=submeshes,
+        use_prefetcher=False,
     )
     _assert_decode_parallelism(decode, _TP_SIZE, _NUM_STAGES)
     assert decode.num_layers == num_layers, f"decode built {decode.num_layers} layers, prefill {num_layers}"
@@ -642,23 +453,114 @@ def _run(
         raise ValueError(f"decode context capped at {decode.context_limit} < the {needed} tokens needed")
     sid = decode.open_session()
     decode.activate_session(sid)
-    # A throw-away step captures the traces; its scratch cache writes are overwritten by every prompt's commit.
-    progress.step("[4/5] throw-away decode step: captures the decode traces")
+
+    # --- decode compile, then prefill compile: decode's L1 tensors parked on the host so prefill can use it --- #
+    prefill = None
+    bias_slots = None
+    build_seconds = prepare_seconds = 0.0
+    num_stages = len(dict.fromkeys(placement))
+    max_len = max(r.prefilled for r in results)
+    if max_len:
+        # Decode's ops keep buffers of their own (global semaphores, cached constants) that no snapshot can reach;
+        # compiling first allocates them before prefill lays out its memory, so its replays keep off them.
+        progress.step("[3/6] decode compile (every variant), before anything of prefill exists")
+        t0 = time.perf_counter()
+        decode.compile_traces(pad_id, 0)
+        logger.info(f"decode compile: {time.perf_counter() - t0:.1f}s")
+        progress.step(
+            "[3/6] prefill model on the decode stages (sharing decode's routed experts, embedding and lm_head)"
+        )
+        decode.release_prefetch_buffers()
+        cache = WeightCache(os.path.join(_CACHE_DIR, os.path.basename(_DEFAULT_MODEL_DIR))) if _CACHE_DIR else None
+        t0 = time.perf_counter()
+        prefill = decode.build_prefill(
+            rope,
+            checkpoint_weights(loader, config, num_layers),
+            lm_head=lm_head,
+            cache=cache,
+            weight_dtype=_ATTENTION_WEIGHT_DTYPE,
+            dense_csa=True,
+            # CSA lightning indexer. Traced prefill runs it too.
+            lightning_indexer=indexer_on,
+            progress=progress,
+        )
+        prefill.synchronize("uploads")
+        build_seconds = time.perf_counter() - t0
+        logger.info(f"prefill model built in {build_seconds:.1f}s")
+        progress.step(
+            f"[3/6] prefill compile for prompts of up to {max_len} tokens: persistent buffers, H2D / D2D / D2H "
+            f"sockets, compile the {chunk_size}-token chunk step (once; not timed)"
+        )
+        t0 = time.perf_counter()
+        prefill.compile_traced_prefill(max_len, chunk_size)
+        prepare_seconds = time.perf_counter() - t0
+        logger.info(f"traced prefill compiled in {prepare_seconds:.1f}s")
+        # Unwinds before the decode model's shutdown (LIFO).
+        prefetcher.callback(prefill.release_traced_prefill)
+        bias_slots = prefill_bias_slots(prefill)
+        decode.restore_prefetch_buffers()
+
+    # --- decode capture: a throw-away step; its scratch cache writes are overwritten by every commit ------ #
+    progress.step("[4/6] throw-away decode step: captures the decode traces")
     t0 = time.perf_counter()
     decode.decode_traced(pad_id, 0)
     logger.info(f"trace capture + first step: {time.perf_counter() - t0:.1f}s")
 
-    # --- every prompt through decode, one after another in the one session ---------------------------- #
+    # --- prefill capture: decode's L1 tensors parked again, and put back where the decode traces expect them --- #
+    if prefill is not None:
+        progress.step("[4/6] prefill capture: one trace per stage (decode's L1 tensors parked meanwhile)")
+        t0 = time.perf_counter()
+        decode.release_prefetch_buffers()
+        prefill.capture_traced_prefill()
+        decode.restore_prefetch_buffers()
+        capture_seconds = time.perf_counter() - t0
+        prepare_seconds += capture_seconds
+        logger.info(f"traced prefill captured in {capture_seconds:.1f}s")
+        # The parked L1 tensors sat under prefill's capture, so its replays overwrite them.
+        decode.snapshot_resident_state()
+
+    # --- every prompt: prefill execute, then decode execute, in the one session -------------------------- #
     eos = _eos_ids(config)
     for k, (prompt, result) in enumerate(zip(prompts, results)):
-        tag = f"[5/5] decode {k + 1}/{len(prompts)} {prompt.name}"
+        reference = None
+        if compare and result.prefilled:
+            reference = _reference_logits(decode, sid, prompt, result.prefilled, f"[5/6] {prompt.name}", progress)
+        row = states = None
+        if result.prefilled:
+            tag = f"[5/6] prefill {k + 1}/{len(prompts)} {prompt.name}"
+            row, states = _prefill_one(
+                prefill,
+                prompt,
+                result,
+                tag,
+                progress,
+                tokenizer,
+                chunk_size,
+                num_stages,
+                build_seconds,
+                prepare_seconds,
+            )
+            decode.reload_resident_state()
+        tag = f"[6/6] decode {k + 1}/{len(prompts)} {prompt.name}"
         _decode_one(
-            decode, sid, prompt, result, rows[k], parked[k], bias_slots, tag, progress, tokenizer, eos, max_new, compare
+            decode,
+            prefill,
+            sid,
+            prompt,
+            result,
+            row,
+            states,
+            reference,
+            bias_slots,
+            tag,
+            progress,
+            tokenizer,
+            eos,
+            max_new,
         )
-        parked[k] = rows[k] = None
         assert all(0 <= t < config.vocab_size for t in result.generated)
     logger.info(f"pool usage: {decode.session_usage()}")
-    _summary(results, traced, prepare_seconds)
+    _summary(results, prepare_seconds)
     progress.step("done")
     return results
 
@@ -670,77 +572,78 @@ def _prefill_one(
     tag: str,
     progress: _Progress,
     tokenizer,
-    traced: bool,
     chunk_size: int,
     num_stages: int,
     build_seconds: float,
     prepare_seconds: float,
-) -> tuple[torch.Tensor, list[dict]]:
-    """Prefill one prompt's aligned part; returns its next-token logits row (host) and its states, parked on host."""
+) -> tuple[torch.Tensor, list[PrefillAttentionState]]:
+    """Prefill one prompt's aligned part by replaying the prefill traces; returns its next-token logits row (host)
+    and its per-layer states, still on device (commit them before the next decode or prefill replay)."""
     aligned = result.prefilled
     num_chunks = math.ceil(aligned / chunk_size)
-    how = f"through {num_stages} pipelined stage(s), traced" if traced else "eager, includes compilation"
-    progress.step(f"{tag}: prefill of {aligned} tokens, {num_chunks} chunk(s) of up to {chunk_size} ({how}; timed)")
+    progress.step(
+        f"{tag}: prefill of {aligned} tokens, {num_chunks} chunk(s) of up to {chunk_size} (through {num_stages} "
+        "pipelined stage(s), traced; timed)"
+    )
     ids = torch.tensor(prompt.ids[:aligned], dtype=torch.long).unsqueeze(0)
     chunk_times: list[tuple[int, int, float]] = []
 
     def on_chunk(index: int, start: int, end: int, seconds: float) -> None:
         chunk_times.append((start, end, seconds))
         tokens = end - start
-        # Traced, ``seconds`` is the time since the previous chunk's logits arrived (the first: the pipeline fill).
-        fill = " (pipeline fill)" if traced and index == 0 and num_chunks > 1 else ""
+        # ``seconds`` is the time since the previous chunk's logits arrived (the first: the pipeline fill).
+        fill = " (pipeline fill)" if index == 0 and num_chunks > 1 else ""
         logger.info(
             f"prefill chunk {index + 1}/{num_chunks} [{start}, {end}): {tokens} tokens, +{seconds:.3f}s{fill}, "
             f"{tokens / seconds:.1f} tok/s"
         )
 
     t0 = time.perf_counter()
-    if traced:
-        logits, states = prefill.prefill_traced(ids, on_chunk=on_chunk)
-    else:
-        logits, states = prefill.prefill(ids, chunk_size=chunk_size, on_chunk=on_chunk)
+    logits, states = prefill.prefill_traced(ids, on_chunk=on_chunk)
     result.prefill_seconds = time.perf_counter() - t0
-    if traced:
-        _report(chunk_times, num_stages, result.prefill_seconds, build_seconds, prepare_seconds)
-        steady = chunk_times[1:] or chunk_times
-        result.pipelined_tps = sum(e - s for s, e, _ in steady) / sum(sec for _, _, sec in steady)
-    else:
-        logger.info(
-            f"prefill: {aligned} tokens in {result.prefill_seconds:.2f}s "
-            f"({result.prefill_seconds / aligned * 1000:.2f} ms/token, {aligned / result.prefill_seconds:.1f} tok/s; "
-            "eager, includes first-run compilation)"
-        )
-    # The traced prefill's logits come back on the host (D2H socket); the eager one's are on the last stage.
-    row = logits.reshape(-1) if traced else prefill.to_host(logits, prefill.head_device).reshape(-1)
+    _report(chunk_times, num_stages, result.prefill_seconds, build_seconds, prepare_seconds)
+    steady = chunk_times[1:] or chunk_times
+    result.pipelined_tps = sum(e - s for s, e, _ in steady) / sum(sec for _, _, sec in steady)
+    # The logits come back on the host (D2H socket).
+    row = logits.reshape(-1)
     assert torch.isfinite(row).all(), f"{prompt.name}: non-finite prefill logits"
     _log_top5(tokenizer, f"prefill's own next token after position {aligned - 1}", row)
+    return row, states
 
-    # The traced states live in the persistent buffers, which the next prompt's run overwrites.
-    progress.step(f"{tag}: parking the per-layer states on the host")
+
+def _reference_logits(decode, sid: int, prompt: _Prompt, aligned: int, tag: str, progress: _Progress) -> torch.Tensor:
+    """``DEEPSEEK_V4_E2E_COMPARE=1``: decode-only logits at the last aligned position, to compare with prefill's.
+
+    Run before the prompt's prefill, so no prefill state is alive while decode replays.
+    """
+    progress.step(f"{tag}: reference: {aligned} prompt tokens through decode only (DEEPSEEK_V4_E2E_COMPARE=1)")
+    decode.reset_session(sid)
+    decode.reset_static_caches()
     t0 = time.perf_counter()
-    parked = _park_states(states)
-    if traced:
-        prefill.free_traced_states(states)  # allocated under the live traces: gone before the next replay
-    del states, logits
-    gc.collect()
-    logger.info(f"states parked in {time.perf_counter() - t0:.1f}s")
-    return row, parked
+
+    def alive(i: int, _out) -> None:
+        if (i + 1) % 512 == 0:
+            rate = (i + 1) / (time.perf_counter() - t0)
+            logger.info(f"{tag}: reference {i + 1}/{aligned} ({rate:.1f} tok/s)")
+
+    return decode.decode_prompt_traced(prompt.ids[:aligned], 0, on_output=alive).reshape(-1).float()
 
 
 def _decode_one(
     decode,
+    prefill,
     sid: int,
     prompt: _Prompt,
     result: _Result,
     row: Optional[torch.Tensor],
-    parked: Optional[list[dict]],
+    states: Optional[list[PrefillAttentionState]],
+    reference: Optional[torch.Tensor],
     bias_slots,
     tag: str,
     progress: _Progress,
     tokenizer,
     eos: set[int],
     max_new: int,
-    compare: bool,
 ) -> None:
     """Rewind the session, commit one prompt's prefill state, replay its tail and generate its answer."""
     aligned, real_len = result.prefilled, result.tokens
@@ -749,30 +652,17 @@ def _decode_one(
     decode.reset_static_caches()
     next_id = None
     if aligned:
-        if compare:  # decode-only logits at the last aligned position, to compare with prefill's (numerics check)
-            progress.step(f"{tag}: reference: {aligned} prompt tokens through decode only (DEEPSEEK_V4_E2E_COMPARE=1)")
-            t0 = time.perf_counter()
+        if reference is not None:
+            _compare_logits(tokenizer, row.float(), reference[: row.numel()])
 
-            def alive(i: int, _out) -> None:
-                if (i + 1) % 512 == 0:
-                    rate = (i + 1) / (time.perf_counter() - t0)
-                    logger.info(f"{tag}: reference {i + 1}/{aligned} ({rate:.1f} tok/s)")
-
-            out = decode.decode_prompt_traced(prompt.ids[:aligned], 0, on_output=alive)
-            _compare_logits(tokenizer, row.float(), out.reshape(-1).float()[: row.numel()])
-            decode.reset_session(sid)  # back to the state the commit expects
-            decode.reset_static_caches()
-
-        # The states go up, are committed (device side: prefill and decode share every stage) and are freed
-        # before the next decode_traced, so no allocation outlives the commit under the live decode traces.
+        # Committed on device (prefill and decode share every stage), then freed before the next decode_traced:
+        # the states were allocated under the live traces.
         progress.step(f"{tag}: commit: prefill state -> decode buffers, on device")
         t0 = time.perf_counter()
-        states = _upload_states(parked)
         committed = decode.commit_prefill_state(
             states, sid, progress=lambda m: progress(m, important=False), bias_slots=bias_slots
         )
-        _free_states(states)
-        del states
+        prefill.free_traced_states(states)
         assert committed == aligned
         logger.info(f"commit of {committed} tokens: {time.perf_counter() - t0:.2f}s")
         if aligned == real_len:
@@ -821,12 +711,11 @@ def _decode_one(
         logger.info(f"{prompt.name}: expected {prompt.expected}, model {result.choice} -> {verdict}")
 
 
-def _summary(results: list[_Result], traced: bool, prepare_seconds: float) -> None:
+def _summary(results: list[_Result], prepare_seconds: float) -> None:
     """One line per prompt: its prefill and decode perf (and answer), then the totals."""
-    mode = "traced, pipelined" if traced else "eager"
     lines = [
         "",
-        f"=== end-to-end perf ({len(results)} prompt(s); prefill {mode}) ===",
+        f"=== end-to-end perf ({len(results)} prompt(s); prefill traced, pipelined; decode prefetcher off) ===",
         f"{'prompt':<18} {'tokens':>7} {'prefill s':>10} {'tok/s':>8} {'piped t/s':>10} "
         f"{'decode t/s':>10} {'gen':>4} {'answer':>9}",
     ]

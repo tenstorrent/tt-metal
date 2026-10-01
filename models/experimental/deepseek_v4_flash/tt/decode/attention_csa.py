@@ -477,9 +477,6 @@ class DeepSeekV4Indexer:
         prefetch_buffers: Optional[dict] = None,
         tp_size: int = 1,
     ):
-        # LinearDecode projections always prefetch (ROW_MAJOR HEIGHT_SHARDED, fully
-        # width-sharded). ``use_prefetcher`` is kept for the CSA constructor's kwargs.
-        del use_prefetcher
         self.device = device
         self.tp_size = int(tp_size)
         self.cluster_axis = _tp_cluster_axis(device) if self.tp_size > 1 else None
@@ -495,7 +492,7 @@ class DeepSeekV4Indexer:
         folded = (self.head_dim**-0.5) * (self.num_heads**-0.5)
         if num_prefetch_pages is None:
             num_prefetch_pages = active_system_config().prefetcher.num_prefetch_pages
-        if prefetch_buffers is None:
+        if use_prefetcher and prefetch_buffers is None:
             prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
 
         compressor_weights = {
@@ -512,7 +509,7 @@ class DeepSeekV4Indexer:
             rope_dim,
             cache=cache.sub("compressor"),
             weight_dtype=weight_dtype,
-            use_prefetcher=True,
+            use_prefetcher=use_prefetcher,
             num_prefetch_pages=num_prefetch_pages,
             prefetch_buffers=prefetch_buffers,
             head_dim=self.head_dim,
@@ -521,8 +518,8 @@ class DeepSeekV4Indexer:
         )
         for name, proj in (("kv_proj", self.compressor.kv_proj), ("gate_proj", self.compressor.gate_proj)):
             assert (
-                proj.use_prefetcher and proj.use_rm_hs and not proj.partial_width_sharded
-            ), f"indexer compressor {name} must be prefetched, ROW_MAJOR HEIGHT_SHARDED, fully width-sharded"
+                proj.use_prefetcher == use_prefetcher and proj.use_rm_hs and not proj.partial_width_sharded
+            ), f"indexer compressor {name} must be ROW_MAJOR HEIGHT_SHARDED and fully width-sharded"
 
         def head_proj(layout_name: str, weight, K: int, N: int, cache_key: str) -> LinearDecode:
             layout = dict(check_decode_layout(layout_name, K, N))
@@ -530,7 +527,7 @@ class DeepSeekV4Indexer:
                 raise ValueError(f"{layout_name} must be fully width-sharded for hub-mode matmul_decode")
             # q_b shares the 64-receiver ring. weights_proj is 2 cores, which does
             # not divide the DRAM banks, so it cannot take a prefetch ring.
-            prefetch = layout_name == "indexer.q_b_proj"
+            prefetch = use_prefetcher and layout_name == "indexer.q_b_proj"
             extra = {}
             if prefetch:
                 extra = {
