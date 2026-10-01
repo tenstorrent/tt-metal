@@ -183,13 +183,17 @@ def write_chunk_metadata(
 
 
 def _llama4_scale_geometry(hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, sp_axis: int):
-    """(heads_local, width, shard_dims) for the query-scale buffer.
+    """(heads, width, shard_dims) for the query-scale buffer.
 
     The allocator and the per-chunk writer below must agree exactly -- a mismatch surfaces only as a
     copy_host_to_device_tensor failure at runtime -- so the shape contract is stated once.
+
+    The buffer is [1, 1, S, q_lora_rank]: ttMLA applies the scale to the q_a latent after its norm,
+    not to Q (see ttMLA._q_stem), so it has one head and the latent's width, which is TP-replicated.
     """
-    heads_local = hf_config.num_attention_heads // mesh_device.shape[1 - sp_axis]
-    width = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+    del mesh_device  # the q_a latent is TP-replicated, so no dimension depends on the TP split
+    heads_local = 1
+    width = hf_config.q_lora_rank
     shard_dims = [None, None]
     shard_dims[sp_axis] = 2
     return heads_local, width, shard_dims
