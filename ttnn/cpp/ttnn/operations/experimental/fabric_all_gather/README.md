@@ -29,11 +29,11 @@ own shard: one per link, or two per link for a non-interleaved input (the ND-sha
 block by block into the output for the link workers to read from there. Link workers sit next to the Ethernet core of
 their link (`tt_fabric::get_forwarding_eth_core`).
 
-- **Fabric chunks**: up to `payload / page` pages of one logical DRAM bank, physically contiguous in an interleaved
+- **Fabric chunks**: up to `payload / page` consecutive pages of one page lane (pages k, k + 8, k + 16, ...), physically contiguous in an interleaved
   tensor, one packet each (a page larger than the payload is split over several packets). Link workers split the
-  logical banks between them.
+  lanes between them.
 - **Forwarding**: outgoing shard k is what upstream sent as its outgoing shard k - 1. Upstream's last packet of every
-  outgoing shard (or a bare increment, if the shard has no chunk on that worker's banks) increments this worker's
+  outgoing shard (or a bare increment, if the shard has no chunk in that worker's lanes) increments this worker's
   shards-arrived counter, so the reader forwards shard k once the counter reaches k.
 - **Fence**: before sending, each sender waits until its downstream has signalled that it started this call (the
   downstream-started counter), so a reused output is never overwritten early.

@@ -50,11 +50,11 @@ void kernel_main() {
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(1), page_bytes);
     auto* shards_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_common_arg_val<uint32_t>(2));
 
-    // Per-core args: [0] first owned bank [1] owned bank stride [2] number of outgoing shards, then the outgoing
+    // Per-core args: [0] first owned lane [1] owned lane stride [2] number of outgoing shards, then the outgoing
     // shards. A local copy core has one (its own shard); with a non-interleaved input, [0] / [1] are its index / the
     // number of local copy cores instead.
-    const uint32_t first_owned_bank = get_arg_val<uint32_t>(0);
-    const uint32_t owned_bank_stride = get_arg_val<uint32_t>(1);
+    const uint32_t first_owned_lane = get_arg_val<uint32_t>(0);
+    const uint32_t owned_lane_stride = get_arg_val<uint32_t>(1);
     const uint32_t num_outgoing_shards = get_arg_val<uint32_t>(2);
     constexpr uint32_t kOutgoingShardsArg = 3;
 
@@ -84,8 +84,8 @@ void kernel_main() {
     };
 
     if constexpr (kLocalCopyCore && !kInputInterleaved) {
-        const uint32_t local_copy_core_index = first_owned_bank;
-        const uint32_t num_converting_cores = owned_bank_stride;
+        const uint32_t local_copy_core_index = first_owned_lane;
+        const uint32_t num_converting_cores = owned_lane_stride;
         for_each_contiguous_input_run(
             geometry,
             input,
@@ -140,10 +140,10 @@ void kernel_main() {
                 geometry,
                 num_dram_banks,
                 pages_per_fabric_chunk,
-                first_owned_bank,
-                owned_bank_stride,
-                outgoing_shard_bank_half(outgoing_shard)) == 0) {
-            continue;  // nothing on our banks: don't wait (the sender may already have reset the counter)
+                first_owned_lane,
+                owned_lane_stride,
+                outgoing_shard_lane_half(outgoing_shard)) == 0) {
+            continue;  // nothing in our lanes: don't wait (the sender may already have reset the counter)
         }
         const bool read_from_output = outgoing_index > 0 || !kInputInterleaved;
         if (outgoing_index > 0) {
@@ -153,9 +153,9 @@ void kernel_main() {
             geometry,
             num_dram_banks,
             pages_per_fabric_chunk,
-            first_owned_bank,
-            owned_bank_stride,
-            outgoing_shard_bank_half(outgoing_shard),
+            first_owned_lane,
+            owned_lane_stride,
+            outgoing_shard_lane_half(outgoing_shard),
             [&](uint32_t outer_slice, uint32_t page_in_slice, uint32_t num_pages) {
                 if constexpr (!kInputInterleaved) {
                     if (outgoing_index == 0) {

@@ -7,7 +7,7 @@
 //      downstream-started counter), then wait for our own downstream's signal;
 //   2. send every fabric chunk of the outgoing shards one fabric hop into the same pages of the next chip's output (a
 //      chunk is one packet; only a single page larger than the payload takes several); the last packet of each
-//      outgoing shard (or a bare packet, if the shard has no chunk on this worker's banks) increments the downstream
+//      outgoing shard (or a bare packet, if the shard has no chunk in this worker's lanes) increments the downstream
 //      shards-arrived counter;
 //   3. wait until every shard expected from upstream has landed (the output is complete when the op ends) and reset
 //      the shards-arrived counter for the next call.
@@ -55,13 +55,13 @@ void kernel_main() {
     const uint32_t shards_arrived_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t downstream_started_addr = get_common_arg_val<uint32_t>(2);
 
-    // Per-core args: [0] first owned bank [1] owned bank stride [2] signal started to downstream? [3, 4] the core that
+    // Per-core args: [0] first owned lane [1] owned lane stride [2] signal started to downstream? [3, 4] the core that
     // gets that signal (downstream's link worker of the opposite direction) [5, 6] downstream link worker core (same
     // direction: gets our data and shards-arrived increments) [7] downstream mesh id [8] downstream chip id [9] shards
     // expected from upstream [10] number of outgoing shards, then the outgoing shards, then the fabric connection.
     size_t arg = 0;
-    const uint32_t first_owned_bank = get_arg_val<uint32_t>(arg++);
-    const uint32_t owned_bank_stride = get_arg_val<uint32_t>(arg++);
+    const uint32_t first_owned_lane = get_arg_val<uint32_t>(arg++);
+    const uint32_t owned_lane_stride = get_arg_val<uint32_t>(arg++);
     const bool signal_started_to_downstream = get_arg_val<uint32_t>(arg++) != 0;
     const uint32_t started_signal_x = get_arg_val<uint32_t>(arg++);
     const uint32_t started_signal_y = get_arg_val<uint32_t>(arg++);
@@ -118,9 +118,9 @@ void kernel_main() {
                 geometry,
                 num_dram_banks,
                 pages_per_fabric_chunk,
-                first_owned_bank,
-                owned_bank_stride,
-                outgoing_shard_bank_half(outgoing_shard));
+                first_owned_lane,
+                owned_lane_stride,
+                outgoing_shard_lane_half(outgoing_shard));
             uint32_t chunks_in_batch = 0, chunks_sent = 0;
             auto pop_batch = [&]() {
                 noc_async_writes_flushed();  // the CB batch's chunks and headers have left L1
@@ -133,9 +133,9 @@ void kernel_main() {
                 geometry,
                 num_dram_banks,
                 pages_per_fabric_chunk,
-                first_owned_bank,
-                owned_bank_stride,
-                outgoing_shard_bank_half(outgoing_shard),
+                first_owned_lane,
+                owned_lane_stride,
+                outgoing_shard_lane_half(outgoing_shard),
                 [&](uint32_t outer_slice, uint32_t page_in_slice, uint32_t num_pages) {
                     cb_wait_front(chunk_cb, pages_per_fabric_chunk * (chunks_in_batch + 1));
                     const uint64_t dst_noc_addr = output.get_noc_addr(
@@ -172,7 +172,7 @@ void kernel_main() {
             if (chunks_in_batch > 0) {
                 pop_batch();
             }
-            if (shard_fabric_chunks == 0) {  // none of this shard is on our banks: still count it downstream
+            if (shard_fabric_chunks == 0) {  // none of this shard is in our lanes: still count it downstream
                 auto* header = next_free_header();
                 header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{downstream_shards_arrived, 1, true});
                 connection.wait_for_empty_write_slot();
