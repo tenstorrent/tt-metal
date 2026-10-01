@@ -674,3 +674,47 @@ def test_triangle_allocation_then_uniform_sharded(device):
     for i in range(num_cores):
         assert triangle_tensors[i].is_allocated()
     assert sharded_tensor.is_allocated()
+
+
+def _create_two_core_tensor(device, cores, shard_bytes):
+    """A HEIGHT_SHARDED per-core L1 tensor with one ``shard_bytes`` shard on each of ``cores``."""
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores]),
+        [1, shard_bytes],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    mem_config.experimental_set_per_core_allocation(True)
+    data = torch.zeros(len(cores), shard_bytes, dtype=torch.uint8)
+    return ttnn.from_torch(
+        data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+    )
+
+
+@requires_hybrid_allocator
+def test_cb_address_is_each_cores_own_shard(device, expect_error):
+    """get_cb_address reports the address a CB on a per-core tensor is programmed at: its own core's shard.
+
+    The first core is skewed so its shard sits below the second's, and Buffer::address() (the first
+    core's) is wrong for the second. The CB sits at the very end of each core's shard.
+    """
+    shard_bytes, page_bytes = 2048, 1024
+    core0, core1 = ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)
+    _skew = _create_single_core_tensor(device, core0, 4096)
+    tensor = _create_two_core_tensor(device, [core0, core1], shard_bytes)
+    assert _per_core_addr(tensor, core0) != _per_core_addr(tensor, core1), "the skew did not move the first core"
+
+    for core in (core0, core1):
+        descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            0,
+            tensor,
+            address_offset=shard_bytes - page_bytes,
+            total_size=page_bytes,
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]),
+        )
+        assert ttnn.get_cb_address(descriptor) == _per_core_addr(tensor, core) + shard_bytes - page_bytes
+
+    # One CB spanning both cores has no single right address.
+    spanning = ttnn.cb_descriptor_from_sharded_tensor(0, tensor)
+    with expect_error(RuntimeError, "a circular buffer has one address"):
+        ttnn.get_cb_address(spanning)

@@ -250,6 +250,9 @@ TEST_F(PerCoreAllocationTest, ProgramCircularBufferFollowsPerCoreBuffer) {
     auto buffer = make_per_core_buffer(device, {first, second}, 2);
     auto next_skew = make_per_core_buffer(device, {second}, 8);
     auto next_buffer = make_per_core_buffer(device, {first, second}, 2);
+    // Both buffers must sit away from their first core on the CB's core, or the checks prove nothing.
+    ASSERT_NE(buffer->address(), per_core::get_per_core_address(*buffer, second));
+    ASSERT_NE(next_buffer->address(), per_core::get_per_core_address(*next_buffer, second));
 
     Program program = CreateProgram();
     CircularBufferConfig config(PAGE_SIZE, {{0, tt::DataFormat::Float16_b}}, *buffer);
@@ -279,7 +282,9 @@ TEST_F(PerCoreAllocationTest, CircularBufferAcrossMatchingPerCoreAddresses) {
     auto* device = this->devices_[0]->get_devices()[0];
     const CoreCoord first(0, 0), second(1, 0);
     auto buffer = make_per_core_buffer(device, {first, second}, 2);
-    ASSERT_EQ(per_core::get_per_core_address(*buffer, first), per_core::get_per_core_address(*buffer, second));
+    if (per_core::get_per_core_address(*buffer, first) != per_core::get_per_core_address(*buffer, second)) {
+        GTEST_SKIP() << "the two cores' free L1 differs on this device, so their per-core addresses do too";
+    }
 
     CircularBufferImpl cb(per_core_cb_descriptor(*buffer, CoreRangeSet(CoreRange(first, second)), 0));
     EXPECT_EQ(cb.address(), per_core::get_per_core_address(*buffer, first));
