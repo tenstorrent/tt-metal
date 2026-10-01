@@ -54,7 +54,7 @@ _PERF_REFERENCE_MS = {
     "SP2xTP4": 9.539,
     "SP4xTP2": 9.991,
 }
-_GALAXY_PERF_REFERENCE_MS = 4.038
+_GALAXY_PERF_REFERENCE_MS = 3.690
 
 
 @pytest.fixture(scope="session")
