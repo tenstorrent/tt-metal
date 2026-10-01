@@ -7,7 +7,8 @@ M=/home/smarton/fasth3/tt-metal; D=/home/smarton/fasth3/t70; LOG=$D/run70.log
 source $M/python_env/bin/activate
 export TT_METAL_HOME=$M PYTHONPATH=$D/src:$M:$M/ttnn:$M/tools HF_HUB_OFFLINE=1
 export TT_METAL_CACHE=/var/tmp/fasth3/cache/tt-metal-cache
-cd $M
+# cwd is $D, not $M: python -m puts cwd first on sys.path, and $M ahead of src/ shadowed t51's models/tt_dit (job 035).
+cd $D
 echo "[t70] tree=$(git rev-parse --short HEAD) src=$(cat $D/src/REV) clock: $(python /home/smarton/tray-stress/hostfmax.py 1150 | tail -1)" | tee $LOG
 timeout 1500 python -m pytest -p conftest -c $M/pytest.ini --rootdir=$M -sv --timeout=1440 $D/test_fold_gate_device_check.py 2>&1 | tee -a $LOG
 rc=${PIPESTATUS[0]}

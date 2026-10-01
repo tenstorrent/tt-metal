@@ -1,8 +1,12 @@
 # #70 — device check of LTX_FUSE_GATE_ON_DEVICE (t51 @80882b291c2) + LTX_FUSE_NORM_ADALN A/B
 
-blx03 broker job **035** (submitted 2026-10-01 10:50, timeout 1500 s): `bash ~/fasth3/t70/run70.sh`.
-Log: `g14blx03:~/fasth3/t70/run70.log` (also `/var/log/tt-device-broker/2026-10-01_105004_035.log`).
-Status: `ssh g14blx03 tt-device-mcp status -j 035`.
+Job 035 failed in 22 s: `python -m pytest` from $M put blx03's tree ahead of src/, so LTXAttention had no
+`fold_gate_on_device` (harness bug, no device fault; broker fabric check 036 passed after it). Fixed: run from $D and
+assert at collection that attention_ltx comes from src/.
+
+blx03 broker job **037** (submitted 2026-10-01 10:51, timeout 1500 s): `bash ~/fasth3/t70/run70.sh`.
+Log: `g14blx03:~/fasth3/t70/run70.log` (also `/var/log/tt-device-broker/2026-10-01_105149_037.log`).
+Status: `ssh g14blx03 tt-device-mcp status -j 037`.
 
 Setup: full (4,8) mesh with FABRIC_1D, then create_submesh(2,4). models/tt_dit comes from 80882b291c2
 (`~/fasth3/t70/src`, 6.5 MB, ahead of blx03's tree on PYTHONPATH); build and models/common come from blx03's tree.

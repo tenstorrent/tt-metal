@@ -24,8 +24,11 @@ from safetensors import safe_open
 import ttnn
 import models.tt_dit.tests.models.ltx.test_transformer_ltx as T
 from models.tt_dit.utils.tracing import Tracer
+from models.tt_dit.models.transformers.ltx import attention_ltx as _A
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+# Fail at collection, before the mesh opens, if blx03's tree shadows t51's models/tt_dit.
+assert _A.__file__.startswith(os.path.join(_HERE, "src")), f"t51 models/tt_dit not on path: {_A.__file__}"
 _ATTNS = ("attn1", "attn2", "audio_attn1", "audio_attn2", "audio_to_video_attn", "video_to_audio_attn")
 _BLOCK0 = {}
 
