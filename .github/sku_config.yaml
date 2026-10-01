@@ -34,15 +34,7 @@ skus:
       - pipeline-functional
       - topology-6u
       - in-service
-
-  # Dedicated WH galaxies carry pipeline-merge-gate instead of pipeline-functional or
-  # pipeline-perf, so general galaxy jobs cannot land on them.
-  wh_galaxy_merge_gate:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-merge-gate
-      - topology-6u
-      - in-service
+    merge_queue_sku: wh_galaxy_merge_gate
 
   wh_galaxy_perf:
     runs_on:
@@ -224,6 +216,15 @@ skus:
   cpu_medium_prio:
     runs_on:
       - tt-ubuntu-2204-medium-prio-stable
+
+  # Dedicated WH galaxies carry pipeline-merge-gate instead of pipeline-functional or
+  # pipeline-perf, so general galaxy jobs cannot land on them.
+  wh_galaxy_merge_gate:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-merge-gate
+      - topology-6u
+      - in-service
 
   # Synthetic CPU SKUs for ttsim simulator jobs. The impl invokes
   # .github/actions/setup-ttsim gated on `startsWith(sku, 'sim_')`; that action reads

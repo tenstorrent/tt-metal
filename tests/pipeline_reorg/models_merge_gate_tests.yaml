@@ -1,4 +1,5 @@
-# Models merge-gate matrix (dedicated WH Galaxy runners).
+# Models merge-gate matrix. On merge_group the merge queue routes wh_galaxy to
+# wh_galaxy_merge_gate (pipeline-merge-gate pool) via sku_config merge_queue_sku.
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id, model (optional).
 # For max allowed timeout refer to .github/time_budget.yaml (models -> merge_gate).
@@ -15,7 +16,7 @@
 #     [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
 #     pytest models/demos/gpt_oss/demo/text_demo.py -k "batch128 and not logprobs" --timeout 1500 $SKIP_MODEL_LOAD
 #   skus:
-#     wh_galaxy_merge_gate:
+#     wh_galaxy:
 #       timeout: 5
 #   model: gpt-oss-120b
 #   owner_id: U053W15B6JF # Djordje Ivanovic
