@@ -8,16 +8,23 @@ model is the all-device tt/model.py:TtXingModel (the ladder's model, final norm 
 owns (tt/runners/kv_contract.py) is the model's own state: every slot's MLA latent cache, which the attention writes
 and gathers in place through ``TtMlaAttention.bind_cache``.
 
-Served layers: ``PREFILL_XING_LAYERS`` (e.g. "0-5"), else the bring-up spec's subset (BRINGUP_SPEC, or this model's
-bringup/spec.yaml), intersected with the rank's range; a contiguous run from the rank's first layer. The runtime acks
-exactly those layers, with their global index.
+Served layers: every layer of the rank's range (num_kv_cache_layers(n) = n: every Xing layer writes KV);
+``PREFILL_XING_LAYERS`` (e.g. "0-5") restricts it for debugging, a contiguous run from the rank's first layer. The
+runtime acks exactly those layers, with their global index.
 
-Engine input: uint32 ROW_MAJOR [sp, 1, chunk / sp] with sp = mesh rows = 4, sharded over mesh axis 0 (row r holds
-tokens [r chunk/4, (r+1) chunk/4)), replicated over the columns, tail padded with 0xFFFFFFFF past actual_end. That is
-the embedding's input split (tt/model.py:TtEmbedding, contiguous rows over axis 0), so the runtime only clamps the pad
-ids into the vocab (``ttnn.minimum``) and reshapes to [1, 1, 1, chunk/4], on the device. Pad tokens sit after every
-real token, so causality keeps them out of every real row's KV (and MoE routing is per token). The layer-completion
-sink fires after an event sync per layer (the layer's KV is then in the engine cache).
+Engine input (bringup/serving_contract.md "Input"): uint32 ROW_MAJOR [sp, 1, chunk / sp] with sp = mesh rows = 4,
+sharded over mesh axis 0, replicated over the columns, PAD_ID 0xFFFFFFFF past actual_end, already reshuffled by the
+server (ring_sdpa_reshuffle with kv_offset = actual_start: absolute position g on row (g // 1280) % 4, rising within
+a row). That is where the attention expects each token for a chunk at actual_start (update_padded_kv_cache,
+rotary_embedding_indexed and ring_mla derive the placement from it on the device), so the runtime only clamps the pad
+ids into the vocab and reshapes to [1, 1, 1, chunk/4], on the device. actual_start is any multiple of 32 (a follow-up
+turn starts at the reused prefix); pad tokens sit after every real token, so causality keeps them out of every real
+row's KV (MoE routing is per token).
+
+Per layer: the attention writes only the records holding real tokens (valid_global = actual_end) and zeroes the pad
+rows [actual_end, ceil32(actual_end)) of the last one; then the ack. Host sink (default): an event sync, then
+``sink(global_layer, request_id)``. D2H (``d2h_service`` given, PREFILL_LAYER_ACK_D2H=1):
+``outbound_socket_service_sync(d2h_service, metadata=metadata_msg)`` enqueued on the same CQ, no host sync.
 
 Import-light: all device / model imports happen inside the methods.
 """
@@ -41,7 +48,10 @@ class Xing40Config:
 
     NUM_LAYERS = 40
     EMB_SIZE = 3584
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE
+    # The runner opens the fabric with this packet payload (runner_utils.open_mesh_device). It must hold an fp32 tile
+    # (4096 B: the mHC [S/4, 32] fp32 all_reduce), else reduce_scatter fits 0 pages per packet (SIGFPE); 4352 is the
+    # fabric default every bring-up test ran with (tt_metal/fabric/erisc_datamover_builder.hpp).
+    FABRIC_PAYLOAD_SIZE = 4352
     NUM_ATTENTION_HEADS = 32
     KV_LORA_RANK = 512
     QK_ROPE_HEAD_DIM = 64
@@ -80,7 +90,7 @@ def served_layers(first_layer_idx: int, num_layers: int) -> list[int]:
     from models.demos.common.bringup.core.spec import parse_layers
 
     env = os.environ.get("PREFILL_XING_LAYERS")
-    layers = parse_layers(env, Xing40Config.NUM_LAYERS) if env else bringup_spec().layers()
+    layers = parse_layers(env, Xing40Config.NUM_LAYERS) if env else range(Xing40Config.NUM_LAYERS)
     layers = [i for i in layers if first_layer_idx <= i < first_layer_idx + num_layers]
     assert (
         layers == list(range(first_layer_idx, first_layer_idx + len(layers))) and layers
@@ -95,7 +105,10 @@ class XingKvCaches(KvCaches):
 
 
 class XingPrefillRuntime:
-    """Structural runtime contract of ADDING_A_PREFILL_MODEL.md section 2 (stateless w.r.t. the KV cache)."""
+    """Runtime contract of ADDING_A_PREFILL_MODEL.md section 2 and bringup/serving_contract.md (stateless w.r.t. the
+    KV cache: the engine's cache is bound into the attention modules per chunk)."""
+
+    PAD_ID = 0xFFFFFFFF
 
     def __init__(self, *, mesh_device, hf_config, params: PrefillRunParams):
         import ttnn
@@ -111,24 +124,29 @@ class XingPrefillRuntime:
         self.model = TtXingModel(mesh_device, resolve_model_path(), c // sp, c, layers=self.layers)
         self.vocab = int(self.model.cfg.vocab_size)
         # Geometry (RoPE tables, scratch, SDPA config, dispatch sizes) for (chunk, max_seq), built once; the KV lives
-        # in the engine's cache (bind_cache per chunk), the modules' own caches are unused.
+        # in the engine's cache (bind_cache per chunk), so the modules' own latent caches are freed.
         self.model.setup(c, params.max_seq_len)
+        for blk in self.model.blocks:
+            blk.attn.drop_own_cache()
         self._ttnn = ttnn
         self._sink = None
+        self._prepared = None
 
     def set_layer_completion_sink(self, sink) -> None:
         self._sink = sink
 
-    def make_chunk_input(self, token_ids):
-        """The engine's H2D layout: uint32 ROW_MAJOR [sp, 1, chunk / sp], sharded over axis 0, tail 0xFFFFFFFF.
-        Host side; used only by compile() warm-up (the engine supplies real inputs)."""
+    def make_chunk_input(self, token_ids, start: int = 0):
+        """The engine's H2D payload for a chunk at ``start``: uint32 ROW_MAJOR [sp, 1, chunk / sp], sharded over
+        axis 0, PAD_ID tail, laid out on the rows as the server does (tt/layout.py:server_order). Host side; used
+        only by compile() warm-up (the engine supplies real inputs)."""
         import torch
 
         import ttnn
+        from models.demos.xing40_a4b_d_p.tt.layout import server_order
 
         c, sp = self.config.chunk_size, self.config.mesh_shape[0]
-        ids = list(token_ids) + [0xFFFFFFFF] * (c - len(token_ids))
-        t = torch.tensor(ids, dtype=torch.int64).reshape(sp, 1, c // sp).to(torch.uint32)
+        ids = torch.tensor(list(token_ids) + [self.PAD_ID] * (c - len(token_ids)), dtype=torch.int64)
+        t = ids[server_order(start, c, sp)].reshape(sp, 1, c // sp).to(torch.uint32)
         return ttnn.from_torch(
             t,
             dtype=ttnn.uint32,
@@ -141,49 +159,52 @@ class XingPrefillRuntime:
             ),
         )
 
-    def _device_ids(self, ids):
-        """Engine input (per chip [1, 1, chunk/4], row r's quarter) -> the embedding's [1, 1, 1, chunk/4] uint32
-        ROW_MAJOR with pad ids clamped to V - 1 (real ids are < V and pass unchanged). On the device."""
-        ttnn = self._ttnn
-        n = ids.shape[-1]
-        t = ttnn.to_layout(ids, ttnn.TILE_LAYOUT)
-        m = ttnn.minimum(t, self.vocab - 1)
-        ttnn.deallocate(t)
-        rm = ttnn.to_layout(m, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(m)
-        return ttnn.reshape(rm, (1, 1, 1, n))
+    def _prepare(self, kv) -> None:
+        """Load time: let every attention bind the engine's cache (a gather scratch of the cache's dtype)."""
+        if self._prepared is kv.contract.kvpe:
+            return
+        for blk in self.model.blocks:
+            blk.attn.prepare_cache(kv.contract.kvpe)
+        self._prepared = kv.contract.kvpe
 
     def _bind(self, kv, slot: int) -> None:
         c = kv.contract
         for blk in self.model.blocks:
             blk.attn.bind_cache(c.kvpe, slot, c.kv_row(blk.i), len(c.layers))
 
-    def _run(self, ids, kv_cache, slot, start, request_id, acks: bool):
+    def _run(self, ids, kv_cache, slot, start, end, request_id, acks: bool, d2h_service=None, metadata_msg=None):
         ttnn = self._ttnn
         sink = self._sink if acks else None
+        d2h = d2h_service if acks else None
+        assert d2h is None or metadata_msg is not None, "metadata_msg is required with d2h_service"
         mesh = self.mesh_device
         self._bind(kv_cache, slot)
-        clean = self._device_ids(ids)
+        clean = self.model.embed.clamp_ids(ids)
         h = self.model.embed(clean)
         ttnn.deallocate(clean)
         for blk in self.model.blocks:
-            h2 = blk(h, start)
+            h2 = blk(h, start, end)  # writes the layer's KV records and zeroes the pad rows of the last one
             ttnn.deallocate(h)
             h = h2
-            if sink is not None:
-                # The ack promises the layer's KV is in the engine cache: wait until the device has finished it.
+            if d2h is not None:
+                # Device-op ack on the same CQ, after the layer's cache write and pad zero: no host sync.
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h, metadata=metadata_msg)
+            elif sink is not None:
+                # The ack promises the layer's KV is in DRAM (the KV Manager reads it out of band): wait for it.
                 ttnn.event_synchronize(ttnn.record_event(mesh, 0))
                 sink(blk.i, request_id)
         ttnn.deallocate(h)
 
     def compile(self, kv_cache: XingKvCaches) -> None:
-        """Warm every chunk-offset program once in slot 0 (junk KV there; real requests overwrite it)."""
+        """Warm the programs once in slot 0 (junk KV there; a request only reads rows it wrote itself): a cold full
+        chunk, an unaligned follow-up start with a mid-record end (pad zero), and the last chunk of the slot."""
         ttnn = self._ttnn
         assert kv_cache.layers == self.layers, (kv_cache.layers, self.layers)
-        c = self.config.chunk_size
-        for start in range(0, self.config.max_seq_len, c):
-            ids = self.make_chunk_input([0] * c)
-            self._run(ids, kv_cache, 0, start, 0, acks=False)
+        self._prepare(kv_cache)
+        c, m = self.config.chunk_size, self.config.max_seq_len
+        for start, n in ((0, c), (2944 % c if m > c else 0, c - 2000), (m - c, c)):
+            ids = self.make_chunk_input([0] * n, start)
+            self._run(ids, kv_cache, 0, start, start + n, 0, acks=False)
             ttnn.deallocate(ids)
         ttnn.synchronize_device(self.mesh_device)
 
@@ -199,20 +220,43 @@ class XingPrefillRuntime:
         d2h_service=None,
         metadata_msg=None,
     ):
-        c = self.config.chunk_size
-        assert actual_start % c == 0, "chunk write offset must be chunk-aligned (block-cyclic cache write)"
-        assert actual_start < actual_end <= actual_start + c, (actual_start, actual_end, c)
-        assert actual_start + c <= self.config.max_seq_len, "chunk overruns the user slot"
+        c, m = self.config.chunk_size, self.config.max_seq_len
+        assert actual_start % 32 == 0, f"actual_start {actual_start} must be tile (32) aligned"
+        assert actual_start < actual_end <= min(actual_start + c, m), (actual_start, actual_end, c, m)
+        assert actual_start + c <= m, "chunk overruns the user slot (the server pulls the last chunk back)"
         assert 0 <= slot_id < kv_cache.contract.num_users, (slot_id, kv_cache.contract.num_users)
         assert tuple(input_tensor.shape)[-1] * self.config.mesh_shape[0] == c, input_tensor.shape
-        self._run(input_tensor, kv_cache, slot_id, actual_start, request_id, acks=True)
+        self._prepare(kv_cache)
+        self._run(
+            input_tensor,
+            kv_cache,
+            int(slot_id),
+            int(actual_start),
+            int(actual_end),
+            request_id,
+            acks=True,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+        )
         return None  # last/single rank: the populated cache is the output
 
     # --- migration hooks ---
-    def build_kv_chunk_table(self, kv_cache, path: str) -> str:
+    def build_kv_chunk_table(
+        self, kv_cache, path: str, *, first_layer_idx=0, num_my_layers=None, stage_layout=None, stage_layouts=None
+    ) -> str:
+        """Export the address table (tt/runners/kv_contract.py). The runner's migration path passes the rank's layer
+        range and the gathered stage layout; the mock-only path calls (kv, path=)."""
         import ttnn
 
-        table = kv_cache.contract.address_table(seq_len=self.config.max_seq_len)
+        if stage_layout is None and stage_layouts:
+            assert len(stage_layouts) == 1, "one cache, one stage layout"
+            stage_layout = stage_layouts[0]
+        n = len(kv_cache.layers)
+        assert num_my_layers in (None, n), (num_my_layers, n)
+        assert first_layer_idx == kv_cache.layers[0], (first_layer_idx, kv_cache.layers)
+        table = kv_cache.contract.address_table(
+            seq_len=self.config.max_seq_len, first_layer_idx=first_layer_idx, stage_layout=stage_layout
+        )
         ttnn.experimental.disaggregation.export_to_protobuf_file(table, path)
         return path
 
@@ -248,7 +292,7 @@ class XingPrefillAdapter(PrefillModelAdapter):
         return path
 
     def num_kv_cache_layers(self, num_layers: int) -> int:
-        """Acks the producer should expect per chunk: one per served layer (every layer writes kv_latent)."""
+        """Acks the producer should expect per chunk: one per layer (every Xing layer writes kv_latent)."""
         return len(served_layers(0, num_layers))
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:

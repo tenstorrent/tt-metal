@@ -538,10 +538,19 @@ class XingDeviceModel:
     def new_state(self, max_seq):
         return _DeviceState(self, max_seq)
 
-    def embed(self, tokens):
+    def embed(self, tokens, start=0):
+        """tokens: one chunk [S] in natural order (the server's PAD_ID 0xFFFFFFFF past actual_end), laid out on the
+        SP rows as the prefill server lays out a chunk at ``start`` (tt/layout.py:server_order; the identity for a
+        chunk-aligned start); pad ids are clamped into the vocab on the device (TtEmbedding.clamp_ids)."""
         import ttnn
+        from models.demos.xing40_a4b_d_p.tt.layout import server_order
 
-        ids = self.model.embed.ids_to_device(tokens)
+        tokens = tokens.reshape(-1).to(torch.int64)
+        if start % tokens.numel():
+            tokens = tokens[server_order(start, tokens.numel(), self.mesh.shape[0])]
+        raw = self.model.embed.ids_to_device(tokens)
+        ids = self.model.embed.clamp_ids(raw)
+        ttnn.deallocate(raw)
         h = self.model.embed(ids)
         ttnn.deallocate(ids)
         return h
@@ -560,8 +569,10 @@ class XingDeviceModel:
             return streams_to_host(self.mesh, h, self.cfg.hidden_size)
         return col_split_to_host(self.mesh, h)
 
-    def layer(self, i, h, start, state):
-        return self.blocks[i](h, start)
+    def layer(self, i, h, start, state, end=None):
+        """start: any multiple of 32 (h laid out by embed(tokens, start)); end: actual_end, rows at or past it are
+        pad (their KV is not kept: the write stops at the last real record, whose pad rows are zeroed)."""
+        return self.blocks[i](h, start, end)
 
     def final_norm(self, h):
         return self.model.final_norm(h)
