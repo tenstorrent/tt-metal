@@ -116,7 +116,6 @@ void py_module_types(nb::module_& mod) {
         .def(
             "write",
             &tt::tt_metal::distributed::H2DSocket::write,
-            nb::call_guard<nb::gil_scoped_release>(),
             nb::arg("data"),
             nb::arg("num_pages"),
             nb::call_guard<nb::gil_scoped_release>(),
@@ -198,7 +197,6 @@ void py_module_types(nb::module_& mod) {
         .def(
             "barrier",
             &tt::tt_metal::distributed::H2DSocket::barrier,
-            nb::call_guard<nb::gil_scoped_release>(),
             nb::arg("timeout_ms") = nb::none(),
             nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
@@ -327,7 +325,6 @@ void py_module_types(nb::module_& mod) {
         .def(
             "read",
             &tt::tt_metal::distributed::D2HSocket::read,
-            nb::call_guard<nb::gil_scoped_release>(),
             nb::arg("data"),
             nb::arg("num_pages"),
             nb::arg("notify_sender") = true,
@@ -436,7 +433,6 @@ void py_module_types(nb::module_& mod) {
         .def(
             "barrier",
             &tt::tt_metal::distributed::D2HSocket::barrier,
-            nb::call_guard<nb::gil_scoped_release>(),
             nb::arg("timeout_ms") = nb::none(),
             nb::call_guard<nb::gil_scoped_release>(),
             R"doc(

@@ -301,7 +301,7 @@ ttnn::device_operation::ProgramArtifacts build_rm_width_sharded_update_artifacts
                 .runtime_arg_names = {"my_batch_idx", "update_idx"},
                 .common_runtime_arg_names = {"cache_addr"},
             },
-        .hw_config = create_writer_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = create_writer_datamovement_config(),
         .advanced_options = {.num_common_runtime_varargs = 2 * num_cache_cores},
     };
 

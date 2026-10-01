@@ -69,6 +69,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         tp_size: int = 1,
+        matmul_decode: Optional[bool] = None,
     ):
         """Build layer ``layer_idx``: attention, MoE, the two hyper-connections and the two
         ``[D]`` RMSNorms.
@@ -79,6 +80,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         tile-cache namespace for this layer. ``prefetch_buffers`` is the per-device mapping from
         :func:`~.decode_prefetch.make_decode_prefetch_buffers`; ``use_prefetcher`` streams
         weights through it, and ``tp_size`` is the stage's tensor-parallel width.
+        ``matmul_decode`` goes to the MoE block (see :class:`~.moe.DeepSeekV4SparseMoeBlock`).
         """
         self.config = config
         self.layer_idx = layer_idx
@@ -108,6 +110,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             tp_size=tp_size,
+            matmul_decode=matmul_decode,
         )
         self.input_layernorm = DeepSeekV4RMSNorm(
             weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm"), sharded=True

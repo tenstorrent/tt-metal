@@ -33,8 +33,14 @@ BroadcastProgramFactory::cached_mesh_workload_t BroadcastProgramFactory::create_
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
-    auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    // In L1_SMALL when the device reserves it, so the semaphores do not fragment L1.
+    const auto sem_buffer_type = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0
+                                     ? tt::tt_metal::BufferType::L1_SMALL
+                                     : tt::tt_metal::BufferType::L1;
+    auto init_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+    auto final_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");

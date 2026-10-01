@@ -1848,9 +1848,15 @@ tt::tt_metal::WorkloadDescriptor MatmulDecodeDeviceOperation::AllGatherFullWidth
     const auto subdevice_id = mesh_device->get_sub_device_ids().at(0);
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
 
+    // In L1_SMALL when the device reserves it, so the semaphores do not fragment L1.
+    const auto sem_buffer_type = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0
+                                     ? tt::tt_metal::BufferType::L1_SMALL
+                                     : tt::tt_metal::BufferType::L1;
     tt::tt_metal::WorkloadDescriptor workload;
-    workload.semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
-    workload.semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
+    workload.semaphores.push_back(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
+    workload.semaphores.push_back(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
     const auto& out_ready_semaphore = workload.semaphores[0];
     const auto& barrier_semaphore = workload.semaphores[1];
 

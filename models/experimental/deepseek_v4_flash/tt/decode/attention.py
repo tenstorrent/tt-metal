@@ -773,7 +773,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     ``o_b`` is row-parallel: it consumes those local groups and all-reduces the
     full-hidden partials.
 
-    ``use_prefetcher=True`` (what the model always passes) switches the decode projections
+    ``use_prefetcher=True`` (the model's default) switches the decode projections
     that fit the shared 64-receiver GCB (q_b, batched o_a, row-parallel o_b) onto
     DRISC-prefetched weights. The compressor pair rides q_a's 32-core ring (CSA) or kv's
     16-core ring (HCA). Each prefetched weight stays DRAM ND-sharded and the tensor

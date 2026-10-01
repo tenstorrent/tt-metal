@@ -133,13 +133,15 @@ def _construct_model(
     config=None,
     num_stages=None,
     submeshes=None,
+    use_prefetcher=None,
 ):
     """Build ``DeepSeekV4Model`` + ``lm_head`` and attach the prefetcher session.
 
     Shared by the single-user decode demo and the multi-user paged demo so the two
     tests cannot drift on construction (mesh profile, TP layout, weight cache, DRISC
     session). ``loader`` / ``config`` are reused when the caller already opened them
-    to tokenize; otherwise they are created here.
+    to tokenize; otherwise they are created here. ``use_prefetcher`` goes to the model
+    (``None``: on).
     """
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
@@ -165,6 +167,7 @@ def _construct_model(
         tp_size=tp_size,
         num_stages=num_stages,
         submeshes=submeshes,
+        use_prefetcher=use_prefetcher,
     )
     lm_head = Linear(
         _w(loader, "lm_head.weight"),
