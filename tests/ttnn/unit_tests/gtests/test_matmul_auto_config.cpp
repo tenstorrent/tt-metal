@@ -22,7 +22,6 @@ namespace {
 
 using namespace ttnn::operations::matmul;
 using namespace ttnn::operations::matmul::auto_config;
-using Layout = ttnn::operations::matmul::auto_config::Layout;
 
 uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
@@ -284,7 +283,7 @@ TEST(MatmulAutoConfig, OneDAvoidsSingleTileK) {
     EXPECT_LT(chosen->blocking.out_block_h, chosen->blocking.per_core_M);
 }
 
-Placement sharded(Layout layout, CoreCoord grid, uint32_t shard_h, uint32_t shard_w, bool col_major = false) {
+Placement sharded(MemoryLayout layout, CoreCoord grid, uint32_t shard_h, uint32_t shard_w, bool col_major = false) {
     Placement pl;
     pl.layout = layout;
     pl.in_l1 = true;
@@ -297,7 +296,7 @@ Placement sharded(Layout layout, CoreCoord grid, uint32_t shard_h, uint32_t shar
     return pl;
 }
 
-Placement sharded_output(Layout layout) {
+Placement sharded_output(MemoryLayout layout) {
     Placement pl;
     pl.layout = layout;
     pl.in_l1 = true;
@@ -317,50 +316,50 @@ TEST(MatmulAutoConfig, ShardedLayouts) {
     std::vector<Case> cases;
     {  // decode: width-sharded activation, 1D in0-mcast, each core a slice of N
         auto p = make_matmul(1, 1, 32, 4096, 4096, tt::DataFormat::Bfp8_b);
-        p.a = sharded(Layout::WidthSharded, CoreCoord(8, 8), 1, 2);
+        p.a = sharded(MemoryLayout::WidthSharded, CoreCoord(8, 8), 1, 2);
         cases.push_back({"width A", p, Family::Mcast1DIn0, 1, 2});
-        p.out = sharded_output(Layout::WidthSharded);
+        p.out = sharded_output(MemoryLayout::WidthSharded);
         cases.push_back({"width A, width out", p, Family::Mcast1DIn0, 1, 2});
     }
     {  // tall: height-sharded activation, 1D in1-mcast
         auto p = make_matmul(1, 1, 8192, 256, 256);
-        p.a = sharded(Layout::HeightSharded, CoreCoord(8, 8), 4, 8);
+        p.a = sharded(MemoryLayout::HeightSharded, CoreCoord(8, 8), 4, 8);
         cases.push_back({"height A", p, Family::Mcast1DIn1, 4, 8});
-        p.out = sharded_output(Layout::HeightSharded);
+        p.out = sharded_output(MemoryLayout::HeightSharded);
         cases.push_back({"height A, height out", p, Family::Mcast1DIn1, 4, 8});
     }
     {  // block-sharded 2D, row- and column-major
         auto p = make_matmul(1, 1, 2048, 2048, 2048);
-        p.a = sharded(Layout::BlockSharded, CoreCoord(8, 8), 8, 8);
+        p.a = sharded(MemoryLayout::BlockSharded, CoreCoord(8, 8), 8, 8);
         cases.push_back({"block A", p, Family::Mcast2D, 8, 8});
-        p.out = sharded_output(Layout::BlockSharded);
+        p.out = sharded_output(MemoryLayout::BlockSharded);
         cases.push_back({"block A, block out", p, Family::Mcast2D, 8, 8});
         p.a.col_major = true;
         cases.push_back({"block A col-major", p, Family::Mcast2D, 8, 8, true});
     }
     {  // batched B with height-sharded A: Reuse over A's shards
         auto p = make_matmul(48, 48, 256, 256, 64);
-        p.a = sharded(Layout::HeightSharded, CoreCoord(8, 6), 8, 8);
+        p.a = sharded(MemoryLayout::HeightSharded, CoreCoord(8, 6), 8, 8);
         cases.push_back({"height A, batched B", p, Family::Reuse, 8, 2});
     }
     {  // interleaved inputs, sharded output
         auto p = make_matmul(1, 1, 8192, 512, 512);
-        p.out = sharded_output(Layout::HeightSharded);
+        p.out = sharded_output(MemoryLayout::HeightSharded);
         cases.push_back({"height out", p, Family::Mcast1DIn1, 4, 16});
         p = make_matmul(1, 1, 32, 4096, 8192, tt::DataFormat::Bfp8_b);
-        p.out = sharded_output(Layout::WidthSharded);
+        p.out = sharded_output(MemoryLayout::WidthSharded);
         cases.push_back({"width out", p, Family::Mcast1DIn0, 1, 4});
         p = make_matmul(1, 1, 2048, 2048, 2048);
-        p.out = sharded_output(Layout::BlockSharded);
+        p.out = sharded_output(MemoryLayout::BlockSharded);
         cases.push_back({"block out", p, Family::Mcast2D, 8, 8});
         // an output shard spec fixes the grid: 4x2 cores of 16x32 tiles
-        p.out = sharded(Layout::BlockSharded, CoreCoord(4, 2), 32, 16);
+        p.out = sharded(MemoryLayout::BlockSharded, CoreCoord(4, 2), 32, 16);
         cases.push_back({"block out with spec", p, Family::Mcast2D, 32, 16});
         p = make_matmul(1, 1, 256, 2048, 2048);
-        p.out = sharded(Layout::BlockSharded, CoreCoord(8, 1), 8, 8);
+        p.out = sharded(MemoryLayout::BlockSharded, CoreCoord(8, 1), 8, 8);
         cases.push_back({"block out on a row", p, Family::Mcast1DIn0, 8, 8});
         p = make_matmul(1, 1, 4096, 512, 512);
-        p.out = sharded(Layout::HeightSharded, CoreCoord(8, 4), 4, 16);
+        p.out = sharded(MemoryLayout::HeightSharded, CoreCoord(8, 4), 4, 16);
         cases.push_back({"height out with spec", p, Family::Mcast1DIn1, 4, 16});
     }
     for (const auto& c : cases) {
@@ -372,10 +371,10 @@ TEST(MatmulAutoConfig, ShardedLayouts) {
         EXPECT_EQ(b.per_core_N, c.per_core_N) << c.name;
         EXPECT_EQ(chosen->transpose_mcast, c.transpose_mcast) << c.name;
         EXPECT_EQ(c.p.Kt % b.in0_block_w, 0u) << c.name;
-        if (c.p.a.sharded() && c.p.a.layout != Layout::HeightSharded) {
+        if (c.p.a.sharded() && c.p.a.layout != MemoryLayout::HeightSharded) {
             EXPECT_EQ(b.in0_block_w, c.p.a.shard_w) << c.name << ": K blocks should be whole shard columns";
         }
-        if (c.p.a.layout == Layout::HeightSharded) {
+        if (c.p.a.layout == MemoryLayout::HeightSharded) {
             EXPECT_EQ(b.in0_block_w, c.p.Kt) << c.name << ": height-sharded A is read in place over all of K";
         }
         if (c.p.out.sharded() && c.family != Family::Reuse) {
@@ -387,8 +386,8 @@ TEST(MatmulAutoConfig, ShardedLayouts) {
 
     // Layout combinations the factories reject are not produced
     auto p = make_matmul(1, 1, 2048, 2048, 2048);
-    p.a = sharded(Layout::BlockSharded, CoreCoord(8, 8), 8, 8);
-    p.out = sharded_output(Layout::HeightSharded);
+    p.a = sharded(MemoryLayout::BlockSharded, CoreCoord(8, 8), 8, 8);
+    p.out = sharded_output(MemoryLayout::HeightSharded);
     EXPECT_FALSE(choose_candidate(p, hw).has_value()) << "sharded output must be laid out like A";
 }
 
@@ -504,7 +503,7 @@ TEST(MatmulAutoConfig, TransposeAOverBatchIsNotFused) {
 TEST(MatmulAutoConfig, NoOneDWhenExcluded) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     auto p = make_matmul(1, 1, 32, 4096, 14336);  // decode: 1D in0-mcast otherwise
-    p.no_mcast_1d = true;
+    p.global_cb = true;
     for (const auto& c : candidates(p, hw)) {
         EXPECT_TRUE(c.family == Family::Mcast2D || c.family == Family::Reuse);
     }
@@ -538,7 +537,7 @@ TEST(MatmulAutoConfig, ShardedEdgeLayouts) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     {  // block-sharded A on one column of cores, column-major: 2D with transposed mcast
         auto p = make_matmul(1, 1, 4096, 32, 128);
-        p.a = sharded(Layout::BlockSharded, CoreCoord(8, 1), 16, 1, /*col_major=*/true);
+        p.a = sharded(MemoryLayout::BlockSharded, CoreCoord(8, 1), 16, 1, /*col_major=*/true);
         const auto chosen = choose_candidate(p, hw);
         ASSERT_TRUE(chosen.has_value());
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
@@ -548,7 +547,7 @@ TEST(MatmulAutoConfig, ShardedEdgeLayouts) {
     }
     {  // one-core block shard spec for a 5-batch output: keep the shard shape, derive the grid
         auto p = make_matmul(5, 1, 416, 32, 416);
-        p.out = sharded(Layout::BlockSharded, CoreCoord(1, 1), 13, 13);
+        p.out = sharded(MemoryLayout::BlockSharded, CoreCoord(1, 1), 13, 13);
         const auto chosen = choose_candidate(p, hw);
         ASSERT_TRUE(chosen.has_value());
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));

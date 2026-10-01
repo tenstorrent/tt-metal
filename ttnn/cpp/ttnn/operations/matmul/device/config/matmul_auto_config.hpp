@@ -18,6 +18,8 @@
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_buffers.hpp"
+#include "ttnn/operations/matmul/device/matmul_desc.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
 // Default program config selection for matmul (issue #57884), enabled by ttnn.CONFIG.matmul_auto_config_v2.
@@ -98,63 +100,7 @@ struct HardwareDesc {
     static HardwareDesc for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_cb_budget);
 };
 
-enum class Layout { Interleaved, HeightSharded, WidthSharded, BlockSharded };
-
-// Where a tensor lives. Shard dimensions are in tiles; a sharded output may come without a shard spec, in
-// which case the program config decides its shard grid.
-struct Placement {
-    Layout layout = Layout::Interleaved;
-    bool in_l1 = false;
-    bool has_shard_spec = false;
-    CoreRange shard_grid = CoreRange({0, 0}, {0, 0});  // bounding box of the shard grid
-    uint32_t shard_cores = 0;
-    uint32_t shard_h = 0;
-    uint32_t shard_w = 0;
-    bool col_major = false;
-
-    bool sharded() const { return layout != Layout::Interleaved; }
-};
-
-// The matmul as the selector sees it. Dimensions are in tiles, after transposes: M in A's tiles (in0_tile_h
-// rows), N in B's (in1_tile_w columns), K in 32-wide tiles.
-struct MatmulDesc {
-    uint32_t batch_a = 1;  // product of A's leading dims
-    uint32_t batch_b = 1;  // product of B's leading dims
-    uint32_t Mt = 0;       // per batch
-    uint32_t Kt = 0;
-    uint32_t Nt = 0;
-    uint32_t in0_tile_h = 32;  // A's tiles are in0_tile_h x 32, B's 32 x in1_tile_w
-    uint32_t in1_tile_w = 32;
-    uint32_t out_tile_h = 32;  // the output tile (in0_tile_h rows; possibly wider than in1_tile_w)
-    uint32_t out_tile_w = 32;
-    tt::DataFormat in0_format = tt::DataFormat::Float16_b;
-    tt::DataFormat in1_format = tt::DataFormat::Float16_b;
-    tt::DataFormat out_format = tt::DataFormat::Float16_b;
-    uint32_t bias_tile_bytes = 0;  // unaligned tile size of a fused row bias; 0 without bias
-    bool transpose_a = false;
-    MathFidelity math_fidelity = MathFidelity::HiFi2;
-    bool fp32_dest_acc_en = false;
-    bool packer_l1_acc = true;
-    bool dst_full_sync_en = false;
-    std::optional<unary::UnaryWithParam> activation;
-    Placement a;
-    Placement b;
-    Placement out;
-    bool b_shard_matches_a = false;  // B sharded with A's layout, grid and orientation (Reuse only)
-    bool no_mcast_1d = false;        // the 1D factories can't run it (a global CB without a gather config)
-};
-
 enum class Family { Mcast2D, Mcast1DIn0, Mcast1DIn1, Reuse };
-
-struct Blocking {
-    uint32_t per_core_M = 0;
-    uint32_t per_core_N = 0;
-    uint32_t in0_block_w = 0;
-    uint32_t out_block_h = 0;
-    uint32_t out_block_w = 0;
-    uint32_t out_subblock_h = 0;
-    uint32_t out_subblock_w = 0;
-};
 
 struct Candidate {
     Family family;
@@ -166,8 +112,8 @@ struct Candidate {
     bool fuse_batch = true;                 // mcast families: the batch folded into M, else looped over
 };
 
-// Per-core L1 bytes the factory for `family` needs with this blocking (32x32 tiles): its circular buffers,
-// less those backed by a sharded tensor, plus a sharded output's shard, which is not allocated yet.
+// Per-core L1 bytes the factory for `family` needs with this blocking: the buffers it allocates (sized by the
+// factory's own functions in matmul_buffers.hpp), plus a sharded output's shard, which is not allocated yet.
 // `fuse_batch`: the batch folded into M (per_core_M and out_block_h count rows of all batches), else looped over.
 uint32_t circular_buffer_bytes(
     const MatmulDesc& matmul, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch);

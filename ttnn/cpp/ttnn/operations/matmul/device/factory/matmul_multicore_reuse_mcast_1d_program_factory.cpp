@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_buffers.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
 #include <utility>
@@ -3219,43 +3220,30 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     bool fuse_op = fused_op_signaler.has_value();
 
     uint32_t num_blocks = K / in0_block_w;
-    // Only enable packer l1 accumulation when there are spills, otherwise
-    // unnecessary overhead for reconfigs are added
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
-
+    // Buffer sizes, shared with the program config selection
+    const auto buffers = operations::matmul::mcast_1d_in0_buffers(
+        operations::matmul::buffer_context(
+            in0_tensor,
+            in1_tensor,
+            out_tensor,
+            in0_tile,
+            in1_tile,
+            output_tile,
+            bias_tensor.has_value() ? bias_tile.get_tile_size(bias_data_format) : 0,
+            bias_is_sharded,
+            fp32_dest_acc_en,
+            packer_l1_acc,
+            untilize_out,
+            M,
+            K),
+        {per_core_M, per_core_N, in0_block_w, out_block_h, out_block_w, out_subblock_h, out_subblock_w},
+        in0_B,
+        in1_B);
+    bool packer_l1_acc_en = buffers.packer_l1_acc_en;
+    tt::DataFormat interm0_data_format = buffers.interm0_format;
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
-
-    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
-    // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
-    // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
-    // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
-    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded buffers are backed by the
-    // tensor buffer and keep their natural entry size.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    uint32_t in0_aligned_tile_size =
-        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size =
-        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
-    // Bias buffer entries must be padded to the DRAM alignment so the reader's L1 write stride
-    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
-    // Mirrors in0/in1 above. Sharded bias is backed by the L1 tensor buffer and keeps its
-    // natural entry size. No-op on Wormhole and for tiles already >= dram_alignment.
-    uint32_t bias_aligned_tile_size =
-        bias_is_sharded ? bias_single_tile_size : tt::align(bias_single_tile_size, dram_alignment);
-    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
-    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
-
-    // A sharded output can share its region with the partials only when the core computes a single output
-    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
-    // when the region holds exactly one block (#58046).
-    bool do_not_inplace_interm0_out_dfb = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
+    uint32_t output_single_tile_size = buffers.out.entry_size;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -3263,50 +3251,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     uint32_t in1_num_blocks_x = per_core_N / out_block_w;
     uint32_t out_num_blocks_x = in1_num_blocks_x;
     uint32_t out_num_blocks_y = in0_num_blocks_y;
+    uint32_t out_block_tiles = out_block_h * out_block_w;
 
-    uint32_t in0_block_tiles = in0_block_h * in0_block_w;
-    uint32_t in0_dfb_tiles = in0_block_tiles;
-    if (in0_B * num_blocks > 1) {
-        in0_dfb_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
-    }
-    uint32_t in0_dfb_size = in0_dfb_tiles * in0_aligned_tile_size;
-
-    uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
     uint32_t in0_shard_height_in_tiles = 0;
     if (in0_is_sharded) {
         in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_width();
         in0_shard_height_in_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_height();
-        in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
-    uint32_t in2_dfb_tiles = in2_block_tiles;
-    uint32_t in2_dfb_size = in2_dfb_tiles * in0_single_tile_size;
-
-    uint32_t in1_block_tiles = out_block_w * in0_block_w;
-    uint32_t in1_dfb_tiles = in1_block_tiles;
-    if (in1_B * num_blocks > 1) {
-        in1_dfb_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
-    }
-    if (in1_is_sharded) {
-        uint32_t in1_shard_height_in_tiles = in1_tensor.shard_spec()->shape[0] / in1_tile.get_height();
-        in1_dfb_tiles = per_core_N * in1_shard_height_in_tiles;
-    }
-
-    uint32_t in1_dfb_size = in1_dfb_tiles * in1_aligned_tile_size;
-
-    uint32_t out_block_tiles = out_block_h * out_block_w;
-    uint32_t out_shard_tiles = per_core_M * per_core_N;
-    uint32_t out_dfb_tiles = out_block_tiles;  // No double buffer
-    if (output_is_sharded) {
-        out_dfb_tiles = out_shard_tiles;
-    }
-    uint32_t out_dfb_size = out_dfb_tiles * output_single_tile_size;
-    uint32_t interm0_dfb_tiles = out_block_tiles;  // No double buffer
-    uint32_t interm0_dfb_size = interm0_dfb_tiles * interm0_single_tile_size;
-
-    uint32_t in3_block_tiles = out_block_w;
-    uint32_t in3_dfb_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_dfb_size = in3_dfb_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
     uint32_t start_core_x = start_core.x;
@@ -3496,8 +3448,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     // the bias add keeps reading the partials buffer via SrcA. The alias is handed to the compute
     // kernel as the MM_PARTIALS_RELOAD_ALIAS define plus its own binding, which selects the alias
     // reload path there. Without bias the reload reads the partials buffer and the flag is set on it.
-    const bool bias_reload_alias =
-        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    const bool bias_reload_alias = buffers.bias_reload_alias;
 
     // ------------------------------------------------------------------
     // Defines
@@ -3570,12 +3521,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     ////////////////////////////////////////////////////////////////////////////
     // The output and partials buffers share one L1 region unless the shapes or formats force them
     // apart; when they share, they are aliases of each other rather than independent buffers.
-    const bool separate_out_and_interm0 = do_not_inplace_interm0_out_dfb ||
-                                          (interm0_data_format != output_data_format) ||
-                                          (untilize_out && (in1_num_subblocks > 1));
-    // Every member of an alias group must have the same total backing size, so the partials buffer
-    // (and its alias) are sized against whichever region they actually sit in.
-    const uint32_t interm0_total_size = separate_out_and_interm0 ? interm0_dfb_size : out_dfb_size;
+    const bool separate_out_and_interm0 = !buffers.share_out_interm;
 
     Group<DataflowBufferSpec> dataflow_buffers;
 
@@ -3625,8 +3571,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     // in0
     DataflowBufferSpec in0_dfb_spec{
         .unique_id = IN0_DFB,
-        .entry_size = in0_aligned_tile_size,
-        .num_entries = in0_dfb_size / in0_aligned_tile_size,
+        .entry_size = buffers.in0.entry_size,
+        .num_entries = buffers.in0.num_entries,
         .data_format_metadata = in0_data_format,
         .tile_format_metadata = in0_tile,
     };
@@ -3671,19 +3617,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     // in1
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN1_DFB,
-        .entry_size = in1_aligned_tile_size,
-        .num_entries = in1_dfb_size / in1_aligned_tile_size,
+        .entry_size = buffers.in1.entry_size,
+        .num_entries = buffers.in1.num_entries,
         .data_format_metadata = in1_data_format,
         .tile_format_metadata = in1_tile,
-        .borrowed_from = in1_is_sharded ? std::optional<TensorParamName>(IN1) : std::nullopt,
+        .borrowed_from = buffers.in1.borrowed ? std::optional<TensorParamName>(IN1) : std::nullopt,
     });
 
     // in0 sharded: the resident in0 shard the block-sharded sender multicasts out of.
     if (in0_is_sharded) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN0_SHARDED_DFB,
-            .entry_size = in0_single_tile_size,
-            .num_entries = in2_dfb_size / in0_single_tile_size,
+            .entry_size = buffers.in0_sharded.entry_size,
+            .num_entries = buffers.in0_sharded.num_entries,
             .data_format_metadata = in0_data_format,
             .tile_format_metadata = in0_tile,
             .borrowed_from = IN0,
@@ -3697,19 +3643,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     // output
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
-        .entry_size = output_single_tile_size,
-        .num_entries = out_dfb_size / output_single_tile_size,
+        .entry_size = buffers.out.entry_size,
+        .num_entries = buffers.out.num_entries,
         .data_format_metadata = output_data_format,
         .tile_format_metadata = output_tile,
-        .borrowed_from = output_is_sharded ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
+        .borrowed_from = buffers.out.borrowed ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
         .advanced_options = {.alias_with = alias_with_others(OUT_DFB)},
     });
 
     // partials
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INTERM0_DFB,
-        .entry_size = interm0_single_tile_size,
-        .num_entries = interm0_total_size / interm0_single_tile_size,
+        .entry_size = buffers.interm0.entry_size,
+        .num_entries = buffers.interm0.num_entries,
         .data_format_metadata = interm0_data_format,
         .tile_format_metadata = output_tile,
         .borrowed_from = alias_group_borrow,
@@ -3720,8 +3666,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     if (bias_reload_alias) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = INTERM0_ALIAS_DFB,
-            .entry_size = interm0_single_tile_size,
-            .num_entries = interm0_total_size / interm0_single_tile_size,
+            .entry_size = buffers.interm0.entry_size,
+            .num_entries = buffers.interm0.num_entries,
             .data_format_metadata = interm0_data_format,
             .tile_format_metadata = output_tile,
             .borrowed_from = alias_group_borrow,
@@ -3733,11 +3679,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     if (bias_tensor.has_value()) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BIAS_DFB,
-            .entry_size = bias_aligned_tile_size,
-            .num_entries = in3_dfb_size / bias_aligned_tile_size,
+            .entry_size = buffers.bias.entry_size,
+            .num_entries = buffers.bias.num_entries,
             .data_format_metadata = bias_data_format,
             .tile_format_metadata = bias_tile,
-            .borrowed_from = bias_is_sharded ? std::optional<TensorParamName>(BIAS) : std::nullopt,
+            .borrowed_from = buffers.bias.borrowed ? std::optional<TensorParamName>(BIAS) : std::nullopt,
         });
     }
 
@@ -3745,8 +3691,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     if (in0_transpose_tile) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN0_TRANSPOSED_DFB,
-            .entry_size = in0_aligned_tile_size,
-            .num_entries = in0_dfb_size / in0_aligned_tile_size,
+            .entry_size = buffers.in0_transposed.entry_size,
+            .num_entries = buffers.in0_transposed.num_entries,
             .data_format_metadata = in0_data_format,
             .tile_format_metadata = in0_tile,
         });
@@ -4493,45 +4439,29 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;
-    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
-    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
-    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
-
-    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
-
-    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
-    // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
-    // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
-    // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
-    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded buffers are backed by the
-    // tensor buffer and keep their natural entry size.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    uint32_t in0_aligned_tile_size =
-        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
-    // Bias buffer entries must be padded to the DRAM alignment so the reader's L1 write stride
-    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
-    // Mirrors in0/in1 above and the dram_sharded factory. No-op on Wormhole and for
-    // tiles already >= dram_alignment.
-    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
-    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
-    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
-
-    // A sharded output can share its region with the partials only when the core computes a single output
-    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
-    // when the region holds exactly one block (#58046).
-    bool do_not_inplace_interm0_out_dfb = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
+    // Buffer sizes, shared with the program config selection
+    const auto buffers = operations::matmul::mcast_1d_in1_buffers(
+        operations::matmul::buffer_context(
+            in0_tensor,
+            in1_tensor,
+            out_tensor,
+            in0_tile,
+            in1_tile,
+            output_tile,
+            bias_tensor.has_value() ? bias_tile.get_tile_size(bias_data_format) : 0,
+            /*bias_sharded=*/false,
+            fp32_dest_acc_en,
+            packer_l1_acc,
+            untilize_out,
+            M,
+            K),
+        {per_core_M, per_core_N, in0_block_w, out_block_h, out_block_w, out_subblock_h, out_subblock_w},
+        in0_B,
+        in1_B);
+    bool packer_l1_acc_en = buffers.packer_l1_acc_en;
+    tt::DataFormat interm0_data_format = buffers.interm0_format;
+    uint32_t output_single_tile_size = buffers.out.entry_size;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -4539,18 +4469,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     uint32_t in1_num_blocks_x = per_core_N / out_block_w;
     uint32_t out_num_blocks_x = in1_num_blocks_x;
     uint32_t out_num_blocks_y = in0_num_blocks_y;
-
-    uint32_t in0_block_tiles = in0_block_h * in0_block_w;
-    uint32_t in0_dfb_tiles = in0_block_tiles;
-
-    if (in0_B == 1 && in1_B > 1) {
-        in0_dfb_tiles = per_core_M * num_blocks * in0_block_w;
-    } else if (in0_is_sharded) {
-        in0_dfb_tiles = num_blocks * per_core_M * in0_block_w * in0_B;
-    } else if (in0_B * num_blocks > 1) {
-        in0_dfb_tiles = in0_dfb_tiles * 2;  // double buffer
-    }
-    uint32_t in0_dfb_size = in0_dfb_tiles * in0_aligned_tile_size;
+    uint32_t out_block_tiles = out_block_h * out_block_w;
 
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
@@ -4561,41 +4480,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
         in0_last_ktile_w,
         in0_last_ktile_h);
 
-    bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
     if (in0_is_sharded) {
         in0_shard_height_in_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_height();
         in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_width();
-        // Do a real per-block copy (not point the in0 buffer at L1) when K needs splitting, or when there's more
-        // than 1 row-block AND col-block: a row-block's data is needed twice, but advancing lands on the wrong one.
-        if (in0_shard_width_in_tiles / in0_block_w > 1 || (in0_num_blocks_y > 1 && in1_num_blocks_x > 1)) {
-            extract_shard_sub_blocks = true;
-        }
     }
-    uint32_t in2_dfb_tiles = in0_block_tiles;
-    uint32_t in2_dfb_size = in2_dfb_tiles * in0_single_tile_size;
-
-    uint32_t in1_block_tiles = out_block_w * in0_block_w;
-    uint32_t in1_dfb_tiles = in1_block_tiles;
-    if (in1_B * num_blocks > 1) {
-        in1_dfb_tiles = in1_dfb_tiles * 2;  // double buffer
-    }
-    uint32_t in1_dfb_size = in1_dfb_tiles * in1_aligned_tile_size;
-
-    uint32_t out_block_tiles = out_block_h * out_block_w;
-    uint32_t out_shard_tiles = per_core_M * per_core_N;
-    uint32_t out_dfb_tiles = out_block_tiles;  // No double buffer
-    if (output_is_sharded) {
-        out_dfb_tiles = out_shard_tiles;
-    }
-    uint32_t out_dfb_size = out_dfb_tiles * output_single_tile_size;
-    uint32_t interm0_dfb_tiles = out_block_tiles;  // No double buffer
-    uint32_t interm0_dfb_size = interm0_dfb_tiles * interm0_single_tile_size;
-
-    uint32_t in3_block_tiles = out_block_w;
-    uint32_t in3_dfb_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_dfb_size = in3_dfb_tiles * bias_aligned_tile_size;
+    // A sharded A is copied out block by block when the in0 buffer can't be a view of the shard
+    const bool extract_shard_sub_blocks = in0_is_sharded && !buffers.in0.borrowed;
 
     CoreCoord start_core = sub_device_start_core;
 
@@ -4729,8 +4621,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     // so when bias is present the reload copies through an alias view of the same SRAM that carries
     // UnpackToDest, while the bias add keeps reading the partials buffer. The alias reaches the
     // compute kernel as the MM_PARTIALS_RELOAD_ALIAS define plus its own binding.
-    const bool bias_reload_alias =
-        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    const bool bias_reload_alias = buffers.bias_reload_alias;
 
     // ------------------------------------------------------------------
     // Defines
@@ -4800,10 +4691,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     ////////////////////////////////////////////////////////////////////////////
     //                      Dataflow buffers
     ////////////////////////////////////////////////////////////////////////////
-    const bool separate_out_and_interm0 = do_not_inplace_interm0_out_dfb ||
-                                          (interm0_data_format != output_data_format) ||
-                                          (untilize_out && (in1_num_subblocks > 1));
-    const uint32_t interm0_total_size = separate_out_and_interm0 ? interm0_dfb_size : out_dfb_size;
+    const bool separate_out_and_interm0 = !buffers.share_out_interm;
 
     Group<DataflowBufferSpec> dataflow_buffers;
 
@@ -4843,20 +4731,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     // straight out of the resident shard, so this buffer is borrowed onto the in0 tensor.
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN0_DFB,
-        .entry_size = in0_aligned_tile_size,
-        .num_entries = in0_dfb_size / in0_aligned_tile_size,
+        .entry_size = buffers.in0.entry_size,
+        .num_entries = buffers.in0.num_entries,
         .data_format_metadata = in0_data_format,
         .tile_format_metadata = in0_tile,
-        .borrowed_from =
-            (in0_is_sharded && !extract_shard_sub_blocks) ? std::optional<TensorParamName>(IN0) : std::nullopt,
+        .borrowed_from = buffers.in0.borrowed ? std::optional<TensorParamName>(IN0) : std::nullopt,
     });
 
     // in0 sharded: only present when the sender extracts sub-blocks out of the resident shard.
     if (in0_is_sharded && extract_shard_sub_blocks) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN0_SHARDED_DFB,
-            .entry_size = in0_single_tile_size,
-            .num_entries = in2_dfb_size / in0_single_tile_size,
+            .entry_size = buffers.in0_sharded.entry_size,
+            .num_entries = buffers.in0_sharded.num_entries,
             .data_format_metadata = in0_data_format,
             .tile_format_metadata = in0_tile,
             .borrowed_from = IN0,
@@ -4866,8 +4753,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     // in1
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN1_DFB,
-        .entry_size = in1_aligned_tile_size,
-        .num_entries = in1_dfb_size / in1_aligned_tile_size,
+        .entry_size = buffers.in1.entry_size,
+        .num_entries = buffers.in1.num_entries,
         .data_format_metadata = in1_data_format,
         .tile_format_metadata = in1_tile,
     });
@@ -4875,19 +4762,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     // output
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
-        .entry_size = output_single_tile_size,
-        .num_entries = out_dfb_size / output_single_tile_size,
+        .entry_size = buffers.out.entry_size,
+        .num_entries = buffers.out.num_entries,
         .data_format_metadata = output_data_format,
         .tile_format_metadata = output_tile,
-        .borrowed_from = output_is_sharded ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
+        .borrowed_from = buffers.out.borrowed ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
         .advanced_options = {.alias_with = alias_with_others(OUT_DFB)},
     });
 
     // partials
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INTERM0_DFB,
-        .entry_size = interm0_single_tile_size,
-        .num_entries = interm0_total_size / interm0_single_tile_size,
+        .entry_size = buffers.interm0.entry_size,
+        .num_entries = buffers.interm0.num_entries,
         .data_format_metadata = interm0_data_format,
         .tile_format_metadata = output_tile,
         .borrowed_from = alias_group_borrow,
@@ -4897,8 +4784,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     if (bias_reload_alias) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = INTERM0_ALIAS_DFB,
-            .entry_size = interm0_single_tile_size,
-            .num_entries = interm0_total_size / interm0_single_tile_size,
+            .entry_size = buffers.interm0.entry_size,
+            .num_entries = buffers.interm0.num_entries,
             .data_format_metadata = interm0_data_format,
             .tile_format_metadata = output_tile,
             .borrowed_from = alias_group_borrow,
@@ -4910,8 +4797,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     if (bias_tensor.has_value()) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BIAS_DFB,
-            .entry_size = bias_aligned_tile_size,
-            .num_entries = in3_dfb_size / bias_aligned_tile_size,
+            .entry_size = buffers.bias.entry_size,
+            .num_entries = buffers.bias.num_entries,
             .data_format_metadata = bias_data_format,
             .tile_format_metadata = bias_tile,
         });
@@ -4921,8 +4808,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     if (in0_transpose_tile) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN0_TRANSPOSED_DFB,
-            .entry_size = in0_aligned_tile_size,
-            .num_entries = in0_dfb_size / in0_aligned_tile_size,
+            .entry_size = buffers.in0_transposed.entry_size,
+            .num_entries = buffers.in0_transposed.num_entries,
             .data_format_metadata = in0_data_format,
             .tile_format_metadata = in0_tile,
         });

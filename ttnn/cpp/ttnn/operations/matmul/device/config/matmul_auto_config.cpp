@@ -24,7 +24,6 @@ constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t L1_HEADROOM_BYTES = 16 * 1024;
 
 uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
-uint32_t align_up(uint32_t a, uint32_t alignment) { return div_up(a, alignment) * alignment; }
 
 uint32_t tile_bytes(tt::DataFormat format, uint32_t h, uint32_t w) {
     return tt::tt_metal::Tile({h, w}).get_tile_size(format);
@@ -48,6 +47,17 @@ std::optional<CoreRange> pinned_workers(const HardwareDesc& hw) {
 // A batch of one against a batched B: only 1D in1-mcast can run it, keeping the core's rows of A resident
 // in L1 and looping over B's batches (in0 reuse).
 bool broadcasts_a(const MatmulDesc& p) { return p.batch_a == 1 && p.batch_b > 1; }
+
+// B sharded in DRAM (width or ND): the 2D factory reads it in place; the other factories can't.
+bool dram_sharded_b(const MatmulDesc& p) {
+    return p.b.dram_sharded() && (p.b.layout == MemoryLayout::WidthSharded || p.b.layout == MemoryLayout::NdSharded);
+}
+
+// Whether a sharded tensor fixes the family (a DRAM-sharded B doesn't: the interleaved candidates handle it)
+bool sharded_layout(const MatmulDesc& p) { return p.a.sharded() || p.b.l1_sharded() || p.out.sharded(); }
+
+// The 1D factories can't run it: a global CB without a gather config, or a DRAM-sharded B
+bool no_mcast_1d(const MatmulDesc& p) { return p.global_cb || dram_sharded_b(p); }
 
 // Largest in0_block_w (see MAX_IN0_BLOCK_W, LARGE_BLOCK_TILES and MAX_SELF_READ_TILES_PER_K_STEP). With a
 // single K block the mcast factories single-buffer the inputs, so reading the next block can't overlap math on
@@ -137,22 +147,6 @@ std::pair<uint32_t, uint32_t> choose_subblock(
     return best;
 }
 
-bool packer_l1_acc_enabled(const MatmulDesc& p, Family /*family*/, uint32_t num_k_blocks) {
-    if (!p.packer_l1_acc) {
-        return false;
-    }
-    // Every factory accumulates in L1 whenever partials are kept between K blocks (#58178)
-    return num_k_blocks > 1;
-}
-
-// Format partial sums are kept in between K blocks
-tt::DataFormat interm_format(const MatmulDesc& p, Family family, uint32_t num_k_blocks) {
-    if (p.fp32_dest_acc_en) {
-        return tt::DataFormat::Float32;
-    }
-    return packer_l1_acc_enabled(p, family, num_k_blocks) ? tt::DataFormat::Float16_b : p.out_format;
-}
-
 bool is_block_float(tt::DataFormat format) {
     switch (format) {
         case tt::DataFormat::Bfp8:
@@ -187,60 +181,64 @@ HardwareDesc HardwareDesc::for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_c
     return hw;
 }
 
+namespace {
+
+tt::tt_metal::TensorMemoryLayout memory_layout(const Placement& t) {
+    using tt::tt_metal::TensorMemoryLayout;
+    switch (t.layout) {
+        case MemoryLayout::Interleaved: return TensorMemoryLayout::INTERLEAVED;
+        case MemoryLayout::HeightSharded: return TensorMemoryLayout::HEIGHT_SHARDED;
+        case MemoryLayout::WidthSharded: return TensorMemoryLayout::WIDTH_SHARDED;
+        case MemoryLayout::BlockSharded: return TensorMemoryLayout::BLOCK_SHARDED;
+        case MemoryLayout::NdSharded: return TensorMemoryLayout::ND_SHARDED;
+    }
+    return TensorMemoryLayout::INTERLEAVED;
+}
+
+// The factories' buffer context for this matmul. A fused bias is taken to be interleaved (the selector doesn't
+// see the bias tensor), which can only overestimate L1.
+BufferContext buffer_context_of(const MatmulDesc& p, const HardwareDesc& hw) {
+    return BufferContext{
+        .in0_tile = tt::tt_metal::Tile({p.in0_tile_h, TILE_DIM}, p.in0_tile_transposed),
+        .in1_tile = tt::tt_metal::Tile({TILE_DIM, p.in1_tile_w}),
+        .output_tile = tt::tt_metal::Tile({p.in0_tile_h, p.in1_tile_w}),
+        .in0_format = p.in0_format,
+        .in1_format = p.in1_format,
+        .output_format = p.out_format,
+        .bias_tile_bytes = p.bias_tile_bytes,
+        .bias_sharded = false,
+        .fp32_dest_acc_en = p.fp32_dest_acc_en,
+        .packer_l1_acc = p.packer_l1_acc,
+        .untilize_out = p.untilize_out,
+        .in0_layout = memory_layout(p.a),
+        .in1_layout = memory_layout(p.b),
+        .out_layout = memory_layout(p.out),
+        .in1_in_dram = !p.b.in_l1,
+        .in0_shard_width = p.a.shard_w,
+        .in1_shard_height = p.b.shard_h,
+        .dram_alignment = hw.dram_alignment,
+        .Mt = p.Mt,
+        .Kt = p.Kt,
+    };
+}
+
+}  // namespace
+
 uint32_t circular_buffer_bytes(
     const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch) {
-    // Sharded operands are read straight from L1, without DRAM-alignment padding
-    const uint32_t in0_tile = p.a.sharded() ? in0_tile_bytes(p) : align_up(in0_tile_bytes(p), hw.dram_alignment);
-    const uint32_t in1_tile = align_up(in1_tile_bytes(p), hw.dram_alignment);
-    const uint32_t out_tile = out_tile_bytes(p, p.out_format);
-    const uint32_t num_k_blocks = p.Kt / b.in0_block_w;
-
-    const tt::DataFormat interm = interm_format(p, family, num_k_blocks);
-    // interm shares the output's memory when formats match (and, for a sharded output, the block covers the
-    // full per-core height); a sharded output's buffer is the output shard itself
-    const bool interm_shares_out =
-        interm == p.out_format && !(p.out.sharded() && family != Family::Reuse && b.per_core_M != b.out_block_h);
-
-    uint32_t in0_bytes = 0;
-    uint32_t in1_bytes = 0;
-    uint32_t out_tiles = 0;
-    uint32_t bias_bytes = 0;
-    if (family == Family::Reuse) {
-        const uint32_t per_batch_M = std::min(b.per_core_M, p.Mt);
-        // A sharded A (and B sharded like it) is read in place
-        in0_bytes = p.a.sharded() ? 0 : per_batch_M * b.in0_block_w * 2 * in0_tile;
-        in1_bytes = p.b_shard_matches_a ? 0 : b.per_core_N * b.in0_block_w * 2 * in1_tile;
-        out_tiles = b.per_core_M * b.per_core_N;
-        bias_bytes = per_batch_M * b.per_core_N * p.bias_tile_bytes;
-    } else {
-        const bool looped_batches = !fuse_batch && p.batch_a > 1;
-        const uint32_t buffering = (num_k_blocks > 1 || looped_batches) ? utilities::MCAST_INPUT_BUFFERING_DEPTH : 1;
-        in0_bytes = b.out_block_h * b.in0_block_w * buffering * in0_tile;
-        if (family == Family::Mcast1DIn1 && broadcasts_a(p) && !p.a.sharded()) {
-            in0_bytes = b.per_core_M * p.Kt * in0_tile;  // A stays resident across B's batches
-        }
-        if (family == Family::Mcast1DIn1 && p.a.layout == Layout::HeightSharded) {
-            // Read in place, unless the kernel has to extract sub-blocks from the shard into a copy
-            const bool extract =
-                num_k_blocks > 1 || (b.per_core_M / b.out_block_h > 1 && b.per_core_N / b.out_block_w > 1);
-            in0_bytes = extract ? b.per_core_M * p.Kt * in0_tile : 0;
-        }
-        in1_bytes = b.out_block_w * b.in0_block_w * buffering * in1_tile;
-        out_tiles = b.out_block_h * b.out_block_w;
-        bias_bytes = p.bias_tile_bytes == 0 ? 0 : b.out_block_w * align_up(p.bias_tile_bytes, hw.dram_alignment);
+    const auto context = buffer_context_of(p, hw);
+    const uint32_t a_batches = fuse_batch ? 1 : p.batch_a;
+    const uint32_t b_batches = fuse_batch ? 1 : p.batch_b;
+    MatmulBuffers buffers;
+    switch (family) {
+        case Family::Mcast2D: buffers = mcast_2d_buffers(context, b, a_batches); break;
+        case Family::Mcast1DIn0: buffers = mcast_1d_in0_buffers(context, b, a_batches, b_batches); break;
+        case Family::Mcast1DIn1: buffers = mcast_1d_in1_buffers(context, b, a_batches, b_batches); break;
+        case Family::Reuse: buffers = reuse_buffers(context, b); break;
     }
-    uint32_t total = in0_bytes + in1_bytes + bias_bytes;
+    uint32_t total = buffers.allocated_bytes();
     if (p.out.sharded()) {
-        total += b.per_core_M * b.per_core_N * out_tile;  // the output shard (allocated with the output)
-    } else {
-        total += out_tiles * out_tile;
-    }
-    if (!interm_shares_out) {
-        total += out_tiles * out_tile_bytes(p, interm);
-    }
-    if (p.transpose_a) {
-        // CB holding the transposed in0 block (the whole per-core A when A is read in place)
-        total += in0_bytes != 0 ? in0_bytes : b.per_core_M * p.Kt * in0_tile;
+        total += b.per_core_M * b.per_core_N * out_tile_bytes(p, p.out_format);  // allocated with the output
     }
     return total;
 }
@@ -587,9 +585,9 @@ std::vector<Candidate> sharded_candidates(const MatmulDesc& p, const HardwareDes
         }
         const CoreCoord grid = a.shard_grid.grid_size();
         const BlockRules out_rules{.sharded_out = p.out.sharded()};
-        if (a.layout == Layout::WidthSharded) {
+        if (a.layout == MemoryLayout::WidthSharded) {
             // 1D in0-mcast on A's grid: each core holds all of M for a slice of K, and computes a slice of N
-            if (b_batched || p.b.sharded() || a.col_major || a.shard_h != M) {
+            if (b_batched || p.b.l1_sharded() || a.col_major || a.shard_h != M) {
                 return result;
             }
             BlockRules rules = out_rules;
@@ -601,14 +599,14 @@ std::vector<Candidate> sharded_candidates(const MatmulDesc& p, const HardwareDes
                 grid,
                 a.shard_grid,
                 false);
-        } else if (a.layout == Layout::HeightSharded) {
+        } else if (a.layout == MemoryLayout::HeightSharded) {
             // Each core holds a slice of M over all of K
             if (a.col_major || a.shard_w != p.Kt) {
                 return result;
             }
             if (b_batched) {
                 // Reuse on A's grid; B interleaved, or sharded exactly like A
-                if (p.b.sharded() && !p.b_shard_matches_a) {
+                if (p.b.l1_sharded() && !p.b_shard_matches_a) {
                     return result;
                 }
                 const bool divides = p.Mt % a.shard_h == 0;
@@ -619,7 +617,7 @@ std::vector<Candidate> sharded_candidates(const MatmulDesc& p, const HardwareDes
                 add(Family::Reuse, block_reuse_sharded(p, hw), grid, std::nullopt, false);
             } else {
                 // 1D in1-mcast on A's grid, reading A in place (in0_block_w = K)
-                if (p.b.sharded()) {
+                if (p.b.l1_sharded()) {
                     return result;
                 }
                 BlockRules rules = out_rules;
@@ -630,10 +628,10 @@ std::vector<Candidate> sharded_candidates(const MatmulDesc& p, const HardwareDes
                     a.shard_grid,
                     false);
             }
-        } else if (a.layout == Layout::BlockSharded) {
+        } else if (a.layout == MemoryLayout::BlockSharded) {
             // 2D on A's grid: rows of cores split M, columns split K (for A) and N (for the output). On a single
             // row or column of cores one of those splits is trivial.
-            if (b_batched || p.b.sharded()) {
+            if (b_batched || p.b.l1_sharded()) {
                 return result;
             }
             const uint32_t virtual_x = a.col_major ? grid.y : grid.x;
@@ -673,9 +671,9 @@ std::vector<Candidate> sharded_candidates(const MatmulDesc& p, const HardwareDes
             return div_up(M, shard_h) == rows && div_up(p.Nt, shard_w) == cols;
         };
         // A block-sharded output on a row (column) of cores is width (height) sharded; on one core it stays 2D
-        const bool block = out.layout == Layout::BlockSharded;
-        const bool row_of_cores = out.layout == Layout::WidthSharded || (block && grid.y == 1 && grid.x > 1);
-        const bool col_of_cores = out.layout == Layout::HeightSharded || (block && grid.x == 1 && grid.y > 1);
+        const bool block = out.layout == MemoryLayout::BlockSharded;
+        const bool row_of_cores = out.layout == MemoryLayout::WidthSharded || (block && grid.y == 1 && grid.x > 1);
+        const bool col_of_cores = out.layout == MemoryLayout::HeightSharded || (block && grid.x == 1 && grid.y > 1);
         if (row_of_cores && fits(1, out.shard_cores)) {
             add(Family::Mcast1DIn0,
                 block_1d(p, hw, Family::Mcast1DIn0, M, shard_w, true, rules),
@@ -699,13 +697,13 @@ std::vector<Candidate> sharded_candidates(const MatmulDesc& p, const HardwareDes
             const auto workers = pinned_workers(hw);
             if (block && rows <= hw.grid.y && cols <= hw.grid.x) {
                 add(Family::Mcast2D, block_2d(p, hw, shard_h, shard_w, true, rules), hw.grid, workers, false);
-            } else if (out.layout != Layout::HeightSharded && rows == 1 && cols <= cores) {
+            } else if (out.layout != MemoryLayout::HeightSharded && rows == 1 && cols <= cores) {
                 add(Family::Mcast1DIn0,
                     block_1d(p, hw, Family::Mcast1DIn0, M, shard_w, true, rules),
                     hw.grid,
                     workers,
                     false);
-            } else if (out.layout != Layout::WidthSharded && cols == 1 && rows <= cores) {
+            } else if (out.layout != MemoryLayout::WidthSharded && cols == 1 && rows <= cores) {
                 add(Family::Mcast1DIn1,
                     block_1d(p, hw, Family::Mcast1DIn1, shard_h, p.Nt, true, rules),
                     hw.grid,
@@ -713,19 +711,19 @@ std::vector<Candidate> sharded_candidates(const MatmulDesc& p, const HardwareDes
                     false);
             }
         }
-    } else if (out.layout == Layout::WidthSharded) {
+    } else if (out.layout == MemoryLayout::WidthSharded) {
         add(Family::Mcast1DIn0,
             block_1d(p, hw, Family::Mcast1DIn0, M, div_up(p.Nt, cores), true, rules),
             hw.grid,
             pinned_workers(hw),
             false);
-    } else if (out.layout == Layout::HeightSharded) {
+    } else if (out.layout == MemoryLayout::HeightSharded) {
         add(Family::Mcast1DIn1,
             block_1d(p, hw, Family::Mcast1DIn1, div_up(M, cores), p.Nt, true, rules),
             hw.grid,
             pinned_workers(hw),
             false);
-    } else if (out.layout == Layout::BlockSharded) {
+    } else if (out.layout == MemoryLayout::BlockSharded) {
         add(Family::Mcast2D,
             block_2d(p, hw, div_up(M, hw.grid.y), div_up(p.Nt, hw.grid.x), true, rules),
             hw.grid,
@@ -738,7 +736,7 @@ std::vector<Candidate> sharded_candidates(const MatmulDesc& p, const HardwareDes
 }  // namespace
 
 std::vector<Candidate> candidates(const MatmulDesc& p, const HardwareDesc& hw) {
-    if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
+    if (sharded_layout(p)) {
         return sharded_candidates(p, hw);
     }
     std::vector<Candidate> result;
@@ -755,7 +753,7 @@ std::vector<Candidate> candidates(const MatmulDesc& p, const HardwareDesc& hw) {
     // The mcast kernels can't take block-float B with A tiles shorter than 16 rows; Reuse can
     const bool mcast_ok = !(is_block_float(p.in1_format) && p.in0_tile_h < 16);
     if (broadcasts_a(p)) {
-        if (mcast_ok && !p.no_mcast_1d) {
+        if (mcast_ok && !no_mcast_1d(p)) {
             add(Family::Mcast1DIn1, block_1d(p, hw, Family::Mcast1DIn1, div_up(p.Mt, cores), p.Nt, false), false);
         }
         return result;
@@ -776,7 +774,7 @@ std::vector<Candidate> candidates(const MatmulDesc& p, const HardwareDesc& hw) {
         deepen_to_legacy_k_depth(p, hw, fuse_batch, *two_d);
     }
     add(Family::Mcast2D, two_d, fuse_batch);
-    if (!p.no_mcast_1d) {
+    if (!no_mcast_1d(p)) {
         add(Family::Mcast1DIn0, block_1d(p, hw, Family::Mcast1DIn0, M, div_up(p.Nt, cores), fuse_batch), fuse_batch);
         add(Family::Mcast1DIn1, block_1d(p, hw, Family::Mcast1DIn1, div_up(M, cores), p.Nt, fuse_batch), fuse_batch);
     }
@@ -854,7 +852,7 @@ bool one_tile_2d(const Candidate& c) {
 
 std::optional<Candidate> choose_by_rules(const MatmulDesc& p, const HardwareDesc& hw) {
     const auto all = candidates(p, hw);
-    if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
+    if (sharded_layout(p)) {
         // The layout already fixed the family
         return all.empty() ? std::nullopt : std::optional<Candidate>(all.front());
     }
@@ -1091,7 +1089,7 @@ std::string check(const MatmulDesc& p, const HardwareDesc& hw, const MatmulProgr
 
 std::vector<Candidate> k_depth_neighbours(const MatmulDesc& p, const HardwareDesc& hw, const Candidate& c) {
     std::vector<Candidate> result;
-    if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
+    if (sharded_layout(p)) {
         return result;
     }
     auto divisors = divisors_desc(p.Kt);  // largest first
@@ -1177,54 +1175,59 @@ std::optional<MatmulProgramConfig> select_program_config(const MatmulDesc& p, co
 
 namespace {
 
-// The selector's view of a memory config (and the tensor's shard spec, when it has one), with shard sizes in
-// the tensor's tiles (tile_h x tile_w). nullopt, with the reason, for placements it doesn't handle.
-std::optional<Placement> placement_of(
-    const tt::tt_metal::MemoryConfig& memory_config,
-    const std::optional<tt::tt_metal::ShardSpec>& shard_spec,
-    uint32_t tile_h,
-    uint32_t tile_w,
-    std::string& why) {
-    using tt::tt_metal::TensorMemoryLayout;
-    Placement placement;
-    placement.in_l1 = memory_config.buffer_type() == tt::tt_metal::BufferType::L1;
-    switch (memory_config.memory_layout()) {
-        case TensorMemoryLayout::INTERLEAVED: return placement;
-        case TensorMemoryLayout::HEIGHT_SHARDED: placement.layout = Layout::HeightSharded; break;
-        case TensorMemoryLayout::WIDTH_SHARDED: placement.layout = Layout::WidthSharded; break;
-        case TensorMemoryLayout::BLOCK_SHARDED: placement.layout = Layout::BlockSharded; break;
-        default: why = "unsupported memory layout"; return std::nullopt;
+std::string placement_issue(const Placement& t) {
+    if (t.dram_sharded()) {
+        return "DRAM-sharded tensor";
     }
-    if (!placement.in_l1) {
-        why = "DRAM-sharded tensor";
-        return std::nullopt;
+    if (t.layout == MemoryLayout::NdSharded) {
+        return "ND-sharded tensor";
     }
-    if (memory_config.nd_shard_spec().has_value() && !shard_spec.has_value()) {
-        why = "ND-sharded tensor";
-        return std::nullopt;
+    if (t.has_shard_spec && !t.shard_whole_tiles) {
+        return "shard shape not a whole number of tiles";
     }
-    if (shard_spec.has_value()) {
-        const auto& spec = shard_spec.value();
-        if (spec.shape[0] % tile_h != 0 || spec.shape[1] % tile_w != 0) {
-            why = "shard shape not a whole number of tiles";
-            return std::nullopt;
-        }
-        placement.has_shard_spec = true;
-        placement.shard_grid = spec.grid.bounding_box();
-        placement.shard_cores = spec.grid.num_cores();
-        placement.shard_h = spec.shape[0] / tile_h;
-        placement.shard_w = spec.shape[1] / tile_w;
-        placement.col_major = spec.orientation == tt::tt_metal::ShardOrientation::COL_MAJOR;
-    }
-    return placement;
+    return "";
 }
 
-// B sharded in DRAM (width or ND): the 2D factory reads it in place; the other factories can't.
-bool is_dram_sharded_b(const Tensor& b) {
-    const auto& mc = b.memory_config();
-    return mc.buffer_type() == tt::tt_metal::BufferType::DRAM &&
-           (mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED ||
-            (mc.nd_shard_spec().has_value() && !b.shard_spec().has_value()));
+// Why the selector has no config for a matmul it can describe (the factories can't run these either), or empty
+std::string unsupported_reason(const MatmulDesc& p) {
+    if (auto why = placement_issue(p.a); !why.empty()) {
+        return "A: " + why;
+    }
+    if (!dram_sharded_b(p)) {
+        if (auto why = placement_issue(p.b); !why.empty()) {
+            return "B: " + why;
+        }
+    }
+    if (auto why = placement_issue(p.out); !why.empty()) {
+        return "output: " + why;
+    }
+    // A sharded tensor must carry its shard spec (an output's may be left to the program config)
+    if ((p.a.sharded() && !p.a.has_shard_spec) || (p.b.l1_sharded() && !p.b.has_shard_spec)) {
+        return "sharded input without a shard spec";
+    }
+    if (dram_sharded_b(p) && (p.a.sharded() || p.out.sharded())) {
+        return "DRAM-sharded B with a sharded A or output";
+    }
+    if (p.out_tile_w != p.in1_tile_w) {
+        return "output tile wider than B's tile";
+    }
+    if (p.batch_b > 1 && p.batch_a != p.batch_b) {
+        // Only a batch of one broadcasts (1D in1-mcast in0 reuse): interleaved tensors of equal rank >= 3
+        if (p.batch_a != 1 || p.rank_a != p.rank_b || p.rank_a < 3) {
+            return "A and B batches don't match";
+        }
+        if (p.a.sharded() || p.b.l1_sharded() || p.out.sharded()) {
+            return "broadcast A with a sharded tensor";
+        }
+    }
+    // A sharded tensor's shard spec is physical while transpose_a transposes the logical shape
+    if (p.transpose_a && p.a.sharded()) {
+        return "transpose_a with a sharded A";
+    }
+    if (dram_sharded_b(p) && (p.batch_b > 1 || (is_block_float(p.in1_format) && p.in0_tile_h < 16))) {
+        return "DRAM-sharded B that only 2D could read, but 2D can't run";
+    }
+    return "";
 }
 
 }  // namespace
@@ -1237,122 +1240,26 @@ std::optional<MatmulProgramConfig> select_program_config(
     const uint32_t bias_single_tile_size,
     const ttnn::prim::MatmulParams& attributes,
     std::string* unsupported) {
-    std::string why;
     auto reject = [&](std::string reason) -> std::optional<MatmulProgramConfig> {
         if (unsupported != nullptr) {
             *unsupported = std::move(reason);
         }
         return std::nullopt;
     };
-    const auto& output_mem_config = attributes.output_mem_config;
-
-    // Tiles: A's are in0_tile_h x 32, B's 32 x in1_tile_w (matmul validation requires the 32-wide K side)
-    const auto in0_tile = utilities::get_matmul_tile(input_tensor_a, transpose_a);
-    const auto in1_tile = utilities::get_matmul_tile(input_tensor_b, transpose_b);
-    const auto out_tile =
-        attributes.output_tile.value_or(tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()}));
-    if (in0_tile.get_width() != TILE_DIM || in1_tile.get_height() != TILE_DIM) {
-        return reject("tile K side not 32");
+    std::string why;
+    const auto described = describe_matmul(
+        input_tensor_a, input_tensor_b, transpose_a, transpose_b, bias_single_tile_size, attributes, why);
+    if (!described) {
+        return reject(why);
     }
-
-    const bool b_dram_sharded = is_dram_sharded_b(input_tensor_b);
-    const auto a_placement =
-        placement_of(input_tensor_a.memory_config(), input_tensor_a.shard_spec(), in0_tile.get_height(), TILE_DIM, why);
-    if (!a_placement) {
-        return reject("A: " + why);
-    }
-    std::optional<Placement> b_placement = Placement{};
-    if (!b_dram_sharded) {
-        b_placement = placement_of(
-            input_tensor_b.memory_config(), input_tensor_b.shard_spec(), TILE_DIM, in1_tile.get_width(), why);
-        if (!b_placement) {
-            return reject("B: " + why);
-        }
-    }
-    const auto out_placement = placement_of(
-        output_mem_config, output_mem_config.shard_spec(), in0_tile.get_height(), in1_tile.get_width(), why);
-    if (!out_placement) {
-        return reject("output: " + why);
-    }
-    // A sharded tensor must carry its shard spec (an output's may be left to the program config)
-    if ((a_placement->sharded() && !a_placement->has_shard_spec) ||
-        (b_placement->sharded() && !b_placement->has_shard_spec)) {
-        return reject("sharded input without a shard spec");
-    }
-    if (b_dram_sharded && (a_placement->sharded() || out_placement->sharded())) {
-        return reject("DRAM-sharded B with a sharded A or output");
-    }
-    if (out_tile.get_width() != in1_tile.get_width()) {
-        return reject("output tile wider than B's tile");
-    }
-
-    const auto a_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
-    const auto b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
-    if (a_shape.rank() < 2 || b_shape.rank() < 2) {
-        return reject("rank below 2");
-    }
-    MatmulDesc p;
-    p.batch_a = a_shape.volume() / (a_shape[-2] * a_shape[-1]);
-    p.batch_b = b_shape.volume() / (b_shape[-2] * b_shape[-1]);
-    p.in0_tile_h = in0_tile.get_height();
-    p.in1_tile_w = in1_tile.get_width();
-    p.out_tile_h = out_tile.get_height();
-    p.out_tile_w = out_tile.get_width();
-    p.Mt = a_shape[-2] / p.in0_tile_h;
-    p.Kt = a_shape[-1] / TILE_DIM;
-    p.Nt = b_shape[-1] / p.in1_tile_w;
-    if (p.batch_b > 1 && p.batch_a != p.batch_b) {
-        // Only a batch of one broadcasts (1D in1-mcast in0 reuse): interleaved tensors of equal rank >= 3
-        if (p.batch_a != 1 || a_shape.rank() != b_shape.rank() || a_shape.rank() < 3) {
-            return reject("A and B batches don't match");
-        }
-        if (a_placement->sharded() || b_placement->sharded() || out_placement->sharded()) {
-            return reject("broadcast A with a sharded tensor");
-        }
-    }
-    p.a = *a_placement;
-    p.b = *b_placement;
-    p.out = *out_placement;
-    p.no_mcast_1d = attributes.global_cb.has_value() || b_dram_sharded;
-
-    if (p.a.sharded() && p.b.sharded()) {
-        const auto& sa = input_tensor_a.shard_spec().value();
-        const auto& sb = input_tensor_b.shard_spec().value();
-        p.b_shard_matches_a = p.a.layout == p.b.layout && sa.grid == sb.grid && sa.orientation == sb.orientation;
-    }
-    // A sharded tensor's shard spec is physical while transpose_a transposes the logical shape
-    if (transpose_a && p.a.sharded()) {
-        return reject("transpose_a with a sharded A");
-    }
-
-    if (!attributes.compute_kernel_config.has_value()) {
-        return reject("no compute kernel config");
-    }
-    auto* device = input_tensor_a.device();
-    const auto arch = device->arch();
-    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(arch, attributes.compute_kernel_config.value());
-    p.in0_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
-    p.in1_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
-    p.out_format =
-        tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value_or(input_tensor_a.dtype()));
-    if (b_dram_sharded && (p.batch_b > 1 || (is_block_float(p.in1_format) && p.in0_tile_h < 16))) {
-        return reject("DRAM-sharded B that only 2D could read, but 2D can't run");
-    }
-    p.bias_tile_bytes = bias_single_tile_size;
-    p.transpose_a = transpose_a;
-    p.math_fidelity = math_fidelity;
-    p.fp32_dest_acc_en = fp32_dest_acc_en;
-    p.packer_l1_acc = packer_l1_acc;
-    p.dst_full_sync_en = dst_full_sync_en;
-    // Fuse the activation only if the kernels support it; otherwise matmul applies it as a separate op
-    if (attributes.user_fused_activation.has_value() &&
-        utilities::is_fusable_activation(attributes.user_fused_activation->op_type)) {
-        p.activation = attributes.user_fused_activation;
+    const MatmulDesc& p = *described;
+    if (auto reason = unsupported_reason(p); !reason.empty()) {
+        return reject(reason);
     }
 
     // Worker grid: the device's, or on a sub-device its worker rectangle (the factories anchor their grid at
     // its first core); a user core_grid shrinks it
+    auto* device = input_tensor_a.device();
     auto grid = device->compute_with_storage_grid_size();
     CoreCoord origin{0, 0};
     const bool on_sub_device = attributes.sub_device_id.has_value();
@@ -1375,7 +1282,7 @@ std::optional<MatmulProgramConfig> select_program_config(
 
     // L1 left for CBs: free space above the lowest L1 buffer, less this op's own L1 output (not allocated yet)
     uint32_t budget = utilities::get_max_l1_space(input_tensor_a);
-    if (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 && !p.out.sharded()) {
+    if (attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 && !p.out.sharded()) {
         const uint64_t out_tiles = static_cast<uint64_t>(std::max(p.batch_a, p.batch_b)) * p.Mt * p.Nt;
         const uint32_t num_banks = device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
         const uint64_t out_per_bank =
@@ -1384,19 +1291,19 @@ std::optional<MatmulProgramConfig> select_program_config(
     }
     budget = budget > L1_HEADROOM_BYTES ? budget - L1_HEADROOM_BYTES : 0;
 
-    auto hw = HardwareDesc::for_arch(arch, grid, budget);
+    auto hw = HardwareDesc::for_arch(device->arch(), grid, budget);
     hw.origin = origin;
     hw.pinned_origin = on_sub_device;
     if (auto config = select_program_config(p, hw)) {
         return config;
     }
     // Nothing blocked fits: the non-reusing factory still runs all-interleaved 32x32 inputs on the device grid
-    const bool all_interleaved = !p.a.sharded() && !p.b.sharded() && !p.out.sharded() && !b_dram_sharded;
+    const bool all_interleaved = !p.a.sharded() && !p.b.sharded() && !p.out.sharded();
     const bool full_tiles = p.in0_tile_h == TILE_DIM && p.in1_tile_w == TILE_DIM;
     if (all_interleaved && full_tiles && !on_sub_device && !broadcasts_a(p)) {
         return MatmulMultiCoreProgramConfig{};
     }
-    if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
+    if (sharded_layout(p)) {
         return reject("unsupported sharded layout combination, or it doesn't fit L1");
     }
     if (is_block_float(p.in1_format) && p.in0_tile_h < 16 && p.batch_a != p.batch_b) {
