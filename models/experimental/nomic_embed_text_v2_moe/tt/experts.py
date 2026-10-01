@@ -20,8 +20,9 @@ the rows, and the pass keeps its tensors in L1:
 Above it the pass runs transposed, the tokens on the columns:
 
     x^T          (1, 1, H, t)
-      w1         (1, 1, E*F, t) the checkpoint's own (E*F, H) w1 times x^T, one unbatched product
-      gelu, w2   (1, E, H, t)
+      w1, gelu   (1, 1, E*F, t) the checkpoint's own (E*F, H) w1 times x^T, one unbatched product,
+                                the GELU fused into it
+      w2         (1, E, H, t)
       gate       (1, E, 1, t)
       reduce E   (1, 1, H, t), transposed back to (1, 1, t, H)
 
@@ -41,9 +42,9 @@ and of the gate is zeroed first: stale values there crush the real tokens beside
 token-major pass keeps the three in bfloat16: its gate would need the same fill before a cast,
 8 to 13 us a pass, against the 2 us a bfloat8_b multiply saves there.
 
-The w1 intermediate and the GELU's copy of it are the port's peak transient, 2 x 27 MB at T=1024
-in the bfloat8_b they are kept in, and they scale with batch times sequence length rather than
-sequence length alone. T is the one axis here that grows without bound, so the pipeline runs in
+The w1 intermediate is the port's peak transient, 27 MB at T=1024 in the bfloat8_b it is kept in
+(a token-major pass also holds the GELU's copy, but runs at most 128 tokens), and it scales with
+batch times sequence length rather than sequence length alone. T is the one axis here that grows without bound, so the pipeline runs in
 passes over the token axis, capping that transient at one pass.
 """
 
@@ -54,10 +55,13 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import pack_expert_weights, to_device
 from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import (
+    expert_w1_gelu_config,
     expert_w1_program_config,
     expert_w1_transposed_config,
     expert_w2_program_config,
     expert_w2_transposed_program_config,
+    gelu_activation,
+    gelu_on_packer,
     l1_bank_bytes,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
@@ -194,31 +198,53 @@ class TtNomicExperts(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    def transposed_w1(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """(1, 1, t, H) -> (1, 1, E*F, t), for a pass above TOKEN_MAJOR_MAX_TOKENS."""
+    def transposed_w1(self, x: ttnn.Tensor, gelu: ttnn.GeluVariant | None = None) -> ttnn.Tensor:
+        """(1, 1, t, H) -> (1, 1, E*F, t) for a pass above TOKEN_MAJOR_MAX_TOKENS, with the GELU if given.
+
+        The GELU is fused into the matmul: a 2D multicast ttnn.matmul, which applies it from the
+        packer, when gelu_on_packer; minimal_matmul, the bare product's program, otherwise.
+        """
         tokens, hidden = x.shape[-2], x.shape[-1]
         x_transposed = ttnn.transpose(x, -2, -1)
         if tokens % ttnn.TILE_SIZE:
             # In place: the fill returns a tensor on the same buffer.
             x_transposed = ttnn.fill_implicit_tile_padding(x_transposed, 0.0)
         compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.EXPERT_W1)
-        hidden_states = ttnn.experimental.minimal_matmul(
-            self.w1_stacked,
-            x_transposed,
-            config=expert_w1_transposed_config(
-                hidden // ttnn.TILE_SIZE,
-                tokens,
-                self.w1_stacked.dtype,
-                x_transposed.dtype,
-                self.tt_config.expert_intermediate_dtype,
-                self.tt_config.core_grid,
-                self.tt_config.l1_cb_bytes,
-                compute_kernel_config,
-            ),
-            dtype=self.tt_config.expert_intermediate_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=compute_kernel_config,
-        )
+        if gelu is not None and gelu_on_packer(gelu):
+            hidden_states = ttnn.matmul(
+                self.w1_stacked,
+                x_transposed,
+                program_config=expert_w1_gelu_config(
+                    self.w1_stacked.shape[-2] // ttnn.TILE_SIZE,
+                    hidden // ttnn.TILE_SIZE,
+                    tokens,
+                    self.tt_config.core_grid,
+                    gelu,
+                    compute_kernel_config,
+                ),
+                dtype=self.tt_config.expert_intermediate_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=compute_kernel_config,
+            )
+        else:
+            hidden_states = ttnn.experimental.minimal_matmul(
+                self.w1_stacked,
+                x_transposed,
+                config=expert_w1_transposed_config(
+                    hidden // ttnn.TILE_SIZE,
+                    tokens,
+                    self.w1_stacked.dtype,
+                    x_transposed.dtype,
+                    self.tt_config.expert_intermediate_dtype,
+                    self.tt_config.core_grid,
+                    self.tt_config.l1_cb_bytes,
+                    compute_kernel_config,
+                ),
+                dtype=self.tt_config.expert_intermediate_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=compute_kernel_config,
+                fused_activation=None if gelu is None else gelu_activation(gelu),
+            )
         ttnn.deallocate(x_transposed)
         return hidden_states
 
@@ -250,7 +276,9 @@ class TtNomicExperts(LightweightModule):
     def _token_major_sum(self, x: ttnn.Tensor, dense_weights: ttnn.Tensor) -> ttnn.Tensor:
         """(1, 1, t, H) -> (1, 1, t, H) for a pass of at most TOKEN_MAJOR_MAX_TOKENS."""
         hidden_states = self.token_major_w1(x)
-        activated = ttnn.gelu(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # sparse_matmul takes no fused activation: given one in its program config, it returns the
+        # raw product.
+        activated = ttnn.gelu(hidden_states, variant=self.tt_config.expert_gelu, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(hidden_states)
         per_expert = self.token_major_w2(activated)
         ttnn.deallocate(activated)
@@ -261,9 +289,7 @@ class TtNomicExperts(LightweightModule):
 
     def _transposed_sum(self, x: ttnn.Tensor, dense_weights: ttnn.Tensor) -> ttnn.Tensor:
         """(1, 1, t, H) -> (1, 1, H, t) for a pass above TOKEN_MAJOR_MAX_TOKENS."""
-        hidden_states = self.transposed_w1(x)
-        activated = ttnn.gelu(hidden_states)
-        ttnn.deallocate(hidden_states)
+        activated = self.transposed_w1(x, self.tt_config.expert_gelu)
         per_expert = self.transposed_w2(activated)
         ttnn.deallocate(activated)
 
