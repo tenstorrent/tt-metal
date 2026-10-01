@@ -323,10 +323,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
     }
     if (has_cached_sem) {
-        // Include for the entry/exit stubs' bodies (get_semaphore + the MEM_ defines),
-        // guarded exactly like those bodies (the pool is DM-only).
+        // Defines CachedSemaphore and the cached-pool entry/exit; the pool is Quasar DM-only.
         content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-        content << "#include \"api/semaphore.h\"\n";
+        content << "#include \"internal/tt-2xx/quasar/semaphore_cached_pool.h\"\n";
         content << "#endif\n";
     }
 
