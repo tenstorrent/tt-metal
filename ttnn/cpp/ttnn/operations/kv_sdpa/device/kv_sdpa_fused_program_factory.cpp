@@ -178,7 +178,9 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
         {"MUL_BCAST_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(Sk_chunk_t, dst_size))},
         {"DHT_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(DHt, dst_size))},
         {"REDUCE_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(1, dst_size / 2))},
-        {"EXP_APPROX_MODE", "0"}};
+        // Approximate exp, matching pi0_5's SDPA default (ttnn_common.get_sdpa_exp_approx_mode); exact exp
+        // costs ~15 us/call more here since tt-metal #57180 made it real.
+        {"EXP_APPROX_MODE", "1"}};
     compute.config = ComputeConfigDescriptor{
         .math_fidelity = ckc.math_fidelity,
         .fp32_dest_acc_en = ckc.fp32_dest_acc_en,

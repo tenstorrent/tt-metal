@@ -33,10 +33,15 @@ import ttnn
 #                              ViT-BH-hiRes uses HiFi4 because they don't
 #                              also enable fp32 dest; with both on we're
 #                              already at fp32-equivalent softmax accuracy.
-#   PI0_SDPA_EXP_APPROX=0    → exp_approx_mode=False.
-#                              Marginal win on both axes vs True (+0.0003 PCC,
-#                              −0.10 ms). Comment in ViT-BH-hiRes line 307:
-#                              "False is more correct".
+#   PI0_SDPA_EXP_APPROX=1    → exp_approx_mode=True.
+#                              Until tt-metal #57180 (90272bb3ffe) SDPA ran
+#                              approximate exp even with exp_approx_mode=False,
+#                              so every validated pi0_5 number (perf, PCC,
+#                              LIBERO) used approx exp; older False-vs-True
+#                              A/Bs here compared identical kernels. Exact exp
+#                              is now real: ~2x slower SDPA, +3..+7 ms e2e on
+#                              p150a, for +0.004 e2e PCC. The kv_sdpa denoise
+#                              kernel matches (EXP_APPROX_MODE=1).
 #   PI0_SDPA_FP32_DEST=1     → fp32_dest_acc_en=True.
 #   PI0_SDPA_PACKER_L1=1     → packer_l1_acc=True.
 # ---------------------------------------------------------------------------
@@ -68,24 +73,19 @@ def get_sdpa_math_fidelity() -> "ttnn.MathFidelity":
 def get_sdpa_exp_approx_mode(seq_len_kv: Optional[int] = None) -> bool:
     """Return SDPA softmax exp_approx_mode.
 
-    Default: False (exact). Per PERF_PLAYBOOKS/04_ATTENTION_SDPA.md §3c the
-    short-ratio case should favour True, and the SigLIP isolated sweep
-    (Sq=Skv=256, k_chunk=256 single chunk) showed `exp=1` as the wall-clock
-    winner. BUT tracy-verified end-to-end (2026-06-04 v7 run): enabling
-    exp_approx=True for SigLIP regressed device kernel time by +0.18 µs/call
-    (12.90 → 13.08 µs). Same wall-clock-doesn't-translate pattern we saw
-    on the VLM band. Per-shape default reverted to False; opt-in via
-    `PI0_SDPA_EXP_APPROX_PER_SHAPE=1` if you want to A/B again.
+    Default: True (approximate exp), the behaviour every validated pi0_5
+    number was measured with (see the comment block above).
 
     Global override: `PI0_SDPA_EXP_APPROX={0|1}` forces a single value
-    everywhere (the prior global A/B knob).
+    everywhere. Without it, `PI0_SDPA_EXP_APPROX_PER_SHAPE=1` uses approx
+    exp only for single-chunk K (seq_len_kv <= 256).
     """
     explicit = os.environ.get("PI0_SDPA_EXP_APPROX")
     if explicit is not None:
         return explicit.strip().lower() in ("1", "true", "yes", "on")
     per_shape = _env_bool("PI0_SDPA_EXP_APPROX_PER_SHAPE", False)
     if not per_shape or seq_len_kv is None:
-        return False
+        return True
     # Per-shape opt-in path (kept for future A/B): single-chunk K → True.
     return seq_len_kv <= 256
 
