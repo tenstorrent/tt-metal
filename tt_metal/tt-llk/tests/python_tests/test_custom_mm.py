@@ -389,9 +389,7 @@ BFP2_CASES = [
 @blackhole_only
 @pytest.mark.xfail(
     strict=True,
-    reason="Bfp2_b weights on the plain custom_mm path: the output is unrelated to the reference (PCC below 0.03 on all "
-    "four shapes) on the base LLK and on this branch alike; tracked as XM4 of the Blackhole custom matmul analysis, "
-    "the marker comes off with the fix",
+    reason="Bfp2_b weights on the plain path compute wrong results, #58785",
 )
 @pytest.mark.parametrize("M,kt,ct,formats", BFP2_CASES)
 def test_custom_mm_bfp2_in1(formats, M, kt, ct):
