@@ -16,6 +16,7 @@ test_kv_reload: a prompt over two chunks. The prefix chunk's KV is saved to disk
 
 import math
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,9 @@ N_LAYERS = int(os.environ.get("MIMO_FT_LAYERS", "48"))
 CHUNK = int(os.environ.get("MIMO_FT_CHUNK", "1024"))
 STEPS = int(os.environ.get("MIMO_FT_STEPS", "1"))
 QUESTION = os.environ.get("MIMO_FT_QUESTION", "What is the capital of Paris ?")
+THINKING = (
+    os.environ.get("MIMO_FT_THINKING", "1") != "0"
+)  # 0: the template's enable_thinking=False (empty <think></think>)
 DOC = Path(__file__).parent / "prompt.txt"
 OUT_DIR = Path(os.environ.get("MIMO_FT_OUT", Path(__file__).parents[4] / "generated" / "mimo_first_token"))
 
@@ -47,7 +51,9 @@ def tokenizer():
 
 
 def chat_ids(tok, content):
-    s = tok.apply_chat_template([{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True)
+    s = tok.apply_chat_template(
+        [{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True, enable_thinking=THINKING
+    )
     return tok(s, add_special_tokens=False)["input_ids"]
 
 
@@ -122,13 +128,25 @@ def test_first_token(mesh_device, device_params):
     _, pcc = comp_pcc(ref, logits)
     logger.info(f"device lm_head vs host fp32 (same hidden): PCC {pcc:.6f}, argmax {logits.argmax()} / {ref.argmax()}")
     logger.info(f"top-5: {top(tok, logits)}")
-    out = [int(logits.argmax())]
-    for _ in range(STEPS - 1):  # greedy: re-prefill the chunk holding the newest token (earlier chunks stay cached)
+    out, step_ms = [int(logits.argmax())], []
+    # greedy until <|im_end|>: re-prefill the chunk holding the newest token (earlier chunks stay cached)
+    while len(out) < STEPS and out[-1] != tok.eos_token_id:
         seq = ids + out
+        t0 = time.perf_counter()
         logits, _ = run_chunk(model, seq, (len(seq) - 1) // CHUNK)
+        step_ms.append((time.perf_counter() - t0) * 1e3)
         out.append(int(logits.argmax()))
+        if len(out) % 64 == 0:
+            logger.info(f"{len(out)} tokens: ...{tok.decode(out[-64:])!r}")
+    if step_ms:
+        med = sorted(step_ms)[len(step_ms) // 2]
+        logger.info(
+            f"generated {len(out)} tokens (stop: {'eos' if out[-1] == tok.eos_token_id else 'MIMO_FT_STEPS'}); per token "
+            f"median {med:.1f} ms -> {1e3 / med:.2f} tok/s, total {sum(step_ms) / 1e3:.1f} s"
+        )
     logger.info(
-        f"mesh={mesh_id(mesh_device)} layers={N_LAYERS} prompt {len(ids)} tokens: {QUESTION!r} -> {tok.decode(out)!r} {out}"
+        f"mesh={mesh_id(mesh_device)} layers={N_LAYERS} thinking={THINKING} prompt {len(ids)} tokens: {QUESTION!r} ->\n"
+        f"{tok.decode(out)}"
     )
     assert pcc > 0.999 and logits.isfinite().all(), pcc
 
