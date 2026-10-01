@@ -557,6 +557,9 @@ std::string ComputeKernel::config_hash() const {
     if (this->config_.enable_trisc2_rvv) {
         hash += "_rvv";
     }
+    if (this->config_.disable_sfpu_replay_optimization) {
+        hash += "_noreplay";
+    }
     return hash;
 }
 
