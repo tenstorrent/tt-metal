@@ -8,71 +8,142 @@
 
 namespace ttml::autograd {
 
-static bool is_float_dtype(ttnn::DataType dtype) {
+namespace detail {
+
+// Shared by every copy of one AutocastTensor (see the header).
+struct AutocastState {
+    ttnn::Tensor native{};
+    // The other float precision, cast from native on first use and refreshed in place when behind.
+    ttnn::Tensor derived{};
+    PreferredPrecision native_precision{PreferredPrecision::FULL};
+    // Bumped when a MutableTensorView of native is destroyed. derived_version is the native_version the derived
+    // copy was cast from; they are compared with != so wrap-around is harmless.
+    uint64_t native_version{0};
+    uint64_t derived_version{0};
+    // Set while a MutableTensorView is alive.
+    bool write_in_progress{false};
+};
+
+}  // namespace detail
+
+namespace {
+
+bool is_float_dtype(ttnn::DataType dtype) {
     return dtype == ttnn::DataType::FLOAT32 || dtype == ttnn::DataType::BFLOAT16;
 }
 
+const char *precision_name(PreferredPrecision precision) {
+    switch (precision) {
+        case PreferredPrecision::HALF: return "HALF";
+        case PreferredPrecision::FULL: return "FULL";
+        case PreferredPrecision::NATIVE: return "NATIVE";
+    }
+    return "unknown";
+}
+
+void reset_state(detail::AutocastState &state, const ttnn::Tensor &tensor) {
+    state.native = tensor;
+    state.derived = ttnn::Tensor();
+    // Non-float tensors (e.g. UINT32 embedding indices) count as FULL and are returned as stored for every
+    // precision: typecast does not apply to them.
+    state.native_precision =
+        tensor.dtype() == ttnn::DataType::BFLOAT16 ? PreferredPrecision::HALF : PreferredPrecision::FULL;
+    state.native_version = 0;
+    state.derived_version = 0;
+    state.write_in_progress = false;
+}
+
+}  // namespace
+
+MutableTensorView::MutableTensorView(std::shared_ptr<detail::AutocastState> state) : m_state(std::move(state)) {
+}
+
+MutableTensorView::MutableTensorView(MutableTensorView &&other) noexcept : m_state(std::move(other.m_state)) {
+}
+
+MutableTensorView::~MutableTensorView() {
+    // A moved-from view holds nothing and must not count as a write.
+    if (m_state) {
+        ++m_state->native_version;
+        m_state->write_in_progress = false;
+    }
+}
+
+const ttnn::Tensor &MutableTensorView::tensor() const {
+    return m_state->native;
+}
+
+AutocastTensor::AutocastTensor() : m_state(std::make_shared<detail::AutocastState>()) {
+}
+
+AutocastTensor::AutocastTensor(const ttnn::Tensor &tensor) : m_state(std::make_shared<detail::AutocastState>()) {
+    reset_state(*m_state, tensor);
+}
+
 void AutocastTensor::set_tensor(const ttnn::Tensor &tensor) {
-    if (tensor.dtype() == ttnn::DataType::FLOAT32) {
-        m_full_precision_tensor = tensor;
-        m_half_precision_tensor = ttnn::Tensor();
-        m_native_precision = PreferredPrecision::FULL;
-    } else if (tensor.dtype() == ttnn::DataType::BFLOAT16) {
-        m_half_precision_tensor = tensor;
-        m_full_precision_tensor = ttnn::Tensor();
-        m_native_precision = PreferredPrecision::HALF;
+    TT_FATAL(!m_state->write_in_progress, "set_tensor called while the tensor is being written in place");
+    // Sole owner: reset in place, so references returned by get_tensor() stay valid (they now see the new
+    // tensor). Shared with copies: detach this copy and leave the others on the old state.
+    if (m_state.use_count() == 1) {
+        reset_state(*m_state, tensor);
     } else {
-        // Non-castable types (e.g. UINT32 for embedding indices): store as-is in the
-        // full-precision slot and return unchanged from get_tensor() regardless of
-        // the requested precision — typecast is not applicable to integer dtypes.
-        m_full_precision_tensor = tensor;
-        m_half_precision_tensor = ttnn::Tensor();
-        m_native_precision = PreferredPrecision::FULL;
+        m_state = std::make_shared<detail::AutocastState>();
+        reset_state(*m_state, tensor);
     }
 }
 
 bool AutocastTensor::has_half() const {
-    return core::is_tensor_initialized(m_half_precision_tensor);
+    const auto &state = *m_state;
+    return (core::is_tensor_initialized(state.native) && state.native.dtype() == ttnn::DataType::BFLOAT16) ||
+           (core::is_tensor_initialized(state.derived) && state.derived.dtype() == ttnn::DataType::BFLOAT16);
 }
 
 bool AutocastTensor::has_full() const {
-    return core::is_tensor_initialized(m_full_precision_tensor);
+    const auto &state = *m_state;
+    return (core::is_tensor_initialized(state.native) && state.native.dtype() != ttnn::DataType::BFLOAT16) ||
+           (core::is_tensor_initialized(state.derived) && state.derived.dtype() == ttnn::DataType::FLOAT32);
+}
+
+uint64_t AutocastTensor::native_version() const {
+    return m_state->native_version;
 }
 
 const ttnn::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_precision) const {
-    // Non-float tensors (e.g. UINT32 embedding indices) are stored in the full-precision
-    // slot and returned unchanged — they cannot be typecast to half/full float precision.
-    if (has_full() && !is_float_dtype(m_full_precision_tensor.dtype())) {
-        return m_full_precision_tensor;
+    auto &state = *m_state;
+    if (preferred_precision == PreferredPrecision::NATIVE || preferred_precision == state.native_precision ||
+        !core::is_tensor_initialized(state.native) || !is_float_dtype(state.native.dtype())) {
+        return state.native;
     }
 
-    // NATIVE: return the slot set by set_tensor, with no typecast. Used by serialization (checkpoint
-    // gather) so the stored value is preserved exactly. m_native_precision records which slot is the
-    // source of truth, so a lazily-cached other-precision view (from a prior FULL/HALF read) is ignored.
-    if (preferred_precision == PreferredPrecision::NATIVE) {
-        return m_native_precision == PreferredPrecision::HALF ? m_half_precision_tensor : m_full_precision_tensor;
-    }
+    TT_FATAL(
+        !state.write_in_progress,
+        "Reading the {} view while the {} tensor is being written in place would return stale values",
+        precision_name(preferred_precision),
+        precision_name(state.native_precision));
 
-    // TODO: Lazy precision caching can leave the FULL/FLOAT32 view stale
-    // after in-place updates that mutate only the BF16 tensor (e.g. optimizer step).
-    // Revisit cache invalidation/refresh strategy so both views stay coherent.
-    // Tracking: #41657
-
-    if (preferred_precision == PreferredPrecision::HALF) {
-        if (!has_half()) {
-            m_half_precision_tensor = ttnn::typecast(m_full_precision_tensor, ttnn::DataType::BFLOAT16);
-        }
-        return m_half_precision_tensor;
+    const auto dtype =
+        preferred_precision == PreferredPrecision::HALF ? ttnn::DataType::BFLOAT16 : ttnn::DataType::FLOAT32;
+    if (!core::is_tensor_initialized(state.derived)) {
+        state.derived = ttnn::typecast(state.native, dtype);
+        state.derived_version = native_version();
+    } else if (state.derived_version != native_version()) {
+        // Refresh into the existing buffer: no allocation, and the buffer address stays the same.
+        ttnn::typecast(state.native, dtype, std::nullopt, state.derived);
+        state.derived_version = native_version();
     }
-
-    if (!has_full()) {
-        m_full_precision_tensor = ttnn::typecast(m_half_precision_tensor, ttnn::DataType::FLOAT32);
-    }
-    return m_full_precision_tensor;
+    return state.derived;
 }
 
-AutocastTensor::AutocastTensor(const ttnn::Tensor &tensor) {
-    set_tensor(tensor);
+MutableTensorView AutocastTensor::get_value_for_update(PreferredPrecision precision) {
+    auto &state = *m_state;
+    TT_FATAL(
+        precision == PreferredPrecision::NATIVE || precision == state.native_precision,
+        "In-place updates must target the native precision ({}), got {}",
+        precision_name(state.native_precision),
+        precision_name(precision));
+    TT_FATAL(!state.write_in_progress, "The tensor is already being written in place");
+    state.write_in_progress = true;
+    return MutableTensorView(m_state);
 }
 
 }  // namespace ttml::autograd

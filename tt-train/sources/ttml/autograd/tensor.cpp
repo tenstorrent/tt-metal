@@ -140,6 +140,10 @@ const ttnn::Tensor& Tensor::get_value(PreferredPrecision preferred_precision) co
     return m_value.get_tensor(preferred_precision);
 }
 
+MutableTensorView Tensor::get_value_for_update(PreferredPrecision precision) {
+    return m_value.get_value_for_update(precision);
+}
+
 const ttnn::Tensor& Tensor::get_grad() const {
     return m_grad;
 }

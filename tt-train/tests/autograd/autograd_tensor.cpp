@@ -14,6 +14,7 @@
 #include "optimizers/sgd.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 
 using namespace ttml;
 
@@ -150,6 +151,126 @@ TEST_F(AutogradTensorTest, AutocastTensorSetTensorInvalidatesCache) {
     [[maybe_unused]] const auto& full = autocast_tensor.get_tensor(autograd::PreferredPrecision::FULL);
     EXPECT_TRUE(autocast_tensor.has_half());
     EXPECT_TRUE(autocast_tensor.has_full());
+}
+
+namespace {
+
+const ttnn::Shape kShape({1, 1, 32, 32});
+
+ttnn::Tensor filled(float value, ttnn::DataType dtype) {
+    return core::full(kShape, value, &autograd::ctx().get_device(), dtype);
+}
+
+// Writes value into the native tensor in place, the way an in-place kernel does.
+void write_in_place(autograd::AutocastTensor& tensor, float value) {
+    auto view = tensor.get_value_for_update();
+    ttnn::copy(filled(value, view.tensor().dtype()), view.tensor());
+}
+
+bool all_equal(const ttnn::Tensor& tensor, float value) {
+    const auto values = core::to_xtensor(tensor);
+    return xt::all(xt::equal(values, value));
+}
+
+void expect_derived_view_tracks_writes(ttnn::DataType native_dtype, autograd::PreferredPrecision derived) {
+    auto tensor = autograd::AutocastTensor(filled(1.0F, native_dtype));
+    const auto& before = tensor.get_tensor(derived);
+    ASSERT_TRUE(all_equal(before, 1.0F));
+    const auto address = before.buffer()->address();
+
+    write_in_place(tensor, 2.0F);
+
+    const auto& after = tensor.get_tensor(derived);
+    EXPECT_TRUE(all_equal(after, 2.0F)) << "the derived view is stale after an in-place write";
+    EXPECT_EQ(after.buffer()->address(), address) << "the refresh allocated a new buffer";
+}
+
+}  // namespace
+
+TEST_F(AutogradTensorTest, AutocastTensorFullViewTracksWritesToBf16Native) {
+    expect_derived_view_tracks_writes(ttnn::DataType::BFLOAT16, autograd::PreferredPrecision::FULL);
+}
+
+TEST_F(AutogradTensorTest, AutocastTensorHalfViewTracksWritesToFp32Native) {
+    expect_derived_view_tracks_writes(ttnn::DataType::FLOAT32, autograd::PreferredPrecision::HALF);
+}
+
+TEST_F(AutogradTensorTest, AutocastTensorDerivedViewIsNotRecastWhenCurrent) {
+    auto tensor = autograd::AutocastTensor(filled(1.0F, ttnn::DataType::BFLOAT16));
+    const auto& full = tensor.get_tensor(autograd::PreferredPrecision::FULL);
+    // Overwrite the derived copy behind the tensor's back: a read with no write in between must not recast it.
+    ttnn::copy(filled(7.0F, ttnn::DataType::FLOAT32), full);
+    EXPECT_TRUE(all_equal(tensor.get_tensor(autograd::PreferredPrecision::FULL), 7.0F))
+        << "the derived copy was recast although the native tensor was not written";
+
+    write_in_place(tensor, 2.0F);
+    EXPECT_TRUE(all_equal(tensor.get_tensor(autograd::PreferredPrecision::FULL), 2.0F));
+}
+
+TEST_F(AutogradTensorTest, AutocastTensorUpdateRequiresNativePrecision) {
+    auto bf16 = autograd::AutocastTensor(filled(1.0F, ttnn::DataType::BFLOAT16));
+    EXPECT_ANY_THROW({
+        auto view = bf16.get_value_for_update(autograd::PreferredPrecision::FULL);
+        (void)view;
+    });
+    {
+        auto view = bf16.get_value_for_update(autograd::PreferredPrecision::HALF);
+    }
+    {
+        auto view = bf16.get_value_for_update(autograd::PreferredPrecision::NATIVE);
+    }
+
+    auto fp32 = autograd::AutocastTensor(filled(1.0F, ttnn::DataType::FLOAT32));
+    EXPECT_ANY_THROW({
+        auto view = fp32.get_value_for_update(autograd::PreferredPrecision::HALF);
+        (void)view;
+    });
+    {
+        auto view = fp32.get_value_for_update(autograd::PreferredPrecision::FULL);
+    }
+}
+
+TEST_F(AutogradTensorTest, AutocastTensorRejectsAccessWhileBeingWritten) {
+    auto tensor = autograd::AutocastTensor(filled(1.0F, ttnn::DataType::BFLOAT16));
+    {
+        auto view = tensor.get_value_for_update();
+        EXPECT_ANY_THROW((void)tensor.get_tensor(autograd::PreferredPrecision::FULL));
+        EXPECT_NO_THROW((void)tensor.get_tensor(autograd::PreferredPrecision::NATIVE));
+        EXPECT_ANY_THROW({
+            auto second = tensor.get_value_for_update();
+            (void)second;
+        });
+        EXPECT_ANY_THROW(tensor.set_tensor(filled(3.0F, ttnn::DataType::BFLOAT16)));
+    }
+    EXPECT_NO_THROW((void)tensor.get_tensor(autograd::PreferredPrecision::FULL));
+}
+
+TEST_F(AutogradTensorTest, AutocastTensorCopiesShareStorageAndVersion) {
+    auto original = autograd::AutocastTensor(filled(1.0F, ttnn::DataType::BFLOAT16));
+    auto copy = original;
+    // The copy creates the derived buffer after the copy was made.
+    (void)copy.get_tensor(autograd::PreferredPrecision::FULL);
+
+    write_in_place(original, 2.0F);
+    EXPECT_TRUE(all_equal(copy.get_tensor(autograd::PreferredPrecision::FULL), 2.0F))
+        << "a copy missed a write made through another copy";
+    EXPECT_TRUE(all_equal(original.get_tensor(autograd::PreferredPrecision::FULL), 2.0F));
+
+    copy.set_tensor(filled(5.0F, ttnn::DataType::BFLOAT16));
+    EXPECT_TRUE(all_equal(copy.get_tensor(autograd::PreferredPrecision::NATIVE), 5.0F));
+    EXPECT_TRUE(all_equal(original.get_tensor(autograd::PreferredPrecision::NATIVE), 2.0F))
+        << "set_tensor on a copy changed the original";
+
+    write_in_place(original, 3.0F);
+    EXPECT_TRUE(all_equal(original.get_tensor(autograd::PreferredPrecision::FULL), 3.0F));
+    EXPECT_TRUE(all_equal(copy.get_tensor(autograd::PreferredPrecision::FULL), 5.0F));
+}
+
+TEST_F(AutogradTensorTest, AutocastTensorSetTensorKeepsHeldReferencesValid) {
+    auto tensor = autograd::AutocastTensor(filled(1.0F, ttnn::DataType::BFLOAT16));
+    const auto& held = tensor.get_tensor(autograd::PreferredPrecision::NATIVE);
+    tensor.set_tensor(filled(4.0F, ttnn::DataType::BFLOAT16));
+    EXPECT_TRUE(all_equal(held, 4.0F)) << "a reference returned by get_tensor() no longer follows the tensor";
 }
 
 // Disabled: fused optimizers leave a cached FULL view stale — https://github.com/tenstorrent/tt-metal/issues/41657
