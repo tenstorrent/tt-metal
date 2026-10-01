@@ -53,17 +53,6 @@ inline std::string_view sem_scope_enumerator(SemScope scope) {
     TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
 }
 
-// The generated semaphore section: one constexpr binding token per bound semaphore, in
-// `namespace sem`. The token carries the id and the mechanism the host picked.
-inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
-    os << "namespace sem {\n";
-    for (const auto& entry : entries) {
-        os << "constexpr ::SemaphoreBindingToken " << entry.name << "{" << entry.id
-           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope) << "};\n";
-    }
-    os << "}  // namespace sem\n";
-}
-
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
 // The CRTA buffer is laid out as four back-to-back sections:
