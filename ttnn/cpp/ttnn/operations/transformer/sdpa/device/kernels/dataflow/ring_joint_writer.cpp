@@ -19,7 +19,11 @@
 #include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
+// Included by a path relative to this file, not from the include roots: when a wheel is installed
+// next to a repo checkout both roots carry these kernels, and the root-relative spelling resolved
+// into the wheel while line 16 resolved here, so `#pragma once` saw two paths for
+// dataflow/chunked_prefill_utils.hpp and every declaration in it was a redefinition.
+#include "../ring_joint_ksplit.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
