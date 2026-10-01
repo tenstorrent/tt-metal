@@ -12,6 +12,12 @@ from probe_loop_recovery import wall_deadline
 from replay_eval_requests import TOOLS, post
 
 
+def request_messages(messages):
+    """Keep template-visible reasoning while excluding local trajectory metadata."""
+    fields = {"role", "content", "tool_calls", "tool_call_id", "reasoning", "reasoning_content"}
+    return [{k: v for k, v in message.items() if k in fields} for message in messages]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--trajectory", type=Path, required=True)
@@ -23,9 +29,7 @@ def main():
     messages = json.loads(args.trajectory.read_text())["messages"][: args.messages]
     payload = {
         "model": "google/gemma-4-26B-A4B-it",
-        "messages": [
-            {k: v for k, v in m.items() if k in {"role", "content", "tool_calls", "tool_call_id"}} for m in messages
-        ],
+        "messages": request_messages(messages),
         "tools": TOOLS,
         "chat_template_kwargs": {"enable_thinking": True},
         "temperature": 1.0,

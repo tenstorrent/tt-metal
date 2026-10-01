@@ -16,6 +16,7 @@ from pathlib import Path
 
 from probe_context_dedup import compact
 from probe_loop_recovery import wall_deadline
+from probe_native_eval_action import request_messages
 from replay_eval_requests import post
 
 
@@ -94,6 +95,23 @@ class WeightControlTests(unittest.TestCase):
             node[parts[-1]] = change["before"]
         candidate["config_id"] = baseline["config_id"]
         self.assertEqual(candidate, baseline)
+
+
+class NativeReplayTests(unittest.TestCase):
+    def test_retains_both_reasoning_fields_but_not_local_metadata(self):
+        messages = [
+            {"role": "assistant", "content": None, "reasoning_content": "plan", "extra": {"timestamp": 1}},
+            {"role": "assistant", "reasoning": "other plan", "provider_specific_fields": {}},
+        ]
+        original = copy.deepcopy(messages)
+        self.assertEqual(
+            request_messages(messages),
+            [
+                {"role": "assistant", "content": None, "reasoning_content": "plan"},
+                {"role": "assistant", "reasoning": "other plan"},
+            ],
+        )
+        self.assertEqual(messages, original)
 
 
 class DiagnosticDeadlineTests(unittest.TestCase):

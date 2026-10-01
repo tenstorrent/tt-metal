@@ -693,3 +693,72 @@ TT-Metal`c9ec3469f1b875e7e5e505660c4421e5126e8dad`, transport/plugin input
 The same-host selected-policy900-second seeded control starts separately after
 server readiness, under`local_django_selected_seed9472`. Independent servers
 are used; there is never more than one live trial per inference server.
+
+### Same-seed outcome control and submission diagnostic
+
+The selected-policy control finishes at 19:15 UTC with reward 0 and
+`AgentTimeoutError` after 900.007 seconds. Its required `test_simplecol_query`
+still fails; all 103 PASS_TO_PASS tests pass. Both local trials have identical
+initial request bytes, SHA256
+`19da7e61b624431d250cb4bc54bcb0e03ae3d18f34e41389c858298ab288435e`,
+same host, image, seed 9472, task and sampling settings. Only the explicit
+precision policy differs intentionally; cache state differs, and one seed is
+not a population-quality estimate.
+
+| Local 900-second control | Selected weights | Configurable BFP8 weights |
+| --- | ---: | ---: |
+| Verifier reward | 0 | 1 |
+| Clean submission | No | No |
+| Recorded completed responses | 43 | 37 |
+| Native repetition stops | 14 | 0 |
+| Recorded output tokens | 28,787 | 12,118 |
+| Recorded prompt tokens | 366,553 | 608,044 |
+
+The selected-policy totals include one 193-token response recorded 15.295
+seconds after the harness's agent-end timestamp. In-budget completed responses
+are 42 / 28,594 output tokens. Another request starts after the nominal agent
+deadline but has no recorded response. Do not divide the untrimmed API-duration
+sum by the 900-second budget and interpret it as utilization. Candidate has
+three no-tool natural-stop responses after its last valid action. The candidate
+uses more prompt processing but substantially less discarded decode; reward
+improves at the same cap, not by extending it. This is not a clean-completion
+speedup measurement.
+
+A post-trial replay exposed a diagnostic-helper omission: saved assistant
+`reasoning_content` was discarded. On the candidate's 70-message completed-patch
+context, omission shortens 26,142 tokens to 19,475. The native replay helper now
+preserves both supported reasoning fields, with a host regression test (nine
+host tests pass). Actual Harbor trials were unaffected. The corrected selected-
+precision replay sees the original 26,142 tokens and emits the proper submission
+bash call in 20.957 seconds / 138 output tokens. The earlier stripped replay
+instead asks to re-read a file and is not a matched original-context experiment.
+No tool is executed by either replay. A restarted candidate server will test
+the same complete context; no release-policy change follows from this alone.
+
+Reproduction commands (repository root; server runs in the retained exact-image
+container with the read-only policy mount recorded above):
+
+```bash
+python3 models/autoports/google_gemma_4_26b_a4b_it/tools/prepare_eval_weight_control.py \
+  --source models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/selected_precision_config.json \
+  --output models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/eval_speed/weight_control/precision.json
+OMP_NUM_THREADS=8 python -m models.autoports.google_gemma_4_26b_a4b_it.tests.run_datatype_candidate \
+  --config models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/eval_speed/weight_control/precision.json \
+  --output models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/eval_speed/weight_control/readiness.json --repeats 1
+PATH=/home/mvasiljevic/gemma4-eval-speed-evidence/docker_cli:/home/mvasiljevic/.local/bin:$PATH \
+/home/mvasiljevic/gemma4-ttft-inference-server/.venv/bin/python \
+  models/autoports/google_gemma_4_26b_a4b_it/tools/run_local_eval_probe.py \
+  --tti-root /home/mvasiljevic/gemma4-ttft-inference-server \
+  --harbor-python /home/mvasiljevic/gemma4-eval-speed-evidence/harbor_venv/bin/python \
+  --source-config /home/mvasiljevic/gemma4-eval-speed-evidence/local_django_thinking_guard/local_django_thinking_guard_harbor_config.json \
+  --output /home/mvasiljevic/gemma4-eval-speed-evidence/local_django_selected_seed9472 \
+  --task django__django-11299 --seconds 900 --request-seed 9472 \
+  --repetition-detection '{"min_pattern_size":16,"max_pattern_size":1024,"min_count":8}'
+```
+
+Use a fresh output directory for repetitions. The candidate trial uses the same
+last command against the candidate server with output directory
+`local_django_weight_bfp8_seed9472`. Server argv, environment overrides and source
+hashes are retained in `weight_control/server/launch.json` and
+`weight_control/selected_seeded_server/launch.json` under the untracked artifact
+directory. Never run the readiness process concurrently with a device server.

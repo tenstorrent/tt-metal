@@ -1,5 +1,5 @@
 {
-  "status": "experimental_unselected_readiness_pass_seeded_baseline_pending",
+  "status": "experimental_unselected_readiness_pass_seeded_baseline_reward0_ci_pending",
   "image_id": "sha256:ad58effd178b9d8c7689a392159532d30aea0c1fe24bec82c06dbc0d3ebf4bbd",
   "tt_metal_sha": "c9ec3469f1b875e7e5e505660c4421e5126e8dad",
   "policy_sha256": "46389c08f1c99f068669f66e902cc34daf00e54e7c7d8014dc1539b3dd1af954",
@@ -19,5 +19,7 @@
   "outcome_status": "reward1_resolved_but_agent_timeout_900_seconds",
   "outcome": {"reward": 1.0, "resolved": true, "agent_seconds": 900.01963, "required_test_passed": "test_simplecol_query (queries.test_query.TestQuery)", "existing_regression_tests_passed": 103, "verifier_finished_at": "2026-10-01T18:48:18.015749Z"},
   "readiness": {"status": "pass", "reference_sha256": "9b792e83314a35e9619e58434f11f4d3c4b1e1edb9f18d14f1799495ff7c4e69", "input_tokens": 161, "output_tokens": 100, "prefill_top1": 0.96, "decode_top1": 0.98, "top5": 1.0, "top100": 1.0, "trace_verified": true, "warmed_teacher_forcing_tps": 50.33560937909173},
-  "limitations": "No clean submission within900seconds. Selected-policy seeded control still pending. Previous unseeded failed trials are not a paired causal baseline. Readiness is one100-token reference, not broad eval accuracy."
+  "seeded_control": {"artifact_root": "/home/mvasiljevic/gemma4-eval-speed-evidence/local_django_selected_seed9472", "reward": 0.0, "resolved": false, "agent_seconds": 900.007471, "initial_request_sha256_both": "19da7e61b624431d250cb4bc54bcb0e03ae3d18f34e41389c858298ab288435e", "responses_recorded": 43, "repetition_stops": 14, "completion_tokens_recorded": 28787, "late_response_seconds_after_agent_end": 15.295304, "late_response_tokens": 193},
+  "ci": {"run": 36910894168, "job": 110533086359, "runner": "qb2-120-p01t03", "status": "in_progress"},
+  "limitations": "Neither policy submits cleanly within900seconds. Candidate reward1 versus same-host same-seed selected reward0 is one-seed evidence, not a measured clean-completion speedup or population estimate. Cache states differ. Earlier unseeded failures are not paired controls. Readiness is one100-token reference, not broad eval accuracy."
 }
