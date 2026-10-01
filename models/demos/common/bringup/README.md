@@ -83,6 +83,10 @@ Other commands: `$B status`, `$B rerun --from <task>` (resets it and everything 
   `<PREFIX><NAME>` environment variables override it for experiments and A/B reports. The orchestrator fails an agent
   step that reads the environment anywhere else in the model's code (`testing/settings_lint.py`); Z.1 moves anything
   left over. A value a gate checks (`serving.kv_dtype`) lives in the spec.
+- **Precision rule**: component and swap tests always run at maximum precision (each precision switch's
+  `max_precision` value in `tt/settings.py`, applied by `testing/model_precision.py`; switch
+  `tests.component_max_precision`). Shipped precision, lowered by perf picks, is judged end to end by the ladder and
+  the contract tests only.
 - **Forks** (`ttnn/ttnn/bringup`): behaviour comes in as op arguments set from the model's settings; an environment
   knob only for diagnostics, marked `diagnostic` on its line.
 

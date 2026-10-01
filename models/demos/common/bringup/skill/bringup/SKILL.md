@@ -33,7 +33,9 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
   options) is a `Setting` in `models/demos/<model>/tt/settings.py` (core/model_settings.py), with its default and the
   owner decision behind it. Agents add switches only there (the orchestrator lints every agent's changes); the last
   task, Z.1, runs the `settings-audit` agent (a smaller model) to move any that ended up elsewhere. Perf picks name
-  their A/B switch from that file.
+  their A/B switch from that file. Component and swap tests always run at the model's max precision
+  (`max_precision` in that file); a precision drop from a perf pick is accepted on the end-to-end numbers (ladder,
+  contract tests), never judged by component limits.
 - **Retry policy**, only if they want to change it: per role, attempts (default 3) and whether it escalates to
   `ttnn-expert-debugger` (only implement and device fixes do; that agent is for TTNN ops, never CPU code).
 
