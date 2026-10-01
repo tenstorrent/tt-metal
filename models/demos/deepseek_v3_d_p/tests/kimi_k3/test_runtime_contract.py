@@ -114,9 +114,10 @@ def test_the_block_kwargs_that_are_swept_through_are_genuinely_block_level():
     passed = _model_cls_kwargs()
     named = set(inspect.signature(TtKimiK3Transformer.__init__).parameters)
     swept = {k for k in passed if k not in named}
-    # Expert dtypes, the dispatch capacity factor and the routing/semaphore placement are per-block
-    # MoE construction arguments. Anything else appearing here is a model-level knob that has drifted
-    # into the block path and should be named on the transformer instead.
+    # Expert dtypes, the dispatch capacity factor, the routing/semaphore placement and the dispatch and
+    # combine ops are per-block MoE construction arguments. Anything else appearing here is a
+    # model-level knob that has drifted into the block path and should be named on the transformer
+    # instead.
     expected = {
         "dispatch_buffer_capacity_factor",
         "routed_expert_activations_dtype",
@@ -125,6 +126,8 @@ def test_the_block_kwargs_that_are_swept_through_are_genuinely_block_level():
         "shared_expert_weights_dtype",
         "routing_use_l1_small_for_semaphores",
         "overlap_shared_expert_with_dispatch",
+        "dispatch_impl",
+        "combine_impl",
     }
     assert swept == expected, (
         f"the set of kwargs forwarded to TtKimiK3Block changed: +{sorted(swept - expected)} "

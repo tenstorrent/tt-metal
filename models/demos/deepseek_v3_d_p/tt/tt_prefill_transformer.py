@@ -181,6 +181,8 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        dispatch_impl: str = "direct",
+        combine_impl: str = "direct",
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
     ):
@@ -282,6 +284,8 @@ class TtPrefillTransformer(LightweightModule):
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 sparse_kv_cache_format=sparse_kv_cache_format,
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+                dispatch_impl=dispatch_impl,
+                combine_impl=combine_impl,
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
             )

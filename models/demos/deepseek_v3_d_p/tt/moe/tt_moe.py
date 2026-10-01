@@ -24,9 +24,10 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
+from models.demos.deepseek_v3_d_p.tt.moe.fabric2d_contract import check_fabric2d_setup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
-from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, TtCombineModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatch2dModule, TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_latent_proj import TtLatentMoeProjections
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
@@ -43,6 +44,9 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 #   hidden_dim         3072  per-routed-expert FFN intermediate.
 #   shared_hidden_dim  6144  shared-expert FFN intermediate; defaults to hidden_dim.
 
+# Values of TtMoe's dispatch_impl and combine_impl. Keep in sync with _MOE_IMPLS in prefill_runner.py.
+MOE_TRANSPORT_IMPLS = ("direct", "fabric2d")
+
 
 class TtMoe(LightweightModule):
     """
@@ -57,13 +61,13 @@ class TtMoe(LightweightModule):
                                       ↓                        ↓
                                 final = routed_output + shared_output
 
-    Layout Flow:
-        - Dispatch: ROW_MAJOR → ROW_MAJOR
-        - Routed Expert: TILE_LAYOUT → TILE_LAYOUT (convert before/after)
-        - Combine: ROW_MAJOR → ROW_MAJOR
+    Layout Flow (x arrives in TILE_LAYOUT):
+        - Dispatch: TILE_LAYOUT → ROW_MAJOR (bf16 dispatch buffer)
+        - Routed Expert: ROW_MAJOR → TILE_LAYOUT (the op tilizes internally)
+        - Combine: TILE_LAYOUT → ROW_MAJOR
         - Shared Expert: TILE_LAYOUT → TILE_LAYOUT
-        - Split Connection: ROW_MAJOR (elementwise ops)
-        - Final Add: ROW_MAJOR
+        - Split Connection (reduce): ROW_MAJOR → TILE_LAYOUT
+        - Final Add: TILE_LAYOUT
     """
 
     @staticmethod
@@ -230,6 +234,8 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
+        dispatch_impl: str = "direct",
+        combine_impl: str = "direct",
     ):
         """
         Initialize TtMoe module.
@@ -313,6 +319,20 @@ class TtMoe(LightweightModule):
                 both routed-expert ops read a per-core weight slice as one NoC transaction per
                 K-row; interleaved elsewhere. Passed straight through; the cache is placement-
                 agnostic, so this never invalidates one.
+            dispatch_impl: Which op dispatch runs, "direct" (default, TtDispatchModule) or
+                "fabric2d" (TtDispatch2dModule).
+                  "direct": the fabric carries each token straight to its destination chip.
+                  "fabric2d": each chip on the way stores the token in DRAM and passes it on.
+                With overlap_shared_expert_with_dispatch on, "fabric2d" gives dispatch two core rows
+                instead of one, which leaves the shared expert one row fewer.
+            combine_impl: The same choice for combine (TtCombineModule or TtCombine2dModule).
+                Independent of dispatch_impl.
+
+        "fabric2d", for either op, needs a Ring axis-0 topology on a fabric that wraps axis 0, an even
+        axis-0 size of at least 4, metadata_len == 3, and a fabric max payload that fits one
+        routed_emb_dim bf16 token plus 64 B (see fabric2d_packet_bytes). A fabric2d dispatch also needs
+        num_experts_per_tok <= DISPATCH_FABRIC2D_MAX_TOPK. A fabric2d combine needs a dispatch buffer that
+        holds every routed token, until combine_fabric2d clamps overflow tokens.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -342,6 +362,29 @@ class TtMoe(LightweightModule):
             self.row_topology, self.col_topology = topology
         else:
             self.row_topology = self.col_topology = topology
+
+        for name, impl in (("dispatch_impl", dispatch_impl), ("combine_impl", combine_impl)):
+            if impl not in MOE_TRANSPORT_IMPLS:
+                raise ValueError(f"TtMoe: {name} must be one of {MOE_TRANSPORT_IMPLS}, got {impl!r}")
+        self.dispatch_impl = dispatch_impl
+        self.combine_impl = combine_impl
+        self.uses_fabric2d = "fabric2d" in (dispatch_impl, combine_impl)
+        if self.uses_fabric2d:
+            if self.row_topology != ttnn.Topology.Ring:
+                raise ValueError(
+                    f"TtMoe: dispatch_impl/combine_impl 'fabric2d' run a ring on axis 0, but the axis-0 "
+                    f"topology is {self.row_topology}"
+                )
+            if metadata_len != 3:
+                raise ValueError(f"TtMoe: the fabric2d ops write 3 metadata fields per token, got {metadata_len=}")
+            # The wrappers check this too, but they are built after the sub-device manager, which a
+            # failure there would leave registered.
+            check_fabric2d_setup(
+                mesh_device,
+                cluster_axis=0,
+                emb_dim=self.routed_emb_dim,
+                num_experts_per_tok=num_experts_per_tok if dispatch_impl == "fabric2d" else None,
+            )
 
         self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
         # Optional SubDeviceTraceController (capture phase): the shared-expert/dispatch overlap's
@@ -441,7 +484,9 @@ class TtMoe(LightweightModule):
         # sub-device manager is created.
         # ========================================
         if self.overlap_shared_expert_with_dispatch:
-            dispatch_sd_rows = 1
+            # routed_x is TILE, so dispatch_fabric2d untilizes it on row 1, under its senders on row 0
+            # next to the ethernet cores.
+            dispatch_sd_rows = 2 if dispatch_impl == "fabric2d" else 1
             grid = mesh_device.compute_with_storage_grid_size()
             grid_x, grid_y = grid.x, grid.y
             assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
@@ -471,34 +516,64 @@ class TtMoe(LightweightModule):
             logger.debug("Sub-devices disabled: shared expert and dispatch will run sequentially")
 
         # Initialize dispatch module (row axis: axis 0)
-        self.dispatch_module = TtDispatchModule(
-            mesh_device=mesh_device,
-            dispatch_group_size=dispatch_group_size,
-            experts_per_chip=experts_per_chip,
-            num_routed_experts=num_routed_experts,
-            num_experts_per_tok=num_experts_per_tok,
-            metadata_len=metadata_len,
-            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
-            seq_len_per_chip=seq_len_per_chip,
-            emb_dim=self.routed_emb_dim,
-            cluster_axis=0,
-            num_links=self.row_num_links,
-            topology=self.row_topology,
-            subdevice_id=self.dispatch_sd_id,
-        )
+        if dispatch_impl == "fabric2d":
+            self.dispatch_module = TtDispatch2dModule(
+                mesh_device=mesh_device,
+                experts_per_chip=experts_per_chip,
+                num_routed_experts=num_routed_experts,
+                num_experts_per_tok=num_experts_per_tok,
+                max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
+                seq_len_per_chip=seq_len_per_chip,
+                emb_dim=self.routed_emb_dim,
+                cluster_axis=0,
+                num_links=self.row_num_links,
+                subdevice_id=self.dispatch_sd_id,
+            )
+        else:
+            self.dispatch_module = TtDispatchModule(
+                mesh_device=mesh_device,
+                dispatch_group_size=dispatch_group_size,
+                experts_per_chip=experts_per_chip,
+                num_routed_experts=num_routed_experts,
+                num_experts_per_tok=num_experts_per_tok,
+                metadata_len=metadata_len,
+                max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
+                seq_len_per_chip=seq_len_per_chip,
+                emb_dim=self.routed_emb_dim,
+                cluster_axis=0,
+                num_links=self.row_num_links,
+                topology=self.row_topology,
+                subdevice_id=self.dispatch_sd_id,
+            )
 
         # Initialize combine module (row axis: axis 0)
-        self.combine_module = TtCombineModule(
-            mesh_device=mesh_device,
-            dispatch_group_size=dispatch_group_size,
-            num_dispatch_groups=num_dispatch_groups,
-            experts_per_chip=experts_per_chip,
-            num_experts_per_tok=num_experts_per_tok,
-            seq_len_per_chip=seq_len_per_chip,
-            cluster_axis=0,
-            num_links=self.row_num_links,
-            topology=self.row_topology,
-            init_zeros=False,
+        if combine_impl == "fabric2d":
+            self.combine_module = TtCombine2dModule(
+                mesh_device=mesh_device,
+                experts_per_chip=experts_per_chip,
+                num_experts_per_tok=num_experts_per_tok,
+                seq_len_per_chip=seq_len_per_chip,
+                emb_dim=self.routed_emb_dim,
+                cluster_axis=0,
+                num_links=self.row_num_links,
+            )
+        else:
+            self.combine_module = TtCombineModule(
+                mesh_device=mesh_device,
+                dispatch_group_size=dispatch_group_size,
+                num_dispatch_groups=num_dispatch_groups,
+                experts_per_chip=experts_per_chip,
+                num_experts_per_tok=num_experts_per_tok,
+                seq_len_per_chip=seq_len_per_chip,
+                cluster_axis=0,
+                num_links=self.row_num_links,
+                topology=self.row_topology,
+                init_zeros=False,
+            )
+
+        logger.info(
+            f"TtMoe layer {layer_idx}: dispatch {type(self.dispatch_module).__name__}, "
+            f"combine {type(self.combine_module).__name__}"
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
@@ -596,7 +671,16 @@ class TtMoe(LightweightModule):
     def set_trace_controller(self, controller):
         """Attach (or clear with None) a SubDeviceTraceController. While set, the shared-expert/
         dispatch overlap routes its sub-device load/clear through the controller so a ttnn trace can
-        be split at those boundaries (see utils/sub_device_trace.py)."""
+        be split at those boundaries (see utils/sub_device_trace.py).
+
+        Raises ValueError with a fabric2d dispatch or combine, which are not yet safe across launches
+        without host syncs, so cannot be traced. TtPrefillRuntime sets a controller on every traced build,
+        before the first traced forward."""
+        if controller is not None and self.uses_fabric2d:
+            raise ValueError(
+                "TtMoe: dispatch_impl/combine_impl 'fabric2d' cannot be traced: fabric2d dispatch and combine "
+                "are not yet safe across launches without host syncs"
+            )
         self._trace_controller = controller
 
     def release_sub_device_manager(self):
@@ -702,7 +786,7 @@ class TtMoe(LightweightModule):
         Forward pass through the full MoE pipeline.
 
         Args:
-            x: Input tensor - ROW_MAJOR, sharded:
+            x: Input tensor - TILE_LAYOUT, sharded:
                - For 2D mesh: sharded dims=(0, -1) - dim 0 across axis 0, dim -1 across axis 1
                - Shape per device: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
             return_intermediates: If True, return intermediate tensors for debugging
@@ -802,11 +886,18 @@ class TtMoe(LightweightModule):
 
         self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = self.routing_setup(
+        routing = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
             num_experts_per_tok=self.num_experts_per_tok,
         )
+        # This chip's offsets, which only the direct dispatch reads.
+        tt_expert_offsets = routing.global_dispatch_offsets if self.dispatch_impl == "direct" else None
+        tt_expert_token_counts = routing.total_counts_per_expert
+        tt_expert_region_offsets = routing.expert_region_offsets
+        # The offsets of every chip in the dispatch group. Only the fabric2d ops read them.
+        all_expert_offsets = routing.all_global_dispatch_offsets if self.uses_fabric2d else None
+        del routing  # frees the outputs nothing below reads
 
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
@@ -868,6 +959,12 @@ class TtMoe(LightweightModule):
         if self.use_latent_moe and DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] routed_x (latent) shape: {routed_x.shape}")
 
+        if self.dispatch_impl == "fabric2d":
+            # dispatch_fabric2d reads indices from DRAM. Copy them here, outside the sub-device window,
+            # so the copy uses the whole grid; the later to_memory_config(indices, DRAM) then returns
+            # the same tensor.
+            indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
+
         ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_start`")
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
@@ -882,14 +979,25 @@ class TtMoe(LightweightModule):
         # all-gathered latent under LatentMoE (routed_x is x itself when there is no latent space).
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] {routed_x.shape=} {routed_x.memory_config()=}")
-        dispatched_buffer, metadata = self.dispatch_module(
-            routed_x,
-            scores,
-            indices,
-            tt_expert_offsets,
-            self.tt_expert_dispatch_table,
-            padding_config=padding_config,
-        )
+        if self.dispatch_impl == "fabric2d":
+            dispatched_buffer, metadata = self.dispatch_module(
+                routed_x,
+                indices,
+                expert_dispatch_table=self.tt_expert_dispatch_table,
+                expert_token_counts=tt_expert_token_counts,
+                expert_region_offsets=tt_expert_region_offsets,
+                all_expert_offsets=all_expert_offsets,
+                padding_config=padding_config,
+            )
+        else:
+            dispatched_buffer, metadata = self.dispatch_module(
+                routed_x,
+                scores,
+                indices,
+                tt_expert_offsets,
+                self.tt_expert_dispatch_table,
+                padding_config=padding_config,
+            )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(
                 f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}"
@@ -932,6 +1040,9 @@ class TtMoe(LightweightModule):
         else:
             routed_x = ttnn.deallocate(routed_x, force=True)
         x = ttnn.deallocate(x, force=True)
+        # Free it now if combine does not read it; otherwise it is freed after combine below.
+        if self.dispatch_impl == "fabric2d" and self.combine_impl != "fabric2d":
+            all_expert_offsets = ttnn.deallocate(all_expert_offsets)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -969,12 +1080,22 @@ class TtMoe(LightweightModule):
         # Step 4: Combine (enabled)
         # ========================================
         # Combine expects TILE_LAYOUT input
-        combined_output = self.combine_module(
-            expert_outputs,
-            metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-        )
+        if self.combine_impl == "fabric2d":
+            combined_output = self.combine_module(
+                expert_outputs,
+                metadata,
+                expert_token_counts=tt_expert_token_counts,
+                expert_region_offsets=tt_expert_region_offsets,
+                all_expert_offsets=all_expert_offsets,
+            )
+            all_expert_offsets = ttnn.deallocate(all_expert_offsets)
+        else:
+            combined_output = self.combine_module(
+                expert_outputs,
+                metadata,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+            )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
 

@@ -273,6 +273,8 @@ class KimiK3Adapter(MLAPrefillAdapter):
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
+            dispatch_impl=params.dispatch_impl,
+            combine_impl=params.combine_impl,
         )
         return TtKimiK3Runtime(
             mesh_device=mesh_device,

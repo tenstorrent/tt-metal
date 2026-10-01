@@ -103,12 +103,27 @@ if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
+# Which ops the MoE layers dispatch and combine with. Temporary, for comparing the two; removed when
+# the default changes.
+# A copy of tt_moe.MOE_TRANSPORT_IMPLS, because this generic runner must not import DeepSeek MoE code.
+_MOE_IMPLS = ("direct", "fabric2d")
+MOE_DISPATCH_IMPL = os.environ.get("PREFILL_MOE_DISPATCH", "direct").strip().lower()
+MOE_COMBINE_IMPL = os.environ.get("PREFILL_MOE_COMBINE", "direct").strip().lower()
+for _var, _impl in (("PREFILL_MOE_DISPATCH", MOE_DISPATCH_IMPL), ("PREFILL_MOE_COMBINE", MOE_COMBINE_IMPL)):
+    if _impl not in _MOE_IMPLS:
+        raise ValueError(f"{_var} must be one of {_MOE_IMPLS}, got {_impl!r}")
+MOE_FABRIC2D = "fabric2d" in (MOE_DISPATCH_IMPL, MOE_COMBINE_IMPL)
 
 assert not (MTP_LEVELS and USE_TRACE), (
     "PREFILL_MTP_LEVELS>0 is incompatible with PREFILL_USE_TRACE=1: the MTP levels are not "
     "trace-captured. Run MTP with PREFILL_USE_TRACE=0."
 )
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
+# TtMoe refuses a trace controller too; this fails before the mesh opens.
+assert not (MOE_FABRIC2D and USE_TRACE), (
+    "PREFILL_MOE_DISPATCH/PREFILL_MOE_COMBINE=fabric2d is incompatible with PREFILL_USE_TRACE=1: fabric2d "
+    "dispatch and combine are not yet safe across launches without host syncs. Run with PREFILL_USE_TRACE=0."
+)
 
 # DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
 # the tap fires from inside the verifier forward, so trace capture is what the wiring is built and
@@ -501,6 +516,8 @@ def _print_config() -> None:
         ),
         ("PREFILL_MTP_LEVELS", f"{MTP_LEVELS} (adapter.supports_mtp={ADAPTER.supports_mtp})"),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
+        ("PREFILL_MOE_DISPATCH", MOE_DISPATCH_IMPL),
+        ("PREFILL_MOE_COMBINE", MOE_COMBINE_IMPL),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -543,6 +560,8 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "mesh_shape": GLOBAL_MESH_SHAPE,
         "mtp_levels": MTP_LEVELS,
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
+        "moe_dispatch": MOE_DISPATCH_IMPL,
+        "moe_combine": MOE_COMBINE_IMPL,
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -584,7 +603,11 @@ def main() -> None:
     )
 
     mesh_device = open_mesh_device(
-        GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE
+        GLOBAL_MESH_SHAPE,
+        MODEL_CFG,
+        l1_small_size=_L1_SMALL_SIZE,
+        trace_region_size=_TRACE_REGION_SIZE,
+        moe_fabric2d=MOE_FABRIC2D,
     )
 
     hf_config = ADAPTER.load_hf_config()
@@ -611,6 +634,8 @@ def main() -> None:
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",
+        dispatch_impl=MOE_DISPATCH_IMPL,
+        combine_impl=MOE_COMBINE_IMPL,
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
