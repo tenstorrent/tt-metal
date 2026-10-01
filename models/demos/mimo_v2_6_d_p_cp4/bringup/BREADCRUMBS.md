@@ -355,3 +355,24 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Reference: PCC 0.998186, overlap 0.99573, matched 1978/2048, rel L2 0.00154, row sums 1.0. Stub: PCC 0, fails.
 - Device gate: already PASSES with the existing `tt/router.py` registration: pcc_router_L05 0.998111, overlap 0.99536, matched 1973/2048, rel L2 0.00107, row sums [0.9976, 1.0023]. The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_router.py` (or with BRINGUP_IMPL=reference|stub).
+
+## C.full_moe.experts.test.1 (test review)
+- Replaced the rendered one-liner with the cp4 `test_c_sliding_moe_experts.py` body, set to layer 5. The docstring is the prior bring-up's frozen full_moe experts review, which covers the same golden and reference: bf16 x is required because of outlier channels, there are tiny routing weights, and the mutation study.
+- Limits are unchanged from the prior test and the cp4 layer-1 test:
+  - PCC >= 0.99 (gated).
+  - Finite output.
+  - rel L2 <= 0.03.
+  - Per-token norm ratio [0.97, 1.03].
+  - Worst row rel L2 <= 0.1.
+  - rel L2 per CP slice <= 0.03.
+  - Deferred / CPU-bridge guards.
+- Host-only CPU check on the golden (script not kept), whole-chunk rel / per-slice rel:
+  - Slices 1 and 2 swapped: 0.97 / 1.48, 1.30.
+  - Slice 3 zeroed: 0.55 / 1.0.
+  - Slice 3 x1.05: 0.0275 / 0.050. It passes the whole-chunk rel and is caught by the slice and ratio checks.
+- Results:
+  - Reference: PASS (pcc 0.999987, rel 0.0050, slices 0.0047-0.0057).
+  - Stub: FAIL (pcc 0).
+  - Device gate (existing experts registration): PASS. pcc 0.999974, rel 0.0073, ratio [0.9859, 1.0208], worst row 0.021 (row 12), slices 0.0069-0.0079.
+- The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_experts.py`
