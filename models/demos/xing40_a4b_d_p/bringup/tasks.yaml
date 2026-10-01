@@ -2075,3 +2075,27 @@ tasks:
       state_bits_kv_latent: == 8
       contract_tests_failed: == 0
   device: true
+- id: L.smoke
+  title: 'Intake smoke on the device model: R.1''s prompt, greedy, the expected answer'
+  step: integrate
+  deps:
+  - L.s56320
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_smoke.py
+    metrics:
+      smoke_device_ok: == 1
+  device: true
+  paths: *id003
+- id: K.4
+  title: 'Runner smoke: real runner, KV through the table to the migration boundary, stand-in decode'
+  step: contract
+  role: contract
+  deps:
+  - L.smoke
+  - K.3
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/xing40_a4b_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      smoke_runner_ok: == 1
+  device: true
+  paths: *id005

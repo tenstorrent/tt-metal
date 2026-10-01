@@ -17,6 +17,8 @@ decode (serving_contract.md, "Adapter and table").
    [cap, prompt_len) recomputed on top as one chunk at start=cap (as decode recomputes its last block), final_norm +
    logits at the last position, greedy. Each new token is appended and the tail recomputed, until EOS or 8 tokens.
 Pass: the table has the geometry tables.py knows, and the decoded answer contains `intake.smoke.expect` ("Paris").
+Records metric smoke_runner_ok and `<results>/<task>_runner_smoke.json` (prompt, expected, answer, token ids, ok,
+seconds, mode "runner", prompt_len, boundary, records) for the dashboard's "Final tests" section.
 Fail fast: test_runner_contract.run_child (bounded waits, process-group kill). The precompile pass of
 run_safe_pytest (UP_FRONT_COLLECT=1) skips the body: the parent opens the mesh for step 3 and must not hold the chips
 while a runner subprocess wants them.
@@ -178,6 +180,7 @@ def test_runner_smoke(tmp_path):
     d = kvc.load_dump(str(out / "final"), slot=0, chunk_bytes=cbytes)
     layers = list(range(R.NUM_LAYERS))
     migrated = {}
+    records = len(layers) * cap // R.RECORD_TOKENS
     for layer in layers:
         kv = kvc.reassemble(d, layer, 0, cap, **gk)
         assert kv.shape == (cap, R.MLA_WIDTH), f"layer {layer}: migrated KV {kv.shape}, expected ({cap}, {R.MLA_WIDTH})"
@@ -185,7 +188,7 @@ def test_runner_smoke(tmp_path):
             pytest.fail(f"layer {layer}: migrated KV [0, {cap}) has non-finite values", pytrace=False)
         migrated[layer] = torch.from_numpy(np.ascontiguousarray(kv, dtype=np.float32))
     log(
-        f"KV read: {len(layers) * cap // R.RECORD_TOKENS} records ({cap // R.RECORD_TOKENS} per layer x {len(layers)} "
+        f"KV read: {records} records ({cap // R.RECORD_TOKENS} per layer x {len(layers)} "
         f"layers, {geom['dtype']} {geom['storage']}, {cbytes} B each) = [0, {cap}) of every layer"
     )
     if tfails:
@@ -224,5 +227,22 @@ def test_runner_smoke(tmp_path):
     log(
         f"answer {text!r} (expect {expect!r}): {'ok' if ok else 'FAIL'}; prompt_len {n}, boundary {cap}, "
         f"total {time.time() - t_all:.0f} s"
+    )
+    from models.demos.common.bringup.core import metrics
+    from models.demos.common.bringup.testing.smoke import record_answer
+
+    metrics.record("smoke_runner_ok", int(ok))
+    record_answer(
+        "runner_smoke",
+        "runner",
+        S,
+        text,
+        out_ids,
+        ok,
+        time.time() - t_all,
+        prompt_len=n,
+        boundary=cap,
+        records=records,
+        prompt_variant=what,
     )
     assert ok, f"decoded answer {text!r} does not contain {expect!r} (prompt_len {n}, migrated [0, {cap}))"
