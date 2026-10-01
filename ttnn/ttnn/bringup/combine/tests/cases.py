@@ -197,4 +197,38 @@ CASES = [
         "seed": 0,
         "exact": True,
     },
+    {
+        # MiMo-V2.6 CP=4 on a 1x4 mesh: routed experts EP=4 as ONE combine group of 4 chips along mesh axis 1
+        # (allow_cluster_axis_1, fabric on, Linear, 2 links); the expert-output buffer is bf16
+        # (unified_routed_expert_moe high_precision); each chip gets back its own 1280-token slice.
+        "id": "mimo_v2_6_d_p_cp4-1x4-axis1-dgs4-s1280-h4096-e256-k8",
+        "model": "mimo_v2_6_d_p_cp4",
+        "task": "O.1",
+        "sig": "a8dff2b514",
+        "mesh": [1, 4],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "seq_len_per_chip": 1280,
+        "emb_dim": 4096,
+        "num_routed_experts": 256,  # counts / regions are [1, 256] (global expert ids)
+        "num_experts_per_tok": 8,
+        "experts_per_chip": 64,
+        "dispatch_group_size": 4,
+        "max_dispatch_buffer_token_size": 42976,
+        "metadata_len": 3,
+        # buffer [1, 1, 42976, 4096] BFLOAT16 TILE; metadata [1, 1, 42976, 3] INT32 ROW_MAJOR;
+        # counts, regions [1, 256] UINT32 ROW_MAJOR; all DRAM interleaved
+        "buffer": {"dtype": "BFLOAT16", "layout": "TILE"},
+        "metadata": {"dtype": "INT32", "layout": "ROW_MAJOR"},
+        "counts": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "regions": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "cluster_axis": 1,
+        "allow_cluster_axis_1": True,
+        "num_links": 2,
+        "topology": "Linear",
+        "memory_config": "DRAM",
+        "init_zeros": True,
+        "use_fp8_combine": False,
+        "seed": 0,
+        "exact": True,
+    },
 ]

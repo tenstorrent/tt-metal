@@ -130,3 +130,10 @@
   when `program_config.inplace` is set; the Python path refuses it. `test_refuses_memory_config_disagreeing_under_inplace`
   failed on it and is skipped until `validate()` in `rms_norm_ttnn.cpp` gets the same check. No model passes
   `inplace` with a disagreeing `memory_config`, so no bring-up result is affected.
+
+### Tests: mimo_v2_6_d_p_cp4 case
+- What: appended the random-input case(s) for the call(s) mimo_v2_6_d_p_cp4 makes (1x4 mesh; two calls: plain and fused residual sum, [1, 1, 1280, 4096] bf16 per chip, HiFi4 + fp32 dest). No op change, no
+  test-file change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: mimo_v2_6_d_p_cp4 O.1
+- Files: `tests/cases.py`

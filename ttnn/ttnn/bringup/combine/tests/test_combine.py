@@ -145,6 +145,82 @@ def _combine_groups(mesh_device, c):
         assert not bad.any(), f"dev {d}: {int(bad.sum())}/{S * K} (token, slot) rows differ"
 
 
+def _combine_axis1(mesh_device, c):
+    """One combine group of all the devices of a 1-row mesh along cluster_axis 1 (allow_cluster_axis_1, fabric on;
+    mimo_v2_6_d_p_cp4). Chip j holds the expert outputs of experts j*epc .. (j+1)*epc - 1 for the tokens of every
+    source chip r (metadata [r, t, k] as dispatch leaves it; counts / regions the group's, the same on every chip);
+    combine sends each row back to chip r at (t, k). With init_zeros and every expert in the group, every (token, slot)
+    is routed; the whole output of every chip is compared exactly."""
+    rows, cols = c["mesh"]
+    assert rows == 1 and c["cluster_axis"] == 1 and c["dispatch_group_size"] == cols and c["allow_cluster_axis_1"]
+    assert c["init_zeros"]
+    S, H, E, K, epc = (
+        c["seq_len_per_chip"],
+        c["emb_dim"],
+        c["num_routed_experts"],
+        c["num_experts_per_tok"],
+        c["experts_per_chip"],
+    )
+    assert E == epc * cols
+    N = c["max_dispatch_buffer_token_size"]
+    g = torch.Generator().manual_seed(c["seed"])
+
+    buf = torch.randn(cols, 1, N, H, generator=g).to(torch.bfloat16)
+    idx = torch.stack([ref.random_topk(S, E, K, g) for _ in range(cols)])  # [cols, S, K]
+    table = ref.dispatch_table_groups(E, cols, 1)[0]
+    offs, totals, regions = ref.group_routing(idx, table, epc)
+    metas = torch.full((cols, 1, N, 3), -1, dtype=torch.int32)
+    back = [[] for _ in range(cols)]  # per source chip: (t, k, holding chip, row)
+    for j in range(cols):
+        for src, (t, k, e, row) in enumerate(ref.group_slots(idx, table, offs, j)):
+            assert int(row.max()) < N
+            metas[j, 0, row, 0] = src
+            metas[j, 0, row, 1] = t.to(torch.int32)
+            metas[j, 0, row, 2] = k.to(torch.int32)
+            back[src].append((t, k, j, row))
+    rep = lambda v: v.unsqueeze(0).expand(cols, -1).contiguous().to(torch.int32)
+    tt_buf = _to_devices(mesh_device, buf, c["buffer"])
+    if c["buffer"]["dtype"] != "BFLOAT16":
+        buf = torch.stack([ttnn.to_torch(t).reshape(1, N, H) for t in ttnn.get_device_tensors(tt_buf)]).to(
+            torch.bfloat16
+        )
+    tt_meta = _to_devices(mesh_device, metas, c["metadata"])
+    tt_cnt = _to_devices(mesh_device, rep(totals), c["counts"])
+    tt_reg = _to_devices(mesh_device, rep(regions), c["regions"])
+
+    out = ttnn.bringup.combine(
+        tt_buf,
+        tt_meta,
+        tt_cnt,
+        tt_reg,
+        dispatch_group_size=c["dispatch_group_size"],
+        experts_per_chip=epc,
+        num_experts_per_tok=K,
+        seq_len_per_chip=S,
+        cluster_axis=c["cluster_axis"],
+        num_links=c["num_links"],
+        topology=getattr(ttnn.Topology, c["topology"]),
+        memory_config=_mem(c["memory_config"]),
+        init_zeros=c["init_zeros"],
+        use_fp8_combine=c["use_fp8_combine"],
+        allow_cluster_axis_1=True,
+    )
+    outs = ttnn.get_device_tensors(out)
+    assert len(outs) == cols
+    for r, dt in enumerate(outs):
+        got = ttnn.to_torch(dt)
+        assert tuple(got.shape) == (1, 1, S, K, H), got.shape
+        want = torch.zeros(S, K, H, dtype=torch.bfloat16)
+        n = 0
+        for t, k, j, row in back[r]:
+            want[t, k] = buf[j, 0, row]
+            n += t.numel()
+        assert n == S * K, f"chip {r}: {n} routed (token, slot) rows, want {S * K}"
+        bad = (got.reshape(S, K, H) != want).any(dim=-1)
+        assert not bad.any(), f"chip {r}: {int(bad.sum())}/{S * K} (token, slot) rows differ"
+        print(f"chip {r}: {n} routed (token, slot) rows exact")
+
+
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
     "mesh_device, device_params, case",
@@ -154,6 +230,8 @@ def _combine_groups(mesh_device, c):
 )
 def test_combine(mesh_device, device_params, case):
     c = case
+    if c["cluster_axis"] == 1:
+        return _combine_axis1(mesh_device, c)
     if c["dispatch_group_size"] > 1:
         return _combine_groups(mesh_device, c)
     rows, cols = c["mesh"]

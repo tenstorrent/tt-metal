@@ -133,6 +133,71 @@ def _dispatch_groups(mesh_device, c):
         print(f"dev {d}: {n_rows} dispatched rows exact")
 
 
+def _dispatch_axis1(mesh_device, c):
+    """One dispatch group of all the devices of a 1-row mesh along cluster_axis 1 (allow_cluster_axis_1, fabric on;
+    mimo_v2_6_d_p_cp4). Chip j holds experts j*epc .. (j+1)*epc - 1; source chip r sends each (token, slot) to the chip
+    of its expert. Every row a chip receives from any source is compared exactly (metadata [r, t, k]: on a 1-row mesh
+    the source's linearized coordinate is its column r), and every (token, slot) of every source lands somewhere."""
+    rows, cols = c["mesh"]
+    assert rows == 1 and c["cluster_axis"] == 1 and c["dispatch_group_size"] == cols and c["allow_cluster_axis_1"]
+    S, H, E, K, epc = (
+        c["seq_len_per_chip"],
+        c["emb_dim"],
+        c["num_routed_experts"],
+        c["num_experts_per_tok"],
+        c["experts_per_chip"],
+    )
+    assert E == epc * cols
+    N = c["max_dispatch_buffer_token_size"]
+    g = torch.Generator().manual_seed(c["seed"])
+
+    x = torch.randn(cols, S, H, generator=g).to(torch.bfloat16)
+    idx = torch.stack([ref.random_topk(S, E, K, g) for _ in range(cols)])  # [cols, S, K]
+    table = ref.dispatch_table_groups(E, cols, 1)[0]  # [E + 1]: expert e -> chip e // epc (one group)
+    offs = ref.group_routing(idx, table, epc)[0]  # offset_cumsum over the group: [cols, E]
+
+    tt_x = _to_devices(mesh_device, x, c["input"])
+    tt_idx = _to_devices(mesh_device, idx.to(torch.int32), c["indices"])
+    tt_off = _to_devices(mesh_device, offs.to(torch.int32), c["offsets"])
+    tt_tab = _to_devices(mesh_device, table.unsqueeze(0).expand(cols, -1).contiguous(), c["table"])
+
+    buf, meta = ttnn.bringup.dispatch(
+        input_tensor=tt_x,
+        indices_tensor=tt_idx,
+        expert_offsets_tensor=tt_off,
+        expert_dispatch_table_tensor=tt_tab,
+        dispatch_group_size=c["dispatch_group_size"],
+        experts_per_chip=epc,
+        num_routed_experts=E,
+        num_experts_per_tok=K,
+        metadata_len=c["metadata_len"],
+        max_dispatch_buffer_token_size=N,
+        cluster_axis=c["cluster_axis"],
+        num_links=c["num_links"],
+        topology=getattr(ttnn.Topology, c["topology"]),
+        fp8_output=c["fp8_output"],
+        subdevice_id=c["subdevice_id"],
+        num_workers_per_sender=c["num_workers_per_sender"],
+        allow_cluster_axis_1=True,
+    )
+    bufs, metas = _per_device(buf), _per_device(meta)
+    assert len(bufs) == cols
+    total = 0
+    for j in range(cols):
+        b = bufs[j].reshape(N, H)
+        m = metas[j].reshape(N, c["metadata_len"]).to(torch.int64)
+        for src, (t, k, e, row) in enumerate(ref.group_slots(idx, table, offs, j)):
+            assert row.numel() > 0 and int(row.max()) < N
+            total += row.numel()
+            want_m = torch.stack([torch.full_like(t, src), t, k], dim=1)
+            bad_m = (m[row, :3] != want_m).any(dim=1)
+            assert not bad_m.any(), f"chip {j} from {src}: {int(bad_m.sum())}/{row.numel()} metadata rows differ"
+            bad_b = (b[row] != x[src][t]).any(dim=1)
+            assert not bad_b.any(), f"chip {j} from {src}: {int(bad_b.sum())}/{row.numel()} buffer rows differ"
+    assert total == cols * S * K, f"{total} dispatched rows, want {cols * S * K}"
+    print(f"{total} dispatched rows exact")
+
+
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
     "mesh_device, device_params, case",
@@ -142,6 +207,8 @@ def _dispatch_groups(mesh_device, c):
 )
 def test_dispatch(mesh_device, device_params, case):
     c = case
+    if c["cluster_axis"] == 1:
+        return _dispatch_axis1(mesh_device, c)
     if c["dispatch_group_size"] > 1:
         return _dispatch_groups(mesh_device, c)
     rows, cols = c["mesh"]

@@ -61,3 +61,12 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   S 1280 / H 4096; also checks that the default still refuses axis 1)
 - Regression with the option off: the model cases in `tests/test_dispatch.py` 6/6 pass; `fork_source`: 82 tests,
   0 regressions vs the baseline.
+
+### Tests: mimo_v2_6_d_p_cp4 case (dispatch group along axis 1)
+- What: appended the random-input case for the call mimo_v2_6_d_p_cp4 makes (1x4 mesh, one dispatch group of 4 chips
+  on cluster_axis 1 with `allow_cluster_axis_1`, 2 links, S 1280 per chip, H 4096, 256 experts top-8, 64 per chip),
+  and `_dispatch_axis1` in `tests/test_dispatch.py` for cases with `cluster_axis == 1` (every received row exact).
+  Other cases run unchanged. No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: mimo_v2_6_d_p_cp4 O.1
+- Files: `tests/cases.py`, `tests/test_dispatch.py`

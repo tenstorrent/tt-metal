@@ -293,4 +293,61 @@ CASES = [
         "atol": 0.002,
         "rtol": 0.006,
     },
+    {
+        # MiMo-V2.6 CP=4 input RMSNorm (layer 0) on a chip's 1280-token slice of a 5120-token chunk, 1x4 mesh.
+        "id": "mimo_v2_6_d_p_cp4-1x4-s1280-h4096-bf16-w-eps1e-6",
+        "model": "mimo_v2_6_d_p_cp4",
+        "task": "O.1",
+        "sig": "2ebfc0dd96",
+        "mesh": [1, 4],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        # input [1, 1, 1280, 4096] bf16 TILE DRAM interleaved (per device)
+        "input": {"shape": [1, 1, 1280, 4096], "dtype": "BFLOAT16", "layout": "TILE"},
+        # weight [1, 1, 1, 4096] bf16 TILE DRAM interleaved
+        "weight": {"shape": [1, 1, 1, 4096], "dtype": "BFLOAT16", "layout": "TILE"},
+        "epsilon": 1e-06,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "seed": 0,
+        # measured (seed 0, 4 devices): pcc 0.9999986, max abs err 0.037, max rel err 0.0046; limits as the 5120-token
+        # mimo_v2_6_d_p case (atol 0.005 + rtol 0.008), 0 elements outside them
+        "pcc": 0.9999,
+        "atol": 0.005,
+        "rtol": 0.008,
+    },
+    {
+        # MiMo-V2.6 CP=4 fused residual add + RMSNorm on a chip's 1280-token slice, 1x4 mesh: t = x + residual is
+        # returned too (return_residual_sum), both DRAM interleaved.
+        "id": "mimo_v2_6_d_p_cp4-1x4-s1280-h4096-bf16-w-res-sum-eps1e-6",
+        "model": "mimo_v2_6_d_p_cp4",
+        "task": "O.1",
+        "sig": "ace7ff0b33",
+        "mesh": [1, 4],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        # input and residual_input_tensor [1, 1, 1280, 4096] bf16 TILE DRAM interleaved (per device)
+        "input": {"shape": [1, 1, 1280, 4096], "dtype": "BFLOAT16", "layout": "TILE"},
+        "residual": {"shape": [1, 1, 1280, 4096], "dtype": "BFLOAT16", "layout": "TILE"},
+        # weight [1, 1, 1, 4096] bf16 TILE DRAM interleaved
+        "weight": {"shape": [1, 1, 1, 4096], "dtype": "BFLOAT16", "layout": "TILE"},
+        "return_residual_sum": True,  # residual_sum_memory_config = DRAM interleaved
+        "epsilon": 1e-06,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "seed": 1,
+        # measured (seed 1, 4 devices): pcc 0.9999973, max abs err 0.048, max rel err 0.0085; limits as the
+        # 5120-token mimo_v2_6_d_p case (atol 0.005 + rtol 0.012); t bit-exact vs ttnn.add
+        "pcc": 0.9999,
+        "atol": 0.005,
+        "rtol": 0.012,
+    },
 ]

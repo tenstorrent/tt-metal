@@ -59,3 +59,12 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   (1x4 FABRIC_2D, every (token, slot) of every chip exact, TILE bf16 buffer, at S 256 / H 1024 and S 1280 / H 4096;
   also checks that the default still refuses axis 1)
 - Regression with the option off: the model cases in `tests/test_combine.py` 6/6 pass; `fork_source`: 117 tests, 0 regressions vs the baseline.
+
+### Tests: mimo_v2_6_d_p_cp4 case (combine group along axis 1)
+- What: appended the random-input case for the call mimo_v2_6_d_p_cp4 makes (1x4 mesh, one combine group of 4 chips
+  on cluster_axis 1 with `allow_cluster_axis_1`, 2 links, S 1280 per chip, H 4096, bf16 buffer, 256 experts top-8),
+  and `_combine_axis1` in `tests/test_combine.py` for cases with `cluster_axis == 1` (whole output exact).
+  Other cases run unchanged. No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: mimo_v2_6_d_p_cp4 O.1
+- Files: `tests/cases.py`, `tests/test_combine.py`

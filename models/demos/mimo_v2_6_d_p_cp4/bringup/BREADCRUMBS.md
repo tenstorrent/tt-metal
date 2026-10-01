@@ -491,3 +491,24 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gotcha: `results/P.2.json` and `results/P.2_profile.json` are written only for the orchestrator's run. A manual run's profile (with `ops`) lands in `/home/sjovic/bringup/mimo_v2_6_d_p_cp4/profiles/P.2_<time>.json`.
 - Not tried (left for later): a smaller dispatch capacity factor or per-expert cap, fp8 dispatch, and unified-op program configs.
 - Re-run (old behaviour: `MIMO_MOE_LINKS=1`): `PYTHONPATH=$PWD TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py` (add `BRINGUP_PROFILE_OPS=1` for per-op rows).
+
+## O.1 optests (attempt 1)
+- Done: one random-input case per captured fork call (6 calls, 5 forks), all `model: mimo_v2_6_d_p_cp4`, appended to each fork's `tests/cases.py`:
+  - dispatch `0c4990cfa8`, combine `a8dff2b514`: one 4-chip group on cluster_axis 1 (`allow_cluster_axis_1`), 2 links, S 1280, H 4096, E 256, top-8, N 42976. Exact check.
+  - offset_cumsum `27df03adca`: cluster_axis 1, 2 links, all experts in the group. Exact check.
+  - rms_norm `2ebfc0dd96` (plain) and `ace7ff0b33` (fused residual sum): [1, 1, 1280, 4096] bf16, HiFi4 + fp32 dest.
+  - unified_routed_expert_moe `31daae9fc6`: the same call as mimo_v2_6_d_p's case. Needs its own case because the checker matches model + sig. Uses seed 1.
+- Test-file change:
+  - Added `_dispatch_axis1` to `dispatch/tests/test_dispatch.py` and `_combine_axis1` to `combine/tests/test_combine.py`, used when `cluster_axis == 1`.
+  - The existing paths only handled axis-0 groups.
+  - Other models' cases are untouched.
+- Measured:
+  - rms plain: pcc 0.9999986, max rel 0.0046.
+  - rms res-sum: pcc 0.9999973, max rel 0.0085.
+  - URE: pcc 0.999996, rel 0.00304 per chip.
+  - dispatch: 40960 rows exact.
+  - combine: 10240 (token, slot) rows exact per chip.
+- Can-fail check: I corrupted temporary copies of the test files by hand (one dispatch buffer row x1.01, one combine output row zeroed). Both failed. The copies are deleted.
+- Fork CHANGELOGs have a "Tests: mimo_v2_6_d_p_cp4 case" entry.
+- Gate: 39 passed, `{"forks_used": 5, "fork_calls": 6, "fork_calls_uncovered": 0, "fork_tests_failed": 0}`.
+- Re-run: `BRINGUP_CAPTURE_FORKS=models/demos/mimo_v2_6_d_p_cp4/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/mimo_v2_6_d_p_cp4/bringup/results/fork_calls.json --run-tests`

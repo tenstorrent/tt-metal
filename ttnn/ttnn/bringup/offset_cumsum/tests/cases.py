@@ -131,4 +131,25 @@ CASES = [
         "seed": 1,
         "exact": True,
     },
+    {
+        # MiMo-V2.6 CP=4 on a 1x4 mesh: cluster_axis 1 has 4 devices, so the whole mesh is one dispatch group
+        # (histograms all_gathered over the 4 chips, fabric on, 2 links); every expert lives in the group.
+        "id": "mimo_v2_6_d_p_cp4-1x4-axis1-e256-epc64",
+        "model": "mimo_v2_6_d_p_cp4",
+        "task": "O.1",
+        "sig": "27df03adca",
+        "mesh": [1, 4],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "hist_shape": [256],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
+        "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        # A device's 1280 tokens x top-8 over all 256 experts (every expert is in the group); any count is exact.
+        "max_count": 1280,
+        "local_experts_only": False,
+        "cluster_axis": 1,
+        "num_links": 2,
+        "experts_per_chip": 64,
+        "memory_config": "DRAM",
+        "seed": 0,
+        "exact": True,
+    },
 ]

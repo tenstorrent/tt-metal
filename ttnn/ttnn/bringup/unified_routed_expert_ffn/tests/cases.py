@@ -200,4 +200,42 @@ CASES = [
         "pcc": 0.9999,
         "rel": 0.008,
     },
+    {
+        # MiMo-V2.6 CP=4 routed experts (SwiGLU) on a 1x4 mesh: 64 local experts per chip, bfp8 weights, HiFi4,
+        # high_precision. The call is the same as mimo_v2_6_d_p's (same sig): here the buffer a chip gets holds the
+        # rows of the 4 chips' 1280-token slices (one dispatch group on axis 1), 5120 tokens x top-8 in all, so the
+        # routing is drawn from 5120 random top-8 ids per chip, as in that case.
+        "id": "mimo_v2_6_d_p_cp4-1x4-silu-hp-hifi4-h4096-i2048-epc64",
+        "model": "mimo_v2_6_d_p_cp4",
+        "task": "O.1",
+        "sig": "31daae9fc6",
+        "mesh": [1, 4],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        # dispatched buffer [42976, 4096] BFLOAT16 ROW_MAJOR; regions / counts [1, 256] UINT32 ROW_MAJOR;
+        # global_expert_idx_table [64] UINT32 ROW_MAJOR; all DRAM interleaved
+        "buffer_rows": 42976,
+        "emb_dim": 4096,
+        "hidden_dim": 2048,
+        "num_routed_experts": 256,
+        "experts_per_chip": 64,
+        "seq_len_per_chip": 5120,
+        "num_experts_per_tok": 8,
+        "buffer": {"dtype": "BFLOAT16", "layout": "ROW_MAJOR"},
+        "weights": {"dtype": "BFLOAT8_B", "layout": "TILE"},  # gate/up [4096, 2048], down [2048, 4096] per expert
+        "max_dispatched_tokens_per_expert": 8192,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": True,
+            "dst_full_sync_en": False,
+        },
+        "activation": "Silu",
+        "high_precision": True,
+        "seed": 1,
+        # x ~ N(0, 1), weights ~ N(0, 1/fan_in). Measured (seed 1, 4 chips, 10101-10226 routed rows each): PCC
+        # 0.999996, rel Frobenius error 0.00304 on every chip; limits as the mimo_v2_6_d_p case.
+        "pcc": 0.9999,
+        "rel": 0.008,
+    },
 ]
