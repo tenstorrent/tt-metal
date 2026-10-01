@@ -1076,8 +1076,15 @@ inline void calculate_acosh() {
 // so the log1p argument never loses precision through a subtract-1 cancellation;
 // the large region exits the x^2 regime entirely so |x| up to fp32 max no longer
 // overflows (the old x^2 + 1 produced +inf at ~1.84e19).
+template <int ITERATIONS>
+void calculate_asinh_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_asinh() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        calculate_asinh_bf16<ITERATIONS>();
+        return;
+    }
     constexpr float LOG1P_LARGE = 268435456.0f;  // 2^28
     constexpr float LN2 = 0.6931471805599453f;
     // SFPU microcode
@@ -1206,3 +1213,5 @@ void init_atanh() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_asinh_bf16.h"
