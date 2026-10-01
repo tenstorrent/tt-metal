@@ -409,9 +409,10 @@ ProgramDescriptor build_ring_program_descriptor(
     // Same predicate the host uses in device_causal_geometry(), so the reader picks the same causal
     // branch. NOT sp_axis alone: a fused full-mesh ring is rotation-exact without a named SP axis.
     reader_ct.push_back(has_meta && program::rotation_exact_sp_geometry(args) ? 1u : 0u);
-    // Key-stripe split, so the reader can recover the UNSPLIT sp/chunk_local that
-    // device_causal_geometry uses. Under KV dedup this is tp; 1 everywhere else.
-    reader_ct.push_back(has_meta ? args.key_stripe_split : 1u);
+    // Geometry split, so the reader can recover the sp/chunk_local that device_causal_geometry uses: the
+    // key-stripe split (tp under KV dedup) times the full-mesh query regrouping (mesh_cols on a fused
+    // full-mesh ring, see query_geometry_split). 1 everywhere else.
+    reader_ct.push_back(has_meta ? args.key_stripe_split * program::query_geometry_split(args) : 1u);
     tt::tt_metal::TensorAccessorArgs(has_meta ? *tensors.chunk_start_idx_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
     // Cache-slot select, same fixed-width discipline as the block above (one kernel binary serves both
@@ -567,8 +568,11 @@ ProgramDescriptor build_ring_program_descriptor(
     } else {
         reader_common.push_back(0u);
     }
-    reader_common.push_back(tensor_rank);
-    reader_common.push_back(tp_index);
+    // The (SP rank, TP window) the reader's metadata causal geometry uses -- regrouped on a full mesh, exactly
+    // as device_causal_geometry does on the host.
+    const auto geometry_ranks = program::query_geometry_ranks(args, tensor_rank, tp_index);
+    reader_common.push_back(geometry_ranks.device_index);
+    reader_common.push_back(geometry_ranks.tp_index);
     if (has_slot_meta) {
         reader_common.push_back(tensors.cache_batch_idx_tensor->buffer());
     } else {

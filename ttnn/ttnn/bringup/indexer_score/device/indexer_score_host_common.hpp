@@ -107,12 +107,47 @@ inline bool rotation_exact_sp_geometry(const operation_attributes_t& args) {
     return args.sp_axis().has_value() || (args.has_fused_ring() && args.fused_ring->full_mesh);
 }
 
+// Query ownership on a fused full-mesh ring follows the model's SP x TP layout, not the key cache's
+// sp*tp stripes: a chunk's queries are rotated at SP granularity along mesh rows (mesh_cols stripes per SP
+// slab) and each mesh column then takes its Sq-row window of that rotated slab. The two agree only when the
+// chunk starts on an SP-slab boundary, so causal geometry regroups the canonical tensor rank into
+// (row, col) and rotates over mesh_rows slabs of mesh_cols * chunk_local. 1 everywhere else. The metadata
+// path folds this into the reader's geometry split, so host and device regroup identically.
+inline uint32_t query_geometry_split(const operation_attributes_t& args) {
+    return (args.has_fused_ring() && args.fused_ring->full_mesh) ? args.fused_ring->mesh_cols : 1u;
+}
+
+struct QueryGeometryRanks {
+    uint32_t device_index;
+    uint32_t tp_index;
+};
+
+// (SP rank, TP window) that causal geometry sees for a canonical row-major tensor rank.
+inline QueryGeometryRanks query_geometry_ranks(
+    const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index) {
+    const uint32_t split = query_geometry_split(args);
+    if (split == 1) {
+        return {device_index, tp_index};
+    }
+    return {device_index / split, device_index % split};
+}
+
 inline DeviceCausalGeometry device_causal_geometry(
     const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index, uint32_t Sq) {
     const bool has_bc = args.block_cyclic.has_value();
     const bool rotation_exact = rotation_exact_sp_geometry(args);
-    const uint32_t sp = has_bc ? args.block_cyclic->sp : 1u;
-    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local : 0u;
+    const uint32_t split = has_bc ? query_geometry_split(args) : 1u;
+    TT_FATAL(
+        !has_bc || args.block_cyclic->sp % split == 0,
+        "indexer_score: full-mesh block-cyclic sp={} must be a multiple of mesh_cols={}",
+        has_bc ? args.block_cyclic->sp : 0u,
+        split);
+    const uint32_t sp = has_bc ? args.block_cyclic->sp / split : 1u;
+    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local * split : 0u;
+    const auto ranks =
+        has_bc ? query_geometry_ranks(args, device_index, tp_index) : QueryGeometryRanks{device_index, tp_index};
+    device_index = ranks.device_index;
+    tp_index = ranks.tp_index;
     TT_FATAL(
         !(has_bc && rotation_exact) || device_index < sp,
         "indexer_score: device_index {} out of range for block-cyclic sp={} (check seq_shard_axes[0] vs "

@@ -68,3 +68,20 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: hy4_preview_d_p O.1
 - Files: `tests/cases.py`, `tests/reference.py`, `tests/test_indexer_score.py`
+
+### Upstream bug fixes ported (source @ `73027b6e6ff`, 2026-10-01)
+- What: three source fixes since the fork's SHA, applied unchanged (fork namespaces kept):
+  (a) #56992 / #58363 fused full-mesh validation checks per-device sequence EXTENTS (K-local x ring = gathered K;
+  Q and weights share Sq) instead of shard placements, which under-counted for activations whose shard dim names the
+  axis they were created on (`indexer_score_device_operation.cpp`, both entry points);
+  (b) #58363 full-mesh causal geometry on mid-slab chunk starts: queries regroup into (SP rank, TP window) via
+  `query_geometry_split` / `query_geometry_ranks` (`indexer_score_host_common.hpp`), and the ring factory hands the
+  reader the same split and ranks (`ring_indexer_score_dsa_program_factory.cpp`);
+  (c) pooled-output scratch rows strided at the full unit width so each row's NoC write keeps its destination's
+  alignment, also for a partial last k-band (`kernels/writer_indexer_score.cpp`).
+  Not taken: #58122 (GLM-5.2 -> 5.3 comment rename only).
+- Default behaviour: (a)/(b) only change the fused full-mesh mode (hy4's ring call is not full-mesh); (c) changes
+  only block-pool output layouts the source wrote misaligned.
+- Needed by: rebase onto origin/malimpic/llk_helper_library_rebased_0110_2 (keep the fork's bug fixes current)
+- Files: `device/indexer_score_device_operation.cpp`, `device/indexer_score_host_common.hpp`,
+  `device/kernels/writer_indexer_score.cpp`, `device/ring_indexer_score_dsa_program_factory.cpp`
