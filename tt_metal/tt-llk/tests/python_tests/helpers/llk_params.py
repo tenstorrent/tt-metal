@@ -841,7 +841,7 @@ class VectorMode(Enum):
     R = 1
     C = 2
     RC = 4
-    # One body call over the rows the kernel itself advances through (the one-vector and whole-tile bodies).
+    # One body call; the kernel itself advances through the rows.
     RC_custom = 6
 
     @property

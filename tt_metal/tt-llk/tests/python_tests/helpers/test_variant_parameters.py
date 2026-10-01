@@ -787,9 +787,7 @@ class VECTOR_MODE(TemplateParameter):
 
 @dataclass
 class PERF_STAGE(TemplateParameter):
-    """How much of a perf kernel's iteration runs. 0 is the frame alone (the data copies, inits and
-    pack the op needs), so that its cost can be subtracted from the stages that add the op's parts.
-    """
+    """How much of a perf kernel's iteration runs; 0 is the frame alone, to subtract from the other stages."""
 
     perf_stage: int = 1
 
@@ -2084,11 +2082,8 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
 
 @dataclass
 class GENERALIZED_MOE_GATE_PERF_PATH(TemplateParameter):
-    """The gate path the generalized MoE gate perf kernel runs: ``ungrouped`` (the ttnn op) or ``grouped`` (the
-    DeepSeek gate). The token geometry is fixed (256 experts, top 8, one token per DEST section, no softmax, no
-    reload, bf16 scores and bias in, uint16 out, eps 0.5 and scale 2.5 as fp32 bit patterns), so the perf module
-    publishes this one column instead of the whole GENERALIZED_MOE_GATE surface; the constants are emitted here.
-    """
+    """The gate path the generalized MoE gate perf kernel runs, ``ungrouped`` (the ttnn op) or ``grouped`` (the
+    DeepSeek gate); the token geometry is fixed and emitted here."""
 
     gmg_path: str = "ungrouped"
 

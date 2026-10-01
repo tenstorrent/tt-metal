@@ -1,12 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole scalar block multiply (experimental/llk_math_eltwise_mul_scalar_block.h and
-// llk_unpack_AB_scalar_block.h): one SrcB scalar tile is read once per block and multiplied into NUM_TILES_IN_BLOCK
-// whole SrcA tiles, 8 ELWMUL per tile and fidelity phase of MATH_FIDELITY. Per iteration NUM_BLOCKS blocks: the
-// block init once, one unpack call and one math call per block, the standard per-tile pack. The isolates mock the
-// block's data-valid cadence, one SrcB valid per block and one SrcA valid per tile (the math clears SrcA per tile
-// and SrcB at the block end).
+// Perf kernel of the Blackhole scalar block multiply: per iteration NUM_BLOCKS blocks of NUM_TILES_IN_BLOCK tiles, one
+// unpack call and one math call per block. The isolates mock one SrcB valid per block and one SrcA valid per tile.
 
 #include <cstdint>
 

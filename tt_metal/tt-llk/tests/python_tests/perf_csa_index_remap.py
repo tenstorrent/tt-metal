@@ -1,13 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of the csa_index_remap SFPU op (sources/csa_index_remap_perf.cpp) on UInt32 indices: one section of three
-tiles per iteration (three datacopies through the unpack-to-DEST path, the remap of one tile, the pack of the
-three), for row offsets 0 and 256, and PERF_STAGE 0, the datacopies alone, whose cycles are subtracted to give the
-remap's cost. L1_TO_L1 only: the 32-bit unpack-to-DEST path has no data-valid mock, and the section is math bound.
-Unit: one section of three tiles.
-"""
+"""Perf of the csa_index_remap SFPU op (sources/csa_index_remap_perf.cpp); unit: one section of three tiles,
+PERF_STAGE 0 being the datacopies alone."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

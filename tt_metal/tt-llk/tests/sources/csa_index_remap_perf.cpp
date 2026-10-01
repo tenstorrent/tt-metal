@@ -1,11 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the csa_index_remap SFPU op (sfpu/experimental/ckernel_sfpu_csa_index_remap.h) on UInt32 indices.
-// Per iteration one section of three tiles: three A2D datacopies into DEST tiles 0 to 2 through the unpack-to-DEST
-// path, the ADDR_MOD_7 change the functional test models, the SFPU init and the remap of tile DST_INDEX (PERF_STAGE
-// 1) or the datacopies alone (PERF_STAGE 0), then the pack of the three tiles. The 32-bit unpack-to-DEST path has no
-// data-valid mock, so L1_TO_L1 is the run type; the section is math bound there.
+// Perf kernel of the csa_index_remap SFPU op: per iteration one section of three tiles, the datacopies alone at
+// PERF_STAGE 0. L1_TO_L1 only: the 32-bit unpack-to-DEST path has no data-valid mock.
 
 #include <cstdint>
 

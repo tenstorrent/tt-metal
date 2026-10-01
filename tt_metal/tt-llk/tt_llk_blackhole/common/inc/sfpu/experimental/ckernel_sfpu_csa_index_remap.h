@@ -23,9 +23,7 @@ template <int ITERATIONS, std::uint32_t ROW_OFFSET>
 inline void _csa_index_remap_()
 {
     using namespace sfpi;
-    // The four masks are held in registers for the whole tile: as immediates in the loop body they were loaded again
-    // for every row, four SFPLOADI of the 19 SFPU words per row. The loop is unrolled in full; the body has no
-    // data-dependent control, so the compiler records it once and replays it.
+    // The masks are loaded once per tile rather than once per row; the unrolled loop is recorded once and replayed.
     const vInt local_row_low_mask  = CSA_LOCAL_ROW_LOW_MASK;
     const vInt bank_device_mask    = CSA_BANK_DEVICE_MASK;
     const vInt local_row_high_mask = CSA_LOCAL_ROW_HIGH_MASK;

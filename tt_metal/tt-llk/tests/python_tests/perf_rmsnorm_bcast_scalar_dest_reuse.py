@@ -1,14 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of the Blackhole rmsnorm bcast-scalar dest-reuse multiply (rmsnorm_bcast_scalar_reuse_tiles,
-sources/rmsnorm_bcast_scalar_dest_reuse_perf.cpp): a row of 1, 2, 4 or 8 tiles re-read from L1 into SrcA in one
-unpack call and multiplied (or added) by the scalar that sits in DEST. ELWMUL at LoFi, HiFi2 and HiFi4 with
-clear_dest, ELWADD at LoFi without, bf16, four faces. UNPACK_ISOLATE and MATH_ISOLATE measure the op alone;
-L1_TO_L1 the functional kernel's whole call per iteration (the seed datacopy, both inits, the op and the pack), the
-per-call re-init form of the DeepSeek sampling kernel. Unit: one 32x32 tile.
-"""
+"""Perf of the Blackhole rmsnorm bcast-scalar dest-reuse multiply (rmsnorm_bcast_scalar_reuse_tiles,
+sources/rmsnorm_bcast_scalar_dest_reuse_perf.cpp); unit: one 32x32 tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

@@ -1,12 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole block pack (experimental/llk_pack_block.h): NUM_TILES_IN_BLOCK tiles from sparse
-// Tile32x32 DEST slots into one contiguous L1 block in one MOP call. Per iteration one block: a standard unpack and
-// an A2D datacopy per tile, then one _llk_pack_block_contiguous_ call (PACK_BLOCK_CONTIGUOUS true) or
-// NUM_TILES_IN_BLOCK standard _llk_pack_ calls (false, the per-tile reference). PACK_ISOLATE runs the pack thread
-// alone over the output ring with no math hand-off, L1_TO_L1 the whole pipeline. The tile geometry follows
-// TEST_FACE_R_DIM and num_faces (32x32, 16x32 and 1x32 tiles in the perf module).
+// Perf kernel of the Blackhole block pack: per iteration one block, packed with one _llk_pack_block_contiguous_ call
+// (PACK_BLOCK_CONTIGUOUS) or one standard _llk_pack_ per tile. PACK_ISOLATE runs the pack thread alone, no math hand-off.
 
 #include <cstdint>
 

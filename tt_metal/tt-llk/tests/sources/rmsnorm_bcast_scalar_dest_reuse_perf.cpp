@@ -1,14 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole rmsnorm bcast-scalar dest-reuse multiply (experimental/llk_math_rmsnorm_bcast_scalar_dest_reuse.h
-// and llk_unpack_A_rmsnorm.h): one MOVD2B of DEST[0][0] into SrcB, then one MOP of RMSNORM_NUM_TILES x num_faces
-// ELW against that scalar from one unpack call. L1_TO_L1 runs the functional kernel's whole call per iteration (the
-// seed datacopy of DEST[0] with its init, the rmsnorm init, the op, the pack of RMSNORM_NUM_TILES tiles), the per-call
-// re-init form the DeepSeek sampling kernel uses. MATH_ISOLATE and UNPACK_ISOLATE run the seed and both inits once in
-// INIT and the op alone per iteration; the DEST scalar is whatever the seed left (the cycle counts are data
-// independent). Data-valid cadence of the op: one SrcB dummy valid per call (the unpack MOP's start op), one SrcA valid
-// per face, the math MOP clearing SrcA per face and SrcB at the end; the seed datacopy takes four SrcA valids.
+// Perf kernel of the Blackhole rmsnorm bcast-scalar dest-reuse multiply. L1_TO_L1 runs the functional kernel's whole
+// call per iteration (seed datacopy, inits, op, pack); the isolates seed and init once in INIT and run the op alone.
 
 #include <cstdint>
 

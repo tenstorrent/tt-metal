@@ -1,11 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the add_rsqrt SFPU functor (experimental/llk_sfpu/ckernel_sfpu_add_rsqrt.h), dst = rsqrt(dst *
-// input_scale + addend). Per iteration one A2D datacopy into DEST tile 0, then, when PERF_STAGE is 1, the functor in
-// VECTOR_MODE with ITERATIONS vectors per call (RC with 8 is the compute API's add_rsqrt_tile, RC_custom with 1 the
-// one-vector call of the DeepSeek RMSNorm), or nothing when PERF_STAGE is 0 (the datacopy alone, to subtract), then
-// one pack. MATH_ISOLATE mocks the datacopy's four SrcA valids per tile.
+// Perf kernel of the add_rsqrt SFPU functor: per iteration one datacopy into DEST tile 0, the functor in VECTOR_MODE
+// with ITERATIONS vectors (PERF_STAGE 1) or nothing more (PERF_STAGE 0), then one pack. MATH_ISOLATE mocks the valids.
 
 #include <cstdint>
 

@@ -1,11 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole H128 Hadamard transform (experimental/llk_math_hadamard.h and llk_unpack_hadamard.h): per
-// 128-element vector one unpack call of three UNPACR, the first matmul, MOVD2B, the second matmul and the optional SFPU
-// scale. Per iteration one DEST section of TILE_CNT vectors (a ZEROACC of the section, TILE_CNT transforms, TILE_CNT
-// packs). Data-valid cadence per vector: SrcB (H16), SrcA (the input, bank 0), SrcA (H16 again, bank 1); the math
-// clears SrcA after the first matmul and SrcA and SrcB after the second.
+// Perf kernel of the Blackhole H128 Hadamard transform: per iteration one DEST section of TILE_CNT vectors. Data-valid
+// cadence per vector: SrcB (H16), SrcA (the input), SrcA (H16 again).
 
 #include <cstdint>
 

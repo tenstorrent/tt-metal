@@ -1,11 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the generic, SFPU-only DeepSeek MoE gate top-k (sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h,
-// the kernel of sfpu_generic_moe_gate_topk_test.cpp). Per iteration one token: two A2D datacopies (the raw scores into
-// tile 0, the biased key into tile 2), the SFPU gate (PERF_STAGE 1) or nothing more (PERF_STAGE 0, the datacopy frame
-// alone, to subtract), the pack of the scores tile and of the indices tile as uint16. MATH_ISOLATE keeps the real unpack
-// of the two tiles and drops the pack and the DEST hand-off.
+// Perf kernel of the generic, SFPU-only DeepSeek MoE gate top-k: per iteration one token, two datacopies, the gate
+// (PERF_STAGE 1) or nothing more (PERF_STAGE 0), then the pack of scores and indices. MATH_ISOLATE keeps the real unpack.
 
 #include <cstdint>
 

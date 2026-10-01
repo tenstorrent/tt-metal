@@ -49,12 +49,10 @@ inline void calculate_add_rsqrt(uint32_t param0) {
             sfpi::dst_reg++;
         }
     } else {
-        // The accurate rsqrt body takes two vectors per step so that their refinement chains overlap
-        // (_calculate_sqrt_body_accurate_x2_); per lane the arithmetic is the one-vector body's, bit for bit.
+        // Two vectors per step so that the refinement chains overlap; per lane the arithmetic is unchanged.
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d += 2) {
-            // The operand of the body is x * scale + addend, formed at every read of x (the body reads DEST again
-            // for its second step instead of holding the operand in the register file).
+            // Formed at every read of x: the body reads DEST again for its second step.
             const float addend = Converter::as_float(param0);
             auto operand = [addend](const sfpi::vFloat x) {
                 if constexpr (INPUT_SCALE == 0x3f800000u) {

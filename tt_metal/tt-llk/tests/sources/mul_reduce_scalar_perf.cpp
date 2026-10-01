@@ -1,16 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole mul_reduce_scalar row (experimental/llk_math_mul_reduce_scalar.h and
-// llk_unpack_mul_reduce_scalar.h, the fused multiply and reduce-to-scalar of the DeepSeek RMSNorm). Per iteration one
-// row of TILE_CNT 32x32 tiles as the functional kernel runs it: the multiply phase (an AB unpack and an ELWMUL per
-// tile), the unpack switch to the reduce phase (SrcA and SrcB dummy valids), the reduce tail (its init, 16 MOVD2A of
-// tile 0, the SFPU fill of SrcB, MOVD2B, the SFPU clear of DEST[0], the GAPOOL column reduces with 16 MOVD2A per
-// further tile, the scalar collapse, CLEARDVALID), and one masked pack of the reduced tile. The pack mask is configured
-// once in INIT, as the functional kernel does. Data-valid cadence per row: four SrcA and four SrcB per tile in the
-// multiply phase, then one SrcA and one SrcB for the reduce phase. The copy form (sum_reduce_scalar, a datacopy in
-// place of the multiply) is not in this kernel: in the perf harness it hung the core in every run type while its
-// functional test passes, and that hang is not understood yet.
+// Perf kernel of the Blackhole mul_reduce_scalar row: per iteration the multiply phase of TILE_CNT tiles, the reduce
+// tail and one masked pack. Data valids per row: four SrcA and four SrcB per tile, then one of each for the reduce.
 
 #include <cstdint>
 
@@ -108,8 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 namespace ckernel::sfpu
 {
-// The float fill of sfpu/ckernel_sfpu_fill.h (the header's integer fills do not parse under this SFPI, see
-// sum_reduce_scalar_test.cpp).
+// The float fill of sfpu/ckernel_sfpu_fill.h, whose integer fills do not parse under this SFPI.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_fill_x_(const float value)
 {

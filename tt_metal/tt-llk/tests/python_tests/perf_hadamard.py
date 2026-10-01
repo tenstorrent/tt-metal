@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of the Blackhole H128 Hadamard transform (hadamard_h128, sources/hadamard_perf.cpp): 1, 4 or 8 128-element
-vectors per DEST section, LoFi and HiFi4, with and without the SFPU normalisation, bf16. L1_TO_L1, UNPACK_ISOLATE
-and MATH_ISOLATE; the isolates mock the three data valids per vector (SrcB, SrcA, SrcA). Unit: one 128-element
-vector.
-"""
+"""Perf of the Blackhole H128 Hadamard transform (hadamard_h128, sources/hadamard_perf.cpp); unit: one 128-element
+vector."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

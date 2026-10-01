@@ -1,13 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of the Blackhole scalar block multiply (mul_tiles_bcast_scalar_block, sources/eltwise_mul_scalar_block_perf.cpp):
-one SrcB scalar tile read once per block and multiplied into a block of 1 to 8 whole SrcA tiles. Axes: the block
-size, bf16 or fp32 output, both DEST widths, and the math fidelity (the LoFi rows are the stage 2 measurement of
-the family; the HiFi rows run 8 ELWMUL per tile and fidelity phase). Unit: one 32x32 tile (TILE_COUNT is the block
-size). All four run types; the isolates mock one SrcB valid per block and one SrcA valid per tile.
-"""
+"""Perf of the Blackhole scalar block multiply (mul_tiles_bcast_scalar_block, sources/eltwise_mul_scalar_block_perf.cpp);
+unit: one 32x32 tile, TILE_COUNT is the block size."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

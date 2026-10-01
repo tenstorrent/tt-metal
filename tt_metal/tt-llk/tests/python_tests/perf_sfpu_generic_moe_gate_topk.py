@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of the generic, SFPU-only DeepSeek MoE gate top-k (sources/sfpu_generic_moe_gate_topk_perf.cpp): one token of
-256 experts, the top 8 and top 16 bodies with and without the normalisation, top 4 and top 12 (the same bodies with
-a zero tail), and PERF_STAGE 0, the two datacopies alone, to subtract. MATH_ISOLATE keeps the real unpack of the two
-tiles and drops the pack. Unit: one token.
-"""
+"""Perf of the generic, SFPU-only DeepSeek MoE gate top-k (sources/sfpu_generic_moe_gate_topk_perf.cpp), PERF_STAGE 0
+being the two datacopies alone; unit: one token."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

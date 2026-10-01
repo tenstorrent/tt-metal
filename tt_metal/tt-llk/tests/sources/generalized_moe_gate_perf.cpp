@@ -1,17 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the gate path of the Blackhole generalized MoE gate (the MODE_GATE path of generalized_moe_gate_test.cpp,
-// one DEST section per token, no sigmoid front end). Per iteration one token exactly as the functional kernel's section:
-// the unpack of the id tile (a uint16 datacopy), the AB unpack of payload and bias, the SrcB dummy valid; on the math
-// thread the id datacopy, the binary front end init and op, the transpose common init and the SFPU topk init (per
-// token, as the production kernels run them), then the part selected by PERF_STAGE:
-//   0  the binary front end only (then the dummy-valid drain, STALLWAIT and SETRWC CLR_AB)
-//   1  plus sum_top2 (SFPU) and step0 (the FPU transpose MOP), then the drain
-//   2  the whole gate (grouped or ungrouped), ended by step2's own CLR_AB
-// and the pack of the four DEST tiles as uint16. MATH_ISOLATE keeps the real unpack thread (the gate's three small
-// unpack calls per token have no data-valid mock) and drops the pack and the DEST hand-off; the math thread is the
-// whole cost. The test-only scratch sanitize of the functional test is not part of this kernel.
+// Perf kernel of the gate path of the Blackhole generalized MoE gate, one token per iteration. PERF_STAGE 0 runs the
+// binary front end only, 1 adds sum_top2 and step0, 2 the whole gate; MATH_ISOLATE keeps the real unpack, drops the pack.
 
 #include <cstdint>
 

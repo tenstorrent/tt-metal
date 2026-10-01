@@ -121,9 +121,8 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
     return y;
 }
 
-// The edge handling of the accurate reciprocal body for one vector: the predicated statements of the RECIPROCAL
-// branch of _calculate_sqrt_body_, unchanged per lane. half_y is computed inside the region because only the enabled
-// lanes read it. An edit to the edge handling of _calculate_sqrt_body_ belongs here as well.
+// The edge handling of the accurate reciprocal body for one vector; keep it in step with the RECIPROCAL branch of
+// _calculate_sqrt_body_.
 template <bool FAST_APPROX>
 sfpi_inline void _sqrt_accurate_reciprocal_edge_(
     const sfpi::vFloat x, sfpi::vFloat& y, const sfpi::vFloat one_minus_xyy, const sfpi::vInt infinity_minus_x_bits) {
@@ -144,10 +143,8 @@ sfpi_inline void _sqrt_accurate_reciprocal_edge_(
     v_endif;
 }
 
-// The second refinement step of the accurate body (algorithm SQRT_23-bits) and its edge handling for one vector: the
-// statements of the accurate branch of _calculate_sqrt_body_ from the second `xy = x * y` onward. The integer
-// statements (the infinity constant, the bit difference) are placed between the dependent float steps so that the
-// multiply, the multiply-add and their readers are never issued back to back; per lane nothing changes.
+// The second refinement step and edge handling of the accurate body for one vector, as in _calculate_sqrt_body_; the
+// integer statements sit between the dependent float steps so that no result is read by the next instruction.
 template <bool RECIPROCAL, bool FAST_APPROX>
 sfpi_inline sfpi::vFloat _sqrt_accurate_second_step_(const sfpi::vFloat x, sfpi::vFloat y) {
     sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
@@ -186,8 +183,7 @@ sfpi_inline sfpi::vFloat _sqrt_accurate_second_step_(const sfpi::vFloat x, sfpi:
     return y;
 }
 
-// The seed and the first refinement step of the accurate body for two vectors, issued in lockstep: every step of one
-// vector is followed by the same step of the other, so a step's result is never read by the very next instruction.
+// The seed and the first refinement step of the accurate body for two vectors, interleaved step by step.
 sfpi_inline void _sqrt_accurate_first_step_x2_(
     const sfpi::vFloat x0, const sfpi::vFloat x1, sfpi::vFloat& y0, sfpi::vFloat& y1) {
     sfpi::vInt i0 = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x0) >> 1);
@@ -210,17 +206,8 @@ sfpi_inline void _sqrt_accurate_first_step_x2_(
     y1 = y1 * t1;
 }
 
-// The accurate body for two vectors at once. Its refinement is a chain in which every multiply-add reads the result
-// of the one before it, and with one vector per body the pipeline latency of each dependent step is paid: 6.3 idle
-// cycles per vector against 1.3 for the approximate body (201 against 41 cycles per tile of 32 vectors on
-// Blackhole). Here the two chains are issued so that no instruction reads the result of the one issued just before
-// it. Per lane the operations and their order are exactly those of _calculate_sqrt_body_<false, RECIPROCAL,
-// FAST_APPROX>, so the results are bit-identical to the one-vector form. The register file holds eight vectors:
-// for the reciprocal both operands stay live and the terms of the two second steps are interleaved before the two
-// edge regions (which own the lane condition) run one after the other; for the square root the terms of both second
-// steps do not fit next to the operands, so the operand is read from DEST again for the second step (load_x0 and
-// load_x1 return it; the barrier keeps the compiler from holding the first read instead) and the second steps run one
-// vector at a time.
+// The accurate body for two vectors at once, interleaved so that no instruction reads the result of the one before it;
+// per lane the operations and their order are those of _calculate_sqrt_body_<false, RECIPROCAL, FAST_APPROX>.
 template <bool RECIPROCAL, bool FAST_APPROX, class LoadX0, class LoadX1>
 sfpi_inline void _calculate_sqrt_body_accurate_x2_(LoadX0 load_x0, LoadX1 load_x1, sfpi::vFloat& y0, sfpi::vFloat& y1) {
     if constexpr (RECIPROCAL) {
@@ -251,6 +238,7 @@ sfpi_inline void _calculate_sqrt_body_accurate_x2_(LoadX0 load_x0, LoadX1 load_x
             const sfpi::vFloat x1 = load_x1();
             _sqrt_accurate_first_step_x2_(x0, x1, y0, y1);
         }
+        // The sqrt form re-reads x from DEST for the second step; the barriers keep the first read from being held.
         asm volatile("" ::: "memory");
         y0 = _sqrt_accurate_second_step_<false, FAST_APPROX>(load_x0(), y0);
         asm volatile("" ::: "memory");
@@ -271,8 +259,7 @@ inline void _calculate_sqrt_internal_() {
             sfpi::dst_reg++;
         }
     } else {
-        // The accurate body takes two vectors per step so that their refinement chains overlap; the results are the
-        // one-vector body's bit for bit.
+        // Two vectors per step so that the refinement chains overlap; per lane the results are unchanged.
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d += 2) {
             sfpi::vFloat y0;

@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of the Blackhole SFPU RoPE in its decode form (one live row per face, sources/rope_perf.cpp): the geometries
-of the functional test (one row of one tile, four rows of one tile, two rows of two tiles), fused cos and sin tiles
-against separate ones, cos and sin per row, and PERF_STAGE 0, the datacopies of the operand tiles alone, to
-subtract. L1_TO_L1 and MATH_ISOLATE (four SrcA valids per tile mocked). Unit: one 32x32 DEST tile.
-"""
+"""Perf of the Blackhole SFPU RoPE in its decode form (sources/rope_perf.cpp), PERF_STAGE 0 being the datacopies alone;
+unit: one 32x32 DEST tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

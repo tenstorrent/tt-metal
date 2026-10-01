@@ -1,13 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of the Blackhole block pack _llk_pack_block_contiguous_ (sources/pack_block_contiguous_perf.cpp) against the
-per-tile standard _llk_pack_, for 32x32, 16x32 and 1x32 tiles at 1, 2, 4 and 8 tiles per call, bf16 in and out.
-PACK_ISOLATE is the pack thread alone over the output ring (the block pack's own cost); L1_TO_L1 the whole pipeline
-of unpack, datacopy and pack, which the per-tile unpack call binds at two tiles per call and above. Unit: one tile
-of the given dimensions.
-"""
+"""Perf of the Blackhole block pack _llk_pack_block_contiguous_ (sources/pack_block_contiguous_perf.cpp) against the
+per-tile standard _llk_pack_; unit: one tile of the given dimensions."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

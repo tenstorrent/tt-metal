@@ -1,11 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole SFPU RoPE (sfpu/experimental/ckernel_sfpu_rope.h), fused cos and sin or separate tiles,
-// over ROPE_HT x ROPE_WT tiles resident in DEST. Per iteration TILE_CNT A2D datacopies into DEST (the operands), then
-// sfpu_rope_dest_setup and the rope over all rows (PERF_STAGE 1) or the datacopies alone (PERF_STAGE 0, to subtract),
-// then the pack of TILE_CNT tiles. MATH_ISOLATE mocks the datacopies' four SrcA valids per tile. Unit: one 32x32 DEST
-// tile (TILE_CNT per iteration).
+// Perf kernel of the Blackhole SFPU RoPE: per iteration TILE_CNT datacopies into DEST, the rope over all rows
+// (PERF_STAGE 1) or nothing more (PERF_STAGE 0), then the pack. MATH_ISOLATE mocks four SrcA valids per tile.
 
 #include <cstdint>
 

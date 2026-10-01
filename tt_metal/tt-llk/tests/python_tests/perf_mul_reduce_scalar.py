@@ -1,14 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of the Blackhole mul_reduce_scalar row (mul_reduce_scalar_tile, sources/mul_reduce_scalar_perf.cpp): a row of
-1, 2, 4 or 8 32x32 tile pairs multiplied into DEST and reduced to one scalar, at LoFi, HiFi2 and HiFi4, bf16 in and
-out, one masked pack of the reduced tile per row. All four run types; the isolates mock the row's data-valid cadence
-(four SrcA and four SrcB per tile for the multiply, one of each for the reduce phase). Unit: one input tile of the
-row. The copy form (sum_reduce_scalar_tile) has no row here: as a perf kernel it hung the core in every run type
-while its functional test passes, and the hang is not understood yet.
-"""
+"""Perf of the Blackhole mul_reduce_scalar row (mul_reduce_scalar_tile, sources/mul_reduce_scalar_perf.cpp); unit: one
+input tile of the row."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

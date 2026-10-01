@@ -11,11 +11,8 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// SCALAR_BLOCK_ALIAS false: the block form, one unpack call and one math call per block, 8 ELWMUL per tile and
-// fidelity phase through ADDR_MOD_7 and ADDR_MOD_6. SCALAR_BLOCK_ALIAS true: the standard scalar broadcast multiply
-// that the compute API aliases next to the block form (deepseek_mul_tiles_bcast_scalar), one unpack call and one
-// MOP run per tile at the same MATH_FIDELITY on the same buffers, so the python test can compare the two results
-// lane by lane.
+// SCALAR_BLOCK_ALIAS true runs the standard scalar broadcast multiply the compute API aliases next to the block form,
+// on the same buffers at the same MATH_FIDELITY, so the python test can compare the two lane by lane.
 
 #ifdef LLK_TRISC_UNPACK
 #include "experimental/llk_unpack_AB_scalar_block.h"

@@ -1,13 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of the add_rsqrt SFPU functor (sources/sfpu_add_rsqrt_perf.cpp), dst = rsqrt(dst + addend), bf16 in and out
-with a 16-bit DEST. Axes: the accurate and the approximate body, the tile form (VectorMode::RC with 8 iterations,
-the compute API's add_rsqrt_tile, four calls per tile) and the one-vector form (RC_custom with 1 iteration, the
-DeepSeek RMSNorm's call per row), and PERF_STAGE 0, the datacopy frame alone, whose MATH_ISOLATE cycles are
-subtracted from the stage 1 rows to give the functor's cost. Unit: one tile (one call for the one-vector form).
-"""
+"""Perf of the add_rsqrt SFPU functor (sources/sfpu_add_rsqrt_perf.cpp), tile form and one-vector form, PERF_STAGE 0
+being the datacopy frame alone; unit: one tile (one call for the one-vector form)."""
 
 import struct
 

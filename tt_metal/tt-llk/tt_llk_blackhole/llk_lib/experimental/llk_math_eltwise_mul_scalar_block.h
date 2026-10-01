@@ -17,12 +17,8 @@ namespace ckernel
 /**
  * @brief Program the address modifiers of the scalar block multiply and reset the counters.
  *
- * ADDR_MOD_7 steps SrcA and DEST by one 8-row group per multiply. Above LoFi the block is multiplied once per
- * fidelity phase and ADDR_MOD_6 carries the phase step: the last multiply of a phase advances the fidelity counter
- * (its SrcA and DEST steps do not matter, the SETRWC that opens the next phase resets both counters). At LoFi only
- * ADDR_MOD_7 is programmed, so a LoFi kernel is what it was before the fidelity template existed. ADDR_MOD_6 is also
- * programmed by the matmul and the SFPU inits, as ADDR_MOD_7 is by the SFPU init: a kernel that runs one of those
- * between this init and the block multiply re-runs this init.
+ * ADDR_MOD_7 steps SrcA and DEST by one 8-row group per multiply; above LoFi ADDR_MOD_6 steps the fidelity counter on
+ * the last multiply of a phase. The matmul and SFPU inits reprogram both, so a kernel that runs one of them re-runs this.
  *
  * @tparam math_fidelity: Fidelity phases of the multiply, values = <LoFi/HiFi2/HiFi3/HiFi4>
  */
@@ -54,11 +50,8 @@ inline void _llk_math_eltwise_mul_scalar_block_init_()
 /**
  * @brief Multiply block_size whole 32x32 tiles in SrcA by the scalar in SrcB into DEST tiles dst_index onward.
  *
- * Per tile, 8 ELWMUL with the scalar broadcast cover the 64 DEST rows. Above LoFi the 8 multiplies run once per
- * fidelity phase (2, 3 or 4 phases), so the products carry the mantissa bits the phases add, as the standard
- * binary multiply does at the same math_fidelity: each phase opens with the SrcA and DEST counters back at the tile
- * start, the eighth multiply of a phase steps the fidelity counter through ADDR_MOD_6, and the SETRWC that closes
- * the tile resets it for the next tile.
+ * Above LoFi the 8 multiplies per tile run once per fidelity phase, the last one stepping the fidelity counter through
+ * ADDR_MOD_6, as the standard binary multiply does at the same math_fidelity.
  *
  * @tparam math_fidelity: Fidelity phases of the multiply, must match the init.
  * @param dst_index: DEST tile of the first product.

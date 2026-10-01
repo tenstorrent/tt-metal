@@ -1,13 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of the gate path of the Blackhole generalized MoE gate (sources/generalized_moe_gate_perf.cpp): one token of 256
-experts per DEST section, top 8, bf16 scores and bias in, uint16 out, the ungrouped path of the ttnn op and the
-grouped path of the DeepSeek gate (GENERALIZED_MOE_GATE_PERF_PATH holds the fixed token geometry). PERF_STAGE cuts the token after the binary front end (0), after the first SFPU
-pass and the first FPU transpose (1), or runs the whole gate (2), so the parts can be told apart by subtraction.
-MATH_ISOLATE keeps the real unpack (the gate's cadence has no mock) and drops the pack. Unit: one token.
-"""
+"""Perf of the gate path of the Blackhole generalized MoE gate (sources/generalized_moe_gate_perf.cpp), ungrouped and
+grouped, cut by PERF_STAGE; unit: one token."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

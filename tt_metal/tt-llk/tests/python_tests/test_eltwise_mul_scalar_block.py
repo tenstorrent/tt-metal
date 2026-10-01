@@ -28,9 +28,7 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 @dataclass
 class SCALAR_BLOCK_ALIAS(TemplateParameter):
-    """False runs the block form; True runs the standard scalar broadcast multiply the
-    compute API aliases next to it (deepseek_mul_tiles_bcast_scalar) on the same buffers.
-    """
+    """True runs the aliased standard scalar broadcast multiply instead of the block form."""
 
     alias: bool = False
 
@@ -111,8 +109,7 @@ def test_eltwise_mul_scalar_block(block_layout, dest_acc, dest_sync):
 
 
 def _fidelity_golden(src, scalars, math_fidelity):
-    """The product the standard multiply computes at math_fidelity: the sum of the
-    fidelity-masked phase products (the shared reference of the HiFi tests)."""
+    """The sum of the fidelity-masked phase products, as the standard multiply computes at math_fidelity."""
     phases = {
         MathFidelity.LoFi: 1,
         MathFidelity.HiFi2: 2,
@@ -136,10 +133,8 @@ def _fidelity_golden(src, scalars, math_fidelity):
     dest_acc=list(DestAccumulation),
 )
 def test_eltwise_mul_scalar_block_fidelity(math_fidelity, dest_acc):
-    """Above LoFi the block form runs the fidelity phases of MATH_FIDELITY: on operands
-    whose products are not exact in one phase, its result equals lane by lane what the
-    aliased standard scalar broadcast multiply returns at the same fidelity, and follows
-    the fidelity-masked reference rather than the one-phase product."""
+    """Above LoFi the block form equals the aliased standard multiply lane by lane and follows the fidelity-masked
+    reference rather than the one-phase product."""
     block_size, dst_index, dest_sync = 4, 0, DestSync.Half
     # Scalars and operands with full mantissas, so every fidelity phase contributes.
     scalars = torch.tensor([1.0 / 3, -0.7, 1.01, 2.9], dtype=torch.bfloat16)
@@ -159,8 +154,7 @@ def test_eltwise_mul_scalar_block_fidelity(math_fidelity, dest_acc):
     alias_cfg = _block_config(
         src, scalars, block_size, dst_index, dest_acc, dest_sync, math_fidelity, True
     )
-    # Build both before running either: under --compile-producer run() returns as soon
-    # as the first variant is built, and the second would never emit its ELF.
+    # Build both before running either: under --compile-producer run() returns after the first build.
     block_cfg.prepare()
     alias_cfg.prepare()
     block = torch.as_tensor(block_cfg.run().result).float().flatten()
