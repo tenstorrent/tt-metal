@@ -1791,6 +1791,56 @@
   "started": "2026-09-30T23:06:44",
   "status": "PASS"
  },
+ "L.s4096": {
+  "attempts": 0,
+  "duration_s": 49.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T03:09:20"
+   }
+  ],
+  "last_run": "2026-10-01T03:09:20",
+  "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/logs/L.s4096.log",
+  "metrics": {
+   "chunk_seconds_c00": 16.265,
+   "chunk_seconds_c01": 0.208,
+   "covered_layers": 6,
+   "deferred_cpu_ms": 0.0,
+   "deferred_cpu_steps": 0,
+   "device_model_hybrid": 0,
+   "host_transfers_per_layer": 0,
+   "model_load_s": 18.4,
+   "pcc_layer_L00": 0.9999957186870927,
+   "pcc_layer_L01": 0.9999874850079162,
+   "pcc_layer_L02": 0.9999778736996484,
+   "pcc_layer_L03": 0.9999746695274403,
+   "pcc_layer_L04": 0.9999754651879154,
+   "pcc_layer_L05": 0.9999689800768078,
+   "pcc_state_key_L00": 0.9999959191085348,
+   "pcc_state_key_L01": 0.9999975204456405,
+   "pcc_state_key_L02": 0.9999975744938405,
+   "pcc_state_key_L03": 0.999996907994296,
+   "pcc_state_key_L04": 0.9999971895962998,
+   "pcc_state_key_L05": 0.9999799237129868,
+   "pcc_state_min": 0.9999261321756931,
+   "pcc_state_value_L00": 0.9999959047998557,
+   "pcc_state_value_L01": 0.9999910441738112,
+   "pcc_state_value_L02": 0.9999871646514414,
+   "pcc_state_value_L03": 0.9999834595641377,
+   "pcc_state_value_L04": 0.9999884308757259,
+   "pcc_state_value_L05": 0.9999261321756931,
+   "prefill_seconds": 16.473,
+   "rung_chunk": 2048,
+   "rung_seq": 4096,
+   "rung_start": 0,
+   "subset": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-01T03:08:31",
+  "status": "PASS"
+ },
  "M.1": {
   "agent": {
    "defs": {
