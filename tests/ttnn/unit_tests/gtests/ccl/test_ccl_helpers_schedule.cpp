@@ -31,7 +31,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/ccl/ccl_helpers_schedule.hpp"
 
 namespace {
 

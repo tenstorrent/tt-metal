@@ -10,8 +10,8 @@
  *        kernel of the op and by its host program factory.
  *
  * The third member of the CCL helper family, alongside
- *   - @c ttnn/cpp/ttnn/kernel_lib/ccl_helpers_dataflow.hpp        (kernel-side fabric EGRESS)
- *   - @c ttnn/cpp/ttnn/operations/ccl/common/host/ccl_helpers_dataflow_host.hpp (its host companion)
+ *   - @c ttnn/cpp/ttnn/kernel_lib/ccl/ccl_helpers_dataflow.hpp (kernel-side fabric EGRESS)
+ *   - @c ttnn/cpp/ttnn/kernel_lib/ccl/ccl_helpers_dataflow_host.hpp (its host companion)
  * and it is deliberately NEITHER of those: it holds no fabric state, allocates no packet header,
  * touches no CB, and issues no unpack/math/pack. It answers exactly one question, in one place:
  *
@@ -37,13 +37,13 @@
  *   So the schedule gets the same treatment the fabric egress got in ccl_helpers_dataflow.hpp:
  *   ONE definition, consumed by every party, with drift made unexpressible rather than documented.
  *
- * @par WHY shared_with_host (and what that costs).
+ * @par WHY this header is shared with the host (and what that costs).
  *   The host program factory derives its own view of the same schedule — per-worker tile ranges,
  *   semaphore wait targets, chunks-per-sync — so host/kernel drift is the same bug class one level
- *   up. Living in @c shared_with_host/ means the factory can consume these functions directly, and
- *   means the schedule is reachable from host gtests: the step-flag table and the chunk walk can be
- *   swept exhaustively for every ring size and direction on the host, with no device and no fabric.
- *   That is the whole reason this is not a kernel-only header.
+ *   up. Keeping it beside the host and device CCL helpers lets a factory consume these functions
+ *   directly and makes the schedule reachable from host gtests: the step-flag table and the chunk
+ *   walk can be swept exhaustively for every ring size and direction on the host, with no device
+ *   and no fabric. That is the whole reason this is not a kernel-only header.
  *
  *   The cost is a hard discipline, inherited from @c hetergeneous_data_structs.hpp:
  *     - NO kernel-only headers, macros or intrinsics. In particular NO @c FORCE_INLINE (a

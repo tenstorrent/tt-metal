@@ -27,6 +27,7 @@
 #include "ttnn-nanobind/layer_ack_service.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
 #include "ttnn-nanobind/bfp_utils.hpp"
+#include "ttnn-nanobind/ccl_host.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
@@ -274,6 +275,8 @@ NB_MODULE(_ttnn, mod) {
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
     auto m_program_specs = mod.def_submodule("program_spec", "Metal 2.0 program spec types");
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
+    auto m_ccl_host =
+        mod.def_submodule("ccl_host", "Host-side CCL helpers (counterpart of kernel_lib/ccl dataflow helpers)");
     auto m_mcast_host =
         mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe)");
 
@@ -305,6 +308,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
     ttnn::program_specs::py_module_types(m_program_specs);
     ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
+    ttnn::ccl_host::py_module_types(m_ccl_host);
     ttnn::mcast_host::py_module_types(m_mcast_host);
 
     // FUNCTIONS / OPERATIONS
@@ -354,6 +358,7 @@ NB_MODULE(_ttnn, mod) {
     // because ttnn defines additional type bindings.
     // TODO: pull them out of the ttnn::operations::py_module.
     ttnn::operations::py_module(m_operations);
+    ttnn::ccl_host::py_module(m_ccl_host);
     // tt::operations::primary::py_module(m_primary_ops);
 
     // CONFIG is a shared mutable global: Python code reads and writes properties
