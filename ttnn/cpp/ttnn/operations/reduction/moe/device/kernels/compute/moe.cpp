@@ -317,8 +317,7 @@ void mask_and_topk() {
 
 #if INDEX_TILES_ON_COMPUTE
             // The index tile is a per-column constant, so its transpose is built in DEST directly.
-            ckernel::topk_fill_index_tile(2, wt * 32);
-            ckernel::topk_fill_index_tile(3, (wt + 1) * 32);
+            ckernel::topk_fill_index_tiles<2, 2>(wt * 32);
 #else
             reconfig_data_format_srca(index_dfb_index);
             transpose_init(index_dfb_index);

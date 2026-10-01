@@ -139,7 +139,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     });
 
     // Index tiles: on Wormhole and Blackhole the compute kernel builds each one in DEST from the lane
-    // id (topk_fill_index_tile), so no index DFB exists and the reader generates nothing. Other
+    // id (topk_fill_index_tiles), so no index DFB exists and the reader generates nothing. Other
     // architectures keep the reader's DM generator. Always defined for the kernels, as 0 or 1.
     const tt::ARCH arch = input_tensor.device().arch();
     const bool index_tiles_on_compute = arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;

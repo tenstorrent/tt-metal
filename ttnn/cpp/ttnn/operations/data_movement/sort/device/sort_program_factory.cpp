@@ -31,7 +31,7 @@ namespace {
 // when the input dtype is UInt16, so the reader/writer software-conversion loops (which
 // reference `dfb::uint16_input_stage` etc.) must also be preprocessor-gated to avoid the
 // undeclared handles from tripping name lookup on the non-UINT16 path.
-// INDEX_TILES_ON_COMPUTE: the compute kernel builds each index tile in DEST (topk_fill_index_tile),
+// INDEX_TILES_ON_COMPUTE: the compute kernel builds each index tile in DEST (topk_fill_index_tiles),
 // so no index DFB is bound and the writer generates nothing. Always defined, as 0 or 1.
 KernelSpec::CompilerOptions::Defines sort_kernel_defines(
     bool is_row_major, bool is_uint16_input, bool index_tiles_on_compute) {
@@ -92,7 +92,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     constexpr uint32_t cb_in_units = 2 * num_cb_unit;
 
     auto* device = tensor_args.input_tensor.device();
-    // Wormhole and Blackhole build the index tiles in DEST on the compute kernel (topk_fill_index_tile);
+    // Wormhole and Blackhole build the index tiles in DEST on the compute kernel (topk_fill_index_tiles);
     // other architectures keep the writer's DM generator and the index DFB.
     const bool index_tiles_on_compute =
         device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE;
@@ -920,7 +920,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
     const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
 
     const bool is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
-    // Wormhole and Blackhole build the index tiles in DEST on the compute kernel (topk_fill_index_tile);
+    // Wormhole and Blackhole build the index tiles in DEST on the compute kernel (topk_fill_index_tiles);
     // other architectures keep the writer's DM generator and the index DFB.
     const tt::ARCH arch = tensor_args.input_tensor.device()->arch();
     const bool index_tiles_on_compute = arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
@@ -1476,7 +1476,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
     const uint32_t W_index_bytes = tile_width * index_element_size;
 
     auto* device = tensor_args.input_tensor.device();
-    // Wormhole and Blackhole build the stage-1 index tiles in DEST on the compute kernel (topk_fill_index_tile);
+    // Wormhole and Blackhole build the stage-1 index tiles in DEST on the compute kernel (topk_fill_index_tiles);
     // the coordinator then copies values only and stage 1 writes the first index tiles to DRAM. Other
     // architectures keep the coordinator's DM generator. The row-major path keeps its tilize-based index rows.
     const bool index_tiles_on_compute =

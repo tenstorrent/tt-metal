@@ -144,7 +144,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     spec.name = "topk_single_core";
 
     // Generated index tiles: on Wormhole and Blackhole the compute kernel builds each one in DEST
-    // from the lane id (topk_fill_index_tile), so there is no index DFB and the reader streams
+    // from the lane id (topk_fill_index_tiles), so there is no index DFB and the reader streams
     // values only. Other architectures keep the DM generator, and a caller-supplied indices
     // tensor is streamed through the DFB as before.
     const tt::ARCH arch = input_tensor.device().arch();

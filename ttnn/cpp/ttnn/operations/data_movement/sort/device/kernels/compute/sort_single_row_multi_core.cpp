@@ -145,8 +145,8 @@ void kernel_main() {
 
                                 // Process index tiles
                                 if (build_index_tiles) {
-                                    ckernel::topk_fill_index_tile(index_dest_start, i * 32);
-                                    ckernel::topk_fill_index_tile(index_dest_end, j * 32);
+                                    // Stage 1 pairs adjacent tiles (j == i + 1), so one call fills both.
+                                    ckernel::topk_fill_index_tiles<index_dest_start, 2>(i * 32);
                                 } else {
                                     reconfig_data_format_srca(dfb::index_tensor);
                                     transpose_init(dfb::index_tensor);

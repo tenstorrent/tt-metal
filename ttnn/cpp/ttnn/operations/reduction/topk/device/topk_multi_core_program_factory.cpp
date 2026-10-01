@@ -150,7 +150,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
 
     const auto& device = input_tensor.device();
     // Generated index tiles: on Wormhole and Blackhole the local compute kernel builds each one in
-    // DEST from the lane id (topk_fill_index_tile), so the index CB is not created and the reader
+    // DEST from the lane id (topk_fill_index_tiles), so the index CB is not created and the reader
     // streams values only. Other architectures keep the DM generator, and a caller-supplied indices
     // tensor is streamed through the CB as before.
     const bool index_tiles_on_compute = !tensor_args.indices.has_value() && (device.arch() == tt::ARCH::WORMHOLE_B0 ||

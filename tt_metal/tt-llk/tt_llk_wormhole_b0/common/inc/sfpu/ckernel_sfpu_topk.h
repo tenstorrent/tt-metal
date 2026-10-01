@@ -420,27 +420,59 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
-// Build the TRANSPOSED index tile for width position w/32 directly in DEST, so a sort op needs no
-// DM-generated index tile, no circular buffer to carry it, and no unpack + transpose of it. The tile
-// the network reads (bitonic_topk_load16) holds, in every column of tile row r, the index w + r. An
-// SFPSTORE vector covers 4 consecutive Dst rows (lane j writes row rwc + j/8), and Dst row R of a tile
-// is face R/16, face row R%16, i.e. tile row (R%16) + 16*(R/32); LTILEID = 2*j, so LTILEID>>4 is the
-// lane's row inside its 4-row group. The walk over the 16 row groups is the one
+// Build the TRANSPOSED index tiles for width positions w/32 (and w/32 + 1) directly in DEST, so a
+// sort op needs no DM-generated index tile, no circular buffer to carry it, and no unpack + transpose
+// of it. The tile the network reads (bitonic_topk_load16) holds, in every column of tile row r, the
+// index w + r. An SFPSTORE vector covers 4 consecutive Dst rows (lane j writes row rwc + j/8), and Dst
+// row R of a tile is face R/16, face row R%16, i.e. tile row (R%16) + 16*(R/32); LTILEID = 2*j, so
+// LTILEID>>4 is the lane's row inside its 4-row group. The walk over the 16 row groups is the one
 // _topk_stamp_tile_rank_range_ uses: +4 per group, rewind 12 where the group crosses into the paired
-// face. The stores use the network's own index store mode (LO16 in 16-bit DEST, INT32 words [0|idx] in
-// 32-bit DEST, where w may exceed 16 bits), so what it reads back is exactly what it would have stored.
-// Runs on MATH while DEST is acquired, after the value tiles' transposes. Clobbers LREG1..2 and the
-// lane enables (left fully enabled).
-template <bool is_fp32_dest_acc_en>
-inline void _topk_fill_index_tile_(std::uint32_t dst_tile_index, std::uint32_t w)
+// face. After the last group the register holds w + 32 plus the lane row, which is the first group of
+// the next width position, so a second tile continues without a reload.
+// The stores use the network's own index store mode (LO16 in 16-bit DEST, INT32 words [0|idx] in
+// 32-bit DEST, where w may exceed 16 bits) and constant addresses like the network's own index stores
+// (a tile is 64 SFPSTORE address units in either DEST mode; 4 per row group, +2 selects the odd
+// columns), so the whole fill is immediate instructions: three per group.
+// Wormhole's SFPSTORE address-mode field is two bits and the SFPU wrapper sets addr_mod_base, so
+// ADDR_MOD_3 is the incr-0 mode here (physical ADDR_MOD_7), as in the rest of this header.
+// Runs on MATH inside the SFPU wrapper (which has already waited for the value tiles' transposes to
+// drain), while DEST is acquired. Clobbers LREG1..2 and the lane enables (left fully enabled).
+#define TOPK_FILL_INDEX_GROUP(store_mode, addr, delta)                                  \
+    TTI_SFPSTORE(p_sfpu::LREG2, store_mode, ADDR_MOD_3, (addr));     /* even columns */ \
+    TTI_SFPSTORE(p_sfpu::LREG2, store_mode, ADDR_MOD_3, (addr) + 2); /* odd columns */  \
+    TTI_SFPIADD((delta) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE)
+
+template <std::uint32_t store_mode, std::uint32_t tile_index>
+inline void topk_fill_index_tile_groups()
 {
-    // The mode the network itself stores indices with (bitonic_topk_store16): LO16 in 16-bit DEST, INT32 in 32-bit.
+    constexpr std::uint32_t base = tile_index * 64;
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 0, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 4, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 8, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 12, -12);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 16, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 20, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 24, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 28, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 32, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 36, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 40, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 44, -12);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 48, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 52, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 56, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 60, 4);
+}
+
+#undef TOPK_FILL_INDEX_GROUP
+
+template <bool is_fp32_dest_acc_en, std::uint32_t first_tile, std::uint32_t num_tiles>
+inline void _topk_fill_index_tiles_(std::uint32_t w)
+{
+    static_assert(num_tiles == 1 || num_tiles == 2, "fill one tile or a pair of adjacent width positions");
+    // The mode the network itself stores indices with (bitonic_topk_store16).
     constexpr std::uint32_t store_mode = static_cast<std::uint32_t>(is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16);
     TOPK_SFPENCC_ALL_LANES_ON();
-    // The transposes that filled the value tiles are FPU datacopies issued just before this; they
-    // must drain before the SFPU touches DEST and the RWC (as topk_uint16_prepare_value_tile_for_pack).
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-    set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // LREG2 = w | (lane row inside the 4-row group). w is a multiple of 32 and the iota is below 4,
@@ -458,29 +490,11 @@ inline void _topk_fill_index_tile_(std::uint32_t dst_tile_index, std::uint32_t w
     }
     TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
 
-    // Addresses are immediates like the network's own index stores (a tile is 64 SFPSTORE address
-    // units in either DEST mode; 4 per row group, +2 selects the odd columns). Wormhole's SFPSTORE
-    // address-mode field is two bits and the SFPU wrapper sets addr_mod_base, so ADDR_MOD_3 is the
-    // incr-0 mode here (physical ADDR_MOD_7), as in the rest of this header.
-    const std::uint32_t base = dst_tile_index * 64;
-    for (std::uint32_t g = 0; g < 16; g++) // 4-row groups across the tile
+    topk_fill_index_tile_groups<store_mode, first_tile>();
+    if constexpr (num_tiles == 2)
     {
-        TT_SFPSTORE(p_sfpu::LREG2, store_mode, ADDR_MOD_3, base + 4 * g);     // even columns
-        TT_SFPSTORE(p_sfpu::LREG2, store_mode, ADDR_MOD_3, base + 4 * g + 2); // odd columns
-        // Next 4-row group: +4 within a face; where the group crosses into the paired face of the
-        // SAME tile rows (Dst rows 16..31 repeat tile rows 0..15), rewind by 12 instead.
-        if ((g & 7) == 3)
-        {
-            TTI_SFPIADD((-12) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        }
-        else
-        {
-            TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        }
+        topk_fill_index_tile_groups<store_mode, first_tile + 1>();
     }
-
-    set_dst_write_addr(0);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
 // Stamp the 2-tile slab's value words with their sign-conditioned sequence
