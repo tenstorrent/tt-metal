@@ -304,6 +304,40 @@ struct OperationUnpackTilize : Operation<Exu::Unpack, Hoistable::No>
         NarrowTile>;
 };
 
+// -----------------------------------------------
+// OPERATION - UNPACK REDUCE (AKA UNPACK_AB_REDUCE)
+// -----------------------------------------------
+
+struct OperationUnpackReduce : Operation<Exu::Unpack, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationUnpackReduce, T>;
+
+    struct PoolType : Field<std::uint32_t>
+    {
+    };
+
+    struct ReduceDim : Field<std::uint32_t>
+    {
+    };
+
+    struct FaceHeight : Field<std::uint32_t>
+    {
+    };
+
+    struct NumFaces : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationUnpackReduce,
+        /* Fields */
+        PoolType,
+        ReduceDim,
+        FaceHeight,
+        NumFaces>;
+};
+
 // ---------------------------------
 // OPERATION - UNPACK FAST TILIZE WH
 // ---------------------------------
@@ -407,6 +441,45 @@ struct OperationFpuEltwiseBinary : Operation<Exu::Fpu, Hoistable::Yes>
         ReuseDest,
         AccToDest,
         FaceHeight,
+        NumFaces,
+        NumFacesCDim>;
+};
+
+// -------------------------
+// OPERATION - FPU REDUCE
+// -------------------------
+
+struct OperationFpuReduce : Operation<Exu::Fpu, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationFpuReduce, T>;
+
+    struct PoolType : Field<std::uint32_t>
+    {
+    };
+
+    struct ReduceDim : Field<std::uint32_t>
+    {
+    };
+
+    struct MathFidelity : Field<std::uint32_t>
+    {
+    };
+
+    struct NumFaces : Field<std::uint32_t>
+    {
+    };
+
+    struct NumFacesCDim : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationFpuReduce,
+        /* Fields */
+        PoolType,
+        ReduceDim,
+        MathFidelity,
         NumFaces,
         NumFacesCDim>;
 };
@@ -531,9 +604,16 @@ struct OperationPackFastTilizeWh : Operation<Exu::Pack, Hoistable::No>
         Use32BitDest>;
 };
 
-using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackBinary, OperationUnpackMatmul, OperationUnpackTilize, OperationUnpackFastTilizeWh>;
+using UnpackOperations = OperationList<
+    OperationUnpackUnary,
+    OperationUnpackBinary,
+    OperationUnpackMatmul,
+    OperationUnpackTilize,
+    OperationUnpackReduce,
+    OperationUnpackFastTilizeWh>;
 
-using FpuOperations = OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy, OperationFpuEltwiseBinary, OperationFpuFastTilizeWh>;
+using FpuOperations =
+    OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy, OperationFpuEltwiseBinary, OperationFpuReduce, OperationFpuFastTilizeWh>;
 
 using SfpuOperations = OperationList<>;
 
