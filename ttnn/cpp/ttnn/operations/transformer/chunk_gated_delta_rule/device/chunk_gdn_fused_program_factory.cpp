@@ -421,6 +421,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     }
     if (attrs.decay_sfpu) {
         prep_compute.defines.emplace_back("GDN_DECAY_SFPU", "1");  // the fp32 SFPU decay chain (Ct == 1)
+        // gb_flat head selector = a row of ones (g, beta, hence decay etc. in every column): the SFPU decay chain then
+        // needs no broadcast ops (prep_chunk_c1 only, which every Ct == 1, Kt/Vt <= 4 shape uses).
+        if (attrs.gb_flat && Ct == 1 && Kt <= 4 && Vt <= 4) {
+            prep_compute.defines.emplace_back("GDN_SEL_BC", "1");
+            prep_reader.defines.emplace_back("GDN_SEL_BC", "1");
+        }
     }
     prep_compute.runtime_args.reserve(P);
 

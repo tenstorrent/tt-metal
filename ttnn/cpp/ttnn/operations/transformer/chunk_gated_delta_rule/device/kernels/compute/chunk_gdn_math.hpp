@@ -664,6 +664,21 @@ ALWI void gdn_exp_const_col_tile(uint32_t idst) {
 #endif
 }
 
+// GDN_SEL_BC: as gdn_exp_const_col_tile over all four faces (every column of every row holds the same value).
+ALWI void gdn_exp_const_tile(uint32_t idst) {
+#ifdef TRISC_MATH
+    _llk_math_eltwise_sfpu_start_(idst);
+    ckernel::sfpu::_gdn_exp_const_face_();
+    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    ckernel::sfpu::_gdn_exp_const_face_();
+    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    ckernel::sfpu::_gdn_exp_const_face_();
+    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    ckernel::sfpu::_gdn_exp_const_face_();
+    _llk_math_eltwise_sfpu_done_();
+#endif
+}
+
 // exp of a ROW-form vector (the 32 values in row 0 of faces 0 and 1, e.g. a transposed column vector): two SFPU
 // iterations per face (the row's 16 columns) instead of the eight a column-form vector needs per face, and only on
 // faces 0 and 1. The other rows are left alone (the lanes of those first iterations that are not row 0 are
@@ -713,9 +728,13 @@ inline void gdn_decay_sfpu_p1(const GdnPrepCbs& cb, uint32_t G, uint32_t cb_eg) 
     transpose_dest<true>(3);
     transpose_dest<true>(2);
     exp_tile_init();
-    gdn_exp_row_tile(3);        // decayfac
-    gdn_exp_row_tile(2);        // decay_exp
+    gdn_exp_row_tile(3);  // decayfac
+    gdn_exp_row_tile(2);  // decay_exp
+#if defined(GDN_SEL_BC)
+    gdn_exp_const_tile(1);  // exp(g_sum): every element of ones@G is the same, so one exp serves the whole tile
+#else
     gdn_exp_const_col_tile(1);  // exp(g_sum): every row of ones@G is the same, so one exp serves all rows
+#endif
     transpose_dest_init<true>(cb.decay);
     transpose_dest<true>(3);
     transpose_dest<true>(2);
@@ -741,6 +760,18 @@ inline void gdn_decay_sfpu_p2(const GdnPrepCbs& cb, uint32_t cb_eg) {
     pack_reconfig_data_format(cb.lmask);
     reconfig_data_format_srca(cb.decay);
     tile_regs_acquire();
+#if defined(GDN_SEL_BC)
+    // The selected g (hence decay, g_sum, exp(g_sum)) holds its value in EVERY column (GDN_SEL_BC: the head selector is
+    // a row of ones), so decay_i is already broadcast along the row, its transpose is decay_j broadcast along the
+    // column, and the difference is an elementwise subtract; dl*I is an elementwise multiply.
+    copy_init(cb.decay);
+    copy_tile(cb.decay, 0, 2);  // DST2[i][j] = decay_i
+    copy_tile(cb.decay, 0, 1);
+    transpose_dest_init<true>(cb.decay);
+    transpose_dest<true>(1);  // DST1[i][j] = decay_j
+    sub_binary_tile_init();
+    sub_binary_tile(2, 1, 2);  // DST2[i][j] = decay_i - decay_j
+#else
     copy_init(cb.decay);
     copy_tile(cb.decay, 0, 0);  // DST0 = decay (column form)
     copy_tile(cb.decay, 0, 1);
@@ -752,6 +783,7 @@ inline void gdn_decay_sfpu_p2(const GdnPrepCbs& cb, uint32_t cb_eg) {
     sfpu_add_bcast_col(2, 0);  // DST2[i][j] = decay_i
     sfpu_bcast_row_init();
     sfpu_sub_bcast_row(2, 1);  // DST2[i][j] = decay_i - decay_j
+#endif
     copy_init(cb.tril);
     copy_tile(cb.tril, 0, 3);  // DST3 = tril
     mul_binary_tile_init();
@@ -763,8 +795,13 @@ inline void gdn_decay_sfpu_p2(const GdnPrepCbs& cb, uint32_t cb_eg) {
     copy_init(cb.eye);
     copy_tile(cb.eye, 0, 0);  // DST0 = I
     copy_tile(cb_eg, 0, 1);   // DST1 = exp(g_sum)
+#if defined(GDN_SEL_BC)
+    mul_binary_tile_init();
+    mul_binary_tile(0, 1, 0);  // dl*I
+#else
     sfpu_bcast_col_init();
     sfpu_mul_bcast_col(0, 1);  // dl*I
+#endif
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(2, cb.lmask, 0);

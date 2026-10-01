@@ -278,7 +278,19 @@ void kernel_main() {
             // Head selector: one-hot at (row hv, col 0) — make_head_selectors' tile hv (face 0 or 2).
             const uint32_t hv = (wi_start / NC) % HV;
             volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_l1 + 3 * kTileBytes);
+#if defined(GDN_SEL_BC)
+            // GDN_SEL_BC: the whole ROW hv is ones (faces (hv>>4)*2 and (hv>>4)*2+1): g @ sel then puts head hv's g in
+            // EVERY column of the selected tile instead of column 0 only; column 0 is bit-identical to the one-hot
+            // selector.
+            volatile tt_l1_ptr uint32_t* row0 = sel + ((hv >> 4) << 9) + ((hv & 15) << 4);
+#pragma GCC unroll 16
+            for (uint32_t c = 0; c < 16; c++) {
+                row0[c] = kOne;
+                row0[256 + c] = kOne;
+            }
+#else
             sel[((hv >> 4) << 9) + ((hv & 15) << 4)] = kOne;
+#endif
         }
         c_mask.push_back(n_mask);
         if constexpr (kColdPrefetch) {
