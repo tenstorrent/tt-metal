@@ -393,6 +393,11 @@ inline bool sdpa_pa_sum_acc = false;
         pack_reconfig_data_format(restore_cb); \
     } while (0)
 #endif
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
+#define PA_SUM_CB(cb) 12  // chunk-local BF16 row sums
+#else
+#define PA_SUM_CB(cb) (cb)
+#endif
 #ifdef SDPA_PERF_ZONES
 constexpr bool sdpa_perf_zones = true;
 #else
@@ -419,6 +424,47 @@ inline void calculate_sdpa_pa_bias() {
     for (int i = 0; i < 32; ++i) {
         sfpi::vFloat m = sfpi::dst_reg[0];
         sfpi::dst_reg[0] = m + bias;
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+#endif
+#endif
+
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
+#ifndef SDPA_PA_THETA
+// Rescale threshold: keep the reference max until the row max grows by more than theta (scaled units).
+// theta + 0.72 must stay below tau (the exp's headroom), so P never saturates.
+#define SDPA_PA_THETA (16.0f * 0.69314718055994531f)
+#endif
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
+namespace ckernel::sfpu {
+// dest tile 0: max(m_ref, rowmax) from the reduce; tile `group`: m_ref. Keep m_ref unless exceeded by theta.
+template <uint32_t scale_fp32, int group>
+inline void calculate_sdpa_pa_select() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    constexpr float theta = SDPA_PA_THETA / __builtin_bit_cast(float, scale_fp32);
+    for (int i = 0; i < 32; ++i) {
+        sfpi::vFloat m = sfpi::dst_reg[0];
+        sfpi::vFloat r = sfpi::dst_reg[32 * group];
+        v_if(m <= r + theta) { sfpi::dst_reg[0] = r; }
+        v_endif;
+        sfpi::dst_reg++;
+    }
+}
+// dest tiles [0, w): state; [w, 2w): this chunk's term; tile 2w: column-broadcast correction c.
+// state = state * c + term.
+template <int w>
+inline void calculate_sdpa_pa_rescale_add() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    for (int i = 0; i < 32; ++i) {
+        sfpi::vFloat c = sfpi::dst_reg[32 * 2 * w];
+#pragma GCC unroll 2
+        for (int t = 0; t < w; ++t) {
+            sfpi::vFloat x = sfpi::dst_reg[32 * t];
+            sfpi::vFloat y = sfpi::dst_reg[32 * (w + t)];
+            sfpi::dst_reg[32 * t] = x * c + y;
+        }
         sfpi::dst_reg++;
     }
 }
@@ -463,7 +509,8 @@ void reduce_c_row_group(
 #endif
     tile_regs_acquire();
 
-#if (defined(SDPA_PA) || (defined(SDPA_PROTO_PA32) && defined(SDPA_RECIPE_FP32))) && !defined(SDPA_PA_REDUCE_PROBE)
+#if (defined(SDPA_PA) || (defined(SDPA_PROTO_PA32) && defined(SDPA_RECIPE_FP32))) && !defined(SDPA_PA_REDUCE_PROBE) && \
+    !defined(SDPA_PA_SAFE)
     if (do_eltwise_max && !pa_force_reduce) {
         // Reference max: carry the previous maximum unchanged (bitwise), skipping the reduce. A plain copy:
         // the reduce's seeding copy transposes within faces for the reduce's dest layout.
@@ -516,6 +563,15 @@ void reduce_c_row_group(
         reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half);
     }
     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger, overlap_first_half);
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
+    // The reference (m_ref) beside the true max, for the conditional rescale below.
+    if (do_eltwise_max) {
+        copy_init(prev_cb);
+        for (uint32_t i = 0; i < group_size; i++) {
+            copy_tile(prev_cb, row_start + i, group_size + i);
+        }
+    }
+#endif
 #ifdef SDPA_PA_REDUCE_PROBE
     // Cost probe for overflow detection: the true max is computed above; carry the reference max.
     if (do_eltwise_max) {
@@ -531,6 +587,16 @@ void reduce_c_row_group(
 
     tile_regs_commit();
     tile_regs_wait();
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
+    if (do_eltwise_max) {
+        static_assert(true);
+        for (uint32_t i = 0; i < group_size; i++) {
+            PACK((SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_pa_select, (pa_scale_fp32, 2), i, VectorMode::None)));
+        }
+        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+    }
+#endif
 #if defined(SDPA_PA) && (SDPA_PA_DBG & 128)
     // First K chunk only (later chunks return above with the carried reference).
     for (uint32_t i = 0; i < group_size; i++) {
@@ -788,7 +854,7 @@ void sub_exp_block_bcast_cols(
         }
 #endif
 #if !defined(SDPA_RECIPE_FP32) && !defined(SDPA_KO_SUMPACK) && !defined(SDPA_PA_DENOM)
-#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16)
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16) && !defined(SDPA_PA_SAFE)
         pack_reconfig_data_format(reduce_cb);
 #endif
         configure_single_tile_pack(reduce_cb);
@@ -796,7 +862,7 @@ void sub_exp_block_bcast_cols(
             uint32_t dst_index = 0;
 #pragma GCC unroll 1
             for (uint32_t i = 0; i < tiles_per_row; i++) {
-#ifdef SDPA_PA
+#if defined(SDPA_PA) && !defined(SDPA_PA_SAFE)
                 if (global_col_base > 0 || sdpa_pa_sum_acc) {
 #else
                 if (global_col_base > 0) {
@@ -814,7 +880,7 @@ void sub_exp_block_bcast_cols(
                 }
             }
         }
-#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16)
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16) && !defined(SDPA_PA_SAFE)
         pack_reconfig_data_format(inout_cb);
 #endif
 #endif
@@ -1204,7 +1270,11 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 #ifdef SDPA_PA
             // The matmul unpack path does not read Float32 into a 16-bit dest: round the accumulated
             // denominator to BF16 through dest into the spare CB 12 (the unused ping-pong bank) first.
+#ifdef SDPA_PA_SAFE
+            constexpr uint32_t pa_sum_bf16_cb = 8;
+#else
             constexpr uint32_t pa_sum_bf16_cb = 12;
+#endif
             CircularBuffer(cur_sum_cb).wait_front(sdpa_sum_stride);
             reconfig_data_format_srca(cur_sum_cb);
             copy_init(cur_sum_cb);
@@ -1393,7 +1463,7 @@ static void sdpa_inner_loop_step(
     constexpr uint32_t KT_stride = Sk_chunk_t;
     constexpr uint32_t active_Sk = Sk_chunk_t;
     constexpr uint32_t actual_sbw = qkt_subblock_w;
-#if defined(SDPA_KO_REDUCE) || defined(SDPA_KO_NOSPLIT) || defined(SDPA_PA) || \
+#if defined(SDPA_KO_REDUCE) || defined(SDPA_KO_NOSPLIT) || (defined(SDPA_PA) && !defined(SDPA_PA_SAFE)) || \
     (defined(SDPA_PROTO_PA32) && defined(SDPA_RECIPE_FP32))
     constexpr bool reduce_trigger = false &&
 #else
@@ -1489,6 +1559,9 @@ static void sdpa_inner_loop_step(
 #ifdef SDPA_PA
     sdpa_pa_sum_acc = !is_first_iter;
 #endif
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
+    CircularBuffer(PA_SUM_CB(cur.sum)).reserve_back(Sq_chunk_t * sdpa_sum_stride);
+#endif
 #ifndef SDPA_RECIPE_FP32
     if (is_first_iter) {
         tile_regs_acquire();
@@ -1563,7 +1636,7 @@ static void sdpa_inner_loop_step(
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
-                        cur.sum,
+                        PA_SUM_CB(cur.sum),
                         KT_stride,
                         prev_q_subblock,
                         kt_subblock * actual_sbw,
@@ -1798,6 +1871,134 @@ static void sdpa_inner_loop_step(
 #else
         const uint32_t group_pv_offset = (group_k_index % 2 == 1) ? vDHt : 0;
 #endif
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
+        // Groups whose reference max is unchanged (bitwise, UNPACK's Phase-1 scans), sent to MATH and PACK.
+        uint32_t pa_ident = 0;
+        if (!is_first_iter) {
+            CircularBuffer(prev.max).wait_front(Sq_chunk_t);
+            CircularBuffer(cur.max).wait_front(Sq_chunk_t);
+            UNPACK({
+                sdpa_identity_flags[q_num_subblocks - 1] = sdpa_scan_identity_maxima(
+                    prev.max, cur.max, qk_index(q_num_subblocks - 1), qk_rows(q_num_subblocks - 1));
+                for (uint32_t g = 0; g < q_num_subblocks; ++g) {
+                    pa_ident |= (sdpa_identity_flags[g] ? 1u : 0u) << g;
+                }
+                mailbox_write(ckernel::ThreadId::MathThreadId, pa_ident);
+                mailbox_write(ckernel::ThreadId::PackThreadId, pa_ident);
+            })
+            MATH(pa_ident = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+            PACK(pa_ident = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        }
+        auto pa_is_ident = [&](uint32_t g) -> bool { return !is_first_iter && ((pa_ident >> g) & 1u); };
+        // Changed groups put this chunk's PV in plane 1 and fold it below; others accumulate in plane 0.
+        auto pa_pv_offset = [&](uint32_t g) -> uint32_t { return (is_first_iter || pa_is_ident(g)) ? 0 : vDHt; };
+        auto pa_pv_acc = [&](uint32_t g) -> bool { return pa_is_ident(g); };
+        // Fold group g (rows Q tile rows) into the Float32 state: l (CB 13) from the chunk-local sums
+        // (CB 12), and for changed groups O = O * c + PV (plane 1). In the last chunk, normalization pops
+        // each group, so reads index from the current front.
+        auto pa_fold = [&](uint32_t g, uint32_t rows, bool first, bool ident) {
+            constexpr uint32_t lsum_cb = 12;
+            const uint32_t read_row = is_last_iter ? 0 : g * rows;
+            CircularBuffer(lsum_cb).push_back(rows * sdpa_sum_stride);
+            CircularBuffer(lsum_cb).wait_front(rows * sdpa_sum_stride);
+            if (first || ident) {
+                reconfig_data_format_srca(lsum_cb);
+                copy_init(lsum_cb);
+                tile_regs_acquire();
+                for (uint32_t r = 0; r < rows; ++r) {
+                    copy_tile(lsum_cb, r * sdpa_sum_stride, r);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cur.sum);
+                configure_single_tile_pack(cur.sum);
+                PACK((llk_pack_reconfig_l1_acc(first ? 0 : 1)));
+                for (uint32_t r = 0; r < rows; ++r) {
+                    pack_tile<true>(r, cur.sum, r * sdpa_sum_stride);
+                }
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                pack_reconfig_data_format(cb_qkt_im);
+                tile_regs_release();
+            } else {
+                for (uint32_t r = 0; r < rows; ++r) {
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(cur.sum);
+                    copy_init(cur.sum);
+                    copy_tile(cur.sum, (read_row + r) * sdpa_sum_stride, 0);
+                    reconfig_data_format_srca(lsum_cb);
+                    copy_init(lsum_cb);
+                    copy_tile(lsum_cb, r * sdpa_sum_stride, 1);
+                    unary_bcast_init<BroadcastType::COL>(cb_exp_max_diff);
+                    unary_bcast<BroadcastType::COL>(cb_exp_max_diff, r, 2);
+                    unary_bcast_uninit<BroadcastType::COL>(cb_exp_max_diff);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    PACK((SFPU_UNARY_CALL(
+                        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_pa_rescale_add, (1), 0, VectorMode::None)));
+                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                    pack_reconfig_data_format(cur.sum);
+                    configure_single_tile_pack(cur.sum);
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    pack_tile<true>(0, cur.sum, r * sdpa_sum_stride);
+                    pack_reconfig_data_format(cb_qkt_im);
+                    tile_regs_release();
+                }
+                for (uint32_t r = 0; r < rows; ++r) {
+                    for (uint32_t j = 0; j < vDHt; j += 2) {
+                        const bool pair = j + 1 < vDHt;
+                        tile_regs_acquire();
+                        reconfig_data_format_srca(out_cb);
+                        copy_init(out_cb);
+                        const uint32_t rbase = (read_row + r) * 2 * vDHt + j;
+                        copy_tile(out_cb, rbase, 0);
+                        if (pair) {
+                            copy_tile(out_cb, rbase + 1, 1);
+                        }
+                        copy_tile(out_cb, rbase + vDHt, pair ? 2 : 1);
+                        if (pair) {
+                            copy_tile(out_cb, rbase + vDHt + 1, 3);
+                        }
+                        reconfig_data_format_srca(cb_exp_max_diff);
+                        unary_bcast_init<BroadcastType::COL>(cb_exp_max_diff);
+                        unary_bcast<BroadcastType::COL>(cb_exp_max_diff, r, pair ? 4 : 2);
+                        unary_bcast_uninit<BroadcastType::COL>(cb_exp_max_diff);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        if (pair) {
+                            PACK((SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_pa_rescale_add, (2), 0, VectorMode::None)));
+                        } else {
+                            PACK((SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_pa_rescale_add, (1), 0, VectorMode::None)));
+                        }
+                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                        pack_reconfig_data_format(out_cb);
+                        configure_single_tile_pack(out_cb);
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        const uint32_t wbase = r * 2 * vDHt + j;
+                        pack_tile<true>(0, out_cb, wbase);
+                        if (pair) {
+                            pack_tile<true>(1, out_cb, wbase + 1);
+                        }
+                        pack_reconfig_data_format(cb_qkt_im);
+                        tile_regs_release();
+                    }
+                }
+            }
+            CircularBuffer(lsum_cb).pop_front(rows * sdpa_sum_stride);
+            reconfig_data_format_srca(cb_qkt_im);
+        };
+#define PA_FIRST_FOLD(rows)                  \
+    if (is_first_iter) {                     \
+        pa_fold(0, rows, true, false);       \
+    }
+#define PA_PV_OFF(g) pa_pv_offset(g)
+#define PA_PV_ACC(g) pa_pv_acc(g)
+#else
+#define PA_FIRST_FOLD(rows)
+#define PA_PV_OFF(g) group_pv_offset
+#define PA_PV_ACC(g) (!is_first_iter)
+#endif
 #endif
 
         // V wait deferred: don't block here. The sub_exp drain loop below
@@ -1854,7 +2055,7 @@ static void sdpa_inner_loop_step(
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
-                        cur.sum,
+                        PA_SUM_CB(cur.sum),
                         KT_stride,
                         qk_index(q_num_subblocks - 1),
                         kt_sub * matmul_inner,
@@ -1875,7 +2076,7 @@ static void sdpa_inner_loop_step(
 #ifdef SDPA_RECIPE_FP32
                     if (kt_sub > 0 || inplace_numerator) {
 #elif defined(SDPA_PA)
-                    PA_PV_BEGIN(out_cb, kt_sub > 0 || !is_first_iter);
+                    PA_PV_BEGIN(out_cb, kt_sub > 0 || PA_PV_ACC(0));
                     if (false) {
 #else
                     if (kt_sub > 0) {
@@ -1919,7 +2120,7 @@ static void sdpa_inner_loop_step(
 #ifdef SDPA_RECIPE_FP32
                                 v_subblock * qktv_subblock_w,
 #else
-                                v_subblock * qktv_subblock_w + group_pv_offset,
+                                v_subblock * qktv_subblock_w + PA_PV_OFF(0),
 #endif
                                 qktv_subblock_w,
                                 first_h,
@@ -2086,6 +2287,7 @@ static void sdpa_inner_loop_step(
                 group2_bootstrap_row(prev.out, out_cb, pushed * qktv_h, 0, sbh, vDHt);
             }
 #endif
+            PA_FIRST_FOLD(sbh)
             CircularBuffer(cur.sum).push_back(sbh * sdpa_sum_stride);
             CircularBuffer(out_cb).push_back(sbh * vDHt * sdpa_out_stride);
             normalize_row_streaming<
@@ -2125,7 +2327,12 @@ static void sdpa_inner_loop_step(
             // Global row-group index is stable even when final normalization pops rows.
             const bool has_local = (group_k_index % 2 == 0) && group_local_valid[salad_row];
 #endif
-#ifdef SDPA_PA
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
+            CircularBuffer(cb_exp_max_diff).wait_front(sbh);
+            pa_fold(salad_row, sbh, false, pa_is_ident(salad_row));
+            CircularBuffer(cb_exp_max_diff).pop_front(sbh);
+            return;
+#elif defined(SDPA_PA)
             // Reference max: nothing to fold; numerator and denominator accumulate in Float32 L1.
             CircularBuffer(cb_exp_max_diff).wait_front(sbh);
             CircularBuffer(cb_exp_max_diff).pop_front(sbh);
@@ -2244,7 +2451,7 @@ static void sdpa_inner_loop_step(
                 }
 #endif
 #ifdef SDPA_PA
-                PA_PV_BEGIN(out_cb, !is_first_iter);
+                PA_PV_BEGIN(out_cb, PA_PV_ACC(q_subblock));
 #endif
                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
@@ -2267,7 +2474,7 @@ static void sdpa_inner_loop_step(
 #ifdef SDPA_RECIPE_FP32
                         v_subblock * qktv_subblock_w,
 #else
-                        v_subblock * qktv_subblock_w + group_pv_offset,
+                        v_subblock * qktv_subblock_w + PA_PV_OFF(q_subblock),
 #endif
                         qktv_subblock_w,
                         cur_h,
@@ -2310,6 +2517,7 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
                     } else {
+                        PA_FIRST_FOLD(qktv_h)
                         CircularBuffer(cur.sum).push_back(qktv_h * sdpa_sum_stride);
                         CircularBuffer(out_cb).push_back(qktv_h * vDHt * sdpa_out_stride);
                         pushed_rows++;
@@ -2320,6 +2528,7 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, drain_h);
                     } else {
+                        PA_FIRST_FOLD(drain_h)
                         CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
                         CircularBuffer(out_cb).push_back(drain_h * vDHt * sdpa_out_stride);
                         pushed_rows++;
@@ -2329,6 +2538,7 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
                     } else {
+                        PA_FIRST_FOLD(qktv_h)
                         CircularBuffer(cur.sum).push_back(qktv_h * sdpa_sum_stride);
                         CircularBuffer(out_cb).push_back(qktv_h * vDHt * sdpa_out_stride);
                         pushed_rows++;
@@ -2340,6 +2550,7 @@ static void sdpa_inner_loop_step(
 #ifndef SDPA_RECIPE_FP32
                 group2_bootstrap_row(prev.out, out_cb, salad_row * qktv_h, salad_row * qktv_h, qktv_h, vDHt);
 #endif
+                PA_FIRST_FOLD(qktv_h)
                 CircularBuffer(cur.sum).push_back(qktv_h * sdpa_sum_stride);
                 CircularBuffer(out_cb).push_back(qktv_h * vDHt * sdpa_out_stride);
                 pushed_rows++;
@@ -2376,6 +2587,7 @@ static void sdpa_inner_loop_step(
                         group2_bootstrap_row(prev.out, out_cb, 0, 0, drain_h, vDHt);
                     }
 #endif
+                    PA_FIRST_FOLD(drain_h)
                     CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
                     CircularBuffer(out_cb).push_back(drain_h * vDHt * sdpa_out_stride);
                     pushed_rows++;
@@ -2391,6 +2603,7 @@ static void sdpa_inner_loop_step(
                         group2_bootstrap_row(
                             prev.out, out_cb, last_group * qktv_h, last_group * qktv_h, drain_h, vDHt);
 #endif
+                        PA_FIRST_FOLD(drain_h)
                         CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
                         CircularBuffer(out_cb).push_back(drain_h * vDHt * sdpa_out_stride);
                         pushed_rows++;

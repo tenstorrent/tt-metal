@@ -127,7 +127,8 @@ ProgramDescriptor recipe_compute_program(
     }
     if (proto_pa) {
         // The kernel starts with cur.sum = CB 13 and keeps that bank for the whole Q chunk.
-        add_cb(12, 1, state_bytes, state_format);
+        // SDPA_PA_SAFE: CB 12 holds each chunk's BF16 row sums (folded per group into CB 13).
+        add_cb(12, std::getenv("SDPA_PA_SAFE") ? q_tiles * stride : 1, state_bytes, state_format);
         add_cb(13, q_tiles * stride, 4096, tt::DataFormat::Float32);
     } else {
         for (uint8_t index : {12, 13}) {
@@ -188,8 +189,12 @@ ProgramDescriptor recipe_compute_program(
     }
     if (proto_pa) {
         compute.defines.emplace_back("SDPA_PROTO_PA", "1");
+        if (std::getenv("SDPA_PA_SAFE")) {
+            compute.defines.emplace_back("SDPA_PA_SAFE", "1");
+        }
         // LOW_PRECISION is pack-bound with an idle-ish FPU: its denominator comes from a P * 1 matmul.
-        if (policy.selection.recipe == Recipe::E && std::getenv("SDPA_PA_NO_DENOM") == nullptr) {
+        // Opt-in only (user decision: not worth its small-logit accuracy cost).
+        if (policy.selection.recipe == Recipe::E && std::getenv("SDPA_PA_DENOM_ON") != nullptr) {
             compute.defines.emplace_back("SDPA_PA_DENOM", "1");
         }
         if (const char* dbg = std::getenv("SDPA_PA_DBG")) {
