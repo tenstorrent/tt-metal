@@ -21,8 +21,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
-#include <type_traits>
-
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common.h"
 
@@ -55,8 +53,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef ARCH_BLACKHOLE
-    // An 8-bit streamed operand is streamed at its data rate; the choice is made once here and the unpack loop below runs
-    // one copy per choice, so it costs nothing per call. Wormhole's init and execute have no such argument.
+    // an 8-bit streamed operand is streamed at its data rate (Wormhole's init has no such argument)
     const bool stream_narrow = _llk_unpack_AB_matmul_stream_narrow_(CT_DIM, RT_DIM, formats.unpack_A_src, formats.unpack_B_src);
 #define MATMUL_STREAM_NARROW_ARG(narrow) , narrow
 #else
@@ -103,39 +100,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            auto unpack_blocks = [&]([[maybe_unused]] const auto narrow)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    for (int block = 0; block < NUM_BLOCKS; ++block)
+                    for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        for (std::uint32_t j = 0; j < KT_DIM; j++)
-                        {
-                            _llk_unpack_AB_matmul_<>(
-                                L1_ADDRESS(buffer_A[0]),
-                                L1_ADDRESS(buffer_B[0]),
-                                j,
-                                j * CT_DIM,
-                                TILE_SIZE_UNPACK_B,
-                                TILE_SIZE_UNPACK_A,
-                                PARTIAL_FACE_B,
-                                PARTIAL_FACE_A,
-                                CT_DIM,
-                                RT_DIM,
-                                KT_DIM MATMUL_STREAM_NARROW_ARG(narrow.value));
-                        }
+                        _llk_unpack_AB_matmul_<>(
+                            L1_ADDRESS(buffer_A[0]),
+                            L1_ADDRESS(buffer_B[0]),
+                            j,
+                            j * CT_DIM,
+                            TILE_SIZE_UNPACK_B,
+                            TILE_SIZE_UNPACK_A,
+                            PARTIAL_FACE_B,
+                            PARTIAL_FACE_A,
+                            CT_DIM,
+                            RT_DIM,
+                            KT_DIM);
                     }
                 }
-            };
-#ifdef ARCH_BLACKHOLE
-            if (stream_narrow)
-            {
-                unpack_blocks(std::true_type {});
-            }
-            else
-#endif
-            {
-                unpack_blocks(std::false_type {});
             }
         }
         PROFILER_SYNC();

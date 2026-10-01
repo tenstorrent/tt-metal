@@ -63,7 +63,7 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
 
 /**
  * @brief Whether the operand a matmul streams holds 8 bits per datum or less: the value of the stream_narrow argument of
- *        @ref _llk_unpack_AB_matmul_init_ and @ref _llk_unpack_AB_matmul_ (pass the same value to both).
+ *        @ref _llk_unpack_AB_matmul_init_.
  *
  * The streamed operand is in1 (unpacked into SrcA) when ct_dim >= rt_dim and in0 (SrcB) otherwise.
  *
@@ -122,7 +122,10 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
     }
     else if (narrow)
     {
-        // CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask, scratch_sel 0)
+        // SCRATCH_SEC0_val = STRIDE_GPR (after the THCON write of TMP_LO), then CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask,
+        // scratch_sel 0): the stride is read from the GPR every tile as before, without the RDCFG and ADDDMAREG round trip
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+        TTI_WRCFG(STRIDE_GPR, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, CFG_REG);
     }
     else
@@ -162,8 +165,8 @@ inline void _llk_unpack_AB_matmul_mop_config_(
     const bool reuse_a             = ct_dim >= rt_dim;
     const bool stream_partial_face = reuse_a ? unpA_partial_face : unpB_partial_face;
     // two copies of the streamed tile body, one per config context: the UNPACR group (4 instructions for a partial face,
-    // 1 otherwise), the address advance (1 instruction for a narrow format, 4 otherwise) and the NOP
-    const std::uint32_t replay_buf_run_len  = (stream_partial_face ? 4 : 1) + (stream_narrow ? 1 : 4) + 1;
+    // 1 otherwise), the address advance (3 instructions for a narrow format, 4 otherwise) and the NOP
+    const std::uint32_t replay_buf_run_len  = (stream_partial_face ? 4 : 1) + (stream_narrow ? 3 : 4) + 1;
     const std::uint32_t replay_buf_prog_len = 2 * replay_buf_run_len;
 
     if (reuse_a)
@@ -234,8 +237,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
  * @param stream_narrow: Whether the streamed operand holds 8 bits per datum or less, from
  *                       @ref _llk_unpack_AB_matmul_stream_narrow_; such an operand is streamed at its data rate (the replay
- *                       advances its address with one CFGSHIFTMASK), every other one as before. Pass the same value to
- *                       @ref _llk_unpack_AB_matmul_.
+ *                       advances its address with one CFGSHIFTMASK), every other one as before.
  * @note Call @ref _llk_unpack_AB_matmul_uninit_ to restore the modified datum-count state.
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
@@ -311,35 +313,11 @@ inline void _llk_unpack_AB_matmul_uninit_()
 }
 
 /**
- * @brief Unpack one tile into SRC with the matmul's held-operand UNPACR group.
- *
- * @tparam SRC: SrcA or SrcB.
- * @param partial_face: Whether the operand is unpacked face-by-face.
- */
-template <std::uint32_t SRC>
-inline void _llk_unpack_AB_matmul_held_tile_(const bool partial_face)
-{
-    if (partial_face)
-    {
-        TTI_UNPACR_NOP(SRC, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-        // Do face by face unpacking
-        TTI_UNPACR(SRC, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-        TTI_UNPACR(SRC, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-        TTI_SETADCZW((SRC == SrcA) ? p_setadc::UNP_A : p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
-    }
-    else
-    {
-        TTI_UNPACR(SRC, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-    }
-}
-
-/**
  * @brief Unpack the operand tiles for a matmul (A x B) into SrcA and SrcB.
  *
  * Iterates over the reused dimension, computing per-tile L1 addresses (with optional kernel-
  * broadcast wraparound and kt_dim striding), and unpacks operand A to SrcB / operand B to SrcA
- * for each row while streaming the other operand through the MOP. With the CFGSHIFTMASK advance (stream_narrow) the
- * streamed tile stride is loaded into SCRATCH_SEC0_val from the tile size GPRs at every call.
+ * for each step while synchronizing through the unpack semaphore and config-context switching.
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
@@ -354,7 +332,6 @@ inline void _llk_unpack_AB_matmul_held_tile_(const bool partial_face)
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
  * @param kt_dim: Number of tiles along the contraction (K) dimension.
- * @param stream_narrow: The value given to @ref _llk_unpack_AB_matmul_init_ (from @ref _llk_unpack_AB_matmul_stream_narrow_).
  * @note Call @ref _llk_unpack_AB_matmul_init_ with matching template args before this function, and
  *       @ref _llk_unpack_AB_matmul_uninit_ after it to restore modified state.
  * @ref _llk_math_matmul_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
@@ -371,42 +348,21 @@ inline void _llk_unpack_AB_matmul_(
     const bool unpB_partial_face = false,
     std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim   = 1,
-    const std::uint32_t kt_dim   = 1,
-    const bool stream_narrow     = false)
+    const std::uint32_t kt_dim   = 1)
 {
-    // In0/InA -> srcB (unpacker 1; supports partial face)
-    // In1/InB -> srcA (unpacker 0)
+    // In0/InA -> srcB (supports partial face)
+    // In1/InB -> srcA
 
     volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-    const bool reuse_a          = ct_dim >= rt_dim;
-    const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim; // rows of the block, one held tile each
-    const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // streamed tiles per row
+    const bool reuse_a        = ct_dim >= rt_dim;
+    const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
 
     if (!reuse_a)
     {
         TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
     }
 
-    if (stream_narrow)
-    {
-        // The replay's CFGSHIFTMASK adds SCRATCH_SEC0_val to the streamed operand's base address: load it with the streamed
-        // tile stride in 16-byte words (in1 tiles are consecutive, in0 rows are kt_dim tiles apart) from the tile size GPRs
-        // (TILE_SIZE_A is the in1 tile size, TMP_LO the in0 row stride), so a tile size change between two calls and another
-        // op's use of the scratch register are honoured. The WRCFG is ordered against the replay's CFGSHIFTMASKs in the
-        // Configuration Unit, so no NOP is needed after it.
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-        if (reuse_a)
-        {
-            TTI_WRCFG(p_gpr_unpack::TILE_SIZE_A, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
-        }
-        else
-        {
-            TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
-        }
-    }
-
-    const bool held_partial_face = reuse_a ? unpB_partial_face : unpA_partial_face;
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
         std::uint32_t offset_address_a = tile_size_a * (tile_index_a + (reuse_a ? (t * kt_dim) : (0)));
@@ -420,8 +376,8 @@ inline void _llk_unpack_AB_matmul_(
             offset_address_b = tile_size_b * ((tile_index_b + (reuse_a ? (0) : (t))) % kernel_broadcast_b);
         }
 
-        const std::uint32_t address_a = base_address_a + offset_address_a;
-        const std::uint32_t address_b = base_address_b + offset_address_b;
+        std::uint32_t address_a = base_address_a + offset_address_a;
+        std::uint32_t address_b = base_address_b + offset_address_b;
 
         // Wait for free context
         wait_for_next_context(2);
@@ -436,15 +392,40 @@ inline void _llk_unpack_AB_matmul_(
 
         if (reuse_a)
         {
-            _llk_unpack_AB_matmul_held_tile_<SrcB>(held_partial_face);
+            if (unpB_partial_face)
+            {
+                TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                // Do face by face unpacking
+                TTI_UNPACR(
+                    SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                TTI_UNPACR(
+                    SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+            }
+            else
+            {
+                TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+            }
         }
         else
         {
-            _llk_unpack_AB_matmul_held_tile_<SrcA>(held_partial_face);
+            if (unpA_partial_face)
+            {
+                // Do face by face unpacking
+                TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR(
+                    SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                TTI_UNPACR(
+                    SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+            }
+            else
+            {
+                TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+            }
         }
 
-        // Stream the other operand; a set zmask bit selects the context 1 replay copy, one bit per streamed tile (up to 16 in a full-sync block)
-        TT_MOP(0, rut_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
+        TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xffff); // Run the MOP
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);

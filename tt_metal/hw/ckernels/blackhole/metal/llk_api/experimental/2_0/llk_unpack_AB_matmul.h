@@ -80,7 +80,5 @@ inline void llk_unpack_AB_matmul(
         IN0_DESC.shape.total_row_dim() < ckernel::TILE_R_DIM,  // partial_face_b (SrcB <- IN0)
         ct_dim,
         rt_dim,
-        kt_dim,
-        _llk_unpack_AB_matmul_stream_narrow_(
-            ct_dim, rt_dim, static_cast<std::uint32_t>(IN1_DESC.format), static_cast<std::uint32_t>(IN0_DESC.format)));
+        kt_dim);
 }

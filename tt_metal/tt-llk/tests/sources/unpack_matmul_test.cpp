@@ -26,7 +26,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifdef ARCH_BLACKHOLE
-    // an 8-bit streamed operand is streamed at its data rate (Wormhole's init and execute have no such argument)
+    // an 8-bit streamed operand is streamed at its data rate (Wormhole's init has no such argument)
     const bool stream_narrow = _llk_unpack_AB_matmul_stream_narrow_(params.CT_DIM, params.RT_DIM, formats.unpack_A_src, formats.unpack_B_src);
 #define MATMUL_STREAM_NARROW_ARG(narrow) , narrow
 #else
@@ -69,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             params.PARTIAL_FACE_A, // in0
             params.CT_DIM,
             params.RT_DIM,
-            params.KT_DIM MATMUL_STREAM_NARROW_ARG(stream_narrow));
+            params.KT_DIM);
     }
 }
 
