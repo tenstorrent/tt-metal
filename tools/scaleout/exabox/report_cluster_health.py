@@ -38,8 +38,23 @@ STORE_ROOT_ENV = "CLUSTER_HEALTH_STORE_ROOT"
 # setgid + sticky + owner/group rwx. mkdir is umask-masked (often 0755), so the
 # first writer of the day would otherwise lock out the store's group. Sticky
 # keeps non-owner writers from unlinking each other's records; as usual, the
-# directory owner can still unlink any entry. No other-write.
+# directory owner can still unlink any entry. No other-write unless the store
+# root is already other-writable (then date dirs follow that and stay sticky).
 STORE_DIR_MODE = 0o3770
+STORE_DIR_MODE_WORLD = 0o1777
+STORE_OTHER_WRITE = 0o002
+
+
+def date_dir_mode_for_root(root_mode: int) -> int:
+    """Match a world-writable store root with a sticky world-writable date dir.
+
+    Mixed human / automation / log-shipper UIDs are often not in one shared
+    group, so a group-only ``03770`` date dir locks out later writers when the
+    typed store root is already ``0777``.
+    """
+    if root_mode & STORE_OTHER_WRITE:
+        return STORE_DIR_MODE_WORLD
+    return STORE_DIR_MODE
 
 
 def dumps_compact(obj: dict[str, Any]) -> str:
@@ -619,11 +634,16 @@ def _existing_or_conflict(
 def _ensure_date_dir(root: Path, date_name: str) -> int:
     """Open today's directory securely and return a caller-owned descriptor.
 
-    Only the date directory gets STORE_DIR_MODE. It is the one directory this
+    Only the date directory gets a shared mode. It is the one directory this
     tool owns per day, so a mistyped --store-root cannot loosen an unrelated
     tree. ``mkdir`` cannot do this itself: its mode applies to the leaf only
     and is masked by umask, which is how the first writer of the day used to
     leave a 0755 directory owned by their uid.
+
+    Mode follows the store root: group-only roots get ``03770``; world-writable
+    roots get sticky ``01777``. An existing date dir that is already
+    other-writable is never tightened back to group-only (wrappers may have
+    opened it for Alloy / mixed UIDs).
 
     Descriptor-relative operations prevent a shared-root writer from replacing
     the date path with a symlink or swapping it while a record is published.
@@ -633,9 +653,11 @@ def _ensure_date_dir(root: Path, date_name: str) -> int:
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     root_fd = os.open(root, directory_flags)
     try:
-        root_gid = os.fstat(root_fd).st_gid
+        root_stat = os.fstat(root_fd)
+        root_gid = root_stat.st_gid
+        desired_mode = date_dir_mode_for_root(root_stat.st_mode)
         try:
-            os.mkdir(date_name, mode=STORE_DIR_MODE, dir_fd=root_fd)
+            os.mkdir(date_name, mode=desired_mode, dir_fd=root_fd)
         except FileExistsError:
             pass
         date_dir_fd = os.open(date_name, directory_flags, dir_fd=root_fd)
@@ -643,13 +665,18 @@ def _ensure_date_dir(root: Path, date_name: str) -> int:
         os.close(root_fd)
 
     try:
+        current_mode = os.fstat(date_dir_fd).st_mode
+        # Never undo a world-writable date dir created by wrappers or an earlier
+        # world-writable root; only repair toward desired_mode.
+        mode = STORE_DIR_MODE_WORLD if current_mode & STORE_OTHER_WRITE else desired_mode
         try:
-            os.fchown(date_dir_fd, -1, root_gid)
-        except OSError:
-            if os.fstat(date_dir_fd).st_gid != root_gid:
-                _warn(f"date directory group does not match store root group ({root_gid})")
-        try:
-            os.fchmod(date_dir_fd, STORE_DIR_MODE)
+            if mode == STORE_DIR_MODE:
+                try:
+                    os.fchown(date_dir_fd, -1, root_gid)
+                except OSError:
+                    if os.fstat(date_dir_fd).st_gid != root_gid:
+                        _warn(f"date directory group does not match store root group ({root_gid})")
+            os.fchmod(date_dir_fd, mode)
         except OSError:
             pass
         return date_dir_fd
@@ -664,10 +691,10 @@ def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
     Uses an exclusive link (no-clobber). If dest already exists, identical
     content is treated as success; different content is left in place and the
     stdout-only record is returned. On I/O failure, warns and returns the
-    stdout-only record (no record_id). The date directory is chmod'd to
-    STORE_DIR_MODE (setgid + sticky + group write) so a shared store stays
-    writable for the store root's group; record files themselves follow the
-    caller's umask.
+    stdout-only record (no record_id). The date directory mode follows the
+    store root (``03770`` group-only, or sticky ``01777`` when the root is
+    other-writable) so mixed UIDs can share a world-writable store; record
+    files themselves follow the caller's umask.
     """
     record_id = compute_record_id(
         record["test_type"],

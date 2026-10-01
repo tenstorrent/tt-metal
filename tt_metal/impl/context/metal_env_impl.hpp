@@ -71,7 +71,6 @@ public:
         tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED,
         tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT,
         tt_fabric::FabricRouterConfig router_config = tt_fabric::FabricRouterConfig{});
-    void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     void teardown_fabric_config();

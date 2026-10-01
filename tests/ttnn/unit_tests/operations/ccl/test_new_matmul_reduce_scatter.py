@@ -70,12 +70,12 @@ def run_reduce_scatter_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    rs_num_batches = rs_input_shape[0]
-    single_batch_input_shape = rs_input_shape[:]
-    single_batch_input_shape[2] //= rs_num_batches
+    # The reduce-scatter stages every batch into its own region of the intermediate and keeps all
+    # batches in flight within one ring step, so the intermediate must be input-shaped. (It used to be
+    # sized to a single batch, which the earlier shared-region layout accepted.)
     persistent_intermediate_buffers = [
         ttnn.from_torch(
-            torch.zeros(single_batch_input_shape),
+            torch.zeros(rs_input_shape),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=rs_input_dtype,

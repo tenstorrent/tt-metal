@@ -34,7 +34,7 @@ using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 using tt::tt_metal::experimental::ComputeHardwareConfig;
 using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementGen1Config;
+using tt::tt_metal::experimental::DataMovementHardwareConfig;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
@@ -51,7 +51,6 @@ using tt::tt_metal::experimental::Table;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
@@ -63,7 +62,7 @@ using dram_sharded_helpers::move_common_entries;
 using dram_sharded_helpers::validate_num_workers_per_dram_bank;
 
 static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
     ComputeHardwareConfig compute_hw,
@@ -111,19 +110,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_mcast_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
     CoreCoord bottom_right_core = {
         (std::size_t)start_core_x + compute_with_storage_grid_size.x - 1,
         (std::size_t)start_core_y + compute_with_storage_grid_size.y - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
@@ -133,7 +132,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     validate_num_workers_per_dram_bank(workers_per_bank);
     TT_FATAL(
-        workers_per_bank == 1 || device->arch() == tt::ARCH::BLACKHOLE,
+        workers_per_bank == 1 || device.arch() == tt::ARCH::BLACKHOLE,
         "Multiple workers per DRAM bank are currently supported only on Blackhole");
     TT_FATAL(
         workers_per_bank == 1 || in1_noc == tt::tt_metal::NOC::NOC_0,
@@ -260,6 +259,23 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     uint32_t in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_tile_shape()[1];
     uint32_t in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
+    // The activation multicast is one semaphore-gated block per sender, so its cost is the block
+    // count K / in0_block_w. A block may be wider than a storage shard: the sender then gathers
+    // shards_per_block consecutive shards over the NoC before multicasting (see the in0 sender
+    // kernel), which takes the block count off the storage-core count.
+    uint32_t shards_per_block = 1;
+    if (in0_block_w > in0_shard_width_in_tiles) {
+        TT_FATAL(
+            in0_block_w % in0_shard_width_in_tiles == 0,
+            "in0_block_w ({}) wider than the in0 shard ({} tiles) must be a multiple of it",
+            in0_block_w,
+            in0_shard_width_in_tiles);
+        TT_FATAL(
+            per_core_M == 1,
+            "a multi-shard in0 block gathers one tile row per shard; per_core_M ({}) must be 1",
+            per_core_M);
+        shards_per_block = in0_block_w / in0_shard_width_in_tiles;
+    }
     uint32_t in0_sharded_num_entries = in2_block_tiles;
 
     uint32_t bias_num_entries = per_core_N_compute;
@@ -319,7 +335,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
 
-    uint32_t num_blocks_per_shard = num_blocks / input_all_storage_cores_vec.size();
+    TT_FATAL(
+        shards_per_block == 1 || num_blocks * shards_per_block == input_all_storage_cores_vec.size(),
+        "in0 block count {} x shards per block {} must cover the {} storage cores",
+        num_blocks,
+        shards_per_block,
+        input_all_storage_cores_vec.size());
+    uint32_t num_blocks_per_shard = shards_per_block > 1 ? 1 : num_blocks / input_all_storage_cores_vec.size();
     if (per_core_M > 1) {
         TT_FATAL(
             num_blocks_per_shard == 1,
@@ -336,6 +358,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     const DFBSpecName IN0_DFB{"in0"};
     const DFBSpecName IN1_DFB{"in1"};
     const DFBSpecName IN0_SHARDED_DFB{"in0_sharded"};
+    const DFBSpecName IN0_STAGE_DFB{"in0_stage"};
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName INTERMED0_DFB{"intermed0"};
@@ -352,6 +375,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_define;
+    if (shards_per_block > 1) {
+        mm_kernel_in0_sender_define["IN0_MULTISHARD"] = "1";
+    }
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     if (bias.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
@@ -393,9 +419,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_compute_cores, mm_kernel_defines);
+        device.arch(), num_compute_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_compute_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_compute_cores, mm_kernel_defines, throttle_level);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build DataflowBufferSpecs
@@ -456,10 +482,22 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     }
 
     Group<DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.reserve(bias.has_value() ? 7 : 6);
+    dataflow_buffers.reserve(8);
     dataflow_buffers.push_back(std::move(in0_dfb_spec));
     dataflow_buffers.push_back(std::move(in1_dfb_spec));
     dataflow_buffers.push_back(std::move(in0_sharded_dfb_spec));
+    if (shards_per_block > 1) {
+        // One block of scratch for a storage core that does no compute to assemble its multi-shard
+        // block in: its in0 slot lies inside the multicast rectangle and receives the other senders'
+        // blocks. The in0 sender kernel is its only toucher.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN0_STAGE_DFB,
+            .entry_size = in0_single_tile_size,
+            .num_entries = in0_block_tiles,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+    }
     dataflow_buffers.push_back(std::move(out_dfb_spec));
     dataflow_buffers.push_back(std::move(intermed0_dfb_spec));
     dataflow_buffers.push_back(std::move(out_reshard_dfb_spec));
@@ -512,11 +550,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     });
     in0_mcast_sender_noc_x.reserve(mcast_senders_coords.size());
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        in0_mcast_sender_noc_x.push_back((std::uint32_t)device.worker_core_from_logical_core(core).x);
     }
     in0_mcast_sender_noc_y.reserve(mcast_senders_coords.size());
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        in0_mcast_sender_noc_y.push_back((std::uint32_t)device.worker_core_from_logical_core(core).y);
     }
 
     AdvancedKernelRunArgs::Varargs in0_sender_noc_varargs;
@@ -542,8 +580,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
             core,
             {{"worker_core_type", worker_core_type},
              {"sender_id", sender_id},
+             // The last K tile is padded by whoever sends the last block: the last storage core, or
+             // the first storage core of the last multi-shard block.
              {"is_last_ktile_padded",
-              (std::uint32_t)((core == input_all_storage_cores_vec.back()) and (in0_last_ktile_w > 0))}});
+              (std::uint32_t)((sender_id + shards_per_block == mcast_senders_coords.size()) and
+                              (in0_last_ktile_w > 0))}});
         in0_run_args.advanced_options.runtime_varargs[core] = in0_sender_noc_varargs;
         sender_id++;
     }
@@ -587,11 +628,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     std::vector<CoreCoord> output_coords = corerange_to_cores(output_all_storage_cores, std::nullopt, true);
     output_noc_x.reserve(output_coords.size());
     for (auto core : output_coords) {
-        output_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        output_noc_x.push_back((std::uint32_t)device.worker_core_from_logical_core(core).x);
     }
     output_noc_y.reserve(output_coords.size());
     for (auto core : output_coords) {
-        output_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        output_noc_y.push_back((std::uint32_t)device.worker_core_from_logical_core(core).y);
     }
 
     uint32_t num_cores_written_back = (N + per_core_N_storage - 1) / per_core_N_storage;
@@ -857,14 +898,37 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                 {"in0_mcast_dest_noc_end_y", (std::uint32_t)end_core_noc.y},
                 {"num_blocks_per_shard", num_blocks_per_shard},
                 {"in0_block_w", in0_block_w},
+                {"shards_per_block", shards_per_block},
+                {"in0_shard_width_bytes", in0_shard_width_in_tiles * in0_single_tile_size},
             },
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"worker_core_type", "sender_id", "is_last_ktile_padded"},
             },
-        .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = in0_noc,
+                    },
+            },
         .advanced_options = {.num_runtime_varargs = num_in0_sender_varargs},
     };
+    if (shards_per_block > 1) {
+        // Sync-free one-toucher, like in0_sharded above: the sender only takes the scratch's base
+        // address, so it stands as both endpoints of its own buffer.
+        in0_sender.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = IN0_STAGE_DFB,
+            .accessor_name = "in0_stage",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        in0_sender.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = IN0_STAGE_DFB,
+            .accessor_name = "in0_stage",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
 
     // in1 sender/writer kernel (writer - RISCV_0)
     KernelSpec in1_sender_writer{
@@ -930,7 +994,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                      "num_shard_to_write_back",
                      "reshard_tensor_start_offset"},
             },
-        .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = in1_noc,
+                    },
+            },
         .advanced_options = {.num_runtime_varargs = num_in1_writer_varargs},
     };
     if (bias.has_value()) {
@@ -952,13 +1023,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     uint32_t in1_per_core_w = per_core_N_in1_sender;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    unpack_modes(compute_hw) = {
+    compute_hw.unpack_modes = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {IN1_DFB, UnpackMode::UnpackToSrc},
         {INTERMED0_DFB, UnpackMode::UnpackToSrc},
     };
     if (bias.has_value()) {
-        unpack_modes(compute_hw).insert({BIAS_DFB, UnpackMode::UnpackToSrc});
+        compute_hw.unpack_modes.insert({BIAS_DFB, UnpackMode::UnpackToSrc});
     }
 
     KernelSpec compute{
@@ -1150,7 +1221,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
 
     const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::distributed::MeshDevice* device = a.device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
@@ -1225,10 +1296,10 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
     const auto& output_mesh = output.mesh_tensor();
 
     return reuse_dram_sharded_optimized_helpers::create_program_dram_sharded_spec(
-        device,
+        *device,
         input_all_cores_storage,
         output_all_cores_storage,
-        ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        ttnn::to_compute_hardware_config(compute_kernel_config),
         fp32_dest_acc_en,
         packer_l1_acc,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config),

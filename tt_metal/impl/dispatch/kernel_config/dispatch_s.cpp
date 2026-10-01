@@ -357,11 +357,17 @@ void DispatchSKernel::CreateKernel() {
         {"DEVICE_PRINT_CYCLES_FOR_FULL",
          std::to_string(static_config_.device_print_cycles_for_full.value_or(0)) + "ULL"},
     };
+
+    if (get_dispatch_query_manager_ref().fds_signalling_enabled()) {
+        defines["FDS_SIGNALLING"] = "1";
+    }
+
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
 
     if (GetCoreType() == CoreType::WORKER && device_->arch() != tt::ARCH::QUASAR) {
         const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
         std::map<std::string, std::string> compute_defines = {
+            {"DISPATCH_KERNEL", "1"},
             {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
             {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
             {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},

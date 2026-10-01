@@ -8,10 +8,10 @@
 #include <variant>
 
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "minimal_matmul_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -26,17 +26,10 @@ struct MinimalMatmulDeviceOperation {
     using tensor_return_value_t = std::vector<Tensor>;
 
     struct ProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const MinimalMatmulParams& operation_attributes,
             const MinimalMatmulInputs& tensor_args,
             std::vector<Tensor>& tensor_return_value);
-
-        static void override_runtime_arguments(
-            tt::tt_metal::Program& program,
-            const MinimalMatmulParams& operation_attributes,
-            const MinimalMatmulInputs& tensor_args,
-            std::vector<Tensor>& tensor_return_value,
-            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;

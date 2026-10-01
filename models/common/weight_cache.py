@@ -25,6 +25,7 @@ import collections.abc
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 import torch
@@ -49,6 +50,26 @@ HOST_WEIGHTS_SIDECAR = ".host_weights.pt"
 WEIGHT_CACHE_FORMAT_VERSION = 3
 
 DEFAULT_FORCE_ENV = "TT_TRANSFORMERS_FORCE_MODEL_LOAD"
+
+
+_HF_HUB_SNAPSHOT_RE = re.compile(r"models--[^/]+--(?P<name>[^/]+)/snapshots/[^/]+$")
+
+
+def checkpoint_name(model_path):
+    """The checkpoint's repo basename, whichever way ``model_path`` addresses it.
+
+    A model reaches its builder as the HF id (``google/gemma-4-31B-it``, the demos and tests), as
+    a local checkpoint directory, or -- under ``HF_HUB_OFFLINE`` -- as the resolved hub snapshot
+    directory vLLM substitutes for the id (``.../models--google--gemma-4-31B-it/snapshots/<rev>``).
+    A cache identity keyed on ``os.path.basename`` sees the revision hash in the last case, so the
+    marker one entry point seeds is invisible to the others and they cold-load the HF checkpoint
+    on every start. Map all three spellings to the repo basename.
+    """
+    path = str(model_path).rstrip("/")
+    hub = _HF_HUB_SNAPSHOT_RE.search(path)
+    if hub:
+        return hub.group("name")
+    return os.path.basename(path)
 
 
 def _variant_digest(build_variant):

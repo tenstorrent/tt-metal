@@ -332,9 +332,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
     sfpi::vFloat result = 0.0f;
 
     // If input is NaN then output must be NaN as well
-    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::Biased);
-    sfpi::vInt mantissa = sfpi::exman(val);
-    v_if(exponent == 255 && mantissa != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+    v_if(sfpi::is_nan(val)) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - 1.0f;
 

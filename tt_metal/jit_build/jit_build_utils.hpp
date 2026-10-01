@@ -26,6 +26,11 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
 // Split a whitespace-delimited string into tokens (no shell quoting support).
 std::vector<std::string> tokenize_flags(const std::string& flags);
 
+// Full first line of <gpp> --version, including its newline, without shell interpretation.
+// Cached once per compiler command per process; restart after replacing the toolchain.
+// Throws if the probe fails or produces no version. Used by both build and PCH cache keys.
+std::string compiler_version(const std::string& gpp);
+
 // What a gpp invocation should do with its source.
 enum class GppAction {
     Compile,     // -c -o <out_obj> <src> -MF <dep>   (produces an object + .d depfile)

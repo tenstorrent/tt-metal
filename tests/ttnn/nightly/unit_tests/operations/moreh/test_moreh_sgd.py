@@ -28,6 +28,34 @@ if is_wormhole_b0():
     fp32_dest_acc_en_ids.append("fp32_dest_acc_en=True")
 
 
+def test_moreh_sgd_golden_honors_positional_hyperparameters():
+    param = torch.tensor([1.0, -2.0])
+    grad = torch.tensor([0.25, -0.5])
+    momentum_buffer = torch.tensor([0.1, 0.2])
+    lr, momentum, dampening, weight_decay = 0.2, 0.9, 0.0, 0.1
+    golden_function = ttnn.get_golden_function(ttnn.moreh_sgd)
+
+    actual_param, actual_buffer = golden_function(
+        param,
+        grad,
+        momentum_buffer,
+        torch.empty_like(param),
+        torch.empty_like(momentum_buffer),
+        lr,
+        momentum,
+        dampening,
+        weight_decay,
+        True,
+        momentum_initialized=True,
+    )
+
+    weighted_grad = grad + weight_decay * param
+    expected_buffer = momentum * momentum_buffer + weighted_grad
+    expected_param = param - lr * (weighted_grad + momentum * expected_buffer)
+    torch.testing.assert_close(actual_buffer, expected_buffer)
+    torch.testing.assert_close(actual_param, expected_param)
+
+
 @pytest.mark.parametrize(
     "shape",
     [
@@ -180,6 +208,41 @@ def test_moreh_sgd(
         assert passing
     if momentum == 0:
         assert dev_momentum_buffer_out == None
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 30, 32],  # H — non-multiple of 32
+        [1, 1, 32, 40],  # W — non-multiple of 32
+    ],
+)
+def test_moreh_sgd_partial_tile(shape, device):
+    # ones - lr*ones with lr=1 → 0 on written tiles; a skipped tile stays 1.
+    cpu_param = torch.ones(shape, dtype=torch.bfloat16)
+    cpu_grad = torch.ones(shape, dtype=torch.bfloat16)
+    dev_param = ttnn.from_torch(cpu_param, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    dev_grad = ttnn.from_torch(cpu_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    dev_param_out = ttnn.from_torch(cpu_param, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    dev_param_out, _ = ttnn.operations.moreh.sgd(
+        dev_param,
+        dev_grad,
+        None,
+        dev_param_out,
+        None,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        False,
+        momentum_initialized=False,
+        compute_kernel_config=get_compute_kernel_options(False),
+    )
+
+    result = ttnn.to_torch(dev_param_out).to(torch.bfloat16)
+    expected = torch.zeros(shape, dtype=torch.bfloat16)
+    assert torch.equal(result, expected), result
 
 
 @pytest.mark.parametrize(
