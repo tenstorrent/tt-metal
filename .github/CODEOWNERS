@@ -74,6 +74,7 @@ conftest.py @tenstorrent/metalium-developers-infra
 
 # test scripts
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
+tests/model_behavior/ @mtairum @uaydonat @yieldthought @tchedaTT
 tests/pipeline_reorg/agentic_research_model_tests.yaml @yieldthought @tchedaTT @mtairum @uaydonat @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @yieldthought @uaydonat @jonathansuTT @cglagovichTT
