@@ -339,3 +339,22 @@ def test_serving_run_tests_runs_the_named_gate(fx):
     fail_b = lambda cmd: seen.append(cmd) or (1 if cmd.endswith("b.py") else 0)  # noqa: E731
     assert SV.run_tests(s, s.repo, "all", fail_b) == ["b.py"] and len(seen) == 2
     assert SV.run_tests(s, s.repo, "attention", fail_b) == [] and seen[-1].endswith("a.py")
+
+
+def test_serving_gate_commit_stages_its_outputs(fx):
+    """F58: SC.1's gate commit carries the how-to, the test list and the contract tests (it missed them on Xing)."""
+    from models.demos.common.bringup.core.gate import stage_paths
+
+    s = Spec.load(fx())
+    s.repo.mkdir(exist_ok=True)
+    write(s, "serving_contract.md", SERVING_MD)
+    write(s, "contract_tests.yaml", {"tests": []})
+    tdir = s.model_dir / "tests/bringup/contract"
+    tdir.mkdir(parents=True)
+    (tdir / "test_x.py").write_text("x = 1\n")
+    led = Ledger(s.bringup_dir)
+    led.write_tasks(generate(s, Reference()))
+    sc = next(t for t in generate(s, Reference())["tasks"] if t["id"] == "SC.1")
+    got = stage_paths(s, led, sc)
+    assert any(p.endswith("serving_contract.md") for p in got) and any(p.endswith("contract_tests.yaml") for p in got)
+    assert any(p.endswith("tests/bringup/contract") for p in got)
