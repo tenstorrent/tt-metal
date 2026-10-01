@@ -70,7 +70,7 @@ public:
     // the caller may back off.
     uint32_t poll();
 
-    const L1MapNew& l1() const;
+    const L1MapUVA& l1() const;
     // Raw per-frame samples, so the caller sorts and takes a median exactly as the three
     // single-leg benchmarks do. Each vector is on ONE clock; empty unless collect_timing.
     struct Timing {

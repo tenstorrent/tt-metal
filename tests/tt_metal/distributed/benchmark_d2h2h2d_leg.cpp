@@ -161,7 +161,7 @@ public:
 protected:
     // Both kernels everywhere: the L1 map must be identical, and each side enables its half.
     Program build_program() const {
-        const L1MapNew& l1 = sock_->l1();
+        const L1MapUVA& l1 = sock_->l1();
         Program program = CreateProgram();
 
         const std::vector<uint32_t> send_cfg = sock_->d2h().config_addresses();
@@ -247,7 +247,7 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
     init_counters(state);
 
     for ([[maybe_unused]] auto _ : state) {
-        const L1MapNew& l1 = sock_->l1();
+        const L1MapUVA& l1 = sock_->l1();
         dist::MeshWorkload workload;
         workload.add_program(dist::MeshCoordinateRange(mesh_->shape()), build_program());
         // Non-blocking, so the poll loop below can feed the receiver to `iters`.
