@@ -26,11 +26,10 @@ from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor
 
-# Sampling settings, stop sequences and image size bounds of the upstream
-# ``briaai/FIBO-VLM-prompt-to-JSON`` pipeline. The bounds make an image 196 to 784 tokens.
+# Sampling settings and image size bounds of the upstream ``briaai/FIBO-VLM-prompt-to-JSON``
+# pipeline. The bounds make an image 196 to 784 tokens.
 _TOP_P = 0.9
 _TEMPERATURE = 0.2
-_STOP_SEQUENCES = ("<|im_end|>", "<|end_of_text|>")
 _MIN_PIXELS = 256 * 28 * 28
 _MAX_PIXELS = 1024 * 28 * 28
 
@@ -147,7 +146,8 @@ class Vlm:
 
         ``max_length`` bounds prompt and generated tokens together, up to the cache length, which is
         the default. Output that is not the expected JSON, as when it is cut off at ``max_length``,
-        is returned as it is.
+        is returned as it is. The text is reduced, so the token counts of the model's output are
+        those of `generate_raw`.
         """
         text = self.generate_raw(prompt, image=image, seed=seed, traced=traced, max_length=max_length).text
         caption = clean(text)
@@ -162,10 +162,7 @@ class Vlm:
         traced: bool,
         max_length: int | None = None,
     ) -> VlmOutput:
-        """Generates what the model emits, before it is reduced to the fields FIBO takes.
-
-        The token counts are the model's own, which the reduced text no longer accounts for.
-        """
+        """Generates what the model emits, before it is reduced to the fields FIBO takes."""
         if max_length is None:
             max_length = self._cache_length
         inputs = self._tokenize(prompt, image)
@@ -177,8 +174,6 @@ class Vlm:
         logger.info(f"VLM generated {generated.shape[0]} tokens")
 
         text = self._tokenizer.decode(generated, skip_special_tokens=True)
-        for stop in _STOP_SEQUENCES:
-            text = text.split(stop, 1)[0]
 
         return VlmOutput(text=text, prompt_tokens=int(num_prompt_tokens), completion_tokens=int(generated.shape[0]))
 
