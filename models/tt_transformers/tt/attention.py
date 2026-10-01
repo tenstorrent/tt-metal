@@ -128,6 +128,16 @@ class Attention(LightweightModule):
         self.li_qkv_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=configuration
         )
+        # QKV decode matmul: bf16 dest accumulation (fp32_dest_acc_en off) doubles dest capacity
+        # and halves pack traffic for the DRAM-sharded decode matmul; K-accumulation stays in L1 via packer_l1_acc.
+        if self.li_qkv_decode_compute_kernel_cfg is not None:
+            _qkv_cfg = self.li_qkv_decode_compute_kernel_cfg
+            self.li_qkv_decode_compute_kernel_cfg = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=_qkv_cfg.math_fidelity,
+                math_approx_mode=_qkv_cfg.math_approx_mode,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=_qkv_cfg.packer_l1_acc,
+            )
         self.sdpa_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
         )
