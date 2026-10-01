@@ -358,26 +358,22 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced():
     assert calls == ["bind", prepare, unbind, "slot_ops", "bind", prepare, "record", unbind, "slot_ops"]
 
 
-def test_prefill_prepare_is_idempotent_and_record_reuses_it(monkeypatch, expect_error):
+def test_prefill_prepare_is_idempotent_and_record_requires_it(monkeypatch, expect_error):
     """prepare_prefill_trace_chunked re-runs only for new args; record needs a prior prepare."""
     released, prepared = [], []
     monkeypatch.setattr(ttnn, "release_trace", lambda device, trace_id: released.append(trace_id))
     model = SimpleNamespace(num_devices=4, _chunked_prepared_key=None, _chunked_trace_id=None)
 
-    def record(device):
-        model._chunked_trace_id = 5
-
     model._prepare_prefill_trace_chunked_tp = lambda device, page_table, chunk_size, warmup: prepared.append(
         tuple(page_table.shape)
     )
-    model._record_prefill_trace_chunked_tp = record
     page_table = torch.zeros(1, 64, dtype=torch.int32)
 
     with expect_error(AssertionError, "prepare_prefill_trace_chunked first"):
         Qwen36Model.record_prefill_trace_chunked(model, "mesh")
     Qwen36Model.prepare_prefill_trace_chunked(model, "mesh", page_table)
     Qwen36Model.prepare_prefill_trace_chunked(model, "mesh", page_table)
-    Qwen36Model.record_prefill_trace_chunked(model, "mesh")
+    model._chunked_trace_id = 5
     Qwen36Model.prepare_prefill_trace_chunked(model, "mesh", page_table)
     assert prepared == [(1, 64)] and model._chunked_trace_id == 5 and released == []
 

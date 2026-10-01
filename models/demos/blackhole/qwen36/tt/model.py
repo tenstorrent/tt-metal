@@ -1039,30 +1039,18 @@ class Qwen36Model:
             x = x_new
         return x
 
-    def capture_prefill_trace_chunked(
-        self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, capture_chunk_trace=True
-    ):
+    def capture_prefill_trace_chunked(self, device, page_table, chunk_size=2048, warmup_masked_buckets=True):
         """Capture one chunk's all-layer prefill as a trace; replayed per chunk.
 
         Chunk-outer prefill stays under the 4 GiB trace limit at long context.
-        Flexible SDPA (runtime chunk_start) makes one trace serve all chunk positions.
+        Flexible SDPA (runtime chunk_start) makes one trace serve all chunk positions."""
+        self.prepare_prefill_trace_chunked(device, page_table, chunk_size, warmup_masked_buckets)
+        self.record_prefill_trace_chunked(device)
 
-        capture_chunk_trace=False warms the masked-bucket programs but skips parking the chunk trace.
-        The batched (B>1) vLLM path passes capture_chunk_trace=True with the PERSISTENT B=1 prefill
-        scratch bound (_bind_gdn_prefill_scratch), so the trace bakes that scratch's addresses and
-        long prompts replay the traced chunk path per user (prefill_paged_slots rebinds the scratch)."""
-        self.prepare_prefill_trace_chunked(device, page_table, chunk_size, warmup_masked_buckets, force=True)
-        if self.num_devices == 1 or capture_chunk_trace:
-            self.record_prefill_trace_chunked(device)
-        else:
-            logger.info("Masked-bucket prefill programs (TP) warmed; chunk trace skipped (batched path).")
-
-    def prepare_prefill_trace_chunked(
-        self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, force=False
-    ):
-        """Allocate + compile everything the chunk trace needs (no capture). No-op if already prepared unless force."""
+    def prepare_prefill_trace_chunked(self, device, page_table, chunk_size=2048, warmup_masked_buckets=True):
+        """Allocate + compile everything the chunk trace needs. No-op if already prepared for these args."""
         key = (chunk_size, tuple(page_table.shape), bool(warmup_masked_buckets))
-        if not force and self._chunked_prepared_key == key:
+        if self._chunked_prepared_key == key:
             return
         if self._chunked_trace_id is not None:
             ttnn.release_trace(device, self._chunked_trace_id)
@@ -1079,10 +1067,22 @@ class Qwen36Model:
         if self._chunked_trace_id is not None:
             ttnn.release_trace(device, self._chunked_trace_id)
             self._chunked_trace_id = None
-        if self.num_devices > 1:
-            self._record_prefill_trace_chunked_tp(device)
-        else:
-            self._record_prefill_trace_chunked_single(device)
+        tp = self.num_devices > 1
+        (self._reset_gdn_state_for_new_sequence if tp else self._reset_dn_state_inplace)()
+        forward = self._forward_prefill_chunk_tp if tp else self._forward_prefill_chunk
+        # The trace output is read right after each replay, before any other trace can run.
+        with trace_allocation_tracker.corruptible_allocation_scope(device):
+            self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            self._chunked_trace_output = forward(
+                self._chunk_token_buf,
+                self._chunk_cos_buf,
+                self._chunk_sin_buf,
+                self._chunk_start_idx_tensor,
+                self._chunk_full_page_table_buf,
+                self._chunk_page_table_buf,
+            )
+            ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
+        logger.info(f"Chunked prefill trace{' (TP)' if tp else ''} captured successfully!")
 
     def _prepare_prefill_trace_chunked_single(self, device, page_table, chunk_size, warmup_masked_buckets):
         assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
@@ -1164,22 +1164,6 @@ class Qwen36Model:
             self.warmup_prefill_masked_buckets(page_table)
         self._reset_dn_state_inplace()
 
-    def _record_prefill_trace_chunked_single(self, device):
-        self._reset_dn_state_inplace()
-        # The trace output is read right after each replay, before any other trace can run.
-        with trace_allocation_tracker.corruptible_allocation_scope(device):
-            self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-            self._chunked_trace_output = self._forward_prefill_chunk(
-                self._chunk_token_buf,
-                self._chunk_cos_buf,
-                self._chunk_sin_buf,
-                self._chunk_start_idx_tensor,
-                self._chunk_full_page_table_buf,
-                self._chunk_page_table_buf,
-            )
-            ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
-        logger.info("Chunked prefill trace captured successfully!")
-
     def _prepare_prefill_trace_chunked_tp(self, device, page_table, chunk_size, warmup_masked_buckets):
         """TP fork of _prepare_prefill_trace_chunked_single.
 
@@ -1249,22 +1233,6 @@ class Qwen36Model:
         if warmup_masked_buckets:
             self.warmup_prefill_masked_buckets(page_table)
         self._reset_gdn_state_for_new_sequence()
-
-    def _record_prefill_trace_chunked_tp(self, device):
-        self._reset_gdn_state_for_new_sequence()
-        # The trace output is read right after each replay, before any other trace can run.
-        with trace_allocation_tracker.corruptible_allocation_scope(device):
-            self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-            self._chunked_trace_output = self._forward_prefill_chunk_tp(
-                self._chunk_token_buf,
-                self._chunk_cos_buf,
-                self._chunk_sin_buf,
-                self._chunk_start_idx_tensor,
-                self._chunk_full_page_table_buf,
-                self._chunk_page_table_buf,
-            )
-            ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
-        logger.info("Chunked prefill trace (TP) captured successfully!")
 
     # ----------------------------------------------------------------------- #
     # Traced batched SHORT-prompt prefill (B=32 / ISL<=128)
