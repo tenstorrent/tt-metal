@@ -7333,41 +7333,11 @@ def _select_perf_target(rep: dict):
                     flush=True,
                 )
             return (
-                _pinned_target(perf_target.compute_target(mf, _ENV, tp_degree=tp, bytes_per_unit=anchored)),
+                perf_target.compute_target(mf, _ENV, tp_degree=tp, bytes_per_unit=anchored),
                 "model",
                 True,
             )
     return perf_target.target_from_floor_ms(rep.get("modeled_floor_ms")), ("module" if module_level else "model"), False
-
-
-def _pinned_target(target):
-    """`target` with the ceiling and band pinned the first time they were computed (measurements.
-    CEILING_KINDS, keyed by the target's unit). Write-once, so a code change cannot move the headline
-    ceiling under a campaign; --fresh re-pins. Best-effort: any failure returns `target` unchanged."""
-    try:
-        import dataclasses
-
-        led = _ledger()
-        # compute_target owns the unit and stamped it on the target; this only keys the pin by it.
-        unit = str(target.unit or "").strip().lower()
-        if not _is_real_unit(unit):
-            return target
-        model, task = _model_key(), os.environ.get("PERF_MCP_TASK", "main")
-        now = (target.theoretical_rate, target.band[0], target.band[1])
-        pinned = []
-        for kind, v in zip(led.CEILING_KINDS, now):
-            if isinstance(v, (int, float)) and v > 0:
-                v = led.anchor(
-                    kind, float(v), depth=unit, mode="rate", source="_select_perf_target", model=model, task=task
-                )
-            else:
-                v = led.anchor_value(kind, depth=unit, model=model, task=task)
-            pinned.append(v)
-        if not all(isinstance(v, (int, float)) and v > 0 for v in pinned):
-            return target
-        return dataclasses.replace(target, theoretical_rate=float(pinned[0]), band=(float(pinned[1]), float(pinned[2])))
-    except Exception:  # noqa: BLE001 -- a pin that cannot be read or written never costs the target
-        return target
 
 
 def _recurring_subtree_share(mf: dict) -> float:
@@ -7686,33 +7656,6 @@ def _ceiling_armed(target, rep: dict) -> tuple:
     return True, ""
 
 
-def _pin_stage_roofs(roofs) -> None:
-    """Pin each stage's roof the first time the gate computes it (measurements.STAGE_ROOF_KINDS).
-
-    Write-once (measurements.anchor), so later rounds, restarts and code changes read the same
-    ceilings; summary._stage_roofs returns the pinned values whenever they exist. Best-effort: a pin
-    that cannot be written never costs the gate its answer."""
-    try:
-        led = _ledger()
-        model = _model_key()
-        task = os.environ.get("PERF_MCP_TASK", "main")
-        for _name, _r in (roofs or {}).items():
-            for field, kind in led.STAGE_ROOF_KINDS:
-                v = (_r or {}).get(field)
-                if _name and isinstance(v, (int, float)) and v > 0:
-                    led.anchor(
-                        kind,
-                        float(v),
-                        depth=str(_name).strip().lower(),
-                        mode="roofline",
-                        source="termination_check stage roof",
-                        model=model,
-                        task=task,
-                    )
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _stages_short_of_achievable() -> list:
     """Stages measured SLOWER than the slow end of their own achievable band, worst first.
 
@@ -7781,7 +7724,6 @@ def _stages_short_of_achievable() -> list:
             model=_model_key(),
             task=os.environ.get("PERF_MCP_TASK", "main"),
         )
-        _pin_stage_roofs(_roofs)
         out = []
         for _name, _r in (_roofs or {}).items():
             _ms = _sms.get(_name)

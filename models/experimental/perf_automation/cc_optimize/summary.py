@@ -1882,20 +1882,6 @@ def _pinned_ceiling_input(kind: str, stage, model: str = "", task: str = ""):
         return None
 
 
-def _pinned_stage_roof(stage, model: str = "", task: str = "") -> dict:
-    """{field: value} of the roof pinned for `stage` (measurements.STAGE_ROOF_KINDS); {} when none.
-    READ-ONLY, like every ceiling input above."""
-    out = {}
-    try:
-        for field, kind in _ledger().STAGE_ROOF_KINDS:
-            v = _pinned_ceiling_input(kind, stage, model, task)
-            if v is not None and float(v) > 0:
-                out[field] = float(v)
-    except Exception:  # noqa: BLE001
-        return {}
-    return out
-
-
 def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stage_ms=None, model="", task=""):
     """Both ceilings for both stages, from the MODEL'S OWN facts rather than from summing annotated ops.
 
@@ -2255,12 +2241,6 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # instantiate and returned 0 for every stage of every run for two days, and nothing on the
         # page disagreed, because the estimate fallback kept printing plausible numbers.
         mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0 if _b else None
-        # THE PINNED ROOF WINS. Computed once, by the gate, and read here by every renderer and by
-        # the gate itself -- so a code change cannot move a ceiling the campaign is measured against.
-        _pinned_roof = _pinned_stage_roof(name, model, task)
-        comp_ms = _pinned_roof.get("compute_ms", comp_ms)
-        mem_ms = _pinned_roof.get("memory_ms", mem_ms)
-        flops = _pinned_roof.get("flops", flops)
         out[name] = {
             "share_basis": _share_bases.get(name, ""),
             "memory_ms": mem_ms,
@@ -3181,10 +3161,6 @@ def _roofline_lines(
                         tp_degree=int(throughput.get("tp_degree") or 1),
                     )
                     band = [_b[0], _b[1]]
-            # THE PINNED HEADLINE WINS over this re-derivation (perf_mcp._pinned_target).
-            _pin = [_pinned_ceiling_input(k, _anchor_depth, model, task) for k in _led.CEILING_KINDS]
-            if all(isinstance(v, (int, float)) and v > 0 for v in _pin):
-                theo, band = float(_pin[0]), [float(_pin[1]), float(_pin[2])]
         except Exception:  # noqa: BLE001
             pass
         tp = max(1, int(throughput.get("tp_degree") or 1))

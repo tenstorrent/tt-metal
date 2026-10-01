@@ -118,28 +118,6 @@ KIND_STAGE_TOKENS = "stage_tokens"
 # biggest win came first (Qwen-Image-Edit vision_encode, ~63.8 s -> 22.8 s) had no "before" anywhere.
 KIND_STAGE_E2E = "stage_e2e"
 
-# EACH STAGE'S ROOF ITSELF, not only its inputs (depth = stage). The inputs above were pinned and the
-# roof rebuilt from them by whatever code ran, so a code change moved every ceiling mid-campaign:
-# Qwen-Image-Edit 2026-10-01, a run on older code priced denoise for ONE chip -- band 31-41 s against
-# the 1.0-1.3 s the same inputs gave the run before -- and the stop gate stopped working on denoise.
-# Pinned once by the gate (perf_mcp._pin_stage_roofs); every renderer reads them. --fresh re-pins.
-KIND_STAGE_ROOF_COMPUTE = "stage_roof_compute_ms"
-KIND_STAGE_ROOF_MEMORY = "stage_roof_memory_ms"
-KIND_STAGE_ROOF_FLOPS = "stage_roof_flops"
-STAGE_ROOF_KINDS = (
-    ("compute_ms", KIND_STAGE_ROOF_COMPUTE),
-    ("memory_ms", KIND_STAGE_ROOF_MEMORY),
-    ("flops", KIND_STAGE_ROOF_FLOPS),
-)
-
-# THE HEADLINE CEILING AND ITS BAND, for the same reason (depth = unit). Its inputs -- active_bytes,
-# tp_degree -- were already pinned and it was still re-derived by whatever code ran. Pinned once by
-# perf_mcp._pinned_target, which the gate and the report snapshot both go through.
-KIND_CEILING_RATE = "ceiling_rate"
-KIND_CEILING_BAND_LO = "ceiling_band_lo"
-KIND_CEILING_BAND_HI = "ceiling_band_hi"
-CEILING_KINDS = (KIND_CEILING_RATE, KIND_CEILING_BAND_LO, KIND_CEILING_BAND_HI)
-
 # THE TENSOR-PARALLEL DEGREE the run's own marker reported (trace_replay: the pipeline's stated split,
 # else the mesh). Every ceiling divides a unit's bytes and FLOPs by it; pinned so a later round cannot
 # change the divisor under a measurement.
