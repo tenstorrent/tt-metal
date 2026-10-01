@@ -4,7 +4,9 @@
 
 #include "slice_write_device_operation.hpp"
 
+#include <algorithm>
 #include <tt_stl/assert.hpp>
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::tt_metal;
@@ -14,13 +16,10 @@ namespace ttnn::experimental::prim {
 SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    bool has_step = false;
-    for (unsigned int step_val : operation_attributes.step) {
-        if (step_val != 1) {
-            has_step = true;
-            break;
-        }
-    }
+    const bool has_step =
+        std::any_of(operation_attributes.step.cbegin(), operation_attributes.step.cend(), [](uint32_t step_val) {
+            return step_val != 1;
+        });
 
     // Logic from slice_write_multi_core
     if (input.is_sharded()) {

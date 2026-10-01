@@ -480,7 +480,9 @@ void ControlPlane::init_control_plane(
 
         // Append MGD many-to-many pinning groups directly (no flattening).
         if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
-            const auto& mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            auto mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            tt::tt_metal::experimental::tt_fabric::drop_inactive_revision_pinnings(
+                mgd_pinnings, *this->physical_system_descriptor_);
             for (const auto& [_, groups] : mgd_pinnings) {
                 pinning_groups.insert(pinning_groups.end(), groups.begin(), groups.end());
             }
@@ -869,8 +871,8 @@ void ControlPlane::initialize_fabric_context() {
         "FabricConfig {} was not validated for consistency across ranks before fabric initialization",
         enchantum::to_string(this->fabric_config_));
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
-        this->fabric_context_ = std::make_unique<FabricContext>(
-            *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);
+        this->fabric_context_ =
+            std::make_unique<FabricContext>(*this, hal_, cluster_, rtoptions_, fabric_config_, fabric_router_config_);
     }
 }
 

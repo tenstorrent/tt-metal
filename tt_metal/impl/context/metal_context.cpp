@@ -4,14 +4,11 @@
 
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
-#include <filesystem>
 #include <algorithm>
 #include <memory>
 #include <mutex>
-#include <future>
 #include <set>
 #include <vector>
-#include <unordered_set>
 
 #include <tracy/Tracy.hpp>
 
@@ -36,7 +33,6 @@
 
 #include <umd/device/types/xy_pair.hpp>
 #include "debug/inspector/data.hpp"
-#include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
 #include "dispatch/topology.hpp"
@@ -181,6 +177,17 @@ void MetalContext::initialize(
         if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
             fw_compile_hash != fw_compile_hash_) {
+            // The legacy implicit context keeps tearing down underneath open devices; an explicit MetalEnv refuses.
+            const bool devices_open = device_manager_ && device_manager_->is_initialized() &&
+                                      !device_manager_->get_all_active_devices().empty();
+            TT_FATAL(
+                env_owned_ || !devices_open,
+                "Cannot change num_command_queues ({} -> {}), dispatch_core_config or worker_l1_size ({} -> {}) of a "
+                "MetalEnv while MeshDevices created from it are open. Close them first.",
+                num_hw_cqs_,
+                num_hw_cqs,
+                worker_l1_size_,
+                worker_l1_size);
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
             teardown();
         } else {
@@ -431,7 +438,7 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
     MetalEnvDescriptor desc{};
     if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
         log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-        desc = MetalEnvDescriptor(*mock_cluster_desc);
+        desc.mock_cluster_desc_path = std::move(*mock_cluster_desc);
     }
     g_default_env = new MetalEnv(std::move(desc));
     MetalContext* instance = new MetalContext(DEFAULT_CONTEXT_ID, *g_default_env);
@@ -678,11 +685,6 @@ tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() con
 const tt_fabric::FabricRouterConfig& MetalContext::get_fabric_router_config() const {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
     return MetalEnvAccessor(*env_).impl().get_fabric_router_config();
-}
-
-void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().set_fabric_tensix_config(fabric_tensix_config);
 }
 
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const {
