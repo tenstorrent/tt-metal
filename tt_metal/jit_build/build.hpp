@@ -35,12 +35,17 @@ using vector_cache_aligned = std::vector<T, ttsl::aligned_allocator<T, CACHE_LIN
 
 class JitBuildSettings;
 
+// Root of the tt-metal cache: TT_METAL_CACHE as captured by `rtoptions` if set, else
+// ~/.cache/tt-metal-cache/, else /tmp/tt-metal-cache/.
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions);
+
 struct JitBuiltStateConfig {
     HalProgrammableCoreType core_type{};
     HalProcessorClassType processor_class{};
     int processor_id = 0;
     bool is_fw = false;
     uint32_t dispatch_message_addr = 0;
+    bool fds_signalling = false;
     // Set `is_cooperative` when Metal FW/Kernel code is loaded on risc with some base FW running.
     // In this case Metal FW will need to facilitate context switching to base FW (e.g. code running on WH active
     // eriscs)

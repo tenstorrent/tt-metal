@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.2 MTP4 and MTP7 chunked prefill through the real ``TtPrefillTransformer``.
+"""GLM-5.3 MTP4 and MTP7 chunked prefill through the real ``TtPrefillTransformer``.
 
 Drives the production device path and gates every level against a teacher-forced CPU reference.
 :data:`SCHEDULE_AXIS` chooses how the request is cut up.
@@ -26,8 +26,8 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID, num_mtp_tokens
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
-from models.demos.deepseek_v3_d_p.reference.glm_5_2.mtp import glm_mtp_predictor_reference
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import glm_mtp_predictor_reference
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions, rotated_row_of_position
@@ -231,7 +231,7 @@ def _mtp_union(transformer: TtPrefillTransformer, stream: Sequence[int], n_mtp: 
 def _mtp_cache_dir(preferred: Path, fallback_root: Path) -> Path:
     """``preferred`` if this run can use it, else the same leaf under ``fallback_root``.
 
-    ``TT_GLM52_MTP_TTNN_CACHE`` overrides it.
+    ``TT_GLM53_MTP_TTNN_CACHE`` overrides it.
     """
     try:
         preferred.mkdir(parents=True, exist_ok=True)
@@ -297,7 +297,7 @@ _MESH_PARAMS = [
     pytest.param(
         (8, 4),
         torus_xy_device_params(
-            fabric_payload_size=GLM52Config.FABRIC_PAYLOAD_SIZE,
+            fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
         ),
         2,
@@ -314,7 +314,7 @@ _MESH_PARAMS = [
 @pytest.mark.parametrize("skip_pcc", [False, True], ids=["pcc", "nopcc"])
 @pytest.mark.parametrize("mtp_levels", MTP_LEVEL_AXIS, ids=[f"mtp{k}" for k in MTP_LEVEL_AXIS])
 @pytest.mark.parametrize("schedule", list(SCHEDULE_AXIS), ids=list(SCHEDULE_AXIS))
-@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"], indirect=True)
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
@@ -336,7 +336,7 @@ def test_mtp_transformer_chunks(
     skip_pcc,
     monkeypatch,
 ):
-    """GLM-5.2 MTP4/MTP7 chunked prefill end to end: every window, every level, exact ids.
+    """GLM-5.3 MTP4/MTP7 chunked prefill end to end: every window, every level, exact ids.
 
     Four claims, most-local first: the stream the socket delivers, every level's output against the
     teacher-forced reference, row 0 of every window, and the last chunk's generated tokens.
@@ -415,10 +415,10 @@ def test_mtp_transformer_chunks(
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
-    mtp_cache_root = Path(os.getenv(MTP_CACHE_ENV) or weight_cache_path.parent.parent / "glm52_mtp_ttnn_cache")
+    mtp_cache_root = Path(os.getenv(MTP_CACHE_ENV) or weight_cache_path.parent.parent / "glm53_mtp_ttnn_cache")
     mtp_cache_path = mtp_cache_root / f"{variant.name}_{'bh' if is_blackhole() else 'wh'}_{ttnn.get_num_devices()}dev"
     mtp_cache_path = mtp_cache_path / (f"{sp_factor}x{tp_factor}" + (f"_L{num_layers}" if shallow else ""))
-    mtp_cache_path = _mtp_cache_dir(mtp_cache_path, Path(ttnn.CONFIG.cache_path) / "glm52_mtp_ttnn_cache")
+    mtp_cache_path = _mtp_cache_dir(mtp_cache_path, Path(ttnn.CONFIG.cache_path) / "glm53_mtp_ttnn_cache")
 
     init_checker(mtp_cache_path)
     mtp_cached = TtMTPPredictor.check_cache_complete(

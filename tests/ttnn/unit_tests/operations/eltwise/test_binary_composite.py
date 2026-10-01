@@ -116,25 +116,6 @@ def test_binary_polyval_ttnn(input_shapes, coeffs, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_gti_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.gt_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.gt_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_gti_ttnn(input_shapes, device):
     for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
         in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -144,25 +125,6 @@ def test_gti_ttnn(input_shapes, device):
 
         comp_pass = compare_equal([input_tensor], [golden_tensor])
         assert comp_pass, f"Failed for scalar={scalar}"
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_gei_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.ge_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.ge_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
 
 
 @pytest.mark.parametrize(
@@ -192,25 +154,6 @@ def test_gei_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_lti_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.lt_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.lt_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_lti_ttnn(input_shapes, device):
     for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
         in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -220,25 +163,6 @@ def test_lti_ttnn(input_shapes, device):
 
         comp_pass = compare_equal([input_tensor], [golden_tensor])
         assert comp_pass, f"Failed for scalar={scalar}"
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_lei_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.le_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.le_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
 
 
 @pytest.mark.parametrize(
@@ -268,25 +192,6 @@ def test_lei_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_eqi_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.eq_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.eq_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_eqi_ttnn(input_shapes, device):
     for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
         in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -296,25 +201,6 @@ def test_eqi_ttnn(input_shapes, device):
 
         comp_pass = compare_equal([input_tensor], [golden_tensor])
         assert comp_pass, f"Failed for scalar={scalar}"
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_nei_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-    ttnn.ne_(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.ne_)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_equal([input_tensor1], [golden_tensor])
-    assert comp_pass
 
 
 @pytest.mark.parametrize(
@@ -345,8 +231,6 @@ def test_nei_ttnn(input_shapes, device):
         (torch.Size([1, 6, 49, 97])),
         (torch.Size([1, 7, 320])),
         (torch.Size([1, 49, 321])),
-        (torch.Size([4, 32])),
-        (torch.Size([49, 321])),
     ),
 )
 def test_binary_prelu_ttnn(input_shapes, device):

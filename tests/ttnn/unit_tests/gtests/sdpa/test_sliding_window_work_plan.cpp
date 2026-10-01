@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <set>
 #include <utility>
 #include <vector>
@@ -15,6 +16,7 @@
 #include "gtest/gtest.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/chunked_q_mapping.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sliding_halo_layout.hpp"
 
 namespace {
 
@@ -462,18 +464,17 @@ TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
                                     }
                                     const uint32_t compact = ref.compact_k_chunk * 4;
                                     ASSERT_LT(compact, halo);
-                                    // The hop whose block holds this row, and what that hop's sender shipped.
-                                    uint32_t hop = 1;
-                                    while (compact < chunked_sliding_halo_hop_dest_row(halo, local, hop)) {
-                                        ++hop;
-                                    }
+                                    // The hop this source sits at, its block (hop- or source-keyed), and
+                                    // what that hop's sender shipped into it.
+                                    const uint32_t hop = (device + ring - ref.source_ring_id) % ring;
+                                    const uint32_t block =
+                                        chunked_sliding_halo_block_dest_row(halo, local, ring, ref.source_ring_id, hop);
+                                    const uint32_t tail = chunked_sliding_halo_hop_rows(halo, local, hop);
+                                    ASSERT_GE(compact, block);
+                                    ASSERT_LT(compact, block + tail);
                                     const auto sources = sliding_halo_sources(mapping, local, ring, halo, 0, hop);
                                     EXPECT_EQ(sources.count, 1u);
-                                    EXPECT_EQ(ref.source_ring_id, (device + ring - hop) % ring);
-                                    EXPECT_EQ(
-                                        sources.first_start_tile + compact -
-                                            chunked_sliding_halo_hop_dest_row(halo, local, hop),
-                                        ref.source_k_chunk * 4);
+                                    EXPECT_EQ(sources.first_start_tile + compact - block, ref.source_k_chunk * 4);
                                 }
                                 EXPECT_EQ(actual, expected);
                             }
@@ -481,6 +482,193 @@ TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
                     }
                 }
             }
+        }
+    }
+}
+
+TEST(SlidingWindowWorkPlan, SourceKeyedOnlyForWholeSlabsDividingTheRing) {
+    EXPECT_TRUE(chunked_sliding_halo_source_keyed(32, 8, 8));            // Gemma4 chunk 2048: 4 hops
+    EXPECT_TRUE(chunked_sliding_halo_source_keyed(32, 16, 8));           // Gemma4 chunk 4096: 2 hops
+    EXPECT_FALSE(chunked_sliding_halo_source_keyed(32, 32, 8));          // one hop: nothing to share
+    EXPECT_FALSE(chunked_sliding_halo_source_keyed(10, 4, 4));           // partial farthest hop
+    EXPECT_FALSE(chunked_sliding_halo_source_keyed(24, 8, 8));           // 3 hops do not divide 8
+    EXPECT_TRUE(chunked_sliding_halo_source_keyed(32, 8, 4));            // halo spans the ring (SP4)
+    EXPECT_EQ(chunked_sliding_halo_block_dest_row(32, 8, 8, 5, 1), 8u);  // block 5 % 4 = 1
+    EXPECT_EQ(chunked_sliding_halo_block_dest_row(32, 8, 8, 5, 3), 8u);  // independent of the hop
+    EXPECT_EQ(chunked_sliding_halo_block_dest_row(10, 4, 4, 1, 1), 6u);  // hop-keyed fallback
+}
+
+// Every receiver gets each remote predecessor's payload exactly once, over unicast or multicast
+// exchanges, and each exchange's routing reaches the receiver its hop names.
+TEST(SlidingWindowWorkPlan, HaloExchangesReachEveryPredecessorOnce) {
+    for (uint32_t ring : {2u, 4u, 8u}) {
+        for (uint32_t local : {4u, 8u, 16u}) {
+            for (uint32_t hops : {2u, 4u, 8u}) {
+                if (hops > ring || ring % hops != 0) {
+                    continue;
+                }
+                for (const bool linear : {true, false}) {
+                    for (const bool multicast : {true, false}) {
+                        ChunkedSlidingHaloLayout layout;
+                        layout.q_local_tile_rows = local;
+                        layout.halo_tile_rows = hops * local;
+                        layout.ring_size = ring;
+                        layout.logical_k_tile_rows = 2 * ring * local;
+                        layout.q_start_tile = ring * local;
+                        const uint32_t remote_hops = layout.remote_hop_count();
+                        std::map<std::pair<uint32_t, uint32_t>, uint32_t> received;  // (receiver, hop) -> count
+                        for (uint32_t source = 0; source < ring; ++source) {
+                            const auto exchanges =
+                                plan_chunked_sliding_halo_exchanges(layout, source, linear, multicast);
+                            SCOPED_TRACE(
+                                ::testing::Message()
+                                << "ring=" << ring << " local=" << local << " hops=" << hops << " linear=" << linear
+                                << " multicast=" << multicast << " source=" << source);
+                            if (multicast) {
+                                EXPECT_LE(exchanges.size(), 2u);
+                            } else {
+                                EXPECT_EQ(exchanges.size(), remote_hops);
+                            }
+                            for (const auto& exchange : exchanges) {
+                                EXPECT_EQ(exchange.multicast, multicast);
+                                if (!multicast) {
+                                    EXPECT_EQ(exchange.hop_count, 1u);
+                                }
+                                if (!linear && !multicast) {
+                                    EXPECT_FALSE(exchange.send_backward);
+                                }
+                                for (uint32_t i = 0; i < exchange.hop_count; ++i) {
+                                    const uint32_t hop = exchange.hop + i;
+                                    // Backward, hop h sits ring - h devices behind: the last hop is nearest.
+                                    const uint32_t distance = exchange.send_backward
+                                                                  ? exchange.distance + exchange.hop_count - 1 - i
+                                                                  : exchange.distance + i;
+                                    const int64_t receiver = exchange.send_backward
+                                                                 ? static_cast<int64_t>(source) - distance
+                                                                 : static_cast<int64_t>(source) + distance;
+                                    if (linear || exchange.send_backward) {
+                                        ASSERT_GE(receiver, 0);
+                                        ASSERT_LT(receiver, ring);
+                                    }
+                                    const uint32_t r = static_cast<uint32_t>((receiver + ring) % ring);
+                                    ASSERT_EQ((r + ring - source) % ring, hop % ring);
+                                    ASSERT_GE(hop, 1u);
+                                    ASSERT_LE(hop, remote_hops);
+                                    ++received[{r, hop}];
+                                }
+                            }
+                        }
+                        for (uint32_t r = 0; r < ring; ++r) {
+                            for (uint32_t hop = 1; hop <= remote_hops; ++hop) {
+                                EXPECT_EQ((received[{r, hop}]), 1u) << "receiver=" << r << " hop=" << hop;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A multicast exchange splits into runs of hops that ship the same origin row, and each run's route
+// reaches exactly the receivers of its hops. Unaligned chunk starts (block-cyclic) give two runs.
+TEST(SlidingWindowWorkPlan, MulticastRunsRouteToTheirReceivers) {
+    bool saw_split = false;
+    for (uint32_t ring : {4u, 8u}) {
+        for (uint32_t local : {8u, 16u}) {
+            const uint32_t group = ring * local;
+            for (uint32_t hops : {2u, 4u}) {
+                if (hops > ring || ring % hops != 0) {
+                    continue;
+                }
+                for (uint32_t start : {group, group + 2 * local, group + (ring - 1) * local}) {
+                    if (chunked_q_wraps(start, start + group, local, ring)) {
+                        continue;
+                    }
+                    for (const bool linear : {true, false}) {
+                        ChunkedSlidingHaloLayout layout;
+                        layout.q_local_tile_rows = local;
+                        layout.halo_tile_rows = hops * local;
+                        layout.ring_size = ring;
+                        layout.logical_k_tile_rows = start + group;
+                        layout.q_start_tile = start;
+                        ASSERT_TRUE(layout.source_keyed());
+                        for (uint32_t source = 0; source < ring; ++source) {
+                            for (const auto& exchange :
+                                 plan_chunked_sliding_halo_exchanges(layout, source, linear, true)) {
+                                SCOPED_TRACE(
+                                    ::testing::Message()
+                                    << "ring=" << ring << " local=" << local << " hops=" << hops << " start=" << start
+                                    << " linear=" << linear << " source=" << source << " hop=" << exchange.hop
+                                    << " backward=" << exchange.send_backward);
+                                ASSERT_TRUE(exchange.multicast);
+                                std::vector<uint32_t> origins;
+                                for (uint32_t i = 0; i < exchange.hop_count; ++i) {
+                                    const auto sources = layout.send_sources(source, exchange.hop + i);
+                                    ASSERT_EQ(sources.count, 1u);
+                                    origins.push_back(sources.first_start_tile);
+                                }
+                                uint32_t runs = 0;
+                                for (uint32_t run_start = 0; run_start < exchange.hop_count; ++runs) {
+                                    const uint32_t run_end =
+                                        chunked_sliding_halo_run_end(origins.data(), run_start, exchange.hop_count);
+                                    ASSERT_GT(run_end, run_start);
+                                    ASSERT_LE(run_end, exchange.hop_count);
+                                    if (run_end < exchange.hop_count) {
+                                        EXPECT_NE(origins[run_end], origins[run_start]);
+                                    }
+                                    const uint32_t distance = chunked_sliding_halo_run_distance(
+                                        exchange.distance,
+                                        exchange.hop_count,
+                                        run_start,
+                                        run_end,
+                                        exchange.send_backward);
+                                    std::set<uint32_t> routed, expected;
+                                    for (uint32_t k = 0; k < run_end - run_start; ++k) {
+                                        const int64_t receiver = exchange.send_backward
+                                                                     ? static_cast<int64_t>(source) - distance - k
+                                                                     : static_cast<int64_t>(source) + distance + k;
+                                        if (linear || exchange.send_backward) {
+                                            ASSERT_GE(receiver, 0);
+                                            ASSERT_LT(receiver, ring);
+                                        }
+                                        routed.insert(static_cast<uint32_t>((receiver + ring) % ring));
+                                    }
+                                    for (uint32_t i = run_start; i < run_end; ++i) {
+                                        EXPECT_EQ(origins[i], origins[run_start]);
+                                        expected.insert((source + exchange.hop + i) % ring);
+                                    }
+                                    EXPECT_EQ(routed, expected);
+                                    run_start = run_end;
+                                }
+                                EXPECT_LE(runs, 2u);
+                                saw_split |= runs > 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    EXPECT_TRUE(saw_split);
+}
+
+// A layout that is not source-keyed keeps one unicast per hop even when multicast is allowed.
+TEST(SlidingWindowWorkPlan, NonSourceKeyedHaloFallsBackToUnicast) {
+    ChunkedSlidingHaloLayout layout;
+    layout.q_local_tile_rows = 4;
+    layout.halo_tile_rows = 10;  // partial farthest hop
+    layout.ring_size = 4;
+    layout.logical_k_tile_rows = 32;
+    layout.q_start_tile = 16;
+    ASSERT_FALSE(layout.source_keyed());
+    for (uint32_t source = 0; source < 4; ++source) {
+        const auto exchanges = plan_chunked_sliding_halo_exchanges(layout, source, true, true);
+        ASSERT_EQ(exchanges.size(), layout.remote_hop_count());
+        for (uint32_t i = 0; i < exchanges.size(); ++i) {
+            EXPECT_FALSE(exchanges[i].multicast);
+            EXPECT_EQ(exchanges[i].hop, i + 1);
+            EXPECT_EQ(exchanges[i].hop_count, 1u);
         }
     }
 }

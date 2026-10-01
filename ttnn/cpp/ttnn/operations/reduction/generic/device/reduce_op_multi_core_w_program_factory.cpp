@@ -53,7 +53,7 @@ auto reduce_w_split_work(const ReduceParams& attrs, const tt::tt_metal::MeshTens
     return attrs.sub_core_grids.has_value()
                ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_rows, split_row_wise)
                : tt::tt_metal::split_work_to_cores(
-                     a.mutable_device().compute_with_storage_grid_size(), num_rows, split_row_wise);
+                     a.device().compute_with_storage_grid_size(), num_rows, split_row_wise);
 }
 
 // The height-sharded fast path, where each core reduces its resident L1 shard. It also pins the
@@ -131,7 +131,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    tt_metal::distributed::MeshDevice& device = a.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = a.device();
 
     // Populate the RM-only locals (chunk sizes, page bytes, padding identity, datum sizes) into
     // a single struct so the per-site formulas don't drift between this factory and the H one.
