@@ -64,6 +64,7 @@ NAME = {
     "EmbeddingsDeviceOperation": "Embeddings",
     "UntilizeCodegenDeviceOperation": "UntilizeCodegen",
     "SliceDeviceOperation": "Slice",
+    "ReshardDeviceOperation": "Reshard",
 }
 v = lambda s: re.sub(r"\[.*", "", s)
 
@@ -125,6 +126,8 @@ def classify(op, r):
         return "", "sdpa"
     if op in ("LayerNormDeviceOperation", "ShardedToInterleavedDeviceOperation", "InterleavedToShardedDeviceOperation"):
         return "", "norm"
+    if op == "ReshardDeviceOperation":  # bs1: the MLP norm output onto the 1D FF1 / FF3 matmul's in0 layout
+        return "", "mlp_mm"
     return "", "other"
 
 
