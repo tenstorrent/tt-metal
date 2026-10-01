@@ -26,3 +26,12 @@
 - Next: read driver.log, /var/tmp/fasth3/t78/run78.log (T78_CMP, AB decode_s per arm), run78b.log (T78B_EXIT).
   Then clean up: git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/t78; rm -rf /var/tmp/fasth3/t78/jit
   ~/fasth3/t78drv ~/fasth3/setup78.sh.
+
+## t79 result (2026-10-01 16:55 UTC)
+- blx03 job 043 (run78.sh, full mesh + create_submesh(2,4), 544x960/145f conv decode): exit 0, no drop
+  (post-job gate 32/32 OK, no reboot since 08:09). h0 decode_s 2.0580/2.0577/2.0542 (min 2.0542);
+  h1 1.9917/1.9963/1.9937 (min 1.9917), 42/42 convs halo-only. -62.5 ms (-3.0%).
+  T78_CMP h1_vs_h0 identical=True max_abs_diff=0 (145,816,960) uint8.
+- Driver stopped after 043 on a false alarm: gate_fail_since() treats "device healthy; no reset needed" and
+  "heartbeat: HEALTHY" as failed gates (it only accepts ": OK"). Same bug made wait_health idle ~16 min.
+- Halo unit tests submitted by hand as blx03 job 049 (run78b.sh, log /var/tmp/fasth3/t78/run78b.log, T78B_EXIT).
