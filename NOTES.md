@@ -1,22 +1,23 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# t85 notes
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
+## State (2026-10-01 22:00 UTC)
+- Code: 129f0081c59 (3 opt-in flags + CPU tests, 7 pass), aadf468a540 (device A/B files).
+- Device A/B staged on blx03 at ~/fasth3/t85 (src = this branch @aadf468a540, run85.sh, test_denoise_trims_ab.py).
+- Detached driver on blx03: ~/fasth3/t85/driver85.sh (copy of tmp/t85/driver.sh), pid 78652.
+  It waits up to 8 h for a healthy broker (blx03 was HELD: tray 1 drop in another tenant's job 104,
+  then a reset left 32/32 off-bus), submits ONE job (run85.sh, 2x4 submesh from full mesh), watches it,
+  then checks the broker log for drops/reboot during our job.
+- Log: /var/tmp/fasth3/t85/driver.log, done marker `T85_DRIVER_DONE ab <rc>`.
+  rc 0 ok, 9 = drop/error/reboot during OUR job (=> stop all device work, report), 8 = never healthy, 7 = submit failed.
+  Job output: /var/tmp/fasth3/t85/run85.log (also ~/fasth3/t85/run85.log).
+- If blx03 reboots before the job, the driver dies without a marker: relaunch it
+  (`ssh g14blx03`, then `setsid nohup bash ~/fasth3/t85/driver85.sh > /var/tmp/fasth3/t85/driver.out 2>&1 < /dev/null &`, run with ssh -f or it hangs).
 
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
-
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
-
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+## Next step on resume
+1. `grep -E 'T85_(AB|BLOCK|STACK|FAIL|EXIT)' /var/tmp/fasth3/t85/run85.log` on blx03.
+2. Per-step saving = 48 x (base - arm) ms_per_block, minus T85_STACK for the adaln arm.
+   E2E = 8 x S1 per-step + 3 x S2 per-step.
+3. Arms bit_identical=True and faster: flip default to "1" on ttp/t48-ltx25-integrated
+   (origin @29a0e8dfdc8; local t48 is stale): cherry-pick 129f0081c59, change default, CPU tests, push.
+4. LTX_AGMM_K2048 stays opt-in: only hits at TP=4 with Ring (4x8), not measurable under the 2x4 rule.
+5. Remove ~/fasth3/t85 and /var/tmp/fasth3/t85 on blx03.
