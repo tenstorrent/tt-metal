@@ -99,12 +99,14 @@ def chunk_gated_delta_rule_fused_adapter(
     const_tiles=None,  # (eye, tril, ones, masks) device tensors built once by the caller (layer);
     # passed to the op so it stays stateless. Required under trace (the op's internal build does a
     # host upload, illegal under trace); if None, the op builds them eagerly.
+    program_config=None,  # ttnn.ChunkGdnFusedProgramConfig / ChunkGdnPhasedProgramConfig / ChunkGdnMono...:
+    # None: the op's own dispatch — fused or phased depending on the cost model.
 ):
     global _logged_path
     if not _logged_path:
         logger.info(
             "[GDN] fused chunk_gated_delta_rule active: "
-            f"path={'PHASED (chunk-parallel prep + V-block scan)' if phased_enabled() else 'monolithic'}, "
+            f"program_config={program_config if program_config is not None else 'None (the op picks fused/phased by its cost model)'}, "
             f"chunk_size={_FUSED_CHUNK_SIZE}, flat_qkv={flat_qkv_enabled()}, "
             f"input q/k/v dtype={q.dtype}/{k.dtype}/{v.dtype}"
         )
@@ -134,7 +136,7 @@ def chunk_gated_delta_rule_fused_adapter(
     beta = ttnn.reshape(beta, [B, T, Nv])
     g = ttnn.reshape(g, [B, T, Nv])
 
-    # Host L2-norm q/k (skipped when in-kernel norm via QWEN_GDN_QK_NORM / flat QKV — required for flat).
+    # Host L2-norm q/k; with flat QKV the prep kernel normalizes in-kernel instead (required for flat).
     if not flat_qkv_enabled():
         q = l2_norm_ttnn(q, dim=-1)
         k = l2_norm_ttnn(k, dim=-1)
@@ -186,6 +188,7 @@ def chunk_gated_delta_rule_fused_adapter(
         output_final_state=True,
         chunk_size=_FUSED_CHUNK_SIZE,
         output_head_major=return_o_bh,
+        program_config=program_config,
         eye=_eye,
         tril=_tril,
         ones=_ones,

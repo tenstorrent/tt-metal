@@ -18,72 +18,69 @@ void kernel_main() {
 
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
-    constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t Sqt = get_compile_time_arg_val(3);
-    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(4);
-    constexpr uint32_t unpadded_Sk = get_compile_time_arg_val(5);
-    constexpr uint32_t DHt = get_compile_time_arg_val(6);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(7);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(8);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(9);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(10);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(11);
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(12);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(13);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(15) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
-    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(19);
-    constexpr bool use_lightweight_mask = get_compile_time_arg_val(20) == 1;
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
-    constexpr uint32_t k_partial_col = get_compile_time_arg_val(23);
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(2);
+    constexpr uint32_t unpadded_Sk = get_compile_time_arg_val(3);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(4);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(7);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8);
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(9);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(10);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(11) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(14) == 1;
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(15);
+    constexpr bool use_lightweight_mask = get_compile_time_arg_val(16) == 1;
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(18);
+    constexpr uint32_t k_partial_col = get_compile_time_arg_val(19);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(20) == 1;
     // Windowed (block-diagonal) mask generation flags. Fixed scalar slots BEFORE the tensor-accessor
     // block so the accessor offset chain stays intact for all configs.
-    constexpr bool use_windowed_mask = get_compile_time_arg_val(25) == 1;
+    constexpr bool use_windowed_mask = get_compile_time_arg_val(21) == 1;
+    // Write the heads side by side as [B x 1 x S x NQH*DH] (what nlp_concat_heads produces) instead of [B x NQH x S x
+    // DH].
+    constexpr bool out_concat_heads = get_compile_time_arg_val(22) == 1;
 
     // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     // Per-device Q offset accessor, chained after cu_window so the offset chain stays intact.
     constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    const uint32_t core_id = get_arg_val<uint32_t>(1);
-    const uint32_t num_phases = get_arg_val<uint32_t>(2);
-    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(3);
-    uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(4);
-    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(5);
+    const uint32_t num_phases = get_arg_val<uint32_t>(1);
+    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(2);
+    uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(3);
+    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(4);
     uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(6);
-        write_offset_phase_2 = get_arg_val<uint32_t>(7);
+        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(5);
+        write_offset_phase_2 = get_arg_val<uint32_t>(6);
     }
 
     // Global Q scheduling args follow phase_2 args.
-    const uint32_t global_q_start = get_arg_val<uint32_t>(8);
-    const uint32_t global_q_count = get_arg_val<uint32_t>(9);
-    const uint32_t cu_window_seqlens_addr = get_arg_val<uint32_t>(10);
-    const uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(11);
+    const uint32_t global_q_start = get_arg_val<uint32_t>(7);
+    const uint32_t global_q_count = get_arg_val<uint32_t>(8);
+    const uint32_t cu_window_seqlens_addr = get_arg_val<uint32_t>(9);
+    const uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(10);
     // Global row index of this tensor's first Q row. Non-zero when Q is a sequence-parallel shard:
     // Q/output are addressed locally, but cu_window_seqlens and K/V are global, so the mask generator
     // needs the shard's global origin. Windowed builds only: the ring-distributed factory shares this
-    // kernel, never sets use_windowed_mask, and supplies runtime args only through slot 11 — so slots
-    // 12/13 must not be read there (mirrors the reader's guarded windowed tail).
+    // kernel, never sets use_windowed_mask, and supplies runtime args only through slot 10 — so slots
+    // 11/12 must not be read there (mirrors the reader's guarded windowed tail).
     uint32_t q_tok_offset = 0;
     // Per-device form: when a tensor was supplied its value wins, read below once cb_cu_window_in is
     // available. Zero address means the caller used the scalar above.
     uint32_t q_tok_offset_addr = 0;
     if constexpr (use_windowed_mask) {
-        q_tok_offset = get_arg_val<uint32_t>(12);
-        q_tok_offset_addr = get_arg_val<uint32_t>(13);
+        q_tok_offset = get_arg_val<uint32_t>(11);
+        q_tok_offset_addr = get_arg_val<uint32_t>(12);
     }
 
-    constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
     constexpr uint32_t cb_arg_offset = q_offset_args.next_compile_time_args_offset();
@@ -102,7 +99,9 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
-    const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    const auto out_tile_shape =
+        out_concat_heads ? TensorTileShape(B, 1, valid_Sqt, NQH * vDHt) : TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    constexpr uint32_t out_row_stride = out_concat_heads ? NQH * vDHt : vDHt;
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
@@ -231,7 +230,12 @@ void kernel_main() {
             const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-            uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+            uint32_t out_tile_id;
+            if constexpr (out_concat_heads) {
+                out_tile_id = out_tile_shape.id_of(nb, 0, write_offset + out_row_start_tile, nq * vDHt);
+            } else {
+                out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+            }
             if constexpr (use_streaming_compute) {
                 // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
@@ -246,7 +250,8 @@ void kernel_main() {
                     out_tile_id,
                     tile_bytes,
                     out_subblock_h,
-                    barrier_threshold);
+                    barrier_threshold,
+                    out_row_stride);
             } else {
                 write_block(
                     noc,
@@ -257,7 +262,8 @@ void kernel_main() {
                     vDHt,
                     out_tile_id,
                     tile_bytes,
-                    barrier_threshold);
+                    barrier_threshold,
+                    out_row_stride);
             }
         }
     }  // close phase

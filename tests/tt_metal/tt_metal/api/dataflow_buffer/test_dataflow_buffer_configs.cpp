@@ -1443,6 +1443,9 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
              .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = p.cap}};
         k.compile_time_args = {{"num_entries_per_consumer", per_consumer}};
+        // Declared so the kernel source stays compilable; these probes never launch, and the
+        // kernel's digest reporting is only consumed by run_single_dfb_program_2_0.
+        k.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
         return k;
     };
 
@@ -2333,8 +2336,7 @@ TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
 // DFBs on disjoint cores all fit at slot 0.
 TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
     const bool is_quasar = this->device().arch() == ARCH::QUASAR;
-    const uint32_t max_slots =
-        is_quasar ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal::get_arch_num_circular_buffers();
+    const uint32_t max_slots = is_quasar ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal::get_num_dataflow_buffers();
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     const uint32_t num_dfbs = max_slots + 4;
     if (grid.x * grid.y < num_dfbs) {

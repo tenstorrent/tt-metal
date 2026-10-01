@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -53,7 +54,7 @@ inline std::shared_ptr<Buffer> make_cross_node_data_buffer(
     BufferType buffer_type = BufferType::L1) {
     const uint32_t ring_size = entry_size * num_entries;
     const uint32_t num_cores = all_cores.num_cores();
-    return Buffer::create(
+    return BufferImpl::create(
         &device,
         ring_size * num_cores,
         ring_size,

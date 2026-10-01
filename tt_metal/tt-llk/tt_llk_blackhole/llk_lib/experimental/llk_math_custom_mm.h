@@ -22,7 +22,7 @@ using namespace ckernel::math;
 // in1 tile shape: [32, 32]
 // rt_dim: 1
 // ct_dim: any integer from 1 to 16
-// kt_dim: even number from 2 to 256 (inclusive)
+// kt_dim: any integer from 1 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
 

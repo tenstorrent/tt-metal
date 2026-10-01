@@ -61,4 +61,27 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads(
         optional_output_tensors);
 }
 
+std::tuple<Tensor, Tensor> nlp_create_q_heads_split(
+    const Tensor& input,
+    uint32_t num_heads,
+    uint32_t split_head_dim,
+    const std::optional<MemoryConfig>& memory_config) {
+    TT_FATAL(input.logical_shape().rank() == 4 && num_heads > 0, "Expected rank-4 input and nonzero head count");
+    TT_FATAL(
+        input.logical_shape()[3] == input.padded_shape()[3] && input.logical_shape()[3] % num_heads == 0,
+        "Q width must be unpadded and divisible by num_heads");
+    auto [first, second, unused] = ttnn::prim::nlp_create_qkv_heads(
+        input,
+        std::nullopt,
+        num_heads,
+        0,
+        input.logical_shape()[3] / num_heads,
+        false,
+        false,
+        memory_config,
+        std::nullopt,
+        split_head_dim);
+    return {first, second};
+}
+
 }  // namespace ttnn::experimental

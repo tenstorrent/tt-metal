@@ -11,6 +11,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "topk_large_indices_compute_body_mode.hpp"
 #include "topk_large_indices_metadata.hpp"
+#include "topk_large_indices_runtime_args.hpp"
 
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
@@ -241,7 +242,7 @@ FORCE_INLINE void materialize_index_rank_order(uint32_t dst, uint32_t indices_cb
 
 void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
-    const uint32_t search_len = get_arg_val<uint32_t>(1);
+    const uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::compute_search_length);
 
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t indices_cb = get_compile_time_arg_val(1);

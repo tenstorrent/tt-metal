@@ -89,7 +89,7 @@ class TtBasicTransformerBlock(LightweightModule):
         )
         self.ln_core_grid_x = model_config.core_grid_x
         self.ln_program_config = model_config.get_layernorm_config(module_path)
-        self.legacy_program_config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)
+        self.legacy_program_config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True)
 
     def forward(self, input_tensor, attention_mask=None, encoder_hidden_states=None):
         N, C, H, W = list(input_tensor.shape)

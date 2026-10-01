@@ -8,6 +8,10 @@
 # expression (bh_* -> blackhole, wh_* -> wormhole_b0), not authored per entry.
 # upload_benchmarks: true opts in to SFTP upload of fabric BW / latency CSVs
 #   (mainline environment; only on refs/heads/main).
+# upload_microbenchmarks: true opts in to the artifact upload of the CSVs the
+#   device profiler writes under generated/profiler/.logs. The impl runs the
+#   profiler off by default, so entries that set this also have to turn it on
+#   in their own cmd.
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> sanity).
 
 - name: t3k fabric tests
@@ -21,6 +25,7 @@
     wh_llmbox_civ2:
       timeout: 30
   team: scaleout
+  budget_type: sanity
   owner_id: U06US5C7M7X # Sean Nijjar
   upload_benchmarks: true
 
@@ -37,6 +42,7 @@
     wh_n300_civ2:
       timeout: 15
   team: scaleout
+  budget_type: sanity
   owner_id: U08RRAU5E15 # Ridvan Song
 
 - name: fabric fast unit tests (1D, 2D, single erisc)
@@ -53,4 +59,21 @@
     bh_p300:
       timeout: 15
   team: scaleout
+  budget_type: sanity
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+
+- name: DRAM ubench
+  # run_moreh_microbenchmark.sh hard-exits unless TT_METAL_DEVICE_PROFILER=1
+  # and refuses to produce numbers outside an ENABLE_TRACY=ON build; the sanity
+  # impl leaves the profiler off for every other entry, so set it per-cmd here.
+  # sanity-tests.yaml builds with tracy: true, which satisfies the second half.
+  cmd: TT_METAL_DEVICE_PROFILER=1 TRACY_NO_INVARIANT_CHECK=1 ./tests/scripts/run_moreh_microbenchmark.sh
+  skus:
+    wh_n300_perf:
+      timeout: 5
+    bh_p150_perf:
+      timeout: 5
+  team: scaleout
+  budget_type: sanity
+  owner_id: U06MJ6CVCGZ # Yu Gao
+  upload_microbenchmarks: true

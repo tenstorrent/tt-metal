@@ -75,7 +75,7 @@ void kernel_main() {
         CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_input_l1_ptr(dfb_tmp_input_obj.get_write_ptr());
         CoreLocalMem<volatile int32_t> target_l1_ptr(dfb_target_obj.get_read_ptr());
 
-        uint32_t idx_max = std::min(w + FACE_WIDTH, W);
+        uint32_t idx_max = std::min(FACE_WIDTH, W - w);
         for (uint32_t idx = 0; idx < idx_max; idx++) {
             int32_t target_val = target_l1_ptr[idx];
 

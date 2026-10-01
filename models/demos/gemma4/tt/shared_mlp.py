@@ -216,7 +216,8 @@ class SharedMLP:
         gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard])
         gate_up.deallocate(True)
 
-        # Prefer Accurate over FastLut/Tanh for device PCC (see compute_config).
+        # Prefer Accurate over FastLut/Tanh for device PCC (see compute_config): the Tanh variant
+        # dropped the E4B full-model PCC from 0.9846 to 0.9578 (gate 0.96) on bh_quietbox_2.
         gate = ttnn.gelu(gate, variant=gelu_variant())
         hidden = ttnn.mul(gate, up)
         gate.deallocate(True)

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
@@ -70,9 +72,14 @@ class TtLlamaImageTransformerBlock(LightweightModule):
         )
 
         if gated:
-            # Gate tensors must be expanded to hidden dim or we get a PCC error
+            # Gate tensors must be expanded to hidden dim or we get a PCC error. The gates are learned
+            # constants, so their tanh is taken once here on the host in fp32 (then rounded to bf16)
+            # instead of on the device on every forward, where it would depend on the SFPU tanh
+            # approximation in use.
             self.gate_attn = ttnn.as_tensor(
-                state_dict[f"{state_dict_prefix}gate_attn"].unsqueeze(0).expand(1, self.hidden_size),
+                torch.tanh(state_dict[f"{state_dict_prefix}gate_attn"].float())
+                .unsqueeze(0)
+                .expand(1, self.hidden_size),
                 dtype=ttnn.bfloat16,
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -80,7 +87,7 @@ class TtLlamaImageTransformerBlock(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self.gate_ffn = ttnn.as_tensor(
-                state_dict[f"{state_dict_prefix}gate_ffn"].unsqueeze(0).expand(1, self.hidden_size),
+                torch.tanh(state_dict[f"{state_dict_prefix}gate_ffn"].float()).unsqueeze(0).expand(1, self.hidden_size),
                 dtype=ttnn.bfloat16,
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -94,12 +101,12 @@ class TtLlamaImageTransformerBlock(LightweightModule):
 
         attn_out = self.attn(self.ln_1(x_11SH), mask=mask)
         if self.gated:
-            attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
+            attn_out = ttnn.mul(attn_out, self.gate_attn)
 
         res = ttnn.add(x_11SH, attn_out)
         mlp_out = self.mlp(self.ln_2(res))
         if self.gated:
-            mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffn))
+            mlp_out = ttnn.mul(mlp_out, self.gate_ffn)
         out = ttnn.add(res, mlp_out)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(attn_out)
