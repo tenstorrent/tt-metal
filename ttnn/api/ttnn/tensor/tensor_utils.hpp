@@ -109,12 +109,12 @@ tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
  *                      in the mutation the ProgramDescriptor callers apply by hand right after
  *                      building a CBDescriptor (set_cb_page_size_for_tile). No-op for a TILE tensor,
  *                      which is already tile-paged.
- * @param unpack_face_geometry Passed straight through to
- *                      DataflowBufferSpec::unpack_face_geometry_metadata. Required by the compute
- *                      engine when an entry holds fewer/shorter faces than a full tile (which is
- *                      exactly the sub-tile shard case @p page_as_tile falls back to). NOT derived:
- *                      whether a partial shard is to be unpacked as a partial tile is the kernel
- *                      author's decision, not something the tensor states.
+ * @param tile_format_override Replaces the derived DataflowBufferSpec::tile_format_metadata. The Tile carries
+ *                      the face layout the compute engine unpacks, so pass one when an entry holds
+ *                      fewer/shorter faces than the tensor's tile (which is exactly the sub-tile shard
+ *                      case @p page_as_tile falls back to). NOT derived: whether a partial shard is to
+ *                      be unpacked as a partial tile is the kernel author's decision, not something
+ *                      the tensor states.
  * @param advanced_options Passed through to DataflowBufferSpec::advanced_options.
  *
  * @return DataflowBufferSpec with all entry-format fields populated from the tensor.
@@ -125,7 +125,7 @@ tt::tt_metal::experimental::DataflowBufferSpec dfb_spec_from_sharded_tensor(
     uint32_t num_entries = 0,
     const std::optional<tt::tt_metal::experimental::TensorParamName>& borrowed_from = std::nullopt,
     bool page_as_tile = false,
-    const std::optional<tt::tt_metal::FaceGeometry>& unpack_face_geometry = std::nullopt,
+    const std::optional<tt::tt_metal::Tile>& tile_format_override = std::nullopt,
     tt::tt_metal::experimental::DFBAdvancedOptions advanced_options = {});
 
 /**
