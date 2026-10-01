@@ -57,9 +57,9 @@ struct ChunkGdnParams {
     // Every geometry/transport field below is resolved from the ChunkGdnFusedProgramConfig (or the
     // cost model, for the fields it leaves free) at attrs construction — never in the factory: these
     // fields being hashed is what keeps the program cache honest. Mono leaves them at their defaults.
-    // Producers per head (NP). Producer p of a head owns chunks c = p, p+NP, ... and NoC-
-    // writes them into the head's receivers in order (receiver-driven rotating ready credits).
-    // Clamped to num_chunks.
+    // Producers per head (NP) in placements 0 and 1: producer j of a head owns chunks c = j, j+NP, ... and
+    // NoC-writes them into the head's receivers in order (receiver-driven rotating ready credits);
+    // clamped to num_chunks. In placement 2 the SIZE of the producer pool P (at most BH * num_chunks).
     uint32_t np = 1;
     // Receivers per head (NV): a head's NV receiver cores form a 1xNV row rectangle and each carries a
     // V-slice of Vt/NV tiles (the phased scan's V-block split, fed over the NoC).
@@ -85,7 +85,14 @@ struct ChunkGdnParams {
     // the same row), heads beyond grid.y in the leftover columns as vertical blocks. NOC_1 routes -x
     // then -y, so a head's hand-off traffic never leaves its own row (or column block) and heads do not
     // share NoC links. The config's row_local, or row-local whenever it is feasible.
+    // 2 = PRODUCER POOL: the row-local layout of NV receivers + NPH home producers per head for the
+    // largest NPH with BH*NPH <= np, plus np - BH*NPH EXTRA producers on the remaining cores; the
+    // extras serve every head (the item map of kernels/dataflow/chunk_gdn_fused_map.hpp).
     uint32_t placement = 0;
+    // Placement 2: the extras' share of each head's chunks, pool_extra_num / pool_extra_den (0 / 1
+    // without extras).
+    uint32_t pool_extra_num = 0;
+    uint32_t pool_extra_den = 1;
     // WY-inverse method of the producer's prep compute (GdnTinv, chunk_gdn_compute_config.hpp).
     GdnTinv tinv = GdnTinv::HORNER;
     bool output_final_state = false;
@@ -142,15 +149,23 @@ struct ChunkGdnDeviceOperation {
 // ---------------------------------------------------------------------------------------------------
 struct FusedGeometryChoice {
     uint32_t nv = 0;  // 0 => no fused geometry fits this grid
-    uint32_t np = 0;
-    uint32_t placement = 0;  // 1 row-local, 0 row-major fallback
+    uint32_t np = 0;  // producers per head; the pool size P when placement == 2
+    uint32_t placement = 0;  // 1 row-local, 0 row-major fallback, 2 producer pool
     float t_fused_us = 0.0f;
     float t_phased_us = 0.0f;
     bool fused_pays = false;
 };
+// Which geometries the model considers: NP producers per head (placements 0/1), the producer pool
+// (placement 2, T = NC * max(BH * w_p(P) / P, t_step) + fill), or both.
+enum class FusedCandidates : uint8_t { PerHead = 0, Pool = 1, Both = 2 };
 bool fused_row_local_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP);
+// Producer pool of P for NV receivers per head: the home producers per head — the largest NPH with
+// BH*NPH <= P that has a row-local layout — or 0 when the pool does not fit.
+uint32_t fused_pool_home_producers(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t P);
+bool fused_pool_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t P);
 // fixed_nv / fixed_np = 0 -> free; a non-zero value pins that field (an env override) and the model
-// chooses the other one so the pair still fits (and prefers a row-local layout for it).
+// chooses the other one so the pair still fits (and prefers a row-local layout for it). With the pool
+// candidates fixed_np pins the pool size.
 FusedGeometryChoice choose_fused_geometry(
     uint32_t grid_x,
     uint32_t grid_y,
@@ -158,16 +173,19 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t NC,
     uint32_t Vt,
     uint32_t fixed_nv = 0,
-    uint32_t fixed_np = 0);
+    uint32_t fixed_np = 0,
+    FusedCandidates candidates = FusedCandidates::PerHead);
 
 // Design D9: the fused program's core map, a pure function of its arguments (no device), shared by
 // the program factory and the nanobind geometry oracle. placement 0 = row-major 1xNV receiver
 // rectangles with the producers on the remaining cores row-major; 1 = row-local (a head's receivers
-// and producers in one row segment, leftover heads as column blocks). FATALs when the layout does
-// not fit, exactly as the factory would.
+// and producers in one row segment, leftover heads as column blocks); 2 = producer pool (NP is the
+// pool size: the row-local map of home_per_head producers per head, then the extras row-major on
+// the remaining cores). FATALs when the layout does not fit, exactly as the factory would.
 struct FusedPlacement {
     std::vector<tt::tt_metal::CoreCoord> receivers;  // index h*NV + v (logical coordinates)
-    std::vector<tt::tt_metal::CoreCoord> producers;  // index h*NP + j
+    std::vector<tt::tt_metal::CoreCoord> producers;  // index h*home_per_head + j, then the extras
+    uint32_t home_per_head = 0;                      // NP in placements 0/1
 };
 FusedPlacement fused_placement(
     uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement);

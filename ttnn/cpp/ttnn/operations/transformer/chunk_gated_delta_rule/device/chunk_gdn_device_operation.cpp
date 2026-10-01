@@ -4,6 +4,7 @@
 #include "chunk_gdn_device_operation.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 #include <variant>
 
@@ -98,6 +99,29 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
         "chunk_gdn_fused: BH * nbuf ({} * {}) credit words exceed the 1024-word credit tile",
         attrs.BH,
         attrs.nbuf);
+    if (attrs.placement == 2) {
+        // Producer pool: np is the pool size; it needs a home producer per head in a row-local layout.
+        TT_FATAL(
+            fused_pool_feasible(grid.x, grid.y, attrs.BH, attrs.nv, attrs.np),
+            "chunk_gdn_fused: a producer pool of {} for BH={} NV={} does not fit the {}x{} grid (needs BH*NV + P "
+            "cores and a row-local layout with a home producer per head)",
+            attrs.np,
+            attrs.BH,
+            attrs.nv,
+            grid.x,
+            grid.y);
+        TT_FATAL(
+            attrs.np <= attrs.BH * attrs.num_chunks,
+            "chunk_gdn_fused: a producer pool of {} exceeds the BH*NC = {} items",
+            attrs.np,
+            attrs.BH * attrs.num_chunks);
+        TT_FATAL(
+            attrs.pool_extra_den >= 1 && attrs.pool_extra_num <= attrs.pool_extra_den,
+            "chunk_gdn_fused: the extras' share {}/{} is not a fraction in [0, 1]",
+            attrs.pool_extra_num,
+            attrs.pool_extra_den);
+        return;
+    }
     if (attrs.placement == 0) {
         const uint32_t hpr = grid.x / attrs.nv;
         TT_FATAL(
@@ -232,19 +256,91 @@ bool fused_row_local_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uin
     return rem * (NV / rw + (NP + wl - 1) / wl) <= grid_y;
 }
 
+uint32_t fused_pool_home_producers(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t P) {
+    if (BH < 1 || NV < 1) {
+        return 0;
+    }
+    for (uint32_t nph = std::min<uint32_t>(P / BH, grid_x); nph >= 1; nph--) {
+        if (fused_row_local_feasible(grid_x, grid_y, BH, NV, nph)) {
+            return nph;
+        }
+    }
+    return 0;
+}
+
+bool fused_pool_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t P) {
+    return NV >= 1 && P >= 1 && BH * NV + P <= grid_x * grid_y &&
+           fused_pool_home_producers(grid_x, grid_y, BH, NV, P) >= 1;
+}
+
 FusedPlacement fused_placement(
     uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement) {
     const uint32_t n_cores = grid_x * grid_y;
     TT_FATAL(NV <= grid_x, "chunk_gdn_fused: nv={} exceeds the grid width {}", NV, grid_x);
     const uint32_t HPR = grid_x / NV;  // heads per receiver row (placement 0)
     const uint32_t R = BH * NV;        // receiver cores
-    const uint32_t P = BH * NP;        // producer cores
+    // Placement 2: NP is the pool size, NPH of it per head are home producers, the rest extras.
+    const uint32_t NPH = placement == 2 ? fused_pool_home_producers(grid_x, grid_y, BH, NV, NP) : NP;
+    const uint32_t P = placement == 2 ? NP : BH * NP;  // producer cores
     TT_FATAL(R + P <= n_cores, "chunk_gdn_fused: R+P = {}+{} cores needed, grid has {}", R, P, n_cores);
 
     // ---- Placement (test_chunk_gdn_fused_geometry.py checks it against a Python oracle) ----
     std::vector<CoreCoord> rcv_cores(R);  // index h*NV + v
-    std::vector<CoreCoord> prod_cores;    // index p = h*NP + j
+    std::vector<CoreCoord> prod_cores;    // index p = h*NPH + j, then the extras
     prod_cores.reserve(P);
+    // Row-local: head h < grid_y owns row h — receivers at columns 0..NV-1, producers at NV..L-1.
+    // NOC_1 routes -x then -y, so every producer's writes travel west inside the head's own row and
+    // never share a link with another head. Heads h >= grid_y live in the leftover columns [L, W)
+    // as vertical blocks: an rw x rh receiver rectangle on top, the producers row-major below it —
+    // their traffic is confined to the block's columns (short -x legs, then -y within the block).
+    auto place_row_local = [&](uint32_t np) {
+        const uint32_t L = NV + np;
+        TT_FATAL(L <= grid_x, "chunk_gdn_fused: row-local placement needs NV+NP={} <= grid_x={}", L, grid_x);
+        // k heads per row, each in its own column segment [i*L, (i+1)*L): the segments' -x legs are
+        // disjoint, so heads sharing a row still share no link.
+        const uint32_t k_per_row = grid_x / L;
+        const uint32_t n_row_heads = std::min<uint32_t>(BH, k_per_row * grid_y);
+        for (uint32_t h = 0; h < n_row_heads; h++) {
+            const uint32_t row = h / k_per_row;
+            const uint32_t xs = (h % k_per_row) * L;
+            for (uint32_t v = 0; v < NV; v++) {
+                rcv_cores[h * NV + v] = CoreCoord{xs + v, row};
+            }
+            for (uint32_t j = 0; j < np; j++) {
+                prod_cores.push_back(CoreCoord{xs + NV + j, row});
+            }
+        }
+        if (BH > n_row_heads) {
+            const uint32_t rem = BH - n_row_heads;
+            const uint32_t wl = grid_x - k_per_row * L;
+            TT_FATAL(wl >= 1, "chunk_gdn_fused: row-local placement: no leftover columns for {} extra heads", rem);
+            const uint32_t rw = std::min<uint32_t>(NV, wl);
+            TT_FATAL(
+                NV % rw == 0,
+                "chunk_gdn_fused: row-local placement: NV={} not a multiple of the leftover width {}",
+                NV,
+                rw);
+            const uint32_t rh = NV / rw;
+            const uint32_t block_h = rh + (np + wl - 1) / wl;
+            TT_FATAL(
+                rem * block_h <= grid_y,
+                "chunk_gdn_fused: row-local placement: {} leftover heads need {} rows, grid has {}",
+                rem,
+                rem * block_h,
+                grid_y);
+            for (uint32_t kk = 0; kk < rem; kk++) {
+                const uint32_t h = n_row_heads + kk;
+                const uint32_t y_base = kk * block_h;
+                const uint32_t xl = k_per_row * L;  // first leftover column
+                for (uint32_t v = 0; v < NV; v++) {
+                    rcv_cores[h * NV + v] = CoreCoord{xl + (v % rw), y_base + v / rw};
+                }
+                for (uint32_t j = 0; j < np; j++) {
+                    prod_cores.push_back(CoreCoord{xl + (j % wl), y_base + rh + j / wl});
+                }
+            }
+        }
+    };
     if (placement == 0) {
         TT_FATAL(
             BH <= HPR * grid_y,
@@ -270,112 +366,118 @@ FusedPlacement fused_placement(
                 }
             }
         }
+    } else if (placement == 1) {
+        place_row_local(NP);
     } else {
-        // Row-local: head h < grid_y owns row h — receivers at columns 0..NV-1, producers at NV..L-1.
-        // NOC_1 routes -x then -y, so every producer's writes travel west inside the head's own row and
-        // never share a link with another head. Heads h >= grid_y live in the leftover columns [L, W)
-        // as vertical blocks: an rw x rh receiver rectangle on top, the producers row-major below it —
-        // their traffic is confined to the block's columns (short -x legs, then -y within the block).
-        const uint32_t L = NV + NP;
-        TT_FATAL(L <= grid_x, "chunk_gdn_fused: row-local placement needs NV+NP={} <= grid_x={}", L, grid_x);
-        // k heads per row, each in its own column segment [i*L, (i+1)*L): the segments' -x legs are
-        // disjoint, so heads sharing a row still share no link.
-        const uint32_t k_per_row = grid_x / L;
-        const uint32_t n_row_heads = std::min<uint32_t>(BH, k_per_row * grid_y);
-        for (uint32_t h = 0; h < n_row_heads; h++) {
-            const uint32_t row = h / k_per_row;
-            const uint32_t xs = (h % k_per_row) * L;
-            for (uint32_t v = 0; v < NV; v++) {
-                rcv_cores[h * NV + v] = CoreCoord{xs + v, row};
-            }
-            for (uint32_t j = 0; j < NP; j++) {
-                prod_cores.push_back(CoreCoord{xs + NV + j, row});
-            }
+        TT_FATAL(
+            NPH >= 1,
+            "chunk_gdn_fused: a producer pool of {} has no row-local layout with a home producer per head for BH={} "
+            "NV={} on a {}x{} grid",
+            NP,
+            BH,
+            NV,
+            grid_x,
+            grid_y);
+        place_row_local(NPH);
+        // The extras: the remaining cores, row-major.
+        std::vector<bool> used(n_cores, false);
+        for (const CoreCoord& c : rcv_cores) {
+            used[c.y * grid_x + c.x] = true;
         }
-        if (BH > n_row_heads) {
-            const uint32_t rem = BH - n_row_heads;
-            const uint32_t wl = grid_x - k_per_row * L;
-            TT_FATAL(wl >= 1, "chunk_gdn_fused: row-local placement: no leftover columns for {} extra heads", rem);
-            const uint32_t rw = std::min<uint32_t>(NV, wl);
-            TT_FATAL(
-                NV % rw == 0,
-                "chunk_gdn_fused: row-local placement: NV={} not a multiple of the leftover width {}",
-                NV,
-                rw);
-            const uint32_t rh = NV / rw;
-            const uint32_t block_h = rh + (NP + wl - 1) / wl;
-            TT_FATAL(
-                rem * block_h <= grid_y,
-                "chunk_gdn_fused: row-local placement: {} leftover heads need {} rows, grid has {}",
-                rem,
-                rem * block_h,
-                grid_y);
-            for (uint32_t kk = 0; kk < rem; kk++) {
-                const uint32_t h = n_row_heads + kk;
-                const uint32_t y_base = kk * block_h;
-                const uint32_t xl = k_per_row * L;  // first leftover column
-                for (uint32_t v = 0; v < NV; v++) {
-                    rcv_cores[h * NV + v] = CoreCoord{xl + (v % rw), y_base + v / rw};
-                }
-                for (uint32_t j = 0; j < NP; j++) {
-                    prod_cores.push_back(CoreCoord{xl + (j % wl), y_base + rh + j / wl});
+        for (const CoreCoord& c : prod_cores) {
+            used[c.y * grid_x + c.x] = true;
+        }
+        for (uint32_t y = 0; y < grid_y && prod_cores.size() < P; y++) {
+            for (uint32_t x = 0; x < grid_x && prod_cores.size() < P; x++) {
+                if (!used[y * grid_x + x]) {
+                    prod_cores.push_back(CoreCoord{x, y});
                 }
             }
         }
     }
     TT_FATAL(prod_cores.size() == P, "chunk_gdn_fused: placement produced {} producers, need {}", prod_cores.size(), P);
-    return {std::move(rcv_cores), std::move(prod_cores)};
+    return {std::move(rcv_cores), std::move(prod_cores), NPH};
 }
 
 FusedGeometryChoice choose_fused_geometry(
-    uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NC, uint32_t Vt, uint32_t fixed_nv, uint32_t fixed_np) {
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t BH,
+    uint32_t NC,
+    uint32_t Vt,
+    uint32_t fixed_nv,
+    uint32_t fixed_np,
+    FusedCandidates candidates) {
     FusedGeometryChoice best;
     best.t_phased_us = t_phased_us(BH, NC);
     bool have = false;
-    auto consider = [&](uint32_t nv, uint32_t np, uint32_t placement) {
-        const float ts = t_step_us(Vt / nv);
-        if (ts < 0.0f) {
-            return;
-        }
-        const float t = NC * std::max(w_p_us(BH * np) / np, ts) + kFillUs;
-        // ties -> fewer cores, then smaller NV
-        const bool better =
-            !have || t < best.t_fused_us ||
-            (t == best.t_fused_us && (nv + np < best.nv + best.np || (nv + np == best.nv + best.np && nv < best.nv)));
+    uint32_t best_cores = 0;
+    // ties -> fewer cores, then smaller NV
+    auto consider = [&](uint32_t nv, uint32_t np, uint32_t placement, float t, uint32_t cores) {
+        const bool better = !have || t < best.t_fused_us ||
+                            (t == best.t_fused_us && (cores < best_cores || (cores == best_cores && nv < best.nv)));
         if (better) {
             best.nv = nv;
             best.np = np;
             best.placement = placement;
             best.t_fused_us = t;
+            best_cores = cores;
             have = true;
         }
     };
+    // Per-head form: NP producers per head, T = NC * max(w_p(BH*NP) / NP, t_step) + fill.
+    auto consider_per_head = [&](uint32_t nv, uint32_t np, uint32_t placement) {
+        const float ts = t_step_us(Vt / nv);
+        if (ts < 0.0f) {
+            return;
+        }
+        const float t = NC * std::max(w_p_us(BH * np) / np, ts) + kFillUs;
+        consider(nv, np, placement, t, BH * (nv + np));
+    };
     auto nv_ok = [&](uint32_t nv) { return Vt % nv == 0 && (fixed_nv == 0 || nv == fixed_nv); };
     auto np_ok = [&](uint32_t np) { return fixed_np == 0 || np == std::min(fixed_np, NC); };
-    for (uint32_t nv : {1u, 2u, 4u, 8u}) {
-        if (!nv_ok(nv)) {
-            continue;
-        }
-        for (uint32_t np = 1; np + nv <= grid_x; np++) {
-            const uint32_t np_eff = std::min(np, NC);
-            if (BH * (nv + np_eff) > grid_x * grid_y) {
-                break;
+    if (candidates != FusedCandidates::Pool) {
+        for (uint32_t nv : {1u, 2u, 4u, 8u}) {
+            if (!nv_ok(nv)) {
+                continue;
             }
-            if (np_ok(np_eff) && fused_row_local_feasible(grid_x, grid_y, BH, nv, np_eff)) {
-                consider(nv, np_eff, 1);
+            for (uint32_t np = 1; np + nv <= grid_x; np++) {
+                const uint32_t np_eff = std::min(np, NC);
+                if (BH * (nv + np_eff) > grid_x * grid_y) {
+                    break;
+                }
+                if (np_ok(np_eff) && fused_row_local_feasible(grid_x, grid_y, BH, nv, np_eff)) {
+                    consider_per_head(nv, np_eff, 1);
+                }
+            }
+        }
+        if (!have) {  // no row-local layout: the row-major fallback (optimistic — ignores link sharing)
+            for (uint32_t nv : {1u, 2u, 4u, 8u}) {
+                if (!nv_ok(nv) || nv > grid_x || BH > (grid_x / nv) * grid_y) {
+                    continue;
+                }
+                const uint32_t free = grid_x * grid_y - BH * nv;
+                const uint32_t np = fixed_np ? std::min(fixed_np, NC) : std::min(free / BH, NC);
+                if (np >= 1 && BH * (nv + np) <= grid_x * grid_y) {
+                    consider_per_head(nv, np, 0);
+                }
             }
         }
     }
-    if (!have) {  // no row-local layout: the row-major fallback (optimistic — ignores link sharing)
-        for (uint32_t nv : {1u, 2u, 4u, 8u}) {
-            if (!nv_ok(nv) || nv > grid_x || BH > (grid_x / nv) * grid_y) {
+    if (candidates != FusedCandidates::PerHead) {
+        // Producer pool: P = every core the receivers leave (or the pinned size), at most one per item;
+        // T = NC * max(BH * w_p(P) / P, t_step) + fill.
+        for (uint32_t nv : {1u, 2u, 4u}) {
+            const float ts = t_step_us(Vt / nv);
+            if (!nv_ok(nv) || ts < 0.0f || BH * nv >= grid_x * grid_y) {
                 continue;
             }
-            const uint32_t free = grid_x * grid_y - BH * nv;
-            const uint32_t np = fixed_np ? std::min(fixed_np, NC) : std::min(free / BH, NC);
-            if (np >= 1 && BH * (nv + np) <= grid_x * grid_y) {
-                consider(nv, np, 0);
+            const uint32_t P = std::min<uint32_t>(fixed_np ? fixed_np : grid_x * grid_y - BH * nv, BH * NC);
+            if (!fused_pool_feasible(grid_x, grid_y, BH, nv, P)) {
+                continue;
             }
+            const float t = NC * std::max(BH * w_p_us(P) / P, ts) + kFillUs;
+            consider(nv, P, 2, t, BH * nv + P);
         }
     }
     best.fused_pays = have && best.t_fused_us < best.t_phased_us;
@@ -452,22 +554,49 @@ std::vector<Tensor> chunk_gdn(
             "chunk_gdn_fused: num_receivers must be >= 1 (got {})",
             nv_pin);
         // The model fills whatever the config leaves free (both, one, or none) so the pair fits the grid.
+        const bool pool = fused_cfg->producer_pool;
         const auto choice = choose_fused_geometry(
-            grid0.x, grid0.y, BH, num_chunks, val_dim / tt::constants::TILE_WIDTH, nv_pin, np_pin);
+            grid0.x,
+            grid0.y,
+            BH,
+            num_chunks,
+            val_dim / tt::constants::TILE_WIDTH,
+            nv_pin,
+            np_pin,
+            pool ? FusedCandidates::Pool : FusedCandidates::PerHead);
         TT_FATAL(
             choice.nv >= 1,
             "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with num_receivers={} num_producers={} "
-            "(0 = free); the dispatch must choose phased",
+            "producer_pool={} (0 = free); the dispatch must choose phased",
             BH,
             grid0.x,
             grid0.y,
             nv_pin,
-            np_pin);
-        // Producers per head, clamped to num_chunks: a producer beyond NC would own no chunks (wasted
-        // core, and the receiver's rotating credit c % NP would skip it anyway). Receivers per head must
-        // divide Vt (validated).
-        attrs.np = np_pin ? std::min<uint32_t>(np_pin, num_chunks) : choice.np;
+            np_pin,
+            pool);
         attrs.nv = nv_pin ? nv_pin : choice.nv;
+        if (pool) {
+            // The pool size, at most one producer per item; its home producers per head come from the
+            // layout (validated), the extras' share from the config or the balanced NX / P.
+            attrs.np = np_pin ? std::min<uint32_t>(np_pin, BH * num_chunks) : choice.np;
+            attrs.placement = 2;
+            const uint32_t nph = fused_pool_home_producers(grid0.x, grid0.y, BH, attrs.nv, attrs.np);
+            const uint32_t nx = nph >= 1 ? attrs.np - BH * nph : 0;
+            if (nx >= 1) {
+                const auto& share = fused_cfg->pool_extra_share;
+                TT_FATAL(
+                    !share.has_value() || (*share >= 0.0f && *share <= 1.0f),
+                    "chunk_gdn_fused: pool_extra_share must be in [0, 1] (got {})",
+                    share.value_or(0.0f));
+                attrs.pool_extra_num = share.has_value() ? static_cast<uint32_t>(std::lround(*share * attrs.np)) : nx;
+                attrs.pool_extra_den = attrs.np;
+            }
+        } else {
+            // Producers per head, clamped to num_chunks: a producer beyond NC would own no chunks (wasted
+            // core, and the receiver's rotating credit c % NP would skip it anyway). Receivers per head must
+            // divide Vt (validated).
+            attrs.np = np_pin ? std::min<uint32_t>(np_pin, num_chunks) : choice.np;
+        }
         attrs.nbuf = fused_cfg->handoff_depth;
         TT_FATAL(
             attrs.nbuf >= 1 && attrs.nbuf <= 8,
@@ -480,9 +609,11 @@ std::vector<Tensor> chunk_gdn(
             "chunk_gdn_fused: posted writes require the unicast transport (unicast=true)");
         // Placement: the config's choice, else row-local whenever the (possibly pinned) geometry has a
         // row-local layout.
-        const bool row_local =
-            fused_cfg->row_local.value_or(fused_row_local_feasible(grid0.x, grid0.y, BH, attrs.nv, attrs.np));
-        attrs.placement = row_local ? 1u : 0u;
+        if (!pool) {
+            const bool row_local =
+                fused_cfg->row_local.value_or(fused_row_local_feasible(grid0.x, grid0.y, BH, attrs.nv, attrs.np));
+            attrs.placement = row_local ? 1u : 0u;
+        }
     } else {
         // The mono program has no forward-substitution solve: AUTO resolves to Horner (attrs.tinv's default)
         // and an explicit request is refused rather than silently downgraded.
