@@ -31,9 +31,9 @@ uint32_t tile_bytes(tt::DataFormat format, uint32_t h, uint32_t w) {
 }
 // Bytes of one A, B and output (or partials) tile. The factories size the output CBs with an
 // in0_tile_h x in1_tile_w tile whatever the output tensor's tile.
-uint32_t in0_tile_bytes(const Problem& p) { return tile_bytes(p.in0_format, p.in0_tile_h, TILE_DIM); }
-uint32_t in1_tile_bytes(const Problem& p) { return tile_bytes(p.in1_format, TILE_DIM, p.in1_tile_w); }
-uint32_t out_tile_bytes(const Problem& p, tt::DataFormat format) {
+uint32_t in0_tile_bytes(const MatmulDesc& p) { return tile_bytes(p.in0_format, p.in0_tile_h, TILE_DIM); }
+uint32_t in1_tile_bytes(const MatmulDesc& p) { return tile_bytes(p.in1_format, TILE_DIM, p.in1_tile_w); }
+uint32_t out_tile_bytes(const MatmulDesc& p, tt::DataFormat format) {
     return tile_bytes(format, p.in0_tile_h, p.in1_tile_w);
 }
 
@@ -47,7 +47,7 @@ std::optional<CoreRange> pinned_workers(const HardwareDesc& hw) {
 
 // A batch of one against a batched B: only 1D in1-mcast can run it, keeping the core's rows of A resident
 // in L1 and looping over B's batches (in0 reuse).
-bool broadcasts_a(const Problem& p) { return p.batch_a == 1 && p.batch_b > 1; }
+bool broadcasts_a(const MatmulDesc& p) { return p.batch_a == 1 && p.batch_b > 1; }
 
 // Largest in0_block_w (see MAX_IN0_BLOCK_W, LARGE_BLOCK_TILES and MAX_SELF_READ_TILES_PER_K_STEP). With a
 // single K block the mcast factories single-buffer the inputs, so reading the next block can't overlap math on
@@ -70,7 +70,7 @@ uint32_t max_in0_block_w(uint32_t Kt, Family family, uint32_t out_block_h, uint3
 }
 
 // Rows of output tiles the mcast families split across cores: all batches when fused, else one batch.
-uint32_t output_rows(const Problem& p, bool fuse_batch) { return fuse_batch ? p.batch_a * p.Mt : p.Mt; }
+uint32_t output_rows(const MatmulDesc& p, bool fuse_batch) { return fuse_batch ? p.batch_a * p.Mt : p.Mt; }
 
 // Divisors of n, largest first.
 std::vector<uint32_t> divisors_desc(uint32_t n) {
@@ -91,7 +91,7 @@ std::vector<uint32_t> divisors_desc(uint32_t n) {
 
 // Tiles held in the destination register for one subblock. Smaller tiles don't raise this: validation's
 // tile-area dest count admits more of them, but subblocks above 8 tiles of 16-row tiles compute wrong values.
-uint32_t max_subblock_area(const Problem& p, Family family) {
+uint32_t max_subblock_area(const MatmulDesc& p, Family family) {
     uint32_t area = p.dst_full_sync_en ? 16 : 8;
     if (p.fp32_dest_acc_en) {
         area /= 2;
@@ -137,7 +137,7 @@ std::pair<uint32_t, uint32_t> choose_subblock(
     return best;
 }
 
-bool packer_l1_acc_enabled(const Problem& p, Family /*family*/, uint32_t num_k_blocks) {
+bool packer_l1_acc_enabled(const MatmulDesc& p, Family /*family*/, uint32_t num_k_blocks) {
     if (!p.packer_l1_acc) {
         return false;
     }
@@ -146,7 +146,7 @@ bool packer_l1_acc_enabled(const Problem& p, Family /*family*/, uint32_t num_k_b
 }
 
 // Format partial sums are kept in between K blocks
-tt::DataFormat interm_format(const Problem& p, Family family, uint32_t num_k_blocks) {
+tt::DataFormat interm_format(const MatmulDesc& p, Family family, uint32_t num_k_blocks) {
     if (p.fp32_dest_acc_en) {
         return tt::DataFormat::Float32;
     }
@@ -168,7 +168,7 @@ bool is_block_float(tt::DataFormat format) {
 // K depth limit (max_in0_block_w). Precision is the compute config's call: with packer L1 accumulation off
 // (or when the factory doesn't use it), partial sums go through the output format between K blocks, and the
 // blocking doesn't try to avoid that.
-uint32_t k_depth_limit(const Problem& p, Family family, uint32_t out_block_h, uint32_t out_block_w) {
+uint32_t k_depth_limit(const MatmulDesc& p, Family family, uint32_t out_block_h, uint32_t out_block_w) {
     return max_in0_block_w(p.Kt, family, out_block_h, out_block_w);
 }
 
@@ -187,7 +187,7 @@ HardwareDesc HardwareDesc::for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_c
     return hw;
 }
 
-uint32_t circular_buffer_bytes(const Problem& p, const HardwareDesc& hw, Family family, const Blocking& b) {
+uint32_t circular_buffer_bytes(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b) {
     // Sharded operands are read straight from L1, without DRAM-alignment padding
     const uint32_t in0_tile = p.a.sharded() ? in0_tile_bytes(p) : align_up(in0_tile_bytes(p), hw.dram_alignment);
     const uint32_t in1_tile = align_up(in1_tile_bytes(p), hw.dram_alignment);
@@ -282,7 +282,7 @@ bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_bl
 // overlaps, larger. Deeper wins where the per-block cost is large next to a block's inputs: accumulation off
 // (pack and reload), or block-float inputs (fewer bytes per K tile). With accumulation on and 16-bit inputs,
 // the shallower depth was as fast or faster on every 2D case measured, so the depth is left as is.
-void deepen_to_legacy_k_depth(const Problem& p, const HardwareDesc& hw, Blocking& b) {
+void deepen_to_legacy_k_depth(const MatmulDesc& p, const HardwareDesc& hw, Blocking& b) {
     if (p.Kt % hw.grid.x != 0) {
         return;
     }
@@ -307,7 +307,7 @@ void deepen_to_legacy_k_depth(const Problem& p, const HardwareDesc& hw, Blocking
 // squarer one (each loaded A and B tile is reused across the block's width and height, so a square block
 // reuses the most for its area).
 std::optional<Blocking> block_2d(
-    const Problem& p,
+    const MatmulDesc& p,
     const HardwareDesc& hw,
     uint32_t per_core_M,
     uint32_t per_core_N,
@@ -377,7 +377,7 @@ uint32_t widest_divisor_within(uint32_t n, uint32_t limit) {
 //  - if keeping the full multicast extent only fits with single-tile K steps, both dimensions are searched
 //    as in 2D (largest in0_block_w * area; ties avoid 1-tile dimensions, then prefer the larger, squarer block).
 std::optional<Blocking> block_1d(
-    const Problem& p,
+    const MatmulDesc& p,
     const HardwareDesc& hw,
     Family family,
     uint32_t per_core_M,
@@ -472,7 +472,7 @@ std::optional<Blocking> block_1d(
 }
 
 // Reuse with a height-sharded A: each core computes its shard's rows against all of N, over all of K.
-std::optional<Blocking> block_reuse_sharded(const Problem& p, const HardwareDesc& hw) {
+std::optional<Blocking> block_reuse_sharded(const MatmulDesc& p, const HardwareDesc& hw) {
     Blocking b{p.a.shard_h, p.Nt, p.Kt, p.a.shard_h, p.Nt, 0, 0};
     if (circular_buffer_bytes(p, hw, Family::Reuse, b) > hw.l1_cb_budget) {
         return std::nullopt;
@@ -484,7 +484,7 @@ std::optional<Blocking> block_reuse_sharded(const Problem& p, const HardwareDesc
 // every core a block (all of Mt when the batch alone fills the grid) and fits L1; in0_block_w is the largest
 // that fits within the K depth rule. Block-float B with A tiles under 16 rows needs a single K block: the
 // factory computes wrong values when it splits K for those.
-std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
+std::optional<Blocking> block_reuse(const MatmulDesc& p, const HardwareDesc& hw) {
     const uint32_t cores = hw.grid.x * hw.grid.y;
     const bool single_k_block = is_block_float(p.in1_format) && p.in0_tile_h < 16;
     for (uint32_t per_core_M : divisors_desc(p.Mt)) {
@@ -514,7 +514,7 @@ uint32_t per_core_input_tiles(const Blocking& b) { return b.per_core_M + b.per_c
 
 // Input tiles read from memory in total. The mcast layouts read A once per output column block and B once
 // per output row block (each shared by multicast); Reuse reads A once and B once per M slice of a batch.
-uint64_t total_input_tiles(const Problem& p, Family family, const Blocking& b) {
+uint64_t total_input_tiles(const MatmulDesc& p, Family family, const Blocking& b) {
     const uint64_t a_tiles = static_cast<uint64_t>(p.batch_a) * p.Mt * p.Kt;
     const uint64_t b_tiles = static_cast<uint64_t>(p.batch_b) * p.Kt * p.Nt;
     if (family == Family::Reuse) {
@@ -523,7 +523,7 @@ uint64_t total_input_tiles(const Problem& p, Family family, const Blocking& b) {
     return a_tiles * (b.per_core_N / b.out_block_w) + b_tiles * (b.per_core_M / b.out_block_h);
 }
 
-uint32_t cores_used(const Problem& p, const HardwareDesc& hw, Family family, const Blocking& b) {
+uint32_t cores_used(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b) {
     if (family == Family::Reuse) {
         const uint32_t blocks = p.batch_a * p.Mt / b.per_core_M;
         return std::min(blocks, static_cast<uint32_t>(hw.grid.x * hw.grid.y));
@@ -536,7 +536,7 @@ uint32_t cores_used(const Problem& p, const HardwareDesc& hw, Family family, con
 // per 8 outputs, and avoids the single-row path, whose per-tile overhead shows as up to 10% on large
 // matmuls with bf16 B. Only when A is the heavier operand (e.g. bf16 A, block-float B) does the extra A
 // unpack cost more than it saves (1 x 8 then wins by ~5% on the Wormhole sweeps).
-void set_subblock(const Problem& p, Family family, Blocking& b) {
+void set_subblock(const MatmulDesc& p, Family family, Blocking& b) {
     const bool reuse = family == Family::Reuse;
     const bool prefer_two_wide = tt::tile_size(p.in1_format) >= tt::tile_size(p.in0_format);
     // Reuse with batched A and B requires out_subblock_h | Mt
@@ -557,7 +557,7 @@ namespace {
 
 // A sharded operand or output fixes the family, grid and per-core sizes; returns that layout's candidate, or
 // nothing when the combination isn't supported (or doesn't fit), in which case the caller falls back.
-std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& hw) {
+std::vector<Candidate> sharded_candidates(const MatmulDesc& p, const HardwareDesc& hw) {
     std::vector<Candidate> result;
     auto add = [&](Family family,
                    std::optional<Blocking> b,
@@ -736,7 +736,7 @@ std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& 
 
 }  // namespace
 
-std::vector<Candidate> candidates(const Problem& p, const HardwareDesc& hw) {
+std::vector<Candidate> candidates(const MatmulDesc& p, const HardwareDesc& hw) {
     if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
         return sharded_candidates(p, hw);
     }
@@ -817,7 +817,7 @@ uint32_t fidelity_multiplier(MathFidelity fidelity) {
     }
 }
 
-std::optional<Candidate> choose_family(const Problem& p, const std::vector<Candidate>& all) {
+std::optional<Candidate> choose_family(const MatmulDesc& p, const std::vector<Candidate>& all) {
     auto find = [&](Family family) -> const Candidate* {
         for (const auto& c : all) {
             if (c.family == family) {
@@ -851,7 +851,7 @@ bool one_tile_2d(const Candidate& c) {
     return c.family == Family::Mcast2D && std::min(c.blocking.per_core_M, c.blocking.per_core_N) == 1;
 }
 
-std::optional<Candidate> choose_by_rules(const Problem& p, const HardwareDesc& hw) {
+std::optional<Candidate> choose_by_rules(const MatmulDesc& p, const HardwareDesc& hw) {
     const auto all = candidates(p, hw);
     if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
         // The layout already fixed the family
@@ -878,7 +878,7 @@ std::optional<Candidate> choose_by_rules(const Problem& p, const HardwareDesc& h
 //  - DRAM: the bytes read from and written to DRAM in total (the mcast layouts read A once per output column
 //    block and B once per output row block; Reuse reads A once and B once per M slice of a batch; the output
 //    is written once), over the chip's bandwidth.
-RooflineTerms roofline(const Problem& p, const HardwareDesc& hw, Family family, const Blocking& b) {
+RooflineTerms roofline(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b) {
     const double a_bytes = in0_tile_bytes(p);
     const double b_bytes = in1_tile_bytes(p);
     const double engine_share = std::min(p.in0_tile_h, 8u) / 8.0;
@@ -915,7 +915,7 @@ RooflineTerms roofline(const Problem& p, const HardwareDesc& hw, Family family, 
 }
 
 std::optional<Estimate> RooflineEstimator::estimate(
-    const Problem& p, const HardwareDesc& hw, const Candidate& c) const {
+    const MatmulDesc& p, const HardwareDesc& hw, const Candidate& c) const {
     return Estimate{.cycles = roofline(p, hw, c.family, c.blocking).cycles(), .confidence = 0, .source = name()};
 }
 
@@ -925,7 +925,7 @@ std::span<const Estimator* const> default_estimators() {
     return estimators;
 }
 
-MatmulProgramConfig to_program_config(const Problem& p, const Candidate& c) {
+MatmulProgramConfig to_program_config(const MatmulDesc& p, const Candidate& c) {
     const Blocking& b = c.blocking;
     const std::optional<CoreRangeSet> worker_cores =
         c.worker_cores ? std::optional<CoreRangeSet>(CoreRangeSet(*c.worker_cores)) : std::nullopt;
@@ -975,7 +975,7 @@ MatmulProgramConfig to_program_config(const Problem& p, const Candidate& c) {
     };
 }
 
-std::string check(const Problem& p, const HardwareDesc& hw, const MatmulProgramConfig& config) {
+std::string check(const MatmulDesc& p, const HardwareDesc& hw, const MatmulProgramConfig& config) {
     const uint32_t cores = hw.grid.x * hw.grid.y;
     return std::visit(
         [&](const auto& c) -> std::string {
@@ -1088,7 +1088,7 @@ std::string check(const Problem& p, const HardwareDesc& hw, const MatmulProgramC
         config);
 }
 
-std::vector<Candidate> k_depth_neighbours(const Problem& p, const HardwareDesc& hw, const Candidate& c) {
+std::vector<Candidate> k_depth_neighbours(const MatmulDesc& p, const HardwareDesc& hw, const Candidate& c) {
     std::vector<Candidate> result;
     if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
         return result;
@@ -1123,7 +1123,7 @@ std::vector<Candidate> k_depth_neighbours(const Problem& p, const HardwareDesc& 
 }
 
 const Candidate& best_by_estimate(
-    const Problem& p,
+    const MatmulDesc& p,
     const HardwareDesc& hw,
     std::span<const Candidate> options,
     std::span<const Estimator* const> estimators) {
@@ -1147,7 +1147,7 @@ const Candidate& best_by_estimate(
 }
 
 std::optional<Candidate> choose_candidate(
-    const Problem& p, const HardwareDesc& hw, std::span<const Estimator* const> estimators) {
+    const MatmulDesc& p, const HardwareDesc& hw, std::span<const Estimator* const> estimators) {
     auto chosen = choose_by_rules(p, hw);
     if (!chosen) {
         return std::nullopt;
@@ -1159,11 +1159,11 @@ std::optional<Candidate> choose_candidate(
     return best_by_estimate(p, hw, options, estimators);
 }
 
-std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& hw) {
+std::optional<Candidate> choose_candidate(const MatmulDesc& p, const HardwareDesc& hw) {
     return choose_candidate(p, hw, default_estimators());
 }
 
-std::optional<MatmulProgramConfig> select_program_config(const Problem& p, const HardwareDesc& hw) {
+std::optional<MatmulProgramConfig> select_program_config(const MatmulDesc& p, const HardwareDesc& hw) {
     if (p.Mt == 0 || p.Kt == 0 || p.Nt == 0 || hw.grid.x == 0 || hw.grid.y == 0) {
         return std::nullopt;
     }
@@ -1290,7 +1290,7 @@ std::optional<MatmulProgramConfig> select_program_config(
     if (a_shape.rank() < 2 || b_shape.rank() < 2) {
         return reject("rank below 2");
     }
-    Problem p;
+    MatmulDesc p;
     p.batch_a = a_shape.volume() / (a_shape[-2] * a_shape[-1]);
     p.batch_b = b_shape.volume() / (b_shape[-2] * b_shape[-1]);
     p.in0_tile_h = in0_tile.get_height();

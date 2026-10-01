@@ -39,7 +39,7 @@ const std::vector<Arch> kArchs = {
 };
 constexpr uint32_t kL1Budget = 1300 * 1024;
 
-Problem make_problem(
+MatmulDesc make_matmul(
     uint32_t batch_a,
     uint32_t batch_b,
     uint32_t M,
@@ -49,7 +49,7 @@ Problem make_problem(
     bool fp32_acc = false,
     bool bias = false,
     bool transpose_a = false) {
-    Problem p;
+    MatmulDesc p;
     p.batch_a = batch_a;
     p.batch_b = batch_b;
     p.Mt = div_up(M, 32);
@@ -63,7 +63,7 @@ Problem make_problem(
 }
 
 // The library's legality check (empty if valid, else the first violated rule)
-std::string check_config(const Problem& p, const HardwareDesc& hw, const MatmulProgramConfig& config) {
+std::string check_config(const MatmulDesc& p, const HardwareDesc& hw, const MatmulProgramConfig& config) {
     return check(p, hw, config);
 }
 
@@ -108,7 +108,7 @@ TEST(MatmulAutoConfig, EmittedConfigsAreValid) {
             for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp4_b}) {
                 for (bool fp32_acc : {false, true}) {
                     for (bool bias : {false, true}) {
-                        const auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, in1, fp32_acc, bias);
+                        const auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, in1, fp32_acc, bias);
                         const auto label = fmt::format(
                             "{} b={}/{} M={} K={} N={} in1={} fp32={} bias={}",
                             arch.name,
@@ -134,7 +134,7 @@ TEST(MatmulAutoConfig, TransposeAFitsL1) {
     for (const auto& arch : kArchs) {
         const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
         for (const auto& s : shapes()) {
-            const auto p = make_problem(
+            const auto p = make_matmul(
                 s.batch_a, s.batch_b, s.M, s.K, s.N, tt::DataFormat::Float16_b, false, false, /*transpose_a=*/true);
             const auto config = select_program_config(p, hw);
             ASSERT_TRUE(config.has_value());
@@ -145,7 +145,7 @@ TEST(MatmulAutoConfig, TransposeAFitsL1) {
 
 TEST(MatmulAutoConfig, BatchedBUsesReuse) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    const auto config = select_program_config(make_problem(384, 384, 256, 256, 64), hw);
+    const auto config = select_program_config(make_matmul(384, 384, 256, 256, 64), hw);
     ASSERT_TRUE(config.has_value());
     EXPECT_TRUE(std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(*config));
 }
@@ -153,7 +153,7 @@ TEST(MatmulAutoConfig, BatchedBUsesReuse) {
 TEST(MatmulAutoConfig, UsesWholeGridForLargeMatmul) {
     for (const auto& arch : kArchs) {
         const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
-        const auto config = select_program_config(make_problem(1, 1, 4096, 4096, 4096), hw);
+        const auto config = select_program_config(make_matmul(1, 1, 4096, 4096, 4096), hw);
         ASSERT_TRUE(config.has_value());
         ASSERT_TRUE(std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(*config)) << arch.name;
         const auto& c = std::get<MatmulMultiCoreReuseMultiCastProgramConfig>(*config);
@@ -167,7 +167,7 @@ TEST(MatmulAutoConfig, UsesWholeGridForLargeMatmul) {
 TEST(MatmulAutoConfig, BlockingIgnoresOutputPrecision) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     for (auto [M, K, N] : {std::tuple{64u, 128u, 64u}, std::tuple{1024u, 160u, 256u}, std::tuple{32u, 1024u, 1000u}}) {
-        auto base = make_problem(1, 1, M, K, N, tt::DataFormat::Bfp8_b);
+        auto base = make_matmul(1, 1, M, K, N, tt::DataFormat::Bfp8_b);
         const auto reference = choose_candidate(base, hw);
         ASSERT_TRUE(reference.has_value());
         for (auto out : {tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp4_b}) {
@@ -186,11 +186,11 @@ TEST(MatmulAutoConfig, BlockingIgnoresOutputPrecision) {
 // Subblocks at least two tiles on each side, unless B's tiles are smaller than A's
 TEST(MatmulAutoConfig, SubblockShape) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    auto p = make_problem(1, 1, 8192, 8192, 8192);
+    auto p = make_matmul(1, 1, 8192, 8192, 8192);
     auto chosen = choose_candidate(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_GE(std::min(chosen->blocking.out_subblock_h, chosen->blocking.out_subblock_w), 2u);
-    p = make_problem(1, 1, 8192, 8192, 8192, tt::DataFormat::Bfp8_b);  // bf16 A, bfp8 B
+    p = make_matmul(1, 1, 8192, 8192, 8192, tt::DataFormat::Bfp8_b);  // bf16 A, bfp8 B
     chosen = choose_candidate(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(chosen->blocking.out_subblock_h, 1u);
@@ -200,13 +200,13 @@ TEST(MatmulAutoConfig, SubblockShape) {
 // 1D in0-mcast splits a wide output block into subblock-wide blocks (not into 1-tile ones)
 TEST(MatmulAutoConfig, OneDOutputBlockSplit) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    auto p = make_problem(1, 1, 32, 2560, 262144);
+    auto p = make_matmul(1, 1, 32, 2560, 262144);
     auto chosen = choose_candidate(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn0));
     EXPECT_EQ(chosen->blocking.per_core_N, 128u);
     EXPECT_EQ(chosen->blocking.out_block_w, 8u);
-    p = make_problem(1, 1, 32, 4544, 11 * 32 * 64);  // per_core_N = 11 has no divisor in 2..8
+    p = make_matmul(1, 1, 32, 4544, 11 * 32 * 64);  // per_core_N = 11 has no divisor in 2..8
     chosen = choose_candidate(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(chosen->blocking.out_block_w, chosen->blocking.per_core_N);
@@ -215,7 +215,7 @@ TEST(MatmulAutoConfig, OneDOutputBlockSplit) {
 // Large 2D output blocks may use K blocks up to 16 deep; small ones stay at 8
 TEST(MatmulAutoConfig, LargeBlockKDepth) {
     // Llama-70B TP8 w1 prefill (bf16 x bfp4, LoFi), with the L1 budget the device reported
-    auto p = make_problem(1, 1, 2048, 8192, 3584, tt::DataFormat::Bfp4_b);
+    auto p = make_matmul(1, 1, 2048, 8192, 3584, tt::DataFormat::Bfp4_b);
     p.math_fidelity = MathFidelity::LoFi;
     auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), 1377056);
     auto chosen = choose_candidate(p, hw);
@@ -224,7 +224,7 @@ TEST(MatmulAutoConfig, LargeBlockKDepth) {
     EXPECT_GT(chosen->blocking.out_block_h * chosen->blocking.out_block_w, LARGE_BLOCK_TILES);
     EXPECT_EQ(chosen->blocking.in0_block_w, 16u);
     // 1x4 blocks: MAX_IN0_BLOCK_W would give 8, but 2D goes no shallower than legacy's Kt / grid width = 16
-    p = make_problem(1, 1, 256, 4096, 1024, tt::DataFormat::Bfp8_b);
+    p = make_matmul(1, 1, 256, 4096, 1024, tt::DataFormat::Bfp8_b);
     hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     chosen = choose_candidate(p, hw);
     ASSERT_TRUE(chosen.has_value());
@@ -240,7 +240,7 @@ TEST(MatmulAutoConfig, TwoDKDepthAtLeastLegacy) {
         for (const auto& s : shapes()) {
             for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b}) {
                 for (bool l1_acc : {false, true}) {
-                    auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, in1);
+                    auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, in1);
                     p.packer_l1_acc = l1_acc;
                     if (l1_acc && in1 == tt::DataFormat::Float16_b) {
                         continue;
@@ -273,7 +273,7 @@ TEST(MatmulAutoConfig, TwoDKDepthAtLeastLegacy) {
 // When keeping the full multicast extent only fits with single-tile K steps, 1D shrinks it instead
 TEST(MatmulAutoConfig, OneDAvoidsSingleTileK) {
     // 1024x1024x16384 bf16 x bfp8 with an L1 output, at the L1 budget the device reported
-    auto p = make_problem(1, 1, 1024, 1024, 16384, tt::DataFormat::Bfp8_b);
+    auto p = make_matmul(1, 1, 1024, 1024, 16384, tt::DataFormat::Bfp8_b);
     p.out.in_l1 = true;
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), 820000);
     const auto chosen = choose_candidate(p, hw);
@@ -308,28 +308,28 @@ TEST(MatmulAutoConfig, ShardedLayouts) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     struct Case {
         std::string name;
-        Problem p;
+        MatmulDesc p;
         Family family;
         uint32_t per_core_M, per_core_N;
         bool transpose_mcast = false;
     };
     std::vector<Case> cases;
     {  // decode: width-sharded activation, 1D in0-mcast, each core a slice of N
-        auto p = make_problem(1, 1, 32, 4096, 4096, tt::DataFormat::Bfp8_b);
+        auto p = make_matmul(1, 1, 32, 4096, 4096, tt::DataFormat::Bfp8_b);
         p.a = sharded(Layout::WidthSharded, CoreCoord(8, 8), 1, 2);
         cases.push_back({"width A", p, Family::Mcast1DIn0, 1, 2});
         p.out = sharded_output(Layout::WidthSharded);
         cases.push_back({"width A, width out", p, Family::Mcast1DIn0, 1, 2});
     }
     {  // tall: height-sharded activation, 1D in1-mcast
-        auto p = make_problem(1, 1, 8192, 256, 256);
+        auto p = make_matmul(1, 1, 8192, 256, 256);
         p.a = sharded(Layout::HeightSharded, CoreCoord(8, 8), 4, 8);
         cases.push_back({"height A", p, Family::Mcast1DIn1, 4, 8});
         p.out = sharded_output(Layout::HeightSharded);
         cases.push_back({"height A, height out", p, Family::Mcast1DIn1, 4, 8});
     }
     {  // block-sharded 2D, row- and column-major
-        auto p = make_problem(1, 1, 2048, 2048, 2048);
+        auto p = make_matmul(1, 1, 2048, 2048, 2048);
         p.a = sharded(Layout::BlockSharded, CoreCoord(8, 8), 8, 8);
         cases.push_back({"block A", p, Family::Mcast2D, 8, 8});
         p.out = sharded_output(Layout::BlockSharded);
@@ -338,27 +338,27 @@ TEST(MatmulAutoConfig, ShardedLayouts) {
         cases.push_back({"block A col-major", p, Family::Mcast2D, 8, 8, true});
     }
     {  // batched B with height-sharded A: Reuse over A's shards
-        auto p = make_problem(48, 48, 256, 256, 64);
+        auto p = make_matmul(48, 48, 256, 256, 64);
         p.a = sharded(Layout::HeightSharded, CoreCoord(8, 6), 8, 8);
         cases.push_back({"height A, batched B", p, Family::Reuse, 8, 2});
     }
     {  // interleaved inputs, sharded output
-        auto p = make_problem(1, 1, 8192, 512, 512);
+        auto p = make_matmul(1, 1, 8192, 512, 512);
         p.out = sharded_output(Layout::HeightSharded);
         cases.push_back({"height out", p, Family::Mcast1DIn1, 4, 16});
-        p = make_problem(1, 1, 32, 4096, 8192, tt::DataFormat::Bfp8_b);
+        p = make_matmul(1, 1, 32, 4096, 8192, tt::DataFormat::Bfp8_b);
         p.out = sharded_output(Layout::WidthSharded);
         cases.push_back({"width out", p, Family::Mcast1DIn0, 1, 4});
-        p = make_problem(1, 1, 2048, 2048, 2048);
+        p = make_matmul(1, 1, 2048, 2048, 2048);
         p.out = sharded_output(Layout::BlockSharded);
         cases.push_back({"block out", p, Family::Mcast2D, 8, 8});
         // an output shard spec fixes the grid: 4x2 cores of 16x32 tiles
         p.out = sharded(Layout::BlockSharded, CoreCoord(4, 2), 32, 16);
         cases.push_back({"block out with spec", p, Family::Mcast2D, 32, 16});
-        p = make_problem(1, 1, 256, 2048, 2048);
+        p = make_matmul(1, 1, 256, 2048, 2048);
         p.out = sharded(Layout::BlockSharded, CoreCoord(8, 1), 8, 8);
         cases.push_back({"block out on a row", p, Family::Mcast1DIn0, 8, 8});
-        p = make_problem(1, 1, 4096, 512, 512);
+        p = make_matmul(1, 1, 4096, 512, 512);
         p.out = sharded(Layout::HeightSharded, CoreCoord(8, 4), 4, 16);
         cases.push_back({"height out with spec", p, Family::Mcast1DIn1, 4, 16});
     }
@@ -385,7 +385,7 @@ TEST(MatmulAutoConfig, ShardedLayouts) {
     }
 
     // Layout combinations the factories reject are not produced
-    auto p = make_problem(1, 1, 2048, 2048, 2048);
+    auto p = make_matmul(1, 1, 2048, 2048, 2048);
     p.a = sharded(Layout::BlockSharded, CoreCoord(8, 8), 8, 8);
     p.out = sharded_output(Layout::HeightSharded);
     EXPECT_FALSE(choose_candidate(p, hw).has_value()) << "sharded output must be laid out like A";
@@ -417,7 +417,7 @@ TEST(MatmulAutoConfig, FamilyChoice) {
     };
     for (const auto& e : expected) {
         const auto& s = e.shape;
-        const auto chosen = choose_candidate(make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, e.in1), hw);
+        const auto chosen = choose_candidate(make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, e.in1), hw);
         ASSERT_TRUE(chosen.has_value());
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(e.family))
             << "b=" << s.batch_a << "/" << s.batch_b << " M=" << s.M << " K=" << s.K << " N=" << s.N;
@@ -435,7 +435,7 @@ TEST(MatmulAutoConfig, TinyTiles) {
                 for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b}) {
                     for (const auto& s :
                          std::vector<Shape>{{1, 1, 1024, 64, 512}, {4, 4, 128, 256, 256}, {1, 1, 32, 4096, 4096}}) {
-                        auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, in1);
+                        auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, in1);
                         p.in0_tile_h = p.out_tile_h = tile_h;
                         p.in1_tile_w = p.out_tile_w = tile_w;
                         p.Mt = s.M / tile_h;
@@ -471,7 +471,7 @@ TEST(MatmulAutoConfig, TinyTiles) {
 TEST(MatmulAutoConfig, BroadcastA) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     for (const auto& s : std::vector<Shape>{{1, 7, 128, 2048, 256}, {1, 5, 64, 768, 192}, {1, 8, 2048, 4096, 1024}}) {
-        const auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N);
+        const auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N);
         const auto chosen = choose_candidate(p, hw);
         ASSERT_TRUE(chosen.has_value()) << s.M;
         // Only 1D in1-mcast reuses a single A across B's batches, looping over them
@@ -491,7 +491,7 @@ TEST(MatmulAutoConfig, BroadcastA) {
 
 TEST(MatmulAutoConfig, TransposeAOverBatchIsNotFused) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    const auto p = make_problem(8, 1, 512, 256, 512, tt::DataFormat::Float16_b, false, false, /*transpose_a=*/true);
+    const auto p = make_matmul(8, 1, 512, 256, 512, tt::DataFormat::Float16_b, false, false, /*transpose_a=*/true);
     const auto chosen = choose_candidate(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_NE(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse));  // Reuse can't broadcast B
@@ -500,7 +500,7 @@ TEST(MatmulAutoConfig, TransposeAOverBatchIsNotFused) {
 
 TEST(MatmulAutoConfig, NoOneDWhenExcluded) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    auto p = make_problem(1, 1, 32, 4096, 14336);  // decode: 1D in0-mcast otherwise
+    auto p = make_matmul(1, 1, 32, 4096, 14336);  // decode: 1D in0-mcast otherwise
     p.no_mcast_1d = true;
     for (const auto& c : candidates(p, hw)) {
         EXPECT_TRUE(c.family == Family::Mcast2D || c.family == Family::Reuse);
@@ -513,7 +513,7 @@ TEST(MatmulAutoConfig, SubDeviceGrid) {
     hw.origin = CoreCoord(0, 1);
     hw.pinned_origin = true;
     for (const auto& s : std::vector<Shape>{{1, 1, 128, 512, 512}, {1, 1, 32, 4096, 4096}, {48, 48, 256, 256, 64}}) {
-        const auto config = select_program_config(make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N), hw);
+        const auto config = select_program_config(make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N), hw);
         ASSERT_TRUE(config.has_value()) << s.M;
         std::visit(
             [&](const auto& c) {
@@ -534,7 +534,7 @@ TEST(MatmulAutoConfig, SubDeviceGrid) {
 TEST(MatmulAutoConfig, ShardedEdgeLayouts) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     {  // block-sharded A on one column of cores, column-major: 2D with transposed mcast
-        auto p = make_problem(1, 1, 4096, 32, 128);
+        auto p = make_matmul(1, 1, 4096, 32, 128);
         p.a = sharded(Layout::BlockSharded, CoreCoord(8, 1), 16, 1, /*col_major=*/true);
         const auto chosen = choose_candidate(p, hw);
         ASSERT_TRUE(chosen.has_value());
@@ -544,7 +544,7 @@ TEST(MatmulAutoConfig, ShardedEdgeLayouts) {
         EXPECT_EQ(chosen->blocking.per_core_N, 4u);
     }
     {  // one-core block shard spec for a 5-batch output: keep the shard shape, derive the grid
-        auto p = make_problem(5, 1, 416, 32, 416);
+        auto p = make_matmul(5, 1, 416, 32, 416);
         p.out = sharded(Layout::BlockSharded, CoreCoord(1, 1), 13, 13);
         const auto chosen = choose_candidate(p, hw);
         ASSERT_TRUE(chosen.has_value());
@@ -562,7 +562,7 @@ TEST(MatmulAutoConfig, CandidatesAndNeighboursPassCheck) {
         for (const auto& s : shapes()) {
             for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b}) {
                 for (bool fp32_acc : {false, true}) {
-                    const auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, in1, fp32_acc);
+                    const auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, in1, fp32_acc);
                     const auto label = fmt::format(
                         "{} b={}/{} M={} K={} N={} in1={} fp32={}",
                         arch.name,
@@ -600,7 +600,7 @@ TEST(MatmulAutoConfig, DefaultEstimatorsKeepHeuristicChoice) {
         for (const auto& s : shapes()) {
             for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp4_b}) {
                 for (bool fp32_acc : {false, true}) {
-                    const auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, in1, fp32_acc);
+                    const auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, in1, fp32_acc);
                     const auto heuristic = choose_candidate(p, hw, {});
                     const auto chosen = choose_candidate(p, hw);
                     ASSERT_EQ(heuristic.has_value(), chosen.has_value());
@@ -623,12 +623,12 @@ TEST(MatmulAutoConfig, EstimatorsRefineKDepth) {
         double confidence;
         explicit PreferShallow(double c) : confidence(c) {}
         std::string_view name() const override { return "prefer_shallow"; }
-        std::optional<Estimate> estimate(const Problem&, const HardwareDesc&, const Candidate& c) const override {
+        std::optional<Estimate> estimate(const MatmulDesc&, const HardwareDesc&, const Candidate& c) const override {
             return Estimate{.cycles = double(c.blocking.in0_block_w), .confidence = confidence, .source = name()};
         }
     };
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    const auto p = make_problem(1, 1, 1024, 8192, 1024);
+    const auto p = make_matmul(1, 1, 1024, 8192, 1024);
     const auto seed = choose_candidate(p, hw, {});
     ASSERT_TRUE(seed.has_value());
     const auto neighbours = k_depth_neighbours(p, hw, *seed);
@@ -661,7 +661,7 @@ TEST(MatmulAutoConfig, DISABLED_PrintSelections) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), 1450 * 1024);
     const char* names[] = {"2D", "1D-in0", "1D-in1", "Reuse"};
     for (const auto& s : shapes()) {
-        const auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N);
+        const auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N);
         const auto chosen = choose_candidate(p, hw);
         fmt::print("b={}/{} M={} K={} N={}\n", s.batch_a, s.batch_b, s.M, s.K, s.N);
         for (const auto& c : candidates(p, hw)) {
@@ -686,7 +686,7 @@ TEST(MatmulAutoConfig, DISABLED_PrintSelections) {
 // Block-float B with A tiles under 16 rows only runs on Reuse with a single K block
 TEST(MatmulAutoConfig, CheckTinyTileBlockFloatB) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    auto p = make_problem(4, 4, 128, 256, 256, tt::DataFormat::Bfp8_b);
+    auto p = make_matmul(4, 4, 128, 256, 256, tt::DataFormat::Bfp8_b);
     p.in0_tile_h = p.out_tile_h = 8;
     p.Mt = 128 / 8;
     const auto chosen = choose_candidate(p, hw);

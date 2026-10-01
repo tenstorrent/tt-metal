@@ -24,7 +24,7 @@
 // It runs only when no program config is given; a measured registry entry (#54943), when present, takes
 // precedence because it sets the program config before this is reached.
 //
-// The selector is a pure function of a Problem (shapes, formats, compute settings) and a HardwareDesc
+// The selector is a pure function of a MatmulDesc (shapes, formats, compute settings) and a HardwareDesc
 // (grid, L1), so it can be exercised for any architecture without a device. It uses structural heuristics
 // only, no measured constants:
 //  - B not batched: the batch is fused into M and 2D mcast is used, unless a 1D layout keeps at least
@@ -117,7 +117,7 @@ struct Placement {
 
 // The matmul as the selector sees it. Dimensions are in tiles, after transposes: M in A's tiles (in0_tile_h
 // rows), N in B's (in1_tile_w columns), K in 32-wide tiles.
-struct Problem {
+struct MatmulDesc {
     uint32_t batch_a = 1;  // product of A's leading dims
     uint32_t batch_b = 1;  // product of B's leading dims
     uint32_t Mt = 0;       // per batch
@@ -168,7 +168,7 @@ struct Candidate {
 
 // Per-core L1 bytes the factory for `family` needs with this blocking (32x32 tiles): its circular buffers,
 // less those backed by a sharded tensor, plus a sharded output's shard, which is not allocated yet.
-uint32_t circular_buffer_bytes(const Problem& problem, const HardwareDesc& hw, Family family, const Blocking& b);
+uint32_t circular_buffer_bytes(const MatmulDesc& matmul, const HardwareDesc& hw, Family family, const Blocking& b);
 
 // Per-core roofline terms (cycles) of a blocked candidate, from the rates in HardwareDesc. They depend on the
 // output blocks but not on in0_block_w.
@@ -178,15 +178,15 @@ struct RooflineTerms {
     double dram = 0;     // bytes read from and written to DRAM, chip-wide
     double cycles() const { return std::max({compute, noc, dram}); }
 };
-RooflineTerms roofline(const Problem& problem, const HardwareDesc& hw, Family family, const Blocking& b);
+RooflineTerms roofline(const MatmulDesc& matmul, const HardwareDesc& hw, Family family, const Blocking& b);
 
 // The program config of a candidate.
-MatmulProgramConfig to_program_config(const Problem& problem, const Candidate& candidate);
+MatmulProgramConfig to_program_config(const MatmulDesc& matmul, const Candidate& candidate);
 
-// Whether the factories accept `config` for `problem` on `hw`: empty if so, else the first rule it breaks
+// Whether the factories accept `config` for `matmul` on `hw`: empty if so, else the first rule it breaks
 // (K and block divisibility, DST capacity, the grid, what each factory's layout requires, and L1). Covers
 // interleaved operands and outputs; a sharded layout's own rules are not checked.
-std::string check(const Problem& problem, const HardwareDesc& hw, const MatmulProgramConfig& config);
+std::string check(const MatmulDesc& matmul, const HardwareDesc& hw, const MatmulProgramConfig& config);
 
 // A cost estimate of a candidate, from one Estimator.
 struct Estimate {
@@ -202,7 +202,7 @@ public:
     virtual ~Estimator() = default;
     virtual std::string_view name() const = 0;
     virtual std::optional<Estimate> estimate(
-        const Problem& problem, const HardwareDesc& hw, const Candidate& candidate) const = 0;
+        const MatmulDesc& matmul, const HardwareDesc& hw, const Candidate& candidate) const = 0;
 };
 
 // The roofline estimate (the largest RooflineTerms term), confidence 0: every estimator that has an answer
@@ -211,37 +211,37 @@ class RooflineEstimator final : public Estimator {
 public:
     std::string_view name() const override { return "roofline"; }
     std::optional<Estimate> estimate(
-        const Problem& problem, const HardwareDesc& hw, const Candidate& candidate) const override;
+        const MatmulDesc& matmul, const HardwareDesc& hw, const Candidate& candidate) const override;
 };
 
 // The estimators choose_candidate uses: the roofline.
 std::span<const Estimator* const> default_estimators();
 
 // The blocked candidate of each family that can run the problem and fits L1, in family order.
-std::vector<Candidate> candidates(const Problem& problem, const HardwareDesc& hw);
+std::vector<Candidate> candidates(const MatmulDesc& matmul, const HardwareDesc& hw);
 
 // A candidate's K-depth neighbours: the same candidate at the next deeper and the next shallower in0_block_w
 // dividing K that pass check(). Interleaved problems only (a sharded layout constrains K depth); empty
 // otherwise.
-std::vector<Candidate> k_depth_neighbours(const Problem& problem, const HardwareDesc& hw, const Candidate& candidate);
+std::vector<Candidate> k_depth_neighbours(const MatmulDesc& matmul, const HardwareDesc& hw, const Candidate& candidate);
 
 // The best of `options` by estimate: per option the most confident estimate (the earlier estimator on ties),
 // then the lowest cycles (the earlier option on ties). Options without an estimate lose to those with one.
 const Candidate& best_by_estimate(
-    const Problem& problem,
+    const MatmulDesc& matmul,
     const HardwareDesc& hw,
     std::span<const Candidate> options,
     std::span<const Estimator* const> estimators);
 
 // The candidate the heuristics choose, K depth refined by the estimators; nullopt if none fits.
-std::optional<Candidate> choose_candidate(const Problem& problem, const HardwareDesc& hw);
+std::optional<Candidate> choose_candidate(const MatmulDesc& matmul, const HardwareDesc& hw);
 std::optional<Candidate> choose_candidate(
-    const Problem& problem, const HardwareDesc& hw, std::span<const Estimator* const> estimators);
+    const MatmulDesc& matmul, const HardwareDesc& hw, std::span<const Estimator* const> estimators);
 
 // The program config for the chosen candidate, or nullopt if the problem is unsupported or nothing fits.
-std::optional<MatmulProgramConfig> select_program_config(const Problem& problem, const HardwareDesc& hw);
+std::optional<MatmulProgramConfig> select_program_config(const MatmulDesc& matmul, const HardwareDesc& hw);
 
-// Builds the Problem and HardwareDesc from matmul's inputs and selects a config. Returns nullopt for inputs
+// Builds the MatmulDesc and HardwareDesc from matmul's inputs and selects a config. Returns nullopt for inputs
 // the new selector does not handle, with the reason in `unsupported` when given.
 std::optional<MatmulProgramConfig> select_program_config(
     const Tensor& input_tensor_a,
