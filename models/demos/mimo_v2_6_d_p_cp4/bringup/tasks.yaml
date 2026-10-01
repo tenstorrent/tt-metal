@@ -580,6 +580,13 @@ tasks:
     - attn_norm
     - attention
     layer: 1
+  frozen:
+    at: '2026-10-01T00:35:11'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_swap_sliding_moe_02_attention.py: b163730d27c306ea8d872d114f5eb7e54d88195c87230fdaddeca0547cf5bb42
+      /home/sjovic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 16e0ef60439c47052a9bf2543ea23258b17ea715224d1f9e30e037294a43e9bd
 - id: C.sliding_moe.attn_residual
   title: sliding_moe attn_residual (residual) on device, layer 1
   step: implement
