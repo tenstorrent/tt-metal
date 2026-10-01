@@ -83,10 +83,46 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+  # BRANCH-LOCAL: splits the command input on ';;' so each part becomes its own matrix job, which
+  # GitHub can re-run on its own. A prep job rather than another dispatch input, because
+  # workflow_dispatch validates inputs against the default branch, whose copy has no such input.
+  split-commands:
+    needs: check-harbor
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    outputs:
+      commands: ${{ steps.split.outputs.commands }}
+    steps:
+      - name: Split the command input
+        id: split
+        shell: bash
+        env:
+          COMMANDS: ${{ inputs.command }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+
+          def name(command):
+              """The test files and any -k expression, so the job is recognisable in the run."""
+              files = [os.path.basename(f) for f in re.findall(r"\S+\.py", command)]
+              selection = re.search(r"-k\s+('[^']*'|\"[^\"]*\"|\S+)", command)
+              label = " ".join(files) or command
+              return f"{label} {selection.group(1)}" if selection else label
+
+          parts = [p.strip() for p in os.environ["COMMANDS"].split(";;")]
+          print("commands=" + json.dumps([{"name": name(p), "run": p} for p in parts if p]))
+          PY
+          cat "$GITHUB_OUTPUT"
+
   test-dispatch:
-    needs: [check-harbor, build-artifact]
+    needs: [check-harbor, build-artifact, split-commands]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    name: ${{ matrix.command.name }}
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        command: ${{ fromJSON(needs.split-commands.outputs.commands) }}
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     container:
       image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
@@ -152,7 +188,7 @@ jobs:
       - name: Run regression in loop
         run: |
           uv pip install pytest-repeat
-          ${{ inputs.command }}
+          ${{ matrix.command.run }}
         shell: bash
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
