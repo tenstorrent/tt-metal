@@ -15,6 +15,8 @@ Environment:
   RTL_SIM_DETAIL      check output.summary (+ text)                    (optional)
   RTL_SIM_SHA / RTL_SIM_URL / RTL_SIM_RUN_URL                          (optional)
   HORIZON_RESULTS_FILE  tt-umd-horizon results (horizon-test-results/v1) (optional)
+  HORIZON_EMU_RESULTS_FILE  Horizon emulator results, same schema, from the
+                      tt-umd-simulators "Horizon Release" check        (optional)
   HORIZON_MAX_AGE_DAYS  staleness threshold for the above (default 7)   (optional)
   RELEASE_VERSION     used in the summary and the dedup label          (optional)
   RTL_SIM_MAP         relevance mapping   (default: ./ai_ip_tests.json)
@@ -192,6 +194,11 @@ def classify(expected, failed_rows, conclusion, detail):
 # file (horizon-test-results/v1) which the release job pulls and passes here.
 HORIZON_REQUIREMENT = "AIIPSW-15"
 
+# Horizon emulation: tt-umd-simulators' Horizon Release pipeline runs tt-metal's
+# Quasar regression lists on the Horizon Zebu emulator and posts the results,
+# in the same schema, as a "Horizon Release" check on the commit it tested.
+HORIZON_EMU_REQUIREMENT = "AIIPSW-9"
+
 
 def parse_horizon(path, req_key=HORIZON_REQUIREMENT, max_age_days=7):
     """Read the tt-umd-horizon results file into evidence for one requirement.
@@ -235,7 +242,14 @@ def parse_horizon(path, req_key=HORIZON_REQUIREMENT, max_age_days=7):
         return INCONCLUSIVE, {}
 
     def row(test):
-        return {"config": "horizon", "group": "tests/axi", "filter": str(test.get("name", "?")), "runner": "gtest"}
+        # tt-umd-horizon names a tests/axi binary; the emulator results also carry
+        # each test's group, filter and runner.
+        return {
+            "config": str(test.get("config") or "horizon"),
+            "group": str(test.get("group") or "tests/axi"),
+            "filter": str(test.get("filter") or test.get("name", "?")),
+            "runner": str(test.get("runner") or "gtest"),
+        }
 
     tests = data.get("tests", [])
     passed = [row(t) for t in tests if t.get("result") == "passed"]
@@ -386,7 +400,8 @@ def render_plain(report, meta):
         "Scope: the requirement evidence above covers the RTL sim tests run by the release gate "
         f"({meta['sim_yaml_name']}, config {meta['config']}). Quasar tests that run "
         "only in the emulator job are not included -- that job reports to Slack and "
-        "does not feed this check. Full inventory: the coverage doc in this artifact.",
+        "does not feed this check. Horizon emulator results come from the tt-umd-simulators "
+        "\"Horizon Release\" check. Full inventory: the coverage doc in this artifact.",
     ]
     return "\n".join(out)
 
@@ -506,7 +521,8 @@ def render_markdown(report, meta):
         "Scope note: the requirement evidence above covers only the RTL sim tests the release gate runs "
         f"(`{meta['sim_yaml_name']}`, config `{meta['config']}`). Quasar tests that run "
         "only in the emulator job are not included — that job reports to Slack and does "
-        "not feed this check. Full inventory: "
+        "not feed this check. Horizon emulator results come from the tt-umd-simulators "
+        "“Horizon Release” check. Full inventory: "
         "the coverage inventory attached to this same artifact.",
     ]
     return "\n".join(out)
@@ -535,7 +551,12 @@ def main():
         )
     max_age = int(_env("HORIZON_MAX_AGE_DAYS", "7") or "7")
     _horizon_status, horizon_evidence = parse_horizon(_env("HORIZON_RESULTS_FILE", ""), max_age_days=max_age)
-    report = build(mapping, expected, passed, failed, verdict, suites, extra_evidence=horizon_evidence)
+    _emu_status, emu_evidence = parse_horizon(
+        _env("HORIZON_EMU_RESULTS_FILE", ""), req_key=HORIZON_EMU_REQUIREMENT, max_age_days=max_age
+    )
+    report = build(
+        mapping, expected, passed, failed, verdict, suites, extra_evidence={**horizon_evidence, **emu_evidence}
+    )
 
     meta = {
         "version": version,

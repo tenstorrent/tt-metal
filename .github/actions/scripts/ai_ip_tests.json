@@ -26,8 +26,7 @@
       "summary": "ResNet LLK API passing in Horizon emulation",
       "team": "Horizon",
       "owner": "Filip Vranic",
-      "in_scope": false,
-      "evidence": "Horizon platform, which this repo does not build; the Quasar gate cannot speak for it"
+      "evidence": "tt-metal's Quasar regression lists on the Horizon Zebu emulator, from the tt-umd-simulators Horizon Release check"
     },
     {
       "key": "AIIPSW-4",

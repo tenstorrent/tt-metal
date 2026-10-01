@@ -21,6 +21,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from create_jira import parse_failed  # noqa: E402
 from release_test_report import (  # noqa: E402
+    HORIZON_EMU_REQUIREMENT,
     HORIZON_REQUIREMENT,
     FAILED,
     INCONCLUSIVE,
@@ -405,6 +406,39 @@ def test_no_horizon_evidence_leaves_the_requirement_uncovered(mapping):
     report = build(mapping, rows, rows, [], PASSED)  # no extra_evidence
     covered = {r["key"] for r in report["requirements"] if r["passed"]}
     assert HORIZON_REQUIREMENT not in covered
+
+
+def test_horizon_emu_rows_keep_their_group_and_filter(tmp_path):
+    """Horizon emulator results name each tt-metal test; tt-umd-horizon ones only a binary."""
+    path = _horizon(
+        tmp_path,
+        [
+            {"name": "[1x3] unit_tests_legacy --gtest_filter=*Bmm", "result": "passed", "config": "horizon",
+             "group": "unit_tests_legacy", "filter": "*Bmm", "runner": "gtest"},
+            {"name": "test_axi_device", "result": "failed"},
+        ],
+    )
+    status, evidence = parse_horizon(path, req_key=HORIZON_EMU_REQUIREMENT)
+    assert status == FAILED and list(evidence) == [HORIZON_EMU_REQUIREMENT]
+    hits = evidence[HORIZON_EMU_REQUIREMENT]
+    assert hits[PASSED] == [{"config": "horizon", "group": "unit_tests_legacy", "filter": "*Bmm", "runner": "gtest"}]
+    assert hits[FAILED] == [{"config": "horizon", "group": "tests/axi", "filter": "test_axi_device", "runner": "gtest"}]
+
+
+def test_horizon_emu_evidence_flows_into_its_requirement(mapping, tmp_path):
+    """Both Horizon sources together: emulator rows cover AIIPSW-9, tt-umd-horizon rows AIIPSW-15."""
+    (tmp_path / "emu").mkdir()
+    emu = _horizon(tmp_path / "emu", [{"name": "x", "result": "passed", "group": "unit_tests_legacy", "filter": "*Bmm"}])
+    umd = _horizon(tmp_path, [{"name": "test_horizon_cluster", "result": "passed"}])
+    _s, umd_evidence = parse_horizon(umd)
+    _s, emu_evidence = parse_horizon(emu, req_key=HORIZON_EMU_REQUIREMENT)
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED, extra_evidence={**umd_evidence, **emu_evidence})
+
+    covered = {r["key"] for r in report["requirements"] if r["passed"]}
+    assert {HORIZON_REQUIREMENT, HORIZON_EMU_REQUIREMENT} <= covered
+    md = render_markdown(report, META)
+    assert "AIIPSW-9" in md and "unit_tests_legacy" in md and "test_horizon_cluster" in md
 
 
 def test_evidence_carries_no_test_counts(mapping):

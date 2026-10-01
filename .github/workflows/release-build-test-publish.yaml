@@ -482,6 +482,44 @@ jobs:
             rm -f horizon-results.json
           fi
 
+      # AIIPSW-9 (Horizon emulation) comes from tt-umd-simulators' Horizon Release
+      # pipeline, which runs this repo's Quasar regression lists on the Horizon Zebu
+      # emulator and posts a completed "Horizon Release" check run (TT CI Reporter
+      # app) on the commit it tested, with horizon-test-results/v1 in an HTML
+      # comment in output.summary. It runs on a schedule, not on every commit, so
+      # take the newest one on the released commit or its recent ancestors; the
+      # report's HORIZON_MAX_AGE_DAYS freshness rule still applies. Non-fatal: no
+      # check just leaves AIIPSW-9 inconclusive.
+      - name: Pull Horizon emulator evidence
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.check-rtl-sim-status.outputs.sha }}
+        run: |
+          set -uo pipefail
+          for c in $(gh api "repos/${GITHUB_REPOSITORY}/commits?sha=${SHA}&per_page=30" --jq '.[].sha' 2>/dev/null); do
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${c}/check-runs?check_name=Horizon+Release&filter=latest" \
+              --jq '[.check_runs[] | select(.app.slug == "tt-ci-reporter-2" and .status == "completed")][0].output.summary // empty' \
+              > horizon-emu-summary.md 2>/dev/null || true
+            if [ -s horizon-emu-summary.md ]; then
+              echo "Horizon Release check found on ${c}"
+              break
+            fi
+          done
+          python3 - <<'PY' || echo "::notice::No usable Horizon Release check; AIIPSW-9 inconclusive."
+          import json, pathlib, re
+          p = pathlib.Path("horizon-emu-summary.md")
+          m = re.search(r"<!--\s*horizon-test-results/v1\s*\n(\{.*?\})\s*\n-->",
+                        p.read_text() if p.exists() else "", re.DOTALL)
+          if not m:
+              raise SystemExit(1)
+          d = json.loads(m.group(1))
+          pathlib.Path("horizon-emu-results.json").write_text(json.dumps(d))
+          t = d.get("totals") or {}
+          print("Pulled Horizon emulator results:", "conclusion=%s passed=%s failed=%s tested_sha=%s timestamp=%s"
+                % (d.get("conclusion"), t.get("passed"), t.get("failed"), str(d.get("tested_sha", ""))[:12], d.get("timestamp")))
+          PY
+
       - name: Build report
         continue-on-error: true
         env:
@@ -498,6 +536,7 @@ jobs:
           RTL_SIM_URL: ${{ needs.check-rtl-sim-status.outputs.url }}
           RTL_SIM_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           HORIZON_RESULTS_FILE: horizon-results.json
+          HORIZON_EMU_RESULTS_FILE: horizon-emu-results.json
           RELEASE_VERSION: ${{ inputs.tag-version }}
           TEST_REPORTS_DIR: test-reports
           REPORT_MD_OUT: release-test-evidence.md
