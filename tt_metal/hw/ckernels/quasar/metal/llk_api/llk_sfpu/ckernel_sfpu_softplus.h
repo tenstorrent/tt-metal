@@ -20,8 +20,8 @@ namespace ckernel::sfpu {
 // Softplus via abs(x) symmetry (ported from Blackhole): with f(a) = ln(1+exp(-a)),
 // softplus(t) = t + f(t) for t >= 0 and f(-t) for t < 0. is_fp32_dest_acc_en selects a degree-8 poly on
 // [0,5] + exp Taylor tail (32-bit Dest) vs the bf16 evaluation in u = exp(-a) (16-bit Dest).
-// A Quasar SFPU pass already covers two rows, so the bf16 path is one vector per iteration
-// rather than the hand-interleaved pair used on Wormhole and Blackhole.
+// The bf16 path is one vector per iteration: the two-vector ILP interleave Wormhole and
+// Blackhole use has not been applied (or measured) on Quasar.
 
 constexpr float SOFTPLUS_POLY_BOUNDARY = 5.0f;
 
@@ -38,9 +38,11 @@ constexpr float SOFTPLUS_POLY_C8 = -4.8245715334e-07f;
 
 // BF16: same coefficients as the Blackhole/Wormhole kernel. -1/ln2, P1 and H1 live in the
 // programmable constant registers (loaded by softplus_init); the rest are fp16-exact.
+// EXP_BIAS is the fp32 exponent bias y is offset by so k = trunc(y) is the biased exponent of u.
 // p(f) ~ 2^f on [0, 1) is pinned to p(0) = 1 and p(1) = 2 - 2^-16 so it stays in [1, 2).
 // h(u) = (ln(1+u)/u - 1)/u on [0, 1], degree 4, h(0) = -1/2 pinned.
 constexpr float SOFTPLUS_BF16_NEG_ONE_LN2 = -1.4426950216293334961f;
+constexpr float SOFTPLUS_BF16_EXP_BIAS = 127.0f;
 constexpr float SOFTPLUS_BF16_P0 = 1.0f;
 constexpr float SOFTPLUS_BF16_P1 = 0.6954193115234375f;
 constexpr float SOFTPLUS_BF16_P2 = 0.2264404296875f;  // 1855 * 2^-13
@@ -56,7 +58,8 @@ constexpr float SOFTPLUS_BF16_H4 = -0.03411865234375f;  // -559 * 2^-14
 // k = trunc(y), f = y - k in [0, 1), p(f) ~ 2^f in [1, 2), u = setexp(p(f), k).
 // The max(y, 0) in softplus_bf16_eval is what sends y < 0 to k = 0: the conversion
 // takes the magnitude, so an unclamped negative y comes back as a positive k.
-// a > 88 clamps to y = 0 and flushes to 0, the right bf16 answer.
+// a > 88 clamps to y = 0: k = 0 and p(0) = 1 has a zero mantissa, so setexp yields exactly
+// +0; 0 < y < 1 just above gives a denormal the SFPU flushes. Both are the right bf16 answer.
 sfpi_inline sfpi::vFloat softplus_exp2_bf16(sfpi::vFloat y) {
     sfpi::vUInt16 k = sfpi::convert<sfpi::vUInt16>(y, sfpi::RoundMode::Zero);
     sfpi::vFloat f = y - sfpi::convert<sfpi::vFloat>(k, sfpi::RoundMode::Nearest);
@@ -70,7 +73,7 @@ sfpi_inline sfpi::vFloat softplus_exp2_bf16(sfpi::vFloat y) {
 // instead of being clamped to 0. Returns beta_reciprocal * softplus(t), rounded to bf16.
 sfpi_inline sfpi::vFloat softplus_bf16_eval(sfpi::vFloat t, const float beta_reciprocal) {
     sfpi::vFloat a = sfpi::setsgn(t, 0);
-    sfpi::vFloat y = a * sfpi::vConstFloatPrgm0 + 127.0f;
+    sfpi::vFloat y = a * sfpi::vConstFloatPrgm0 + SOFTPLUS_BF16_EXP_BIAS;
     sfpi::vFloat sp = sfpi::max(t, 0.0f);
     y = sfpi::max(y, 0.0f);
     sfpi::vFloat u = softplus_exp2_bf16(y);

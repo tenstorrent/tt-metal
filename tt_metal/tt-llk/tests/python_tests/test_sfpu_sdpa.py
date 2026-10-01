@@ -118,12 +118,15 @@ def _ramp(lo: float, hi: float) -> torch.Tensor:
 
 # Most paths that pack into bf16 share one pair because packer rounding is the main source of error.
 # Correction is not limited by rounding precision because it accumulates across five tiles.
+# Softplus's stimulus reaches beta*x = -12, where its output is ~6e-6 (beta 1) / ~3e-6 (beta 2),
+# so its atol cap is ~3e-8 and the comparison is effectively rtol-only: a 0 result in the tail
+# fails rather than slipping under the floor.
 _TOLERANCES = {
     # op, approx (None where the body ignores it): bf16-packed, fp32 end-to-end
     (SdpaOp.Correction, None): ((1.5e-4, 2.5e-2), (1.0e-6, 2.5e-7)),
     (SdpaOp.ExpAccurate, None): ((4.0e-6, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.ExpPoly, None): ((4.0e-6, 1.2e-2), (4.0e-6, 8.0e-6)),
-    (SdpaOp.Softplus, None): ((1.0e-4, 1.0e-2), (1.0e-4, 4.0e-3)),
+    (SdpaOp.Softplus, None): ((3.0e-8, 1.0e-2), (3.0e-8, 4.0e-3)),
     (SdpaOp.RecipIter, False): ((2.5e-3, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.RecipIter, True): ((2.5e-3, 1.2e-2), (2.5e-3, 1.2e-2)),
 }
