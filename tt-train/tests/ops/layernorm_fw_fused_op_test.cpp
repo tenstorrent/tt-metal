@@ -2,11 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -15,6 +19,7 @@
 #include "metal/ops/layernorm_fw/device/layernorm_fw_device_operation.hpp"
 #include "metal/ops/layernorm_fw/layernorm_fw.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/device_operation.hpp"
 
 // Reference implementation using xtensor
 std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>> layernorm_forward_reference_(
@@ -77,12 +82,14 @@ void expect_cache_test_forward_matches(
     const std::vector<std::optional<ttnn::Tensor>>& result,
     const std::vector<float>& input,
     const std::vector<float>& gamma,
-    const std::vector<float>& beta) {
+    const std::vector<float>& beta,
+    const uint32_t rows = kCacheTestRows,
+    const uint32_t width = kCacheTestWidth) {
     xt::xarray<float> input_array = xt::adapt(input, std::array<size_t, 1>{input.size()});
     xt::xarray<float> gamma_array = xt::adapt(gamma, std::array<size_t, 1>{gamma.size()});
     xt::xarray<float> beta_array = xt::adapt(beta, std::array<size_t, 1>{beta.size()});
-    const auto [output_ref, mean_ref, rstd_ref] = layernorm_forward_reference_(
-        input_array, gamma_array, beta_array, kCacheTestRows, kCacheTestWidth, kCacheTestEpsilon);
+    const auto [output_ref, mean_ref, rstd_ref] =
+        layernorm_forward_reference_(input_array, gamma_array, beta_array, rows, width, kCacheTestEpsilon);
 
     const auto output = xt::flatten(ttml::core::to_xtensor(result[0].value()));
     const auto mean = xt::flatten(ttml::core::to_xtensor(result[1].value()));
@@ -90,6 +97,29 @@ void expect_cache_test_forward_matches(
     EXPECT_TRUE(xt::allclose(output, output_ref, 1.0e-3F, 5.0e-2F));
     EXPECT_TRUE(xt::allclose(mean, mean_ref, 1.0e-3F, 5.0e-2F));
     EXPECT_TRUE(xt::allclose(rstd, rstd_ref, 1.0e-3F, 5.0e-2F));
+}
+
+template <typename Operation>
+void expect_validation_accepts(
+    const typename Operation::operation_attributes_t& attributes,
+    const typename Operation::tensor_args_t& tensor_args) {
+    using Adapter = ttnn::device_operation::MeshDeviceOperationAdapter<Operation>;
+    EXPECT_NO_THROW(Adapter::validate_on_program_cache_miss(attributes, tensor_args));
+    EXPECT_NO_THROW(Adapter::validate_on_program_cache_hit(attributes, tensor_args));
+}
+
+template <typename Operation>
+void expect_validation_rejects(
+    const typename Operation::operation_attributes_t& attributes,
+    const typename Operation::tensor_args_t& tensor_args,
+    const std::string_view diagnostic) {
+    using Adapter = ttnn::device_operation::MeshDeviceOperationAdapter<Operation>;
+    EXPECT_THAT(
+        ([&] { Adapter::validate_on_program_cache_miss(attributes, tensor_args); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(std::string(diagnostic))));
+    EXPECT_THAT(
+        ([&] { Adapter::validate_on_program_cache_hit(attributes, tensor_args); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(std::string(diagnostic))));
 }
 
 }  // namespace
@@ -294,4 +324,164 @@ TEST_F(LayerNormForwardOpTest, ProgramCacheSeparatesPaddingAndRebindsAllAddresse
     ASSERT_NE(replay_mean.buffer()->address(), padded_mean.buffer()->address());
     ASSERT_NE(replay_rstd.buffer()->address(), padded_rstd.buffer()->address());
     expect_cache_test_forward_matches(replay_result, replay_input_data, replay_gamma_data, replay_beta_data);
+}
+
+TEST_F(LayerNormForwardOpTest, StatsUseSingleTileWidthForWidthAlignedInput) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    constexpr uint32_t rows = 64U;
+    constexpr uint32_t width = 64U;
+    const ttnn::Shape input_shape({1U, 1U, rows, width});
+    const ttnn::Shape parameter_shape({1U, 1U, 1U, width});
+    const tt::tt_metal::Alignment width_aligned_input({1U, 1U, 32U, 64U});
+
+    const auto run = [&](const float offset) {
+        auto input_data = make_cache_test_data(input_shape.volume(), offset, 7U);
+        auto gamma_data = make_cache_test_data(parameter_shape.volume(), 0.75F + offset, 3U);
+        auto beta_data = make_cache_test_data(parameter_shape.volume(), -0.125F + offset, 5U);
+        auto input = make_cache_test_tensor(input_data, input_shape, device, width_aligned_input);
+        auto gamma = make_cache_test_tensor(gamma_data, parameter_shape, device);
+        auto beta = make_cache_test_tensor(beta_data, parameter_shape, device);
+        auto result = ttnn::prim::ttml_layernorm_fw(input, gamma, beta, kCacheTestEpsilon, /*return_mean_rstd=*/true);
+        return std::make_tuple(std::move(result), std::move(input_data), std::move(gamma_data), std::move(beta_data));
+    };
+
+    const auto entries_before_first = device->num_program_cache_entries();
+    auto [first_result, first_input, first_gamma, first_beta] = run(0.25F);
+    const auto entries_after_first = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_first, entries_before_first);
+    ASSERT_EQ(first_result.size(), 3U);
+    ASSERT_TRUE(first_result[0].has_value());
+    ASSERT_TRUE(first_result[1].has_value());
+    ASSERT_TRUE(first_result[2].has_value());
+    EXPECT_EQ(first_result[0]->padded_shape(), input_shape);
+    EXPECT_EQ(first_result[1]->logical_shape(), (ttnn::Shape({1U, 1U, rows, 1U})));
+    EXPECT_EQ(first_result[1]->padded_shape(), (ttnn::Shape({1U, 1U, rows, 32U})));
+    EXPECT_EQ(first_result[2]->tensor_spec(), first_result[1]->tensor_spec());
+    expect_cache_test_forward_matches(first_result, first_input, first_gamma, first_beta, rows, width);
+
+    const auto entries_before_replay = device->num_program_cache_entries();
+    auto [replay_result, replay_input, replay_gamma, replay_beta] = run(0.5F);
+    const auto entries_after_replay = device->num_program_cache_entries();
+    EXPECT_EQ(entries_after_replay, entries_before_replay);
+    expect_cache_test_forward_matches(replay_result, replay_input, replay_gamma, replay_beta, rows, width);
+}
+
+TEST_F(LayerNormForwardOpTest, ValidatesContractsOnProgramCacheMissAndHit) {
+    using Operation = ttml::metal::ops::layernorm_fw::device::LayerNormForwardDeviceOperation;
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    const ttnn::Shape input_shape({1U, 1U, kCacheTestRows, kCacheTestWidth});
+    const ttnn::Shape parameter_shape({1U, 1U, 1U, kCacheTestWidth});
+    const ttnn::Shape stats_shape({1U, 1U, kCacheTestRows, 1U});
+    const tt::tt_metal::Alignment overpadded_alignment({1U, 1U, 64U, 32U});
+    const auto input_data = make_cache_test_data(input_shape.volume(), 0.25F, 7U);
+    const auto gamma_data = make_cache_test_data(parameter_shape.volume(), 0.75F, 3U);
+    const auto beta_data = make_cache_test_data(parameter_shape.volume(), -0.125F, 5U);
+
+    auto input = make_cache_test_tensor(input_data, input_shape, device, overpadded_alignment);
+    auto overwide_input =
+        make_cache_test_tensor(input_data, input_shape, device, tt::tt_metal::Alignment({1U, 1U, 32U, 96U}));
+    auto gamma = make_cache_test_tensor(gamma_data, parameter_shape, device);
+    auto beta = make_cache_test_tensor(beta_data, parameter_shape, device);
+    auto rank3_gamma = make_cache_test_tensor(gamma_data, ttnn::Shape({1U, 1U, kCacheTestWidth}), device);
+    auto rank3_beta = make_cache_test_tensor(beta_data, ttnn::Shape({1U, 1U, kCacheTestWidth}), device);
+    auto oversized_output = make_cache_test_tensor(
+        std::vector<float>(2U * input_shape.volume(), -7.0F),
+        ttnn::Shape({1U, 1U, 2U * kCacheTestRows, kCacheTestWidth}),
+        device,
+        overpadded_alignment);
+    auto overwide_stats = make_cache_test_tensor(
+        std::vector<float>(stats_shape.volume(), -7.0F),
+        stats_shape,
+        device,
+        tt::tt_metal::Alignment({1U, 1U, 64U, 64U}));
+    auto oversized_stats = make_cache_test_tensor(
+        std::vector<float>(2U * stats_shape.volume(), -7.0F),
+        ttnn::Shape({1U, 1U, 2U * kCacheTestRows, 1U}),
+        device,
+        overpadded_alignment);
+
+    const auto narrow_tile_layout = tt::tt_metal::TensorLayout(
+        ttnn::DataType::BFLOAT16,
+        ttnn::PageConfig(ttnn::Layout::TILE, tt::tt_metal::Tile({16U, 16U})),
+        ttnn::DRAM_MEMORY_CONFIG);
+    auto narrow_tile_input =
+        ttnn::Tensor::from_vector(input_data, tt::tt_metal::TensorSpec(input_shape, narrow_tile_layout), device);
+
+    const Operation::operation_attributes_t with_stats{.epsilon = kCacheTestEpsilon, .return_mean_rstd = true};
+    const Operation::operation_attributes_t without_stats{.epsilon = kCacheTestEpsilon, .return_mean_rstd = false};
+    const Operation::tensor_args_t valid_args{.input = input, .gamma = gamma, .beta = beta};
+    expect_validation_accepts<Operation>(with_stats, valid_args);
+    expect_validation_accepts<Operation>(without_stats, valid_args);
+
+    struct ValidationCase {
+        Operation::operation_attributes_t attributes;
+        Operation::tensor_args_t tensor_args;
+        std::string_view diagnostic;
+    };
+
+    std::vector<ValidationCase> invalid_cases;
+    const auto add_case = [&](const Operation::operation_attributes_t& attributes,
+                              const auto& mutate,
+                              const std::string_view diagnostic) {
+        auto tensor_args = valid_args;
+        mutate(tensor_args);
+        invalid_cases.push_back({attributes, std::move(tensor_args), diagnostic});
+    };
+    add_case(with_stats, [&](auto& args) { args.gamma = rank3_gamma; }, "Gamma tensor must have shape");
+    add_case(with_stats, [&](auto& args) { args.beta = rank3_beta; }, "Beta tensor must have shape");
+    add_case(
+        with_stats,
+        [&](auto& args) { args.input = narrow_tile_input; },
+        "Tensor 'Input' must use the canonical non-transposed 32x32 tile");
+    add_case(
+        with_stats,
+        [&](auto& args) { args.input = overwide_input; },
+        "Input tensor may be overpadded in height but must use canonical width padding");
+    add_case(
+        with_stats,
+        [&](auto& args) { args.preallocated_output = oversized_output; },
+        "Preallocated output TensorSpec must match the input TensorSpec");
+    add_case(
+        with_stats,
+        [&](auto& args) { args.preallocated_mean = oversized_stats; },
+        "Preallocated mean tensor must have logical shape");
+    add_case(
+        with_stats,
+        [&](auto& args) { args.preallocated_rstd = oversized_stats; },
+        "Preallocated rstd tensor must have logical shape");
+    add_case(
+        with_stats,
+        [&](auto& args) { args.preallocated_mean = overwide_stats; },
+        "Preallocated mean tensor must have logical shape");
+    add_case(
+        without_stats,
+        [&](auto& args) { args.preallocated_mean = oversized_stats; },
+        "Preallocated mean/rstd tensors require return_mean_rstd=true");
+
+    for (const auto& test_case : invalid_cases) {
+        SCOPED_TRACE(test_case.diagnostic);
+        expect_validation_rejects<Operation>(test_case.attributes, test_case.tensor_args, test_case.diagnostic);
+    }
+
+    const auto entries_before_warmup = device->num_program_cache_entries();
+    const auto valid_result =
+        ttnn::prim::ttml_layernorm_fw(input, gamma, beta, kCacheTestEpsilon, /*return_mean_rstd=*/true);
+    const auto entries_after_warmup = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_warmup, entries_before_warmup);
+    ASSERT_EQ(valid_result.size(), 3U);
+    EXPECT_EQ(valid_result[0]->tensor_spec(), input.tensor_spec());
+    auto expected_stats_shape = input_shape;
+    expected_stats_shape[-1] = 1U;
+    const auto expected_stats_spec =
+        tt::tt_metal::TensorSpec(expected_stats_shape, input.tensor_spec().tensor_layout());
+    EXPECT_EQ(valid_result[1]->tensor_spec(), expected_stats_spec);
+    EXPECT_EQ(valid_result[2]->tensor_spec(), expected_stats_spec);
+    expect_cache_test_forward_matches(valid_result, input_data, gamma_data, beta_data);
 }
