@@ -164,3 +164,11 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   204800: 596 / 1222 / 1853 / 2495 / 3132 ms. O.1 PASS 65ba16635b5 (8 forks, 90 calls covered, 0 failing).
 - Xing retrofit: SC.1 (serving contract) and K.2 (all contract tests + s56320 accuracy) added; contract step fixes
   the model to the tests.
+- 2026-10-01 SC.1 PASS dbc6fef1c93 (outputs committed by the overseer 4049fcbc43e; staging fixed 3baa2887bc5), K.2 PASS
+  15ebcff4554 (32-aligned starts, valid_global + zeroed pad, server input order, D2H acks, runner table signature,
+  bfp8_b TILE served cache; 4/4 contract tests), K.3 PASS b4705511de3 (ladder on the served bfp8 cache; the first K.3
+  pass was hollow, gate now requires state_bits_kv_latent == 8, f706aa39115).
+- Owner decision (2026-10-01): KV cache bfp8_b TILE (spec serving.kv_dtype, intake re-approved) and HiFi2 routed
+  experts (overrides the P.3 rejection). Measured s56320, current code: bf16+HiFi4 top1 0.9714 / final 0.99841 /
+  9.79 s full prefill; bfp8+HiFi4 0.9514 / 0.99819 / 9.46 s; bfp8+HiFi2 0.9686 / 0.99803 / 9.32 s (chunk device
+  1159 ms, experts 242.4 ms). Defaults now bfp8 + HiFi2; rung last with defaults: state 8-bit, top5 1.0.
