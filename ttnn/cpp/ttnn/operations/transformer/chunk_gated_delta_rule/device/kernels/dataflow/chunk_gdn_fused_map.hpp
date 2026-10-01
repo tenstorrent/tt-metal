@@ -8,9 +8,8 @@
 // BH*NPH+NX-1 are the pool's EXTRAS, which take the share num/den of every head's chunks. The extra items
 // e = 0, 1, ... are spread evenly over the BH*NC (chunk, head) slots: item e is head e % BH at chunk
 // ceil((e+1)*den/(num*BH)) - 1, so chunk c of head h is an extra chunk iff
-// floor(((c+1)*num*BH + (BH-1-h)*den) / (den*BH)) > floor((c*num*BH + (BH-1-h)*den) / (den*BH)) — the extra
-// chunks of consecutive heads are phased by den/(num*BH) chunks, so an extra's successive items step through
-// increasing chunks instead of the same chunk of BH/NX heads. Extra x serves the items x, x+NX, ...; home
+// floor(((c+1)*num*BH + (BH-1-h)*den) / (den*BH)) > floor((c*num*BH + (BH-1-h)*den) / (den*BH)), and the
+// extra chunks of consecutive heads are phased by den/(num*BH) chunks. Extra x serves the items x, x+NX, ...; home
 // producer j of head h serves that head's non-extra chunks of ranks r = j, j+NPH, ... in chunk order. Every
 // producer's chunks are therefore non-decreasing. The per-head form (NP producers per head, producer j owns
 // c = j, j+NP, ...) is NX = 0.
