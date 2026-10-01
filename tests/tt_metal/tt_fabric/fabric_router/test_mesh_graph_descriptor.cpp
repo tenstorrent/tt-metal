@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <set>
 #include <map>
+#include <optional>
+#include <utility>
 #include <unordered_set>
 #include <fstream>
 
@@ -2542,5 +2544,319 @@ TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
     EXPECT_FALSE(mgds[1].connections_by_type("FABRIC").empty())
         << "Dual MGD should retain FABRIC connections after emplace";
 }
+
+std::optional<std::pair<std::size_t, MeshId>> decode_merged_mesh_id(
+    MeshId global_mesh_id, const std::vector<std::map<MeshId, MeshId>>& per_part_local_to_global) {
+    for (std::size_t part = 0; part < per_part_local_to_global.size(); ++part) {
+        for (const auto& [local, global] : per_part_local_to_global[part]) {
+            if (global == global_mesh_id) {
+                return std::make_pair(part, local);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+TEST(MeshGraphDescriptorTests, MergeSingleDescriptorKeepsLocalIdsAndNames) {
+    MeshGraphDescriptor source{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&source}, &maps);
+
+    ASSERT_EQ(maps.size(), 1u);
+    ASSERT_EQ(maps[0].size(), 1u);
+    EXPECT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+
+    const auto names = merged.mesh_id_to_instance_name();
+    ASSERT_TRUE(names.contains(MeshId{0}));
+    EXPECT_EQ(names.at(MeshId{0}), "M0") << "a single descriptor is cloned; names stay unprefixed";
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("M0").at(0)), 4u);
+}
+
+TEST(MeshGraphDescriptorTests, MergeTwoSameNamedMeshesRenumbersAndPrefixes) {
+    MeshGraphDescriptor left{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor right{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right}, &maps);
+
+    ASSERT_EQ(maps.size(), 2u);
+    EXPECT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+    EXPECT_EQ(maps[1].at(MeshId{0}), MeshId{1});
+
+    const auto names = merged.mesh_id_to_instance_name();
+    ASSERT_EQ(names.size(), 2u);
+    EXPECT_EQ(names.at(MeshId{0}), "mgd0_M0");
+    EXPECT_EQ(names.at(MeshId{1}), "mgd1_M0");
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd0_M0").at(0)), 2u);
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd1_M0").at(0)), 1u);
+
+    const auto decoded0 = decode_merged_mesh_id(MeshId{0}, maps);
+    const auto decoded1 = decode_merged_mesh_id(MeshId{1}, maps);
+    ASSERT_TRUE(decoded0.has_value());
+    ASSERT_TRUE(decoded1.has_value());
+    EXPECT_EQ(decoded0->first, 0u);
+    EXPECT_EQ(decoded0->second, MeshId{0});
+    EXPECT_EQ(decoded1->first, 1u);
+    EXPECT_EQ(decoded1->second, MeshId{0});
+}
+
+TEST(MeshGraphDescriptorTests, MergePreservesInterMeshSeamAndDecodesGlobals) {
+    MeshGraphDescriptor pair{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor singleton{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&pair, &singleton}, &maps);
+
+    ASSERT_EQ(maps.size(), 2u);
+    EXPECT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+    EXPECT_EQ(maps[0].at(MeshId{1}), MeshId{1});
+    EXPECT_EQ(maps[1].at(MeshId{0}), MeshId{2});
+
+    const auto names = merged.mesh_id_to_instance_name();
+    ASSERT_EQ(names.size(), 3u);
+    EXPECT_EQ(names.at(MeshId{0}), "mgd0_M0");
+    EXPECT_EQ(names.at(MeshId{1}), "mgd0_M1");
+    EXPECT_EQ(names.at(MeshId{2}), "mgd1_M0");
+    EXPECT_TRUE(merged.has_connections_of_type("FABRIC"))
+        << "the first descriptor's inter-mesh seam must survive under the merged graph";
+    EXPECT_TRUE(merged.is_inter_mesh_policy_relaxed());
+
+    for (MeshId global : {MeshId{0}, MeshId{1}, MeshId{2}}) {
+        const auto decoded = decode_merged_mesh_id(global, maps);
+        ASSERT_TRUE(decoded.has_value()) << "global mesh " << *global << " should invert through the merge maps";
+    }
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{0}, maps)->first, 0u);
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{1}, maps)->second, MeshId{1});
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{2}, maps)->first, 1u);
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{2}, maps)->second, MeshId{0});
+}
+
+TEST(MeshGraphDescriptorTests, MergeMeshTopLevelDescriptors) {
+    MeshGraphDescriptor first{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor second{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&first, &second}, &maps);
+
+    ASSERT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+    ASSERT_EQ(maps[1].at(MeshId{0}), MeshId{1});
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd0_M0").at(0)), 4u);
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd1_M0").at(0)), 4u);
+    EXPECT_EQ(merged.top_level().name, "G0");
+}
+
+TEST(MeshGraphDescriptorTests, MergeRemapsPinningsToGlobalMeshIds) {
+    MeshGraphDescriptor left{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 1 }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor right{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 1 }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right}, &maps);
+    const auto& pinnings = merged.get_pinnings();
+
+    ASSERT_TRUE(pinnings.contains(MeshId{0}));
+    ASSERT_TRUE(pinnings.contains(MeshId{1}));
+    ASSERT_EQ(pinnings.at(MeshId{0}).size(), 1u);
+    ASSERT_EQ(pinnings.at(MeshId{1}).size(), 1u);
+    EXPECT_EQ(*pinnings.at(MeshId{0})[0].fabric_nodes[0].mesh_id, 0u);
+    EXPECT_EQ(pinnings.at(MeshId{0})[0].fabric_nodes[0].chip_id, 0u);
+    EXPECT_EQ(*pinnings.at(MeshId{1})[0].fabric_nodes[0].mesh_id, 1u);
+    EXPECT_EQ(pinnings.at(MeshId{1})[0].fabric_nodes[0].chip_id, 3u);
+}
+
+TEST(MeshGraphDescriptorTests, MergeRejectsInconsistentInterMeshPolicy) {
+    MeshGraphDescriptor relaxed{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor strict{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 2 policy: STRICT }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    EXPECT_ANY_THROW(MeshGraphDescriptor::merge({&relaxed, &strict}));
+}
+
+TEST(MeshGraphDescriptorTests, MergeEmptyDescriptorsThrows) { EXPECT_ANY_THROW(MeshGraphDescriptor::merge({})); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
