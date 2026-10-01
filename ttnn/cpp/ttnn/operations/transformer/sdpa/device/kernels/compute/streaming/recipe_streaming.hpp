@@ -397,6 +397,10 @@ inline bool sdpa_pa_sum_acc = false;
 #define PA_SUM_CB(cb) 12  // chunk-local BF16 row sums
 #else
 #define PA_SUM_CB(cb) (cb)
+// Defaults for builds without the safe P-A (defined in Phase 2 when it is on).
+#define PA_FIRST_FOLD(rows)
+#define PA_PV_OFF(g) group_pv_offset
+#define PA_PV_ACC(g) (!is_first_iter)
 #endif
 #ifdef SDPA_PERF_ZONES
 constexpr bool sdpa_perf_zones = true;
@@ -1994,10 +1998,6 @@ static void sdpa_inner_loop_step(
     }
 #define PA_PV_OFF(g) pa_pv_offset(g)
 #define PA_PV_ACC(g) pa_pv_acc(g)
-#else
-#define PA_FIRST_FOLD(rows)
-#define PA_PV_OFF(g) group_pv_offset
-#define PA_PV_ACC(g) (!is_first_iter)
 #endif
 #endif
 
