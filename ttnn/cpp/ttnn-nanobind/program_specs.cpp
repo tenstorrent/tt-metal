@@ -222,90 +222,103 @@ void py_module_types(nb::module_& mod) {
 
     // ---------------------------------------------------------------- hardware configs
 
-    nb::class_<m2::DataMovementGen1Config>(mod, "DataMovementGen1Config")
+    using DM1XX = m2::DataMovementHardwareConfig::DataMovement1XXConfig;
+    using DM2XX = m2::DataMovementHardwareConfig::DataMovement2XXConfig;
+    using Compute1XX = m2::ComputeHardwareConfig::Compute1XXConfig;
+    using Compute2XX = m2::ComputeHardwareConfig::Compute2XXConfig;
+    using ComputeUnpackModes = m2::ComputeHardwareConfig::ComputeUnpackModes;
+
+    nb::class_<DM1XX>(mod, "DataMovement1XXConfig")
         .def(
             "__init__",
-            [](m2::DataMovementGen1Config* self,
+            [](DM1XX* self,
                tt::tt_metal::DataMovementProcessor processor,
                tt::tt_metal::NOC noc,
                tt::tt_metal::NOC_MODE noc_mode) {
-                new (self) m2::DataMovementGen1Config{.processor = processor, .noc = noc, .noc_mode = noc_mode};
+                new (self) DM1XX{.processor = processor, .noc = noc, .noc_mode = noc_mode};
             },
             nb::arg("processor"),
             nb::arg("noc"),
             nb::arg("noc_mode") = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC)
-        .def_rw("processor", &m2::DataMovementGen1Config::processor)
-        .def_rw("noc", &m2::DataMovementGen1Config::noc)
-        .def_rw("noc_mode", &m2::DataMovementGen1Config::noc_mode);
+        .def_rw("processor", &DM1XX::processor)
+        .def_rw("noc", &DM1XX::noc)
+        .def_rw("noc_mode", &DM1XX::noc_mode);
 
-    nb::class_<m2::DataMovementGen2Config>(mod, "DataMovementGen2Config")
+    nb::class_<DM2XX>(mod, "DataMovement2XXConfig")
         .def(
             "__init__",
-            [](m2::DataMovementGen2Config* self,
+            [](DM2XX* self,
                std::vector<m2::DFBSpecName> disable_dfb_implicit_sync_for,
                bool disable_dfb_implicit_sync_for_all) {
-                new (self) m2::DataMovementGen2Config{
+                new (self) DM2XX{
                     .disable_dfb_implicit_sync_for = std::move(disable_dfb_implicit_sync_for),
                     .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
             },
             nb::arg("disable_dfb_implicit_sync_for") = std::vector<m2::DFBSpecName>{},
-            nb::arg("disable_dfb_implicit_sync_for_all") = false);
+            nb::arg("disable_dfb_implicit_sync_for_all") = false)
+        .def_rw("disable_dfb_implicit_sync_for", &DM2XX::disable_dfb_implicit_sync_for)
+        .def_rw("disable_dfb_implicit_sync_for_all", &DM2XX::disable_dfb_implicit_sync_for_all);
 
-    nb::class_<m2::ComputeGen1Config>(mod, "ComputeGen1Config")
+    nb::class_<m2::DataMovementHardwareConfig>(mod, "DataMovementHardwareConfig")
         .def(
             "__init__",
-            [](m2::ComputeGen1Config* self,
-               MathFidelity fpu_math_fidelity,
-               tt::tt_metal::Precision sfpu_precision_mode,
-               tt::tt_metal::Precision bfp_pack_precision_mode,
-               bool enable_32_bit_dest,
-               bool double_buffer_dest,
-               m2::ComputeUnpackModes unpack_modes) {
-                new (self) m2::ComputeGen1Config{
-                    .fpu_math_fidelity = fpu_math_fidelity,
-                    .sfpu_precision_mode = sfpu_precision_mode,
-                    .bfp_pack_precision_mode = bfp_pack_precision_mode,
-                    .enable_32_bit_dest = enable_32_bit_dest,
-                    .double_buffer_dest = double_buffer_dest,
-                    .unpack_modes = std::move(unpack_modes)};
+            [](m2::DataMovementHardwareConfig* self, std::optional<DM1XX> config_1xx, std::optional<DM2XX> config_2xx) {
+                new (self) m2::DataMovementHardwareConfig{
+                    .config_1xx = std::move(config_1xx), .config_2xx = std::move(config_2xx)};
             },
-            nb::arg("fpu_math_fidelity") = MathFidelity::HiFi4,
-            nb::arg("sfpu_precision_mode") = tt::tt_metal::Precision::Precise,
-            nb::arg("bfp_pack_precision_mode") = tt::tt_metal::Precision::Approximate,
-            nb::arg("enable_32_bit_dest") = false,
-            nb::arg("double_buffer_dest") = true,
-            nb::arg("unpack_modes") = m2::ComputeUnpackModes{})
-        .def_rw("fpu_math_fidelity", &m2::ComputeGen1Config::fpu_math_fidelity)
-        .def_rw("sfpu_precision_mode", &m2::ComputeGen1Config::sfpu_precision_mode)
-        .def_rw("bfp_pack_precision_mode", &m2::ComputeGen1Config::bfp_pack_precision_mode)
-        .def_rw("enable_32_bit_dest", &m2::ComputeGen1Config::enable_32_bit_dest)
-        .def_rw("double_buffer_dest", &m2::ComputeGen1Config::double_buffer_dest)
-        .def_rw("unpack_modes", &m2::ComputeGen1Config::unpack_modes);
+            nb::arg("config_1xx") = nb::none(),
+            nb::arg("config_2xx") = nb::none())
+        .def_rw("config_1xx", &m2::DataMovementHardwareConfig::config_1xx)
+        .def_rw("config_2xx", &m2::DataMovementHardwareConfig::config_2xx);
 
-    nb::class_<m2::ComputeGen2Config>(mod, "ComputeGen2Config")
+    nb::class_<Compute1XX>(mod, "Compute1XXConfig")
         .def(
             "__init__",
-            [](m2::ComputeGen2Config* self,
+            [](Compute1XX* self, tt::tt_metal::Precision bfp_pack_precision_mode) {
+                new (self) Compute1XX{.bfp_pack_precision_mode = bfp_pack_precision_mode};
+            },
+            nb::arg("bfp_pack_precision_mode") = tt::tt_metal::Precision::Approximate)
+        .def_rw("bfp_pack_precision_mode", &Compute1XX::bfp_pack_precision_mode);
+
+    nb::class_<Compute2XX>(mod, "Compute2XXConfig").def(nb::init<>());
+
+    nb::class_<m2::ComputeHardwareConfig>(mod, "ComputeHardwareConfig")
+        .def(
+            "__init__",
+            [](m2::ComputeHardwareConfig* self,
                MathFidelity fpu_math_fidelity,
                tt::tt_metal::Precision sfpu_precision_mode,
                bool enable_32_bit_dest,
                bool double_buffer_dest,
-               m2::ComputeUnpackModes unpack_modes) {
-                new (self) m2::ComputeGen2Config{
+               ComputeUnpackModes unpack_modes,
+               std::optional<Compute1XX> config_1xx,
+               std::optional<Compute2XX> config_2xx) {
+                new (self) m2::ComputeHardwareConfig{
                     .fpu_math_fidelity = fpu_math_fidelity,
                     .sfpu_precision_mode = sfpu_precision_mode,
                     .enable_32_bit_dest = enable_32_bit_dest,
                     .double_buffer_dest = double_buffer_dest,
-                    .unpack_modes = std::move(unpack_modes)};
+                    .unpack_modes = std::move(unpack_modes),
+                    .config_1xx = std::move(config_1xx),
+                    .config_2xx = std::move(config_2xx)};
             },
             nb::arg("fpu_math_fidelity") = MathFidelity::HiFi4,
             nb::arg("sfpu_precision_mode") = tt::tt_metal::Precision::Precise,
             nb::arg("enable_32_bit_dest") = false,
             nb::arg("double_buffer_dest") = true,
-            nb::arg("unpack_modes") = m2::ComputeUnpackModes{});
+            nb::arg("unpack_modes") = ComputeUnpackModes{},
+            nb::arg("config_1xx") = nb::none(),
+            nb::arg("config_2xx") = nb::none())
+        .def_rw("fpu_math_fidelity", &m2::ComputeHardwareConfig::fpu_math_fidelity)
+        .def_rw("sfpu_precision_mode", &m2::ComputeHardwareConfig::sfpu_precision_mode)
+        .def_rw("enable_32_bit_dest", &m2::ComputeHardwareConfig::enable_32_bit_dest)
+        .def_rw("double_buffer_dest", &m2::ComputeHardwareConfig::double_buffer_dest)
+        .def_rw("unpack_modes", &m2::ComputeHardwareConfig::unpack_modes)
+        .def_rw("config_1xx", &m2::ComputeHardwareConfig::config_1xx)
+        .def_rw("config_2xx", &m2::ComputeHardwareConfig::config_2xx);
 
-    mod.def("create_reader_dm_config", &m2::CreateReaderGen1DataMovementConfig);
-    mod.def("create_writer_dm_config", &m2::CreateWriterGen1DataMovementConfig);
+    mod.def("create_reader_dm_config", &m2::CreateReaderDataMovementConfig);
+    mod.def("create_writer_dm_config", &m2::CreateWriterDataMovementConfig);
 
     // ---------------------------------------------------------------- kernels
 
