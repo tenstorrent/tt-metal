@@ -96,7 +96,6 @@ void py_module_types(nb::module_& mod) {
                uint32_t num_entries,
                std::optional<ttnn::DataType> data_format,
                std::optional<tt::tt_metal::Tile> tile_format,
-               std::optional<tt::tt_metal::FaceGeometry> unpack_face_geometry,
                std::optional<m2::TensorParamName> borrowed_from,
                m2::DFBAdvancedOptions advanced_options) {
                 std::optional<tt::DataFormat> df;
@@ -109,7 +108,6 @@ void py_module_types(nb::module_& mod) {
                     .num_entries = num_entries,
                     .data_format_metadata = df,
                     .tile_format_metadata = tile_format,
-                    .unpack_face_geometry_metadata = unpack_face_geometry,
                     .borrowed_from = std::move(borrowed_from),
                     .advanced_options = std::move(advanced_options)};
             },
@@ -118,7 +116,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("num_entries"),
             nb::arg("data_format") = nb::none(),
             nb::arg("tile_format") = nb::none(),
-            nb::arg("unpack_face_geometry") = nb::none(),
             nb::arg("borrowed_from") = nb::none(),
             nb::arg("advanced_options") = m2::DFBAdvancedOptions{})
         .def_rw("unique_id", &m2::DataflowBufferSpec::unique_id)
@@ -134,7 +131,6 @@ void py_module_types(nb::module_& mod) {
                 return static_cast<uint32_t>(*self.data_format_metadata);
             })
         .def_rw("tile_format_metadata", &m2::DataflowBufferSpec::tile_format_metadata)
-        .def_rw("unpack_face_geometry_metadata", &m2::DataflowBufferSpec::unpack_face_geometry_metadata)
         .def_rw("borrowed_from", &m2::DataflowBufferSpec::borrowed_from)
         .def_rw("advanced_options", &m2::DataflowBufferSpec::advanced_options);
 
@@ -148,7 +144,7 @@ void py_module_types(nb::module_& mod) {
         nb::arg("num_entries") = 0,
         nb::arg("borrowed_from") = nb::none(),
         nb::arg("page_as_tile") = false,
-        nb::arg("unpack_face_geometry") = nb::none(),
+        nb::arg("tile_format") = nb::none(),
         nb::arg("advanced_options") = m2::DFBAdvancedOptions{},
         R"pbdoc(
             Create a DataflowBufferSpec from a sharded tensor.
@@ -170,9 +166,10 @@ void py_module_types(nb::module_& mod) {
                 page_as_tile: Treat entries as tiles even for a ROW_MAJOR tensor - one entry becomes
                     one tile (or the whole shard, when the shard is smaller than a tile) instead of
                     one stick, and tile_format_metadata is set. No-op for a TILE tensor.
-                unpack_face_geometry: Passed through to unpack_face_geometry_metadata. Needed when an
-                    entry holds fewer or shorter faces than a full tile - which is exactly the
-                    sub-tile shard case page_as_tile falls back to. Never derived for you.
+                tile_format: Replaces the derived tile_format_metadata. The tile carries the face
+                    layout, so pass one when an entry holds fewer or shorter faces than the tensor's
+                    tile - which is exactly the sub-tile shard case page_as_tile falls back to. Never
+                    derived for you.
                 advanced_options: Passed through to advanced_options.
 
             Returns:

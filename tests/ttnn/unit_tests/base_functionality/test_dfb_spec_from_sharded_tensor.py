@@ -72,7 +72,6 @@ def test_tiled_shard_derives_one_entry_per_tile(device, dtype):
     assert dfb.data_format_metadata == _data_format_of(dtype)
     assert dfb.tile_format_metadata is not None
     assert dfb.tile_format_metadata.tile_shape == [32, 32]
-    assert dfb.unpack_face_geometry_metadata is None
     assert dfb.borrowed_from is None
 
 
@@ -139,22 +138,19 @@ def test_page_as_tile_repages_a_row_major_shard(device):
 def test_page_as_tile_on_a_sub_tile_shard_falls_back_to_one_partial_entry(device):
     """A 16-row shard is half a tile: one partial-tile entry, mirroring set_cb_page_size_for_tile.
 
-    Such an entry needs a matching unpack_face_geometry to be unpacked correctly, which the helper
+    Such an entry needs a matching tile format (two 16x16 faces) to be unpacked correctly, which the helper
     passes through rather than guessing.
     """
     tensor = _height_sharded(
         device, (1, 1, 16, 32), (16, 32), _one_core(), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    dfb = ttnn.dfb_spec_from_sharded_tensor(
-        "in", tensor, page_as_tile=True, unpack_face_geometry=ttnn.FaceGeometry(16, 2)
-    )
+    dfb = ttnn.dfb_spec_from_sharded_tensor("in", tensor, page_as_tile=True, tile_format=ttnn.Tile([16, 32]))
 
     assert dfb.entry_size == 16 * 32 * 2  # the whole shard, less than one tile
     assert dfb.num_entries == 1
-    assert dfb.tile_format_metadata is not None
-    assert dfb.unpack_face_geometry_metadata.face_r_dim == 16
-    assert dfb.unpack_face_geometry_metadata.num_faces == 2
+    assert dfb.tile_format_metadata.tile_shape == [16, 32]
+    assert dfb.tile_format_metadata.face_shape == [16, 16]
 
 
 # ---------------------------------------------------------------- borrowing and depth
