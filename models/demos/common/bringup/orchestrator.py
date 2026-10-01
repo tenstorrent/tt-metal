@@ -71,6 +71,7 @@ from string import Template
 
 import yaml
 
+from models.demos.common.bringup.core import defaults
 from models.demos.common.bringup.core import freeze as F
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core.gate import (
@@ -108,23 +109,8 @@ DEBUGGER_DEF = CODE_ROOT / ".claude" / "agents" / f"{DEBUGGER}.md"
 # Everything else (reference, plan, contract, test, fix after a CPU gate) stops for a person with the logs.
 # The spec overrides per role: agents.policy.<role>: {attempts, escalate: debugger | stop, debugger_attempts}.
 # F56: component review default; a spec sets agents.component_review: all to review every component test
-COMPONENT_REVIEW_DEFAULT = (
-    "none"  # owner 2026-10-01: component tests freeze without review when their mistake sweep passes
-)
-DEFAULT_POLICY = {
-    # defer_after_debugger: once the debugger is out of attempts, one last implement attempt may defer a component
-    # step to op-gen (F46) instead of stopping.
-    "implement": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3, "defer_after_debugger": True},
-    "fix": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
-    "reference": {"attempts": 3, "escalate": "stop"},
-    "plan": {"attempts": 3, "escalate": "stop"},
-    "contract": {"attempts": 3, "escalate": "stop"},
-    "test": {"attempts": 3, "escalate": "stop"},
-    "perf": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
-    "assemble": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
-    "optests": {"attempts": 3, "escalate": "stop"},
-    "serving": {"attempts": 2, "escalate": "stop"},
-}
+COMPONENT_REVIEW_DEFAULT = defaults.get("agents.component_review")  # defaults.yaml
+DEFAULT_POLICY = defaults.get("agents.policy")  # defaults.yaml: per role attempts, escalate, debugger_attempts
 ROLE_OF_STEP = {
     "reference": "reference",
     "plan": "plan",
@@ -398,7 +384,7 @@ class Orchestrator:
         self.model = model or spec.get("agents.model")
         self.max_attempts, self.debugger_attempts = max_attempts, debugger_attempts
         self.attempts_override = None
-        self.timeout_s = timeout_s or int(spec.get("agents.timeout_s", 4 * 3600))
+        self.timeout_s = timeout_s or int(spec.get("agents.timeout_s"))
         self.run_dir = spec.run_dir(run_name(self.led))
         (self.run_dir / "briefs").mkdir(parents=True, exist_ok=True)
         (self.run_dir / "agents").mkdir(parents=True, exist_ok=True)
@@ -467,7 +453,7 @@ class Orchestrator:
             "hf_dir": str(s.hf_dir),
             "mesh": "x".join(map(str, s.mesh)),
             "chips": s.mesh[0] * s.mesh[1],
-            "dram": s.get("box.chip_dram_gb", 32),
+            "dram": s.get("box.chip_dram_gb"),
             "tests": ", ".join(task.get("tests") or []),
             "component_desc": desc,
             "component_entry": yaml.safe_dump(comp).strip() if comp else "(none in components.yaml)",
@@ -713,7 +699,7 @@ class Orchestrator:
         """Spec ``agents.component_review``: all | none | [block types] (default none, COMPONENT_REVIEW_DEFAULT). F56: a
         component test with the built-in checks is frozen without a test-role review when this leaves its block type
         out, provided its mistake sweep (BRINGUP_IMPL=mutations) passes."""
-        v = self.spec.get("agents.component_review", COMPONENT_REVIEW_DEFAULT)
+        v = self.spec.get("agents.component_review")
         if v in (None, False, "none", []):
             return False
         return v in ("all", True) or block_type in (v if isinstance(v, list) else [v])

@@ -27,6 +27,8 @@ from pathlib import Path
 
 import yaml
 
+from models.demos.common.bringup.core import defaults
+
 FRAMEWORK = Path(__file__).resolve().parents[1]
 CODE_ROOT = FRAMEWORK.parents[3]
 
@@ -87,10 +89,11 @@ class Spec:
         return cls(yaml.safe_load(path.read_text()) or {}, path)
 
     def get(self, key: str, default=None):
+        """The spec's value, else the framework default (defaults.yaml), else ``default``."""
         cur = self.data
         for k in key.split("."):
             if not isinstance(cur, dict) or k not in cur:
-                return default
+                return defaults.get(key, default)
             cur = cur[k]
         return cur
 

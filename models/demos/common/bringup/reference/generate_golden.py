@@ -108,10 +108,10 @@ def main(argv=None):
     fixed = spec.state_fixed
     tail_at = None
     if fixed:
-        from models.demos.common.bringup.testing.contract import BLOCK, contract_rung
+        from models.demos.common.bringup.testing.contract import contract_rung
 
         if contract_rung(spec) == a.rung:
-            tail_at = seq - int(spec.get("tests.contract_tail_pad", BLOCK))
+            tail_at = seq - int(spec.get("tests.contract_tail_pad"))
 
     def snapshot(at: int) -> None:
         for i in selected:
