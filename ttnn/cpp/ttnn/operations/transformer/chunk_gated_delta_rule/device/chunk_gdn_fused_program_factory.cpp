@@ -114,7 +114,8 @@ constexpr uint32_t scr3 = tt::CBIndex::c_30;
 // sizes may differ per side). Post-renumber scan indices: vnew moved 22 -> 11.
 constexpr uint32_t S = tt::CBIndex::c_8;
 constexpr uint32_t vnew = tt::CBIndex::c_11;  // scan-only (receiver); producer's c_11 is decayfac
-constexpr uint32_t out = tt::CBIndex::c_16;
+constexpr uint32_t out = tt::CBIndex::c_16;   // receiver; the producer's c_16 is kdec
+constexpr uint32_t kdec = tt::CBIndex::c_16;  // producer-only: k_dec before its transpose
 constexpr uint32_t s2 = tt::CBIndex::c_21;
 constexpr uint32_t ointer = tt::CBIndex::c_23;
 constexpr uint32_t supd = tt::CBIndex::c_25;
@@ -138,8 +139,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
 
     // Producer-side (full-V) tile counts — the phased prep factory's.
     const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kc = Kt * Ct;
-    // Prep scratch sizes, as in the phased prep factory (see the comment there and qwen36-gdn-cb-inventory.md).
-    const uint32_t scr1_tiles = ck, scr2_tiles = 1, scr3_tiles = cc, qk_tiles = ck, one_tile = 1;
+    // Prep scratch sizes, as in the phased prep factory (see the comment there). Each scratch CB receives blocks of
+    // one size, equal to its capacity: scr1 decay_row (Ct), kdec k_dec (ck), scr2 / ointer single tiles, scr3 cc.
+    const uint32_t scr1_tiles = Ct, scr2_tiles = 1, scr3_tiles = cc, kdec_tiles = ck, qk_tiles = ck, one_tile = 1;
     // Receiver-side (V-sliced) tile counts — the phased scan factory's at Vt = Vtl.
     const uint32_t cvl = Ct * Vtl, kvl = Kt * Vtl;
 
@@ -222,8 +224,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(prod_set, fcb::decayfac, Ct + 1);  // + the dl = exp(g_sum) column tile
     add_cb(prod_set, fcb::lmask, cc);
     add_cb(prod_set, fcb::kbeta, ck);
+    add_cb(prod_set, fcb::kdec, kdec_tiles);
     add_cb(prod_set, fcb::s2, one_tile);      // invert_block scratch C
-    add_cb(prod_set, fcb::ointer, one_tile);  // Ct == 2: the off-diagonal inverse block
+    add_cb(prod_set, fcb::ointer, one_tile);  // invert_block's tmpN; Ct == 2: the off-diagonal inverse block
     add_cb(prod_set, fcb::supd, qk_tiles);
     add_cb(prod_set, fcb::stmp, qk_tiles);
     add_cb(prod_set, fcb::final_s, one_tile);  // invert_block scratch B
