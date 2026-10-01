@@ -1,4 +1,4 @@
-# Binary pow(a, b), positive base (see sfpu_port_pow_dest32 for negative bases).
+# Binary pow(a, b), positive base (see sfpu_binary_pow_dest32 for negative bases).
 #
 # Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
 # dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
