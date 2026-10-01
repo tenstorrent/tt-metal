@@ -24,9 +24,11 @@
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
 #include "small_vector_caster.hpp"
@@ -44,6 +46,7 @@
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
+#include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
@@ -582,6 +585,31 @@ void device_module(nb::module_& m_device) {
         nb::arg("device").noconvert(),
         nb::arg("buffer_type").noconvert(),
         get_allocator_base_address_doc.data());
+
+    constexpr std::string_view get_l1_occupied_ranges_doc = R"doc(
+        Experimental. Return the occupied L1 ``(start, end)`` byte ranges (end exclusive) on one device of the mesh:
+        lockstep allocations, the core's per-core allocations and persistent L1, sorted and coalesced.
+        With ``core``, returns a list for that core; without it, a dict mapping every L1-bank core to its list.
+        Requires the device to be opened with ``TT_METAL_ALLOCATOR_MODE_HYBRID=1``.
+    )doc";
+    m_device.def(
+        "ExperimentalGetL1OccupiedRanges",
+        [](const MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord, const CoreCoord& core) {
+            return tt::tt_metal::experimental::per_core_allocation::get_l1_occupied_ranges(
+                mesh_device, device_coord, core);
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        nb::arg("core"),
+        get_l1_occupied_ranges_doc.data());
+    m_device.def(
+        "ExperimentalGetL1OccupiedRanges",
+        [](const MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord) {
+            return tt::tt_metal::experimental::per_core_allocation::get_l1_occupied_ranges(mesh_device, device_coord);
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        get_l1_occupied_ranges_doc.data());
 
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
