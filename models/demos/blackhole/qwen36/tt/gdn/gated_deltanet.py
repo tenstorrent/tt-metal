@@ -29,6 +29,7 @@ from models.demos.blackhole.qwen36.tt.gdn.weights import load_gdn_weights
 #                     conv's prenormed fp32 q/k). The SP prefill dies' geometry (demo/sp_sc_flags.env).
 #   "nv2np4d2" / "nv2np4d4" / "nv2np3d3" / "nv1np5d3" / "nv4np2" / "nv4np2d3": depth / geometry variants of nv2np4d3 on
 #                     the 11x10 dies, A/B'd in the SP prefill (traced 4k TTFT); none beats nv2np4d3 (bit-exact to it).
+#   "nv2np4d3p"    -> nv2np4d3 with posted=True (posted unicast hand-off writes), opt-in A/B variant.
 _GDN_PCFG_GEOMETRIES = {
     "nv1np6": dict(num_producers=6, num_receivers=1, row_local=False),
     "nv1np5": dict(num_producers=5, num_receivers=1, row_local=True),
@@ -43,6 +44,17 @@ _GDN_PCFG_GEOMETRIES = {
         num_receivers=2,
         row_local=True,
         handoff_depth=3,
+        split_layout=True,
+        qk_fp32_double_buffer=True,
+    ),
+    # nv2np4d3 with posted unicast data writes (posted=True: posted unicast data writes, VALID flag ordered by in-order delivery;
+    # transport-only, bit-neutral by design). Opt-in A/B variant.
+    "nv2np4d3p": dict(
+        num_producers=4,
+        num_receivers=2,
+        row_local=True,
+        handoff_depth=3,
+        posted=True,
         split_layout=True,
         qk_fp32_double_buffer=True,
     ),
