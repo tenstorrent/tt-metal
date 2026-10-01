@@ -1013,6 +1013,13 @@ tasks:
     kind: residual
     layer: 5
     stateful: false
+  frozen:
+    at: '2026-10-01T02:21:11'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_attn_residual.py: 961dabefda91629ff08fb52dd2498e9a7c8c3fee9860f1573e73e182a70d0238
+      /home/sjovic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 16e0ef60439c47052a9bf2543ea23258b17ea715224d1f9e30e037294a43e9bd
 - id: S.full_moe.03
   title: 'full_moe block with steps 1-3 on device (last: attn_residual)'
   step: implement
