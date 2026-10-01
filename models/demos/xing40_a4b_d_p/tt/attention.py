@@ -301,6 +301,19 @@ class TtMlaAttention:
         self.geom = self._geoms[key]
         return self.geom
 
+    def release(self, max_seq: int) -> None:
+        """Harness boundary: free every geometry built for ``max_seq`` (cache, RoPE tables, the shared gather
+        scratch). The next setup() for that length rebuilds them."""
+        for key in [k for k in self._geoms if k[1] == max_seq]:
+            g = self._geoms.pop(key)
+            if self.geom is g:
+                self.geom = None
+            for t in (g.cache, g.cos, g.sin, g.trans):
+                ttnn.deallocate(t)
+        kb = _KV_BUFS.pop((id(self.mesh), max_seq, self.kv_width), None)
+        if kb is not None:
+            ttnn.deallocate(kb)
+
     def bind_cache(self, cache, slot: int, row: int, rows: int) -> None:
         """Serving option: write / gather this layer's latent rows in an external multi-slot cache (the prefill
         engine's, tt/runners/kv_contract.py) instead of the geometry's own. ``cache`` is laid out like the geometry's
