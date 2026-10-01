@@ -204,9 +204,13 @@ def test_program_config_defaults():
     f = ttnn.ChunkGdnFusedProgramConfig()
     assert (f.num_producers, f.num_receivers, f.row_local) == (None, None, None)
     assert (f.handoff_depth, f.unicast, f.posted) == (2, True, False)
+    assert (f.producer_pool, f.pool_extra_share) == (False, None)
     f = ttnn.ChunkGdnFusedProgramConfig(num_receivers=4, num_producers=5, row_local=False, handoff_depth=3)
     assert (f.num_receivers, f.num_producers, f.row_local, f.handoff_depth) == (4, 5, False, 3)
     assert "num_receivers=4" in repr(f) and "row_local=False" in repr(f)
+    f = ttnn.ChunkGdnFusedProgramConfig(num_receivers=2, num_producers=78, producer_pool=True, pool_extra_share=0.25)
+    assert (f.num_producers, f.producer_pool) == (78, True) and abs(f.pool_extra_share - 0.25) < 1e-6
+    assert "producer_pool=True" in repr(f) and "pool_extra_share=0.25" in repr(f)
     p = ttnn.ChunkGdnPhasedProgramConfig()
     assert (p.use_mcast, p.scan_serial, p.prep_serial) == (True, False, False)
     assert repr(ttnn.ChunkGdnPhasedProgramConfig(use_mcast=False)) == (
@@ -968,3 +972,112 @@ def test_mono_tinv_horner_only(device, expect_error):
     assert torch.equal(o_auto, o_h) and torch.equal(fs_auto, fs_h), "mono: AUTO is not the Horner inverse"
     with expect_error(RuntimeError, "Horner only"):
         _run_op(device, tensors, const_tiles, s0, mono, FORWARD_SUBSTITUTION)
+
+
+# ---------------------------------------------------------------------------
+# Producer pool (producer_pool=True, placement 2). One pool of P producers for every head: the receivers
+# and BH*NPH home producers in the row-local map of the largest NPH the pool allows, every other core of
+# the pool an extra producer serving all heads with the share pool_extra_share of each head's chunks
+# (default NX/P). Which producer computes which (head, chunk) is one formula shared by the factory and
+# the three dataflow kernels (chunk_gdn_fused_map.hpp; its partition and owner properties are tested
+# host-side in test_chunk_gdn_fused_geometry.py). The gate here is the same as everywhere: torch.equal
+# vs phased, and a protocol error hangs rather than corrupts.
+# ---------------------------------------------------------------------------
+
+
+def _skip_unless_pool_fits(device, bh, nv, pool, nc):
+    from ttnn._ttnn.operations import transformer as _t
+
+    grid = device.compute_with_storage_grid_size()
+    if VDIM // 32 % nv != 0 or nv > grid.x:
+        pytest.skip(f"NV={nv} does not divide Vt or exceeds the grid width")
+    if pool > bh * nc:
+        pytest.skip(f"pool of {pool} exceeds the BH*NC={bh * nc} items")
+    if not _t.chunk_gdn_fused_pool_feasible(grid.x, grid.y, bh, nv, pool):
+        pytest.skip(f"a producer pool of {pool} for BH={bh} NV={nv} does not fit the {grid.x}x{grid.y} grid")
+
+
+@pytest.mark.parametrize(
+    "hk, hv, nv, pool, nc",
+    [
+        (4, 16, 2, 78, 8),  # BH=16 NV=2: 3 home producers per head + 30 extras (the target geometry)
+        (4, 16, 2, 78, 9),  # NC not a multiple of anything
+        (4, 16, 2, 78, 64),  # the production chunk count
+        (4, 16, 1, 94, 8),  # BH=16 NV=1: 4 per head + 30 extras
+        (4, 16, 2, 48, 8),  # no extras: the row-local NV=2 NP=3 map through the pool kernels
+        (4, 12, 2, 86, 8),  # BH=12 NV=2: 7 per head + 2 extras
+        (4, 12, 2, 40, 16),  # BH=12 NV=2, a small pool: 3 per head + 4 extras
+        (1, 4, 2, 102, 32),  # BH=4 NV=2: 9 per head + 66 extras, most items on the extras (NC=32: one item per core)
+        (1, 4, 4, 94, 32),  # BH=4 NV=4: 7 per head + 66 extras
+        (16, 48, 1, 62, 8),  # BH=48 NV=1: 1 per head + 14 extras
+    ],
+)
+def test_fused_pool_bit_exact_vs_phased(device, hk, hv, nv, pool, nc):
+    """Fused with a producer pool == phased, bit for bit, at the pool geometries of the target shapes."""
+    _skip_unless_pool_fits(device, hv, nv, pool, nc)
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, hk, hv, nc, nv, pool, 20261001 + hv + pool, producer_pool=True
+    )
+    assert delta == 1, f"pooled fused(NV={nv},P={pool}) compiled {delta} programs (expected 1)"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"pooled fused BH={hv} NV={nv} P={pool}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "pooled fused differs from phased"
+
+
+@pytest.mark.parametrize("share", [0.0, 1.0 / 3.0, 1.0], ids=["none", "third", "all"])
+def test_fused_pool_extra_share_bit_exact(device, share):
+    """pool_extra_share at its extremes (the extras idle; every chunk on the extras, the home producers
+    idle) and at the 1/3 of the design note is bit-exact: idle producers of either kind are legal."""
+    hk, hv, nv, pool, nc = 4, 16, 2, 78, 8
+    _skip_unless_pool_fits(device, hv, nv, pool, nc)
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, hk, hv, nc, nv, pool, 20261002, producer_pool=True, pool_extra_share=share
+    )
+    assert delta == 1, f"pooled fused(share={share}) compiled {delta} programs (expected 1)"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), f"pooled fused share={share} differs from phased"
+
+
+def test_fused_pool_cache_identity(device):
+    """producer_pool and pool_extra_share must reach the hashed attributes: per-head -> pool compiles one
+    program, a different share another, and every revisit is a cache hit. Pinning the model's own pool
+    size (every core the receivers leave) is the same program as leaving num_producers free."""
+    from ttnn._ttnn.operations import transformer as _t
+
+    hk, hv = NP_BH_KV_HEADS
+    nc, nv = 8, 2
+    grid = device.compute_with_storage_grid_size()
+    pool = min(grid.x * grid.y - hv * nv, hv * nc)
+    _skip_unless_pool_fits(device, hv, nv, pool, nc)
+    _skip_unless_geometry_fits(device, hv, nv, 3, nc, placement=1)
+    _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20261003)
+    const_tiles = _const_tiles(device)
+
+    o_h, fs_h = _run_op(device, tensors, const_tiles, s0, _fused(nv, 3))
+    n0 = device.num_program_cache_entries()
+    o_p, fs_p = _run_op(device, tensors, const_tiles, s0, _fused(nv, pool, producer_pool=True))
+    n1 = device.num_program_cache_entries()
+    assert n1 - n0 == 1, f"per-head -> pool compiled {n1 - n0} programs (expected 1)"
+    o_s, fs_s = _run_op(device, tensors, const_tiles, s0, _fused(nv, pool, producer_pool=True, pool_extra_share=0.5))
+    n2 = device.num_program_cache_entries()
+    assert n2 - n1 == 1, f"pool_extra_share compiled {n2 - n1} programs (expected 1: the share must be hashed)"
+    _run_op(device, tensors, const_tiles, s0, _fused(nv, producer_pool=True))  # the model's P == pool
+    _run_op(device, tensors, const_tiles, s0, _fused(nv, 3))
+    _run_op(device, tensors, const_tiles, s0, _fused(nv, pool, producer_pool=True))
+    n3 = device.num_program_cache_entries()
+    assert n3 - n2 == 0, f"revisits compiled {n3 - n2} programs (expected 0: cache hits, free P == pinned {pool})"
+    assert torch.equal(o_h, o_p) and torch.equal(o_h, o_s), "o differs between the per-head and pool forms"
+    assert torch.equal(fs_h, fs_p) and torch.equal(fs_h, fs_s), "final_state differs between the forms"
+
+
+def test_fused_pool_infeasible_raises(device, expect_error):
+    """A pool smaller than a home producer per head, or larger than the grid, is refused."""
+    hk, hv = 4, 16
+    _, tensors, s0 = _make_inputs(device, 1, T_SMALL, hk, hv, True, seed=20261004)
+    const_tiles = _const_tiles(device)
+    grid = device.compute_with_storage_grid_size()
+    with expect_error(RuntimeError, "no fused geometry fits"):
+        _run_op(device, tensors, const_tiles, s0, _fused(2, hv - 1, producer_pool=True))
+    with expect_error(RuntimeError, "no fused geometry fits"):
+        _run_op(device, tensors, const_tiles, s0, _fused(2, grid.x * grid.y, producer_pool=True))
+    with expect_error(RuntimeError, "pool_extra_share must be in"):
+        _run_op(device, tensors, const_tiles, s0, _fused(2, None, producer_pool=True, pool_extra_share=1.5))
