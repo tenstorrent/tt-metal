@@ -17,7 +17,17 @@ struct affine_coefficients {
 };
 
 template <typename Config>
-inline void init_signed_abs_affine() {}
+inline void init_signed_abs_affine() {
+    sfpi::vConstIntPrgm0 = static_cast<int32_t>(0x807f0000u);
+}
+
+// The copysign source: raw's sign, but positive for a NaN of either sign. A DEST
+// carrier's low half is zero, so |raw| + 0x807f0000 (Prgm0, set in init) is
+// negative exactly when raw is not a NaN.
+sfpi_inline sfpi::vFloat nan_positive_sign(sfpi::vFloat raw, sfpi::vFloat magnitude) {
+    sfpi::vInt not_nan = sfpi::as<sfpi::vInt>(magnitude) + sfpi::vConstIntPrgm0;
+    return sfpi::as<sfpi::vFloat>(not_nan & sfpi::as<sfpi::vInt>(raw));
+}
 
 template <typename Config, int Iterations = 8>
 inline void calculate_signed_abs_affine() {
@@ -32,8 +42,8 @@ inline void calculate_signed_abs_affine() {
         sfpi::eval_polynomial_dual<Config::kDegree>(affine_coefficients<Config>{}, x0, x1, y0, y1);
         sfpi::signed_abs_affine_tail<Config>(x0, y0);
         sfpi::signed_abs_affine_tail<Config>(x1, y1);
-        y0 = sfpi::copysgn(y0, raw0);
-        y1 = sfpi::copysgn(y1, raw1);
+        y0 = sfpi::copysgn(y0, nan_positive_sign(raw0, x0));
+        y1 = sfpi::copysgn(y1, nan_positive_sign(raw1, x1));
         y0 = sfpi::convert<sfpi::vFloat16b>(y0, sfpi::RoundMode::Nearest);
         y1 = sfpi::convert<sfpi::vFloat16b>(y1, sfpi::RoundMode::Nearest);
         sfpi::dst_reg[0] = y0;

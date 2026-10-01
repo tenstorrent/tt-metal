@@ -6,7 +6,7 @@
 namespace ckernel::sfpu {
 struct TanhshrinkBf16Config {
     static constexpr uint32_t kDegree = 8u;
-    // Fit: minimax degree-8 polynomial on [0, 10], 1 segment, BF16 max ULP 0.781.
+    // Fit: minimax degree-8 polynomial on [0, 3], 1 segment, max pure (continuous) ULP 0.781.
     static constexpr uint32_t kCoefficientBits[] = {
         0x00000000u,
         0x00000000u,

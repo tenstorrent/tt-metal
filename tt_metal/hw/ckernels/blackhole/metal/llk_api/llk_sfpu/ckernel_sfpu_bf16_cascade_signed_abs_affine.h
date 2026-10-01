@@ -5,17 +5,9 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-#include "ckernel_sfpu_bf16_horner.h"
 #include "ckernel_sfpu_bf16_signed_abs_affine.h"
 
 namespace ckernel::sfpu::bf16 {
-template <typename Config>
-struct affine_coefficients {
-    constexpr float operator[](uint32_t index) const {
-        return __builtin_bit_cast(float, Config::kCoefficientBits[index]);
-    }
-};
-
 template <typename Config>
 inline void init_signed_abs_affine() {
     sfpi::signed_abs_affine_init<Config>();

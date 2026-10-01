@@ -6,7 +6,7 @@
 namespace ckernel::sfpu {
 struct TanhshrinkBf16Config {
     static constexpr uint32_t kDegree = 8u;
-    // Fit: minimax degree-8 polynomial on [0, 10], 1 segment, BF16 max ULP 0.781.
+    // Fit: minimax degree-8 polynomial on [0, 3], 1 segment, max pure (continuous) ULP 0.781.
     static constexpr uint32_t kCoefficientBits[] = {
         0x00000000u,
         0x00000000u,
@@ -20,11 +20,6 @@ struct TanhshrinkBf16Config {
     static constexpr uint32_t kBoundBits = 0x40400000u;
     static constexpr uint32_t kScaleBits = 0x3f800000u;
     static constexpr uint32_t kBiasBits = 0xbf800000u;
-    static constexpr uint32_t kLeftBiasBits = 0x3f800000u;
-    static constexpr uint32_t kBodySlots = 32u;
-    static constexpr uint32_t kRawEqualValue = 0x80ffu;
-    static constexpr uint32_t kRepairedPatterns = 127u;
-    static constexpr uint32_t kMacroSequenceBits = 0x13850000u;
 };
 }  // namespace ckernel::sfpu
 #include "ckernel_sfpu_bf16_cascade_signed_abs_affine.h"
