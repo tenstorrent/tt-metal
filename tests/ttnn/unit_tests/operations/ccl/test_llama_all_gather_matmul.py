@@ -19,7 +19,6 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
 )
 from tracy import signpost
 
-
 SUB_DEVICE_CRS = ttnn.CoreRangeSet(
     [
         ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
@@ -368,6 +367,16 @@ def run_llama_all_gather_matmul_impl(
                     dtype=output_dtype,
                     global_cb=global_cb,
                 )
+                # Output TensorTopology of the matmul (the only tensor the host entry returns): the union of the
+                # gathered activation's label (input0's [Shard(0), Shard(1)] with the cluster axis Replicate) and
+                # input1's [Shard(0), Shard(1)] is [Shard(0), Shard(1)] on the cluster shape. Before the op had a
+                # compute_output_topologies the union was taken over the PRE-gather input0, which spelled the same
+                # here; the test pins the label so a later change in either operand shows up.
+                assert [repr(p) for p in out.tensor_topology().placements()] == [
+                    "PlacementShard(0)",
+                    "PlacementShard(1)",
+                ]
+                assert tuple(int(d) for d in out.tensor_topology().distribution_shape()) == tuple(cluster_shape)
 
                 # TODO: Change when actual output is integrated
                 # out = tt_intermediate_tensors[i % num_buffers]

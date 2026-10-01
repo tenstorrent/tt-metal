@@ -20,7 +20,12 @@ error rather than a warning; the negative controls assert that error.
 
 Meshes: 1x2 (N300), 1x8 (T3K line), 2x4 (T3K / galaxy submesh), 8x4 (galaxy; the mesh_device fixture skips it on a
 smaller box). Cases that need two non-trivial mesh axes skip on the lines; whole-mesh (cluster_axis=None) cases run on
-the lines only. Fabric: 1D, Linear topology (the axis-wise collectives on a 2-D mesh run per row / column).
+the lines only. Fabric: 1D, Linear topology (the axis-wise collectives on a 2-D mesh run per row / column), except
+strided_all_gather_async, the whole-mesh all_to_all_async and the two direct / strided reduce_scatters, which run on a
+wrapping axis (1D ring fabric, Ring topology -- the combination their nightlies exercise) and skip when
+``ttnn.get_usable_topology`` says the axis does not wrap. The two strided_all_gather_async cases that run the op are
+Wormhole-only (``skip_for_blackhole``, like the op's own nightly): on a Blackhole 1x8 the op hung in both the Linear and
+the Ring topology during bench.
 """
 
 import math
@@ -29,8 +34,10 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_for_blackhole
 
 FABRIC_1D = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}]
+FABRIC_1D_RING = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}]
 MESHES = [2, 8, (2, 4), (8, 4)]
 MESH_IDS = ["1x2", "1x8", "2x4", "8x4"]
 TWO_AXIS_MESHES = [(2, 4), (8, 4)]
@@ -566,4 +573,357 @@ def test_all_reduce_async_whole_mesh_overload(mesh_device, sharded, rs_ag_branch
     assert _placements(tt_output) == [REPLICATE]
     assert _dist_shape(tt_output) == (num_devices,)
     expected = sum(_pieces(full, num_devices)) if sharded else full * num_devices
+    assert torch.equal(_compose_by_label(tt_output), expected)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# experimental/ccl ops that had no compute_output_topologies until now (strided_all_gather_async,
+# all_to_all_async_generic, reduce_scatter_minimal_direct, strided_reduce_scatter_async). Before this change every one
+# of them took launch()'s union default -- the INPUT's label -- so the negative control for each test below is the
+# same: composing the output by the input's label (Shard where the collective produced Replicate, or the input's dim
+# where the collective produced another) either fails the identical-bytes check or reassembles the wrong tensor.
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def _skip_unless_ring(tensor, cluster_axis):
+    """reduce_scatter_minimal_direct and strided_reduce_scatter_async only run on an axis that wraps into a ring."""
+    if ttnn.get_usable_topology(tensor, cluster_axis=cluster_axis) != ttnn.Topology.Ring:
+        pytest.skip("needs a mesh axis that wraps into a ring (1D ring fabric)")
+
+
+def _strided_all_gather_async(tensor, mesh_device, dim, cluster_axis):
+    # The strided variant is the matmul-fused all_gather's reader; stand-alone it still needs the matmul block
+    # geometry because the factory divides by it. As in its nightly: Ring topology, 2 semaphores, 1 link, one matmul
+    # block per device slice (the slices here are one tile high and one tile wide, so 1 x 1 tiles).
+    return ttnn.experimental.strided_all_gather_async(
+        tensor,
+        persistent_output_buffer=None,
+        dim=dim,
+        multi_device_global_semaphore=_semaphores(mesh_device, 2),
+        topology=ttnn.Topology.Ring,
+        cluster_axis=cluster_axis,
+        mm_cores_y=1,
+        mm_block_ht=1,
+        mm_block_wt=1,
+    )
+
+
+def _all_to_all_async_generic(tensor, in_dim, out_dim, cluster_axis):
+    return ttnn.experimental.all_to_all_async_generic(
+        tensor, in_dim=in_dim, out_dim=out_dim, topology=ttnn.Topology.Linear, cluster_axis=cluster_axis
+    )
+
+
+def _all_to_all_async(tensor, mesh_device, full_shape, in_dim, out_dim):
+    """The whole-mesh all_to_all with the caller-owned intermediate and output buffers its nightly uses (both the
+    per-device output shape: the full tensor with out_dim split across the ring)."""
+    _, _, num_devices = _mesh(mesh_device)
+    output_shape = list(full_shape)
+    output_shape[out_dim] //= num_devices
+    intermediate, output = (
+        _from_torch(torch.zeros(output_shape).bfloat16(), mesh_device, ttnn.ReplicateTensorToMesh(mesh_device))
+        for _ in range(2)
+    )
+    return ttnn.experimental.all_to_all_async(
+        tensor,
+        persistent_intermediate_buffer=intermediate,
+        persistent_output_buffer=output,
+        in_dim=in_dim,
+        out_dim=out_dim,
+        multi_device_global_semaphore=_semaphores(mesh_device, 1)[0],
+        topology=ttnn.Topology.Ring,
+    )
+
+
+def _reduce_scatter_minimal_direct(tensor, dim, cluster_axis):
+    return ttnn.experimental.reduce_scatter_minimal_direct(
+        tensor, dim=dim, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+
+def _strided_reduce_scatter_async(tensor, mesh_device, dim, cluster_axis):
+    # Each device's slice is 2 x 2 tiles: one matmul block (mm_block_ht x mm_block_wt) of the fused matmul the strided
+    # reduce_scatter is the writer of; stand-alone it still needs that geometry.
+    return ttnn.experimental.strided_reduce_scatter_async(
+        tensor,
+        dim=dim,
+        multi_device_global_semaphore=_semaphores(mesh_device, 3),
+        mm_block_ht=2,
+        mm_block_wt=2,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=ttnn.Topology.Ring,
+        cluster_axis=cluster_axis,
+        mm_cores_y=1,
+        mm_N_full_block_wt=2,
+        chunk_width_in_mm_blocks=1,
+    )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# strided_all_gather_async (ring fabric)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@skip_for_blackhole("strided_all_gather_async hung on a Blackhole 1x8 in both topologies; its nightly is WH-only")
+@pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
+def test_strided_all_gather_async_collapsed_shard_inner_axis(mesh_device, strict_ccl_topology):
+    """{N}, [Shard(3)] gathered on dim 3 along the innermost axis: [Shard(3), Replicate] on a 2-D mesh, {N},
+    [Replicate] on a line, composing to the original. Negative control: the union default kept {N}, [Shard(3)], so
+    composing concatenated N copies of the gathered row. Wormhole-only: the op's own nightly is skip_for_blackhole;
+    on a Blackhole 1x8 the op hung in both Linear and Ring topologies during bench."""
+    torch.manual_seed(20)
+    rows, cols, num_devices = _mesh(mesh_device)
+    full = _integers([1, 1, 32, 32 * num_devices])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=3))
+    _skip_unless_ring(tt_input, 1)
+
+    tt_output = _strided_all_gather_async(tt_input, mesh_device, dim=3, cluster_axis=1)
+
+    expected_placements, expected_shape = _expected_collapsed_shard_after_inner_gather(rows, cols)
+    assert _placements(tt_output) == expected_placements
+    assert _dist_shape(tt_output) == expected_shape
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+    # The label does not depend on the program cache: a second call (cache hit) is labelled the same.
+    tt_again = _strided_all_gather_async(tt_input, mesh_device, dim=3, cluster_axis=1)
+    assert _placements(tt_again) == expected_placements
+
+
+@skip_for_blackhole("strided_all_gather_async hung on a Blackhole 1x8 in both topologies; its nightly is WH-only")
+@pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+def test_strided_all_gather_async_nd_input_replicates_only_the_gathered_axis(mesh_device, strict_ccl_topology):
+    """ShardTensor2dMesh dims=(2, 3) gathered on dim 3 along the columns: [Shard(2), Replicate]; the rows' Shard(2) is
+    untouched and the composed tensor is the original. Wormhole-only: the op's own nightly is skip_for_blackhole; on a
+    Blackhole 1x8 the op hung in both Linear and Ring topologies during bench."""
+    torch.manual_seed(21)
+    rows, cols, _ = _mesh(mesh_device)
+    full = _integers([1, 1, 32 * rows, 32 * cols])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(2, 3)))
+    _skip_unless_ring(tt_input, 1)
+
+    tt_output = _strided_all_gather_async(tt_input, mesh_device, dim=3, cluster_axis=1)
+
+    assert _placements(tt_output) == [SHARD(2), REPLICATE]
+    assert _dist_shape(tt_output) == (rows, cols)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+def test_strided_all_gather_async_collapsed_shard_outer_axis_is_refused(mesh_device, strict_ccl_topology, expect_error):
+    """Rule (d), negative control: gathering dim 3 of {N}, [Shard(3)] along the rows interleaves pieces c and C+c;
+    the hook refuses before the op runs (so no ring is needed, nothing is skipped, and this runs on Blackhole too).
+    Before this change the output silently kept {N}, [Shard(3)]."""
+    torch.manual_seed(22)
+    _, _, num_devices = _mesh(mesh_device)
+    tt_input = _from_torch(
+        _integers([1, 1, 32, 32 * num_devices]), mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=3)
+    )
+
+    with expect_error(RuntimeError, "would interleave"):
+        _strided_all_gather_async(tt_input, mesh_device, dim=3, cluster_axis=0)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# all_to_all_async_generic
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
+def test_all_to_all_async_generic_collapsed_shard_inner_axis(mesh_device, strict_ccl_topology):
+    """all_to_all is an all_gather of in_dim followed by each device keeping its ring-index piece of out_dim, and so is
+    its label. {N}, [Shard(2)] exchanged along the innermost axis with in_dim=2, out_dim=3: on a line every device
+    ends up with all rows and its own column block, {N}, [Shard(3)]; on a 2-D mesh each row keeps its (contiguous)
+    row block and splits the columns, [Shard(2), Shard(3)]. Either way composing by the label gives the original.
+    Negative control: the union default kept {N}, [Shard(2)], which stacks the column blocks along the rows."""
+    torch.manual_seed(23)
+    rows, cols, num_devices = _mesh(mesh_device)
+    full = _integers([1, 1, 32 * num_devices, 32 * cols])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=2))
+
+    tt_output = _all_to_all_async_generic(tt_input, in_dim=2, out_dim=3, cluster_axis=1)
+
+    if rows > 1:
+        assert _placements(tt_output) == [SHARD(2), SHARD(3)]
+        assert _dist_shape(tt_output) == (rows, cols)
+    else:
+        assert _placements(tt_output) == [SHARD(3)]
+        assert _dist_shape(tt_output) == (cols,)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+def test_all_to_all_async_generic_nd_transposes_the_exchanged_axis(mesh_device, strict_ccl_topology):
+    """The nightly test's 2-D layout: ShardTensor2dMesh dims=(3, 2) holds column block r and row block c on device
+    (r, c). Exchanging along the columns with in_dim=2, out_dim=3 gathers the rows and leaves device (r, c) with
+    column sub-block Cr+c -- row-major hierarchical sharding of dim 3, the collapsed {N}, [Shard(3)] the nightly
+    composes with ConcatMeshToTensor(dim=3). Negative control: the union default kept [Shard(3), Shard(2)], whose
+    composition concatenates full-height blocks along dim 2 and reads the wrong tensor."""
+    torch.manual_seed(24)
+    rows, cols, num_devices = _mesh(mesh_device)
+    full = _integers([1, 1, 32 * cols, 32 * num_devices])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(3, 2)))
+
+    tt_output = _all_to_all_async_generic(tt_input, in_dim=2, out_dim=3, cluster_axis=1)
+
+    assert _placements(tt_output) == [SHARD(3)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+def test_all_to_all_async_generic_collapsed_shard_outer_axis_is_refused(mesh_device, strict_ccl_topology, expect_error):
+    """Negative control: {N}, [Shard(2)] exchanged along the rows with in_dim=2 gathers row pieces c and C+c side by
+    side -- the all_gather half of the label refuses by rule (d), "would interleave" (gather family: a warning in
+    warn-only mode), before the op runs. Routing the input label through the reduce_scatter-shaped alias alone would
+    have labelled this [Shard(3), Shard(2)], a permuted tensor. This is a different refusal from the nightly's
+    cluster_axis=0 cases: those exchange an N-D [Shard(in), Shard(out)], whose gather half succeeds
+    ([Replicate, Shard(out)]) and whose scatter half rule (c) then refuses -- out_dim already sharded on the inner
+    axis while the new Shard axis is the outer one, "no TensorTopology can express" (scatter family: logged at error
+    level) -- so the output keeps the union default there."""
+    torch.manual_seed(25)
+    _, cols, num_devices = _mesh(mesh_device)
+    tt_input = _from_torch(
+        _integers([1, 1, 32 * num_devices, 32 * cols]), mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    )
+
+    with expect_error(RuntimeError, "would interleave"):
+        _all_to_all_async_generic(tt_input, in_dim=2, out_dim=3, cluster_axis=0)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# all_to_all_async (whole mesh, ring fabric)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
+def test_all_to_all_async_whole_mesh(mesh_device, strict_ccl_topology):
+    """The whole-mesh all_to_all of {N}, [Shard(2)] with in_dim=2, out_dim=3 leaves device k with every row and
+    column block k. Its program factory numbers the ring by MeshDeviceView::get_ring_devices() -- the walk around the
+    mesh boundary -- which is the coordinate order only on a line, so: on 1x2 / 1x8 the label is {N}, [Shard(3)] and
+    composing by it gives the original (negative control: the union default kept {N}, [Shard(2)], which stacks the
+    column blocks along the rows); on a 2-D mesh the hook deliberately keeps the union default -- the input's
+    {N}, [Shard(2)] -- because {N}, [Shard(3)] over row-major coordinates would put device (1, 0)'s piece 7 where
+    piece 4 belongs, and no label can carry the boundary order. The caller's persistent output buffer (replicated
+    zeros before the call) is the tensor relabelled either way. Shape: each device's input is 4 x 4N tiles so every
+    destination shard is 4 x 4 tiles = eight two-tile packets; the op's factory statically partitions the
+    intermediate buffer by packet id and rejects shards of a single packet (its final packet would overflow the
+    buffer), which is what the nightly's shapes also satisfy."""
+    torch.manual_seed(30)
+    rows, cols, num_devices = _mesh(mesh_device)
+    full = _integers([1, 1, 128 * num_devices, 128 * num_devices])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=2))
+    _skip_unless_ring(tt_input, None)
+
+    tt_output = _all_to_all_async(tt_input, mesh_device, full.shape, in_dim=2, out_dim=3)
+
+    if rows > 1 and cols > 1:
+        assert _placements(tt_output) == [SHARD(2)]
+        assert _dist_shape(tt_output) == (num_devices,)
+    else:
+        assert _placements(tt_output) == [SHARD(3)]
+        assert _dist_shape(tt_output) == (num_devices,)
+        assert torch.equal(_compose_by_label(tt_output), full)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# reduce_scatter_minimal_direct (ring fabric)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
+def test_reduce_scatter_minimal_direct_collapsed_replicate(mesh_device, strict_ccl_topology):
+    """{N}, [Replicate] reduce-scattered on dim 3 along the innermost axis: [Replicate, Shard(3)] on a 2-D mesh,
+    {N}, [Shard(3)] on a line, composing to `cols` * T. Negative control: the union default kept {N}, [Replicate],
+    whose composition asserts identical columns. The staging buffer (return index 1, not surfaced here) keeps the
+    input's label."""
+    torch.manual_seed(26)
+    rows, cols, _ = _mesh(mesh_device)
+    full = _integers([1, 1, 32, 32 * cols])
+    tt_input = _from_torch(full, mesh_device, ttnn.ReplicateTensorToMesh(mesh_device))
+    _skip_unless_ring(tt_input, 1)
+
+    tt_output = _reduce_scatter_minimal_direct(tt_input, dim=3, cluster_axis=1)
+
+    if rows > 1:
+        assert _placements(tt_output) == [REPLICATE, SHARD(3)]
+        assert _dist_shape(tt_output) == (rows, cols)
+    else:
+        assert _placements(tt_output) == [SHARD(3)]
+        assert _dist_shape(tt_output) == (cols,)
+    assert torch.equal(_compose_by_label(tt_output), full * cols)
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
+def test_reduce_scatter_minimal_direct_collapsed_shard_same_dim_inner_axis(mesh_device, strict_ccl_topology):
+    """{N}, [Shard(3)] reduce-scattered on dim 3 along the innermost axis: each row sums its pieces and splits the sum
+    back across the row -- the collapsed label again (rule (c)), composing to the concatenated row sums."""
+    torch.manual_seed(27)
+    rows, cols, num_devices = _mesh(mesh_device)
+    full = _integers([1, 1, 32, 32 * num_devices * cols])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=3))
+    _skip_unless_ring(tt_input, 1)
+
+    tt_output = _reduce_scatter_minimal_direct(tt_input, dim=3, cluster_axis=1)
+
+    assert _placements(tt_output) == [SHARD(3)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    pieces = _pieces(full, num_devices)
+    expected = torch.cat([sum(pieces[r * cols : (r + 1) * cols]) for r in range(rows)], dim=3)
+    assert torch.equal(_compose_by_label(tt_output), expected)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# strided_reduce_scatter_async (ring fabric)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
+def test_strided_reduce_scatter_async_collapsed_replicate(mesh_device, strict_ccl_topology):
+    """{N}, [Replicate] reduce-scattered on dim 3 along the innermost axis: [Replicate, Shard(3)] on a 2-D mesh,
+    {N}, [Shard(3)] on a line, composing to `cols` * T. Negative control: the union default kept {N}, [Replicate].
+    The ring intermediate (return index 0, not surfaced here) keeps the input's label."""
+    torch.manual_seed(28)
+    rows, cols, _ = _mesh(mesh_device)
+    full = _integers([1, 1, 64, 64 * cols])
+    tt_input = _from_torch(full, mesh_device, ttnn.ReplicateTensorToMesh(mesh_device))
+    _skip_unless_ring(tt_input, 1)
+
+    tt_output = _strided_reduce_scatter_async(tt_input, mesh_device, dim=3, cluster_axis=1)
+
+    if rows > 1:
+        assert _placements(tt_output) == [REPLICATE, SHARD(3)]
+        assert _dist_shape(tt_output) == (rows, cols)
+    else:
+        assert _placements(tt_output) == [SHARD(3)]
+        assert _dist_shape(tt_output) == (cols,)
+    assert torch.equal(_compose_by_label(tt_output), full * cols)
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
+def test_strided_reduce_scatter_async_collapsed_shard_same_dim_inner_axis(mesh_device, strict_ccl_topology):
+    """{N}, [Shard(3)] reduce-scattered on dim 3 along the innermost axis: the collapsed label again (rule (c)),
+    composing to the concatenated row sums."""
+    torch.manual_seed(29)
+    rows, cols, num_devices = _mesh(mesh_device)
+    full = _integers([1, 1, 64, 64 * num_devices * cols])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=3))
+    _skip_unless_ring(tt_input, 1)
+
+    tt_output = _strided_reduce_scatter_async(tt_input, mesh_device, dim=3, cluster_axis=1)
+
+    assert _placements(tt_output) == [SHARD(3)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    pieces = _pieces(full, num_devices)
+    expected = torch.cat([sum(pieces[r * cols : (r + 1) * cols]) for r in range(rows)], dim=3)
     assert torch.equal(_compose_by_label(tt_output), expected)

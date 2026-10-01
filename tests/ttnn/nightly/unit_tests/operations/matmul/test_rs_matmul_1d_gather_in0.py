@@ -529,6 +529,17 @@ def run_multi_core_matmul_1d(
         memory_config_rs=model_configuration["REDUCE_SCATTER_OUT_MEMCFG"],
         topology=ttnn.Topology.Ring if is_6u_device else ttnn.Topology.Linear,
     )
+    # Output TensorTopologies. The reduce_scatter input (rs_tensor) is ShardTensor2dMesh dims=(0, 1); summing along
+    # the columns and keeping each device's `dim` slice gives Shard(0) on the rows and Shard(dim) on the columns --
+    # the layout the golden's chunk-and-concat along `dim` assumes. The matmul operands are replicated (no mesh
+    # mapper), so the matmul output is fully replicated too. Before the fused op had a compute_output_topologies both
+    # outputs kept the union default of every operand, Shard(0) / Shard(1) from rs_tensor.
+    assert [repr(p) for p in rs_out_val.tensor_topology().placements()] == [
+        "PlacementShard(0)",
+        f"PlacementShard({dim})",
+    ]
+    assert tuple(int(d) for d in rs_out_val.tensor_topology().distribution_shape()) == cluster_shape
+    assert all(repr(p) == "PlacementReplicate()" for p in matmul_out_val.tensor_topology().placements())
     ttnn.synchronize_device(mesh_device)
     logger.info("Capturing trace")
     trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)

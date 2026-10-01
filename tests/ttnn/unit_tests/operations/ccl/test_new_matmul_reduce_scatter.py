@@ -276,6 +276,23 @@ def run_reduce_scatter_impl(
         tt_mm_out_tensor = tt_matmul_output_list[i]
         torch_mm_out_tensor = torch_matmul_output_list[i]
 
+        # Output TensorTopologies. The matmul output takes the union-default label of its operands: the input is
+        # [Replicate, Shard(3)] on (1, N) and the weight's collapsed {N}, [Shard(2)] has the lower distribution rank,
+        # so the matmul reads [Replicate, Shard(3)] (the K-split partial sums are stacked by the composer below). The
+        # reduce_scatter of that matmul over the whole mesh is the collapsed {N}, [Shard(rs_scatter_dim)] that
+        # ConcatMeshToTensor(dim=3) composes. Before the fused op had a compute_output_topologies the
+        # reduce_scatter output kept the union default, [Replicate, Shard(3)] on (1, N).
+        assert [repr(p) for p in tt_mm_out_tensor.tensor_topology().placements()] == [
+            "PlacementReplicate()",
+            "PlacementShard(3)",
+        ]
+        assert [repr(p) for p in tt_reduce_scatter_output_list[i].tensor_topology().placements()] == [
+            f"PlacementShard({rs_scatter_dim})"
+        ]
+        assert tuple(int(d) for d in tt_reduce_scatter_output_list[i].tensor_topology().distribution_shape()) == (
+            num_devices,
+        )
+
         tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
         tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
         tt_mm_out = torch.sum(torch.stack(torch.chunk(tt_mm_out, num_devices, 3)), dim=0)
