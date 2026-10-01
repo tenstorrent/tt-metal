@@ -14,15 +14,22 @@ LAUNCHER = Path(__file__).resolve().parents[1] / "serve_vllm.sh"
 SETUP = Path(__file__).resolve().parents[1] / "setup_vllm.sh"
 
 
+XS = "poolside/Laguna-XS-2.1"
+S = "poolside/Laguna-S-2.1"
+
+
 def _config(tmp_path, **overrides):
-    # A minimal environment makes the test independent of inherited bring-up/debug knobs.
+    # A minimal environment makes the test independent of inherited bring-up/debug knobs. The profile
+    # policy tests below are the XS launcher contract; S cases pass HF_MODEL=None to drop the default.
     env = {
         "HOME": str(tmp_path),
         "PATH": os.environ["PATH"],
+        "HF_MODEL": XS,
         "LAGUNA_PROFILE": "p150x2",
         "TT_VISIBLE_DEVICES": "0,1",
         **overrides,
     }
+    env = {k: v for k, v in env.items() if v is not None}
     return subprocess.run(
         ["bash", str(LAUNCHER), "config"],
         env=env,
@@ -609,3 +616,46 @@ def test_weaker_memory_margins_require_experimental_override_acknowledgement(tmp
         assert accepted.returncode == 0, accepted.stderr
         assert config_line in accepted.stdout
         assert f"{name}={value} (qualified={qualified})" in accepted.stdout
+
+
+def test_s_is_the_default_model_and_selects_p150x4(tmp_path):
+    result = _config(tmp_path, HF_MODEL=None, LAGUNA_PROFILE=None, TT_VISIBLE_DEVICES=None)
+
+    assert result.returncode == 0, result.stderr
+    assert f"hf_model={S}\n" in result.stdout
+    assert "profile=p150x4\n" in result.stdout
+    assert "mesh_device=P150x4\n" in result.stdout
+    assert "tt_visible_devices=0,1,2,3\n" in result.stdout
+    assert "prefix_cache=0\n" in result.stdout
+    assert "hybrid_kv_layout=uniform_forty_eight_tensor_pairs\n" in result.stdout
+    assert "experimental_overrides=<none>\n" in result.stdout
+
+
+def test_tt_laguna_model_alone_selects_the_checkpoint(tmp_path):
+    result = _config(tmp_path, HF_MODEL=None, TT_LAGUNA_MODEL=XS)
+
+    assert result.returncode == 0, result.stderr
+    assert f"hf_model={XS}\n" in result.stdout
+    assert "hybrid_kv_layout=uniform_forty_tensor_pairs\n" in result.stdout
+
+
+@pytest.mark.parametrize(("profile", "devices"), (("p150", "0"), ("p150x2", "0,1")))
+def test_s_rejects_profiles_that_cannot_hold_it(tmp_path, profile, devices):
+    result = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE=profile, TT_VISIBLE_DEVICES=devices)
+
+    assert result.returncode == 2
+    assert f"does not fit LAGUNA_PROFILE '{profile}'" in result.stderr
+
+
+def test_conflicting_model_selectors_are_rejected(tmp_path):
+    result = _config(tmp_path, HF_MODEL=S, TT_LAGUNA_MODEL=XS)
+
+    assert result.returncode == 2
+    assert "conflicts with TT_LAGUNA_MODEL" in result.stderr
+
+
+def test_unknown_model_is_rejected(tmp_path):
+    result = _config(tmp_path, HF_MODEL="poolside/Laguna-M-2.1")
+
+    assert result.returncode == 2
+    assert "HF_MODEL must be poolside/Laguna-S-2.1 or poolside/Laguna-XS-2.1" in result.stderr

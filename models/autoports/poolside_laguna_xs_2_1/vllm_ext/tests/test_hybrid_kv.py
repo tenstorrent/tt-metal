@@ -6,15 +6,15 @@ import pytest
 from laguna_vllm_ext import hybrid_kv
 
 
-def _layer_types():
-    return ["full_attention" if layer % 4 == 0 else "sliding_attention" for layer in range(40)]
+def _layer_types(num_layers=40):
+    return ["full_attention" if layer % 4 == 0 else "sliding_attention" for layer in range(num_layers)]
 
 
-def _config():
+def _config(num_layers=40):
     hf_config = SimpleNamespace(
         model_type="laguna",
-        num_hidden_layers=40,
-        layer_types=_layer_types(),
+        num_hidden_layers=num_layers,
+        layer_types=_layer_types(num_layers),
         sliding_window=512,
     )
     return SimpleNamespace(
@@ -140,3 +140,15 @@ def test_hybrid_contract_fails_closed_on_any_sizing_input_drift(mutation, messag
 
     with expect_error(RuntimeError, message):
         hybrid_kv.validate_hybrid_kv_vllm_config(config)
+
+
+def test_laguna_s_48_layer_pattern_is_accepted_with_same_block_floor():
+    # S has 12 full + 36 sliding layers in the same four vLLM groups, so the shared-pool floor
+    # depends only on context, block size and scheduler chunk, not on the layer count.
+    assert hybrid_kv.exact_hybrid_kv_num_blocks(_config(48)) == 2460
+
+
+def test_hybrid_kv_rejects_unpublished_layer_counts():
+    for num_layers in (4, 44, 52):
+        with pytest.raises(RuntimeError, match="40-layer \\(XS\\) or 48-layer \\(S\\)"):
+            hybrid_kv.validate_hybrid_kv_vllm_config(_config(num_layers))

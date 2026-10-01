@@ -63,6 +63,11 @@ TOKEN_DISPATCH_BUCKETS = frozenset({1024, 2048, 4096, 8192})
 TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 40))
 TOKEN_DISPATCH_CHUNK_M_TILES = 16
 TOKEN_DISPATCH_METADATA_LEN = 5
+# Decode keeps the routed-expert intermediates (gate/up, GLU, down, weighted: ~LE x 32 rows x (2I + 2H) bf16)
+# in L1. The largest footprint qualified on hardware is XS on one chip (256 x 32 x (1024 + 4096) x 2 B =
+# 83.9 MB); S on one chip (134.2 MB) clashes with the static circular buffers. Above this bound decode uses
+# DRAM instead. S on P150x4 needs 33.5 MB and keeps L1.
+MOE_DECODE_L1_MAX_BYTES = 256 * TILE * (2 * 512 + 2 * 2048) * 2
 
 
 def _parse_binary_env(name: str, default: bool = False) -> bool:
@@ -248,6 +253,10 @@ class MultichipDecoder(OptimizedDecoder):
         self.D = meta["mesh_devices"]
         self.global_experts = meta["global_experts"]
         self.local_experts = meta["local_experts"]
+        self.moe_decode_l1_bytes = (
+            self.local_experts * TILE * (2 * cfg.moe_intermediate + 2 * cfg.hidden) * 2 if cfg.is_moe else 0
+        )
+        self.moe_decode_in_l1 = self.moe_decode_l1_bytes <= MOE_DECODE_L1_MAX_BYTES
         self._token_dispatch_requested = _parse_binary_env(TOKEN_DISPATCH_ENV)
         self._token_dispatch_state = None
         self._token_dispatch_fallback_reason = "feature flag is disabled"
@@ -311,6 +320,15 @@ class MultichipDecoder(OptimizedDecoder):
             raise ValueError(f"Laguna supports D=1, 2, or 4 devices; got D={D}")
         if mesh_shape != (1, D):
             raise ValueError(f"Laguna requires a 1×D mesh; got shape={mesh_shape} for D={D}")
+        # TTNN decode SDPA pads each device's query heads to 32-row tiles and needs the tile count to be a
+        # power of two (sdpa_decode MUL_BCAST_GRANULARITY). S's 72-head sliding layers give 3 tiles on one
+        # chip (72 -> 96 rows) and fail mid-decode; on D=2/4 they give 2/1. Reject before loading weights.
+        q_tiles = -(-(cfg.num_heads // D) // TILE)
+        if q_tiles & (q_tiles - 1):
+            raise ValueError(
+                f"layer {layer_idx}: {cfg.num_heads // D} query heads per device pad to {q_tiles} tiles; decode "
+                f"SDPA needs a power of two. Use a larger mesh (this checkpoint on D={D} is unsupported)."
+            )
         dram_cores = mesh_device.dram_grid_size().x
 
         replicate = ttnn.ReplicateTensorToMesh(dev)
@@ -408,6 +426,9 @@ class MultichipDecoder(OptimizedDecoder):
             w["gate_w"] = rep_tt("gate_w", lambda: g("mlp.gate.weight").t().contiguous(), policy.router)
             w["e_bias"] = rep_tt(
                 "e_bias", lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E), ttnn.bfloat16
+            )
+            w["e_bias_f32"] = rep_tt(
+                "e_bias", lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E), ttnn.float32
             )
             # For D>1, a mesh-sharded identity selects device d's contiguous local expert scores.
             # D=1 already owns every score, so avoid the large identity weight and selector matmul.
@@ -740,15 +761,7 @@ class MultichipDecoder(OptimizedDecoder):
         for start in range(0, seq_len, self.MOE_PREFILL_CHUNK):
             end = min(start + self.MOE_PREFILL_CHUNK, seq_len)
             chunk = ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])
-            logits = ttnn.linear(chunk, self.w["gate_w"], compute_kernel_config=self._ck_router)
-            scores = ttnn.sigmoid(logits)
-            selected_scores = ttnn.add(scores, self.w["e_bias"])
-            _, idx = ttnn.topk(ttnn.typecast(selected_scores, ttnn.bfloat16), k=cfg.top_k, dim=-1, sorted=True)
-            wsel = ttnn.gather(scores, dim=3, index=idx)
-            if cfg.norm_topk_prob:
-                wsel = ttnn.div(wsel, ttnn.sum(wsel, dim=3, keepdim=True))
-            if cfg.routed_scaling != 1.0:
-                wsel = ttnn.multiply(wsel, cfg.routed_scaling)
+            _, idx, wsel = self._route(chunk)
             weights.append(ttnn.reshape(ttnn.to_layout(wsel, ttnn.ROW_MAJOR_LAYOUT), (1, end - start, cfg.top_k)))
             indices.append(ttnn.reshape(ttnn.to_layout(idx, ttnn.ROW_MAJOR_LAYOUT), (1, end - start, cfg.top_k)))
         return ttnn.concat(weights, dim=1), ttnn.concat(indices, dim=1)
@@ -867,15 +880,7 @@ class MultichipDecoder(OptimizedDecoder):
         LE = self.local_experts
         H, I, K = cfg.hidden, cfg.moe_intermediate, cfg.top_k
         T = ln_flat.shape[2]
-        logits = ttnn.linear(ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router)
-        scores = ttnn.sigmoid(logits)
-        sel = ttnn.add(scores, self.w["e_bias"])
-        _, idx = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K, dim=-1, sorted=True)
-        wsel = ttnn.gather(scores, dim=3, index=idx)
-        if cfg.norm_topk_prob:
-            wsel = ttnn.div(wsel, ttnn.sum(wsel, dim=3, keepdim=True))
-        if cfg.routed_scaling != 1.0:
-            wsel = ttnn.multiply(wsel, cfg.routed_scaling)
+        logits, idx, wsel = self._route(ln_flat)
         dense = ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
         dense_local = (
             dense if self.D == 1 else ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)
@@ -902,7 +907,7 @@ class MultichipDecoder(OptimizedDecoder):
             matmul_m = T
         sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
         down_sparsity = ttnn.to_layout(full_union, ttnn.ROW_MAJOR_LAYOUT) if tile_sparse else sparsity
-        moe_mem = ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG
+        moe_mem = ttnn.L1_MEMORY_CONFIG if sharded and self.moe_decode_in_l1 else ttnn.DRAM_MEMORY_CONFIG
         otile = ttnn.Tile([TILE, TILE])
         gu_pc = _sparse_pc(2 * I, matmul_m, H)  # packed gate+up, N = 2*I
         gu = ttnn.sparse_matmul(
@@ -960,16 +965,7 @@ class MultichipDecoder(OptimizedDecoder):
         H, I, K = cfg.hidden, cfg.moe_intermediate, cfg.top_k
         T = ln_flat.shape[2]
         # --- router (replicated: identical full-256 selection on every device) ---
-        logits = ttnn.linear(ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router)  # [1,1,T,GE]
-        scores = ttnn.sigmoid(logits)
-        sel = ttnn.add(scores, self.w["e_bias"])
-        _, idx = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K, dim=-1, sorted=True)
-        wsel = ttnn.gather(scores, dim=3, index=idx)
-        if cfg.norm_topk_prob:
-            wsum = ttnn.sum(wsel, dim=3, keepdim=True)
-            wsel = ttnn.div(wsel, wsum)
-        if cfg.routed_scaling != 1.0:
-            wsel = ttnn.multiply(wsel, cfg.routed_scaling)
+        logits, idx, wsel = self._route(ln_flat)  # logits [1,1,T,GE]
         dense = ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)  # [1,1,T,GE] replicated
         # --- EP selection: replicated 256-wide -> device-local contiguous 64-wide (SPMD-safe matmul) ---
         dense_local = (
@@ -978,7 +974,7 @@ class MultichipDecoder(OptimizedDecoder):
         union = ttnn.sum(dense_local, dim=2, keepdim=True)  # [1,1,1,LE]
         sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
         a = ttnn.reshape(ln_flat, (1, 1, T, H))
-        moe_mem = ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG
+        moe_mem = ttnn.L1_MEMORY_CONFIG if sharded and self.moe_decode_in_l1 else ttnn.DRAM_MEMORY_CONFIG
         otile = ttnn.Tile([TILE, TILE])
         gu_pc = _sparse_pc(I, T, H)
         gate_o = ttnn.sparse_matmul(

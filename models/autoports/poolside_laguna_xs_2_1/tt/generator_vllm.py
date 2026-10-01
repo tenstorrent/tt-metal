@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""vLLM serving adapter for poolside/Laguna-XS-2.1 on a 1×D Blackhole mesh.
+"""vLLM serving adapter for poolside/Laguna-S-2.1 / Laguna-XS-2.1 (``tt/model_spec.py``) on a 1×D Blackhole mesh.
 
 This is the thin translation layer between the Tenstorrent vLLM plugin and the model-specific
 ``LagunaGenerator`` / ``LagunaModel`` (``tt/generator.py`` / ``tt/model.py``). It implements exactly
@@ -22,7 +22,7 @@ checks.
 Attention: Laguna is a hybrid model (10 full + 30 sliding layers, ``sliding_window=512``). The
 qualified default remains a uniform full-context KV cache: sliding attention is enforced on the
 READ side by the SDPA op. ``TT_LAGUNA_HYBRID_KV=1`` is a separate, fail-closed qualification path.
-It exposes the exact 40-layer attention pattern to vLLM, which creates four independent block-table
+It exposes the exact 40-layer (XS) or 48-layer (S) attention pattern to vLLM, which creates four independent block-table
 groups and aliases equal group slots onto ten physical K/V tensor pairs. The TT adapter validates
 that complete contract before allocating or executing and keeps prefix caching disabled until the
 two ownership schemes have been qualified together.
@@ -46,6 +46,7 @@ import ttnn
 
 try:
     from .generator import LagunaGenerator, _replicate
+    from .model_spec import MODEL_MAX_CONTEXT
     from .kv_grouping import HybridKVLayout, build_laguna_hybrid_kv_layout, validate_per_layer_tensor_aliases
     from .prefill_runtime import (
         PrefillRuntimeOffsets,
@@ -56,6 +57,7 @@ try:
     )
 except ImportError:  # loaded as a standalone module by some tooling
     from models.autoports.poolside_laguna_xs_2_1.tt.generator import LagunaGenerator, _replicate
+    from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MODEL_MAX_CONTEXT
     from models.autoports.poolside_laguna_xs_2_1.tt.kv_grouping import (
         HybridKVLayout,
         build_laguna_hybrid_kv_layout,
@@ -75,7 +77,9 @@ except ImportError:  # loaded as a standalone module by some tooling
 # for D2/D4; get_max_tokens_all_users bounds the KV pool by that request and this global ceiling. The
 # historical 2026-07-31 D4 record served 131072 and OOMed at 262144, but its formerly cited raw sweep is
 # absent from this checkout. D1/D2 full qualification is still incomplete; see doc/context_contract.json.
-HF_CONFIG_MAX_CONTEXT = 262144  # what the HF config declares (not currently servable end-to-end)
+# The XS figures above are XS history; S declares 1048576. Either way this is the HF config's RoPE
+# horizon for the selected checkpoint, not a qualified serving context.
+HF_CONFIG_MAX_CONTEXT = MODEL_MAX_CONTEXT  # what the HF config declares (not currently servable end-to-end)
 # This is the global ceiling, not the per-profile qualification result. Env-overridable only for
 # explicit context experiments; the launcher's smaller max_model_len still bounds D1. Raising the
 # ceiling re-introduces the historical D4 OOM risk and must never be used to claim qualification.
@@ -496,7 +500,7 @@ class LagunaForCausalLM:
         non-default policy is only used via ``TT_LAGUNA_PRECISION_CONFIG``. ``n_layers`` builds a
         reduced representative target for the minimum-surface bring-up loop."""
         assert tt_data_parallel == 1, (
-            f"Laguna-XS-2.1 uses one 1×D mesh (intra-mesh TP=D/EP=D); tt_data_parallel must be 1, "
+            f"Laguna uses one 1×D mesh (intra-mesh TP=D/EP=D); tt_data_parallel must be 1, "
             f"got {tt_data_parallel}"
         )
         # Minimum-surface bring-up: TT_LAGUNA_VLLM_NUM_LAYERS builds a reduced representative target

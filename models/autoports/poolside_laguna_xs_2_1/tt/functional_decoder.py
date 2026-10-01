@@ -171,7 +171,9 @@ def _hf_rope_tables(hf_config, attention_type: str, max_seq_len: int):
 
     from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
-    model_id = hf_config._name_or_path or "poolside/Laguna-XS-2.1"
+    from .model_spec import MODEL_ID
+
+    model_id = hf_config._name_or_path or MODEL_ID
     RE = get_class_from_dynamic_module("modeling_laguna.LagunaRotaryEmbedding", model_id)
     rp = hf_config.rope_parameters
     cfg = copy.deepcopy(hf_config)

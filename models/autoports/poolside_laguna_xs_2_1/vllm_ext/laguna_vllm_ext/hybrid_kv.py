@@ -30,7 +30,7 @@ MODEL_TYPE = "laguna"
 QUALIFIED_BLOCK_SIZE = 64
 QUALIFIED_SCHEDULER_CHUNK = 8192
 QUALIFIED_SLIDING_WINDOW = 512
-QUALIFIED_NUM_LAYERS = 40
+QUALIFIED_NUM_LAYERS = (40, 48)  # Laguna-XS-2.1, Laguna-S-2.1
 QUALIFIED_SLIDING_GROUPS = 3
 
 _PLATFORM_PATCH_MARKER = "_laguna_hybrid_kv_platform_patch"
@@ -46,8 +46,8 @@ def _text_config(vllm_config: Any) -> Any:
     return getattr(hf_config, "text_config", hf_config)
 
 
-def _expected_layer_types() -> tuple[str, ...]:
-    return tuple("full_attention" if layer % 4 == 0 else "sliding_attention" for layer in range(QUALIFIED_NUM_LAYERS))
+def _expected_layer_types(num_layers: int) -> tuple[str, ...]:
+    return tuple("full_attention" if layer % 4 == 0 else "sliding_attention" for layer in range(num_layers))
 
 
 def validate_hybrid_kv_vllm_config(vllm_config: Any) -> None:
@@ -80,9 +80,10 @@ def validate_hybrid_kv_vllm_config(vllm_config: Any) -> None:
 
     text_config = _text_config(vllm_config)
     layer_types = tuple(getattr(text_config, "layer_types", ()) or ())
-    if layer_types != _expected_layer_types():
+    if len(layer_types) not in QUALIFIED_NUM_LAYERS or layer_types != _expected_layer_types(len(layer_types)):
         raise RuntimeError(
-            "Laguna hybrid KV requires the exact 40-layer " "full/sliding/sliding/sliding attention pattern"
+            "Laguna hybrid KV requires the exact 40-layer (XS) or 48-layer (S) "
+            "full/sliding/sliding/sliding attention pattern"
         )
     sliding_window = int(getattr(text_config, "sliding_window", 0) or 0)
     if sliding_window != QUALIFIED_SLIDING_WINDOW:

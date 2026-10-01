@@ -49,7 +49,11 @@ PROFILE = resolve_profile(trace_region_size=200_000_000)
 
 
 PCC_BAR = 0.995
-HIDDEN = 2048
+# Sizes come from the selected checkpoint (TT_LAGUNA_MODEL; Laguna-S-2.1 by default): S has hidden 3072,
+# 48 query heads on full layers and 72 on sliding layers; XS has 2048 / 48 / 64. Layers 0, 1 and 4 have the
+# same roles in both stacks (full+dense, sliding+MoE, full+MoE).
+_HF_CONFIG = R.build_config()
+HIDDEN = _HF_CONFIG.hidden_size
 
 FULL_DENSE = 0
 SLIDING_MOE = 1
@@ -72,7 +76,7 @@ def device():
 
 @pytest.fixture(scope="module")
 def hf_config():
-    return R.build_config()
+    return _HF_CONFIG
 
 
 _CTX = {}
@@ -92,7 +96,16 @@ def _ctx(hf_config, layer):
 _DEC = {}
 
 
+def _decode_sdpa_supported(hf_config, layer):
+    """MultichipDecoder rejects layers whose per-device query heads pad to a non-power-of-two tile count
+    (S's 72-head sliding layers on one chip); see from_state_dict."""
+    q_tiles = -(-(hf_config.num_attention_heads_per_layer[layer] // PROFILE.num_devices) // 32)
+    return q_tiles & (q_tiles - 1) == 0
+
+
 def _decoder(hf_config, layer, device):
+    if not _decode_sdpa_supported(hf_config, layer):
+        pytest.skip(f"layer {layer} is unsupported on {PROFILE.name} (decode SDPA head tiles); see test_unsupported_layout_is_rejected")
     if layer not in _DEC:
         _, raw = _ctx(hf_config, layer)
         _DEC[layer] = _DECODER_CLS.from_state_dict(
@@ -127,18 +140,31 @@ def test_multichip_path_active(device, hf_config, layer):
     D = PROFILE.num_devices
     assert dec.D == D and device.get_num_devices() == D
     assert dec.PACK_GATE_UP is _PACK_GATE_UP_REQUESTED
-    assert dec.cfg.num_kv_heads == 8 // D
-    assert dec.cfg.num_heads == (48 // D if layer in (0, 4) else 64 // D)
+    heads = hf_config.num_attention_heads_per_layer[layer]
+    assert hf_config.layer_types[layer] == ("full_attention" if layer in (0, 4) else "sliding_attention")
+    assert dec.cfg.num_kv_heads == hf_config.num_key_value_heads // D
+    assert dec.cfg.num_heads == heads // D
     assert dec.use_dram_sharded and dec.policy.kv_cache == ttnn.bfloat8_b
     if dec.cfg.is_moe:
-        assert dec.local_experts == 256 // D and dec.global_experts == 256
+        assert dec.local_experts == hf_config.num_experts // D and dec.global_experts == hf_config.num_experts
         # routed-expert weight is BFP4 + EP-sharded (per-device expert dim == 256/D); the optimized
         # class packs gate+up into exp_gate_up, the baseline keeps them separate as exp_gate.
         ekey = "exp_gate_up" if "exp_gate_up" in dec.w else "exp_gate"
         assert dec.w[ekey].dtype == ttnn.bfloat4_b
-        assert dec.w[ekey].shape[1] == 256 // D, "experts must be EP-sharded across the selected mesh"
+        assert dec.w[ekey].shape[1] == hf_config.num_experts // D, "experts must be EP-sharded across the selected mesh"
     kv = dec.alloc_kv_cache(max_users=1, max_seq_len=64, block_size=32)
-    assert kv["k"].shape[1] == 8 // D, "cache holds local KV heads"
+    assert kv["k"].shape[1] == hf_config.num_key_value_heads // D, "cache holds local KV heads"
+
+
+def test_unsupported_layout_is_rejected(device, hf_config):
+    bad = [layer for layer in ALL_LAYERS if not _decode_sdpa_supported(hf_config, layer)]
+    if not bad:
+        pytest.skip(f"every tested layer is supported on {PROFILE.name}")
+    _, raw = _ctx(hf_config, bad[0])
+    with pytest.raises(ValueError, match="decode SDPA needs a power of two"):
+        _DECODER_CLS.from_state_dict(
+            raw, hf_config=hf_config, layer_idx=bad[0], mesh_device=device, max_seq_len=PROFILE.max_context
+        )
 
 
 @pytest.mark.parametrize("seq", [8, 32, 100, 512, 513, 1024, 2048])
@@ -392,9 +418,9 @@ def test_full_context_decode(device, hf_config, layer):
     g = torch.Generator().manual_seed(99)
     # Varied cached K + ZERO cached V so the output direction == v_new -> PCC invariant to the
     # long-context softmax floor while exercising full-context cache/page-table/cur_pos/RoPE at
-    # the advertised 262144 with local (2-KV-head) BFP8 cache. Reference uses the full 8-KV-head
-    # cache; the per-device local KV heads reconstruct the same attention on device 0.
-    GKV = 8
+    # the profile's maximum context with a local (8/D-KV-head) BFP8 cache. Reference uses the full
+    # KV-head cache; the per-device local KV heads reconstruct the same attention on device 0.
+    GKV = hf_config.num_key_value_heads
     k = (torch.randn(1, GKV, n_ctx, cfg.head_dim, generator=g)).to(torch.bfloat16).float()
     v = torch.zeros(1, GKV, n_ctx, cfg.head_dim)
     # Shard the global KV heads across D; each device cache receives 8/D heads.

@@ -274,10 +274,15 @@ PYTHONPATH="$MODEL_DIR/vllm_ext:$REPO_ROOT" "$PY" -m pytest -q "$MODEL_DIR/vllm_
 
 # Weights are gated; a missing snapshot only shows up ~10 min into a boot otherwise.
 HF_HUB="${HF_HUB_CACHE:-${HF_HOME:-$HOME/.cache/huggingface}/hub}"
-if [ ! -d "$HF_HUB/models--poolside--Laguna-XS-2.1" ]; then
+SETUP_MODEL="${HF_MODEL:-${TT_LAGUNA_MODEL:-poolside/Laguna-S-2.1}}"
+case "$SETUP_MODEL" in
+  poolside/Laguna-S-2.1) SETUP_MODEL_SIZE="~235 GB" ;;
+  *) SETUP_MODEL_SIZE="~63 GB" ;;
+esac
+if [ ! -d "$HF_HUB/models--${SETUP_MODEL//\//--}" ]; then
   echo
-  echo "NOTE: poolside/Laguna-XS-2.1 is not in $HF_HUB."
-  echo "      It is a gated repo (~63 GB): run 'hf auth login', then serving will fetch it."
+  echo "NOTE: $SETUP_MODEL is not in $HF_HUB."
+  echo "      It is a gated repo ($SETUP_MODEL_SIZE): run 'hf auth login', then serving will fetch it."
   echo "      ('huggingface-cli' is removed in huggingface_hub >= 1.0 — 'hf' replaces it.)"
 fi
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Full autoregressive TTNN model for poolside/Laguna-XS-2.1 on a 1×D Blackhole mesh.
+"""Full autoregressive TTNN model for poolside/Laguna-S-2.1 / Laguna-XS-2.1 on a 1×D Blackhole mesh.
 
 Assembles the topology-generic decoder (``tt/multichip_decoder.py``, ``MultichipDecoder`` — TP=D
 attention/dense + EP=D routed MoE, replicated BF16 residual, 2 ``all_reduce``/layer for D>1, BFP8 local
@@ -37,7 +37,7 @@ from .dflash_reference import DFLASH_TARGET_LAYER_IDS, DFlashTargetAuxCapture
 from .multichip_decoder import MultichipDecoder
 from .optimized_decoder import PrecisionPolicy, _cached_device_tensor, weight_cache_key
 
-MODEL_ID = "poolside/Laguna-XS-2.1"
+from .model_spec import MODEL_ID  # noqa: E402  (TT_LAGUNA_MODEL; default Laguna-S-2.1)
 
 # Canonical datatype-sweep-selected precision policy. When present, this is the required
 # config artifact that the default construction path (``from_pretrained`` -> generator ->
@@ -111,7 +111,7 @@ class ModelConfig:
 
 
 class LagunaModel:
-    """40-layer TTNN Laguna-XS-2.1 on a supported 1×D Blackhole mesh."""
+    """TTNN Laguna (S-2.1: 48 layers, XS-2.1: 40 layers) on a supported 1×D Blackhole mesh."""
 
     def __init__(self, hf_config, layers, embed_w, norm_w, lm_head_w, lm_head_ds, meta, mesh_device):
         self.hf_config = hf_config

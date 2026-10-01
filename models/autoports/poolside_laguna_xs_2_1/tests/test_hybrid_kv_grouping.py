@@ -40,14 +40,28 @@ def test_laguna_exact_four_group_layout_and_ten_tensor_aliases():
         assert alias.tensor_index == layer // 4
 
 
+def test_laguna_s_48_layer_layout_and_twelve_tensor_aliases():
+    layout = build_laguna_hybrid_kv_layout(_laguna_kinds(48))
+
+    assert layout.groups == tuple(tuple(range(group, 48, 4)) for group in range(4))
+    assert layout.num_groups == 4
+    assert layout.num_tensors == 12
+    for layer, alias in enumerate(layout.aliases):
+        assert alias.group_id == layer % 4
+        assert alias.tensor_index == layer // 4
+
+
 def test_laguna_production_layout_fails_closed_for_reduced_or_changed_stacks(expect_error):
     assert tuple(_laguna_kinds()) == LAGUNA_HYBRID_LAYER_KINDS
-    with expect_error(ValueError, "exact 40-layer"):
+    with expect_error(ValueError, "exact published full/sliding pattern"):
         build_laguna_hybrid_kv_layout(_laguna_kinds(4))
-    changed = _laguna_kinds()
-    changed[17] = "full"
-    with expect_error(ValueError, "exact 40-layer"):
-        build_laguna_hybrid_kv_layout(changed)
+    with expect_error(ValueError, "exact published full/sliding pattern"):
+        build_laguna_hybrid_kv_layout(_laguna_kinds(44))
+    for num_layers in (40, 48):
+        changed = _laguna_kinds(num_layers)
+        changed[17] = "full"
+        with expect_error(ValueError, "exact published full/sliding pattern"):
+            build_laguna_hybrid_kv_layout(changed)
 
 
 def test_group_page_tables_expand_in_logical_layer_order():
@@ -317,7 +331,7 @@ def test_get_kv_cache_spec_rejects_prefix_overlap_and_checkpoint_drift(monkeypat
     monkeypatch.setattr(LagunaForCausalLM, "_PREFIX_CACHE_ENABLED", False)
     changed = _vllm_config().model_config.hf_config.layer_types.copy()
     changed[17] = "full_attention"
-    with expect_error(ValueError, "exact 40-layer"):
+    with expect_error(ValueError, "exact published full/sliding pattern"):
         LagunaForCausalLM.get_kv_cache_spec(_vllm_config(changed))
 
     unknown = _vllm_config().model_config.hf_config.layer_types.copy()

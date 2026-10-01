@@ -1,8 +1,9 @@
 #!/bin/bash
-# Serve Laguna-XS-2.1 on vLLM: stock vLLM 0.24.0 + public vllm-tt-plugin + this model's vllm_ext.
+# Serve Laguna-S-2.1 (default) or Laguna-XS-2.1 on vLLM: stock vLLM 0.24.0 + public vllm-tt-plugin + this model's vllm_ext.
 # Builds the env on first use (setup_vllm.sh), then backgrounds the server (setsid) and streams
 # the FULL raw build+server log to a per-run timestamped file under $LAGUNA_LOG_DIR.
 #   Launch:  ./serve_vllm.sh
+#   Model:   HF_MODEL=poolside/Laguna-S-2.1 (default; p150x4 only) | poolside/Laguna-XS-2.1
 #   Profile: LAGUNA_PROFILE=p150|p150x2|p150x4 ./serve_vllm.sh
 #   Inspect: LAGUNA_PROFILE=p150 ./serve_vllm.sh config   (no device access)
 #   Watch:   tail -f ~/laguna-logs/latest.log   (ready at "Application startup complete", ~10 min)
@@ -54,9 +55,37 @@ case "${1:-}" in
   *) die "unknown command '$1' (expected: config or stop)" ;;
 esac
 
-# The qualified production default is two P150 ASICs. Keep D4 as an explicit regression profile.
-DEFAULT_LAGUNA_PROFILE=p150x2
+# The checkpoint decides which profiles can hold it. HF_MODEL and TT_LAGUNA_MODEL (read by
+# tt/model_spec.py) name the same thing; accept either, reject a conflict, and export both so the
+# vLLM model id, the TTNN model, its reference and its weight cache always agree.
+if [ -n "${HF_MODEL:-}" ] && [ -n "${TT_LAGUNA_MODEL:-}" ] && [ "$HF_MODEL" != "$TT_LAGUNA_MODEL" ]; then
+  die "HF_MODEL '$HF_MODEL' conflicts with TT_LAGUNA_MODEL '$TT_LAGUNA_MODEL'; set one or make them equal"
+fi
+HF_MODEL="${HF_MODEL:-${TT_LAGUNA_MODEL:-poolside/Laguna-S-2.1}}"
+case "$HF_MODEL" in
+  poolside/Laguna-S-2.1)
+    # 117.6B parameters: ~17.6 GB of weights per chip at D4; D1/D2 cannot hold them.
+    MODEL_NUM_LAYERS=48
+    DEFAULT_LAGUNA_PROFILE=p150x4
+    MODEL_PROFILES="p150x4"
+    ;;
+  poolside/Laguna-XS-2.1)
+    # The qualified XS production default is two P150 ASICs. D4 is an explicit regression profile.
+    MODEL_NUM_LAYERS=40
+    DEFAULT_LAGUNA_PROFILE=p150x2
+    MODEL_PROFILES="p150 p150x2 p150x4"
+    ;;
+  *)
+    die "HF_MODEL must be poolside/Laguna-S-2.1 or poolside/Laguna-XS-2.1; the adapter and cached weights are model-specific"
+    ;;
+esac
+export HF_MODEL
+export TT_LAGUNA_MODEL="$HF_MODEL"
 LAGUNA_PROFILE="${LAGUNA_PROFILE:-$DEFAULT_LAGUNA_PROFILE}"
+case " $MODEL_PROFILES " in
+  *" $LAGUNA_PROFILE "*) ;;
+  *) die "$HF_MODEL does not fit LAGUNA_PROFILE '$LAGUNA_PROFILE' (supported: $MODEL_PROFILES)" ;;
+esac
 
 case "$LAGUNA_PROFILE" in
   p150)
@@ -253,11 +282,6 @@ fi
 export LAGUNA_FABRIC_CONFIG="$FABRIC_CONFIG"
 export TT_LAGUNA_CCL_TOPOLOGY="$CCL_TOPOLOGY"
 export TT_LAGUNA_CCL_NUM_LINKS="$CCL_NUM_LINKS"
-
-HF_MODEL="${HF_MODEL:-poolside/Laguna-XS-2.1}"
-[ "$HF_MODEL" = "poolside/Laguna-XS-2.1" ] ||
-  die "HF_MODEL must be poolside/Laguna-XS-2.1; the adapter and cached weights are model-specific"
-export HF_MODEL
 
 # Resolve prefix caching from the profile before collecting experimental overrides. Enabling an
 # unqualified profile must be acknowledged, while an explicit 0 is always a safe rollback if a
@@ -549,7 +573,10 @@ if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ]; then
   )
 else
   HYBRID_KV_STATUS=production_safe_disabled
-  HYBRID_KV_LAYOUT=uniform_forty_tensor_pairs
+  case "$MODEL_NUM_LAYERS" in
+    40) HYBRID_KV_LAYOUT=uniform_forty_tensor_pairs ;;
+    48) HYBRID_KV_LAYOUT=uniform_forty_eight_tensor_pairs ;;
+  esac
 fi
 if [ "$TT_LAGUNA_DFLASH" -eq 1 ]; then
   [ "$LAGUNA_PROFILE" = p150x2 ] ||
@@ -613,6 +640,7 @@ printf -v VLLM_ADDITIONAL_CONFIG \
 
 if [ "$1" = "config" ]; then
   printf '%s\n' \
+    "hf_model=$HF_MODEL" \
     "profile=$LAGUNA_PROFILE" \
     "mesh_device=$MESH_DEVICE" \
     "mesh_graph_desc_path=${TT_MESH_GRAPH_DESC_PATH:-<unset>}" \
@@ -704,7 +732,7 @@ export PYTHONPATH="$REPO_ROOT"          # so EXTRA_MODELS_DIR's main_class (gene
 export EXTRA_MODELS_DIR="$MODEL_DIR/vllm_ext/extra_models"
 
 echo "[serve_vllm] vllm $("$VLLM_ENV_BIN/python" -c 'import vllm;print(vllm.__version__)' 2>/dev/null) | env: $VLLM_ENV | log: $LOG" | tee -a "$LOG"
-echo "[serve_vllm] profile: $LAGUNA_PROFILE | mesh: $MESH_DEVICE | devices: $TT_VISIBLE_DEVICES | context: $MAX_MODEL_LEN | seqs: $MAX_NUM_SEQS | streaming prefill: $TT_LAGUNA_STREAMING_PREFILL ($STREAMING_PREFILL_STATUS) | MoE token dispatch/tile sparse: $TT_LAGUNA_MOE_TOKEN_DISPATCH/$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE ($MOE_TOKEN_DISPATCH_STATUS/$MOE_TILE_SPARSE_STATUS) | DFlash: $TT_LAGUNA_DFLASH ($DFLASH_STATUS; $DFLASH_ENVELOPE) | hybrid KV: $TT_LAGUNA_HYBRID_KV ($HYBRID_KV_STATUS; $HYBRID_KV_LAYOUT) | prefix cache: $TT_LAGUNA_PREFIX_CACHE ($PREFIX_CACHE_STATUS; quantum=$PREFIX_CACHE_QUANTUM; admission=$PREFIX_CACHE_ADMISSION_POLICY; scheduler=$PREFIX_CACHE_SCHEDULER_POLICY) | fabric: $FABRIC_CONFIG | CCL: $TT_LAGUNA_CCL_TOPOLOGY/$TT_LAGUNA_CCL_NUM_LINKS | decode SDPA PC/k/exp/maxcores: $TT_LAGUNA_DECODE_SDPA_PC/$TT_LAGUNA_DECODE_K/$TT_LAGUNA_DECODE_EXP/$TT_LAGUNA_DECODE_MAXCORES | verify k: $TT_LAGUNA_VERIFY_K | experimental: $EXPERIMENTAL_OVERRIDE_SUMMARY" | tee -a "$LOG"
+echo "[serve_vllm] model: $HF_MODEL | profile: $LAGUNA_PROFILE | mesh: $MESH_DEVICE | devices: $TT_VISIBLE_DEVICES | context: $MAX_MODEL_LEN | seqs: $MAX_NUM_SEQS | streaming prefill: $TT_LAGUNA_STREAMING_PREFILL ($STREAMING_PREFILL_STATUS) | MoE token dispatch/tile sparse: $TT_LAGUNA_MOE_TOKEN_DISPATCH/$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE ($MOE_TOKEN_DISPATCH_STATUS/$MOE_TILE_SPARSE_STATUS) | DFlash: $TT_LAGUNA_DFLASH ($DFLASH_STATUS; $DFLASH_ENVELOPE) | hybrid KV: $TT_LAGUNA_HYBRID_KV ($HYBRID_KV_STATUS; $HYBRID_KV_LAYOUT) | prefix cache: $TT_LAGUNA_PREFIX_CACHE ($PREFIX_CACHE_STATUS; quantum=$PREFIX_CACHE_QUANTUM; admission=$PREFIX_CACHE_ADMISSION_POLICY; scheduler=$PREFIX_CACHE_SCHEDULER_POLICY) | fabric: $FABRIC_CONFIG | CCL: $TT_LAGUNA_CCL_TOPOLOGY/$TT_LAGUNA_CCL_NUM_LINKS | decode SDPA PC/k/exp/maxcores: $TT_LAGUNA_DECODE_SDPA_PC/$TT_LAGUNA_DECODE_K/$TT_LAGUNA_DECODE_EXP/$TT_LAGUNA_DECODE_MAXCORES | verify k: $TT_LAGUNA_VERIFY_K | experimental: $EXPERIMENTAL_OVERRIDE_SUMMARY" | tee -a "$LOG"
 cd /tmp
 setsid "$VLLM_ENV_BIN/vllm" serve "$HF_MODEL" \
   --trust-remote-code --max-model-len "$MAX_MODEL_LEN" --max-num-seqs "$MAX_NUM_SEQS" --block-size "$PREFIX_CACHE_BLOCK_SIZE" \

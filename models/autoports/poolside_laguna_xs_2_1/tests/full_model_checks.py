@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Full-model readiness harness for Laguna-XS-2.1 on a P150 D=1/2/4 profile.
+"""Full-model readiness harness for Laguna (S-2.1 default, XS-2.1 via TT_LAGUNA_MODEL) on a P150 D=1/2/4 profile.
 
 Subcommands:
   prefill   — prefill_forward(return_all_logits=True) top-1/5/100 vs the AIME24 reference (faithful
@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from pathlib import Path
 
 import torch
 
@@ -32,7 +34,15 @@ from models.autoports.poolside_laguna_xs_2_1.tests.laguna_test_utils import (
     profile_summary,
 )
 
-REF = MODEL_DIR / "tests" / "reference_outputs" / "readiness_aime24_chat.refpt"
+from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MODEL_ID  # noqa: E402
+
+# Teacher-forced HF top-K reference for the selected checkpoint. XS's came from the shared full-model
+# generator; S's from tests/gen_streamed_reference.py (layer-streamed HF, since S does not fit in host RAM).
+_REFERENCES = {
+    "poolside/Laguna-XS-2.1": "readiness_aime24_chat.refpt",
+    "poolside/Laguna-S-2.1": "readiness_aime24_chat_s.refpt",
+}
+REF = Path(os.environ.get("LAGUNA_REFERENCE") or MODEL_DIR / "tests" / "reference_outputs" / _REFERENCES[MODEL_ID])
 QUALITY_BARS = {"top1": 0.90, "top5": 0.98, "top100": 1.0}
 
 
@@ -102,7 +112,7 @@ def _assert_quality(rows, label):
 def _assert_acceptance_profile(args):
     if not args.acceptance:
         return
-    assert args.num_layers is None, "acceptance requires the full 40-layer model"
+    assert args.num_layers is None, "acceptance requires the full model (every layer)"
     requested = args.max_seq_len or args.profile_spec.max_context
     assert requested == args.profile_spec.max_context, (
         f"acceptance requires the exact {args.profile_spec.name} context cap "
@@ -304,7 +314,7 @@ if __name__ == "__main__":
     ap.add_argument(
         "--acceptance",
         action="store_true",
-        help="require the full 40-layer model at the selected profile's exact context cap",
+        help="require the full model (every layer) at the selected profile's exact context cap",
     )
     ap.add_argument(
         "--max-seq-len",

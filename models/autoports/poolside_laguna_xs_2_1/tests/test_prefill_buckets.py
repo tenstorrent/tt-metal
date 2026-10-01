@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from models.autoports.poolside_laguna_xs_2_1.tt import generator_vllm as gv
+from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MAX_POSITION_EMBEDDINGS, MODEL_ID
 
 
 class _Stub:
@@ -42,7 +43,8 @@ def _no_warm_cap_override(monkeypatch):
 def test_advertised_equals_servable():
     # 1.2: advertised is the verified-servable limit, distinct from the (larger) HF config length.
     assert gv.ADVERTISED_MAX_CONTEXT == 131072
-    assert gv.HF_CONFIG_MAX_CONTEXT == 262144
+    # The HF ceiling follows the selected checkpoint (XS 262144, S 1048576).
+    assert gv.HF_CONFIG_MAX_CONTEXT == MAX_POSITION_EMBEDDINGS[MODEL_ID]
     assert gv.ADVERTISED_MAX_CONTEXT <= gv.HF_CONFIG_MAX_CONTEXT
 
 

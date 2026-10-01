@@ -23,7 +23,7 @@ import os
 
 import torch
 
-MODEL_ID = "poolside/Laguna-XS-2.1"
+from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MODEL_ID  # noqa: E402
 
 
 def _snapshot_dir():

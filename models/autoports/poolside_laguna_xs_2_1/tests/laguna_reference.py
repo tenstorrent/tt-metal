@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 import torch
 
-MODEL_ID = "poolside/Laguna-XS-2.1"
+from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MODEL_ID  # noqa: E402
 
 
 def build_config(attn_implementation: str = "eager"):

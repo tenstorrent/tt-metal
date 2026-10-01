@@ -37,6 +37,8 @@ from models.common.lightweightmodule import LightweightModule
 from .prefill_page_table import single_shot_fill_page_table
 
 TILE = 32
+ROUTER_PRECISION_ENV = "TT_LAGUNA_ROUTER_PRECISION"
+ROUTER_PRECISIONS = ("precise", "bf16")
 
 
 # --------------------------------------------------------------------------- #
@@ -328,7 +330,9 @@ def _hf_rope_tables(hf_config, attention_type: str, max_seq_len: int):
 
     from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
-    model_id = hf_config._name_or_path or "poolside/Laguna-XS-2.1"
+    from .model_spec import MODEL_ID
+
+    model_id = hf_config._name_or_path or MODEL_ID
     RE = get_class_from_dynamic_module("modeling_laguna.LagunaRotaryEmbedding", model_id)
     rp = hf_config.rope_parameters
     cfg = copy.deepcopy(hf_config)
@@ -378,7 +382,11 @@ _WEIGHT_CACHE_DISABLE = os.environ.get("TT_LAGUNA_WEIGHT_CACHE_DISABLE", "0") ==
 
 
 def _weight_cache_dir() -> str:
-    default = os.path.join(os.path.expanduser("~"), ".cache", "ttnn", "laguna_xs_2_1")
+    from .model_spec import MODEL_SLUG
+
+    # One directory per checkpoint: cache keys carry no model identity, so S and XS must never
+    # share a directory (an S run would otherwise load converted XS tensors of the same name).
+    default = os.path.join(os.path.expanduser("~"), ".cache", "ttnn", MODEL_SLUG)
     d = os.environ.get("TT_LAGUNA_WEIGHT_CACHE", default)
     os.makedirs(d, exist_ok=True)
     return d
@@ -624,6 +632,14 @@ class OptimizedDecoder(LightweightModule):
         self._ck_shared = self._ck_by_fid[policy.fid_shared]
         self._ck_router = self._ck_by_fid[policy.fid_router]
         self._ck_moe = self._ck_by_fid[policy.fid_moe]
+        # Router selection precision (see _route). "precise" (default): fp32 sigmoid + bias and a
+        # cut-off-shifted bf16 top-k; "bf16": the original single-pass bf16 router (A/B only).
+        self.router_precision = os.environ.get(ROUTER_PRECISION_ENV, "precise").strip().lower()
+        if self.router_precision not in ROUTER_PRECISIONS:
+            raise ValueError(f"{ROUTER_PRECISION_ENV} must be one of {ROUTER_PRECISIONS}; got {self.router_precision!r}")
+        # The precise router's logits matmul: HiFi4 keeps every mantissa bit of the bf16 operands and
+        # fp32 accumulation/output keeps the near-tie ordering (S layer 1: K-th vs (K+1)-th median gap 1.7e-4).
+        self._ck_router_precise = self._ck_hifi4
 
     # ---- construction ------------------------------------------------------ #
     @classmethod
@@ -677,6 +693,12 @@ class OptimizedDecoder(LightweightModule):
             w["gate_w"] = _linear_w(g("mlp.gate.weight"), dev, policy.router, cache_key=ckey("gate_w"))  # [H, E]
             w["e_bias"] = _as_tt(
                 lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E), dev, cache_key=ckey("e_bias")
+            )
+            w["e_bias_f32"] = _as_tt(
+                lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E),
+                dev,
+                ttnn.float32,
+                cache_key=ckey("e_bias"),
             )
 
             # The 256-expert torch.stack is the dominant boot cost, so build it lazily
@@ -841,21 +863,64 @@ class OptimizedDecoder(LightweightModule):
         up = ttnn.linear(x, w[uk], compute_kernel_config=ck)
         return ttnn.linear(ttnn.mul(gate, up), w[dk], compute_kernel_config=ck)
 
+    # ---- router ------------------------------------------------------------ #
+    def _route(self, ln_flat):
+        """Laguna router: sigmoid scores, bias-for-selection top-k, unbiased normalized weights.
+
+        Returns ``(logits, idx, wsel)``: the bf16 router logits ``[1,1,T,E]`` (shape template for the
+        dense routing matrix), the selected expert ids ``[1,1,T,K]`` and their final bf16 weights
+        (normalized over the K picks, times ``routed_scaling``).
+
+        HF computes ``sigmoid(logits) + bias`` and the top-k in fp32. ``ttnn.topk`` accepts only
+        bf16/bfp8 input, and bf16 holds ~3 significant digits, so near-equal experts can swap places.
+        ``router_precision == "precise"`` (default) narrows that gap without an fp32 top-k:
+          1. the logits matmul runs at HiFi4 with fp32 accumulation and output (HiFi2 drops operand
+             mantissa bits: on S layer 1 that alone cut expert agreement with HF fp32 from ~0.95 to ~0.8),
+             and sigmoid and the bias add run in fp32;
+          2. a coarse bf16 top-(K+1) finds the experts around the K-th place, and the fp32 midpoint
+             of the K-th and (K+1)-th selection scores becomes the cut-off estimate;
+          3. scores are shifted by that cut-off before the bf16 cast, so experts near the boundary
+             map near zero where bf16 is fine-grained, and the final top-K orders them correctly.
+        ``router_precision == "bf16"`` is the original single-pass bf16 router (A/B baseline).
+        """
+        cfg = self.cfg
+        K = cfg.top_k
+        if self.router_precision == "bf16":
+            logits = ttnn.linear(ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router)
+            scores = ttnn.sigmoid(logits)
+            sel = ttnn.add(scores, self.w["e_bias"])
+            _, idx = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K, dim=-1, sorted=True)
+            wsel = ttnn.gather(scores, dim=3, index=idx)
+        else:
+            logits32 = ttnn.linear(
+                ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router_precise, dtype=ttnn.float32
+            )
+            # Callers use ``logits`` only as the bf16 [1,1,T,E] template of the dense routing matrix.
+            logits = ttnn.typecast(logits32, ttnn.bfloat16)
+            scores = ttnn.sigmoid(logits32)
+            sel = ttnn.add(scores, self.w["e_bias_f32"])
+            _, idx_coarse = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K + 1, dim=-1, sorted=True)
+            rows = [idx_coarse.shape[i] for i in range(len(idx_coarse.shape) - 1)]
+            kth = ttnn.gather(sel, dim=3, index=ttnn.slice(idx_coarse, [0] * len(rows) + [K - 1], rows + [K]))
+            k1th = ttnn.gather(sel, dim=3, index=ttnn.slice(idx_coarse, [0] * len(rows) + [K], rows + [K + 1]))
+            cutoff = ttnn.multiply(ttnn.add(kth, k1th), 0.5)
+            shifted = ttnn.typecast(ttnn.subtract(sel, cutoff), ttnn.bfloat16)
+            _, idx = ttnn.topk(shifted, k=K, dim=-1, sorted=True)
+            wsel = ttnn.gather(scores, dim=3, index=idx)
+        if cfg.norm_topk_prob:
+            wsel = ttnn.div(wsel, ttnn.sum(wsel, dim=3, keepdim=True))
+        if cfg.routed_scaling != 1.0:
+            wsel = ttnn.multiply(wsel, cfg.routed_scaling)
+        if wsel.dtype != ttnn.bfloat16:
+            wsel = ttnn.typecast(wsel, ttnn.bfloat16)
+        return logits, idx, wsel
+
     # ---- MoE --------------------------------------------------------------- #
     def _moe(self, ln_flat, m, sharded):
         cfg = self.cfg
         E, H, I, K = cfg.num_experts, cfg.hidden, cfg.moe_intermediate, cfg.top_k
         T = ln_flat.shape[2]
-        logits = ttnn.linear(ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router)
-        scores = ttnn.sigmoid(logits)
-        sel = ttnn.add(scores, self.w["e_bias"])
-        _, idx = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K, dim=-1, sorted=True)
-        wsel = ttnn.gather(scores, dim=3, index=idx)
-        if cfg.norm_topk_prob:
-            wsum = ttnn.sum(wsel, dim=3, keepdim=True)
-            wsel = ttnn.div(wsel, wsum)
-        if cfg.routed_scaling != 1.0:
-            wsel = ttnn.multiply(wsel, cfg.routed_scaling)
+        logits, idx, wsel = self._route(ln_flat)
         dense = ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
         union = ttnn.sum(dense, dim=2, keepdim=True)
         sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)

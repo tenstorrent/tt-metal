@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pure metadata helpers for Laguna's vLLM hybrid-KV layout.
 
-vLLM turns Laguna's 10 full-attention and 30 sliding-window layers into four
-block-table groups of ten layers.  Layers at the same ordinal in different
+vLLM turns Laguna's full-attention and sliding-window layers (XS: 10 + 30,
+S: 12 + 36) into four block-table groups of one quarter of the layers each.  Layers at the same ordinal in different
 groups share one physical KV tensor and use disjoint block-id namespaces.  The
 TT adapter needs both identities: group id selects the block table, while tensor
 index selects the aliased K/V allocation.
@@ -19,10 +19,17 @@ from dataclasses import dataclass
 from math import ceil
 from typing import Any, Sequence
 
-LAGUNA_NUM_LAYERS = 40
-LAGUNA_HYBRID_LAYER_KINDS = tuple(
-    "full" if layer_index % 4 == 0 else "sliding" for layer_index in range(LAGUNA_NUM_LAYERS)
-)
+# Published Laguna stacks: XS-2.1 has 40 layers, S-2.1 has 48. Both repeat full/sliding/sliding/sliding.
+LAGUNA_NUM_LAYERS = 40  # XS-2.1 (kept for existing callers)
+SUPPORTED_LAGUNA_NUM_LAYERS = (40, 48)
+
+
+def laguna_hybrid_layer_kinds(num_layers: int) -> tuple[str, ...]:
+    """The published Laguna attention pattern for a ``num_layers``-layer stack."""
+    return tuple("full" if layer_index % 4 == 0 else "sliding" for layer_index in range(num_layers))
+
+
+LAGUNA_HYBRID_LAYER_KINDS = laguna_hybrid_layer_kinds(LAGUNA_NUM_LAYERS)
 
 
 @dataclass(frozen=True)
@@ -126,22 +133,28 @@ def build_hybrid_kv_layout(layer_kinds: Sequence[str]) -> HybridKVLayout:
 def build_laguna_hybrid_kv_layout(layer_kinds: Sequence[str]) -> HybridKVLayout:
     """Build Laguna's production layout and reject reduced or reordered stacks.
 
-    Tensor aliasing is a whole-model vLLM contract: the four groups share ten
-    physical buffers by slot.  Applying that contract to a reduced layer bring-up,
-    or to a checkpoint whose attention pattern changed, can make unrelated logical
-    layers overwrite one another.  Hybrid allocation therefore requires the exact
-    published 40-layer ``full, sliding, sliding, sliding`` repetition.
+    Tensor aliasing is a whole-model vLLM contract: the four groups share one
+    quarter of the layer count in physical buffers by slot (XS: 10, S: 12).
+    Applying that contract to a reduced layer bring-up, or to a checkpoint whose
+    attention pattern changed, can make unrelated logical layers overwrite one
+    another.  Hybrid allocation therefore requires the exact published
+    ``full, sliding, sliding, sliding`` repetition of a 40-layer (XS) or 48-layer
+    (S) stack.
     """
 
     kinds = tuple(str(kind) for kind in layer_kinds)
-    if kinds != LAGUNA_HYBRID_LAYER_KINDS:
+    num_layers = len(kinds)
+    if num_layers not in SUPPORTED_LAGUNA_NUM_LAYERS or kinds != laguna_hybrid_layer_kinds(num_layers):
         raise ValueError(
-            "Laguna hybrid KV requires the exact 40-layer full/sliding pattern; " f"got {len(kinds)} layer kinds"
+            "Laguna hybrid KV requires the exact published full/sliding pattern of a 40-layer (XS) or "
+            f"48-layer (S) stack; got {num_layers} layer kinds"
         )
     layout = build_hybrid_kv_layout(kinds)
-    expected_groups = tuple(tuple(range(group_id, LAGUNA_NUM_LAYERS, 4)) for group_id in range(4))
-    if layout.groups != expected_groups or layout.num_tensors != 10:
-        raise ValueError("Laguna hybrid KV grouping drifted from four groups sharing ten physical tensors")
+    expected_groups = tuple(tuple(range(group_id, num_layers, 4)) for group_id in range(4))
+    if layout.groups != expected_groups or layout.num_tensors != num_layers // 4:
+        raise ValueError(
+            f"Laguna hybrid KV grouping drifted from four groups sharing {num_layers // 4} physical tensors"
+        )
     return layout
 
 
