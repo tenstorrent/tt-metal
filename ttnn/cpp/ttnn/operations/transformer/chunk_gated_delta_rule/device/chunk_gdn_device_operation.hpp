@@ -65,11 +65,11 @@ struct ChunkGdnParams {
     // V-slice of Vt/NV tiles (the phased scan's V-block split, fed over the NoC).
     uint32_t nv = 1;
     // Hand-off CB depth (slots per CB): how many chunks a producer may run ahead of a receiver's
-    // consumption, and how early a receiver can reserve+credit the next chunk. Deeper rings hide more
-    // of the per-chunk handshake round trip at +76 KB of L1 per slot on every core. The receiver keeps
-    // nbuf-1 hand-offs in flight (per-slot VALID flags, BH x nbuf credit words), so 3 hides the unicast
-    // round trip (5.8-6.1 us) behind two receiver steps at NV=2 and NV=4.
-    uint32_t nbuf = 2;  // measured: 3 and 4 are slower than 2 in every transport
+    // consumption, and how early a receiver can reserve+credit the next chunk. The receiver keeps nbuf-1
+    // hand-offs in flight (per-slot VALID flags, BH x nbuf credit words) at +76 KB of L1 per slot on
+    // every core. The config's handoff_depth, or the cost model's pick (2, or 3 where the depth-2 round
+    // trip is exposed: Vtl=1, or the supply within 10 % of the step).
+    uint32_t nbuf = 2;
     // Ship the six shared tensors and the v_beta slices as NV plain unicast writes per item instead of
     // a linked multicast chain. Multicasts reserve router ports along their path; the zone captures show
     // sporadic 20-120 us multicast-issue stalls on individual producers. The default; unicast=false

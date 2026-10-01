@@ -591,7 +591,13 @@ std::vector<Tensor> chunk_gdn(
             !fused_cfg->num_receivers.has_value() || nv_pin >= 1,
             "chunk_gdn_fused: num_receivers must be >= 1 (got {})",
             nv_pin);
-        // The model fills whatever the config leaves free (both, one, or none) so the pair fits the grid.
+        const uint32_t nbuf_pin = fused_cfg->handoff_depth.value_or(0);
+        TT_FATAL(
+            !fused_cfg->handoff_depth.has_value() || (nbuf_pin >= 1 && nbuf_pin <= 8),
+            "chunk_gdn_fused: handoff_depth must be in [1, 8] (got {})",
+            nbuf_pin);
+        // The model fills whatever the config leaves free (geometry, hand-off depth, or all) so the pair fits
+        // the grid.
         const bool pool = fused_cfg->producer_pool;
         const auto choice = choose_fused_geometry(
             grid0.x,
@@ -601,7 +607,7 @@ std::vector<Tensor> chunk_gdn(
             val_dim / tt::constants::TILE_WIDTH,
             nv_pin,
             np_pin,
-            /*fixed_nbuf=*/0,
+            nbuf_pin,
             pool ? FusedCandidates::Pool : FusedCandidates::PerHead);
         TT_FATAL(
             choice.nv >= 1,
@@ -636,11 +642,7 @@ std::vector<Tensor> chunk_gdn(
             // divide Vt (validated).
             attrs.np = np_pin ? std::min<uint32_t>(np_pin, num_chunks) : choice.np;
         }
-        attrs.nbuf = fused_cfg->handoff_depth;
-        TT_FATAL(
-            attrs.nbuf >= 1 && attrs.nbuf <= 8,
-            "chunk_gdn_fused: handoff_depth must be in [1, 8] (got {})",
-            attrs.nbuf);
+        attrs.nbuf = nbuf_pin ? nbuf_pin : choice.nbuf;
         attrs.unicast = fused_cfg->unicast;
         attrs.posted = fused_cfg->posted;
         TT_FATAL(
