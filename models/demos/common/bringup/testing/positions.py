@@ -24,11 +24,19 @@ from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.testing import cpu_bridge
 
 
+def _target_seq(s) -> int:
+    """The spec's own target length. run_positions raises target.seq in memory to fit its last position; the
+    original is kept so a second call in the same process (the safe runner's precompile pass, then the real one)
+    does not start from the raised value and double every position."""
+    t = s.data["target"]
+    return int(t.setdefault("_seq_before_positions", t["seq"]))
+
+
 def positions(s) -> list[int]:
     got = s.get("perf.positions")
     if got:
         return [int(p) for p in got]
-    last = int(s.get("target.seq")) - int(s.get("target.chunk"))
+    last = _target_seq(s) - int(s.get("target.chunk"))
     return [k * last for k in range(5)]
 
 
@@ -45,7 +53,7 @@ def _free(state) -> None:
 
 def run_positions(s, mesh) -> list[tuple[int, float]]:
     chunk, starts = int(s.get("target.chunk")), positions(s)
-    s.data["target"]["seq"] = max(int(s.get("target.seq")), max(starts) + chunk)  # in memory only
+    s.data["target"]["seq"] = max(_target_seq(s), max(starts) + chunk)  # in memory only
     layers = s.layers()
     model = s.hooks().device_model(mesh, s, layers, lm_head=False)
     metrics.record("device_model_hybrid", int("Hybrid" in type(model).__name__))
