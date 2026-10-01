@@ -74,6 +74,23 @@ def get_valid_dest_accumulation_modes(formats):
     return [DestAccumulation.No, DestAccumulation.Yes]
 
 
+def effective_dest_accumulation(formats, dest_acc):
+    """The dest_acc TestConfig will actually build with for *formats*.
+
+    TestConfig promotes an outlier format combination (expB non-fp32 input to a Float16
+    output at dest_acc=No) to dest_acc=Yes. A golden computed from the requested value
+    would then model a 16-bit Dest the hardware is not using, so drivers resolve the
+    effective value here before calling their golden.
+    """
+    if get_chip_architecture() == ChipArchitecture.QUASAR:
+        return dest_acc
+    if is_format_combination_outlier(
+        formats.input_format, formats.output_format, dest_acc
+    ):
+        return DestAccumulation.Yes
+    return dest_acc
+
+
 def distinct_dest_accumulation_modes(formats, modes):
     """Drop dest_acc modes that TestConfig normalizes onto another requested mode.
 

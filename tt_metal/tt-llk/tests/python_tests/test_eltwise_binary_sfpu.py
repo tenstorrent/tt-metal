@@ -11,7 +11,10 @@ import pytest
 import torch
 from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
-from helpers.data_format_inference import is_format_combination_outlier
+from helpers.constraints import (
+    distinct_dest_accumulation_modes,
+    effective_dest_accumulation,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -91,6 +94,19 @@ def _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc):
         pytest.skip(
             "SfpuLcm dest_acc=Yes is codegen-sensitive and hangs on Blackhole; see tt-metal#52997"
         )
+
+
+def _dest_accs_for(formats):
+    """Both dest_acc values, minus the one TestConfig promotes onto the other.
+
+    An expB input into a Float16 output is built with a 32-bit Dest whichever value is
+    requested, so its dest_acc=No cell would be the dest_acc=Yes kernel run a second time
+    against a golden modelling the wrong Dest. Used as a parametrize dependency on
+    ``formats``.
+    """
+    return distinct_dest_accumulation_modes(
+        formats, [DestAccumulation.No, DestAccumulation.Yes]
+    )
 
 
 # Shared crafted-stimuli helpers. Several predicate/paired ops (mask, isclose, eq/ne,
@@ -538,6 +554,8 @@ def sfpu_binary(
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
     ):
         dest_acc = DestAccumulation.Yes
+    # Same reason for the outlier pairs TestConfig promotes on every arch but Quasar.
+    dest_acc = effective_dest_accumulation(formats, dest_acc)
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_format = (
@@ -675,7 +693,7 @@ def sfpu_binary(
         # are covered with crafted paired stimuli by test_eltwise_binary_sfpu_eq_ne and
         # test_eltwise_binary_sfpu_float_comparison below.
     ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=_dest_accs_for,
 )
 def test_eltwise_binary_sfpu_float(
     formats,
@@ -699,12 +717,9 @@ def test_eltwise_binary_sfpu_float(
             "Bfp8_b input is not supported for XLOGY/LOGADDEXP/LOGADDEXP2 coverage"
         )
 
-    if bcast_dim == LlkBroadcastType.Row and (
-        dest_acc == DestAccumulation.Yes
-        or is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
-    ):
+    # The promoted outlier pairs arrive here as dest_acc=Yes already (_dest_accs_for), so
+    # the single check covers them too.
+    if bcast_dim == LlkBroadcastType.Row and dest_acc == DestAccumulation.Yes:
         pytest.skip(
             "Row broadcast with FP32 dest: B2D datacopy uses MOVB2D which can't handle FP32 dest format conversion"
         )
@@ -717,6 +732,7 @@ def test_eltwise_binary_sfpu_float(
     )
 
 
+@pytest.mark.sfpu_op(MathOperation.SfpuElwdiv)
 @parametrize(
     formats=input_output_formats(
         [
@@ -725,7 +741,7 @@ def test_eltwise_binary_sfpu_float(
             DataFormat.Float16_b,
         ]
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=_dest_accs_for,
 )
 def test_eltwise_binary_sfpu_div(formats, dest_acc):
     # DIV routes through the dedicated production kernel (calculate_sfpu_binary_div);
@@ -756,7 +772,7 @@ def test_eltwise_binary_sfpu_div(formats, dest_acc):
         MathOperation.SfpuBinaryFmod,
         MathOperation.SfpuBinaryRemainder,
     ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=_dest_accs_for,
 )
 def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop):
     # max/min (SFPSWAP) and fmod/remainder (fp32 reciprocal) binary kernels with no
@@ -1559,10 +1575,11 @@ def test_eltwise_binary_sfpu_int_shift_int32_min(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
-        )
+    # Only the Float32 input needs a 32-bit Dest. Int32 and UInt32 go through
+    # unpack_to_dest here, the same path test_ttnn_where drives at both dest_acc values,
+    # and pass at dest_acc=No on Wormhole; the old is_32_bit() guard withheld them.
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
 
     input_dimensions = [64, 32]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(

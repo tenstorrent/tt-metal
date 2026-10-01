@@ -185,7 +185,13 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
         formats.input_format == DataFormat.Bfp8_b
         and mathop != MathOperation.SfpuAddcmul
     ):
-        pytest.skip("Bfp8_b is only supported for addcmul")
+        # A kernel limit, not a harness one: calculate_addcdiv, calculate_lerp and
+        # snake_beta each static_assert the format down to Float32 / Float16_b
+        # (ckernel_sfpu_{addcdiv,lerp,snake_beta}.h), so these variants fail to compile.
+        pytest.skip(
+            "Bfp8_b is only supported for addcmul; the other ternary kernels "
+            "static_assert Float32 / Float16_b"
+        )
 
     _run_sfpu_ternary(formats, dest_acc, mathop)
 
@@ -201,10 +207,26 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
 
 _TERNARY_EDGE_OPS = [
     MathOperation.SfpuAddcdiv,
-    MathOperation.SfpuAddcmul,
     MathOperation.SfpuLerp,
     MathOperation.SfpuSnakeBeta,
 ]
+# addcmul is not an edge op: c is a multiplicand, so edge_spec(operand=C) has no pole or
+# knee to return on any pipeline. It stays out of the list rather than being collected
+# and skipped on every cell.
+assert all(
+    edge_spec(
+        MathOperation.SfpuAddcmul,
+        fmt.input_format,
+        fmt.output_format,
+        operand=Operand.C,
+        dest_acc=dest_acc,
+    )
+    is None
+    for fmt in input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32], same=True
+    )
+    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+), "addcmul grew an operand-C edge; add it back to _TERNARY_EDGE_OPS"
 
 # Ops that divide by c, and therefore need a numerator held away from zero: c = 0 with an
 # unconstrained numerator would mix the pole (every element ±inf) with the 0/0 indeterminate
@@ -239,7 +261,8 @@ def test_sfpu_ternary_edges(formats, dest_acc, mathop):
         dest_acc=dest_acc,
     )
     if spec_C is None:
-        # addcmul: c is a multiplicand, so there is no pole or knee for a probe to reach.
+        # Every op in _TERNARY_EDGE_OPS has an operand-C pole or knee on every cell today;
+        # this only fires if a pipeline-dependent gate withdraws one later.
         pytest.skip(
             reason=f"{mathop.name} has no operand-C edge (no pole, no knee) for this "
             "pipeline"

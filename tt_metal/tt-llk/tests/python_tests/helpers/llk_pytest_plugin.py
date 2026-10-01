@@ -576,7 +576,9 @@ def _collapse_runtime_only_variants(config, items):
 def _item_op_names(item) -> set:
     """Return the op name(s) a test covers, lowercased.
 
-    Reads the MathOperation from the test's parameters, falling back to the op name in the test id.
+    Reads the MathOperation from the test's parameters, then from an ``sfpu_op`` marker
+    (for a test whose op is fixed in the body and so never appears in its id), falling
+    back to the op name in the test id.
     """
     from helpers.llk_params import MathOperation
 
@@ -586,9 +588,19 @@ def _item_op_names(item) -> set:
         for val in callspec.params.values():
             if isinstance(val, MathOperation):
                 names.add(val.name.lower())
+    for marker in item.iter_markers(name="sfpu_op"):
+        for op in marker.args:
+            if not isinstance(op, MathOperation):
+                raise pytest.UsageError(
+                    f"{item.nodeid}: sfpu_op marker takes MathOperation members, got {op!r}"
+                )
+            names.add(op.name.lower())
     if not names:
+        # build_param_id renders an op as ``mathop:Exp``; ``MathOperation.Exp`` is what a
+        # plain pytest.mark.parametrize id carries.
         names.update(
-            m.lower() for m in re.findall(r"MathOperation\.(\w+)", item.nodeid)
+            m.lower()
+            for m in re.findall(r"(?:MathOperation\.|mathop:)(\w+)", item.nodeid)
         )
     return names
 
