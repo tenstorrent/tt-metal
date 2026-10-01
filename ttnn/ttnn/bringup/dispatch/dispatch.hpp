@@ -34,7 +34,8 @@ std::array<ttnn::Tensor, 2> dispatch(
     bool use_l1_small_for_semaphores = false,
     bool fp8_output = false,
     bool fp8_scaled_input = false,
-    uint32_t num_workers_per_sender = 2);
+    uint32_t num_workers_per_sender = 2,
+    bool allow_cluster_axis_1 = false);
 
 }  // namespace ttnn::operations::bringup::dispatch
 

@@ -28,16 +28,18 @@ ttnn::Tensor combine(
     std::optional<tt::tt_fabric::Topology> topology,
     bool init_zeros,
     bool use_l1_small_for_semaphores,
-    bool use_fp8_combine) {
+    bool use_fp8_combine,
+    bool allow_cluster_axis_1) {
     // Get device and subdevice info
     auto* mesh_device = dispatched_buffer.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
-    // Validate fabric configuration - only tested values are supported
+    // Validate fabric configuration - only tested values are supported (axis 1 opt-in: allow_cluster_axis_1)
     TT_FATAL(
-        cluster_axis.value_or(0) == 0,
-        "cluster_axis must be 0 (current value: {}). Other values are not tested.",
+        cluster_axis.value_or(0) == 0 || (allow_cluster_axis_1 && cluster_axis.value_or(0) == 1),
+        "cluster_axis must be 0 (current value: {}). Other values are not tested; pass allow_cluster_axis_1=True "
+        "for a combine group along mesh axis 1.",
         cluster_axis.value_or(0));
     TT_FATAL(
         num_links.value_or(1) >= 1 && num_links.value_or(1) <= 4,

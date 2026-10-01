@@ -191,6 +191,38 @@ def _router_host_fn(mesh, module):
     return fn
 
 
+def _experts_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtExperts (CP=4 EP=4: each chip dispatches its own S/4 rows over one 4-chip group on axis 1, 64 complete
+    experts per chip, unified_routed_expert_moe high_precision at HiFi4, combine, post_combine_reduce; no CCL after)."""
+    import os
+
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig
+    from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
+    from models.demos.mimo_v2_6_d_p_cp4.tt.experts import build_experts
+
+    loader = loader or WeightLoader(hf_path(spec))
+    cfg = cfg or MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
+    return build_experts(mesh, loader, cfg, layer, _max_chunk(spec))
+
+
+def _experts_host_fn(mesh, module):
+    """fn(ctx, ffn_norm_host [S, H], dense_routing_host [S, E]) -> experts_out host [S, H] (CP slices in and out)."""
+    import ttnn
+    from models.demos.mimo_v2_6_d_p_cp4.tt.rms_norm import cp_to_host, to_device_cp
+
+    def fn(ctx, x, r):
+        xd = to_device_cp(mesh, x)
+        rd = to_device_cp(mesh, r)
+        yd = module(xd, dense=rd)
+        y = cp_to_host(mesh, yd)
+        for t in (xd, rd, yd):
+            ttnn.deallocate(t)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def device_component(mesh, spec, layer, step):
     if step in _NORM_WEIGHTS:
         return _cp_host_fn(mesh, _norm_module(mesh, spec, layer, step))
@@ -200,6 +232,8 @@ def device_component(mesh, spec, layer, step):
         return _cp_host_fn(mesh, _mlp_module(mesh, spec, layer))
     if step == "router":
         return _router_host_fn(mesh, _router_module(mesh, spec, layer))
+    if step == "experts":
+        return _experts_host_fn(mesh, _experts_module(mesh, spec, layer))
     if step == "attention":
         from models.demos.mimo_v2_6_d_p_cp4.tt.ccl import RingCCL
 
@@ -227,7 +261,7 @@ def device_component(mesh, spec, layer, step):
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
-    "sliding_moe": {"attn_norm", "attention", "router"},
+    "sliding_moe": {"attn_norm", "attention", "router", "experts"},
     "full_moe": set(),
 }
 
@@ -278,6 +312,8 @@ class HybridDeviceModel:
                 ov["mlp"] = _cp_host_fn(mesh, _mlp_module(mesh, spec, i, loader))
             if "router" in steps:
                 ov["router"] = _router_host_fn(mesh, _router_module(mesh, spec, i, loader, self.cfg))
+            if "experts" in steps:
+                ov["experts"] = _experts_host_fn(mesh, _experts_module(mesh, spec, i, loader, self.cfg))
             if "attention" in steps:
                 from models.demos.mimo_v2_6_d_p_cp4.tt.ccl import RingCCL
 

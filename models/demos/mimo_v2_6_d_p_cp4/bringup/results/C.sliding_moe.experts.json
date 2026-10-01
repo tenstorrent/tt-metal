@@ -1,0 +1,29 @@
+{
+ "metrics": {
+  "max_row_rel_l2_experts_L01": {
+   "t": "2026-10-01T01:58:16",
+   "value": 0.015155901201069355
+  },
+  "max_slice_rel_l2_experts_L01": {
+   "t": "2026-10-01T01:58:16",
+   "value": 0.006397909019142389
+  },
+  "pcc_experts_L01": {
+   "t": "2026-10-01T01:58:16",
+   "value": 0.9999804731405626
+  },
+  "rel_l2_experts_L01": {
+   "t": "2026-10-01T01:58:16",
+   "value": 0.006331225857138634
+  },
+  "row_norm_ratio_max_experts_L01": {
+   "t": "2026-10-01T01:58:16",
+   "value": 1.0063725709915161
+  },
+  "row_norm_ratio_min_experts_L01": {
+   "t": "2026-10-01T01:58:16",
+   "value": 0.992753267288208
+  }
+ },
+ "task": "C.sliding_moe.experts"
+}

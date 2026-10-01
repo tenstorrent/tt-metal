@@ -233,3 +233,40 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   - full_moe is not touched; its router is not gated yet.
 - Gate: PASS. pcc_router_L01 0.999129, nnz 8/row, selection overlap 0.99841, matched 2022/2048, matched rel L2 0.00102, row sums [0.9976, 1.0020]. The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_router.py`
+
+## C.sliding_moe.experts.test.1 (test review)
+- Replaced the rendered one-liner with the prior bring-up's frozen test (`mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_experts.py`). It uses the same golden (s4096 chunk 1, layer 1, ffn_norm [2048, 4096] + router [2048, 256] -> experts_out) and the same reference, so its limits and mutation study still apply.
+- Checks: PCC >= 0.99 (gated), finite output, rel L2 <= 0.03, per-token norm ratio [0.97, 1.03], worst row rel L2 <= 0.1.
+- Added: the deferred / CPU-bridge guards of `run_component_test`, and rel L2 per CP slice <= 0.03 (rows [r S/4, (r+1) S/4)).
+- CPU study (script /tmp/cp4ex/m.py, not kept): I zeroed the routing of one source slice to one chip's 64 experts, for each of the 16 (slice, chip) pairs, to model a lost EP dispatch / combine pair.
+  - Every case fails the existing checks: PCC 0.954-0.990, rel 0.14-0.30, worst row 0.92-0.98, that slice's rel 0.29-0.58.
+  - Slice 3 x1.03 fails the ratio check (1.033), and its slice rel is 0.0304.
+  - So the per-slice check is a backstop. On this golden it caught nothing the per-row checks miss.
+- Results:
+  - Reference: PASS. pcc 0.999997, rel 0.00234, ratio [0.9954, 1.0037], worst row 0.0050, slices 0.00233-0.00235.
+  - Stub: FAIL (pcc 0).
+  - Device gate: FAIL with NotImplementedError (no experts module yet; that is the implement step).
+- Implementer: the device output must be the full [S, 4096], with the 4 slices in order. Per the known issues, use `ttnn.bringup.unified_routed_expert_moe(high_precision=True)` at HiFi4 + fp32 dest with bf16 activations. The kernel's default LoFi Silu path fails the norm-ratio check.
+- The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `BRINGUP_IMPL=reference|stub PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_experts.py`
+
+## C.sliding_moe.experts.implement.1
+- Copied `mimo_v2_6_d_p_2x2/tt/experts.py` into `tt/experts.py` and adapted it to CP=4.
+  - `DISPATCH_AXIS = 1`, one dispatch group of 4 chips (dgs 4, groups 1), 64 complete experts per chip (chip c holds experts 64c..64c+63).
+  - Each chip takes its own S/4 rows: dense routing -> `ttnn.topk` -> masked_bincount -> `ttnn.bringup.offset_cumsum(cluster_axis=1)` -> `ttnn.bringup.dispatch` -> `ttnn.bringup.unified_routed_expert_moe(high_precision=True)` (HiFi4 + fp32 dest, bf16 ROW_MAJOR x, bfp8 weights) -> `ttnn.bringup.combine` -> `post_combine_reduce`.
+  - The output is [1, 1, S/4, H] on chip c. There is no all_reduce and no all_gather after it.
+  - The per-expert cap is the max chunk (8192), with capacity factor 8.
+  - `build_experts` lives in `tt/experts.py` (this model has no `tt/model.py` yet).
+  - `MIMO_EXPERTS_MODE=loop|unified_lofi` are kept for comparison.
+- Global-expert-idx table: built from `create_global_expert_idx_table(64, dgs=4, groups=1)` with the mapper `ShardTensor2dMesh(dims=(0, 1))`. `get_ep_mesh_mapper` shards the wrong dims on 1x4 with one group.
+- The weight layout is the one `TtRoutedExpert` derives from the mesh shape, so chip c holds experts 64c.. (same as the 1x4 prior). The weights are cached under `generated/mimo_v2_6_d_p_cp4/tt_cache/experts`; the first run dequantizes the mxfp4 experts.
+- Fork change:
+  - `ttnn.bringup.dispatch` and `ttnn.bringup.combine` rejected `cluster_axis=1` with a host TT_FATAL. Their factories and kernels already support axis 1.
+  - Added the opt-in `allow_cluster_axis_1` (default False) to both forks: a host-check change only, so the program with the option off is unchanged. Rebuilt with `./build_metal.sh`.
+  - New tests: `dispatch/tests/unit/test_dispatch_cluster_axis_1.py` and `combine/tests/unit/test_combine_cluster_axis_1.py` (exact checks plus a refusal check). Each fails when its expected output is corrupted (checked once by hand).
+  - Regression with the option off: model cases 12/12 pass; `fork_source` dispatch 82 tests and combine 117 tests, 0 regressions each.
+  - CHANGELOG entries and INDEX rows are updated.
+- hooks: added `_experts_module` / `_experts_host_fn` (the CP slices of x and the dense router in, the per-chip outputs concatenated). Added `device_component` "experts", added "experts" to `DEVICE_STEPS["sliding_moe"]`, and added it to the hybrid overrides.
+- Gate: PASS. pcc_experts_L01 0.999980, rel L2 0.0063, row norm ratio [0.9928, 1.0064], worst row 0.0152, slice rel L2 0.0063-0.0064. The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Gotcha: fork test files with the same basename in two forks collide under pytest (`tests.unit.<name>`). Name them per fork.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_experts.py`

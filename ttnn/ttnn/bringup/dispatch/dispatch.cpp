@@ -33,15 +33,17 @@ std::array<ttnn::Tensor, 2> dispatch(
     bool use_l1_small_for_semaphores,
     bool fp8_output,
     bool fp8_scaled_input,
-    uint32_t num_workers_per_sender) {
+    uint32_t num_workers_per_sender,
+    bool allow_cluster_axis_1) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
-    // Validate fabric configuration - only tested values are supported
+    // Validate fabric configuration - only tested values are supported (axis 1 opt-in: allow_cluster_axis_1)
     TT_FATAL(
-        cluster_axis.value_or(0) == 0,
-        "cluster_axis must be 0 (current value: {}). Other values are not tested.",
+        cluster_axis.value_or(0) == 0 || (allow_cluster_axis_1 && cluster_axis.value_or(0) == 1),
+        "cluster_axis must be 0 (current value: {}). Other values are not tested; pass allow_cluster_axis_1=True "
+        "for a dispatch group along mesh axis 1.",
         cluster_axis.value_or(0));
     TT_FATAL(
         num_links.value_or(1) >= 1 && num_links.value_or(1) <= 4,

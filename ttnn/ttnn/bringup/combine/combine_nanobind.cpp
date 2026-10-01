@@ -68,6 +68,9 @@ void bind_combine(nb::module_& mod) {
                 Defaults to True.
             use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3.
                 Requires Blackhole hardware. Defaults to False.
+            allow_cluster_axis_1 (bool, optional): Accept cluster_axis=1 (a combine group along the
+                mesh columns, e.g. a 1xN mesh with one group of N chips). The program is the source op's
+                for that axis; only the host check changes. Defaults to False (cluster_axis must be 0).
 
         Returns:
             ttnn.Tensor:
@@ -94,7 +97,8 @@ void bind_combine(nb::module_& mod) {
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("init_zeros") = true,
         nb::arg("use_l1_small_for_semaphores") = false,
-        nb::arg("use_fp8_combine") = false);
+        nb::arg("use_fp8_combine") = false,
+        nb::arg("allow_cluster_axis_1") = false);
 }
 
 }  // namespace ttnn::operations::bringup::combine::detail

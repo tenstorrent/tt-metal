@@ -46,3 +46,18 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: hy4_preview_d_p O.1
 - Files: `tests/cases.py`
+
+### Opt-in dispatch group along mesh axis 1 (`allow_cluster_axis_1`)
+- What: new keyword `allow_cluster_axis_1` (default False). When True, the host check accepts `cluster_axis=1` as
+  well as 0. The program factory and kernels already handle both axes (`AXIS` define, `ReplicateGroup::ROWS`, the
+  FABRIC_2D same-group peer scan), so only `dispatch.cpp`'s TT_FATAL changes. Option off: the same refusal, and the
+  same program for every existing call.
+- Why: under CP=4 on a 1x4 mesh each chip dispatches its own S/4 rows over all 4 chips: one dispatch group along
+  axis 1. Axis 0 has one device there, and the source's check rejected axis 1 (TT_FATAL "cluster_axis must be 0").
+  With the option on, MiMo layer-1 experts score PCC 0.99998 and rel L2 0.0063 (component gate).
+- Needed by: mimo_v2_6_d_p_cp4 C.sliding_moe.experts
+- Files: `dispatch.cpp`, `dispatch.hpp`, `dispatch_nanobind.cpp`, `tests/unit/test_dispatch_cluster_axis_1.py`
+  (1x4 FABRIC_2D, a group of 4 on axis 1, every received buffer / metadata row exact, at S 256 / H 1024 and
+  S 1280 / H 4096; also checks that the default still refuses axis 1)
+- Regression with the option off: the model cases in `tests/test_dispatch.py` 6/6 pass; `fork_source`: 82 tests,
+  0 regressions vs the baseline.

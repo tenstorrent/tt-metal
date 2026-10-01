@@ -97,6 +97,9 @@ void bind_dispatch(nb::module_& mod) {
             num_workers_per_sender (int, optional): Number of worker cores per
                 sender. Applies to both TILE and ROW_MAJOR input (both layouts run on
                 the same worker architecture; ROW_MAJOR reads rows without untilizing).
+            allow_cluster_axis_1 (bool, optional): Accept cluster_axis=1 (a dispatch group along the
+                mesh columns, e.g. a 1xN mesh with one group of N chips). The program is the source op's
+                for that axis; only the host check changes. Defaults to False (cluster_axis must be 0).
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -132,7 +135,8 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("use_l1_small_for_semaphores") = false,
         nb::arg("fp8_output") = false,
         nb::arg("fp8_scaled_input") = false,
-        nb::arg("num_workers_per_sender") = 2);
+        nb::arg("num_workers_per_sender") = 2,
+        nb::arg("allow_cluster_axis_1") = false);
 }
 
 }  // namespace ttnn::operations::bringup::dispatch::detail

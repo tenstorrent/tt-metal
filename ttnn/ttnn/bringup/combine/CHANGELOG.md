@@ -48,3 +48,14 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: hy4_preview_d_p O.1
 - Files: `tests/cases.py`
+
+### Opt-in combine group along mesh axis 1 (`allow_cluster_axis_1`)
+- What: new keyword `allow_cluster_axis_1` (default False). When True, the host check accepts `cluster_axis=1` as
+  well as 0. The program factory and kernels already handle both axes, so only `combine.cpp`'s TT_FATAL changes.
+  Option off: the same refusal, and the same program for every existing call.
+- Why: the combine half of the dispatch fork's change of the same name (CP=4 on 1x4: one group of 4 chips on axis 1).
+- Needed by: mimo_v2_6_d_p_cp4 C.sliding_moe.experts
+- Files: `combine.cpp`, `combine.hpp`, `combine_nanobind.cpp`, `tests/unit/test_combine_cluster_axis_1.py`
+  (1x4 FABRIC_2D, every (token, slot) of every chip exact, TILE bf16 buffer, at S 256 / H 1024 and S 1280 / H 4096;
+  also checks that the default still refuses axis 1)
+- Regression with the option off: the model cases in `tests/test_combine.py` 6/6 pass; `fork_source`: 117 tests, 0 regressions vs the baseline.
