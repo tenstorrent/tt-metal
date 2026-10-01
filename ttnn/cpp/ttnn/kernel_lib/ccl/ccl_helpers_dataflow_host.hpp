@@ -6,7 +6,7 @@
 
 /**
  * @file ccl_helpers_dataflow_host.hpp
- * @brief Host companion to ttnn/cpp/ttnn/kernel_lib/ccl_helpers_dataflow.hpp.
+ * @brief Host companion to ttnn/cpp/ttnn/kernel_lib/ccl/ccl_helpers_dataflow.hpp.
  *
  * The host-side half of the multi-device CCL (fabric) dataflow helper: 1-D route
  * computation, fabric packet framing, the fabric-connection runtime-arg append (in
@@ -14,15 +14,13 @@
  * allocation + the cross-device Synchronize barrier. Mirrors the single-device
  * dataflow-helper precedent (#45698) at the multi-device tier.
  *
- * Header-only (all functions `inline`): the only consumer today is a program factory
- * that already pulls these dependencies; splitting into a compiled .cpp + CMake
- * target is trivial later if the inline footprint grows.
+ * Header-only (all functions `inline`), so program factories and bindings can use
+ * the same implementation without a separate library target.
  *
  * @par Authoring a CCL dataflow op — which helper for each step.
- *   These are host-side building blocks called from an op's PROGRAM FACTORY (point_to_point and
- *   all_gather are the consumers today). The pure-computation entries (@c ccl_packet_dims,
- *   @c ccl_dm_route) and @c make_ccl_semaphore are also Python-bound under @c ttnn._ttnn.fabric,
- *   because generated ops assemble their MeshProgramDescriptor from Python host code. A typical
+ *   These are host-side building blocks called from an op's PROGRAM FACTORY. The
+ *   pure-computation entries (@c ccl_packet_dims, @c ccl_dm_route) and
+ *   @c make_ccl_semaphore are also Python-bound under @c ttnn._ttnn.ccl_host. A typical
  *   fabric dataflow op builds its writer/reader args in this order:
  *     1. @c ccl_packet_dims(dtype, page_size, num_pages, alignment) — frame pages into fabric
  *        packets (packet size / pages-per-packet / segments); owns the bf16 case + the page regimes.
@@ -41,7 +39,7 @@
  *        cache-miss Synchronize barrier; keep the returned handle alive for the workload's lifetime.
  *
  * @par Host helper <-> kernel-side consumer pairing.
- *   | host (this header / ttnn._ttnn.fabric)   | kernel side consumes it via                       |
+ *   | host (this header / ttnn._ttnn.ccl_host) | kernel side consumes it via                      |
  *   |-------------------------------------------|---------------------------------------------------|
  *   | @c build_ccl_fabric_rt_args               | @c FabricStreamSender<>(arg_idx, ...) cursor       |
  *   | @c append_ccl_line_route_ct_args          | @c ccl_routing_utils::get_line_*_route_info_from_args |
@@ -66,8 +64,6 @@
  *   FabricStreamSender<> sender(arg_idx, is_forward, l1_alignment);  // cursor eats the fabric block
  *   const uint32_t num_hops = get_arg_val<uint32_t>(arg_idx++);      // op args resume at the cursor
  * @endcode
- *   Full worked references: the committed example packages under ttnn/ttnn/operations/
- *   (point_to_point is the smallest) and the migrated reduce_scatter_minimal_async factory.
  */
 
 #include <bit>
@@ -202,7 +198,7 @@ inline DmRoute ccl_dm_route(
         // (Pre-fix this computed `line_hops + sign(line_hops) * ring_size` over the already-ABSOLUTE
         // line_hops, which is always longer — the wrap branch was unreachable and a Ring route
         // silently degraded to the line route, with the wrong hop count AND direction for wrap
-        // pairs. Caught by reduce_scatter's Refinement-1 fabric probe on a (1, 4) ring.)
+        // pairs.)
         const int signed_line_hops = line_is_forward ? line_hops : -line_hops;
         const int ring_hops = signed_line_hops + ((signed_line_hops > 0 ? -1 : 1) * static_cast<int>(mesh_shape[dim]));
         if (std::abs(ring_hops) < std::abs(signed_line_hops)) {
@@ -297,8 +293,7 @@ inline std::vector<uint32_t> build_ccl_fabric_rt_args(
 /**
  * @brief Allocate a GlobalSemaphore on the mesh's worker cores and run the cache-miss
  *        cross-device Synchronize barrier. Returns the semaphore; the CALLER must keep
- *        it alive for the cached workload's lifetime (point_to_point parks it in
- *        WorkloadDescriptor::semaphores).
+ *        it alive for the cached workload's lifetime.
  */
 inline GlobalSemaphore make_ccl_semaphore(MeshDevice* mesh_device, uint32_t initial_value = 0) {
     auto sd_id = mesh_device->get_sub_device_ids().at(0);

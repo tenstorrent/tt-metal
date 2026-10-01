@@ -12,9 +12,6 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
-
-namespace sched = ttnn::ccl::schedule;  // the neighbour-first ring slice walk
 
 using namespace tt::tt_fabric::linear::experimental;
 
@@ -124,13 +121,7 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<output_ct_val>();
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_address);
 
-    // Connect to fabric. NOTE: this op's egress sits on the ROUTING-PLANE fabric stack
-    // (RoutingPlaneConnectionManager + route-id API + the fused SCATTER-write-atomic-inc send),
-    // which the CCL dataflow helper does not wrap: the helper's connection policies and armed
-    // channels are built over FabricConnectionManager and the linear set_state/with_state API.
-    // Wrapping the routing-plane stack deserves its own helper tier, designed against runnable
-    // hardware (this op needs an 8-device system) — only the shared SCHEDULE pieces are adopted
-    // here.
+    // connect to fabric
     size_t arg_for_fab = arg_idx;
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     constexpr uint32_t num_connections = 1;
@@ -167,11 +158,14 @@ void kernel_main() {
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
 
     Noc noc_obj;
-    // The shared neighbour-first slice walk (same cursor as the reader and reduction kernel).
-    auto slice_cursor = sched::RingSliceCursor::starting_at(
-        sched::ring_neighbour_first_slice(my_chip_id, direction), ring_size, direction);
+    int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
-        const uint32_t actual_slice_idx = slice_cursor.wrap();
+        uint32_t actual_slice_idx;
+        if (direction) {
+            actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+        } else {
+            actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+        }
 
         uint32_t reduced_cb_id = i == 0 ? input_slice_cb_ids[actual_slice_idx] : compute_cb_id;
         CircularBuffer cb_reduced(reduced_cb_id);
@@ -268,7 +262,12 @@ void kernel_main() {
             }
         }
 
-        slice_cursor.advance();
+        // next slice idx
+        if (direction) {
+            slice_idx--;
+        } else {
+            slice_idx++;
+        }
     }
 
     close_connections(fabric_connection);
