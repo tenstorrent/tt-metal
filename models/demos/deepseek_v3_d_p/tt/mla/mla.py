@@ -11,6 +11,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.all_gather_op import persistent_all_gather
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     NullIndexer,
     ReuseIndexer,
@@ -1110,7 +1111,7 @@ class ttMLA:
                 f"q_a latent gather was preallocated for {self.active_seq_len_local} local tokens, "
                 f"got {seq_len_local}"
             )
-            qr = ttnn.experimental.high_bw_all_gather(
+            qr = persistent_all_gather(
                 qr,
                 dim=3,
                 output_tensor=self._q_a_latent_gather_output,
@@ -1307,7 +1308,7 @@ class ttMLA:
             assert seq_len_local == self.active_seq_len_local, (
                 f"KV stem gather was preallocated for {self.active_seq_len_local} local tokens, " f"got {seq_len_local}"
             )
-            tt_kv = ttnn.experimental.high_bw_all_gather(
+            tt_kv = persistent_all_gather(
                 tt_kv,
                 dim=1,
                 output_tensor=self._kv_stem_gather_output,
@@ -1442,7 +1443,7 @@ class ttMLA:
                 f"output-gate gather was preallocated for {self.active_seq_len_local} local tokens, "
                 f"got {seq_len_local}"
             )
-            h = ttnn.experimental.high_bw_all_gather(
+            h = persistent_all_gather(
                 hidden_states,
                 dim=3,
                 output_tensor=self._output_gate_gather_output,
@@ -2250,7 +2251,7 @@ class ttMLA:
                 ready_semaphore=overlap_resources.ready_semaphore,
                 data_valid_semaphore=overlap_resources.data_valid_semaphore,
             )
-        gathered = ttnn.experimental.high_bw_all_gather(storage, **gather_kwargs)
+        gathered = persistent_all_gather(storage, **gather_kwargs)
         return MlaKvCache(
             format=kvpe_cache.format,
             storage=gathered,

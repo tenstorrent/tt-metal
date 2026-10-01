@@ -21,6 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.all_gather_op import persistent_all_gather
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # DeepSeek 671B RMSNorm dimensions
@@ -348,7 +349,7 @@ class TtDistributedRmsNorm(LightweightModule):
                     device=self.mesh_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-            tt_gathered_stats = ttnn.experimental.high_bw_all_gather(
+            tt_gathered_stats = persistent_all_gather(
                 tt_stats,
                 dim=3,
                 output_tensor=self._gathered_stats,

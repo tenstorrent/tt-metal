@@ -240,10 +240,9 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Recentered to CI run 36356786056 / job 108727344674. Main had already drifted ~13 ms under the
-    # previous centre on every chunk (jobs 108833541819, 108591991106, 108483306778 read 0.530s at
-    # chunk 0); ND-sharded routed-expert weights take a flat ~5 ms more per chunk.
-    (78, 11, 10): [0.525, 0.521, 0.534, 0.528, 0.542, 0.540, 0.539, 0.543, 0.558, 0.564, 0.574],
+    # Recentered to CI run 36673313175 / job 109754834799: all GLM all-gathers on ttnn.experimental.fabric_all_gather
+    # (was high_bw_all_gather) take chunks 0-5 ~1-2% and chunks 6-10 3-4.4% faster (the KV-prefix gather grows).
+    (78, 11, 10): [0.517, 0.514, 0.525, 0.518, 0.528, 0.525, 0.522, 0.525, 0.538, 0.541, 0.549],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -1843,8 +1842,9 @@ def run_chunked_transformer_updated(
             topk_cores = {resources.topk_core_grid.num_cores() for _, resources in active}
             gather_cores = {resources.gather_core_grid.num_cores() for _, resources in active}
             assert profiles == {expected_overlap_profile}, profiles
-            assert topk_cores == {80}, topk_cores
-            assert gather_cores == {40}, gather_cores
+            gather_rows = 2  # tt_ccl._SPARSE_MLA_OVERLAP_GATHER_ROWS: the two worker rows below the Ethernet row
+            assert topk_cores == {worker_grid.x * (worker_grid.y - gather_rows)}, topk_cores
+            assert gather_cores == {worker_grid.x * gather_rows}, gather_cores
             observed_profile = next(iter(profiles))
             observed_topk_cores = next(iter(topk_cores))
             observed_gather_cores = next(iter(gather_cores))

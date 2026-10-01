@@ -46,11 +46,17 @@ class SparseMlaOverlapResources:
     data_valid_semaphore: object
 
 
+# Tensix grid each profile requires. Every profile gives the KV gather the two worker rows right below the Ethernet
+# row (logical rows 0..1, the full width) and top-k the other eight rows. Blackhole has all its Ethernet cores in one
+# row and harvests only columns, so those two rows hold a core directly below every Ethernet core on every chip,
+# whichever links the fabric routes through: the fabric CCL senders sit one NoC hop from their links. A column strip
+# (the previous 80/40 split) forced them across the chip (QuietBox, standalone: 1.7-2x slower KV gather).
 _SPARSE_MLA_OVERLAP_PROFILE_GRIDS = {
-    "galaxy_80_40": (12, 10),
-    "loudbox_80_40": (12, 10),
-    "qb2_80_30": (11, 10),
+    "galaxy_rows2": (12, 10),
+    "loudbox_rows2": (12, 10),
+    "qb2_rows2": (11, 10),
 }
+_SPARSE_MLA_OVERLAP_GATHER_ROWS = 2
 
 
 def get_tt_ccl(mesh_device: ttnn.MeshDevice) -> "TT_CCL":
@@ -205,7 +211,7 @@ class TT_CCL:
         return resources["pairs"][index]
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
-        """Create or return the exact 80/40 production or 80/30 QB2 overlap profile.
+        """Create or return the sparse-MLA overlap profile: KV gather on the top two worker rows, top-k on the rest.
 
         Resource creation happens outside the hot forward path. Semaphore allocation is followed by a
         mesh-wide synchronization so every participating device observes the zero initialization before
@@ -215,8 +221,8 @@ class TT_CCL:
         if profile == "auto":
             grid = self.mesh_device.compute_with_storage_grid_size()
             profile = {
-                (11, 10): "qb2_80_30",
-                (12, 10): "loudbox_80_40",
+                (11, 10): "qb2_rows2",
+                (12, 10): "loudbox_rows2",
             }.get((grid.x, grid.y))
             if profile is None:
                 raise ValueError(
@@ -245,11 +251,15 @@ class TT_CCL:
                 f"Tensix grid, got {grid.x}x{grid.y}"
             )
 
-        topk_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))])
-        gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(grid.x - 1, 9))])
-        assert topk_core_grid.num_cores() == 80
-        expected_gather_cores = 40 if grid.x == 12 else 30
-        assert gather_core_grid.num_cores() == expected_gather_cores
+        rows = _SPARSE_MLA_OVERLAP_GATHER_ROWS
+        gather_core_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, rows - 1))]
+        )
+        topk_core_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+        )
+        assert gather_core_grid.num_cores() == grid.x * rows
+        assert topk_core_grid.num_cores() == grid.x * (grid.y - rows)
 
         manager_id = self.mesh_device.create_sub_device_manager(
             [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
