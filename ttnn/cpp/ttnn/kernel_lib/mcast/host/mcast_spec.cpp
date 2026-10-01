@@ -128,8 +128,8 @@ std::vector<size_t> validate_targets(
 
 NOC spec_noc(const m2::KernelSpec& kernel) {
     const auto& hw = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
-    if (const auto* gen1 = std::get_if<m2::DataMovementGen1Config>(&hw)) {
-        return gen1->noc;
+    if (hw.config_1xx) {
+        return hw.config_1xx->noc;
     }
     return NOC::NOC_0;  // Gen2 has one unified NoC.
 }
