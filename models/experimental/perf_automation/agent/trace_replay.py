@@ -27,6 +27,7 @@ FORWARD_WALL_MS.
 
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 import time
@@ -289,6 +290,23 @@ def _replay_1cq(device, tid, iters, budget_s=0.0):
     return (time.perf_counter() - t0) / n
 
 
+def _replay(device, tid, iters, budget_s=0.0):
+    """Run whatever `_replay_1cq` is in force, handing it the budget only if it accepts one.
+
+    A perf test may install its own replay over _replay_1cq, and one written before the budget
+    existed takes three arguments. Qwen-Image-Edit 2026-10-01: its per-iteration progress replay was
+    called with four, every stage raised TypeError, and the run timed nothing for hours. The budget
+    is additive, so such a replay is called exactly as it was before it."""
+    fn = _replay_1cq
+    try:
+        inspect.signature(fn).bind(device, tid, iters, budget_s)
+    except TypeError:
+        return fn(device, tid, iters)
+    except ValueError:  # no signature to read -- call it the current way
+        pass
+    return fn(device, tid, iters, budget_s)
+
+
 # A REPLAYED TRACE DISPATCHES ONE OP. An eager pass dispatches one per ttnn call in the model --
 # 3,564 of them for a 48-layer gemma-3 prefill. Nothing else about the two paths differs by three
 # orders of magnitude, so the dispatch count is the signal, and anything above this is eager.
@@ -526,7 +544,7 @@ def _measure_stage(device, stage, budget_s=0.0):
         _report_read_set(stage.name, _n, _ws_bytes)
     tid = _capture_step_trace(device, stage.step)
     try:
-        per_s = _replay_1cq(device, tid, _REPLAY_ITERS, budget_s)
+        per_s = _replay(device, tid, _REPLAY_ITERS, budget_s)
         path = "trace+1cq"
     finally:
         try:

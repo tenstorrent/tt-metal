@@ -2932,7 +2932,11 @@ def _persist_stage_ms(
     from prose can put time in the wrong pool and be acted on. These names come from the
     PIPELINE_STAGES the model declares, measured by the harness.
     """
-    if not stage_ms:
+    # THE BATCH OUTLIVES A FAILED TIMING. The replay states its batch even when every stage raised, and
+    # returning here dropped it, so the report printed "batch: not reported" for a run that served 32.
+    # Recorded with no stages -- which every reader already treats as "not measured" -- and only when
+    # this run has no stage file yet, so a crash never overwrites timings this run did measure.
+    if not stage_ms and (not stage_batch or read_stage_ms(model=_model_key())):
         return
     try:
         p = _stage_ms_path()

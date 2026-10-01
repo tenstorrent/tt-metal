@@ -25,8 +25,6 @@ import os
 import sys
 import types
 
-import pytest
-
 
 def _tr(monkeypatch):
     monkeypatch.setitem(sys.modules, "ttnn", types.SimpleNamespace())
@@ -175,3 +173,35 @@ def test_it_names_no_model_or_stage(monkeypatch):
         lowered = ast.unparse(node).lower()
         for name in ("qwen", "denoise", "prefill", "vision", "encoder", "decoder", "vae"):
             assert name not in lowered, f"{name!r} in {fn.__name__} assumes the model's vocabulary"
+
+
+# --- a replay a perf test installed before the budget existed -------------------------------------
+
+
+def test_a_three_argument_replay_a_test_installed_is_still_called(monkeypatch):
+    """Qwen-Image-Edit 2026-10-01: its test replaces _replay_1cq with a 3-argument progress replay;
+    called with the budget it raised TypeError in every stage and the whole timing read 0."""
+    TR = _tr(monkeypatch)
+    seen = []
+    monkeypatch.setattr(TR, "_replay_1cq", lambda dev, tid, iters: seen.append(iters) or 0.5)
+    assert TR._replay("dev", 7, 4, 120.0) == 0.5
+    assert seen == [4]
+
+
+def test_a_replay_that_takes_the_budget_gets_it(monkeypatch):
+    TR = _tr(monkeypatch)
+    seen = []
+    monkeypatch.setattr(TR, "_replay_1cq", lambda dev, tid, iters, budget_s=0.0: seen.append(budget_s) or 0.25)
+    assert TR._replay("dev", 7, 4, 120.0) == 0.25
+    assert seen == [120.0]
+
+
+def test_the_stage_measurement_goes_through_the_tolerant_call(monkeypatch):
+    import ast
+    import inspect
+    import textwrap
+
+    TR = _tr(monkeypatch)
+    body = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(TR._measure_stage))).body[0])
+    assert "_replay(device, tid, _REPLAY_ITERS, budget_s)" in body
+    assert "_replay_1cq(" not in body, "a direct call is the one that broke installed replays"

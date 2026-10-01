@@ -103,3 +103,33 @@ def test_all_three_fields_share_one_reader():
     i = src.index("def read_stage_ms")
     j = src.index("def read_stage_isl")
     assert 'json.loads((base / ("perf_mcp_stage_ms' not in src[i:j], "a reader is still opening the file itself"
+
+
+def test_a_timing_where_every_stage_failed_still_records_the_batch(tmp_path, monkeypatch):
+    """Qwen-Image-Edit 2026-10-01: every stage raised, the replay still printed batch=32, and the report
+    said "batch: not reported" because the writer returned on the empty timings."""
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(PM, "_MODEL_ROOT", Path("m"), raising=False)
+    _write(tmp_path, run="run-A")  # the previous run's file, with its own stages
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-B")
+    PM._persist_stage_ms({}, stage_batch=32)
+    assert PM.read_stage_batch(model="m", task="main") == 32
+    assert PM.read_stage_ms(model="m", task="main") == {}, "no stage is invented"
+
+
+def test_a_failed_timing_never_overwrites_this_runs_measured_stages(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-A")
+    monkeypatch.setattr(PM, "_MODEL_ROOT", Path("m"), raising=False)
+    PM._persist_stage_ms({"prefill": 1.0}, stage_batch=8)
+    PM._persist_stage_ms({}, stage_batch=32)
+    assert PM.read_stage_ms(model="m", task="main") == {"prefill": 1.0}
+    assert PM.read_stage_batch(model="m", task="main") == 8
+
+
+def test_no_stages_and_no_batch_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-A")
+    monkeypatch.setattr(PM, "_MODEL_ROOT", Path("m"), raising=False)
+    PM._persist_stage_ms({})
+    assert not (tmp_path / "perf_mcp_stage_ms_m_main.json").exists()
