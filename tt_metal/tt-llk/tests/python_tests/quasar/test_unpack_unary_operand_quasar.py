@@ -5,7 +5,8 @@ from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
+from helpers.constraints import is_valid_data_format_conversion
+from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
     TransposeGolden,
@@ -83,6 +84,8 @@ def generate_unpack_unary_operand_combinations(
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
 
     for fmt in formats_list:
+        if not is_valid_data_format_conversion(fmt):
+            continue
         in_fmt = fmt.input_format
 
         dest_acc_modes = (
@@ -183,6 +186,11 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
+        DataFormat.Int32,
+        DataFormat.Int8,
+        DataFormat.UInt8,
+        DataFormat.Int4,
+        DataFormat.UInt4,
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
         DataFormat.MxFp4,
@@ -191,14 +199,8 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ]
 )
-# Int4/UInt4 are L1 input-only formats: pair each with the 8-bit integer formats and Int32.
-UNPACK_4BIT_INPUT_FORMATS = [
-    InputOutputFormat(input_format, output_format)
-    for input_format in (DataFormat.Int4, DataFormat.UInt4)
-    for output_format in (DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32)
-]
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
-    UNPACK_FORMATS + UNPACK_4BIT_INPUT_FORMATS
+    UNPACK_FORMATS
 )
 PERF_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
     UNPACK_FORMATS,
