@@ -98,8 +98,8 @@ void kernel_main() {
 
     // wait for all other devices to finish dispatching their input tokens and metadata
     uint32_t my_device_offset = tokens_per_device * dispatch_index;
-    // Ring: credits come from the completion multicast only, dispatch_devices of them, plus 1 local.
-    // Otherwise each metadata packet carries one.
+    // Ring: dispatch_devices completion credits (one per remote device, two from the antipode) plus 1 local.
+    // Otherwise one credit per metadata packet.
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(22);
     constexpr bool ring_completion = topology == tt::tt_fabric::Topology::Ring && axis != ReplicateGroup::NONE;
     if constexpr (write_page_by_page) {
