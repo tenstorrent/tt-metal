@@ -67,9 +67,6 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
 
-                // The packer bakes the output DFB's L1 base into its descriptor at init, so point it at this K
-                // chunk's target (a format reconfig alone would leave the data in the other DFB).
-                pack_init(pack_target_id);
                 // With packer L1 accumulation, K chunk 0 overwrites the partials, later K chunks add DST
                 // onto them, and the finished sum is packed without accumulation.
                 if constexpr (partials_format_differs) {
