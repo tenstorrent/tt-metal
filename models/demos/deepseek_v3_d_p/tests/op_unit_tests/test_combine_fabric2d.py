@@ -421,9 +421,11 @@ def test_combine_fabric2d_relaunch(mesh_device, device_params, num_links, emb_di
     assert added == [1, 1, 0, 0], f"programs the four launches added: {added}, expected [1, 1, 0, 0]"
 
 
+# The production mesh only: if the clamp regresses, this hangs the device rather than failing, and the CI
+# boxes run the 8x1 mesh.
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
-    _MESH_CONFIGS,
+    _PRODUCTION_MESH,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("routing", [None, "production"], ids=lambda r: r or "in-group")
@@ -448,8 +450,6 @@ def test_combine_fabric2d_overflow(mesh_device, device_params, num_links, routin
     """
     cfg = extract_mesh_config(mesh_device)
     H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
-    if routing == "production" and G == 1:
-        pytest.skip("production routing sends most picks to other dispatch groups; this mesh has only one")
     topk, num_routed_experts, seed = 8, 256, 11
     # Positional, as _Fixture calls it, so both share the one cached draw.
     drawn = _drawn_routing(G, H, SEQ_LEN_PER_CHIP, topk, num_routed_experts, seed, routing)
