@@ -6,7 +6,8 @@
 
 Complex divide is multiply-by-reciprocal, and all three divisions in this op divide
 by the same tensor. The reciprocal of a conjugate is the conjugate of the reciprocal,
-so the conjugated division shares it too.
+so the conjugated division shares it too. The divisor's zero test runs both EQZs as
+operand activations of its logical_and.
 """
 
 import pytest
@@ -72,6 +73,7 @@ def test_complex_div_bw_dispatch_count(device):
     n = sum(
         1
         for x in captured
-        if x.get("node_type") == "function_start" and str(x.get("params", {}).get("name", "")).endswith("DeviceOperation")
+        if x.get("node_type") == "function_start"
+        and str(x.get("params", {}).get("name", "")).endswith("DeviceOperation")
     )
-    assert n == 44, f"expected 44 device operations, got {n}"
+    assert n == 42, f"expected 42 device operations, got {n}"
