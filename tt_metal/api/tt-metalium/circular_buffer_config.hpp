@@ -24,9 +24,6 @@ enum class DataFormat : uint8_t;
 namespace tt_metal {
 class Buffer;
 class MeshTensor;
-namespace distributed {
-class MeshBuffer;
-}  // namespace distributed
 enum class DataType;
 }  // namespace tt_metal
 }  // namespace tt
@@ -80,9 +77,6 @@ public:
     CircularBufferConfig& set_globally_allocated_address_and_total_size(
         const Buffer& buffer, uint32_t total_size, uint32_t address_offset);
 
-    CircularBufferConfig& set_globally_allocated_address_and_total_size(
-        const MeshTensor& tensor, uint32_t total_size, uint32_t address_offset);
-
     CircularBufferConfig& set_tile_dims(uint8_t buffer_index, const Tile& tile);
 
     /// Override face row count and logical face count metadata for this buffer index.
@@ -117,9 +111,6 @@ public:
     void set_address_offset(uint32_t offset);
 
     const Buffer* shadow_global_buffer{nullptr};
-    // Set when the backing comes from a MeshTensor: the CB is programmed from shadow_global_buffer (the reference
-    // device's buffer) on every device, so a per-core buffer is checked to sit at one address across devices.
-    const distributed::MeshBuffer* shadow_global_mesh_buffer{nullptr};
 
     class Builder {
     public:

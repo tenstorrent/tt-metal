@@ -293,8 +293,8 @@ TEST_F(PerCoreAllocationTest, CircularBufferAcrossMatchingPerCoreAddresses) {
 }
 
 // A CB backed by a MeshTensor is programmed from the reference device's buffer on every device, so a per-core
-// tensor that sits at different addresses on different devices must be rejected on every path that takes a
-// tensor: creating the CB and re-pointing it (as a cached program is).
+// tensor that sits at different addresses on different devices must be rejected where the tensor reaches the CB:
+// creating it from a descriptor that names the tensor, and re-pointing it at the tensor (as a cached program is).
 class PerCoreAllocationTwoDeviceTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -379,12 +379,8 @@ TEST_F(PerCoreAllocationTwoDeviceTest, CircularBufferRejectsPerCoreTensorAtDiffe
     EXPECT_ANY_THROW(UpdateDynamicCircularBufferAddressAndTotalSize(program, handle, skewed, PAGE_SIZE));
     EXPECT_EQ(program.impl().get_circular_buffer(handle)->address(), uniform_address);
 
-    // So is creating a CB on it, from a config or from a descriptor.
-    CircularBufferConfig skewed_config(PAGE_SIZE, {{0, tt::DataFormat::Float16_b}});
-    skewed_config.set_page_size(0, PAGE_SIZE);
-    skewed_config.set_globally_allocated_address(skewed);
-    Program other = CreateProgram();
-    EXPECT_ANY_THROW(CreateCircularBuffer(other, core, skewed_config));
+    // So is creating a CB on it from a descriptor that names the tensor. (A CircularBufferConfig only keeps the
+    // reference device's buffer, so a CB created from one cannot be checked across devices.)
     CBDescriptor descriptor;
     descriptor.total_size = PAGE_SIZE;
     descriptor.core_ranges = cores;
