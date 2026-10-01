@@ -438,7 +438,7 @@ def p300_prefill_mm(kind, device, M, K, N, in1_dtype=None, ckc=None, fp32_acc=No
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=True,
-            in1_dual_sender=_dual_in1(rows, int(M) // 32, pcm),  # QWEN36_MM_DUAL_IN1 (default off)
+            in1_dual_sender=_dual_in1(rows, int(M) // 32, pcm),  # QWEN36_MM_DUAL_IN1 (default on)
         )
         desc = f"2D mcast 11x10 bw{bw} pcM{pcm} pcN{pcn} sb{sh}x{sw} fuse_batch=True" + (
             " in1_dual_sender" if cfg.in1_dual_sender else ""
@@ -930,7 +930,7 @@ def r5_glu_sp_progcfg(x, w_gate_up, grid, compute_kernel_config):
         glu_last_block=True,
         glu_sfpu_on_pack=True,
         in0_single_buffer=False,
-        in1_dual_sender=_dual_in1(glu_rows, R5_GLU_SP_T // 32, 4),  # QWEN36_MM_DUAL_IN1 (default off)
+        in1_dual_sender=_dual_in1(glu_rows, R5_GLU_SP_T // 32, 4),  # QWEN36_MM_DUAL_IN1 (default on)
     )
 
 
@@ -945,12 +945,12 @@ def r5_glu_sp_progcfg(x, w_gate_up, grid, compute_kernel_config):
 #         each case: fewer bf16 L1-acc roundings in the K loop, not bit-exact). Deliberately excludes
 #         M1 S3 (GDN q|k|v in-proj, K2048 N6144): bw16 there overflows a kernel-config limit (TT_THROW
 #         in program.cpp), confirmed by P3_MMSWEEP.
-#   DUAL_IN1  QWEN36_MM_DUAL_IN1=1: the P300 prefill 2D-mcast configs (p300_prefill_mm kinds B, C, D1, D2, D3 and
-#         the R5 GLU_SP gate|up config) set in1_dual_sender=True: two in1 senders per column (the top and the bottom
-#         core row each read + multicast half of the K rows of every in1 block, over NOC_0 / NOC_1), which halves
-#         the in1 chain per K block and mostly shortens the pipeline fill. Same blocks, same K order, same CB layout:
-#         bit-exact vs a single sender. Only when the call has at least 3 core rows and no M padding.
-MM_FLAG_DEFAULTS = {"BW16": "0", "DUAL_IN1": "0"}
+#   DUAL_IN1  QWEN36_MM_DUAL_IN1 (default ON; "0" = off): the P300 prefill 2D-mcast configs (p300_prefill_mm kinds
+#         B, C, D1, D2, D3 and the R5 GLU_SP gate|up config) set in1_dual_sender=True: two in1 senders per column (the
+#         top and the bottom core row each read + multicast half of the K rows of every in1 block, both over NOC_0),
+#         which halves the in1 chain per K block and mostly shortens the pipeline fill. Same blocks, same K order,
+#         same CB layout: bit-exact vs a single sender. Only when the call has at least 3 core rows and no M padding.
+MM_FLAG_DEFAULTS = {"BW16": "0", "DUAL_IN1": "1"}
 
 
 def mm_value(item):
