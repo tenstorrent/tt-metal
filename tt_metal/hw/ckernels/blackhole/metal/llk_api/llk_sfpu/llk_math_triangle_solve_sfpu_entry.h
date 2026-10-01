@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "internal/tt-1xx/cache.h"
+#include "internal/tt-1xx/risc_common.h"
 #include "llk_math_eltwise_binary_sfpu_init.h"
 #include "llk_math_eltwise_sfpu_common.h"
 #include "sanitizer/api.h"
@@ -33,6 +34,7 @@ inline void llk_math_triangle_solve_sfpu_init() {
  *
  * @tparam L_FORMAT: Format of the L tile in L1, values = <Float32/Float16_b>
  * @tparam L_NEGATED: The tile holds -L below the diagonal
+ * @tparam L_CACHED: Read L through this RISC's L1 data cache
  * @param l1_base: L1 byte address of the L tile, resident until this function returns.
  * @param idst_in: DEST tile index of the right-hand side.
  * @param idst_out: DEST tile index that receives X; must differ from idst_in.
@@ -41,20 +43,28 @@ inline void llk_math_triangle_solve_sfpu_init() {
  *       The function releases the L tile to UNPACK through the MATH -> UNPACK mailbox (@ref
  *       llk_math_triangle_solve_release_l); the UNPACK thread must consume that release with
  *       @ref llk_unpack_triangle_solve_wait_l_released before it pops or overwrites the tile.
+ * @note With L_CACHED the data cache is enabled only inside this call: invalidated after the enable, flushed and
+ *       disabled again before the release.
  */
-template <DataFormat L_FORMAT, bool L_NEGATED>
+template <DataFormat L_FORMAT, bool L_NEGATED, bool L_CACHED = true>
 inline void llk_math_triangle_solve_sfpu_tile(
     const std::uint32_t l1_base, const std::uint32_t idst_in, const std::uint32_t idst_out) {
     SAN_HOOK(unsupported());
     _llk_math_eltwise_sfpu_assert_dst_index_<DST_SYNC_MODE>(idst_in, "triangle_solve_tile: idst_in out of range");
     _llk_math_eltwise_sfpu_assert_dst_index_<DST_SYNC_MODE>(idst_out, "triangle_solve_tile: idst_out out of range");
     LLK_ASSERT(idst_in != idst_out, "triangle_solve_tile: idst_out must differ from idst_in");
+    if constexpr (L_CACHED) {
+        set_l1_data_cache<true>();
+    }
     // The RISC reads L through its write-through L1 cache, which may still hold this address from an earlier tile
     // written by the packer or the NoC.
     invalidate_l1_cache();
     // The solve addresses DEST absolutely (tile index * rows per tile), so the DEST base is 0.
     _llk_math_eltwise_sfpu_start_(0 /*dst_index*/);
     sfpu::_triangle_solve_tile_<L_FORMAT, L_NEGATED>(idst_in, idst_out, l1_base);
+    if constexpr (L_CACHED) {
+        set_l1_data_cache<false>();
+    }
     llk_math_triangle_solve_release_l();  // every L1 load of L has returned: UNPACK may pop the tile
     _llk_math_eltwise_sfpu_done_();
 }
