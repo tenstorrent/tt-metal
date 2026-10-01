@@ -165,6 +165,8 @@ tensors). End-of-model hidden-state cosines are not an equivalence test on this 
 | `bench_swiglu_variants.py <batch> [xscale …]` (`MM_BLOCKS=`, `SW_ONLY=`, `SW_REPEAT=3`) | pack-thread SwiGLU SFPU pass variants (`swiglu_sfpu.hpp` patched) timed at the model's blocks, with their error vs an fp32 SwiGLU of the device's own pre-activations; `SW_REPEAT=3` exposes a pass's cost |
 | `test_qkv_chunks.py` | bit-identity of the chunked bs32 path's ops: add+norm half-batch output pair, heads op per half batch at a batch offset |
 | `test_heads_qsplit.py`, `test_sdpa_concat_out.py` | bit-identity + timing of the fused-heads Q split and the concat-free SDPA output |
+| `mm_legacy_variants.py <out> [variant]`, `bench_bs1_mm_ablate.py [op ...]` (`MM_SWEEP=`) | legacy 2D-multicast matmul kernel trees with data transfers switched off (compute only, no in0 / in1 / out), run via `TT_METAL_KERNEL_PATH` at the bs1 QKV / WO / FF1 / FF2 calls, device time via `device_kernel_us.py` |
+| `bench_bs1_ff13_1d.py` | bs1 FF1 on the 1D in0-multicast matmul over 12x10 with DRAM width-sharded weights (the landed path), in0 width-sharded over 10 / 5 cores |
 | `bench_bs1_swiglu.py` | bs1 FF1 + FF3 + SwiGLU product at the model's call: stock mul vs `silu_mul` mode 3 on interleaved and on block-sharded FF1 / FF3 outputs, with each arm's error vs an fp32 SwiGLU (device times via `device_kernel_us.py`) |
 | `parse_smi2.py <dev> <log>` | aligns tt-smi clock/power samples (`/tmp/smi_samples/*.json`) with iteration timestamps |
 
