@@ -53,7 +53,8 @@ cmbf2d::ControlTables read_control_tables(const Dram& dram) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.control_addr + ct.dispatch_group_size * row_bytes),
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.control_addr + (ct.dispatch_group_size + 1) * row_bytes),
         ct.num_routed_experts,
-        ct.dispatch_group_size};
+        ct.dispatch_group_size,
+        ct.dispatch_capacity};
     for (uint32_t r = 0; r < ct.dispatch_group_size; r++) {
         noc_async_read(dram.expert_offsets.get_noc_addr(r), ct.control_addr + r * row_bytes, row_bytes);
     }

@@ -31,18 +31,31 @@ namespace cmbf2d {
 // Where origin chip `dg_index`'s tokens for expert `e` start and end. One run ends where the next begins; the
 // last one ends at the expert's total count past its region base, which is the only thing expert_offsets
 // cannot say.
+//
+// The tables count every routed token, but dispatch drops the ones whose page would fall past the end of the
+// buffer (dispatch_fabric2d's routing_index::kept_count), so both ends are clamped to `capacity`: what lies past
+// it was never written. Clamping never reorders pages, so adjacent runs still meet and a run wholly past the end
+// is empty, which the walk skips. Every chip has the same buffer shape and clamps the same replicated tables, so
+// a run's length still agrees between the chips that send, forward and receive it.
 struct ControlTables {
     volatile tt_l1_ptr uint32_t* offsets;
     volatile tt_l1_ptr uint32_t* counts;
     volatile tt_l1_ptr uint32_t* region;
     uint32_t num_routed_experts;
     uint32_t dispatch_group_size;
+    uint32_t capacity;
 
-    uint32_t run_begin(uint32_t dg_index, uint32_t e) const { return offsets[dg_index * num_routed_experts + e]; }
-    uint32_t run_end(uint32_t dg_index, uint32_t e) const {
-        return dg_index + 1 < dispatch_group_size ? offsets[(dg_index + 1) * num_routed_experts + e]
-                                                  : region[e] + counts[e];
+    uint32_t run_begin(uint32_t dg_index, uint32_t e) const {
+        return clamp_to_capacity(offsets[dg_index * num_routed_experts + e]);
     }
+    uint32_t run_end(uint32_t dg_index, uint32_t e) const {
+        return clamp_to_capacity(
+            dg_index + 1 < dispatch_group_size ? offsets[(dg_index + 1) * num_routed_experts + e]
+                                               : region[e] + counts[e]);
+    }
+
+private:
+    uint32_t clamp_to_capacity(uint32_t page) const { return page < capacity ? page : capacity; }
 };
 
 class GroupWalk {

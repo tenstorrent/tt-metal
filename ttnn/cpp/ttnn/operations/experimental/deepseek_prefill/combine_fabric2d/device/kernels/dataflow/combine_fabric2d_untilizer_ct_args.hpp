@@ -23,7 +23,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the destinations start at. Asserted
 // against the field list below, so it cannot drift out of step with it.
-constexpr uint32_t UNTILIZER_SCALAR_CT_ARGS = 17;
+constexpr uint32_t UNTILIZER_SCALAR_CT_ARGS = 18;
 
 struct UntilizerCtArgs {
     uint32_t token_size_bytes;
@@ -46,6 +46,8 @@ struct UntilizerCtArgs {
     uint32_t tiles_per_row;
     uint32_t tile_bytes;
     uint32_t block_tiles;
+    // Pages in the dispatched buffer, as in the reader's arguments: both walk the same clamped runs.
+    uint32_t dispatch_capacity;
 
 #ifndef KERNEL_BUILD
     UntilizerCtArgs(
@@ -69,7 +71,8 @@ struct UntilizerCtArgs {
         produced_addr(plan.produced_addr),
         tiles_per_row(op::tiles_per_token_row(tensor_args)),
         tile_bytes(op::tile_size_bytes(tensor_args)),
-        block_tiles(op::untilize_block_tiles(tensor_args)) {
+        block_tiles(op::untilize_block_tiles(tensor_args)),
+        dispatch_capacity(op::dispatch_capacity(tensor_args)) {
         // The own destinations in emission order, which is the order the group walks their runs. Taken from
         // the same work list a reader's schedule is built from, so neither side can reorder alone.
         for (const auto& w : work) {
@@ -103,7 +106,8 @@ struct UntilizerCtArgs {
             produced_addr,
             tiles_per_row,
             tile_bytes,
-            block_tiles};
+            block_tiles,
+            dispatch_capacity};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -125,7 +129,8 @@ struct UntilizerCtArgs {
         produced_addr(get_compile_time_arg_val(13)),
         tiles_per_row(get_compile_time_arg_val(14)),
         tile_bytes(get_compile_time_arg_val(15)),
-        block_tiles(get_compile_time_arg_val(16)) {}
+        block_tiles(get_compile_time_arg_val(16)),
+        dispatch_capacity(get_compile_time_arg_val(17)) {}
 
     static constexpr uint32_t destination_base = UNTILIZER_SCALAR_CT_ARGS;
     static constexpr uint32_t consumer_base = destination_base + get_compile_time_arg_val(6);  // num_destinations

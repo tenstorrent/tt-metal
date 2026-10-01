@@ -25,7 +25,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at. Asserted against
 // the field list below, so it cannot drift out of step with it.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 28;
+constexpr uint32_t READER_SCALAR_CT_ARGS = 29;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -63,6 +63,8 @@ struct ReaderCtArgs {
     uint32_t num_untilizers;
     // The counter this reader owns on each untilizer core, bumped once per batch it is done with.
     uint32_t unt_freed_addr;
+    // Pages in the dispatched buffer. Runs are clamped to it, as dispatch dropped every token past it.
+    uint32_t dispatch_capacity;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -104,7 +106,8 @@ struct ReaderCtArgs {
         unt_ring_addr(untilizers.ring_addr),
         unt_ring_batches(UNT_RING_BATCHES),
         num_untilizers(static_cast<uint32_t>(untilizers.peers.size())),
-        unt_freed_addr(untilizers.my_freed_addr) {
+        unt_freed_addr(untilizers.my_freed_addr),
+        dispatch_capacity(op::dispatch_capacity(tensor_args)) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
         // follows.
         uint32_t own_idx = 0;
@@ -169,7 +172,8 @@ struct ReaderCtArgs {
             unt_ring_addr,
             unt_ring_batches,
             num_untilizers,
-            unt_freed_addr};
+            unt_freed_addr,
+            dispatch_capacity};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -202,7 +206,8 @@ struct ReaderCtArgs {
         unt_ring_addr(get_compile_time_arg_val(24)),
         unt_ring_batches(get_compile_time_arg_val(25)),
         num_untilizers(get_compile_time_arg_val(26)),
-        unt_freed_addr(get_compile_time_arg_val(27)) {}
+        unt_freed_addr(get_compile_time_arg_val(27)),
+        dispatch_capacity(get_compile_time_arg_val(28)) {}
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
     static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(13);  // schedule_len

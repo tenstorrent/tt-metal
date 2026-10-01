@@ -139,6 +139,15 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         buf.dtype());
     const auto buf_shape = buf.logical_shape();
     TT_FATAL(buf_shape.rank() >= 2, "combine_fabric2d: dispatched_buffer must be rank 2 or more");
+    // A token's slot is its index along dim -2, which is also where the kernels clamp to the buffer's end, so any
+    // dim before it would put slots the kernels never see.
+    for (uint32_t d = 0; d + 2 < buf_shape.rank(); d++) {
+        TT_FATAL(
+            buf_shape[d] == 1,
+            "combine_fabric2d: dispatched_buffer must be 1 in every dim before the last two, as dispatch leaves it; "
+            "got {}",
+            buf_shape);
+    }
 
     const auto& meta = tensor_args.dispatched_metadata;
     validate_dram_row_major(meta, "dispatched_metadata");
@@ -152,6 +161,13 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         "combine_fabric2d: dispatched_metadata last dim is {}, expected 3 (linearized_coord, token_idx, "
         "topk_idx). The fp8 scale tail is not supported.",
         meta_shape[-1]);
+    for (uint32_t d = 0; d + 2 < meta_shape.rank(); d++) {
+        TT_FATAL(
+            meta_shape[d] == 1,
+            "combine_fabric2d: dispatched_metadata must be 1 in every dim before the last two, as dispatch leaves it; "
+            "got {}",
+            meta_shape);
+    }
     TT_FATAL(
         meta_shape[-2] == buf_shape[-2],
         "combine_fabric2d: dispatched_metadata holds {} slots but dispatched_buffer holds {}; they index the "
