@@ -2549,3 +2549,78 @@ def test_group_norm_constant_group_exactness(device, H, W, num_groups, use_mask,
     # The sums of identical bf16 values are exact and the single fp32 reciprocal multiply is
     # correct to ~2^-24 relative, far below half a bf16 ulp -- so the result is exactly 0.
     assert max_abs == 0.0, f"constant group normalized to {max_abs} instead of 0 (mean is inexact)"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize(
+    "path, rows, C, num_groups",
+    [
+        ("interleaved_1x1", 1024, 320, 32),  # GroupNormNoMcastProgramFactory, one core
+        ("interleaved_8x8", 16384, 320, 32),  # GroupNormMcastProgramFactory, SDXL-scale
+        ("block_sharded_8x4", 8192, 320, 32),  # GroupNormShardedProgramFactory
+    ],
+)
+@pytest.mark.parametrize("offset_ratio", [0, 2, 8, 32])
+def test_group_norm_large_offset(device, path, rows, C, num_groups, offset_ratio):
+    """Groups whose mean is large compared with their spread: |mean|/std = offset_ratio.
+
+    Regression test for the corrected two-pass statistics (the pass-1 mean is the shift for pass 2,
+    so no sum runs on values of magnitude |mean|). With bf16 statistics the plain two-pass drifts
+    with the offset -- 0.85 max error at ratio 32 on the 8x8 shape, 1.39 on the 1x1 shape -- and
+    fp32 DEST or Welford still leave 0.15-0.18 there because they round the mean to bf16. The
+    corrected path measured 0.02-0.05 max / <= 0.005 mean at every ratio, so the thresholds below
+    hold with margin; the residual is bf16 output quantization.
+    """
+    from ttnn.operations.normalization import dram_group_norm_virtual_columns
+
+    torch.manual_seed(0)
+    ch_per_group = C // num_groups
+    mu = offset_ratio * (0.5 + 0.5 * torch.rand(num_groups)) * torch.where(torch.rand(num_groups) < 0.5, -1.0, 1.0)
+    x = (torch.randn(rows, C) + mu.repeat_interleave(ch_per_group).view(1, C)).to(torch.bfloat16)
+    golden = torch.nn.functional.group_norm(x.float().T.reshape(1, C, rows, 1), num_groups, eps=1e-5)
+    golden = golden.reshape(C, rows).T
+
+    if path == "block_sharded_8x4":
+        grid = ttnn.CoreGrid(y=4, x=8)
+        xt = ttnn.from_torch(
+            x.view(1, 1, rows, C),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y), device)
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        shard_spec = ttnn.ShardSpec(shard_grid, (rows // grid.x, C // grid.y), ttnn.ShardOrientation.COL_MAJOR)
+        mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+        xt = ttnn.to_memory_config(xt, mem)
+        out = ttnn.group_norm(
+            xt, num_groups=num_groups, epsilon=1e-5, input_mask=mask, memory_config=mem, core_grid=grid, inplace=False
+        )
+        out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)
+    else:
+        gy, gx = (1, 1) if path == "interleaved_1x1" else (8, 8)
+        grid = ttnn.CoreGrid(y=gy, x=gx)
+        xt = ttnn.from_torch(
+            x.view(1, 1, rows, C),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        nvc = dram_group_norm_virtual_columns(grid, C, num_groups)
+        mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, nvc), device)
+        out = ttnn.group_norm(
+            xt,
+            num_groups=num_groups,
+            epsilon=1e-5,
+            input_mask=mask,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=grid,
+            inplace=False,
+        )
+    got = ttnn.to_torch(ttnn.from_device(out)).float().reshape(-1, C)[:rows, :]
+    err = (got - golden).abs()
+    logger.info(f"{path} ratio={offset_ratio}: max_abs_err={err.max().item():.4f} mean_abs_err={err.mean().item():.4f}")
+    assert err.max().item() <= 0.08, f"max abs error {err.max().item()} at |mean|/std={offset_ratio}"
+    assert err.mean().item() <= 0.01, f"mean abs error {err.mean().item()} at |mean|/std={offset_ratio}"

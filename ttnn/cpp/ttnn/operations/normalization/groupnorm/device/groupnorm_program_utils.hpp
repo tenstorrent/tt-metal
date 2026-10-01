@@ -92,8 +92,9 @@ inline uint32_t groupnorm_bf16_num_out_blocks(uint32_t memory_blocks, uint32_t b
 // Percent of usable L1 we allow the estimate to reach; the margin covers the approximated small CBs.
 inline constexpr uint64_t kGroupnormTilizedL1UsagePercent = 95;
 
-// Flat tile budget covering the small 1-tile CBs (eps, ex/ex2 partials, etc.)
-inline constexpr uint32_t kGroupnormSmallCbAllowanceTiles = 32;
+// Flat tile budget covering the small 1-tile CBs (eps, ex/ex2 partials, etc.), including the
+// corrected-statistics CBs (ones, D-filled tile, D partial and global) and the doubled gather ring.
+inline constexpr uint32_t kGroupnormSmallCbAllowanceTiles = 40;
 
 // At or below this many active cores, prefer composite over fused RM.
 inline constexpr uint32_t kGroupnormLegacyRmMinCoresForOnChip = 32;

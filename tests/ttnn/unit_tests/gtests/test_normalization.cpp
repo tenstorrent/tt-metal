@@ -949,6 +949,35 @@ inline Tensor gn_make_input_mask_c64_g4(tt::tt_metal::distributed::MeshDevice& d
     return make_device_tensor(device, ttnn::Shape({1, 4, 32, 32}), m, DataType::BFLOAT16, Layout::TILE);
 }
 
+// General form of the above: one [32, block_w*32] slab per group with ones in the group's columns,
+// where block_w is the widest tile span any group has from the tile it starts in (so a group that
+// straddles a tile boundary spills into the slab's second tile). Same layout as
+// create_group_norm_input_mask(C, G, 1).
+inline Tensor gn_make_input_mask(tt::tt_metal::distributed::MeshDevice& device, size_t C, size_t G) {
+    constexpr size_t kTile = 32;
+    const size_t group_w = C / G;
+    size_t block_w = 1;
+    for (size_t g = 0; g < G; ++g) {
+        block_w = std::max(block_w, ((g * group_w) % kTile + group_w + kTile - 1) / kTile);
+    }
+    const size_t slab_w = block_w * kTile;
+    std::vector<float> m(G * kTile * slab_w, 0.0f);
+    for (size_t g = 0; g < G; ++g) {
+        const size_t start = (g * group_w) % kTile;
+        for (size_t h = 0; h < kTile; ++h) {
+            for (size_t w = start; w < start + group_w; ++w) {
+                m[(g * kTile + h) * slab_w + w] = 1.0f;
+            }
+        }
+    }
+    return make_device_tensor(
+        device,
+        ttnn::Shape({1, static_cast<uint32_t>(G), kTile, static_cast<uint32_t>(slab_w)}),
+        m,
+        DataType::BFLOAT16,
+        Layout::TILE);
+}
+
 }  // namespace detail
 
 TEST_F(NormalizationSmoke, GroupNormNoMcastInterleaved) {
@@ -1149,6 +1178,47 @@ TEST_F(NormalizationSmoke, GroupNormInputMask) {
     // Same expected vector as the two-group golden by construction (each varying group has
     // mean +/-1 pattern with var 1; constant groups normalize to 0).
     detail::expect_close(detail::to_float_vector(out), detail::gn_golden_expected(32, 1.0f, 0.0f), 0.0f, 0.03f);
+}
+
+TEST_F(NormalizationSmoke, GroupNormLargeOffsetNoMcast) {
+    // Regression for the corrected two-pass statistics (compute/groupnorm.cpp, corrected_stats):
+    // groups whose mean is large compared with their spread. [1,1,1024,160], 16 groups of 10
+    // channels: group g alternates (20+g) -/+ 1 across its channels, so every group has mean 20+g,
+    // variance exactly 1 and the closed-form output -/+ 1/sqrt(1+eps). The 10-wide groups make the
+    // bf16 partial sums round (10 * mean needs more than 8 significant bits), so with the plain
+    // two-pass the pass-1 mean drifts by ~std and the output is off by 1.28 on BH p150b. The
+    // corrected path only ever sums values of magnitude ~std; it measured 0.10 here (one group,
+    // a few percent of rstd: on this perfectly regular input the bf16 DEST accumulation errors of
+    // the centered sums line up instead of averaging out as they do on random data, where the
+    // same path measures <= 0.05). The tolerance sits well clear of both.
+    auto& device = *device_;
+    constexpr size_t kRows = 1024, kC = 160, kGroups = 16, kGroupW = kC / kGroups;
+    std::vector<float> data(kRows * kC);
+    std::vector<float> expected(kRows * kC);
+    const float inv = 1.0f / std::sqrt(1.0f + detail::kGnEps);
+    for (size_t r = 0; r < kRows; ++r) {
+        for (size_t ch = 0; ch < kC; ++ch) {
+            const float mean = 20.0f + static_cast<float>(ch / kGroupW);
+            const float sign = (ch % 2 == 0) ? -1.0f : 1.0f;
+            data[r * kC + ch] = mean + sign;
+            expected[r * kC + ch] = sign * inv;
+        }
+    }
+    auto input =
+        detail::make_device_tensor(device, ttnn::Shape({1, 1, kRows, kC}), data, DataType::BFLOAT16, Layout::TILE);
+    auto mask = detail::gn_make_input_mask(device, kC, kGroups);
+    auto out = ttnn::group_norm(
+        input,
+        /*num_groups=*/kGroups,
+        detail::kGnEps,
+        mask,
+        /*weight=*/std::nullopt,
+        /*bias=*/std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        ttnn::CoreGrid(1, 1));
+    detail::expect_close(detail::to_float_vector(out), expected, 0.0f, 0.15f);
 }
 
 // ---------------------------------------------------------------------------

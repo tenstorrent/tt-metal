@@ -151,7 +151,7 @@ void kernel_main() {
     // Non-tile-aligned H*W: the tile-padding rows are excluded from both accumulation passes by
     // switching to a second, row-masked set of mask tiles on the batch's final row-tile. The writer
     // gives cores that do not hold that row-tile a copy of the normal set, so the switch here is
-    // unconditional. The divisor is corrected separately, in the reduce scaler.
+    // unconditional. The divisor is corrected separately, through mean_recip_bits.
     // logical_hw / padded_hw are carried only so two shapes padding to the same size cannot share a
     // cached program; has_row_mask is what this kernel branches on.
     constexpr std::uint32_t logical_hw [[maybe_unused]] = get_named_compile_time_arg_val("logical_hw");

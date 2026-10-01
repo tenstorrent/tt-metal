@@ -311,9 +311,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             block_wt * tile_width);
     }
 
-    // Non-tile-aligned H*W: corrected reduce scaler + on-device row-mask composition (c_18/c_19).
-    // See compute/groupnorm.cpp and GroupNormPadCorrection. Unlike the interleaved paths the scaler
-    // and the core's valid-row count ship as RUNTIME args (8, 9).
+    // Non-tile-aligned H*W: corrected divisor (mean_recip_bits) + on-device row-mask composition
+    // (c_18/c_19). See compute/groupnorm.cpp and GroupNormPadCorrection. Unlike the interleaved
+    // paths the core's valid-row count ships as a RUNTIME arg (9); arg 8 is a kept-but-unused slot.
     const auto pad = make_group_norm_pad_correction(
         static_cast<uint32_t>(a.logical_shape()[2]),
         static_cast<uint32_t>(a.padded_shape()[2]),
@@ -323,6 +323,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // (validation requires it), but the sharded writer never reads it -- the row mask is composed
     // on device instead. mask_sets only scopes the per-core start-id wrap to the first set.
     const uint32_t mask_sets = pad.active ? 2 : 1;
+    // Corrected two-pass statistics (compute/groupnorm_sharded_v2.cpp): pass 2 also sums the masked
+    // residual (x - s) so mean, variance and the normalized output are formed from values of
+    // magnitude ~std instead of |mean|. bf16 statistics only. The pad-corrected (row-masked)
+    // configuration stays on the plain two-pass for now: its pass-3 column tiles would need the
+    // composed final-row mask.
+    // PROTOTYPE A/B KNOB (remove before merge): TT_GN_PLAIN_TWO_PASS=1 forces the plain two-pass.
+    const bool corrected_stats = !use_welford && cb_data_format == tt::DataFormat::Float16_b && !pad.active &&
+                                 std::getenv("TT_GN_PLAIN_TWO_PASS") == nullptr;
     const uint32_t mask_set_tiles =
         input_mask.has_value() ? (input_mask.value().physical_volume() / tile_hw) / mask_sets : 0;
 
@@ -555,6 +563,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     reader_mcast_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_mcast_sender_desc.core_ranges = mcast_sender_cores;
     reader_mcast_sender_desc.compile_time_args = reader_mcast_sender_compile_time_args;
+    reader_mcast_sender_desc.named_compile_time_args = {{"corrected_stats", static_cast<uint32_t>(corrected_stats)}};
     reader_mcast_sender_desc.defines =
         KernelDescriptor::Defines(reader_mcast_sender_defines.begin(), reader_mcast_sender_defines.end());
     reader_mcast_sender_desc.config = DataMovementConfigDescriptor{
@@ -574,6 +583,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         reader_mcast_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_mcast_receiver_desc.core_ranges = mcast_receiver_cores;
         reader_mcast_receiver_desc.compile_time_args = reader_mcast_receiver_compile_time_args;
+        reader_mcast_receiver_desc.named_compile_time_args = {
+            {"corrected_stats", static_cast<uint32_t>(corrected_stats)}};
         reader_mcast_receiver_desc.defines =
             KernelDescriptor::Defines(reader_mcast_receiver_defines.begin(), reader_mcast_receiver_defines.end());
         reader_mcast_receiver_desc.config = DataMovementConfigDescriptor{
@@ -832,6 +843,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         {"mean_recip_bits", pad.recip_bits(num_rows_per_batch_per_core * num_datum_row_per_group)},
         {"global_recip_bits",
          std::bit_cast<uint32_t>(1.0f / static_cast<float>(num_cores_per_batch * num_cores_per_group))},
+        {"corrected_stats", static_cast<uint32_t>(corrected_stats)},
     };
     if (use_welford) {
         compute_named_compile_time_args.push_back({"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)});
@@ -1119,8 +1131,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // ex_external: Not used by Welford.
     if (!use_welford) {
         constexpr uint32_t ex_cb_external_index = tt::CBIndex::c_10;
+        // corrected_stats: the second pass gathers a variance tile and a D tile back to back.
         desc.cbs.push_back(CBDescriptor{
-            .total_size = single_tile_size,
+            .total_size = single_tile_size * (corrected_stats ? 2 : 1),
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(ex_cb_external_index),
@@ -1160,6 +1173,46 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             .page_size = single_tile_size,
         }}},
     });
+
+    if (corrected_stats) {
+        // D statistics (compute/groupnorm_sharded_v2.cpp): c_20 partial, c_21 global with the reader's
+        // c_22 alias, c_23/c_24 the D- and D*rstd-filled tiles, c_25 the block_wt pass-3 column tiles.
+        for (uint32_t single_cb : {tt::CBIndex::c_20, tt::CBIndex::c_23, tt::CBIndex::c_24}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = single_tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(single_cb),
+                    .data_format = cb_data_format,
+                    .page_size = single_tile_size,
+                }}},
+            });
+        }
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors =
+                {{CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_21),
+                      .data_format = cb_data_format,
+                      .page_size = single_tile_size,
+                  },
+                  CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_22),
+                      .data_format = cb_data_format,
+                      .page_size = single_tile_size,
+                  }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = block_wt * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_25),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+    }
 
     constexpr uint32_t cb_ones_index = tt::CBIndex::c_26;
     desc.cbs.push_back(CBDescriptor{

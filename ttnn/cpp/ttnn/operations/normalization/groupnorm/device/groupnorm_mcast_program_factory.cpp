@@ -311,7 +311,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             block_wt * tile_width);
     }
 
-    // Non-tile-aligned H*W: corrected reduce scaler + the row-masked mask set. See
+    // Non-tile-aligned H*W: corrected divisor (mean_recip_bits) + the row-masked mask set. See
     // compute/groupnorm.cpp and GroupNormPadCorrection.
     const auto pad = make_group_norm_pad_correction(
         static_cast<uint32_t>(a.logical_shape()[2]),

@@ -30,6 +30,12 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
+    // Corrected two-pass statistics (compute/groupnorm_sharded_v2.cpp): on the second pass the
+    // sender gathers this core's c_20 partial next to its variance partial and multicasts the
+    // global D into c_21.
+    constexpr bool corrected_stats = get_named_compile_time_arg_val("corrected_stats") == 1;
+    constexpr uint32_t dfb_exd_partial_id = tt::CBIndex::c_20;
+    constexpr uint32_t dfb_exd_global_id = tt::CBIndex::c_21;
     constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t dfb_repack_id = tt::CBIndex::c_11;
     constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_12;
@@ -40,6 +46,8 @@ void kernel_main() {
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
+    DataflowBuffer dfb_exd_partial(dfb_exd_partial_id);
+    DataflowBuffer dfb_exd_global(dfb_exd_global_id);
     const DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
@@ -69,13 +77,25 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_batch_group; ++i) {
         for (uint32_t j = 0; j < 2; ++j) {
+            const bool with_d = corrected_stats && j == 1;
             dfb_ex_partial.wait_front(1);
+            if (with_d) {
+                // The sender reads both partials after this signal.
+                dfb_exd_partial.wait_front(1);
+            }
             reduce_sender_sem.set(INVALID);
             dfb_ex_global.reserve_back(1);
+            if (with_d) {
+                dfb_exd_global.reserve_back(1);
+            }
             reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
             reduce_sender_sem.wait(VALID);
             dfb_ex_global.push_back(1);
             dfb_ex_partial.pop_front(1);
+            if (with_d) {
+                dfb_exd_global.push_back(1);
+                dfb_exd_partial.pop_front(1);
+            }
         }
     }
 
