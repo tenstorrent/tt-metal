@@ -203,7 +203,7 @@ def test_program_config_defaults():
     """The three program configs and their defaults, as the op and the model construct them."""
     f = ttnn.ChunkGdnFusedProgramConfig()
     assert (f.num_producers, f.num_receivers, f.row_local) == (None, None, None)
-    assert (f.handoff_depth, f.unicast, f.posted) == (2, True, False)
+    assert (f.handoff_depth, f.unicast, f.posted) == (None, True, False)
     assert (f.producer_pool, f.pool_extra_share) == (False, None)
     f = ttnn.ChunkGdnFusedProgramConfig(num_receivers=4, num_producers=5, row_local=False, handoff_depth=3)
     assert (f.num_receivers, f.num_producers, f.row_local, f.handoff_depth) == (4, 5, False, 3)
@@ -814,20 +814,23 @@ def test_fused_default_geometry_repeats(device, hk, hv):
 
 
 def test_fused_config_pinned_geometry_matches_free(device):
-    """Pinning the cost model's own pick explicitly must be the SAME program as leaving the fields free
-    (the free config is what the op's default dispatch builds), and a free config after a pinned one is
-    a cache hit. Pins the equivalence the default-dispatch test relies on."""
+    """Pinning the cost model's own pick explicitly (geometry, placement and hand-off depth) must be the
+    SAME program as leaving the fields free (the free config is what the op's default dispatch builds),
+    and a free config after a pinned one is a cache hit. Pins the equivalence the default-dispatch test
+    relies on."""
     hk, hv = NP_BH_KV_HEADS
     nc = 16
     grid = device.compute_with_storage_grid_size()
     from ttnn._ttnn.operations import transformer as _t
 
-    nv, np_producers, placement, _, _, _, _ = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)
+    nv, np_producers, placement, nbuf, _, _, _ = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)
     if nv == 0:
         pytest.skip(f"no fused geometry for BH={hv} on the {grid.x}x{grid.y} grid")
     _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20260933)
     const_tiles = _const_tiles(device)
-    o_pin, fs_pin = _run_op(device, tensors, const_tiles, s0, _fused(nv, np_producers, row_local=bool(placement)))
+    o_pin, fs_pin = _run_op(
+        device, tensors, const_tiles, s0, _fused(nv, np_producers, row_local=bool(placement), handoff_depth=nbuf)
+    )
     n_pin = device.num_program_cache_entries()
     o_free, fs_free = _run_op(device, tensors, const_tiles, s0, _fused())
     assert (
