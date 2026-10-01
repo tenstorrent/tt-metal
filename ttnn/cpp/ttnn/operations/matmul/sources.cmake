@@ -3,7 +3,9 @@
 
 set(TTNN_OP_MATMUL_SRCS
     matmul.cpp
+    device/config/factory_blocking_source.cpp
     device/config/matmul_auto_config.cpp
+    device/config/roofline_estimator.cpp
     device/matmul_desc.cpp
     device/config/matmul_program_config.cpp
     device/matmul_device_operation.cpp
