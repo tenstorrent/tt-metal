@@ -83,7 +83,7 @@ _RELATIONAL_SCALAR_VALUES = [
     1.0,
     -1.0,
     0.1,
-    -0.1,
+    1.003,
     float(torch.finfo(torch.bfloat16).tiny),
     float(torch.finfo(torch.bfloat16).max),
     float(torch.finfo(torch.bfloat16).min),
@@ -100,13 +100,16 @@ def test_relational_ops_scalar(device, ttnn_op, scalar):
     variants): the stratified bfloat16 grid, including ±0, ±inf and qNaN,
     against a scalar from every ordering / special-value class.
 
-    The grid is broadcast to (2048, 2048) so the scalar path spans many tiles,
-    as in category 3's test_logical_ops_scalar. Same contract as the
-    tensor-tensor sweep: exact 0/1, ±0 compare equal, a NaN on either side
-    makes every compare false except ne.
+    The grid is 2048 unique values. Each is repeated across one tile width,
+    giving (2048, 32): 64 full tiles, and the same (value, scalar) pairs as
+    the 1-D grid. A 1-D [2048] tensor in tile layout is one tile row with
+    31/32 padding, so it never reaches the multi-tile scalar path. Same
+    contract as the tensor-tensor sweep: exact 0/1, ±0 compare equal, a NaN
+    on either side makes every compare false except ne.
     """
     values = generate_bfloat16_binary_grid(include_spl_values=True)
-    input_a = values.unsqueeze(1).expand(values.numel(), values.numel()).contiguous()
+    tile_width = 32
+    input_a = values.unsqueeze(1).expand(values.numel(), tile_width).contiguous()
     tt_a = to_tt_tensor(input_a, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
