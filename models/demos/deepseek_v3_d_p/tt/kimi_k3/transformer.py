@@ -437,6 +437,7 @@ class TtKimiK3Transformer(LightweightModule):
         rope_tensors=None,
         padding_side: Optional[str] = None,
         layer_tap: Optional[Callable] = None,
+        attn_input_tap: Optional[Callable] = None,
         mtp_union=None,
         on_mtp_complete: Optional[Callable] = None,
         input_is_embedded: bool = False,
@@ -448,6 +449,10 @@ class TtKimiK3Transformer(LightweightModule):
         AttnRes is the running sum, and is exactly what the vLLM traces record as
         `decoder_output_layer_i` (pinned by `tests/kimi_k3/test_golden_contract.py`). That makes the
         per-layer PCC curve a tap rather than a separate forward.
+
+        `attn_input_tap(local_idx, hidden)` fires inside each layer with its AttnRes read before
+        attention, the input of `attn_norm`. That read is what DSpark taps for target layer
+        `local_idx - 1`. `hidden` is borrowed from the stream, so use or copy it before returning.
         """
         if on_layer_hidden is not None:
             # DFlash's per-layer tap. Under AttnRes a tap is a READ SITE, and a site needs its own
@@ -501,6 +506,7 @@ class TtKimiK3Transformer(LightweightModule):
                 actual_end=actual_end,
                 actual_isl=actual_isl,
                 padding_side=padding_side,
+                attn_input_tap=attn_input_tap,
             )
             if layer_tap is not None and not layer.kv_only:
                 layer_tap(local_idx, residual.current())
