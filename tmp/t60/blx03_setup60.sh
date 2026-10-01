@@ -3,13 +3,15 @@
 # the t60 commit, submodules from the shared repo's objects, and a Release build (~2.5 GB, a few min).
 # Usage (from g15blx02): ssh g14blx03 'bash -s' < tmp/t60/blx03_setup60.sh   (returns at once; worktree at the
 # pushed branch tip; for a given commit use 'bash -s -- <sha>')
-# Done when ~/fasth3/t60-setup.log ends with SETUP60_DONE rc=0.
-# Remove afterwards: git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/t60; rm ~/fasth3/t60-setup.*
+# Another branch/worktree: ssh g14blx03 'BR=<branch> W=/home/smarton/fasth3/<name> bash -s' < tmp/t60/blx03_setup60.sh
+# Done when ~/fasth3/<name>-setup.log ends with SETUP60_DONE rc=0 (<name> = basename of W, default t60).
+# Remove afterwards: git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/<name>; rm ~/fasth3/<name>-setup.*
 set -u
 REV=${1:-FETCH_HEAD}
-BASE=/home/smarton/fasth3/tt-metal; W=/home/smarton/fasth3/t60; LOG=/home/smarton/fasth3/t60-setup.log
-BR=ttp/t60-fold-per-conv-pad-mask-mul-and-temporal-
-cat > /home/smarton/fasth3/t60-setup.sh <<EOF
+BASE=/home/smarton/fasth3/tt-metal; W=${W:-/home/smarton/fasth3/t60}
+LOG=/home/smarton/fasth3/$(basename $W)-setup.log; SH=/home/smarton/fasth3/$(basename $W)-setup.sh
+BR=${BR:-ttp/t60-fold-per-conv-pad-mask-mul-and-temporal-}
+cat > $SH <<EOF
 set -x
 run() {
   git -C $BASE fetch origin $BR && git -C $BASE cat-file -e $REV^{commit} || return 11
@@ -26,5 +28,5 @@ run() {
 }
 run; echo "SETUP60_DONE rc=\$?"
 EOF
-setsid nohup bash /home/smarton/fasth3/t60-setup.sh > $LOG 2>&1 < /dev/null &
+setsid nohup bash $SH > $LOG 2>&1 < /dev/null &
 echo "started; log $LOG"

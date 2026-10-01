@@ -19,28 +19,29 @@ based on t36 `16ba9a383dc` (LTX-2.5 port + blx03 setup), with:
 | t18 video encode on a worker under the device audio decode | 63902277007 | export 0.9 -> 0.3 s on g15blx02 (job 610, mp4 byte-identical) |
 | t44/t66 `LTX_VAE_FOLD_TIME_PAD` (default on; `=0` turns it off) | 1968790b040 | -44 ms per conv decode at 1080p/145f, bit-identical (#46, blx03 2x4 jobs 000/008) |
 | t58 fused YUV unpatch permute drops the p=1 axis | b9312ff3061 | output path 208.7 -> 38.5 ms per decode (about -170 ms), bit-identical (#62, blx03 2x4 job 030) |
+| t60/t72 `LTX_VAE_FOLD_W_MASK` (default on; `=0` turns it off): neighbor_pad_async `logical_w` zeros the W pad columns | e21bcbad8d9 (C++) | -69 ms per conv decode at 1080p/145f, bit-identical (#65, blx03 2x4 jobs 033/034) |
 | t8 ltx_eval harness | t8 tip | eval tooling only |
 
 Conflicts resolved: t13 and t40 both moved the Gemma trace capture; t40's `capture_trace()` (guarded by
 `_trace_captured`) is kept. t13 and t18 both rewrote the yuv export; the merged `YuvVideoExport` keeps the worker
 thread (t18), the zero-copy frame wrap (t13), and encodes AAC in `finish()` while the video worker may still run (t13).
 
-t48 changes only Python against t36, so the job uses blx03's t36 build, kernels and warm JIT cache
-(`TT_METAL_HOME=~/fasth3/tt-metal`) with Python from a t48 worktree. No build, no new cache.
+t60's neighbor_pad_async `logical_w` is a C++ change (op, kernels, nanobind), so t48 no longer runs on blx03's t36
+build: the t48 worktree needs its own Release build, and `run48.sh` sets `TT_METAL_HOME` to it. The Python passes
+`logical_w` to neighbor_pad even with the fold off, so an old build fails at the first conv either way.
 
-## One-time setup on blx03 (~320 MB source worktree, no build)
+## One-time setup on blx03 (CPU only, ~2.5 GB worktree + Release build, a few min)
 
 ```bash
-ssh g14blx03 'set -e; cd ~/fasth3/tt-metal
-  git merge-base --is-ancestor 16ba9a383dc HEAD   # blx03 sits on t36 plus script-only commits (86076afc66a)
-  git fetch origin ttp/t48-ltx25-integrated
-  git diff --quiet HEAD FETCH_HEAD -- tt_metal ttnn/cpp CMakeLists.txt cmake || { echo "C++ differs: rebuild needed, stop"; exit 1; }
-  git worktree add --detach ~/fasth3/t48 FETCH_HEAD'
+ssh g14blx03 'BR=ttp/t48-ltx25-integrated W=/home/smarton/fasth3/t48 bash -s' < tmp/t60/blx03_setup60.sh
 ```
+
+Ready when `ssh g14blx03 tail -1 ~/fasth3/t48-setup.log` prints `SETUP60_DONE rc=0`. New kernels JIT-compile into
+`$FASTH3_DATA/cache/tt-metal-cache` (/var/tmp) on the first run.
 
 If blx03 cannot fetch from GitHub: on g15blx02
 `git -C ~/fasth3/tt-metal bundle create /tmp/t48.bundle 16ba9a383dc..ttp/t48-ltx25-integrated && scp /tmp/t48.bundle g14blx03:/tmp/`,
-then on blx03 `git fetch /tmp/t48.bundle ttp/t48-ltx25-integrated` and continue with the `git worktree add` line.
+then on blx03 `git fetch /tmp/t48.bundle ttp/t48-ltx25-integrated` and run the setup script with `bash -s -- FETCH_HEAD`.
 
 ## The job (one broker job, ~5-8 min warm; budget 1800 s)
 
@@ -53,9 +54,9 @@ capture, plus the Gemma encode capture at its end; not a timing number), then #1
 (`LTX_FRESH_PROMPTS=1`, so the text encoder is on the measured path). `LTX_TIME_STAGES=1` logs per-stage times.
 Output: `blx03:~/fasth3/out/t48/t48_e2e/{run.log, ltx_av_fast_1920x1088_{0,1,2,3}.mp4}`.
 
-Optional second job, only after the first passes (fold A/B with the fold off, same everything else):
-`ssh g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 1800 bash /home/smarton/fasth3/t48/tmp/blx03/run48.sh t48_nofold LTX_VAE_FOLD_TIME_PAD=0"`.
-Expect bit-identical frames: `cmp` the two runs' mp4s for gens 1-3; any difference means the fold is not exact on device.
+Optional second job, only after the first passes (fold A/B with both folds off, same everything else):
+`ssh g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 1800 bash /home/smarton/fasth3/t48/tmp/blx03/run48.sh t48_nofold LTX_VAE_FOLD_TIME_PAD=0 LTX_VAE_FOLD_W_MASK=0"`.
+Expect bit-identical frames: `cmp` the two runs' mp4s for gens 1-3; any difference means a fold is not exact on device.
 
 Check: `ssh g14blx03 tt-device-mcp status -j <id>`; pass = run.log has ` passed` and `RUN_EXIT[t48_e2e]=0`.
 Stop all device work and report at the first chip drop (`ssh g14blx03 tt-smi -ls` count, or a fabric/PCIe error in the log).
@@ -74,7 +75,7 @@ Expected gen #1-#3 (vs t20 job 879 gen #1 at E2E 8.76 s):
 | S1 denoise | 2.28 | 2.28 |
 | upsample | 0.15 | 0.15 |
 | S2 denoise | 2.50 | 2.50 |
-| VAE decode (conv) | 0.72 | 0.72 (0.65-0.70 with the fold) |
+| VAE decode (conv) | 0.72 | 0.72 (~0.6 with both folds: -44 ms T pad, -69 ms W mask) |
 | audio decode | 0.37 | 0.37 (video encode runs under it) |
 | export | 0.8 | 0.1-0.2 |
 | E2E_WALL_S | 8.76 | ~6.4-6.7 |
@@ -100,7 +101,7 @@ Expect PSNR >= 40 dB and PCC >= 0.99. Look at the stills in /tmp/q48 and show th
 ## Cleanup after the runs
 
 Copy the mp4s and run.log to `tt-project/baselines/t48/` on g15blx02, then on blx03:
-`rm -rf ~/fasth3/out/t48 && git -C ~/fasth3/tt-metal worktree remove ~/fasth3/t48`.
+`rm -rf ~/fasth3/out/t48 ~/fasth3/t48-setup.* && git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/t48`.
 
 ## Known latency: first request pays the encode-trace capture
 

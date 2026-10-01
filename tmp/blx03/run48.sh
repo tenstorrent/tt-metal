@@ -1,8 +1,8 @@
 #!/bin/bash
 # t48 integrated LTX-2.5 e2e on blx03: 4x8 ring (full mesh), 1080p/145f, seed 0, gen #0 (capture) + 3 timed gens.
 # Usage: bash ~/fasth3/t48/tmp/blx03/run48.sh <label> [VAR=val ...]
-# Python comes from the t48 worktree; ttnn, the build and kernel sources from the t36 tree. t48 has no C++ change
-# against t36, so the t36 build and its warm JIT cache are reused and nothing new is built or cached.
+# Runs the t48 worktree with its own build (neighbor_pad_async logical_w is C++, so the t36 build cannot run it)
+# and the shared tree's venv.
 set -o pipefail
 W=${W:-/home/smarton/fasth3/t48}
 BASE=${BASE:-/home/smarton/fasth3/tt-metal}
@@ -10,7 +10,7 @@ OUT=${OUT:-/home/smarton/fasth3/out/t48}
 label=$1; shift
 cd $W
 source $BASE/python_env/bin/activate
-export TT_METAL_HOME=$BASE PYTHONPATH=$W:$BASE/ttnn:$BASE/tools
+export TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools
 export LTX_VERSION=2.5 LTX25_DIFFVAE=0
 export LTX_CHECKPOINT=/home/smarton/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors
 export LTX25_VIDEO_VAE=$LTX_CHECKPOINT
@@ -24,7 +24,7 @@ PYTEST_TIMEOUT=${PYTEST_TIMEOUT:-1500}
 for kv in "$@"; do export "$kv"; done
 mkdir -p $OUT/$label
 export LTX_OUT_DIR=$OUT/$label
-echo "[run48] host=$(hostname) tree=$W commit=$(git -C $W rev-parse --short HEAD) base=$(git -C $BASE rev-parse --short HEAD) label=$label fold=${LTX_VAE_FOLD_TIME_PAD:-1}"
+echo "[run48] host=$(hostname) tree=$W commit=$(git -C $W rev-parse --short HEAD) base=$(git -C $BASE rev-parse --short HEAD) label=$label fold=${LTX_VAE_FOLD_TIME_PAD:-1} wmask=${LTX_VAE_FOLD_W_MASK:-1}"
 (while true; do echo "[hb] $(date +%T)"; sleep 45; done) & HB=$!
 python -u -m pytest -sv --timeout=$PYTEST_TIMEOUT \
   "models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled" \
