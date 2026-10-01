@@ -96,7 +96,13 @@ whose gate runs it: a component step name such as `attention` or `embedding`, or
 
 Tests that start processes (runner, producer) wait with bounds: they fail at once with a clear message when a
 process exits non-zero or stops making progress, never hang. Read the engine's current APIs (table encoding, producer
-signatures) from the code at this commit, not from earlier tests.
+signatures) from the code at this commit, not from earlier tests. A test that starts its own processes or opens
+the mesh itself skips its body when `UP_FRONT_COLLECT=1` (run_safe_pytest's precompile pass), or that pass holds the
+chips and the real pass's subprocesses wait on them.
+Each model also gets a runner smoke as its last contract test: the spec's `intake.smoke` prompt (padded with a fixed
+neutral system message past 128 tokens) through the real runner, its KV read back through the table up to the
+boundary decode asks for, then the device model as a stand-in decode recomputes the tail and must give the expected
+answer.
 
 ## Check before you finish
 
