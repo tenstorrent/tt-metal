@@ -18,6 +18,7 @@ based on t36 `16ba9a383dc` (LTX-2.5 port + blx03 setup), with:
 | t13 yuv420p/x264 export: ultrafast crf 20, zero-copy frames, AAC beside video | eee3baf7c0d | host bench: video encode 0.65 -> 0.15 s, export 0.35-0.40 -> 0.19 s |
 | t18 video encode on a worker under the device audio decode | 63902277007 | export 0.9 -> 0.3 s on g15blx02 (job 610, mp4 byte-identical) |
 | t44/t66 `LTX_VAE_FOLD_TIME_PAD` (default on; `=0` turns it off) | 1968790b040 | -44 ms per conv decode at 1080p/145f, bit-identical (#46, blx03 2x4 jobs 000/008) |
+| t58 fused YUV unpatch permute drops the p=1 axis | b9312ff3061 | output path 208.7 -> 38.5 ms per decode (about -170 ms), bit-identical (#62, blx03 2x4 job 030) |
 | t8 ltx_eval harness | t8 tip | eval tooling only |
 
 Conflicts resolved: t13 and t40 both moved the Gemma trace capture; t40's `capture_trace()` (guarded by
