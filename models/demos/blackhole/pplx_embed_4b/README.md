@@ -145,7 +145,7 @@ DP scripts pick the right placement + grid for their shape with no extra flags.
 
 | Script | What it does / produces |
 |--------|--------------------------|
-| `demo/demo_bs{1,4,8,32}_isl{512,1024,2048}.py` | Single-device **latency benchmark** for one (batch, ISL). Times the extended trace (forward + pooling + I/O in one replay) by default and prints avg/best time, embeddings/s and tokens/s; `--no-full-pipeline` times the bare forward replay. |
+| `demo/demo_bs{1,4,8,16,32}_isl512.py`, `demo_bs{1,8,32}_isl{1024,2048}.py` | Single-device **latency benchmark** for one (batch, ISL). Times the extended trace (forward + pooling + I/O in one replay) by default and prints avg/best time, embeddings/s and tokens/s; `--no-full-pipeline` times the bare forward replay. |
 | `demo/dp32_multiprocess.py` | **Data-parallel benchmark** across N chips (one resident model per chip). Prints per-chip latency (mean/median/min/max), slowest-chip latency and aggregate throughput. `--mean-pool` runs the real serving post-processing (RMSNorm + mean-token pooling folded in-trace). |
 | `demo/live_demo.py` | **Resident encoder** — loads the model once and keeps it up. Embed your own text interactively, from a file (one text/line), or from a folder (one doc/file). `--fast` = low-latency traced serving; `--mask` = accurate for short/variable inputs; `--dp N` = serve across N chips; `--bench N` = report per-request latency. |
 | `demo/eval_accuracy.py` | **CPU fp32 reference** accuracy (STS-B Spearman / SciFact nDCG@10). The ground-truth baseline the device is compared against. |
@@ -166,7 +166,12 @@ python models/demos/blackhole/pplx_embed_4b/demo/demo_bs4_isl512.py --full-pipel
 
 # DRAM-resident shapes on the full worker grid
 python models/demos/blackhole/pplx_embed_4b/demo/demo_bs8_isl512.py
+python models/demos/blackhole/pplx_embed_4b/demo/demo_bs16_isl512.py
 python models/demos/blackhole/pplx_embed_4b/demo/demo_bs32_isl512.py
+
+# sustained protocol behind the table above: 30 iterations on one chip with tt-smi sampling,
+# prints the cold best and the median of iterations 15-29 (any batch size: 1, 4, 8, 16, 32)
+bash models/demos/blackhole/pplx_embed_4b/perf_tools/sustained_run.sh 16 8 30 pplx16
 
 # pick a chip on a multi-chip host
 TT_VISIBLE_DEVICES=5 python models/demos/blackhole/pplx_embed_4b/demo/demo_bs1_isl512.py --device-id 0
