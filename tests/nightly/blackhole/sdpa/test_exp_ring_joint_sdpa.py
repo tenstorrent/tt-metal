@@ -179,6 +179,7 @@ def run_exp_ring_joint_sdpa_nightly(
     num_buffers_per_channel=32,
     max_payload_size=8192,
     mesh_device=None,
+    grid_cols=None,
 ):
     """
     Run exp_ring_joint_scaled_dot_product_attention and verify accuracy or determinism.
@@ -236,6 +237,8 @@ def run_exp_ring_joint_sdpa_nightly(
             sdpa_compute_grid = (GALAXY_SDPA_COLS + 1, GALAXY_GRID_ROWS)
         else:
             sdpa_compute_grid = (NON_GALAXY_SDPA_COLS + 1, NON_GALAXY_GRID_ROWS)
+        if grid_cols is not None:
+            sdpa_compute_grid = (grid_cols, sdpa_compute_grid[1])
 
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
 
@@ -1001,3 +1004,16 @@ def test_exp_ring_joint_attention_perf_check(ring_size_expected, max_payload_siz
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {EXP_RING_JOINT_PERF_MARGIN*100:.1f}%)"
     )
+
+
+# === GRID VALIDATION ===
+# The factory needs 4 columns (1 fabric MUX + 2 MUX-writer + 1 pure SDPA). Validation used to accept 2, so a
+# 2- or 3-column grid failed inside program construction instead of in validation.
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("grid_cols", [2, 3])
+def test_exp_ring_joint_attention_sdpa_grid_too_narrow(grid_cols, expect_error):
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size = TEST_CONFIGS[0]
+    with expect_error(RuntimeError, "needs at least 4 columns"):
+        run_exp_ring_joint_sdpa_nightly(
+            b, nh, total_seq, d, q_chunk_size, k_chunk_size, ttnn.bfloat16, grid_cols=grid_cols
+        )
