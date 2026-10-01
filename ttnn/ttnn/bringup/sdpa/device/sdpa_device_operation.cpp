@@ -102,8 +102,9 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             validate_v_head_dim(v_shape[3], DH);
         }
         TT_FATAL(
-            nqh >= nkv && nqh % nkv == 0,
-            "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}",
+            nkv > 0 && nqh >= nkv && nqh % nkv == 0,
+            "Q num_heads must be >= K num_heads and divisible by K num_heads, and K num_heads must be greater than 0. "
+            "Got Q: {}, K: {}",
             nqh,
             nkv);
 
@@ -112,13 +113,13 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             auto k_chunk_size = attrs.program_config->k_chunk_size;
 
             TT_FATAL(
-                q_chunk_size % tt::constants::TILE_WIDTH == 0,
-                "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+                q_chunk_size > 0 && q_chunk_size % tt::constants::TILE_WIDTH == 0,
+                "q_chunk_size must be a positive multiple of TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
                 q_chunk_size,
                 tt::constants::TILE_WIDTH);
             TT_FATAL(
-                k_chunk_size % tt::constants::TILE_WIDTH == 0,
-                "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
+                k_chunk_size > 0 && k_chunk_size % tt::constants::TILE_WIDTH == 0,
+                "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
         }
@@ -327,8 +328,9 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             }
         }
         TT_FATAL(
-            nqh >= nkv && nqh % nkv == 0,
-            "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}",
+            nkv > 0 && nqh >= nkv && nqh % nkv == 0,
+            "Q num_heads must be >= K num_heads and divisible by K num_heads, and K num_heads must be greater than 0. "
+            "Got Q: {}, K: {}",
             nqh,
             nkv);
 
@@ -337,13 +339,13 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             auto k_chunk_size = attrs.program_config->k_chunk_size;
 
             TT_FATAL(
-                q_chunk_size % tt::constants::TILE_WIDTH == 0,
-                "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+                q_chunk_size > 0 && q_chunk_size % tt::constants::TILE_WIDTH == 0,
+                "q_chunk_size must be a positive multiple of TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
                 q_chunk_size,
                 tt::constants::TILE_WIDTH);
             TT_FATAL(
-                k_chunk_size % tt::constants::TILE_WIDTH == 0,
-                "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
+                k_chunk_size > 0 && k_chunk_size % tt::constants::TILE_WIDTH == 0,
+                "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
 

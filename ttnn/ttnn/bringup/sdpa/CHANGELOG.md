@@ -162,3 +162,23 @@ Build fixes after fork_op.py (no behaviour change):
   torch (rel 0.018 / worst row 0.031 at fp32 DEST, 0.023 / 0.058 at bf16 DEST); the source op still refuses it.
 - Needed by: xing40_a4b_d_p X.3 (test_positions, `tt/attention.py:_ring_attend`)
 - Files: `device/ring_joint_sdpa_device_operation.cpp`, `tests/unit/test_ring_mla_single_chunk.py`
+
+### Upstream sync to source @ `73027b6e6ff` (2026-10-01): shared CCL halo contract, legacy recip removal, bug fix
+- What: a 3-way merge (base = fork_op.py's mechanical copy of the source @ `99f7e834cea`, theirs = the same copy of
+  the source with the commits below, ours = this fork; no conflicts) of seven source commits:
+  - required to build: #57190 (block-cyclic sliding ring), #55596 (ring MLA chunked Q remainder rotated across grid
+    rows), #57453 (multi-hop sliding halo), #57979 (multicast halo, larger packets), #57790 (IDevice -> MeshDevice).
+    The fork shares `experimental/ccl/ring_attention_all_gather_async` with the source, and those PRs changed its
+    halo runtime-arg layout and `RingAttentionNeighborHaloConfig` (`unicast_hops` -> `distance`/`hop`, writer
+    origin field renamed), so ring_joint_sdpa_program_factory.cpp no longer compiled against it; the four ring PRs
+    are interlocked in that file, so they come together;
+  - required by the kernels: #56292 (legacy sqrt/rsqrt/reciprocal paths dropped from the LLK:
+    `calculate_recip_first_column` lost its `legacy_compat` parameter; `recip_tile<false>` is gone), applied to
+    compute_common.hpp / compute_streaming.hpp; without it every SDPA kernel fails to JIT-compile;
+  - bug fix: #58381 (positive chunk sizes, nonzero K head count validated in every SDPA entry).
+- Not taken (new optional features, listed only): #56922 `output_concat_heads` (+ pad-key blanking) for
+  scaled_dot_product_attention; #57636 sparse_sdpa_msa rotated causal geometry (multi-turn resume).
+- Default behaviour: the fork's own changes are untouched by the merge; new ring options default off.
+- Needed by: rebase onto origin/malimpic/llk_helper_library_rebased_0110_2
+- Files: 24 merged files under `device/` and `sdpa_nanobind.cpp`; new `device/kernels/chunked_q_mapping.hpp`,
+  `device/ring_joint_sdpa_schedule.hpp`
