@@ -5,7 +5,7 @@ the current eval bottlenecks, predict the attainable speed, iterate on small
 measured experiments, then run and monitor actual CI. This is ongoing work,
 not a claim that the five-task evaluation has been repaired.
 
-## Latest checkpoint (20:04 UTC)
+## Latest checkpoint (20:26 UTC)
 
 Experimental configurable-weight BFP8 passes the existing short readiness gate
 and produces a verifier-passing Django patch both locally and in actual QB2 CI.
@@ -18,14 +18,17 @@ Its warmer cache explains most of the lower wall time; this is **not** a causal
 CI [36910894168](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36910894168)
 is complete (reward 1, but 900-second agent timeout). Follow-up
 [36916089719](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36916089719)
-tests clean completion with the adapter and a bounded 1,200-second cap. It reuses
-the same image and is actively monitored. No full five-task run has been launched;
-cross-task quality and clean release-topology completion remain unproven.
+finishes with **native submission in 845.733 seconds**, reward 1, no exception,
+all 104 tests passing and zero adapter conversions. It reuses the same image;
+both CI runs were monitored through completion and their artifacts inspected.
+No full five-task run has been launched; all-five release completion is unproven.
 Local Matplotlib subsequently finishes **natively** in 647.041 agent seconds,
 reward 1, no exception, required pickle test plus all 181 regression tests pass.
-There are zero adapter conversions. A capped Astropy check is running while the
-separate Django CI trial continues; three other full-release outcomes are still
-unproven, and the precision policy remains experimental.
+There are zero adapter conversions. Astropy's patch also passes its required test
+and all 426 regression tests, but the agent hits its 900-second cap without
+submission. Sympy/sklearn remain untested with this candidate. The precision
+policy remains experimental. All owned local device processes are stopped, both
+device files are unowned, and no dispatched CI remains running.
 
 ## Baseline and timing model
 
@@ -642,6 +645,9 @@ controls retain the saved prompt and explicit request seed.
 The same image initializes all30 layers and the full262144-token serving
 contract. Construction calls`precision_summary()`, which validates allocated
 weight dtypes and bound compute configs against the mounted complete policy.
+Here “fixed prefill unchanged” means the fixed per-layer prefill policy, not
+identical full-prefill logits: the configurable output head is shared by prefill
+and decode, and its BFP4-to-BFP8 change affects both phases.
 Observed`/server_info?config_format=json` confirms async scheduling and on-device
 sampling. No profiler is enabled on the live serving path.
 
@@ -918,3 +924,90 @@ separate-server C1 test. Meanwhile the remote follow-up server becomes reachable
 at 20:00:57 and completes a 98.167-second warmup around 20:03. Thus the DNS alias
 is confirmed by its model metrics; exact attribution of its longer startup
 awaits the final CI logs.
+
+### Completed CI and Astropy checkpoint
+
+Follow-up CI **36916089719 / 110550407919** completes at 20:17:54 UTC. Artifact
+**11191289165** is downloaded under
+`/home/mvasiljevic/gemma4-eval-speed-evidence/bfp8_submit_36916089719`.
+Trial `django__django-11299__5fh38H3` runs from 20:03:07.645288 to
+20:17:13.378679: **845.733391 agent seconds, reward 1, resolved, no exception**.
+The required `test_simplecol_query` and all 103 PASS_TO_PASS tests pass. All 38
+responses contain native tool calls, including the final submission; the
+enabled adapter converts zero responses. There are no repetition stops or late
+responses. Recorded totals are 466,648 input / 12,030 output tokens,
+840.273 proxy API seconds and 1.742 tool seconds. This is a clean, actual QB2
+outcome within even the earlier 900-second cap, not just a green workflow.
+
+The policy hash remains `46389c08f1c99f068669f66e902cc34daf00e54e7c7d8014dc1539b3dd1af954`,
+logged at 19:44:08.524. Image, TT-Metal, plugin and TTI provenance are the exact
+inputs recorded above. The job builds no image. End-to-end dispatch-to-workflow
+completion is **36m52s**, much longer than the 14m06s agent phase: the uncached
+HF snapshot fetch alone takes approximately **386.5 seconds** (19:44:11.708 to
+19:50:38.172), then the startup health poll measures **620.6 seconds**, and the
+4K/4-token diagnostic warmup takes **98.167 seconds**. Model/cache creation and
+startup are outside the per-agent cap. Reusing images does not ensure that a
+different runner has HF weights, converted tensors, or compiled kernels cached.
+Persistent exact-revision caches and staying on the loaded server are practical
+iteration priorities; no cache-transfer speedup has yet been measured.
+
+Endpoint counters before and after this complete trial isolate **592.468298
+seconds TTFT** and **247.685461 seconds post-first-token latency**, total
+840.153759 seconds. Proxy/API bookkeeping accounts for approximately 0.119
+seconds above that total. TTFT is **70.5%** of request time. On this fixed
+trajectory, another 5% decode speedup saves only about 11.8 seconds; halving TTFT
+would reduce agent time to approximately **549.5 seconds**. The impossible
+zero-TTFT floor is approximately **253.3 agent seconds** (3.34x ceiling relative
+to this successful trial), retaining decode and non-request time. These are
+conditional arithmetic bounds, not an implemented prefix-cache gain or a
+forecast that other tasks will terminate. The earlier 77% TTFT observation was
+a different trajectory; 70.5% here reinforces the bottleneck without claiming
+identical turn sequences across runners.
+
+Local Astropy trial `astropy__astropy-14096__8kNeQ6D` runs from
+20:03:28.719137 to 20:18:28.750481: **900.031344 seconds, reward 1, resolved,
+AgentTimeoutError**. The required `test_subclass_property_exception_error` and
+all 426 PASS_TO_PASS tests pass. Artifact root is
+`/home/mvasiljevic/gemma4-eval-speed-evidence/local_astropy_bfp8_submit_seed9472`.
+The correct source edit is applied at **865.974 seconds**, and the reproduction
+shows the requested error at **891.945 seconds**, both before the deadline.
+One final read-only source inspection arrives **30.874 seconds after agent end**;
+it does not create the passing patch. Saved totals (including that late response)
+are 28 native tool responses, 442,628 input / 26,539 output tokens and 1.621 tool
+seconds. The late response contains 721 output tokens. Zero normalization or
+repetition stops occur. The remaining inefficiency is semantic over-analysis
+and repeated small synthetic tests, not a malformed native tool loop. The patch
+also leaves the method's former docstring after executable statements: verifier
+reward is not a general code-quality approval.
+
+At 20:23 UTC the owned `gemma4-eval-weight-bfp8-v2` container is stopped cleanly;
+`fuser /dev/tenstorrent/0 /dev/tenstorrent/1` reports no owners. No device reset,
+unrelated-container stop, image rebuild, or full five-task run was performed.
+The checkpoint covers approximately **4h53m active agent wall time** across
+12:43–15:30 and 18:20–20:26, excluding the user-requested stop interval.
+Final host revalidation passes all **140 TTI harness tests** and **9 model-tool
+invariant tests**, plus JSON parsing and `git diff --check`. The host system
+Python lacks pytest; use the TTI virtualenv. Model-tool tests need their tools
+directory as the working directory and `-c /dev/null --confcutdir=.` to avoid
+unrelated TT-Metal conftest dependencies. The temporary pytest-cache warning
+from `/dev/null` does not affect results; disable the cache provider if desired.
+
+### Remaining gates and recommended next bounded work
+
+- Validate Sympy and sklearn with the same candidate in 15–20 minute C1 trials,
+  preferably sequentially on one already-loaded server. Do not infer their
+  outcome or completion time from Django/Matplotlib.
+- Test Astropy clean termination with a bounded extension or a separately
+  declared generic progress policy; never inject hidden verifier tests or
+  task-specific solution guidance. Keep reward and submission separate.
+- Broaden the narrow 100-token precision correctness gate before selecting
+  BFP8 for release. Record precision, guard, seed, environment and adapter as
+  distinct interventions. The best local paired Django comparison is still
+  only one seed and differing cache states.
+- Only then perform the intended serial C1, five-task 7,200-second validation.
+  Current TTI `215e6375...` is deliberately a one-Django/1,200-second diagnostic
+  recipe with explicit seed, not that release config. Restore the actual task
+  set/cap and declare policy/sampling deviations before a final comparison.
+- Optimize measured prefill/cache costs after outcome stability. Real prefix
+  caching remains unsupported; do not enable its flag or claim ideal savings
+  as delivered performance. Preserve request telemetry and timeout-tail checks.

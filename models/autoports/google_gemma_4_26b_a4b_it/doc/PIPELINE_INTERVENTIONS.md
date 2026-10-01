@@ -355,6 +355,23 @@ five-task release suite has not been rerun. Resume requires a new user request.
   These are positive cross-task outcomes, not an extrapolated all-five pass or
   a causal speedup percentage against the older failed trajectories.
 - Measure their TTFT and TSU.
+- Final bounded checkpoint at 20:26 UTC: actual QB2 CI 36916089719 /
+  110550407919 finishes cleanly with native submission in 845.733 agent seconds,
+  reward 1 and all 104 tests passing; the adapter is enabled but never fires.
+  Artifact 11191289165 is downloaded and reviewed. Local Astropy earns reward 1
+  with all 427 tests passing at its 900-second cap; the passing edit and
+  reproduction precede the deadline, but clean submission remains unproven.
+  The candidate therefore has positive patch outcomes on three tasks, clean
+  completion on two, and an actual clean CI validation—not an all-five release
+  pass. Sympy/sklearn still need bounded checks. Final CI request time is 70.5%
+  TTFT; its 36m52s total workflow also includes a 386.5s HF fetch, 620.6s server
+  startup health wait and 98.167s diagnostic warmup. The image was reused.
+  Performance-claim review keeps cache warming, precision/quality changes,
+  native completion and causal serving speedups separate. About 4h53m active
+  wall time was used across 12:43–15:30 and 18:20–20:26, excluding the shutdown
+  gap. All dispatched CI is complete; the owned local server is stopped and
+  both TT device files are free. Exact provenance, limitations and next gates
+  are in `eval_speed/README.md`; release precision remains unchanged.
 - Separate model/device performance from eval-framework overhead.
 - Check whether the same evals can run with more parallelism and finish sooner.
 - Dispatch eval subsets in parallel on multiple CI machines during development.
