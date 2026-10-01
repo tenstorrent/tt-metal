@@ -10,7 +10,8 @@
 // the low-level LLKs, because a tt-llk test cannot include tt_metal/hw/inc/api/compute.
 // The three threads mirror the compute API exactly:
 //
-//   UNPACK  llk_unpack_AB_custom_mm_init<transpose>   -> _llk_unpack_AB_custom_mm_init_
+//   UNPACK  llk_unpack_AB_custom_mm_init<transpose, false /*clear_src*/>
+//                                                      -> _llk_unpack_AB_custom_mm_init_
 //           llk_unpack_AB_sdpa_custom_mm<read_transposed>
 //                                                      -> _llk_unpack_AB_sdpa_custom_mm_
 //   MATH    llk_math_sdpa_custom_mm_init<transpose>    -> _llk_math_sdpa_custom_mm_init_
@@ -109,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // init: unpB_face_r_dim = in0 row count (M), unpA_dst_format selects the profiling
     // heuristic (post1) in the MOP config.
-    _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
+    _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
 
     // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
     // The re-entry variant appends a mask to in1 and uses it only on the first pass.

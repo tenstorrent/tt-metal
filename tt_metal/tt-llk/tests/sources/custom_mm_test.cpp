@@ -92,12 +92,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // unpB_face_r_dim = in0 (SrcB) face rows in {1,2,4,8}; unpA_dst_format tunes the
     // instruction sequence (post1 only for Bfp4_b). transpose=false.
-    _llk_unpack_AB_custom_mm_init_<false /* transpose */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
+    _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
 
     // Single call: SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix).
     // tile_index_a = tile_index_b = 0; the SrcA walk covers the whole kt*ct grid via
-    // CFGSHIFTMASK, the SrcB walk covers kt via counters. clear_src=true (default).
-    _llk_unpack_AB_custom_mm_<false /* read_transposed */, true /* clear_src */>(
+    // CFGSHIFTMASK, the SrcB walk covers kt via counters.
+    _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
         L1_ADDRESS(params.buffer_B[0]),
         L1_ADDRESS(params.buffer_A[0]),
         0 /* tile_index_a */,

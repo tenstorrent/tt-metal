@@ -182,7 +182,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     TTI_MOP_CFG(0);
 }
 
-template <bool transpose = false>
+template <bool transpose = false, bool clear_src = true>
 inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, const std::uint32_t unpA_dst_format, const std::uint32_t ct_dim = 1)
 {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
@@ -200,6 +200,16 @@ inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, 
     const bool post1 = unpA_dst_format == to_underlying(DataFormat::Bfp4_b);
 
     _llk_unpack_AB_custom_mm_mop_config_(ct_dim, post1);
+
+    if constexpr (clear_src)
+    {
+        // Clear SrcB as we only unpack into 1/8 FPU rows so zeroing them gives power savings
+        // This particular instruction clears both banks after waiting for both of them to be free
+        // It must run alone: a both-bank SrcB clear drops SrcA writes that unpacker 0 makes while it runs
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
+    }
 
     // Reset counters here since reset in the execute API is at the end
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
@@ -263,7 +273,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-template <bool read_transposed = false, bool clear_src = true>
+template <bool read_transposed = false>
 inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -272,7 +282,8 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim) {
+    const std::uint32_t ct_dim)
+{
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
@@ -284,13 +295,6 @@ inline void _llk_unpack_AB_custom_mm_(
     // Wait for all contexts to be free
     wait_for_next_context(1);
     reset_config_context();
-
-    if constexpr (clear_src)
-    {
-        // Clear SrcB as we only unpack into 1/8 FPU rows so zeroing them gives power savings
-        // This particular instruction clears both banks after waiting for both of them to be free
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
-    }
 
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }
