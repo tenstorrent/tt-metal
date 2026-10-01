@@ -1,0 +1,18 @@
+# Serving-contract tests (SC.1), from serving_contract.md. gates: the step whose gate runs the test.
+tests:
+- test: models/demos/xing40_a4b_d_p/tests/bringup/contract/test_cache_starts.py
+  checks: KV written at the server's starts (cold mid-record end, 64-aligned and 32-aligned follow-ups) vs golden; rows below start untouched; pad rows zero
+  section: Attention and cache writes
+  gates: attention
+- test: models/demos/xing40_a4b_d_p/tests/bringup/contract/test_pulled_back_chunk.py
+  checks: the pulled-back last chunk (49024, 54144) then (51200, 56000); layer-0 rewrite bit-identical, KV vs golden
+  section: Attention and cache writes
+  gates: attention
+- test: models/demos/xing40_a4b_d_p/tests/bringup/contract/test_adapter_acks.py
+  checks: adapter runtime, server payload, 2 slots, host-sink acks one per layer with the layer's KV in DRAM at the ack; table rules
+  section: Acks
+  gates: adapter
+- test: models/demos/xing40_a4b_d_p/tests/bringup/contract/test_runner_contract.py
+  checks: real runner + producer, 40 layers, 2 interleaved slots, follow-ups, pulled-back chunk, D2H acks, mock migration; KV through the table vs golden with tables.py and kv_dump_compare
+  section: Adapter and table
+  gates: adapter
