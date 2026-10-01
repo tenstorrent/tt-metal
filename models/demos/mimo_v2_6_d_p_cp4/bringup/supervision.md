@@ -19,3 +19,10 @@
   raises instead of failing the attempt). Classification: framework. Fixed the two tests to use expect_error, ran them on
   device (2 passed), re-ran the gate with `gate --commit` -> 45055357df7. Fork review: dispatch/combine
   allow_cluster_axis_1, default off, CHANGELOG + INDEX, fork_source 0 regressions. Resumed.
+- 2026-10-01 02:52, M.1 (pre-check). Box/disk: /home/sjovic/private (NFS, 102 GB) hit 100%. The M.1 gate died writing
+  the expert tt_cache (ENOSPC), then the ledger's next state write left state.json empty and the orchestrator crashed
+  on JSONDecodeError. Classification: box (disk). Action: deleted the 489 cache files written during that M.1 run (114
+  were 0 bytes; the 384 older files were intact, all one size), moved generated/mimo_v2_6_d_p_cp4 to
+  /home/sjovic/bringup/mimo_v2_6_d_p_cp4/generated_cache (root disk, 3 TB free) with a symlink back, restored
+  state.json from git (last gate S.full_moe.07). NFS back to 26 GB free. Finding: tt/experts.py hard-codes
+  CACHE_ROOT under generated/ instead of the spec's tt_cache dir. Resumed.
