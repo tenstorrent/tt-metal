@@ -53,7 +53,8 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
     std::vector<SerializedTensorBuffer> buffers;
     flatbuffers::FlatBufferBuilder builder;
     auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
-    builder.Finish(tensor_offset);
+    // Stamps the file identifier "TTNB" after the root offset.
+    ttnn::flatbuffer::FinishTensorBuffer(builder, tensor_offset);
 
     FILE* output_file = fopen(file_name.c_str(), "wb");
     TT_FATAL(
@@ -110,9 +111,15 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distri
         header_size < flatbuffers::Verifier::Options().max_size,
         "Tensor header size is too large; this most likely indicates data corruption.");
     flatbuffers::Verifier verifier(header_start, header_size);
+    // Verify without requiring the file identifier: files written before schema version 1 carry none, and the
+    // generated `VerifyTensorBuffer` would reject them. Its absence only says which kind of file this is.
     TT_FATAL(
-        ttnn::flatbuffer::VerifyTensorBuffer(verifier),
+        verifier.VerifyBuffer<ttnn::flatbuffer::Tensor>(/*identifier=*/nullptr),
         "Cannot validate tensor data; this most likely indicates data corruption.");
+    if (!ttnn::flatbuffer::TensorBufferHasIdentifier(header_start)) {
+        log_debug(
+            tt::LogAlways, "Tensor file \"{}\" carries no file identifier; it predates schema version 1", file_name);
+    }
     const auto* fb_tensor = ttnn::flatbuffer::GetTensor(header_start);
 
     const uint64_t data_offset = sizeof(header_size) + header_size;

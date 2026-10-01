@@ -20,6 +20,9 @@
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -751,6 +754,214 @@ TEST(TensorSerializationFlatbufferGuardTest, ShardedRoundtripPreservesTopology2D
     for (size_t i = 0; i < coords.size(); ++i) {
         EXPECT_THAT(shard_values(loaded_tensor, coords[i]), Pointwise(FloatEq(), data[i]));
     }
+}
+
+// Schema identifier, version and read-side validation. The files are patched in place through the root table's
+// vtable, which is how a reader resolves a field, so a patch changes exactly what the reader sees. Every "Rejected"
+// test is a negative control: the same file loaded without complaint before the check it exercises.
+
+constexpr size_t kFlatbufferStart = sizeof(uint64_t);  // The uint64 header size precedes the flatbuffer.
+// Field indices in tensor.fbs (root `Tensor` table) and tensor_topology.fbs (`TensorTopology` table).
+constexpr size_t kTensorTopologyField = 3;
+constexpr size_t kSchemaVersionField = 4;
+constexpr size_t kTopologyPlacementsField = 1;
+constexpr size_t kTopologyMeshCoordsField = 2;
+// Spelled out rather than taken from the serializer's `kTensorFileSchemaVersion`, so that bumping the on-disk
+// version has to change this golden too.
+constexpr uint32_t kExpectedSchemaVersion = 1;
+
+std::vector<std::byte> read_file_bytes(const std::filesystem::path& path) {
+    std::vector<std::byte> data(std::filesystem::file_size(path));
+    std::ifstream file(path, std::ios::binary);
+    file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    EXPECT_TRUE(file.good());
+    return data;
+}
+
+void write_file_bytes(const std::filesystem::path& path, const std::vector<std::byte>& data) {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    EXPECT_TRUE(file.good());
+}
+
+template <typename T>
+T read_le(const std::vector<std::byte>& data, size_t pos) {
+    T value{};
+    std::memcpy(&value, data.data() + pos, sizeof(T));
+    return value;
+}
+
+template <typename T>
+void write_le(std::vector<std::byte>& data, size_t pos, T value) {
+    std::memcpy(data.data() + pos, &value, sizeof(T));
+}
+
+// Position that the uoffset stored at `pos` points to.
+size_t follow(const std::vector<std::byte>& data, size_t pos) { return pos + read_le<uint32_t>(data, pos); }
+
+size_t root_table(const std::vector<std::byte>& data) { return follow(data, kFlatbufferStart); }
+
+// Position of the vtable slot holding the offset of field `index` of the table at `table`. Writing 0 there makes
+// the field absent, so a reader gets its default (nullptr or 0).
+size_t vtable_slot(const std::vector<std::byte>& data, size_t table, size_t index) {
+    const size_t vtable = table - static_cast<size_t>(read_le<int32_t>(data, table));
+    return vtable + 2 * sizeof(uint16_t) + index * sizeof(uint16_t);
+}
+
+// Position of field `index` of the table at `table`, which must be present.
+size_t field_position(const std::vector<std::byte>& data, size_t table, size_t index) {
+    const uint16_t offset = read_le<uint16_t>(data, vtable_slot(data, table, index));
+    EXPECT_NE(offset, 0) << "field " << index << " is absent";
+    return table + offset;
+}
+
+// Position of element `i` of the vector of tables whose uoffset is stored at `vector_field`.
+size_t table_element(const std::vector<std::byte>& data, size_t vector_field, size_t i) {
+    const size_t vector = follow(data, vector_field);
+    return follow(data, vector + sizeof(uint32_t) + i * sizeof(uint32_t));
+}
+
+// Per-coordinate values of the file the schema tests patch: distinct shards at (0,0) and (0,1).
+const std::vector<std::vector<float>>& two_shard_data() {
+    static const std::vector<std::vector<float>> data{{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}};
+    return data;
+}
+
+// Dumps a 1x2 tensor holding `two_shard_data()` under a `{1,2},[Replicate,Shard{1}]` label and returns its bytes.
+std::vector<std::byte> dump_two_shard_file(const TemporaryFile& file) {
+    const std::vector<MeshCoordinate> coords = all_coords(MeshShape(1, 2));
+    const TensorTopology label(MeshShape(1, 2), Placements{kReplicate, shard_on(1)}, coords);
+    dump_tensor_flatbuffer(
+        file.string(), make_host_tensor(MeshShape(1, 2), coords, two_shard_data(), label), DumpTensorMode::LOCAL);
+    return read_file_bytes(file.path());
+}
+
+void expect_load_rejected(const TemporaryFile& file, const std::string& diagnostic) {
+    EXPECT_THAT(
+        [&]() { load_tensor_flatbuffer(file.string()); }, ThrowsMessage<std::runtime_error>(HasSubstr(diagnostic)));
+}
+
+// Before this change the flatbuffer had no identifier (bytes [12, 16) of the file were table data) and no version
+// field.
+TEST(TensorSerializationFlatbufferSchemaTest, FileCarriesIdentifierAndSchemaVersion) {
+    TemporaryFile test_file("schema_identifier.tensorbin");
+    const auto data = dump_two_shard_file(test_file);
+
+    ASSERT_GE(data.size(), kFlatbufferStart + 2 * sizeof(uint32_t));
+    const std::string identifier(
+        reinterpret_cast<const char*>(data.data()) + kFlatbufferStart + sizeof(uint32_t), sizeof(uint32_t));
+    EXPECT_EQ(identifier, "TTNB");
+    EXPECT_EQ(
+        read_le<uint32_t>(data, field_position(data, root_table(data), kSchemaVersionField)), kExpectedSchemaVersion);
+}
+
+// A file written by a newer tt-metal is refused rather than misread; before this change there was no version to
+// refuse on. Restoring the version loads the file again, as a control.
+TEST(TensorSerializationFlatbufferSchemaTest, NewerSchemaVersionRejected) {
+    TemporaryFile test_file("newer_schema_version.tensorbin");
+    auto data = dump_two_shard_file(test_file);
+    const size_t version_pos = field_position(data, root_table(data), kSchemaVersionField);
+
+    write_le<uint32_t>(data, version_pos, kExpectedSchemaVersion + 1);
+    write_file_bytes(test_file.path(), data);
+    expect_load_rejected(test_file, "schema version 2");
+
+    write_le<uint32_t>(data, version_pos, kExpectedSchemaVersion);
+    write_file_bytes(test_file.path(), data);
+    EXPECT_NO_THROW(load_tensor_flatbuffer(test_file.string()));
+}
+
+// A versioned writer always records the topology, so a versioned file without one is corrupt. Before this change
+// the same file loaded silently as fully replicated.
+TEST(TensorSerializationFlatbufferSchemaTest, VersionedFileWithoutTopologyRejected) {
+    TemporaryFile test_file("versioned_without_topology.tensorbin");
+    auto data = dump_two_shard_file(test_file);
+    write_le<uint16_t>(data, vtable_slot(data, root_table(data), kTensorTopologyField), 0);
+    write_file_bytes(test_file.path(), data);
+
+    expect_load_rejected(test_file, "no tensor topology");
+}
+
+// A file from before the topology field existed (neither topology nor version) keeps loading as fully replicated
+// with both shards intact, and the loader logs that the label is unknown. This pins the pre-change behaviour (the
+// warning is the only addition); the refusal the plan first proposed would have thrown here.
+TEST(TensorSerializationFlatbufferSchemaTest, LegacyFileWithoutTopologyLoadsAsReplicated) {
+    TemporaryFile test_file("legacy_without_topology.tensorbin");
+    auto data = dump_two_shard_file(test_file);
+    const size_t root = root_table(data);
+    write_le<uint16_t>(data, vtable_slot(data, root, kTensorTopologyField), 0);
+    write_le<uint16_t>(data, vtable_slot(data, root, kSchemaVersionField), 0);
+    write_file_bytes(test_file.path(), data);
+
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    EXPECT_EQ(
+        loaded_tensor.tensor_topology(), TensorTopology::create_fully_replicated_tensor_topology(MeshShape(1, 2)));
+    const std::vector<MeshCoordinate> coords = all_coords(MeshShape(1, 2));
+    for (size_t i = 0; i < coords.size(); ++i) {
+        EXPECT_THAT(shard_values(loaded_tensor, coords[i]), Pointwise(FloatEq(), two_shard_data()[i]));
+    }
+}
+
+// The label's second coordinate is changed to (0,0), so the record at (0,1) is no longer covered. Before this change
+// the file loaded with a label through which that shard was unreachable.
+TEST(TensorSerializationFlatbufferSchemaTest, RecordOutsideLabelRejected) {
+    TemporaryFile test_file("record_outside_label.tensorbin");
+    auto data = dump_two_shard_file(test_file);
+    const size_t topology = follow(data, field_position(data, root_table(data), kTensorTopologyField));
+    const size_t second_coord = table_element(data, field_position(data, topology, kTopologyMeshCoordsField), 1);
+    const size_t values = follow(data, field_position(data, second_coord, 0));
+    ASSERT_EQ(read_le<uint32_t>(data, values), 2u) << "a 1x2 coordinate has two values";
+    const size_t column = values + sizeof(uint32_t) + 1 * sizeof(uint32_t);
+    ASSERT_EQ(read_le<uint32_t>(data, column), 1u);
+    write_le<uint32_t>(data, column, 0);
+    write_file_bytes(test_file.path(), data);
+
+    expect_load_rejected(test_file, "does not cover");
+}
+
+// The Shard{1} placement is flipped to Replicate, so the label calls (0,0) and (0,1) replicas while their records
+// point at different data. Before this change the file loaded under that label; re-dumping it then failed the
+// replica byte check, and before that check existed dropped the (0,1) shard.
+TEST(TensorSerializationFlatbufferSchemaTest, InconsistentReplicaGroupRejected) {
+    TemporaryFile test_file("inconsistent_replica_group.tensorbin");
+    auto data = dump_two_shard_file(test_file);
+    const size_t topology = follow(data, field_position(data, root_table(data), kTensorTopologyField));
+    const size_t shard_placement = table_element(data, field_position(data, topology, kTopologyPlacementsField), 1);
+    const size_t type = field_position(data, shard_placement, 0);
+    ASSERT_EQ(std::to_integer<uint8_t>(data[type]), 1) << "MeshMapperPlacementType::Shard";
+    data[type] = std::byte{0};  // MeshMapperPlacementType::Replicate
+    write_file_bytes(test_file.path(), data);
+
+    expect_load_rejected(test_file, "different data");
+}
+
+// The label's coordinate list is cut to one entry for a two-position distribution shape. `TensorTopology` accepts
+// that, so before this change the file loaded and the first label-driven lookup indexed past the list.
+TEST(TensorSerializationFlatbufferSchemaTest, MeshCoordsLengthMismatchRejected) {
+    TemporaryFile test_file("mesh_coords_mismatch.tensorbin");
+    auto data = dump_two_shard_file(test_file);
+    const size_t topology = follow(data, field_position(data, root_table(data), kTensorTopologyField));
+    const size_t coords_vector = follow(data, field_position(data, topology, kTopologyMeshCoordsField));
+    ASSERT_EQ(read_le<uint32_t>(data, coords_vector), 2u);
+    write_le<uint32_t>(data, coords_vector, 1);
+    write_file_bytes(test_file.path(), data);
+
+    expect_load_rejected(test_file, "lists 1 mesh coordinate(s)");
+}
+
+// A label with one placement for a two-dimensional distribution shape, over two shards holding the same bytes. Before
+// this change the dump succeeded (the single placement was applied to axis 0 and both shards fell into one replica
+// group that compared equal) and the file was then refused on load as corrupt; with distinct bytes the dedup guard
+// fired instead, with a message about replicas. Now the writer rejects the label itself and writes no file.
+TEST(TensorSerializationFlatbufferSchemaTest, PlacementCountMismatchRejectedOnDump) {
+    TemporaryFile test_file("placement_count_mismatch.tensorbin");
+    const std::vector<MeshCoordinate> coords = all_coords(MeshShape(1, 2));
+    const std::vector<float> values{1.0f, 2.0f, 3.0f};
+    const TensorTopology label(MeshShape(1, 2), Placements{shard_on(1)}, coords);
+    Tensor tensor = make_host_tensor(MeshShape(1, 2), coords, {values, values}, label);
+
+    expect_dump_rejected(test_file, tensor, "1 placement(s) for the 2-dimensional distribution shape");
 }
 
 }  // namespace

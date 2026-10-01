@@ -36,6 +36,15 @@ enum class DumpTensorMode : std::uint8_t {
 //    Known gap: `DistributedHostBuffer::transform` rebuilds its container with every unpopulated shard marked
 //    remote, so after a host-side layout or dtype conversion a partial tensor's missing local coordinates read as
 //    remote and pass the exemption above. That is a missed rejection, never a false one.
+// 5. The header opens with the file identifier "TTNB" (file bytes [12, 16)) and records a schema version,
+//    `kTensorFileSchemaVersion` at the time of writing. Files written before either existed carry neither and still
+//    load; a file with a newer version than this build understands is rejected. On load the recorded topology is
+//    checked against the shard records (one placement per distribution dimension, one mesh coordinate per position,
+//    records of one replica group pointing at the same copy, every record covered by the label) and a file that
+//    fails is rejected as corrupt. A topology that lists coordinates with no record (a LOCAL-mode dump from one host
+//    of a multi-host job) loads with those coordinates unpopulated and a warning. A file without a topology loads
+//    fully replicated as before; when it holds more than one distinct shard buffer the label is unknown and a warning
+//    says so, while a versioned file without a topology is rejected.
 void dump_tensor_flatbuffer(
     const std::string& file_name, const Tensor& tensor, DumpTensorMode mode = DumpTensorMode::DISTRIBUTED_GATHER);
 Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distributed::MeshDevice* device = nullptr);

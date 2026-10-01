@@ -21,6 +21,10 @@ namespace ttnn {
 //   [8, 8 + header_size)        flatbuffer header, zero-padded up to `kTensorDataAlignment`
 //   [8 + header_size, EOF)      shard buffers, each starting on `kTensorDataAlignment`
 //
+// The flatbuffer header is a `ttnn.flatbuffer.Tensor` (tensor.fbs). From schema version 1 on it opens with the root
+// offset followed by the file identifier "TTNB" (file bytes [12, 16)) and records `schema_version`; see
+// `kTensorFileSchemaVersion` for what readers do with both.
+//
 // Because the padding is folded into `header_size` and every shard records its own offset in the header, a reader
 // derives every position from the file itself. The alignment is a writer-side choice that the format does not
 // encode, so a file whose data region is aligned to at least `kMinTensorDataAlignment` loads correctly.
@@ -41,6 +45,17 @@ inline constexpr uint64_t kTensorDataAlignment = 64;
 // bytes, so 8 is structurally forced and nothing beyond it is. Files on disk may sit anywhere at or above this, so
 // this, not `kTensorDataAlignment`, is what a load-time check can require.
 inline constexpr uint64_t kMinTensorDataAlignment = alignof(std::uint64_t);
+
+// Revision of the header schema (tensor.fbs) that this writer records in `Tensor.schema_version`:
+//   0  pre-versioning. The field and the file identifier are absent. `tensor_topology` may be absent (files written
+//      before that field existed load fully replicated) and, when present, was written without being checked
+//      against the shards.
+//   1  the file identifier is present, `tensor_topology` is always recorded, and the writer checked it against the
+//      shards: replica groups hold identical bytes, every labelled coordinate is backed by a local or remote shard,
+//      and every populated shard is covered by the label.
+// A reader accepts every version up to its own and rejects newer ones, so bump this whenever the writer starts
+// recording something a reader has to understand, or guaranteeing something a reader may rely on.
+inline constexpr uint32_t kTensorFileSchemaVersion = 1;
 
 // A shard buffer paired with the byte offset, relative to the start of the tensor data region, at which it
 // must be written. Offsets are aligned to `kTensorDataAlignment`, so consecutive buffers are generally not

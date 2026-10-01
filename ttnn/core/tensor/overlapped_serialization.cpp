@@ -105,8 +105,10 @@ std::vector<OverlappedTensorView> load_overlapped_tensors(
         header_size < flatbuffers::Verifier::Options().max_size,
         "Header size is too large; this most likely indicates data corruption.");
     flatbuffers::Verifier verifier(header_start, header_size);
+    // Overlapped files carry no file identifier: the one tensor.fbs declares belongs to that schema's root, and flatc
+    // resets it after an include. Spelling the check out keeps it independent of what flatc generates here.
     TT_FATAL(
-        ttnn::flatbuffer::VerifyOverlappedTensorsBuffer(verifier),
+        verifier.VerifyBuffer<ttnn::flatbuffer::OverlappedTensors>(/*identifier=*/nullptr),
         "Cannot validate overlapped tensor data; this most likely indicates data corruption.");
     const auto* fb_root = ttnn::flatbuffer::GetOverlappedTensors(header_start);
 
