@@ -15,7 +15,7 @@
 namespace sem_internal {
 
 /**
- * @brief One entry in the generated header's list of cached semaphores: which semaphore, and
+ * @brief One entry in kernel_includes.hpp's list of cached semaphores: which semaphore, and
  *        how many harts on this core use it.
  */
 struct CachedSemaphore {
@@ -24,8 +24,8 @@ struct CachedSemaphore {
 };
 
 // Cached-pool entry/exit for the DM_LOCAL_CACHED semaphores a kernel binds. The generated
-// header lists them (sem_internal::kCachedSemaphores) and these are called around
-// kernel_main(). A cached semaphore's pool row must be seeded with its init value once per
+// kernel_includes.hpp lists them (sem_internal::kCachedSemaphores) and dmk.cc calls these
+// around kernel_main(). A cached semaphore's pool row must be seeded with its init value once per
 // program, by exactly one hart, before anyone touches it, and is left clean for the next
 // program. Each 8B row is [0] = the counter, [1] = a bookkeeping word: entered[15:0],
 // exited[30:16], seeded[31]. On entry, each binder hart increments `entered`; whoever got

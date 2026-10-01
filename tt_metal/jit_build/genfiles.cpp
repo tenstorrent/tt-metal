@@ -183,21 +183,24 @@ void emit_programmatic_binding_token_getter(
     content << "}\n";
 }
 
-// Emits the list of cached semaphores this kernel binds: each one's id and how many harts on
+// Generates the list of cached semaphores this kernel binds: each one's id and how many harts on
 // this core use it. The list may be empty.
-void emit_cached_semaphore_list(ostream& os, const vector<SemBindingEntry>& entries) {
-    vector<string> cached_semaphore_entries;
-    for (const auto& entry : entries) {
-        if (entry.scope == SemScope::DM_LOCAL_CACHED) {
-            cached_semaphore_entries.push_back(fmt::format("{{{}u, {}u}}", entry.id, entry.total_binder_harts));
-        }
-    }
-    os << "namespace sem_internal {\n";
-    os << fmt::format(
-        "inline constexpr std::array<::sem_internal::CachedSemaphore, {}> kCachedSemaphores{{{{{}}}}};\n",
+string generate_cached_semaphore_list(const JitBuildSettings& settings) {
+    // Keyed by accessor name so the output is deterministic for the JIT build cache.
+    map<string, string> cached_semaphore_entries;
+    settings.process_semaphore_binding_handles(
+        [&cached_semaphore_entries](const string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
+            if (scope == SemScope::DM_LOCAL_CACHED) {
+                cached_semaphore_entries.emplace(name, fmt::format("{{{}u, {}u}}", id, total_binder_harts));
+            }
+        });
+    return fmt::format(
+        "#include \"internal/tt-2xx/quasar/semaphore_cached_pool.h\"\n"
+        "namespace sem_internal {{\n"
+        "inline constexpr std::array<::sem_internal::CachedSemaphore, {}> kCachedSemaphores{{{{{}}}}};\n"
+        "}}  // namespace sem_internal\n",
         cached_semaphore_entries.size(),
-        fmt::join(cached_semaphore_entries, ", "));
-    os << "}  // namespace sem_internal\n";
+        fmt::join(views::values(cached_semaphore_entries), ", "));
 }
 
 // METAL 2.0 only:
@@ -236,10 +239,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             sem_entries.push_back({name, id, scope, total_binder_harts});
         });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
-
-    // Gates TT_DM_CACHED_SEM_STUBS below.
-    const bool has_cached_sem = std::any_of(
-        sem_entries.begin(), sem_entries.end(), [](const auto& e) { return e.scope == SemScope::DM_LOCAL_CACHED; });
 
     // Get the tensor binding handles from the settings callback
     // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
@@ -339,11 +338,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         // so it is safe on compute builds too.
         content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
     }
-    // Defines CachedSemaphore and the cached-pool entry/exit
-    // This is quasar + DM only feature.
-    content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-    content << "#include \"internal/tt-2xx/quasar/semaphore_cached_pool.h\"\n";
-    content << "#endif\n";
 
     // This is included unconditionally for the `get_token_if_present()` helper, as it needs to see the full templated
     // definition of TensorBindingToken.
@@ -403,12 +397,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Emit Semaphore bindings
     tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
-    if (has_cached_sem) {
-        content << "#define TT_DM_CACHED_SEM_STUBS 1\n";
-    }
-    content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-    emit_cached_semaphore_list(content, sem_entries);
-    content << "#endif\n";
 
     // Emit Tensor bindings
     content << "namespace tensor {\n";
@@ -736,8 +724,6 @@ void jit_build_genfiles_kernel_include(
     const bool is_metal2 = settings.is_metal2_kernel();
     string kernel_header_content;
     if (is_metal2) {
-        // When the kernel binds cached semaphores, the generated header lists them and dmk.cc
-        // runs the pool entry/exit around kernel_main() (TT_DM_CACHED_SEM_STUBS).
         write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
         kernel_header_content =
@@ -754,6 +740,12 @@ void jit_build_genfiles_kernel_include(
         kernel_header_content += "#include \"named_args_generated.h\"\n";
     }
     ////////////////////////////////////////////////////////////
+
+    // Quasar DM firmware (dmk.cc) seeds and restores the pool rows of the kernel's cached
+    // semaphores around kernel_main(), so every Quasar kernel gets the list, possibly empty.
+    if (env.get_arch() == tt::ARCH::QUASAR) {
+        kernel_header_content += generate_cached_semaphore_list(settings);
+    }
 
     kernel_header_content += get_kernel_source_to_include(kernel_src);
 
