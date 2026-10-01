@@ -327,3 +327,15 @@ def test_serving_contract_gates_the_steps_it_names(fx):
     assert any("'## Acks' missing" in e for e in SV.check(s, s.repo))
     write(s, "contract_tests.yaml", {"tests": tests[:1]})
     assert any("no runner test" in e for e in SV.check(s, s.repo))
+
+
+def test_serving_run_tests_runs_the_named_gate(fx):
+    from models.demos.common.bringup.testing import serving as SV
+
+    s = Spec.load(fx())
+    ts = [{"test": "a.py", "gates": "attention", "section": "x"}, {"test": "b.py", "gates": "adapter", "section": "x"}]
+    write(s, "contract_tests.yaml", {"tests": ts})
+    seen = []
+    fail_b = lambda cmd: seen.append(cmd) or (1 if cmd.endswith("b.py") else 0)  # noqa: E731
+    assert SV.run_tests(s, s.repo, "all", fail_b) == ["b.py"] and len(seen) == 2
+    assert SV.run_tests(s, s.repo, "attention", fail_b) == [] and seen[-1].endswith("a.py")
