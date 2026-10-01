@@ -2255,3 +2255,15 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: unit
+- name: TT-DiT Mochi VAE Conv1x1 matmul stress (probe for #58653)
+  cmd: |
+    pytest --timeout 2400 models/tt_dit/tests/models/mochi/test_vae_conv1x1_matmul_stress.py
+  model: mochi
+  model_family: Mochi
+  skus:
+    wh_n300:
+      timeout: 50
+      tier: 3
+    wh_n150:
+      timeout: 50
+      tier: 3
