@@ -21,6 +21,11 @@ class MultichipDecoder(OptimizedDecoder):
     prefill_k_chunk = 256
     accurate_attention_batch_size = 32
     accurate_attention_transport = "packed_gqa_rows_v1"
+    # Beyond the stock decode bound: split-K flash decode with FP32 recurrence
+    # (accurate_flash_decode). "chunked" restores the chunked-prefill fallback.
+    accurate_decode_kernel = "flash"
+    flash_decode_k_chunk = 256
+    flash_decode_max_cores_per_head = 64  # tree reduction limit; B1 uses all 55 per KV head
 
     @classmethod
     def from_state_dict(
@@ -44,7 +49,7 @@ class MultichipDecoder(OptimizedDecoder):
     ):
         import torch
 
-        from .accurate_attention import _load, accurate_attention
+        from .accurate_attention import _load, accurate_attention, accurate_flash_decode
 
         _load()  # Host extension/kernel-path loading is an explicit setup boundary.
         c = hf_config
@@ -113,6 +118,7 @@ class MultichipDecoder(OptimizedDecoder):
         self.weight_allocations = []
         self.kv_dtype = getattr(ttnn, self.policy.kv)
         self._attention = accurate_attention
+        self._flash_decode = accurate_flash_decode
         self.eps = c.rms_norm_eps
         self.context = c.max_position_embeddings
         self.compute = ttnn.init_device_compute_kernel_config(
@@ -529,12 +535,37 @@ class MultichipDecoder(OptimizedDecoder):
                     compute_with_storage_grid_size=(11, 10), q_chunk_size=0, k_chunk_size=128, exp_approx_mode=False
                 ),
             )
+        elif self.accurate_decode_kernel == "flash":
+            attention = self._flash_decode_attention(q, kv_cache, page_table, current_pos)
         else:
             attention = self._accurate_decode_attention(q, kv_cache, page_table, current_pos)
         # [1,B,H,D] is already in concatenated logical order. Tile reshape
         # avoids the dedicated concat op's compulsory L1 sharding roundtrip.
         attention = ttnn.reshape(attention, (1, 1, batch, 1024))
         return self._finish(x, attention)
+
+    def _flash_decode_attention(self, q, kv_cache, page_table, current_pos):
+        """Stock split-K decode contract with FP32 scores/recurrence and accurate exp.
+
+        All 110 workers split each KV head's history and merge through the stock tree
+        (B1: 55 per KV head). The chunked-prefill fallback ran one query head per core,
+        8 of 64 cores at B1, serially over the whole context.
+        """
+        # The reader fetches whole K chunks before causal masking; pad with a valid
+        # request-owned page, as the stock branch does for K128.
+        padding = (-page_table.shape[1]) % (self.flash_decode_k_chunk // self.page_size)
+        table = (
+            ttnn.concat([page_table, ttnn.repeat(page_table[:, -1:], (1, padding))], dim=1) if padding else page_table
+        )
+        return self._flash_decode(
+            q,
+            kv_cache[0],
+            kv_cache[1],
+            table,
+            current_pos,
+            max_cores_per_head=self.flash_decode_max_cores_per_head,
+            k_chunk_size=self.flash_decode_k_chunk,
+        )
 
     def _accurate_decode_attention(self, q, kv_cache, page_table, current_pos):
         """Pack the four query heads sharing each KV head into independent rows."""
