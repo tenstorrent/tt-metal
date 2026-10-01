@@ -100,11 +100,11 @@ def test_summarize_includes_all_ops(tmp_path):
 def test_report_rejects_unsafe_signposts(tmp_path, monkeypatch, expect_error):
     called = False
 
-    def unexpected_run(*args, **kwargs):
+    def unexpected_import():
         nonlocal called
         called = True
 
-    monkeypatch.setattr(lpr.subprocess, "run", unexpected_run)
+    monkeypatch.setattr(lpr, "_perf_report", unexpected_import)
     with expect_error(ValueError, "invalid start signpost"):
         lpr.run_tt_perf_report(
             tmp_path / "ops.csv",
