@@ -455,7 +455,7 @@ void reduce_c_row_group(
 #endif
     tile_regs_acquire();
 
-#if defined(SDPA_PA) || (defined(SDPA_PROTO_PA32) && defined(SDPA_RECIPE_FP32))
+#if (defined(SDPA_PA) || (defined(SDPA_PROTO_PA32) && defined(SDPA_RECIPE_FP32))) && !defined(SDPA_PA_REDUCE_PROBE)
     if (do_eltwise_max) {
         // Reference max: carry the previous maximum unchanged (bitwise), skipping the reduce. A plain copy:
         // the reduce's seeding copy transposes within faces for the reduce's dest layout.
@@ -508,6 +508,18 @@ void reduce_c_row_group(
         reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half);
     }
     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger, overlap_first_half);
+#ifdef SDPA_PA_REDUCE_PROBE
+    // Cost probe for overflow detection: the true max is computed above; carry the reference max.
+    if (do_eltwise_max) {
+#ifdef SDPA_RECIPE_FP32
+        sdpa_stream_reconfig_srca(prev_cb);
+#endif
+        copy_init(prev_cb);
+        for (uint32_t i = 0; i < group_size; i++) {
+            copy_tile(prev_cb, row_start + i, group_size + i);
+        }
+    }
+#endif
 
     tile_regs_commit();
     tile_regs_wait();
@@ -524,7 +536,11 @@ void reduce_c_row_group(
 #endif
 
     for (uint32_t i = 0; i < group_size; i++) {
+#ifdef SDPA_PA_REDUCE_PROBE
+        pack_tile<false>(do_eltwise_max ? group_size + i : i, out_cb);
+#else
         pack_tile<false>(i, out_cb);
+#endif
     }
 
     tile_regs_release();
