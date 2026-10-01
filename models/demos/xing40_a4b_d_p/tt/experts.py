@@ -50,6 +50,14 @@ CAPACITY_FACTOR = 4  # flat dispatch buffer = 4 x per-expert cap (all top-4 expe
 _SEQ_MODULES = {}
 
 
+def experts_fidelity():
+    """Routed-expert matmul fidelity: HiFi2 by owner decision (2026-10-01, after P.3's A/B: experts 256.6 -> 242.4 ms,
+    s56320 top5 1.0, final hidden 0.99803 with the bfp8 KV cache); XING_EXPERTS_FIDELITY=hifi4 for the previous path."""
+    f = os.environ.get("XING_EXPERTS_FIDELITY", "hifi2").lower()
+    assert f in ("hifi2", "hifi4"), f"XING_EXPERTS_FIDELITY={f!r}, expected hifi2 or hifi4"
+    return ttnn.MathFidelity.HiFi2 if f == "hifi2" else ttnn.MathFidelity.HiFi4
+
+
 class LazyExpertWeights:
     """Sequence of {'gate_proj' [I, H], 'up_proj' [I, H], 'down_proj' [H, I]} (HF (out, in) layout, bf16, global
     expert order) read from the checkpoint one expert at a time."""
@@ -176,7 +184,7 @@ class TtExperts:
         assert torch_weights is not None or cache, "no weights and no cache"
         # HiFi4 + fp32 dest for every expert matmul (owner rule; high_precision honours it).
         self.cfg = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+            math_fidelity=experts_fidelity(), math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
         self.routed = TtRoutedExpert(
             mesh_device=mesh,

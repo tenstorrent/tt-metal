@@ -1,9 +1,9 @@
 intake:
   by: dnijemcevic
-  at: '2026-09-30T06:37:34'
+  at: '2026-10-01T15:03:08'
   files:
-    models/demos/xing40_a4b_d_p/bringup/spec.yaml: 8123d91e7c5bcfa8be91cd24fced6296bc76149e444ee8bd158cbe22412e3142
-  note: 'owner: fp32_dest_acc_en off for ring_mla (streaming compute)'
+    models/demos/xing40_a4b_d_p/bringup/spec.yaml: 7fefaa45026d721d8f99c3a74913fa3e80172499b609ef4f5facf6e79eb5db8d
+  note: ''
 plan:
   by: dnijemcevic
   at: '2026-09-30T18:07:18'
