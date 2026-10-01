@@ -19,27 +19,8 @@
 #include "optimizers/sgd.hpp"
 #include "test_utils/mesh_utils.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "ttnn_fixed/distributed/tt_metal.hpp"
 
-namespace {
-
-const tt::tt_metal::distributed::MeshShape kMeshShape(1, 2);
-
-}  // namespace
-
-class LinearRegressionDDPTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
-
-        ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
-        ttml::autograd::ctx().open_device(kMeshShape);
-    }
-
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
-    }
-};
+class LinearRegressionDDPTest : public ttml::test_utils::Mesh1x2Fixture {};
 
 using ttml::autograd::TensorPtr;
 

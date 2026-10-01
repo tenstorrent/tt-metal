@@ -14,11 +14,8 @@
 #include "ops/losses.hpp"
 #include "test_utils/mesh_utils.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
-
-const tt::tt_metal::distributed::MeshShape kMeshShape(1, 2);
 
 // Reference: standard cross-entropy loss = mean_over_positions( log_normalizer − target_logit )
 //   log_normalizer = global_max + log(sum(exp(x − global_max)))
@@ -139,18 +136,9 @@ xt::xarray<float> cross_entropy_grad_reference_per_position(
 
 }  // namespace
 
-class ShardedCrossEntropyLossTest : public ::testing::Test {
+class ShardedCrossEntropyLossTest : public ttml::test_utils::Mesh1x2Fixture {
 protected:
-    void SetUp() override {
-        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
-
-        ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
-        ttml::autograd::ctx().open_device(kMeshShape);
-        ttml::autograd::ctx().set_seed(42);
-    }
-
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
+    ShardedCrossEntropyLossTest() : Mesh1x2Fixture(/*seed=*/42) {
     }
 };
 

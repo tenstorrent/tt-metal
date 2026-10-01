@@ -19,11 +19,8 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
-
-const tt::tt_metal::distributed::MeshShape kMeshShape(1, 2);
 
 ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& name_substring) {
     for (const auto& [name, parameter] : parameters) {
@@ -36,18 +33,9 @@ ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& nam
 
 }  // namespace
 
-class Mesh1x2TensorParallelLinearTest : public ::testing::Test {
+class Mesh1x2TensorParallelLinearTest : public ttml::test_utils::Mesh1x2Fixture {
 protected:
-    void SetUp() override {
-        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
-
-        ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
-        ttml::autograd::ctx().open_device(kMeshShape);
-        ttml::autograd::ctx().set_seed(42);
-    }
-
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
+    Mesh1x2TensorParallelLinearTest() : Mesh1x2Fixture(/*seed=*/42) {
     }
 };
 
