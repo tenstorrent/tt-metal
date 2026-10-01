@@ -8,6 +8,7 @@ are not the original raw model token stream, so this checks internal patterns,
 not exact native stopping positions or an exhaustive false-positive guarantee.
 """
 
+import argparse
 import json
 import sys
 from collections import Counter
@@ -19,11 +20,14 @@ from vllm.v1.core.sched.utils import check_sequence_repetition
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--max-pattern-size", type=int, default=128)
+    args = parser.parse_args()
     trajectories = json.load(sys.stdin)
     tokenizer = AutoTokenizer.from_pretrained(
         "google/gemma-4-26B-A4B-it", revision="4d7ae4984b7db7de8f8457170b3f1a419ee76d52", local_files_only=True
     )
-    params = RepetitionDetectionParams(min_pattern_size=16, max_pattern_size=128, min_count=8)
+    params = RepetitionDetectionParams(min_pattern_size=16, max_pattern_size=args.max_pattern_size, min_count=8)
     counts, flags = Counter(), []
     for item in trajectories:
         for index, message in enumerate(item["trajectory"]["messages"]):
@@ -45,7 +49,7 @@ def main():
                     counts["fields"] += 1
                     counts["field_tokens"] += len(tokens)
                     for end in range(128, len(tokens) + 1):
-                        if check_sequence_repetition(tokens[max(0, end - 1024) : end], params):
+                        if check_sequence_repetition(tokens[max(0, end - args.max_pattern_size * 8) : end], params):
                             flags.append(
                                 {
                                     "task": item["task"],
@@ -61,7 +65,7 @@ def main():
             {
                 "counts": counts,
                 "flagged_fields": flags,
-                "params": {"min_pattern_size": 16, "max_pattern_size": 128, "min_count": 8},
+                "params": {"min_pattern_size": 16, "max_pattern_size": args.max_pattern_size, "min_count": 8},
             },
             indent=2,
         )

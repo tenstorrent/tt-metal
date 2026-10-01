@@ -279,6 +279,21 @@ Detailed forecasts, configuration, image digests, assumptions and measurements
 are in [`eval_speed/README.md`](eval_speed/README.md). No eval-quality success is
 claimed while these outcome-bearing tests remain unresolved.
 
+By15:00 UTC, the measured diagnostic-startup improvement is394.508 seconds
+saved (79.1% of external warmup): a scoped4K probe replaces the broad context
+sweep while retaining full model context. Actual CI confirms this; model load
+remains590.5 seconds. Thinking-only Matplotlib CI36870715050 still times out
+at900 seconds/reward0. A local20-minute Django thinking-plus-repetition-guard
+trial also fails, isolating only0.62 seconds of tool execution and a670-second
+discarded generation. Widening the detector to1024-token patterns stops a matched
+pathological replay in91.65 seconds versus an unfinished180-second control,
+with identical output prefix and matched8.62-second TTFT. Separate-server C1
+CI probes36876743431 and36880038816 are monitored for actual outcome quality.
+The guard changes termination policy; no solved-task or release-speed success
+is inferred from early termination alone. A hash-matched bounded HF reference
+and a greedy/sampled/greedy stale-state check investigate the remaining quality
+problem. All inference images are reused; no rebuild has been requested.
+
 ## Remaining eval-focused work
 
 - Analyze why standard and agentic evals take so long.
@@ -298,6 +313,6 @@ claimed while these outcome-bearing tests remain unresolved.
 - TSU: `doc/tsu_optimization/closure.md` and
   `doc/tsu_optimization/work_log.md`.
 
-Final documented heads: TT-Metal
+Earlier pipeline closeout heads, before the eval-speed experiments: TT-Metal
 `2a052971dffc0e1747a487cdf42c513a5c0dc3ab`; tt-inference-server
 `6d88032ed5f8259333233c53db671cd29aad377d`.
