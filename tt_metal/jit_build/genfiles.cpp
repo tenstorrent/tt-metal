@@ -301,7 +301,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     Binding tensor_binding{
         .name = "TensorBindingToken",
         .emission_namespace = "tensor",
-        .binding_type = "TensorBindingToken",
+        .binding_type = "::tensor_accessor::TensorBindingToken",
         .is_binding_type_templated = true,
         .includes = {"api/tensor/tensor_binding_token.h"},
     };
@@ -365,8 +365,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     Binding tensor_binding_sequence_binding{
         .name = "TensorBindingSequenceToken",
         .emission_namespace = "tensor",
-        .binding_type = "TensorBindingSequenceToken",
-        .includes = {"<tuple>"},
+        // every entries construct the binding sequence using `std::make_tuple(...)`,
+        // this should be deduced as tuple<TensorBindingToken<...>, ...>.
+        .binding_type = "auto",
+        .includes = {"tuple"},
         .entries = {},  // assigned later
     };
 
@@ -421,10 +423,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Collect the set of includes from all bindings
     for (const auto& binding : all_bindings) {
         // We don't need to emit the include for a binding if it has no entries.
-        if (binding.entries.empty()) {
-            continue;
+        if (!binding.entries.empty()) {
+            includes.insert(binding.includes.begin(), binding.includes.end());
         }
-        includes.insert(binding.includes.begin(), binding.includes.end());
     }
 
     // get_token_if_present() helper need to pull additional includes.
@@ -461,7 +462,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Omit binding
     for (const auto& binding : bindings_need_forward_declarations) {
-        content << fmt::format("struct {0};\n", binding.binding_type);
+        content << fmt::format("struct {};\n", binding.binding_type);
     }
 
     // Section spacing
@@ -474,19 +475,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Resource binding entries:
 
-    auto emit_binding_entries = [&](string_view namespace_, const vector<BindingEntry>& entries) {
+    // Emits a collection of binding entries
+    auto emit_binding_entries = [&](string_view type_name, const vector<BindingEntry>& entries) {
         for (const auto& entry : entries) {
             if (entry.template_args.empty()) {
-                content << fmt::format("constexpr {}({});", entry.name, fmt::join(entry.args, ", "));
+                content << fmt::format("constexpr {} {}({});", type_name, entry.name, fmt::join(entry.args, ", "));
             } else {
+                // spell out the type first
                 content << fmt::format(
-                    "using {0}_t = ::{1}::{2}<{3}>;\n",
-                    entry.name,
-                    namespace_,
-                    entry.name,
-                    fmt::join(entry.template_args, ", "));
-                content << fmt::format(
-                    "constexpr {0}_t {1}({2});", entry.name, entry.name, fmt::join(entry.args, ", "));
+                    "using {}_t = {}<{}>;\n", entry.name, type_name, fmt::join(entry.template_args, ", "));
+                content << fmt::format("constexpr {0}_t {0}({1});", entry.name, fmt::join(entry.args, ", "));
             }
         }
     };
@@ -503,8 +501,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Emit binding by namespace
     for (const auto& [namespace_, bindings] : bindings_by_namespace) {
         // Here we group all the bindings by their namespace and emit them all at once.
-        content << fmt::format("namespace {0} {{\n", namespace_);
+        content << fmt::format("namespace {} {{\n", namespace_);
 
+        // Here the ordering of the bindings needs to be respected,
+        // as some bindings could depend on the others.
+        //
+        // e.g. tensor binding sequence depends on the tensor bindings.
         for (const auto& binding : bindings) {
             emit_binding_entries(binding->binding_type, binding->entries);
 
