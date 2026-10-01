@@ -25,10 +25,6 @@ CODE_SIZE = 10
 
 BEV_SHAPES = {"tiny": (50, 50), "base": (200, 200)}
 
-# Random part of the sampling offsets, in BEV pixels, on top of the 1..num_points px grid
-# init, and the spread of the cross- and self-attention logits. Trained offsets spread over
-# several pixels and trained attention is peaked; nn.Linear's default init gives ~0.6 px
-# offsets and near-uniform softmaxes, which hide per-point and per-key errors.
 SAMPLING_OFFSET_STD_PX = 2.0
 ATTENTION_LOGIT_STD = 2.0
 SELF_ATTENTION_LOGIT_STD = 2.0

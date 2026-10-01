@@ -272,8 +272,6 @@ class TTMSDeformableAttention:
         for level, (h, w) in enumerate(spatial_shapes.tolist()):
             scale[:, level, :, 0] = 2.0 / float(w)
             scale[:, level, :, 1] = 2.0 / float(h)
-        # In float32, then cast back: a bfloat16 2/W is off by up to 0.2%, the same for every
-        # offset, where rounding the product alone is unbiased.
         scale_tt = ttnn.from_torch(
             scale.reshape(1, out_features), device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )

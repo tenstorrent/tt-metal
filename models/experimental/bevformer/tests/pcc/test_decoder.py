@@ -22,15 +22,19 @@ from models.experimental.bevformer.tt.model_preprocessing_decoder import (
 from models.experimental.bevformer.tt.tt_decoder import GRID_DTYPE, TtDetectionTransformerDecoder
 
 CASES = [
-    # (name, bev_shape, batch_size, traced)
-    ("tiny", BEV_SHAPES["tiny"], 1, False),
-    ("tiny-traced", BEV_SHAPES["tiny"], 1, True),
-    ("base", BEV_SHAPES["base"], 1, False),
-    ("base-traced", BEV_SHAPES["base"], 1, True),
-    ("tiny-bs2", BEV_SHAPES["tiny"], 2, False),
+    # (name, bev_shape, batch_size, traced, batch_first)
+    ("tiny", BEV_SHAPES["tiny"], 1, False, False),
+    ("tiny-traced", BEV_SHAPES["tiny"], 1, True, False),
+    ("base", BEV_SHAPES["base"], 1, False, False),
+    ("base-traced", BEV_SHAPES["base"], 1, True, False),
+    ("tiny-bs2", BEV_SHAPES["tiny"], 2, False, False),
     # Non-square, so a swapped (H, W) anywhere in the grid scale or value layout shows.
-    ("50x100", (50, 100), 1, False),
+    ("50x100", (50, 100), 1, False, False),
+    # bs=2, so a batch/query mix-up in the batch-first inputs or outputs shows.
+    ("tiny-bs2-batch-first", BEV_SHAPES["tiny"], 2, False, True),
 ]
+
+SEQUENCE_FIRST_INPUTS = ("query", "value", "query_pos")
 
 
 def _to_device(tensor, device, dtype=ttnn.bfloat16):
@@ -42,8 +46,15 @@ def _input_dtype(name):
     return GRID_DTYPE if name == "reference_points" else ttnn.bfloat16
 
 
-def _check(torch_outputs, tt_outputs, input_reference_points, bev_shape):
+def _host_input(name, tensor, batch_first):
+    """The reference's sequence-first inputs, permuted to batch-first for a batch-first decoder."""
+    return tensor.permute(1, 0, 2).contiguous() if batch_first and name in SEQUENCE_FIRST_INPUTS else tensor
+
+
+def _check(torch_outputs, tt_outputs, input_reference_points, bev_shape, batch_first):
     tt_outputs = tuple(ttnn.to_torch(t).float() for t in tt_outputs)
+    if batch_first:
+        tt_outputs = (tt_outputs[0].permute(0, 2, 1, 3), tt_outputs[1])
     # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
     for name, tensor in zip(("output", "reference points"), tt_outputs):
         assert torch.isfinite(tensor).all(), f"non-finite values in the decoder {name}"
@@ -54,10 +65,10 @@ def _check(torch_outputs, tt_outputs, input_reference_points, bev_shape):
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("name, bev_shape, batch_size, traced", CASES, ids=[case[0] for case in CASES])
+@pytest.mark.parametrize("name, bev_shape, batch_size, traced, batch_first", CASES, ids=[case[0] for case in CASES])
 # Headroom for the six layers' recorded commands, not a measured size.
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 32 * 1024 * 1024}], indirect=True)
-def test_decoder(device, reset_seeds, name, bev_shape, batch_size, traced):
+def test_decoder(device, reset_seeds, name, bev_shape, batch_size, traced, batch_first):
     torch_model = build_reference_decoder()
     reg_branches = build_reg_branches()
     spatial_shapes = torch.tensor([bev_shape])
@@ -65,11 +76,16 @@ def test_decoder(device, reset_seeds, name, bev_shape, batch_size, traced):
     def reference(inputs):
         return torch_model(**inputs, spatial_shapes=spatial_shapes, reg_branches=reg_branches)
 
-    tt_model = TtDetectionTransformerDecoder(create_decoder_parameters(torch_model, device), device, bev_shape)
+    tt_model = TtDetectionTransformerDecoder(
+        create_decoder_parameters(torch_model, device), device, bev_shape, batch_first=batch_first
+    )
     tt_reg_branches = create_reg_branch_parameters(reg_branches, device)
 
     inputs = random_decoder_inputs(bev_shape, batch_size, seed=0)
-    tt_inputs = {key: _to_device(tensor, device, _input_dtype(key)) for key, tensor in inputs.items()}
+    tt_inputs = {
+        key: _to_device(_host_input(key, tensor, batch_first), device, _input_dtype(key))
+        for key, tensor in inputs.items()
+    }
 
     def run():
         return tt_model(**tt_inputs, reg_branches=tt_reg_branches)
@@ -81,7 +97,7 @@ def test_decoder(device, reset_seeds, name, bev_shape, batch_size, traced):
     if not traced:
         tt_outputs = run()
         assert device.num_program_cache_entries() == num_programs
-        _check(reference(inputs), tt_outputs, inputs["reference_points"], bev_shape)
+        _check(reference(inputs), tt_outputs, inputs["reference_points"], bev_shape, batch_first)
         return
 
     # Capture fails on any host read or write in forward. Replaying on fresh inputs shows
@@ -92,10 +108,10 @@ def test_decoder(device, reset_seeds, name, bev_shape, batch_size, traced):
 
     replay_inputs = random_decoder_inputs(bev_shape, batch_size, seed=1)
     for key, tensor in replay_inputs.items():
-        host = ttnn.from_torch(tensor, dtype=_input_dtype(key), layout=ttnn.TILE_LAYOUT)
+        host = ttnn.from_torch(_host_input(key, tensor, batch_first), dtype=_input_dtype(key), layout=ttnn.TILE_LAYOUT)
         ttnn.copy_host_to_device_tensor(host, tt_inputs[key])
     ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
     try:
-        _check(reference(replay_inputs), tt_outputs, replay_inputs["reference_points"], bev_shape)
+        _check(reference(replay_inputs), tt_outputs, replay_inputs["reference_points"], bev_shape, batch_first)
     finally:
         ttnn.release_trace(device, trace_id)

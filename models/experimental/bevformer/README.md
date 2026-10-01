@@ -45,7 +45,10 @@ six DETR layers of self-attention, single-level deformable cross-attention over 
   through the refinement.
 - The BEV size is folded into the sampling-offset Linear when the module is built, so the
   decoder is built for one `(bev_h, bev_w)` and its forward runs on device only.
-- Parameters come from `tt/model_preprocessing_decoder.py`.
+- Parameters come from `tt/model_preprocessing_decoder.py` and are single use: building a decoder
+  consumes them, so each decoder instance needs its own `create_decoder_parameters` call.
+- Inputs and outputs are sequence-first by default, as in the reference; `batch_first=True` takes
+  and returns batch-first tensors and skips the permutes.
 
 ## Project Structure
 
