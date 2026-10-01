@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <filesystem>
 #include <memory>
 #include <map>
+#include <optional>
 #include <vector>
 #include <unordered_set>
 #include <unordered_map>
@@ -17,6 +19,8 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <umd/device/types/arch.hpp>
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -99,18 +103,54 @@ using AsicPosition = tt::tt_metal::ASICPosition;
 // `fabric_nodes` may map to any of `asic_positions` (all-to-all); the topology solver still enforces a
 // bijection, so distinct nodes land on distinct ASICs. A group with a single node and a single position is
 // the classic one-to-one pin. The same shape is used as TopologyMappingConfig::PinningConstraint.
+enum class BoardRevision : uint8_t { BhRevAb, BhRevC, Wh };
+
 struct AsicPinningGroup {
     std::vector<FabricNodeId> fabric_nodes;
     std::vector<AsicPosition> asic_positions;
+    // Set when the MGD pinning named board_revision: BH_REV_AB, BH_REV_C, or WH. Empty means always apply.
+    std::optional<BoardRevision> board_revision;
 
     bool operator==(const AsicPinningGroup& other) const {
-        return fabric_nodes == other.fabric_nodes && asic_positions == other.asic_positions;
+        return fabric_nodes == other.fabric_nodes && asic_positions == other.asic_positions &&
+               board_revision == other.board_revision;
     }
     bool operator<(const AsicPinningGroup& other) const {
-        return fabric_nodes == other.fabric_nodes ? asic_positions < other.asic_positions
-                                                  : fabric_nodes < other.fabric_nodes;
+        if (fabric_nodes != other.fabric_nodes) {
+            return fabric_nodes < other.fabric_nodes;
+        }
+        if (asic_positions != other.asic_positions) {
+            return asic_positions < other.asic_positions;
+        }
+        return board_revision < other.board_revision;
     }
 };
+
+// What a descriptor says an inter-mesh channel count means: STRICT a requirement, RELAXED a preference.
+// Mirrors proto::Policy, so that consumers reading a descriptor's policy do not have to take a dependency
+// on the generated proto enum (which is only forward-declared in this header).
+enum class InterMeshChannelPolicy : uint8_t { Strict, Relaxed };
+
+// The grid a mesh or switch descriptor declares, with the proto enums already resolved, so that
+// consumers reading a descriptor's shape do not have to take a dependency on the generated proto.
+struct DeclaredTopology {
+    std::vector<int32_t> dims;       // device_topology dims; empty when the descriptor declares none
+    std::vector<int32_t> host_dims;  // host_topology dims; empty when the descriptor declares none
+    // Per device dim, whether it was declared RING rather than LINE. Reported as written: a RING on an
+    // axis too short to make a distinct wrap edge is still a RING here, and it is the reader's call
+    // whether that matters to it.
+    std::vector<bool> ring_dims;
+};
+
+// RING on a dim of 2 or less is the same edge set as LINE. Drop those flags so
+// consumers that pick TORUS variants from ring_dims do not invent a wrap.
+inline DeclaredTopology with_effective_ring_dims(DeclaredTopology topology) {
+    for (std::size_t i = 0; i < topology.ring_dims.size(); ++i) {
+        const int32_t dim_size = i < topology.dims.size() ? topology.dims[i] : 0;
+        topology.ring_dims[i] = topology.ring_dims[i] && is_genuine_torus_axis(dim_size);
+    }
+    return topology;
+}
 
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
@@ -118,6 +158,28 @@ public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
     explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
+    // Programmatic construction from a populated proto (no textproto parse).
+    explicit MeshGraphDescriptor(std::shared_ptr<proto::MeshGraphDescriptor> proto, bool backwards_compatible = false);
+
+    // Programmatic single-mesh descriptor (protobuf API, not a textproto string).
+    static MeshGraphDescriptor generate_mesh_graph_descriptor_of_shape(
+        tt::tt_metal::distributed::MeshShape mesh_shape,
+        FabricType fabric_type,
+        FabricReliabilityMode reliability_mode,
+        tt::ARCH arch,
+        std::uint32_t num_connections_per_direction);
+
+    // Combine descriptors into one MGD 1.0 proto (backwards_compatible validation must pass):
+    // one FABRIC graph, 2D meshes, no express links. Mesh/switch ids are remumbered globally;
+    // several descriptors prefix names `mgd{i}_`. Parts that specify an inter-mesh channel
+    // policy must all agree; unspecified parts do not force STRICT. Seams stay the disjoint
+    // union of each part (no new edges between descriptors; graph_topology is rejected because
+    // ALL_TO_ALL/RING would span every merged mesh). One descriptor is cloned as-is (identity
+    // ids). per_part_local_to_global_mesh_ids[i] maps descriptor i's local MeshId to the merged
+    // id; callers decode seating/mapping with that table.
+    static MeshGraphDescriptor merge(
+        const std::vector<const MeshGraphDescriptor*>& descriptors,
+        std::vector<std::map<MeshId, MeshId>>* per_part_local_to_global_mesh_ids = nullptr);
 
     ~MeshGraphDescriptor();
 
@@ -171,6 +233,10 @@ public:
     // Unique mesh descriptor names from mesh instances (e.g. "M0", "Decode32x4"), sorted lexicographically.
     std::vector<std::string> get_all_mesh_names() const;
 
+    // Map MeshId (mesh/switch instance local_id) -> definition name used as the MESH key in
+    // get_valid_groupings_for_mgd (e.g. MeshId{0} -> "M0").
+    std::unordered_map<MeshId, std::string> mesh_id_to_instance_name() const;
+
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
         auto it = instances_by_name_.find(name);
@@ -204,6 +270,36 @@ public:
     const std::string& type_by_name(const std::string& name) const {
         const auto& ids = instances_by_name(name);
         return get_instance(ids[0]).type;
+    }
+
+    // Intra-mesh channel policy for a mesh or switch instance, keyed by its local mesh id (same sources and
+    // semantics as MeshGraph::is_intra_mesh_policy_relaxed).
+    bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
+
+    // Inter-mesh channel policy from the first FABRIC connection, or top-level graph topology when there are
+    // none. Defaults to STRICT when the descriptor states none (mirrors MeshGraph::is_inter_mesh_policy_relaxed).
+    bool is_inter_mesh_policy_relaxed() const;
+
+    // True when a FABRIC connection or top-level graph_topology.channels set the policy. If false, merge
+    // and multi-MGD rank binding must not treat this descriptor as STRICT.
+    bool is_inter_mesh_policy_specified() const;
+
+    // The device and host grid an instance's descriptor declares. Graph instances, and descriptors with
+    // no device_topology, come back with empty dims. Switches declare no host topology.
+    DeclaredTopology get_declared_topology(GlobalNodeId instance_id) const;
+    DeclaredTopology get_declared_topology(const InstanceData& instance) const;
+
+    // First instance of `instance_name`, or nullopt when the name exists but declares no device dims.
+    // Unknown names still fail like instances_by_name.
+    std::optional<DeclaredTopology> try_get_declared_topology(const std::string& instance_name) const;
+
+    // try_get_declared_topology with RING flags dropped on axes too short to wrap.
+    std::optional<DeclaredTopology> get_effective_declared_topology(const std::string& instance_name) const {
+        auto topology = try_get_declared_topology(instance_name);
+        if (!topology.has_value()) {
+            return std::nullopt;
+        }
+        return with_effective_ring_dims(std::move(*topology));
     }
 
     // Calculate chip count from device_topology dimensions for a mesh instance
@@ -268,6 +364,9 @@ private:
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
     std::map<MeshId, std::vector<AsicPinningGroup>> pinnings_;
+    std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
+    bool inter_mesh_relaxed_policy_ = false;
+    bool inter_mesh_policy_specified_ = false;
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
@@ -313,6 +412,7 @@ private:
 
     // Populate Connections
     void populate_connections();
+    void populate_inter_mesh_policy();
 
     void pre_populate_connections_lookups();
 

@@ -47,6 +47,7 @@ env:
     bh_sc1
     bh_sc1_high_power
     bh_sc4
+    bh_sc4_high_power
     bh_sc16
 
   # Yamls the gate cannot dispatch, so edits to them go to their code owners for
@@ -103,6 +104,16 @@ env:
     fabric_perf_tests.yaml
     runtime_perf_profiler_tests.yaml
     blackhole_e2e_tests.yaml
+  # Pipelines that run their legs under the watcher do it through setup-job's
+  # enable-watcher input, which also sets TT_METAL_WATCHER_DISABLE_ETH=1 (and NOINLINE,
+  # APPEND). A leg cmd that only exports TT_METAL_WATCHER=N relies on that: with the
+  # watcher on the ETH cores the fabric erisc router no longer fits its text region
+  # ("section .data LMA overlaps section .text LMA"), idle_erisc overflows on N300 and
+  # ACTIVE_ETH kernels exceed the kernel config buffer on QB2. The gate passes the same
+  # input for legs from these yamls; the list mirrors which *-impl.yaml files pass
+  # enable-watcher: true.
+  WATCHER_YAMLS: >-
+    models_unit_tests.yaml
 
 jobs:
   scope:
@@ -291,9 +302,19 @@ jobs:
         # Weights cache, selected by the SKU's weights-cache-mode exactly as the
         # owning pipeline selects it.
         - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:rw') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:rw') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:rw' }}
+      # Mount the Tenstorrent device only for silicon runners. The CPU-only pools have
+      # no /dev/tenstorrent, so mounting it makes the job container fail to start. Every
+      # deviceless sku contains "cpu" (github_hosted_cpu, cpu_medium, cpu_medium_prio) and
+      # no silicon sku does, so a single substring check excludes them all.
+      # -e TT_GH_CI_INFRA forwards the runner host's CI-infra marker into the container,
+      # as the *-impl.yaml pipelines do: conftest.py's is_ci_v2_env is
+      # `"TT_GH_CI_INFRA" in os.environ`, and model_location_generator only downloads
+      # weights from the CIv2 large file cache when it is set. Without it a leg on an
+      # lfc / local-disk SKU falls back to the HF hub id and fails with
+      # LocalEntryNotFoundError against the per-runner cache.
       options: >-
          ${{ (startsWith(matrix.leg.sku, 'sim_') && '--label runner-mode=sim')
-             || (matrix.leg.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent')
+             || (!contains(matrix.leg.sku, 'cpu') && '--device /dev/tenstorrent -e TT_GH_CI_INFRA')
              || '' }}
     defaults:
       run:
@@ -320,6 +341,7 @@ jobs:
             ${{ (matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.wheel-artifact-name)
              || needs.build-default.outputs.wheel-artifact-name
              || '' }}
+          enable-watcher: ${{ contains(env.WATCHER_YAMLS, format('{0}.yaml', matrix.leg.source_yaml)) && 'true' || 'false' }}
           auto-triage: false
 
       - name: ⬇️ Download packages artifact
