@@ -47,8 +47,8 @@ fix: |
 perf: |
   Role: perf. Make one performance change to $model and keep it correct:
   $details
-  Keep the previous behaviour selectable with the switch the task names ($ab_switch; recorded in the profile's
-  settings): the orchestrator sets it explicitly for both sides, change on and off, so its default does not matter.
+  Keep the previous behaviour selectable with the switch the task names ($ab_switch), a `Setting` in the model's
+  `tt/settings.py`: the orchestrator sets it explicitly for both sides, change on and off, so its default does not matter.
   Make the change the default and never revert it when a test fails: the owner decides from the measurements. Do not
   change thresholds, goldens or frozen tests.
   Accuracy first. Before any profile, run the frozen tests of the step the change touches: the accuracy commands of
@@ -65,6 +65,9 @@ serving: |
   Role: serving contract, for $model, before anything is planned or built. Follow your agent instructions
   (agents/serving-contract.md): write `$bringup_dir/serving_contract.md`, `$bringup_dir/contract_tests.yaml` and the
   tests under `$model_dir/tests/bringup/contract/`. Never write or change model code.
+settings: |
+  Role: settings audit, for $model. Follow your agent instructions (agents/settings-audit.md): every switch of the
+  model's code and of the bring-up forks it calls in one place, `$model_dir/tt/settings.py`, with behaviour unchanged.
 optests: |
   Role: optests. $model calls derived bring-up ops (`ttnn.bringup.*`, see `ttnn/ttnn/bringup/INDEX.md`). Every
   distinct call it makes needs a test case in that fork's `tests/`, with random inputs (never the model's real
