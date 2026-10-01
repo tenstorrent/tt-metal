@@ -63,6 +63,24 @@ _ROPE_SHARD = ttnn.create_sharded_memory_config(
     orientation=ttnn.ShardOrientation.ROW_MAJOR,
     use_height_and_width_as_shard_shape=True,
 )
+
+
+def _rope_shard_for(batch, device_grid):
+    """Height-sharded one tile per user over `batch` cores: the layout rotary_embedding_hf's decode
+    mode reads for cos/sin and the one nlp_concat_heads_decode takes for the sdpa output (the same
+    spec tt_transformers' RotarySetupHF builds). batch=1 is _ROPE_SHARD, unchanged."""
+    if batch == 1:
+        return _ROPE_SHARD
+    cores = ttnn.num_cores_to_corerangeset(batch, device_grid, row_wise=True)
+    return ttnn.create_sharded_memory_config(
+        (TILE, HEAD_DIM),
+        core_grid=cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 # sdpa_decode program config. Faster chunk/grid choices exist but are not exact at every cache
 # position; change it only against a sweep over positions.
 _SDPA_PRG = ttnn.SDPAProgramConfig(
@@ -193,15 +211,19 @@ class TtVoxtralGPT:
     """The backbone on device. prefill(embeds) -> hidden; step(embed) -> hidden, sharing a KV
     cache."""
 
-    def __init__(self, device, ckpt_path=DEFAULT_CKPT, n_layers=N_LAYERS, state=None, max_seq_len=2048):
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT, n_layers=N_LAYERS, state=None, max_seq_len=2048, max_batch=1):
         """`state` takes an already-loaded `load_backbone_state` dict so the fp32 weights load once;
-        `max_seq_len=0` skips the KV cache."""
+        `max_seq_len=0` skips the KV cache. `max_batch` is the number of users decoded together
+        (one row each, at most one tile of rows); 1 keeps every code path exactly as before."""
         check_device_grid(device)
+        if not 1 <= int(max_batch) <= TILE:
+            raise ValueError(f"max_batch must be in 1..{TILE} (one tile of decode rows), got {max_batch}")
         self.device = device
         self.decode_prg = decode_program_configs(decode_grid(device.compute_with_storage_grid_size()))
         self.dtype = DTYPE
         self.n_layers = n_layers
         self.max_seq_len = max_seq_len
+        self.max_batch = int(max_batch)
         self.pos = 0
         wd = WEIGHT_DTYPE
         attnd = ATTN_WEIGHT_DTYPE
@@ -233,8 +255,19 @@ class TtVoxtralGPT:
         self._assert_shapes()
         # Allocated once and written in place, so a generation never reallocates. Zero-init is not
         # relied on for correctness -- `step` masks everything above self.pos.
-        z = torch.zeros(1, N_KV_HEADS, max_seq_len, HEAD_DIM)
+        z = torch.zeros(self.max_batch, N_KV_HEADS, max_seq_len, HEAD_DIM)
         self.caches = [(up(z, DTYPE), up(z, DTYPE)) for _ in range(n_layers)] if max_seq_len else []
+        # Batched decode gathers each user's cos/sin row from these tables ON DEVICE (the
+        # tt_transformers RotarySetupHF pattern); `step()` at max_batch=1 keeps the host path.
+        self._rope_mem = _rope_shard_for(self.max_batch, device.compute_with_storage_grid_size())
+        if max_seq_len:
+            cos_t, sin_t = rope_tables(max_seq_len)
+            self._cos_tab = ttnn.from_torch(
+                cos_t.contiguous(), dtype=DTYPE, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+            self._sin_tab = ttnn.from_torch(
+                sin_t.contiguous(), dtype=DTYPE, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
 
     def reset(self):
         """Start a new utterance. The cache needs no clearing: every position is written before it
@@ -317,9 +350,9 @@ class TtVoxtralGPT:
         u = ttnn.multiply_(
             g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG, memory_config=mc, **_pc(prg, "w3"))
         )
-        # Residual as the matmul bias on decode (one row) only; a bias broadcasts over rows, so
-        # prefill keeps the add.
-        if prg:
+        # Residual as the matmul bias on decode (one row) only; a bias broadcasts ONE row over every
+        # output row, so prefill and batched decode (max_batch > 1) keep the add. B=1 is unchanged.
+        if prg and self.max_batch == 1:
             return ttnn.linear(
                 u,
                 w["w2"],
@@ -332,13 +365,13 @@ class TtVoxtralGPT:
             x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG, memory_config=mc, **_pc(prg, "w2"))
         )
 
-    def _layer(self, x, w, S, cos, sin, mask, cache=None):
+    def _layer(self, x, w, S, cos, sin, mask, cache=None, user=0):
         """x [1,S,3072] -> same. Pre-norm GQA with RoPE + causal mask, then SwiGLU. Fills `cache`
-        with all padded rows; decode reads it only up to `self.pos`."""
+        row `user` with all padded rows; decode reads it only up to that user's position."""
         qh, kh, vh = self._qkv(x, w, S, cos, sin)
         if cache is not None:
-            ttnn.fill_cache(cache[0], kh, 0)  # update_idx 0, so the tile-alignment rule is moot
-            ttnn.fill_cache(cache[1], vh, 0)
+            ttnn.fill_cache(cache[0], kh, user)  # one batch row; prefill runs one user at a time
+            ttnn.fill_cache(cache[1], vh, user)
         a = self._attend(qh, kh, vh, S, mask)
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG))
         return self._mlp(x, self._norm(x, w["fn"]), w, ttnn.DRAM_MEMORY_CONFIG)
@@ -355,8 +388,16 @@ class TtVoxtralGPT:
             program_config=self.decode_prg["wqkv"],
             compute_kernel_config=COMPUTE_CONFIG,
         )
-        qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, 1, _QKV_WIDTH]), _QKV_SHARD)
-        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
+        B = self.max_batch
+        # One row per user; B <= 32 rows fill the same (32, 6144) shard the batch-1 path used.
+        qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, B, _QKV_WIDTH]), _QKV_SHARD)
+        if B == 1:
+            qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
+        else:
+            # Heads land one tile per user on B cores, matching the cos/sin shard the rope op reads.
+            qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(
+                qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS, memory_config=self._rope_mem
+            )
         qh = ttnn.experimental.rotary_embedding_hf(
             qh, cos, sin, is_decode_mode=True, compute_kernel_config=COMPUTE_CONFIG
         )
@@ -376,23 +417,94 @@ class TtVoxtralGPT:
             compute_kernel_config=COMPUTE_CONFIG,
             program_config=_SDPA_PRG,
         )
-        # No memory_config move: sdpa already emits the layout wo reads.
-        a = ttnn.reshape(o, [1, 1, Q_WIDTH])
-        # Residual as bias: decode is M=1, so the residual is a row vector.
-        x = ttnn.linear(
-            a,
-            w["wo"],
-            bias=ttnn.reshape(x, [1, DIM]),
-            program_config=self.decode_prg["wo"],
-            compute_kernel_config=COMPUTE_CONFIG,
-            memory_config=_L1,
-        )
+        if B == 1:
+            # No memory_config move: sdpa already emits the layout wo reads.
+            a = ttnn.reshape(o, [1, 1, Q_WIDTH])
+            # Residual as bias: decode is M=1, so the residual is a row vector.
+            x = ttnn.linear(
+                a,
+                w["wo"],
+                bias=ttnn.reshape(x, [1, DIM]),
+                program_config=self.decode_prg["wo"],
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=_L1,
+            )
+        else:
+            # [1, B, heads, hd] -> one tile per user -> [1, 1, B, heads*hd] -> [1, B, 4096]; then a
+            # per-row residual add, because a bias would broadcast row 0 over all B rows.
+            o = ttnn.to_memory_config(o, self._rope_mem)
+            a = ttnn.experimental.nlp_concat_heads_decode(o, num_heads=N_HEADS)
+            a = ttnn.reshape(ttnn.to_memory_config(a, _L1), [1, B, Q_WIDTH])
+            x = ttnn.add(
+                x,
+                ttnn.linear(
+                    a,
+                    w["wo"],
+                    program_config=self.decode_prg["wo"],
+                    compute_kernel_config=COMPUTE_CONFIG,
+                    memory_config=_L1,
+                ),
+                memory_config=_L1,
+            )
         return self._mlp(x, self._norm(x, w["fn"]), w, _L1, self.decode_prg)
 
+    # ---- batched decode (max_batch > 1): per-user positions, everything on device ----------
+    def rot_mats(self, pos_u32):
+        """pos_u32: device uint32 [1, Bpad] (Bpad = B rounded up to 32) -> (cos, sin), each
+        [1, B, 1, 128] height-sharded one tile per user, gathered from the device tables."""
+        B = self.max_batch
+        cos = ttnn.embedding(pos_u32, self._cos_tab, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin = ttnn.embedding(pos_u32, self._sin_tab, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        cos = ttnn.transpose(ttnn.unsqueeze_to_4D(cos), 1, 2)  # [1, Bpad, 1(pad 32), 128]
+        sin = ttnn.transpose(ttnn.unsqueeze_to_4D(sin), 1, 2)
+        if B % TILE:
+            cos, sin = cos[:, :B, :, :], sin[:, :B, :, :]
+        return ttnn.interleaved_to_sharded(cos, self._rope_mem), ttnn.interleaved_to_sharded(sin, self._rope_mem)
+
+    def step_device(self, x, pos_u32, pos_i32):
+        """The whole decode step on device tensors: x [1, B, 3072], pos_u32 [1, Bpad] uint32 for the
+        rope gather, pos_i32 [B] int32 for the cache write and sdpa. -> normed hidden [1, B, 3072]
+        on device. No host work inside, so it can be captured as a trace."""
+        cos, sin = self.rot_mats(pos_u32)
+        for i, w in enumerate(self.layers):
+            x = self._layer_step(x, w, cos, sin, self.caches[i], pos_i32)
+        return self._norm(x, self.norm)
+
+    @staticmethod
+    def pos_tensors(positions, device):
+        """torch int [B] -> (pos_u32 [1, Bpad] uint32, pos_i32 [B] int32), both on device."""
+        positions = torch.as_tensor(positions, dtype=torch.int32).reshape(-1)
+        B = positions.shape[0]
+        Bpad = -(-B // TILE) * TILE
+        padded = torch.zeros(1, Bpad, dtype=torch.int32)
+        padded[0, :B] = positions
+        pos_u32 = ttnn.from_torch(padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        pos_i32 = ttnn.from_torch(positions, dtype=ttnn.int32, device=device)
+        return pos_u32, pos_i32
+
     @torch.no_grad()
-    def prefill(self, embeds, apply_final_norm=True, last_only=False):
+    def step_batched(self, embeds, positions):
+        """embeds torch [1, B, 3072] (one frame per user), positions int [B] (each user's own cache
+        position) -> hidden torch [1, B, 3072]. Leaves `self.pos` alone: the caller owns positions."""
+        if not self.caches:
+            raise RuntimeError("step_batched() needs a KV cache; construct with max_seq_len > 0")
+        B = self.max_batch
+        if tuple(embeds.shape) != (1, B, DIM):
+            raise ValueError(f"embeds must be [1, {B}, {DIM}], got {tuple(embeds.shape)}")
+        positions = torch.as_tensor(positions, dtype=torch.int32).reshape(-1)
+        if positions.shape[0] != B or int(positions.max()) >= self.max_seq_len:
+            raise ValueError(f"positions must be [{B}] and below {self.max_seq_len}, got {positions.tolist()}")
+        x = ttnn.from_torch(embeds.contiguous(), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+        pos_u32, pos_i32 = self.pos_tensors(positions, self.device)
+        return ttnn.to_torch(self.step_device(x, pos_u32, pos_i32)).float().reshape(1, B, DIM)
+
+    @torch.no_grad()
+    def prefill(self, embeds, apply_final_norm=True, last_only=False, user=0):
         """embeds torch [1,S,3072] -> hidden torch [1,S,3072], or [1,1,3072] if `last_only`. Pads with
-        zero rows to PREFILL_MULTIPLE; the causal mask keeps real positions from seeing them."""
+        zero rows to PREFILL_MULTIPLE; the causal mask keeps real positions from seeing them.
+        `user` picks the KV-cache row written (0 on the batch-1 path); prefill is one user at a time."""
+        if not 0 <= int(user) < self.max_batch:
+            raise ValueError(f"user must be in 0..{self.max_batch - 1}, got {user}")
         S = embeds.shape[1]
         Sp = (S + PREFILL_MULTIPLE - 1) // PREFILL_MULTIPLE * PREFILL_MULTIPLE
         if self.caches and Sp > self.max_seq_len:
@@ -409,7 +521,7 @@ class TtVoxtralGPT:
         mask = up(m, ttnn.bfloat16)
         x = up(embeds.reshape(1, Sp, DIM))
         for i, w in enumerate(self.layers):
-            x = self._layer(x, w, Sp, cos, sin, mask, self.caches[i] if self.caches else None)
+            x = self._layer(x, w, Sp, cos, sin, mask, self.caches[i] if self.caches else None, user=int(user))
         # Decode continues from the REAL length, not the padded one, or the first generated frame
         # would attend to the zero rows the pad wrote into the cache.
         self.pos = S
