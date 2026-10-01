@@ -45,26 +45,35 @@ def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_a
     )
 
 
-def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activation=None):
+def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activation=None, per_core_n=None):
     """1D in0-multicast config for short-M prefill projections, or None when it does not apply.
 
     With at most 8 tile rows of M, the 2D config uses only 8 of the grid's rows and reads each weight column
     block through one core. Here every core reads its own two weight columns from DRAM while the activations
-    are multicast, which keeps more DRAM readers busy.
+    are multicast, which keeps more DRAM readers busy. A width-sharded activation (to_l1_width_sharded) is read
+    one shard per K block.
     """
+    per_core_n = per_core_n or _PER_CORE_N_1D
     tile = ttnn.TILE_SIZE
     m_tiles = hidden_states.padded_shape[-2] // tile
     k_tiles = hidden_states.padded_shape[-1] // tile
     n_tiles = weight.padded_shape[-1] // tile
-    if m_tiles > 8 or n_tiles % _PER_CORE_N_1D or n_tiles // _PER_CORE_N_1D > grid.x * grid.y:
+    if not is_short_m(hidden_states) or n_tiles % per_core_n or n_tiles // per_core_n > grid.x * grid.y:
         return None
+    # fp32 dest: at most 4 tiles (2 x 2) per output subblock.
+    out_subblock_w = 2 if per_core_n % 2 == 0 else 1
+    out_subblock_h = 2 if m_tiles % 2 == 0 else 1
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
-        in0_block_w=_in0_block_w(k_tiles),
-        out_subblock_h=2 if m_tiles % 2 == 0 else 1,
-        out_subblock_w=_PER_CORE_N_1D,
+        in0_block_w=(
+            hidden_states.memory_config().shard_spec.shape[1] // tile
+            if hidden_states.is_sharded()
+            else _in0_block_w(k_tiles)
+        ),
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
         per_core_M=m_tiles,
-        per_core_N=_PER_CORE_N_1D,
+        per_core_N=per_core_n,
         fuse_batch=True,
         fused_activation=fused_activation,
         mcast_in0=True,
@@ -73,3 +82,59 @@ def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activati
 
 def _in0_block_w(k_tiles):
     return max(d for d in range(1, min(k_tiles, 16) + 1) if k_tiles % d == 0)
+
+
+# Most tile rows (per device) that the 1D projection config takes.
+_MAX_SHORT_M_TILES = 8
+
+# K tiles per core of a width-sharded short-M activation. An interleaved activation is read and multicast through a
+# single core, which paces the 1D projections at chunk 2048; sharded, the cores holding its K slices multicast them
+# in turn. 8 (or 7 where 8 does not divide K) keeps the K blocks deep: 2-tile blocks are ~1.6x slower.
+_SHARD_K_TILES = (8, 7, 6, 4)
+
+
+def _is_short_m_rows(rows):
+    return rows // ttnn.TILE_SIZE <= _MAX_SHORT_M_TILES
+
+
+def is_short_m(x):
+    """Whether x takes the 1D projection config: at most _MAX_SHORT_M_TILES tile rows."""
+    return _is_short_m_rows(x.padded_shape[-2])
+
+
+def _width_sharded_l1(device, rows, num_cores, shard_tiles):
+    """L1 width-sharded layout: num_cores row-wise cores, each holding rows x shard_tiles tiles."""
+    cores = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, (rows, shard_tiles * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def short_m_sharded_memcfg(device, rows, k_tiles):
+    """Width-sharded L1 layout of a short-M activation: K split over cores in _SHARD_K_TILES blocks."""
+    shard = next(d for d in _SHARD_K_TILES if k_tiles % d == 0)
+    return _width_sharded_l1(device, rows, k_tiles // shard, shard)
+
+
+def to_l1_width_sharded(x):
+    """x in the short-M sharded layout; x itself when it is already in it."""
+    memcfg = short_m_sharded_memcfg(x.device(), x.padded_shape[-2], x.padded_shape[-1] // ttnn.TILE_SIZE)
+    return x if x.memory_config() == memcfg else ttnn.to_memory_config(x, memcfg)
+
+
+def short_m_gather_memcfg(x, tp_degree):
+    """Output layout for the TP row all-gather of x: the short-M sharded layout when the gathered activation is short
+    M, so the projections read it without a reshard; None (the default) otherwise."""
+    rows = x.padded_shape[-2] * tp_degree
+    if not _is_short_m_rows(rows):
+        return None
+    return short_m_sharded_memcfg(x.device(), rows, x.padded_shape[-1] // ttnn.TILE_SIZE)
+
+
+def short_m_output_memcfg(x, weight, per_core_n=_PER_CORE_N_1D):
+    """Width-sharded L1 output of a 1D short-M projection: per_core_n columns on each of its cores, which skips the
+    interleaved write."""
+    n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
+    return _width_sharded_l1(x.device(), x.padded_shape[-2], n_tiles // per_core_n, per_core_n)
