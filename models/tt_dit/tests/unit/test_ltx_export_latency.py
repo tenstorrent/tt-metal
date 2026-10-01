@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import torch
 
-from models.tt_dit.encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from models.tt_dit.encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
 from models.tt_dit.utils import video
 
 
@@ -101,20 +101,29 @@ def test_gate_without_prompt_or_trace_does_not_encode():
 
 
 def test_yuv_export_encodes_audio_alongside_video(tmp_path, monkeypatch):
-    threads = []
+    audio_started = threading.Event()
     encode_audio = video._encode_audio
+    encode_video = video.YuvVideoExport._encode_video
 
     def spy(stream, audio):
-        threads.append(threading.current_thread())
+        audio_started.set()
         return encode_audio(stream, audio)
 
+    overlapped = []
+
+    def gated(self, stream, yuv_planar):
+        # Holds the video track until the audio encode starts: a serial export would never get there.
+        overlapped.append(audio_started.wait(timeout=10))
+        encode_video(self, stream, yuv_planar)
+
     monkeypatch.setattr(video, "_encode_audio", spy)
+    monkeypatch.setattr(video.YuvVideoExport, "_encode_video", gated)
     clip = _yuv_clip(t=24)
     audio = video.Audio(waveform=torch.zeros(2, 48000).uniform_(-0.1, 0.1), sampling_rate=48000)
     out = str(tmp_path / "clip.mp4")
     video.export_video_audio_yuv(clip, out, fps=24, audio=audio)
 
-    assert threads and threads[0] is not threading.main_thread()
+    assert overlapped == [True], "audio encode did not start while the video track was encoding"
     with av.open(out) as c:
         samples = sum(f.samples for f in c.decode(audio=0))
     assert abs(samples - 48000) <= 2048  # AAC priming/padding only
