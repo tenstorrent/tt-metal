@@ -11,6 +11,11 @@
 //   s_upd   = k_dec_t @ v_new
 //   S       = S * dl + s_upd        (dl = exp(g_sum), scalar in dl tile [0,0])
 // No matrix inverse here — that (the expensive part) lives entirely in the prep phase.
+//
+// EMIT (chunk_gated_delta_rule(output_intermediates=True)): additionally tee out, per chunk,
+//   v_new     = T_inv @ (v_beta - kd@S)       -> cb_vnout [C, Vt]
+//   h_{c+1}   = S leaving chunk c (c < NC-1)  -> cb_hout  [K, Vt]   (h_0 is staged by the reader)
+// by packing the same DEST tiles a second time (exact fp32; no extra math, recurrence unchanged).
 
 #include <cstdint>
 #include "api/compute/common.h"
@@ -29,13 +34,20 @@ constexpr uint32_t cb_vbeta = 17, cb_kd = 18, cb_qdecay = 19, cb_intra = 20;
 constexpr uint32_t cb_s2 = 21, cb_vnew = 22, cb_ointer = 23, cb_kdec_t = 24;
 constexpr uint32_t cb_supd = 25, cb_stmp = 26, cb_final = 27;
 constexpr uint32_t cb_scr1 = 28, cb_s3 = 31;
+constexpr uint32_t cb_hout = 0, cb_vnout = 1;  // EMIT only (slots unused by the scan otherwise)
 
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
 inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 
+constexpr uint32_t NO_CB = 0xFFFFFFFFu;
+
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
-void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
+// o2 (optional, same format as o): each result tile is also packed from DEST into o2 (exact tee).
+void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr, uint32_t o2 = NO_CB) {
     cb_reserve_back(o, Mt * Nt);
+    if (o2 != NO_CB) {
+        cb_reserve_back(o2, Mt * Nt);
+    }
     pack_reconfig_data_format(o);  // mixed bf16/fp32 CBs: set packer to this output's format
     // matmul_tiles(a,b): in0=a->srcB, in1=b->srcA. The op init only asserts formats, it does not
     // set them, so reconfig the unpack src formats explicitly (else CBs read at the wrong format).
@@ -51,15 +63,24 @@ void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t N
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, o, mi * Nt + ni);
+            if (o2 != NO_CB) {
+                pack_tile(0, o2, mi * Nt + ni);
+            }
             tile_regs_release();
         }
     }
     cb_push_back(o, Mt * Nt);
+    if (o2 != NO_CB) {
+        cb_push_back(o2, Mt * Nt);
+    }
 }
 
-// out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul.
-void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
+// out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul. o2: optional exact tee (as mm).
+void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op, uint32_t o2 = NO_CB) {
     cb_reserve_back(o, n);
+    if (o2 != NO_CB) {
+        cb_reserve_back(o2, n);
+    }
     pack_reconfig_data_format(o);
     reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
     if (op == 0) {
@@ -81,9 +102,15 @@ void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o, i);
+        if (o2 != NO_CB) {
+            pack_tile(0, o2, i);
+        }
         tile_regs_release();
     }
     cb_push_back(o, n);
+    if (o2 != NO_CB) {
+        cb_push_back(o2, n);
+    }
 }
 
 // out = A * scalar, n tiles. scalar is the [0,0] element of the single `scal` tile.
@@ -109,6 +136,7 @@ void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
     constexpr uint32_t Vt = get_compile_time_arg_val(2);
+    constexpr uint32_t EMIT = get_compile_time_arg_val(5);
     const uint32_t NC = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t cc = Ct * Ct;
@@ -142,7 +170,8 @@ void kernel_main() {
         POP(cb_vbeta, cv);
         POP(cb_scr1, cv);
         WAIT(cb_Tinv, cc);
-        mm(cb_Tinv, cb_ointer, cb_vnew, Ct, Ct, Vt, false);  // v_new = T_inv @ diff -> vnew
+        // v_new = T_inv @ diff -> vnew (EMIT: + exact tee to cb_vnout)
+        mm(cb_Tinv, cb_ointer, cb_vnew, Ct, Ct, Vt, false, EMIT ? cb_vnout : NO_CB);
         WAIT(cb_vnew, cv);
         POP(cb_Tinv, cc);
         POP(cb_ointer, cv);
@@ -173,7 +202,8 @@ void kernel_main() {
         WAIT(cb_stmp, kv);
         POP(cb_dl, 1);
         POP(cur_S, kv);
-        ew(cb_stmp, cb_supd, dst, kv, 0);
+        // S_{c+1} -> dst (EMIT && !last: + exact tee to cb_hout = h_{c+1}, the state entering chunk c+1)
+        ew(cb_stmp, cb_supd, dst, kv, 0, (EMIT && !last) ? cb_hout : NO_CB);
         POP(cb_stmp, kv);
         POP(cb_supd, kv);
     }

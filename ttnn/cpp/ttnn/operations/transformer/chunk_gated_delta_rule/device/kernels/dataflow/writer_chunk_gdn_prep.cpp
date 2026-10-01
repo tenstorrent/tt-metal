@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Phase A (prep) writer: per chunk, drain the 7 state-independent intermediates to DRAM.
-//   v_beta [C,V], kd [C,K], q_decay [C,K], intra [C,C], k_dec_t [K,C], dl [1 tile], t_inv [C,C].
+//   v_beta [C,V], kd [C,K], q_decay [C,K], intra [C,C], k_dec_t [K,C], dl [1 tile], t_inv [C,C],
+//   and (EMIT_GCUM) g_cumsum [C,1].
 // All fp32. Each DRAM tensor is [BH, NC, R, Col] TILE, so head h chunk c starts at
 // tile (h*NC + c) * (tiles-per-chunk).
 
@@ -13,21 +14,23 @@
 
 // CB indices (must match the prep compute kernel + program factory).
 constexpr uint32_t cb_Tinv = 13, cb_vbeta = 14, cb_kd = 18, cb_qdecay = 19, cb_intra = 20;
-constexpr uint32_t cb_kdec_t = 24, cb_dl = 22;
+constexpr uint32_t cb_kdec_t = 24, cb_dl = 22, cb_gcum = 16;
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
     constexpr uint32_t Vt = get_compile_time_arg_val(2);
+    constexpr uint32_t EMIT_GCUM = get_compile_time_arg_val(3);
 
-    // Accessors in output order: v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv.
-    constexpr auto vb_a = TensorAccessorArgs<3>();
+    // Accessors in output order: v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv[, g_cumsum].
+    constexpr auto vb_a = TensorAccessorArgs<4>();
     constexpr auto kd_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
     constexpr auto qd_a = TensorAccessorArgs<kd_a.next_compile_time_args_offset()>();
     constexpr auto it_a = TensorAccessorArgs<qd_a.next_compile_time_args_offset()>();
     constexpr auto kc_a = TensorAccessorArgs<it_a.next_compile_time_args_offset()>();
     constexpr auto dl_a = TensorAccessorArgs<kc_a.next_compile_time_args_offset()>();
     constexpr auto ti_a = TensorAccessorArgs<dl_a.next_compile_time_args_offset()>();
+    constexpr auto gc_a = TensorAccessorArgs<ti_a.next_compile_time_args_offset()>();  // valid iff EMIT_GCUM
 
     // Chunk-parallel: drain this core's contiguous work-item slice [wi_start, wi_start+wi_count).
     // Work-item index == flat DRAM tile-group index (h*NC + c), so no h/c needed here.
@@ -40,6 +43,7 @@ void kernel_main() {
     const uint32_t kc_addr = get_arg_val<uint32_t>(6);
     const uint32_t dl_addr = get_arg_val<uint32_t>(7);
     const uint32_t ti_addr = get_arg_val<uint32_t>(8);
+    const uint32_t gc_addr = get_arg_val<uint32_t>(9);  // 0 unless EMIT_GCUM
 
     const uint32_t tb = get_tile_size(cb_vbeta);  // all outputs are fp32 -> same tile size
     const auto vb_acc = TensorAccessor(vb_a, vb_addr, tb);
@@ -49,6 +53,7 @@ void kernel_main() {
     const auto kc_acc = TensorAccessor(kc_a, kc_addr, tb);
     const auto dl_acc = TensorAccessor(dl_a, dl_addr, tb);
     const auto ti_acc = TensorAccessor(ti_a, ti_addr, tb);
+    const auto gc_acc = TensorAccessor(gc_a, gc_addr, tb);
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
@@ -78,5 +83,8 @@ void kernel_main() {
         drain(cb_qdecay, qd_acc, ck, hc * ck);
         drain(cb_kdec_t, kc_acc, kc, hc * kc);
         drain(cb_dl, dl_acc, 1, hc * 1);
+        if constexpr (EMIT_GCUM) {
+            drain(cb_gcum, gc_acc, Ct, hc * Ct);  // g_cumsum [BH, NC, C, 1]: Ct column tiles/chunk
+        }
     }
 }

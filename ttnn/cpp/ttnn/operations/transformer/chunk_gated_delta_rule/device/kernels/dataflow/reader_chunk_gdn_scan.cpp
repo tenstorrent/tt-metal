@@ -9,7 +9,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
-constexpr uint32_t cb_dl = 11, cb_S = 8, cb_Tinv = 13;
+constexpr uint32_t cb_dl = 11, cb_S = 8, cb_Tinv = 13, cb_h0 = 2;
 constexpr uint32_t cb_vbeta = 17, cb_kd = 18, cb_qdecay = 19, cb_intra = 20, cb_kdec_t = 24;
 
 void kernel_main() {
@@ -18,9 +18,10 @@ void kernel_main() {
     constexpr uint32_t Vt = get_compile_time_arg_val(2);  // per-core V-block width (tiles)
     constexpr uint32_t has_s0 = get_compile_time_arg_val(3);
     constexpr uint32_t Vt_full = get_compile_time_arg_val(4);  // full V (tiles) for row stride
+    constexpr uint32_t EMIT = get_compile_time_arg_val(5);     // stage h_0 for the writer
     (void)has_s0;
 
-    constexpr auto vb_a = TensorAccessorArgs<5>();
+    constexpr auto vb_a = TensorAccessorArgs<6>();  // ct arg 5 = EMIT (writer/compute only)
     constexpr auto kd_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
     constexpr auto qd_a = TensorAccessorArgs<kd_a.next_compile_time_args_offset()>();
     constexpr auto it_a = TensorAccessorArgs<qd_a.next_compile_time_args_offset()>();
@@ -89,6 +90,11 @@ void kernel_main() {
 
     // initial state S [K, V] (once) — host always provides it (zeros if none). V-sliced.
     read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+    if constexpr (EMIT) {
+        // h_0 = the initial state, bit-exact: a second DRAM read into a reader-only CB the writer
+        // drains (cb_hout carries h_1.. from compute; one producer per CB).
+        read_vslice(s0_acc, cb_h0, h * Kt * Vt_full, Kt);
+    }
 
     for (uint32_t c = 0; c < NC; c++) {
         const uint32_t hc = h * NC + c;
