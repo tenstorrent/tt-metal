@@ -18,15 +18,28 @@ namespace {
 
 void initialize_weights_tensor_parallel(PipelineParallelLlama& model) {
     auto params = model.parameters();
+    auto* device = &autograd::ctx().get_device();
+    // The blocks are DistributedLlamaBlocks sharded along the ParallelismContext's TP axis, so the re-initialised
+    // weights are sharded along that axis too (as DistributedLlama does): a whole-mesh mapper labels them sharded on
+    // every mesh axis, which on a DP x TP mesh reads as "already reduced" on the DP axis and skips the gradient
+    // all-reduce. Without a TP-enabled ParallelismContext the whole mesh is the TP group, which is what the
+    // distributed modules shard across when they are given no axis.
+    std::optional<uint32_t> tp_axis;
+    auto tp_size = static_cast<uint32_t>(device->num_devices());
+    if (autograd::ctx().is_parallelism_context_initialized()) {
+        const auto& pctx = autograd::ctx().get_parallelism_context();
+        if (pctx.is_tp_enabled()) {
+            tp_axis = pctx.get_tp_axis();
+            tp_size = pctx.get_tp_size();
+        }
+    }
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
             auto tensor_shape = tensor.logical_shape();
-            auto* device = &autograd::ctx().get_device();
-            auto num_devices = static_cast<uint32_t>(device->num_devices());
-            tensor_shape[0] *= num_devices;
+            tensor_shape[0] *= tp_size;
             auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
-            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, tp_axis);
             tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
                 weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
         } else if (name.find("bias") != std::string::npos) {

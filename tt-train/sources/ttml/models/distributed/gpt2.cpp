@@ -32,6 +32,11 @@ void weights_initialization(DistributedTransformer& model) {
             auto num_devices = static_cast<uint32_t>(device->num_devices());
             tensor_shape[0] *= num_devices;
             auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
+            // DistributedGPTBlock shards its linears across the whole mesh (it passes no TP axis), so the
+            // re-initialised weights are sharded the same way: the collapsed 1-D mapper over every device is the
+            // honest label here, and synchronize_gradients expands it to Shard on every mesh axis of size > 1
+            // (Replicate on size-1 axes). DistributedLlama shards along the ParallelismContext's TP axis instead and
+            // its initialiser follows that.
             const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
             tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
                 weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
