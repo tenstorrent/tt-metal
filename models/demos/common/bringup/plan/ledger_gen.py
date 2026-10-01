@@ -356,7 +356,9 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "contract",
         [f"L.{first['name']}"] + ([smoke] if smoke else []),
         f"{SAFE} --no-precompile models/demos/common/bringup/tests/test_contract.py" + contract_cmds(SV.ADAPTER),
-        {"contract_checks_failed": "== 0", "acks_early": "== 0", "pcc_producer_kv_*": thr(spec, "state")},
+        {"contract_checks_failed": "== 0", "acks_early": "== 0", "pcc_producer_kv_*": thr(spec, "state")}
+        # the runner smoke (contract_tests.yaml kind: runner_smoke) runs in this gate and records its answer
+        | ({"smoke_runner_ok": "== 1"} if SV.runner_smoke(spec, SV.ADAPTER) else {}),
         device=True,
         paths=[f"{model_dir}/tt"],  # plus models/demos/common/prefill, for every contract step (orchestrator)
     )
