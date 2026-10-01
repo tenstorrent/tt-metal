@@ -99,7 +99,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         operation_attributes.program_config;
     const std::optional<int64_t>& chunk_start_idx = operation_attributes.chunk_start_idx;
 
-    IDevice* device = input_tensor_q.device();
+    MeshDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
