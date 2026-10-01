@@ -222,15 +222,17 @@ def _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, *, include
     return stats
 
 
-def _golden_function_layer_norm_pre_all_gather(input_tensor, *, residual_input_tensor=None, **_):
+def _golden_function_layer_norm_pre_all_gather(input_tensor, *, residual_input_tensor=None, dtype=ttnn.bfloat16, **_):
     # The stats tensor is two tiles wide: sum(x^2) rides the leftmost column of tile 0, sum(x) tile 1.
-    return _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, include_sum=True)
+    return _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, include_sum=True, dtype=dtype)
 
 
 ttnn.attach_golden_function(ttnn.layer_norm_pre_all_gather, golden_function=_golden_function_layer_norm_pre_all_gather)
 
 
-def _golden_function_layer_norm_post_all_gather(input_tensor, stats, *, epsilon=1e-12, weight=None, bias=None, **_):
+def _golden_function_layer_norm_post_all_gather(
+    input_tensor, stats, *, epsilon=1e-12, weight=None, bias=None, dtype=None, **_
+):
     import torch
 
     # Tile column 0 of each device block is sum(x^2), and column _TILE_WIDTH is sum(x).
@@ -240,7 +242,7 @@ def _golden_function_layer_norm_post_all_gather(input_tensor, stats, *, epsilon=
     ex = sum(stats[..., d * 2 * _TILE_WIDTH + _TILE_WIDTH] for d in range(num_devices)) / global_width
     var = ex2 - ex**2
     normalized = (input_tensor - ex.unsqueeze(-1)) * torch.rsqrt(var.unsqueeze(-1) + epsilon)
-    return _apply_affine(normalized, weight, bias)
+    return golden_to_output_dtype(_apply_affine(normalized, weight, bias), dtype)
 
 
 ttnn.attach_golden_function(

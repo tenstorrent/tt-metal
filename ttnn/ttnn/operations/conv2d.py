@@ -9,6 +9,7 @@ import warnings
 import math
 import ttnn
 from ttnn.operations.activations import get_golden_function_for_activation
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
@@ -185,6 +186,7 @@ def _golden_function(
     conv_config: Conv2dConfig = None,
     return_output_dim=False,
     return_weights_and_bias=False,
+    dtype=None,
     **_,
 ):
     import torch
@@ -244,6 +246,7 @@ def _golden_function(
 
     N, C, H, W = output_tensor.shape
     output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
+    output_tensor = golden_to_output_dtype(output_tensor, dtype)
 
     if return_output_dim or return_weights_and_bias:
         return [output_tensor]

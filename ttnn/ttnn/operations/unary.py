@@ -513,16 +513,34 @@ def _golden_function_i1(input_tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.i1, golden_function=_golden_function_i1)
 
 
-def _golden_function_pow(input_tensor, exponent, *args, **kwargs):
+def _golden_function_pow(input_tensor, exponent, *args, dtype=None, _ttnn_output_tensor_dtype=None, **kwargs):
     import torch
 
     if torch.is_tensor(input_tensor) and integer_golden.is_unsigned_dtype(input_tensor.dtype):
         # Evaluate unsupported unsigned power in int64 and restore TT wraparound.
-        return integer_golden.power(input_tensor, exponent)
-    return torch.pow(input_tensor, exponent)
+        output_tensor = integer_golden.power(input_tensor, exponent)
+    else:
+        output_tensor = torch.pow(input_tensor, exponent)
+    return golden_to_output_dtype(output_tensor, dtype if dtype is not None else _ttnn_output_tensor_dtype)
 
 
-ttnn.attach_golden_function(ttnn.pow, golden_function=_golden_function_pow)
+def _preprocess_pow_golden_inputs(function_args, function_kwargs):
+    """Record the preallocated output dtype, which fixes the stored values when dtype is omitted.
+    Default preprocessing converts that tensor to Torch and loses block-float dtypes.
+    """
+
+    golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
+        function_args, function_kwargs
+    )
+    golden_kwargs["_ttnn_output_tensor_dtype"] = getattr(function_kwargs.get("output_tensor"), "dtype", None)
+    return golden_args, golden_kwargs
+
+
+ttnn.attach_golden_function(
+    ttnn.pow,
+    golden_function=_golden_function_pow,
+    preprocess_golden_function_inputs=_preprocess_pow_golden_inputs,
+)
 
 
 def _golden_function_xielu(x, *args, alpha_p=0.8, alpha_n=0.8, **kwargs):

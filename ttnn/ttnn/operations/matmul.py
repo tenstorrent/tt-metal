@@ -64,6 +64,7 @@ def _golden_function(
 ttnn.attach_golden_function(
     ttnn.matmul,
     golden_function=_golden_function,
+    postprocess_golden_function_outputs=ttnn.decorators.requested_dtype_postprocess_golden_function_outputs,
 )
 
 
@@ -111,6 +112,7 @@ def _golden_function(
 ttnn.attach_golden_function(
     ttnn.linear,
     golden_function=_golden_function,
+    postprocess_golden_function_outputs=ttnn.decorators.requested_dtype_postprocess_golden_function_outputs,
 )
 
 
@@ -171,7 +173,7 @@ def _golden_function_matmul_batched_weights(input_tensor_a, input_tensors_b, *_,
 ttnn.attach_golden_function(ttnn.matmul_batched_weights, golden_function=_golden_function_matmul_batched_weights)
 
 
-def _golden_function_sparse_matmul(
+def _sparse_matmul_golden_result(
     input_tensor_a,
     input_tensor_b,
     *,
@@ -221,6 +223,10 @@ def _golden_function_sparse_matmul(
         active_results = expanded_output.reshape(-1, *expanded_output.shape[-2:])[mask.reshape(-1)]
         return active_results.reshape(compact_shape)
     return expanded_output
+
+
+def _golden_function_sparse_matmul(input_tensor_a, input_tensor_b, *, dtype=None, **kwargs):
+    return golden_to_output_dtype(_sparse_matmul_golden_result(input_tensor_a, input_tensor_b, **kwargs), dtype)
 
 
 ttnn.attach_golden_function(ttnn.sparse_matmul, golden_function=_golden_function_sparse_matmul)

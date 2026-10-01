@@ -42,7 +42,9 @@ def _golden_function(input_tensor_a, *args, **kwargs):
     return torch.imag(input_tensor_a)
 
 
-ttnn.attach_golden_function(ttnn.imag, golden_function=_golden_function)
+ttnn.attach_golden_function(
+    ttnn.imag, golden_function=_golden_function, preprocess_golden_function_inputs=_preprocess_complex_golden_inputs
+)
 
 
 def _golden_function(input_tensor_a, *args, **kwargs):
@@ -51,7 +53,9 @@ def _golden_function(input_tensor_a, *args, **kwargs):
     return torch.angle(input_tensor_a)
 
 
-ttnn.attach_golden_function(ttnn.angle, golden_function=_golden_function)
+ttnn.attach_golden_function(
+    ttnn.angle, golden_function=_golden_function, preprocess_golden_function_inputs=_preprocess_complex_golden_inputs
+)
 
 
 def _golden_function(input_tensor_a, *args, **kwargs):
@@ -61,7 +65,9 @@ def _golden_function(input_tensor_a, *args, **kwargs):
     return torch.real(input_tensor_a) == 0
 
 
-ttnn.attach_golden_function(ttnn.is_imag, golden_function=_golden_function)
+ttnn.attach_golden_function(
+    ttnn.is_imag, golden_function=_golden_function, preprocess_golden_function_inputs=_preprocess_complex_golden_inputs
+)
 
 
 def _golden_function(input_tensor_a, *args, **kwargs):
@@ -71,7 +77,9 @@ def _golden_function(input_tensor_a, *args, **kwargs):
     return torch.isreal(input_tensor_a)
 
 
-ttnn.attach_golden_function(ttnn.is_real, golden_function=_golden_function)
+ttnn.attach_golden_function(
+    ttnn.is_real, golden_function=_golden_function, preprocess_golden_function_inputs=_preprocess_complex_golden_inputs
+)
 
 
 def _golden_function(input_tensor_a, *args, **kwargs):
@@ -91,7 +99,9 @@ def _golden_function(input_tensor_a, *args, **kwargs):
     return torch.conj(input_tensor_a)
 
 
-ttnn.attach_golden_function(ttnn.conj, golden_function=_golden_function)
+ttnn.attach_golden_function(
+    ttnn.conj, golden_function=_golden_function, preprocess_golden_function_inputs=_preprocess_complex_golden_inputs
+)
 
 
 def _golden_function(input_tensor_a, *args, **kwargs):
@@ -114,7 +124,11 @@ def _golden_function(input_tensor_a, *args, **kwargs):
     return torch.reciprocal(input_tensor_a)
 
 
-ttnn.attach_golden_function(ttnn.reciprocal, golden_function=_golden_function)
+ttnn.attach_golden_function(
+    ttnn.reciprocal,
+    golden_function=_golden_function,
+    preprocess_golden_function_inputs=_preprocess_complex_golden_inputs,
+)
 
 
 def _golden_function_complex_tensor(real, imag, *args, **kwargs):

@@ -842,7 +842,9 @@ def prepare_backward_golden_inputs(function_args_and_kwargs):
     return prepare(args), prepare(kwargs)
 
 
-def default_postprocess_golden_function_outputs(output, function_args, function_kwargs, *, keep_golden_dtype=False):
+def default_postprocess_golden_function_outputs(
+    output, function_args, function_kwargs, *, keep_golden_dtype=False, output_dtype=None
+):
     input_tensors = get_ttnn_tensors((function_args, function_kwargs))
 
     input_dtype = None
@@ -854,12 +856,13 @@ def default_postprocess_golden_function_outputs(output, function_args, function_
         input_layout = input_tensor.layout
         if ttnn.is_tensor_storage_on_device(input_tensor):
             input_device = input_tensor.device()
+    dtype = output_dtype if output_dtype is not None else input_dtype
 
     def recursive_postprocess_golden_function_outputs(output):
         import torch
 
         if isinstance(output, torch.Tensor):
-            return ttnn.from_torch(output, dtype=input_dtype, layout=input_layout, device=input_device)
+            return ttnn.from_torch(output, dtype=dtype, layout=input_layout, device=input_device)
         elif isinstance(output, (list, tuple)):
             new_output = [recursive_postprocess_golden_function_outputs(element) for element in output]
             return type(output)(new_output)
@@ -876,6 +879,16 @@ def dtype_preserving_postprocess_golden_function_outputs(output, function_args, 
     """
 
     return default_postprocess_golden_function_outputs(output, function_args, function_kwargs, keep_golden_dtype=True)
+
+
+def requested_dtype_postprocess_golden_function_outputs(output, function_args, function_kwargs):
+    """Convert golden outputs to the dtype requested through a dtype argument.
+    Without one they follow the first input's dtype, so block-float inputs are not widened to the golden's dtype.
+    """
+
+    return default_postprocess_golden_function_outputs(
+        output, function_args, function_kwargs, output_dtype=function_kwargs.get("dtype")
+    )
 
 
 TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
