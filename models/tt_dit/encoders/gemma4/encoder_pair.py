@@ -215,7 +215,9 @@ class Gemma4TokenizerEncoderPair:
         """Capture the encode trace now, on a placeholder prompt, so the first request after the
         gate opens replays it instead of paying the ~1.7s capture."""
         if self._encoder_trace and self._trace_gate_open and not self._trace_captured:
-            self.encode(["warmup"])
+            # The second encode replays: the first replay builds the programs that copy new
+            # inputs into the trace's buffers (~0.5s), which would otherwise land on a request.
+            self.encode(["warmup", "warmup"])
 
     def register_coresident_peers(self, peers: list) -> None:
         """Store the DiT/VAE peers the encoder modules must not be L1-coresident with.

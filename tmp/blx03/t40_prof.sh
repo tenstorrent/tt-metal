@@ -10,4 +10,4 @@ export LTX25_ROOT=/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5/snapsh
 export FASTH3_DATA=/var/tmp/fasth3
 export TT_METAL_CACHE=$FASTH3_DATA/cache/tt-metal-cache TT_DIT_CACHE_DIR=$FASTH3_DATA/cache/dit-ltx25
 mkdir -p $OUT
-python -u -m pytest -sv --timeout=900 models/tt_dit/tests/encoders/gemma4/test_gemma4_encode_timing.py 2>&1 | tee $OUT/prof.log
+python -u -m pytest -sv --timeout=900 models/tt_dit/tests/encoders/gemma4/test_gemma4_encode_timing.py ${PYTEST_K:+-k $PYTEST_K} 2>&1 | tee $OUT/${LOG:-prof.log}
