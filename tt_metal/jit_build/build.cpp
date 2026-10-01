@@ -198,6 +198,10 @@ std::string get_default_root_path() {
     return "/tmp/tt-metal-cache/";
 }
 
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+}
+
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
@@ -208,7 +212,7 @@ void JitBuildEnv::init(
     this->rtoptions_ = &rtoptions;
     // Paths
     this->root_ = rtoptions.get_root_dir();
-    this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+    this->out_root_ = get_cache_root(rtoptions);
 
     this->arch_ = config.arch;
     this->max_dfbs_ = config.max_dfbs;

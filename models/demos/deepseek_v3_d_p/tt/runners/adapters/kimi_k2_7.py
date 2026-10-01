@@ -25,7 +25,9 @@ class KimiK27Adapter(MLAPrefillAdapter):
     hf_model_default = "/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized"
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill"
     default_gate_mode = "DEVICE_FP32"  # Kimi (1 expert group)
-    prefill_trace_default = "/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
+    prefill_trace_default = (
+        "/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
+    )
     # Empty: https://github.com/tenstorrent/tt-metal/issues/54973
     mla_trace_defaults = ()
     # The drafter golden is keyed to prefill_trace_default's prompt, so the two move together.
@@ -59,7 +61,9 @@ class KimiK27Adapter(MLAPrefillAdapter):
     # vllm-traced golden: metadata.json + row-sharded kv_post_transform
     # (kv_cache/layer_N/rows_*.safetensors). resolve_trace_dir descends a run-hash subdir as needed.
     prefill_trace_layout = "chunked_group_a_v1"
-    test_prefill_trace_default = "/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
+    test_prefill_trace_default = (
+        "/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
+    )
 
     @property
     def reference_model_cls(self):

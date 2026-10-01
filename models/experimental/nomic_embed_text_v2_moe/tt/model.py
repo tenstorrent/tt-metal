@@ -103,9 +103,10 @@ class TtNomicBertModel(LightweightModule):
         Args:
             input_ids: (B, S) int64 token ids, from reference.preprocessing.tokenize.
             attention_mask: (B, S) int64, 1 for real tokens and 0 for padding. None means no
-                masking, which is equivalent to all-ones and cheaper: an all-ones mask is a
-                proven no-op (test_an_all_ones_mask_is_a_no_op) and materialising it would cost
-                a (B, 1, S, S) tensor, 1 MB at B=2 S=512.
+                masking. An all-ones mask is treated the same way: it is a proven no-op
+                (test_an_all_ones_mask_is_a_no_op), while materialising it would cost a
+                (B, 1, S, S) tensor read by every head of every SDPA call, which doubled SDPA's
+                time at 8x512. SDPA masks the tile padding of S on its own.
             token_type_ids: Accepted for parity with the reference. type_vocab_size is 1, so 0 is
                 the only legal value and the embeddings module has already folded that row into
                 the word table.
@@ -135,10 +136,13 @@ class TtNomicBertModel(LightweightModule):
         ttnn.deallocate(hidden)
 
         # dtype is passed explicitly rather than left to each helper's default, so lowering
-        # tt_config.activation_dtype moves the mask and the rotary tables with it. A mismatch here
-        # surfaces inside SDPA, which rejects a mask whose dtype differs from q/k/v.
+        # tt_config.activation_dtype moves the rotary tables and the mask's fill value with it.
         dtype = self.tt_config.activation_dtype
-        mask = None if attention_mask is None else additive_attention_mask(attention_mask, self.device, dtype=dtype)
+        mask = None
+        if attention_mask is not None and not bool(attention_mask.all()):
+            mask = additive_attention_mask(
+                attention_mask, self.device, dtype=dtype, mask_dtype=self.tt_config.attention_mask_dtype
+            )
         out = self.encoder(normalized, rotary_tables(self.device, self.config, seqlen, dtype=dtype), mask)
         ttnn.deallocate(normalized)
         return out

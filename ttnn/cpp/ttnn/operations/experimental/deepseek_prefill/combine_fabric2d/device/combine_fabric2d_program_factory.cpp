@@ -169,9 +169,12 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // GlobalSemaphores rather than the op's own L1 region so they sit at an address uniform across the mesh:
 // `fwd_arrived` is bumped by the upstream chip, which has to know where it lives.
 //
-// Nothing zeroes them between launches — they outlive the cached workload — so the kernels reset all three at
-// end of stream. Skipping that leaves the next launch reading this one's totals, and a stale `freed`
-// underflows the reader's free-slot arithmetic into a silent buffer overwrite rather than a clean failure.
+// Nothing zeroes them between launches — they outlive the cached workload — so the kernels undo each launch's
+// count at end of stream. `filled` and `freed` are zeroed, which is safe because only the reader and sender
+// on the same core bump them. `fwd_arrived` is bumped by the upstream chip, which may already be in the next
+// launch, so the reader subtracts what it consumed instead. Skipping that leaves the next launch reading this
+// one's totals, and a stale `freed` underflows the reader's free-slot arithmetic into a silent buffer
+// overwrite rather than a clean failure.
 // The untilizer handshake needs the same treatment for the same reason. `untilized[j]` lives on a reader's
 // core and is bumped by its group's j-th untilizer; `unt_freed[c]` lives on an untilizer's core and is
 // bumped by the reader on link c. One semaphore per INDEX serves the whole mesh, because a core only ever

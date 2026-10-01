@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_FABRIC_SRC
     common/utils.cpp
+    common/mock_psd_builder.cpp
     common/fabric_worker_kernel_helpers.cpp
     common/fabric_command_interface.cpp
     fabric_router/test_routing_tables.cpp
