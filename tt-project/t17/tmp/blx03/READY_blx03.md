@@ -31,3 +31,13 @@ Per-stage times: `grep -E "LTX_TIME|stage|decode|export|load-cache" ~/fasth3/out
 Still: `ffmpeg -ss 3 -i <mp4> -frames:v 1 <label>.png`.
 Other trees: `W=<tree with its own build> bash tmp/blx03/run25.sh ...`; a python-only worktree can symlink build_Release,
 runtime and ttnn/ttnn/_ttnn.so from ~/fasth3/tt-metal (as t22 did on g15blx02).
+
+## Device stop procedure and drop guards (added 2026-10-01, #64)
+
+- **At every device stop** (pause, chip drop, reboot, fabric failure): on each box, list our own queued
+  broker jobs (`tt_device_queue_status` / `tt_device_recent_jobs`) and kill each with `tt_device_job_kill`.
+  The broker re-queues jobs after a reboot (QUEUE-RESTORE): blx03 job 000 ran at 07:29:16 that way.
+  Never kill other tenants' jobs. Skip any box whose broker is being upgraded.
+- **`hostfmax.py 1150` is not a guard against drops.** ltx-host job 995 ran at aiclk 1150 and still dropped
+  tray 1 (see tt-project/research/blx03_drop_0722.md). Rely on the rules instead: open the full mesh, then
+  `create_submesh(2,4)`; one project job at a time per box; no 4x8 runs.

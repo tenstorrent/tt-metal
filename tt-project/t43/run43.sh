@@ -1,5 +1,8 @@
 #!/bin/bash
 # blx03 broker job for #43: Tracy device profile of one conv VAE decode on 2x4. JIT/profiler output under /var/tmp.
+# hostfmax.py 1150 below is not a drop guard (ltx-host job 995 dropped tray 1 at 1150, see tt-project/research/blx03_drop_0722.md).
+# Safety comes from: full mesh then create_submesh(2,4), one job at a time, no 4x8. At any device stop, kill our
+# queued broker jobs on every box (broker re-queues after reboot); never other tenants' jobs; skip boxes mid-upgrade.
 M=/home/smarton/fasth3/tt-metal; D=/home/smarton/fasth3/t43; V=/var/tmp/fasth3/t43; LOG=$D/run43.log
 source $M/python_env/bin/activate
 export TT_METAL_HOME=$M PYTHONPATH=$D:$M:$M/ttnn:$M/tools HF_HUB_OFFLINE=1

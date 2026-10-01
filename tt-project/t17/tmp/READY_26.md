@@ -25,3 +25,13 @@ Past failures, all fixed or external:
 - 671 dv145, 687 dv145_c211: neighborhood_sdpa.cpp JIT compile error (stale num_blocks arg). Fixed d079ee7cd11,
   verified off-device with tmp/na_kernel_compile.sh (job 671's exact riscv g++ commands: FAIL before, OK after).
 - 640, 689: killed by broker device recovery (chips left PCIe). Box instability, not the job.
+
+## Device stop procedure and drop guards (added 2026-10-01, #64)
+
+- **At every device stop** (pause, chip drop, reboot, fabric failure): on each box, list our own queued
+  broker jobs (`tt_device_queue_status` / `tt_device_recent_jobs`) and kill each with `tt_device_job_kill`.
+  The broker re-queues jobs after a reboot (QUEUE-RESTORE): blx03 job 000 ran at 07:29:16 that way.
+  Never kill other tenants' jobs. Skip any box whose broker is being upgraded.
+- **`hostfmax.py 1150` is not a guard against drops.** ltx-host job 995 ran at aiclk 1150 and still dropped
+  tray 1 (see tt-project/research/blx03_drop_0722.md). Rely on the rules instead: open the full mesh, then
+  `create_submesh(2,4)`; one project job at a time per box; no 4x8 runs.

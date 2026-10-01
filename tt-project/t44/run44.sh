@@ -1,5 +1,8 @@
 #!/bin/bash
 # blx03 broker job for #44: one arm of the LTX_VAE_FOLD_TIME_PAD conv VAE decode A/B on a 2x4 submesh.
+# hostfmax.py 1150 below is not a drop guard (ltx-host job 995 dropped tray 1 at 1150, see tt-project/research/blx03_drop_0722.md).
+# Safety comes from: full mesh then create_submesh(2,4), one job at a time, no 4x8. At any device stop, kill our
+# queued broker jobs on every box (broker re-queues after reboot); never other tenants' jobs; skip boxes mid-upgrade.
 # Usage (on blx03, via submit.sh): bash ~/fasth3/t44/run44.sh <0|1>. One arm per job.
 FOLD=${1:?fold 0 or 1}
 M=/home/smarton/fasth3/tt-metal; D=/home/smarton/fasth3/t44; V=/var/tmp/fasth3/t44; LOG=$D/run44_fold$FOLD.log
