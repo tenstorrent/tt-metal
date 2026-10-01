@@ -197,6 +197,7 @@ string generate_cached_semaphore_list(const JitBuildSettings& settings) {
     return fmt::format(
         "#include \"internal/tt-2xx/quasar/semaphore_cached_pool.h\"\n"
         "namespace sem_internal {{\n"
+        // fmt's escape rule makes this look weird, trying to emit: kCachedSemaphores {{entry... }}
         "inline constexpr std::array<::sem_internal::CachedSemaphore, {}> kCachedSemaphores{{{{{}}}}};\n"
         "}}  // namespace sem_internal\n",
         cached_semaphore_entries.size(),
