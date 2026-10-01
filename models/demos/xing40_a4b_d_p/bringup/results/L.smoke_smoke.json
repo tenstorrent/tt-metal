@@ -1,0 +1,14 @@
+{
+ "task": "L.smoke",
+ "t": "2026-10-01T23:59:50",
+ "mode": "model",
+ "prompt": "What is the capital of France? Answer in one word.",
+ "expected": "Paris",
+ "answer": "Paris",
+ "token_ids": [
+  9972
+ ],
+ "ok": true,
+ "seconds": 17.2,
+ "prompt_len": 16
+}
