@@ -97,8 +97,12 @@ void kernel_main() {
             const uint32_t first = output_page(shard, rank, stripe, page);
             for (uint32_t i = 0; i < num_pages; ++i) {
                 const uint32_t o = first + i;
-                noc_async_write_one_packet(
-                    src + i * page_bytes, bank_base[o % num_banks] + (o / num_banks) * page_bytes, page_bytes);
+                const uint64_t dst = bank_base[o % num_banks] + (o / num_banks) * page_bytes;
+                if constexpr (page_bytes <= NOC_MAX_BURST_SIZE) {
+                    noc_async_write_one_packet(src + i * page_bytes, dst, page_bytes);
+                } else {  // a page larger than one NoC packet
+                    noc_async_write(src + i * page_bytes, dst, page_bytes);
+                }
             }
             done_pages += num_pages;
             const uint32_t batch_cap = batch_chunks < cb_chunks - cb_offset ? batch_chunks : cb_chunks - cb_offset;
