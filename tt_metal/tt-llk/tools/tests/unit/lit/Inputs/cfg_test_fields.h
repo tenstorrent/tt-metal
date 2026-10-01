@@ -18,3 +18,16 @@ inline constexpr Field state_outside {RegisterScope::State, 32, 224, 0, 0, 32, 1
 inline constexpr Field thread_outside {RegisterScope::Thread, 16, 68, 0, 0, 16, 1, 0};
 inline constexpr Field state_word5 {RegisterScope::State, 32, 5, 0, 0, 4, 1, 0};
 inline constexpr Field thcon_last_block {RegisterScope::State, 32, 176, 0, 0, 32, 1, 0};
+inline constexpr Field state_two_words {RegisterScope::State, 32, 64, 0, 0, 64, 1, 0};
+
+// The same 64-bit field spans words 64-66 in S0 (bit 16) and 67-68 in S1 (bit 0).
+inline constexpr Field state_sectioned_wide {RegisterScope::State, 32, 64, 0, 16, 64, 2, 80};
+
+// A field group without a Raw anchor cannot stand in for a Field.
+class GroupWithoutRaw
+{
+public:
+    static constexpr Field Value {RegisterScope::State, 32, 64, 0, 0, 32, 1, 0};
+};
+
+inline constexpr GroupWithoutRaw group_without_raw {};

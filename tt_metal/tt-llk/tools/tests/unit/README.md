@@ -12,7 +12,8 @@ tests require Clang. Tests requiring libfmt skip when it is unavailable.
 The Blackhole CFG tests under `lit/` include:
 
 - `functional/test_cfg_write_plan.cpp`: host checks for grouping and overlap.
-- `diagnostics/test_cfg_access_bounds.cpp`: array, MMIO read, and GPR bank bounds.
+- `diagnostics/test_cfg_access_bounds.cpp`: array, MMIO read, and GPR bank bounds,
+  plus section-dependent spans of wide fields and groups without a `Raw` anchor.
 - `diagnostics/test_cfg_write_overlap.cpp`: field and GPR destination overlap,
   including all four words of a 128-bit transfer in both operand orders.
 - `codegen/test_cfg_access.cpp`: public calls compared with handwritten hardware

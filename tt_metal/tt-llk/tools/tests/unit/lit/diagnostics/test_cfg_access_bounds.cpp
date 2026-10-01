@@ -24,6 +24,15 @@
 // RUN: not %{check} %t/gpr_grouped_state_crossing_Bits128.cpp 2>&1 | FileCheck %s --check-prefix=GPR-SPAN
 // RUN: not %{check} %t/gpr_operand_outside.cpp 2>&1 | FileCheck %s --check-prefix=GPR-ADDR
 // RUN: not %{check} %t/gpr_operand_span.cpp 2>&1 | FileCheck %s --check-prefix=GPR-SPAN
+// RUN: not %{check} %t/anchor_array_span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR-ARRAY
+// RUN: not %{check} %t/anchor_read_span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR-READ
+// RUN: not %{check} %t/anchor_gpr_direct_span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR-GPR
+// RUN: not %{check} %t/anchor_gpr_grouped_span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR-GPR
+// RUN: not %{check} %t/anchor_group_without_raw.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR-GROUP
+// RUN: not %{check} %t/anchor_shifted_array_span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR-ARRAY
+// RUN: not %{check} %t/anchor_shifted_read_span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR-READ
+// RUN: not %{check} %t/anchor_section_array_span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR-ARRAY
+// RUN: not %{check} %t/anchor_section_read_span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR-READ
 
 // Match an actual compiler error, not the echoed static_assert source text.
 // ARRAY-END: error: static assertion failed: CFG array write crosses the end of the state bank
@@ -33,6 +42,10 @@
 // GPR-READ: error: static assertion failed: CFG read source lies outside the state bank
 // GPR-ADDR: error: static assertion failed: CFG write destination lies outside its register scope
 // GPR-SPAN: error: static assertion failed: GPR write crosses the end of its CFG bank
+// ANCHOR-ARRAY: error: static assertion failed: CFG array write extends past its anchor field
+// ANCHOR-READ: error: static assertion failed: CFG word offset extends past its anchor field
+// ANCHOR-GPR: error: static assertion failed: GPR write extends past its anchor field
+// ANCHOR-GROUP: error: static assertion failed: whole-word CFG access requires a Field or a field group with a Raw anchor
 
 // State: 40 + 184 reaches word 224; 40 + 0xffffffd8 would wrap to zero.
 // Thread: 5 + 63 reaches word 68; 5 + 0xfffffffb would wrap to zero.
@@ -181,4 +194,84 @@ void probe()
 void probe()
 {
     auto operand = from_gpr<state_crossing, Sec::S0, GprTransferSize::Bits128>(hal::gpr<4>());
+}
+
+//--- anchor_array_span.cpp
+#include "cfg_test_fields.h"
+
+void probe(const std::array<std::uint32_t, 5>& values)
+{
+    write<Access::MMIO, Thcon[Reg0].TileDescriptor, Sec::S0, 5>(values);
+}
+
+//--- anchor_read_span.cpp
+#include "cfg_test_fields.h"
+
+std::uint32_t probe()
+{
+    return read_word<Access::MMIO, Thcon[Reg0].TileDescriptor, Sec::S0, 4>();
+}
+
+//--- anchor_gpr_direct_span.cpp
+#include "cfg_test_fields.h"
+
+void probe()
+{
+    write<Access::TensixCfgUnit, state_two_words, Sec::S0, GprTransferSize::Bits128>(hal::gpr<4>());
+}
+
+//--- anchor_gpr_grouped_span.cpp
+#include "cfg_test_fields.h"
+
+void probe()
+{
+    write<Access::TensixCfgUnit>(from_gpr<state_two_words, Sec::S0, GprTransferSize::Bits128>(hal::gpr<4>()));
+}
+
+//--- anchor_group_without_raw.cpp
+#include "cfg_test_fields.h"
+
+void probe(const std::array<std::uint32_t, 1>& values)
+{
+    write<Access::MMIO, group_without_raw, Sec::S0, 1>(values);
+}
+
+//--- anchor_shifted_array_span.cpp
+#include <cstdint>
+
+#include "cfg_test_fields.h"
+
+void probe(const std::array<std::uint32_t, 4>& values)
+{
+    write<Access::MMIO, state_sectioned_wide, Sec::S0, 4>(values);
+}
+
+//--- anchor_shifted_read_span.cpp
+#include <cstdint>
+
+#include "cfg_test_fields.h"
+
+std::uint32_t probe()
+{
+    return read_word<Access::MMIO, state_sectioned_wide, Sec::S0, 3>();
+}
+
+//--- anchor_section_array_span.cpp
+#include <cstdint>
+
+#include "cfg_test_fields.h"
+
+void probe(const std::array<std::uint32_t, 3>& values)
+{
+    write<Access::MMIO, state_sectioned_wide, Sec::S1, 3>(values);
+}
+
+//--- anchor_section_read_span.cpp
+#include <cstdint>
+
+#include "cfg_test_fields.h"
+
+std::uint32_t probe()
+{
+    return read_word<Access::MMIO, state_sectioned_wide, Sec::S1, 2>();
 }
