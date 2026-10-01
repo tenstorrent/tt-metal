@@ -5,6 +5,7 @@
 Utilities for KVPE cache initialization and management.
 """
 
+import math
 import socket
 from dataclasses import dataclass
 from enum import Enum
@@ -809,6 +810,172 @@ def populate_kv_chunk_address_table_dflash(
                             # `layer` indexes the drafter's own cache; the table key continues the
                             # verifier's layer axis, so the draft layers land at first_layer onwards.
                             lookup_table.set(first_layer + layer, position, slot, location, config_id)
+    return lookup_table
+
+
+def _kda_local_segments(geometry, kind: str, tp_col: int):
+    """One device's segments of one layer: ``(global segment, shard index within the layer's batch)``."""
+    if kind == "kda_recurrent":
+        return [
+            (geometry.recurrent_segment(tp_col, head, band), geometry.recurrent_local_shard(0, head, band))
+            for head in range(geometry.local_heads)
+            for band in range(geometry.bands)
+        ]
+    if kind == "kda_convolution":
+        return [
+            (
+                geometry.convolution_segment(branch, tp_col, head, half),
+                geometry.convolution_local_column(branch, head, half),
+            )
+            for branch in range(3)
+            for head in range(geometry.local_heads)
+            for half in range(geometry.halves)
+        ]
+    raise ValueError(f"unknown KDA state kind {kind!r} (expected 'kda_recurrent' or 'kda_convolution')")
+
+
+def kda_segment_bytes(geometry, kind: str) -> int:
+    if kind == "kda_recurrent":
+        return geometry.recurrent_segment_bytes
+    if kind == "kda_convolution":
+        return geometry.convolution_segment_bytes
+    raise ValueError(f"unknown KDA state kind {kind!r}")
+
+
+def kda_segments_per_layer(geometry, kind: str) -> int:
+    if kind == "kda_recurrent":
+        return geometry.recurrent_segments_per_layer
+    if kind == "kda_convolution":
+        return geometry.convolution_segments_per_layer
+    raise ValueError(f"unknown KDA state kind {kind!r}")
+
+
+# The contract's KDA position axis (k3_disagg_contract.md, tt-blaze #3634). A KDA config has no token
+# axis, so its positions are synthetic: one version of BOTH states spans a window of kda_window()
+# positions, recurrent segment i sits at i * 96 and convolution segment i at i * 64 inside it (at 96
+# heads), and each of the decode side's KDA_VERSIONS windows aliases the one prefill state. Segment
+# indices would not pair: the KV Manager requires equal chunk_n_tokens on both sides, and one
+# /migrate position range serves every config of a layer, so both states must fill the same window.
+KDA_POSITION_QUANTUM = 32  # decode's minimum position stride (one tile edge)
+KDA_VERSIONS = 8  # decode's per-user state ring (speculative-decode versions)
+
+
+def kda_window(geometry) -> int:
+    """Positions per version: the least window both states fill evenly at a stride of whole tiles."""
+    return (
+        math.lcm(geometry.recurrent_segments_per_layer, geometry.convolution_segments_per_layer) * KDA_POSITION_QUANTUM
+    )
+
+
+def kda_chunk_n_tokens(geometry, kind: str) -> int:
+    return kda_window(geometry) // kda_segments_per_layer(geometry, kind)
+
+
+def kda_max_sequence_length(geometry) -> int:
+    return KDA_VERSIONS * kda_window(geometry)
+
+
+def kda_position(geometry, kind: str, segment: int, version: int = 0) -> int:
+    """Table position of global segment ``segment`` in window ``version``."""
+    return version * kda_window(geometry) + segment * kda_chunk_n_tokens(geometry, kind)
+
+
+def populate_kv_chunk_address_table_kda(
+    lookup_table,
+    config,
+    mesh_shape,
+    sp_axis,
+    tp_axis,
+    geometry,
+    kind,
+    num_users=1,
+    config_id=0,
+    stage_layout=None,
+    layer_rows=None,
+):
+    """
+    Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a Kimi-K3 KDA state slab
+    (see ``tt/kda/state_adapter.py`` for the slabs and the segment numbering being described).
+
+    The KDA analogue of the block-cyclic and dflash walks, differing in three ways:
+
+      * **No token axis.** A KDA layer's state is a fixed set of segments, each set at
+        ``kda_position(geometry, kind, i, v)`` for every version window ``v`` (see the constants above).
+      * **TP shards heads, SP replicates.** Column ``g // H_local`` is the only column holding global
+        head ``g``, and every SP row of that column holds the same bytes, so a device group is one TP
+        column spanning all SP rows -- the worker reads any member as a replica. (The MLA cache is the
+        transpose: SP-sharded, TP-replicated, one group per row.)
+      * **Batch-major shards.** Both slabs fold ``(slot, layer)`` into their leading dim, so a layer's
+        segments are one contiguous shard run ``[batch * shards_per_layer, +shards_per_layer)`` with
+        ``batch = slot * count + local_layer``; shard ``s`` lives in bank ``s % num_banks`` at
+        ``base + (s // num_banks) * segment_bytes``. The recurrent slab is ND-sharded with one
+        ``[128, 32]`` band per shard (four 4 KiB tile pages); the convolution slab is interleaved
+        row-major with one 384-byte page per segment, which is the same address function.
+
+    ``stage_layout`` (required) is the all-gathered layout of this slab's ``KvCacheStage`` -- numbered
+    in compacted KDA-slot space -- and ``layer_rows`` maps that space back to model layers, exactly as
+    the kvpe stage does. Ranks whose stage has ``count == 0`` (no KDA layer) are skipped.
+
+    Returns:
+        lookup_table: the same table, with config_id populated.
+    """
+    if stage_layout is None:
+        raise ValueError("populate_kv_chunk_address_table_kda needs the gathered stage layout of the slab")
+    segment_bytes = kda_segment_bytes(geometry, kind)
+    shards_per_layer = (
+        geometry.recurrent_shards_per_layer if kind == "kda_recurrent" else geometry.convolution_shards_per_layer
+    )
+    stride = kda_chunk_n_tokens(geometry, kind)
+    window = kda_window(geometry)
+    assert (
+        config.chunk_n_tokens == stride
+    ), f"KDA {kind} config has chunk_n_tokens {config.chunk_n_tokens}; the contract stride is {stride}"
+    assert config.max_sequence_length == kda_max_sequence_length(geometry), (
+        f"KDA {kind} config spans {config.max_sequence_length} positions, not "
+        f"{KDA_VERSIONS} windows of {kda_window(geometry)}"
+    )
+    assert (
+        config.chunk_size_bytes == segment_bytes
+    ), f"KDA {kind} config chunk is {config.chunk_size_bytes} bytes but a segment is {segment_bytes}"
+    assert sp_axis != tp_axis, f"sp_axis and tp_axis must differ; both are {sp_axis}"
+    sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
+    assert (sp, tp) == (
+        geometry.sequence_parallel_size,
+        geometry.tensor_parallel_size,
+    ), f"mesh SP{sp}xTP{tp} != contract geometry SP{geometry.sequence_parallel_size}xTP{geometry.tensor_parallel_size}"
+
+    for stage in stage_layout:
+        count = int(stage["count"])
+        if count == 0:
+            continue
+        base = int(stage["base_addr"])
+        num_banks = int(stage["num_banks"])
+        host_name = f"host-{stage['host_tag']:08x}"  # crc32 tag rebuilt to a string (int-only allgather)
+        first = int(stage["first_layer"])
+        fnids = stage["fnids"]
+        for tp_col in range(tp):
+            members = []
+            for sp_row in range(sp):
+                coord = [0, 0]
+                coord[sp_axis] = sp_row
+                coord[tp_axis] = tp_col
+                members.append(fnids[coord[0]][coord[1]])
+            group_idx = lookup_table.add_device_group(members)
+            for fid in members:
+                lookup_table.set_fabric_node_host(fid, host_name=host_name)
+            local_segments = _kda_local_segments(geometry, kind, tp_col)
+            for slot in range(num_users):
+                for local_layer in range(count):
+                    batch = slot * count + local_layer
+                    row = layer_rows[first + local_layer] if layer_rows is not None else first + local_layer
+                    for segment, shard_in_layer in local_segments:
+                        shard = batch * shards_per_layer + shard_in_layer
+                        location = ttnn.experimental.disaggregation.KvCacheLocation()
+                        location.noc_addr = ((shard % num_banks) << 32) | (base + (shard // num_banks) * segment_bytes)
+                        location.size_bytes = segment_bytes
+                        location.device_group_index = group_idx
+                        for version in range(KDA_VERSIONS):  # kda_position(), inlined: 17M calls at 32 users
+                            lookup_table.set(row, version * window + segment * stride, slot, location, config_id)
     return lookup_table
 
 
