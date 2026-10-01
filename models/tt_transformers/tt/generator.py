@@ -3026,7 +3026,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             return tt_logits
 
     # Note: This function is called by vLLM
-    def read_decode_output(self, tt_out, async_read=False):
+    def read_decode_output(self, tt_out, async_read=False, sample_rows=None):
         """
         Input tt_out is list of tuples of (tt_out_tok, tt_log_probs)
         tt_log_probs can be: ttnn.Tensor (old path), LogProbsResult (new path), or None.
@@ -3036,6 +3036,32 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             if lp is None:
                 return None
             return lp.cpu(blocking=blocking)
+
+        if sample_rows is not None:
+            batch_per_model = self.model_args[0].max_batch_size
+            capacity = batch_per_model * self.data_parallel
+            if (
+                not sample_rows
+                or len(set(sample_rows)) != len(sample_rows)
+                or any(row < 0 or row >= capacity for row in sample_rows)
+            ):
+                raise ValueError(f"Invalid selective host rows {sample_rows} for capacity {capacity}")
+            if any(isinstance(output, tuple) and output[1] is not None for output in tt_out):
+                raise ValueError("Selective host logits cannot discard model-provided logprobs")
+            host_outputs = []
+            read_events = []
+            for rank, output in enumerate(tt_out):
+                local_rows = [row % batch_per_model for row in sample_rows if row // batch_per_model == rank]
+                if not local_rows:
+                    host_outputs.append(None)
+                    continue
+                logits = output[0] if isinstance(output, tuple) else output
+                host_outputs.append(
+                    (self.model[rank].read_output_decode(logits, local_rows, blocking=not async_read), None)
+                )
+                if async_read:
+                    read_events.append(ttnn.record_event(self.model[rank].mesh_device, 0))
+            return (host_outputs, read_events) if async_read else host_outputs
 
         if not async_read:
             if isinstance(tt_out[0], tuple):
