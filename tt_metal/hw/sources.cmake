@@ -230,7 +230,6 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
-    inc/hostdev/fabric_telemetry_msgs.h
     inc/hostdev/profiler_common.h
     inc/hostdev/profiler_zone_id.h
     inc/hostdev/realtime_profiler_msgs.h
@@ -333,15 +332,30 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v1.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v2.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v3.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/memory_port_cacheable_reg.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/memory_port_noncacheable_reg.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_cache_controller_reg.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_cluster_clint_reg.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_cluster_ctrl_reg.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_cluster_ctrl_t6_l1_csr_reg.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_overlay_llk_tile_counters_reg.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_rocc_accel_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/fds_registers/tt_fds_dispatch_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/fds_registers/tt_fds_tensixneo_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/overlay_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/memory_port_cacheable_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/memory_port_noncacheable_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_cache_controller_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_cluster_clint_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_cluster_ctrl_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_cluster_ctrl_t6_l1_csr_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_cluster_plic_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_overlay_llk_tile_counters_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_rocc_accel_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/fds_registers/tt_fds_dispatch_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/fds_registers/tt_fds_tensixneo_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/overlay_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/memory_port_cacheable_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/memory_port_noncacheable_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cache_controller_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cluster_clint_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cluster_ctrl_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cluster_ctrl_t6_l1_csr_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cluster_plic_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_overlay_llk_tile_counters_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_rocc_accel_reg.h
     inc/internal/tt-2xx/quasar/overlay/overlay_addresses.h
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h

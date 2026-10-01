@@ -10,12 +10,9 @@ Run all:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s
 Run 128:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"
 Run batched:  MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "b8"
 
-GDN prefill runs the fast fused path by DEFAULT — no env vars needed: chunk-parallel phase-split
-(PREP fanned across the grid + V-block SCAN), fp32 o output, fp32 state, and flat token-major q/k/v
-with in-kernel L2-norm (eliminates the head-split relayouts + host l2_norm — the bulk of the
-preprocessing cost). Two opt-out flags exist only for benchmarking/debug:
-  QWEN_GDN_PHASED=0    fall back to the monolithic single-kernel fused op (no phase split).
-  QWEN_GDN_FLAT_QKV=0  fall back to head-split q/k/v + host l2_norm (no flat token-major reads).
+GDN prefill uses a cost model to select the fastest program config at runtime. To pick a specific
+program config or a geometry for benchmarking, set Qwen36ModelArgs.gdn_program_config to one of:
+ttnn.ChunkGdnFusedProgramConfig / ChunkGdnPhasedProgramConfig / ChunkGdnMonoProgramConfig.
 """
 
 import hashlib
@@ -923,7 +920,11 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         _greedy_params = SamplingParams(
             temperature=[1.0] * _sbatch, top_k=[1] * _sbatch, top_p=[1.0] * _sbatch, seed=[0] * _sbatch
         )
-        model.sampling.apply_decode_state([_greedy_params], reset_batch=True)
+        model.sampling.apply_decode_state(
+            [_greedy_params],
+            reload_sampling_params=True,
+            reset_sampling_state=True,
+        )
 
     _sharded_logits_mode = _mode in ("shard", "sample")
     trace_id, tt_logits, tt_idx, tt_val, tt_tok = None, None, None, None, None
@@ -1086,6 +1087,10 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
             kv_cache=None,
             enable_trace=True,
             read_from_device=True,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
         next_token = int(dl.argmax())
@@ -1143,6 +1148,10 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
             kv_cache=None,
             enable_trace=False,
             read_from_device=True,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
         next_token = int(dl.argmax())

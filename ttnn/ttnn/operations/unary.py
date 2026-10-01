@@ -648,10 +648,19 @@ def _golden_function_round(input_tensor_a, decimals=None, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.round, golden_function=_golden_function_round)
 
 
-def _golden_function_selu(input_tensor_a, *args, **kwargs):
+_SELU_SCALE = 1.0507009873554804934193349852946
+_SELU_ALPHA = 1.6732632423543772848170429916717
+
+
+def _golden_function_selu(input_tensor_a, *args, scale=_SELU_SCALE, alpha=_SELU_ALPHA, **kwargs):
     import torch
 
-    return torch.nn.functional.selu(input_tensor_a)
+    # Defaults are torch's canonical SELU constants; use torch's built-in for that case.
+    # torch.nn.functional.selu has no scale/alpha parameters, so any other (kernel-forwarded)
+    # scale/alpha is applied via the closed-form definition.
+    if scale == _SELU_SCALE and alpha == _SELU_ALPHA:
+        return torch.nn.functional.selu(input_tensor_a)
+    return torch.where(input_tensor_a >= 0, scale * input_tensor_a, scale * alpha * (torch.exp(input_tensor_a) - 1))
 
 
 ttnn.attach_golden_function(ttnn.selu, golden_function=_golden_function_selu)

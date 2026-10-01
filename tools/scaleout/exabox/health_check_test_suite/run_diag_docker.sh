@@ -237,6 +237,16 @@ add_volume() {
     fi
 }
 
+# Bind mount for caller-supplied paths. `-v src:dst` splits on colons, so a
+# timestamped directory such as .../2026-09-29T09:32:28Z is rejected with "too
+# many colons"; --mount splits on commas instead, so those are refused here.
+bind_mount() {
+    local src=$1 dst=$2 ro=${3:-}
+    [[ ${src} != *,* && ${dst} != *,* ]] \
+        || die "path contains a comma, which docker --mount cannot take: ${src}"
+    DOCKER_ARGS+=(--mount "type=bind,source=${src},target=${dst}${ro:+,readonly}")
+}
+
 add_device /dev/tenstorrent rwm required \
     "Without the chips there is nothing to check — is tt-kmd loaded?"
 # tt-smi -glx_reset drives the reset over IPMI (`ipmitool raw 0x30 0x8b ...`),
@@ -254,7 +264,7 @@ add_volume /lib/modules ro \
 add_volume /sys/kernel/debug ro \
     "debugfs is unavailable; the triage device mappings section will be empty"
 
-DOCKER_ARGS+=(-v "${OUTPUT_DIR}:${OUTPUT_DIR}")
+bind_mount "${OUTPUT_DIR}" "${OUTPUT_DIR}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Staged temporary files: the virt stub and the token env-file. Both cleaned up
@@ -317,7 +327,7 @@ mount_input() {
     fi
     local abs
     abs="$( cd "$( dirname "${host}" )" && printf '%s/%s' "$(pwd)" "$(basename "${host}")" )"
-    DOCKER_ARGS+=(-v "${abs}:${IN_DIR}/${name}:ro")
+    bind_mount "${abs}" "${IN_DIR}/${name}" ro
     MOUNTED_PATH="${IN_DIR}/${name}"
 }
 
@@ -346,6 +356,8 @@ DOCKER_ARGS+=(
     -e "HC_DIAG_PKG_VERSION=${DIAG_PKG_VERSION}"
     -e "HC_NEED_LSPCI=${NEED_LSPCI}"
     -e "HC_SKIP_QSFP=${SKIP_QSFP}"
+    -e "HC_HOST_UID=$(id -u)"
+    -e "HC_HOST_GID=$(id -g)"
 )
 
 CONTAINER_SCRIPT='
@@ -437,11 +449,25 @@ fi
     exit 1
 }
 
+# Everything the suite writes is owned by the image user (uid 1001) or, for the
+# steps that run under sudo, by root. Hand the output back to whoever launched
+# the wrapper, on every exit path, so the results can be moved and deleted
+# without sudo on the host.
+_give_back_output() {
+    sudo -n chown -R "${HC_HOST_UID}:${HC_HOST_GID}" "${HC_OUTPUT_DIR}" \
+        || _warn "could not chown ${HC_OUTPUT_DIR} to ${HC_HOST_UID}:${HC_HOST_GID};" \
+                 "some results stay owned by the container user or root"
+}
+trap _give_back_output EXIT
+trap "exit 130" INT
+trap "exit 143" TERM
+
 # --output takes a file path, not a directory. --snapshot-out is placed in the
 # mount too, so the raw tt-smi snapshot survives the container; both come before
-# the forwarded arguments so an explicit --snapshot-out still wins.
+# the forwarded arguments so an explicit --snapshot-out still wins. Not exec-ed,
+# so the EXIT trap above still runs once the suite finishes.
 _say "starting the health check"
-exec bash "${HC_RUN_DIAG}" "${HC_TIER}" \
+bash "${HC_RUN_DIAG}" "${HC_TIER}" \
     --output "${HC_OUTPUT_DIR}/diag_report.json" \
     --snapshot-out "${HC_OUTPUT_DIR}/diag_snapshot.json" \
     "$@"

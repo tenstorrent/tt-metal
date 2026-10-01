@@ -24,12 +24,12 @@
 #include <internal/disaggregation/layer_completion_message.hpp>
 
 namespace tt::tt_metal::distributed {
-class NamedShm;  // fwd — defined in tt_metal/distributed/named_shm.hpp
+class NamedShm;  // fwd — defined in tt-metalium/experimental/sockets/named_shm.hpp
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::internal {
 
-using tt::tt_metal::distributed::NamedShm;  // tt_metal/distributed/named_shm.hpp
+using tt::tt_metal::distributed::NamedShm;  // tt-metalium/experimental/sockets/named_shm.hpp
 
 struct LayerCompletionRingHeader;  // fwd — defined in layer_completion_ring_layout.hpp
 struct LayerCompletionCell;        // fwd — defined in layer_completion_ring_layout.hpp
