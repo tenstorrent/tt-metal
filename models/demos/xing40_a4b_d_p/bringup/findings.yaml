@@ -1,0 +1,16 @@
+findings:
+- id: X3-positions-single-chunk
+  task: X.3
+  kind: OP
+  title: test_positions needs a one-chunk state (max_seq = chunk); ring_mla refused kv_actual_isl=0 there (fork fixed)
+  detail: >-
+    test_positions calls new_state(start + 5120) for every position. hooks.py:_chunks_for only knows the ladder and
+    target seqs, so new_state(5120) asserts. With a fallback to target.chunk (tried temporarily, hooks.py is outside the
+    fix step's paths) the latent cache equals the chunk (1280 rows per SP row = Q), and ring_mla with kv_actual_isl=0
+    TT_FATALed ("KV-pad rotation requires chunked-prefill input"). The sdpa fork now drops host kv_actual_isl=0 on a
+    non-chunked input (full-prefill path, the metadata path already does this). Left for a step that may edit them:
+    the hooks fallback, a _DeviceState.free() that drops the attention geometries (TtMlaAttention._geoms keeps every
+    (chunk, max_seq) cache), and the positions doubling under the precompile pass (positions.py mutates the shared
+    module-level spec; perf.positions in spec.yaml avoids it). With the fallback in place, the precompile real pass
+    measured 0->5120 586 ms, 204800->209920 3132 ms, 409600 5677 ms and 614400 8256 ms, then timed out building the
+    819200 state.

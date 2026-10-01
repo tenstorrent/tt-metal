@@ -479,6 +479,10 @@ def _chunks_for(spec, max_seq):
     """Chunk lengths of the ladder rungs / target that run a sequence of ``max_seq`` (first = the default geometry)."""
     runs = list(spec.get("ladder") or []) + [spec.get("target") or {}]
     out = [r["chunk"] for r in runs if r.get("seq") == max_seq and "chunk" in r]
+    if not out:  # e.g. test_positions: start + chunk at any multiple of the target chunk
+        c = int((spec.get("target") or {}).get("chunk", 0))
+        if c and max_seq % c == 0:
+            out = [c]
     return list(dict.fromkeys(out))
 
 
@@ -501,6 +505,11 @@ class _DeviceState:
 
     def to_torch(self, layer, length):
         return self.blocks[layer].state_torch(length)
+
+    def free(self):
+        """Release the device geometries (latent caches, RoPE tables, gather scratch) built for this max_seq."""
+        for b in self.blocks.values():
+            b.attn.release(self.max_seq)
 
 
 class XingDeviceModel:

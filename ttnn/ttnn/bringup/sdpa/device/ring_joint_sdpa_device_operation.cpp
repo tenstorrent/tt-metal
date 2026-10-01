@@ -1437,6 +1437,16 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     auto all_gather_tensor_args = ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs{
         std::move(all_gather_input_tensors), std::move(all_gather_output_tensors)};
 
+    // A host kv_actual_isl of 0 on a non-chunked input (Q.seq == K.seq per device: one chunk that fills the whole
+    // cache, at position 0) has nothing to rotate past; it is the full-prefill causal case. Drop it so the op takes
+    // the full-prefill path instead of TT_FATALing in validate, as the metadata path already does
+    // (kv_pad_from_metadata needs is_chunked). Every other input is unchanged.
+    std::optional<uint32_t> kv_actual_isl_eff = kv_actual_isl;
+    if (kv_actual_isl.has_value() && kv_actual_isl.value() == 0 && is_causal && !is_cross &&
+        input_tensor_q.logical_shape()[2] == input_tensor_k.logical_shape()[2]) {
+        kv_actual_isl_eff = std::nullopt;
+    }
+
     auto operation_attributes = OperationType::operation_attributes_t(
         joint_strategy,
         scale,
@@ -1453,7 +1463,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         std::move(all_gather_tensor_args),
         ccl_core_grid_offset,
         kv_cache_batch_idx,
-        kv_actual_isl,
+        kv_actual_isl_eff,
         latent_v_head_dim.value_or(0),
         kv_cache_num_layers,
         kv_cache_layer_idx,
