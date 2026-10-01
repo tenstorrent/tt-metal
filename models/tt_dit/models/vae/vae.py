@@ -498,7 +498,6 @@ class VaeAttention(Module):
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=resolved_q_chunk,
             k_chunk_size=resolved_k_chunk,
-            exp_approx_mode=False,
         )
         self._sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             ctx.device.arch(),
