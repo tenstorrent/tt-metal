@@ -92,6 +92,8 @@ def _create_golden_function(torch_function_name):
         import torch
 
         input_dtype = input_tensor.dtype
+        if input_tensor.ndim == 0 and spec.scale_output is not None:
+            return input_tensor.clone()
         if spec.widen_unsigned and input_dtype in (torch.uint16, torch.uint32):
             input_tensor = input_tensor.to(torch.int64)
 
@@ -99,10 +101,7 @@ def _create_golden_function(torch_function_name):
         if spec.passes_correction and correction is not None:
             torch_kwargs["correction"] = correction
 
-        reduction_spec = spec
-        if scalar < 0 and spec.negative_scalar_spec is not None:
-            reduction_spec = _REDUCTION_GOLDEN_SPECS[spec.negative_scalar_spec]
-        output = _reduce(reduction_spec, input_tensor, dim, keepdim, **torch_kwargs)
+        output = _reduce(spec, input_tensor, dim, keepdim, **torch_kwargs)
         if spec.scale_output is None:
             return output
         return spec.scale_output(output, scalar, input_dtype)

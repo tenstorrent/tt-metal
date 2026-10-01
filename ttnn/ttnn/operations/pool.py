@@ -412,7 +412,6 @@ def golden_grid_sample(
     use_precomputed_grid: bool = False,
     batch_output_channels: bool = False,
     grid_batching_factor: int = None,
-    use_precomputed_grid: bool = False,
     **_,
 ):
     """
