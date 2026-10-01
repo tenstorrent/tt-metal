@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""QKV projection + fused heads op in batch chunks (QWEN_QKV_CHUNKS=2, bs32 at ISL 512).
+"""QKV projection + fused heads op in batch chunks (QWEN_QKV_CHUNKS=2 or 4, bs32 at ISL 512; 4 is the default).
 
 At bs32 the QKV output (892 KB per core) cannot live in L1, so the heads op streams it from DRAM at the op's DRAM
 floor. Run in two half-batch chunks, each chunk's QKV output (446 KB per core) fits in L1 like bs16's and the heads op
 reads it from L1 with the v3 compute; each chunk writes its Q / K / V into full-batch tensors at a batch offset, so
-SDPA sees one bs32 tensor.
+SDPA sees one bs32 tensor. Four quarter-batch chunks (223 KB per core) also leave room for K / V in L1.
 
-The halves come from the previous layer's post-MLP fused add+RMSNorm, which writes its normalised output as two
-half-batch tensors (tt/decoder_fusion.py). The decoder still reshapes the attention input and hands it to the
+The chunks come from the previous layer's post-MLP fused add+RMSNorm, which writes its normalised output as that many
+batch-chunk tensors (tt/decoder_fusion.py). The decoder still reshapes the attention input and hands it to the
 attention module as one tensor, so the next layer's ``attention_norm`` returns a never-written DRAM stand-in of the
 full shape instead, registered here against the halves; the attention (tt/attention.py) looks its input up and, if it
 is a stand-in, runs the chunks inside its QKV matmul call.
@@ -17,7 +17,7 @@ import os
 
 import ttnn
 
-# stand-in buffer address -> (stand-in tensor, (first half, second half))
+# stand-in buffer address -> (stand-in tensor, (chunk tensors, in batch order))
 _STANDINS = {}
 
 

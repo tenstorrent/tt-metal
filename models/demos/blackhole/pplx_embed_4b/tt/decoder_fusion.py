@@ -250,10 +250,10 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
             and os.getenv("QWEN_RESIDUAL_BFP8", "0") == "1"
         )
         wo = getattr(getattr(layer, "attention", None), "wo", None)
-        # QWEN_QKV_CHUNKS=2 (with the preallocation): the output is two half-batch tensors, one per QKV chunk of the
-        # next layer (tt/qkv_chunks.py); both are allocated before FF2, so both sit at the top of L1.
+        # QWEN_QKV_CHUNKS=2 / 4 (with the preallocation): the output is that many batch-chunk tensors, one per QKV
+        # chunk of the next layer (tt/qkv_chunks.py); all are allocated before FF2, so all sit at the top of L1.
         n_chunks = qkv_chunks.chunks() if want_prealloc else 1
-        if n_chunks not in (1, 2) or (n_chunks == 2 and (shape[-2] // 32) % 2):
+        if n_chunks not in (1, 2, 4) or (shape[-2] // 32) % n_chunks:
             n_chunks = 1
         pending = {}
         calls = [0]
@@ -323,7 +323,7 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
         def attn_norm_wrapper(h, *n_args, **n_kwargs):
             hit = stash.pop(id(h), None)
             if hit is not None and hit[0] is h:
-                if isinstance(hit[1], tuple):  # two half-batch outputs: the attention runs its QKV in chunks
+                if isinstance(hit[1], tuple):  # batch-chunk outputs: the attention runs its QKV in chunks
                     return qkv_chunks.register(hit[1], list(h.padded_shape), hit[1][0].dtype, h.device())
                 return hit[1]
             return orig_attn_norm(h, *n_args, **n_kwargs)
@@ -358,9 +358,9 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
                 alloc = lambda shp: ttnn.allocate_tensor_on_device(
                     ttnn.Shape(shp), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, x.device(), out_mc
                 )
-                if n_chunks == 2:
-                    half = shape[:-2] + [shape[-2] // 2, shape[-1]]
-                    prealloc["n"] = (alloc(half), alloc(half))
+                if n_chunks > 1:
+                    part = shape[:-2] + [shape[-2] // n_chunks, shape[-1]]
+                    prealloc["n"] = tuple(alloc(part) for _ in range(n_chunks))
                 else:
                     prealloc["n"] = alloc(shape)
 

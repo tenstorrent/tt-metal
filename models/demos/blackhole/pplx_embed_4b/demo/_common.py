@@ -392,6 +392,28 @@ WORKLOAD_CONFIGS = {
 }
 
 
+# The firmware power cap below is applied for the two checkpoints this stack serves and for nothing else.
+_TDP_MODELS = ("pplx-embed", "qwen3-embedding")
+
+
+def _apply_tdp_limit() -> None:
+    """Firmware power cap for this model: ``QWEN_TDP_LIMIT_WATTS`` (default 160 W; the board default is 130 W).
+
+    The fused kernels are power-limited from bs 8 up at 130 W (settled clock ~1.0-1.1 GHz); 160 W lifts the settled
+    clock to ~1.2-1.35 GHz. DP=32 per-chip median at 130 / 160 / 190 W: bs1 17.0 / 15.7 / 15.5 ms, bs8 99.3 / 89.6 /
+    81.3, bs16 190.1 / 172.0 / 158.0, bs32 389.6 / 336.0 / 311.2. tt-metal hands the cap to the firmware when the
+    device opens and it stays on the chip until a reset. ``QWEN_TDP_LIMIT_WATTS=0`` restores the board default, an
+    empty value leaves the firmware limit alone, and an explicit ``TT_METAL_TDP_LIMIT_WATTS`` always wins. Any other
+    ``HF_MODEL`` is left untouched.
+    """
+    model = os.getenv("HF_MODEL", MODEL_NAME).lower()
+    if not any(name in model for name in _TDP_MODELS):
+        return
+    watts = os.getenv("QWEN_TDP_LIMIT_WATTS", "160").strip()
+    if watts:
+        os.environ.setdefault("TT_METAL_TDP_LIMIT_WATTS", watts)
+
+
 def _model_is_bidirectional() -> bool:
     """pplx-embed is a bidirectional Qwen3-4B; Qwen3-Embedding-4B (same backbone) is causal."""
     return "pplx" in os.getenv("HF_MODEL", MODEL_NAME).lower()
@@ -407,6 +429,7 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # Attention direction follows the checkpoint: causal for Qwen3-Embedding-4B, bidirectional for pplx-embed.
     if not _model_is_bidirectional():
         os.environ.setdefault("QWEN_SDPA_CAUSAL", "1")
+    _apply_tdp_limit()
     cfg = WORKLOAD_CONFIGS.get((batch_size, seq_len))
     if cfg is None:
         activation_bytes = batch_size * seq_len * HIDDEN_DIM * 2
@@ -488,13 +511,14 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # (tt/qkv_chunks.py): the add writes its output as two preallocated half-batch tensors at the top of L1, each
     # chunk's QKV output goes to L1 and its heads op (v3) writes Q / K / V into full-batch tensors at a batch offset;
     # layer 0 (input from the embedding) runs unchunked. bs32: 369.1 / 433.3 -> 362.2 / 430.4 ms (3 alternating
-    # rounds, chip 0; the settled clock drops ~10 MHz), STS-B 0.8146 unchanged (NEGATIVE_RESULTS 56). Opt out:
-    # QWEN_FUSED_ADD_NORM_PREALLOC=0 (bs16) / QWEN_QKV_CHUNKS=1 (bs32).
+    # rounds, chip 0; the settled clock drops ~10 MHz), STS-B 0.8146 unchanged (NEGATIVE_RESULTS 56). Four quarter-batch
+    # chunks (the default since NEGATIVE_RESULTS 66) leave room for K / V in L1 (QWEN_HEADS_KV_L1 below). Opt out:
+    # QWEN_FUSED_ADD_NORM_PREALLOC=0 (bs16) / QWEN_QKV_CHUNKS=2 or 1 (bs32).
     if batch_size == 16 and seq_len == 512:
         os.environ.setdefault("QWEN_FUSED_ADD_NORM_PREALLOC", "1")
     if batch_size == 32 and seq_len == 512:
-        os.environ.setdefault("QWEN_QKV_CHUNKS", "2")
-        if os.getenv("QWEN_QKV_CHUNKS") == "2":
+        os.environ.setdefault("QWEN_QKV_CHUNKS", "4")
+        if os.getenv("QWEN_QKV_CHUNKS") in ("2", "4"):
             os.environ.setdefault("QWEN_FUSED_ADD_NORM_PREALLOC", "1")
     # Batched ISL 512: the fused add+RMSNorm's short-lived operands live in L1 interleaved instead of DRAM: its b (the
     # WO / FF2 outputs) and both norms' outputs (read by QKV / FF1+FF3), and at bs8 the post-attention residual sum (add
@@ -519,6 +543,16 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     if batch_size in (8, 16, 32) and seq_len == 512 and os.getenv("QWEN_SDPA_REUSE_KV", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_REUSE_KV", "1")
         os.environ.setdefault("QWEN_SDPA_REUSE_Q_CHUNK", "128")
+    # bs8 / bs16 (ISL 512): the heads op writes K / V to L1 interleaved (Q stays in DRAM), so reuse_kv SDPA reads them
+    # from L1. Standalone SDPA per call: bs8 237.0 -> 201.2 us, bs16 355.8 -> 308.7 (bench_sdpa_bs16_ablate.py <bs> l1;
+    # Q or the output in L1 add little on top). sustained_run.sh, 3 alternating rounds, cold / sustained (chips 0 / 1): bs8
+    # 78.3 / 97.2 -> 77.0 / 97.2 ms (the settled clock drops ~20 MHz), bs16 145.6 / 192.6 -> 144.5 / 191.5 ms; STS-B
+    # embeddings bit-identical at both. bs32's K / V (297 KB per core) fit only beside quarter-batch QKV chunks
+    # (QWEN_QKV_CHUNKS=4, above; with two half-batch chunks they clash with the first chunk's QKV matmul): SDPA per
+    # layer 549 -> 499 us, device replay -1.1 ms, cold -0.7 / -1.5 ms on two chips (NEGATIVE_RESULTS 66).
+    # Opt out: QWEN_HEADS_KV_L1=0.
+    if (batch_size in (8, 16) or (batch_size == 32 and os.getenv("QWEN_QKV_CHUNKS") == "4")) and seq_len == 512:
+        os.environ.setdefault("QWEN_HEADS_KV_L1", "1")
     # bs1 SDPA: q_chunk 256 doubles the work units (32 -> 64) so the 8x8 grid is full; k stays 256.
     # Standalone at the model's config (LoFi, fp32 acc off = streaming kernel, exp approx, bfp8
     # Q/K/V in L1): q512/k256 79.1 us -> q256/k256 55.0 us (-30%); q256/k512 71.5, q128/k128 72.2,

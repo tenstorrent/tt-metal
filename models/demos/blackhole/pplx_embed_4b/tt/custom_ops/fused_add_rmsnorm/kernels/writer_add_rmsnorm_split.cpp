@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Row-split add+RMSNorm writer: writes the sum slice, exchanges this core's partial mean-square with the
 // other cores of its row (NoC write into slot k of their CB 8 + semaphore increment), then writes the
-// normalised slice. The normalised output can be split by rows over two tensors: tile-rows [0, split_row) go to
-// the first, [split_row, rows) to the second at row - split_row (split_row = 0xFFFFFFFF: one tensor).
+// normalised slice. The normalised output can be split by rows over up to four tensors of split_row tile-rows each:
+// row goes to part row / split_row at row % split_row (split_row = 0xFFFFFFFF: one tensor).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -22,14 +22,17 @@ void kernel_main() {
     constexpr uint32_t R = get_compile_time_arg_val(2);
     constexpr uint32_t SEM_ID = get_compile_time_arg_val(3);
     const uint32_t split_row = get_arg_val<uint32_t>(6 + 2 * R);
-    const uint32_t out2_addr = get_arg_val<uint32_t>(7 + 2 * R);
     constexpr auto s_args = TensorAccessorArgs<4>();
     constexpr auto o_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
-    constexpr auto o2_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
+    constexpr auto o1_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
+    constexpr auto o2_args = TensorAccessorArgs<o1_args.next_compile_time_args_offset()>();
+    constexpr auto o3_args = TensorAccessorArgs<o2_args.next_compile_time_args_offset()>();
     constexpr uint32_t cb_sum = 16, cb_out = 17, cb_part = 7, cb_parts = 8;
     const auto ss = TensorAccessor(s_args, sum_addr);
     const auto so = TensorAccessor(o_args, out_addr);
-    const auto so2 = TensorAccessor(o2_args, out2_addr);
+    const auto so1 = TensorAccessor(o1_args, get_arg_val<uint32_t>(7 + 2 * R));
+    const auto so2 = TensorAccessor(o2_args, get_arg_val<uint32_t>(8 + 2 * R));
+    const auto so3 = TensorAccessor(o3_args, get_arg_val<uint32_t>(9 + 2 * R));
     const uint32_t ts = get_tile_size(cb_sum), to = get_tile_size(cb_out), tp = get_tile_size(cb_part);
     Noc noc;
     CircularBuffer cs(cb_sum), co(cb_out), cp(cb_part), cparts(cb_parts);
@@ -71,14 +74,17 @@ void kernel_main() {
 
         // 3. normalised slice
         co.wait_front(Wc);
-        if (row < split_row) {
-            for (uint32_t j = 0; j < Wc; ++j) {
-                noc.async_write(co, so, to, {.offset_bytes = j * to}, {.page_id = base + j});
-            }
-        } else {
-            const uint32_t base2 = (row - split_row) * Wt + k * Wc;
-            for (uint32_t j = 0; j < Wc; ++j) {
-                noc.async_write(co, so2, to, {.offset_bytes = j * to}, {.page_id = base2 + j});
+        const uint32_t part = row < split_row ? 0 : row / split_row;
+        const uint32_t base_p = part == 0 ? base : (row - part * split_row) * Wt + k * Wc;
+        for (uint32_t j = 0; j < Wc; ++j) {
+            if (part == 0) {
+                noc.async_write(co, so, to, {.offset_bytes = j * to}, {.page_id = base_p + j});
+            } else if (part == 1) {
+                noc.async_write(co, so1, to, {.offset_bytes = j * to}, {.page_id = base_p + j});
+            } else if (part == 2) {
+                noc.async_write(co, so2, to, {.offset_bytes = j * to}, {.page_id = base_p + j});
+            } else {
+                noc.async_write(co, so3, to, {.offset_bytes = j * to}, {.page_id = base_p + j});
             }
         }
         noc.async_write_barrier();
