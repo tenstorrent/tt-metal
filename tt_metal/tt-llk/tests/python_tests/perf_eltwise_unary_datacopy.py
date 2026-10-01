@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import Tilize
 from helpers.param_config import input_output_formats, parametrize
@@ -25,7 +26,9 @@ DATACOPY_BLOCK_PERF_FORMATS = input_output_formats(
     same=True,
 ) + [
     fmt
-    for fmt in input_output_formats([DataFormat.Bfp8_b, DataFormat.Float16_b, DataFormat.Float32])
+    for fmt in input_output_formats(
+        [DataFormat.Bfp8_b, DataFormat.Float16_b, DataFormat.Float32]
+    )
     if fmt.input_format != fmt.output_format
 ]
 
@@ -62,6 +65,7 @@ def test_perf_eltwise_unary_datacopy(
 
 
 @pytest.mark.perf
+@skip_for_wormhole
 @parametrize(
     formats=DATACOPY_BLOCK_PERF_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,

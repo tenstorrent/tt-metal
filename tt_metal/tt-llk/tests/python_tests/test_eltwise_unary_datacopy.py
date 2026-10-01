@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from conftest import skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
@@ -302,6 +303,7 @@ def test_eltwise_unary_datacopy_sub_byte_bfp(
     )
 
 
+@skip_for_wormhole
 @parametrize(**DATACOPY_BLOCK_SWEEP)
 def test_eltwise_unary_datacopy_block(
     formats,
@@ -315,6 +317,7 @@ def test_eltwise_unary_datacopy_block(
     )
 
 
+@skip_for_wormhole
 @parametrize(**DATACOPY_SUB_BYTE_BLOCK_SWEEP)
 def test_eltwise_unary_datacopy_sub_byte_bfp_block(
     formats,

@@ -25,7 +25,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-// UNPACK_BLOCK (driver template): one _llk_unpack_A_block_ call per DEST block instead of one _llk_unpack_A_ per tile
+// UNPACK_BLOCK (driver template): one _llk_unpack_A_block_ call per DEST block instead of one _llk_unpack_A_ per tile (Blackhole only)
 #ifndef UNPACK_BLOCK
 #define UNPACK_BLOCK 0
 #endif
@@ -88,7 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (!tilize_en)
                 {
-#if UNPACK_BLOCK
+#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
                     const std::uint32_t tile_stride_16B = (buffer_A[1] - buffer_A[0]) >> 4;
                     for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                     {
