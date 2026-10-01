@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -60,7 +61,7 @@ __attribute__((always_inline)) inline void restore_cached_row(const CachedSemaph
 // Handles the semaphores one after another with no loop: the recursion over I unrolls at compile
 // time into one block per semaphore.
 template <ProgrammableCoreType core_type, std::size_t N, std::size_t I = 0>
-__attribute__((always_inline)) inline void init_dm_local_cached(const CachedSemaphore (&sems)[N]) {
+__attribute__((always_inline)) inline void init_dm_local_cached(const std::array<CachedSemaphore, N>& sems) {
     if constexpr (I < N) {
         seed_cached_row<core_type>(sems[I]);
         init_dm_local_cached<core_type, N, I + 1>(sems);
@@ -68,7 +69,7 @@ __attribute__((always_inline)) inline void init_dm_local_cached(const CachedSema
 }
 
 template <std::size_t N, std::size_t I = 0>
-__attribute__((always_inline)) inline void finish_dm_local_cached(const CachedSemaphore (&sems)[N]) {
+__attribute__((always_inline)) inline void finish_dm_local_cached(const std::array<CachedSemaphore, N>& sems) {
     if constexpr (I < N) {
         restore_cached_row(sems[I]);
         finish_dm_local_cached<N, I + 1>(sems);

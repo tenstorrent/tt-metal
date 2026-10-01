@@ -183,6 +183,23 @@ void emit_programmatic_binding_token_getter(
     content << "}\n";
 }
 
+// Emits the list of cached semaphores this kernel binds: each one's id and how many harts on
+// this core use it. The list may be empty.
+void emit_cached_semaphore_list(ostream& os, const vector<SemBindingEntry>& entries) {
+    vector<string> cached_semaphore_entries;
+    for (const auto& entry : entries) {
+        if (entry.scope == SemScope::DM_LOCAL_CACHED) {
+            cached_semaphore_entries.push_back(fmt::format("{{{}u, {}u}}", entry.id, entry.total_binder_harts));
+        }
+    }
+    os << "namespace sem_internal {\n";
+    os << fmt::format(
+        "inline constexpr std::array<::sem_internal::CachedSemaphore, {}> kCachedSemaphores{{{{{}}}}};\n",
+        cached_semaphore_entries.size(),
+        fmt::join(cached_semaphore_entries, ", "));
+    os << "}  // namespace sem_internal\n";
+}
+
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
@@ -220,7 +237,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
-    // Gates the cached-semaphore list below.
+    // Gates TT_DM_CACHED_SEM_STUBS below.
     const bool has_cached_sem = std::any_of(
         sem_entries.begin(), sem_entries.end(), [](const auto& e) { return e.scope == SemScope::DM_LOCAL_CACHED; });
 
@@ -322,12 +339,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         // so it is safe on compute builds too.
         content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
     }
-    if (has_cached_sem) {
-        // Defines CachedSemaphore and the cached-pool entry/exit; the pool is Quasar DM-only.
-        content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-        content << "#include \"internal/tt-2xx/quasar/semaphore_cached_pool.h\"\n";
-        content << "#endif\n";
-    }
+    // Defines CachedSemaphore and the cached-pool entry/exit
+    // This is quasar + DM only feature.
+    content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
+    content << "#include \"internal/tt-2xx/quasar/semaphore_cached_pool.h\"\n";
+    content << "#endif\n";
 
     // This is included unconditionally for the `get_token_if_present()` helper, as it needs to see the full templated
     // definition of TensorBindingToken.
@@ -389,8 +405,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
     if (has_cached_sem) {
         content << "#define TT_DM_CACHED_SEM_STUBS 1\n";
-        tt::tt_metal::emit_cached_semaphore_list(content, sem_entries);
     }
+    content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
+    emit_cached_semaphore_list(content, sem_entries);
+    content << "#endif\n";
 
     // Emit Tensor bindings
     content << "namespace tensor {\n";
