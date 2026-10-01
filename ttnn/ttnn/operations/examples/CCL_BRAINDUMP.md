@@ -26,51 +26,81 @@ block). "Bank" only ever means a physical DRAM bank.
 
 ---
 
-## 1. [FABRIC] Fabric facts
+## 1. [FABRIC] The fabric itself
 
-1. **The receiving router writes each packet to its final address itself** (DRAM or L1 on its chip); there is no
-   receiver kernel. A receiver only needs a semaphore to learn data has landed. *code*
-2. **A fused write + atomic increment means "landed".** With `flush = true` the router waits until every
-   outstanding write on that receive channel is acknowledged (`NIU_MST_REQS_OUTSTANDING_ID == 0`) before issuing
-   the increment. So a counter value guarantees the data is in DRAM. *code:
-   `tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:214`, `flush_write_to_noc_pipeline:96`*
-3. **The rate cost of that wait depends on how often you do it.** The old reference says an increment on every
-   packet halves the rate (24.5 vs 46.4 GB/s per chip). One per outgoing shard (hundreds of packets) is not
-   measurable. *measured (earlier QuietBox runs) + derived*
-4. **`send_current_slot_non_blocking` writes payload then header from the worker's L1 over the NoC** and bumps
-   the slot pointer. Neither the header nor the source may change until `noc_async_writes_flushed()`. *code:
-   `edm_fabric_worker_adapters.hpp:353`*
-5. **Packet header pool on Blackhole: `NUM_PACKET_HEADERS = 6 × 2 × 2 = 24` per core, 12 per data-movement
-   RISC.** A sender using one header per chunk in flight (≤ 8) fits; nothing asserts the coupling. *code:
-   `tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h:167`*
-6. **The max payload is process-wide** (router config at mesh open). An op cannot pick it: the model does. GLM
-   uses 6144 B because it is tied to the MoE token migration (`GLM53Config.FABRIC_PAYLOAD_SIZE = EMB_SIZE`, "must
-   stay in sync with migration code"). A CCL has to be good at the payload it is given. *code*
-7. **A page larger than the payload must be split by the sender** into several packets (the router will
-   overflow its slot otherwise). `high_bw_all_gather` does this; `fabric_all_gather` did not until the Codex
-   review. *code + Codex finding*
-8. **Placement API exists, no probe kernel needed:** `tt_fabric::get_forwarding_eth_core(src, dst, link)` →
-   `experimental::Device::get_closest_worker_to_eth_core(device, eth, NOC_1)` →
-   `Device::get_worker_noc_hop_distance(device, a, b, NOC_1)`. The old reference's probe-and-map-harvesting
-   recipe is obsolete. *code: `fabric_all_gather_factory.cpp:440`*
-9. **All Blackhole Ethernet cores are in physical row 1** (columns are harvested, rows are not). So the cores
-   nearest the routers are the rows right below; a CCL confined to a sub-device should get **rows**, not a column
-   strip. *measured: gather on the two rows below = full-grid speed; on a 3-column strip 1.7–2× slower (QuietBox)*
-10. **NoC routing:** NoC0 goes +x then +y, NoC1 −y then −x, both wrapping. Placement measures NoC1 hops because the
-    sender talks to its router over NoC1. *code + fact*
-11. **Link peaks:** QuietBox 48.5 GB/s per link direction (bare one-hop stream, FABRIC_1D, 14336 B). Galaxy ~27
-    GB/s (user-stated; `high_bw_all_gather`'s own Galaxy gate uses ≥ 26.9, which is a *derived* busiest-link
-    number of an unbalanced ring, not a per-link measurement). Galaxy has 2 links per edge. *measured / stated*
-12. **Same-address guarantee:** a mesh tensor is allocated at the same address on every chip, and a global
-    semaphore at the same L1 address on every core of every chip. So a sender can compute the destination address
-    with its own chip's accessor and put it in the header. *code (relied on throughout)*
-13. **Routing in the header is set once per header:** 2D routes by destination `(mesh_id, chip_id)`, 1D by hop
-    count. One header ring per destination, routed at setup. *code: `fabric_all_gather_sender.cpp:26`*
-14. **Payload size on the Galaxy barely matters above 6 KiB for these sizes:** 6144 → 9216 / 13824 B gave only
-    +3–4% on the GLM KV gather. *measured: CI run 36790983426*
-15. **A fused increment's NoC address uses the destination's virtual coordinates;** data addresses were built with
-    `noc = 0` in the accessor while the increment used `noc_index`. Works on Blackhole (virtual coordinates are the
-    same on both NoCs); worth confirming before Wormhole. *code + hypothesis*
+Only the fabric: what it is, how a worker uses it, what the routers do, and its limits. Nothing about any particular
+collective. Numbers come from bare one-hop streams (the `fabric_link_ceiling` example) or from the fabric code.
+
+### What it is
+F1. **A worker hands a packet (header + payload) to a fabric router over the NoC; the router runs on an Ethernet
+    core of the same chip and sends it over its link.** One Ethernet core serves one link, full duplex: the two
+    directions of a link are independent. *code*
+F2. **The receiving router writes the payload straight to its final NoC address** (DRAM or L1) on its own chip, on
+    its local NoC. There is no receiver kernel; a receiver learns about arrivals only through semaphores that packets
+    increment. *code: `fabric_edm_packet_transmission.hpp`*
+F3. **Command types a packet can carry** (router dispatch): unicast write, unicast atomic increment (header only),
+    inline 4-byte write, fused write + atomic increment, scatter write (2–4 destinations, `NOC_SCATTER_WRITE_MAX_CHUNKS
+    = 4`), multicast write / increment. *code: `fabric_edm_packet_transmission.hpp:177-323`*
+F4. **Routing planes = link indices.** Link `l` of every edge forms plane `l`; a connection made with link index `l`
+    stays on plane `l`. Spreading over several links means one connection per link.
+    `get_forwarding_link_indices(src, dst)` lists the links a hop can use under the active config (empty = not a
+    direct route). *code + TT-Fabric-Architecture §2.2.2*
+F5. **Routing fields live in the header and are set once per header:** 2D configs route by destination
+    `(mesh_id, chip_id)`, 1D configs by hop count. A header reused for the same destination needs no re-routing. *code*
+
+### How a worker uses it
+F6. **One producer per router sender channel:** a connection (`WorkerToFabricEdmSender`, opened with a handshake,
+    closed at the end) belongs to one core. A mux gives several cores access to one channel; it adds fan-in, not
+    bandwidth. *code + fabric docs*
+F7. **Flow control is by slots:** `wait_for_empty_write_slot()` spins until the router has a free buffer slot;
+    `send_current_slot_non_blocking(payload, size, header)` writes the payload and then the header into that slot over
+    the NoC and advances the slot pointer. *code: `edm_fabric_worker_adapters.hpp:305,353,761`*
+F8. **Non-blocking means the source is still being read:** neither the header nor the payload buffer may change until
+    `noc_async_writes_flushed()` (the writes have left L1). Keep a ring of headers and flush only before reuse. *code*
+F9. **Packet header pool (Blackhole): 24 headers per core, 12 per data-movement RISC** (`NUM_PACKET_HEADERS = 6 × 2 ×
+    2`, 144 B each). That caps how many packets one RISC can have in flight with distinct headers. *code:
+    `dev_mem_map.h:167`*
+F10. **The max payload is process-wide** (router config, fixed when the mesh opens). Hardware maximum: Blackhole
+    15232 B, Wormhole 7616 B. Whoever opens the mesh (usually the model) picks it; kernels must work with what they get.
+    A page larger than the payload has to be split into several packets by the sender. *code:
+    `tt_metal/fabric/erisc_datamover_builder.hpp:477`*
+
+### What the routers do
+F11. **A fused write + increment means "landed":** with `flush = true` the receiving router waits until every
+    outstanding write on that receive channel is acknowledged, then issues the increment. A semaphore value therefore
+    guarantees the data before it is in memory. *code: `fabric_edm_packet_transmission.hpp:96,214`*
+F12. **That wait costs throughput when frequent:** an increment on every packet halves a one-hop stream (24.5 vs
+    46.4 GB/s per chip, 2 chips, 1 link); on one packet in hundreds it is not measurable. *measured (fabric examples,
+    QuietBox)*
+F13. **The router cost is per packet, not per byte:** throughput is packet-rate bound below ~5 KiB payloads; full
+    packets are required to approach the link rate. *measured (fabric microbenchmark goldens + examples)*
+
+### Limits and placement
+F14. **Link peaks:** QuietBox ~48.5 GB/s per link direction (bare one-hop stream, FABRIC_1D, 14336 B payload); Galaxy
+    ~27 GB/s per link direction, 2 links per edge. *measured (QuietBox) / stated (Galaxy)*
+F15. **All Blackhole Ethernet cores sit in physical row 1** (Tensix columns are harvested, rows are not), so the worker
+    cores closest to the routers are the rows right below them. *fact*
+F16. **Finding a link's router core needs no probing:** `tt_fabric::get_forwarding_eth_core(src, dst, link)` →
+    `experimental::Device::get_closest_worker_to_eth_core(device, eth, NOC_1)`, and
+    `Device::get_worker_noc_hop_distance(device, a, b, NOC_1)` for distances. *code*
+F17. **NoC directions:** NoC0 routes +x then +y, NoC1 −y then −x, both wrapping. A sender talks to its router over the
+    NoC it was configured with (NoC1 in practice), so placement distance should be measured on that NoC. *fact*
+F18. **Configs:** FABRIC_1D (hop count) is fastest for one-hop traffic; in the 2D family TORUS_XY was the fastest
+    variant (~12% above the others on the QuietBox); `TORUS_Y` wraps mesh axis 0, `TORUS_X` axis 1. One config per
+    process. *measured / code*
+
+### How a CCL touches the fabric (interaction only)
+I1. **Addresses are computed by the sender, valid on the receiver:** mesh tensors and global semaphores sit at the same
+    address on every chip (and, for semaphores, every core), so a sender builds the destination address with its own
+    chip's accessor and puts it in the header. *code (TTNN mesh allocation)*
+I2. **Signal per unit of work, not per packet:** because of F11–F12, a CCL should put its arrival increment on the last
+    packet of a whole unit (a shard, a batch), and the receiver waits for a count of units.
+I3. **One sending core per (link, direction), placed by F16 nearest its router;** when a CCL is confined to part of the
+    grid (a sub-device), give it rows next to the Ethernet row (F15), not a column strip.
+I4. **In-flight packets per RISC are capped by the header pool (F9);** a CCL batching N packets before a flush needs
+    N ≤ 12 headers (currently implicit).
+I5. **The payload is given, not chosen (F10):** a CCL must handle pages larger than the payload and must be measured at
+    the payload the model uses.
 
 ## 2. [CCL] Algorithm
 
@@ -137,6 +167,9 @@ block). "Bank" only ever means a physical DRAM bank.
     between input, local output and remote output. *derived, unmeasured*
 35. **Walk order rotates across a worker's lanes** (outer slice → row in lane → owned lanes), so consecutive DRAM
     reads hit different banks. *code*
+35b. **Placement evidence (fabric_all_gather, QuietBox):** the KV gather on the two rows below the Ethernet row ran at
+    full-grid speed; on a 3-column strip it was 1.7–2× slower; `high_bw_all_gather` was poor on one row and fine on
+    two. *measured*
 36. **Short outer slices shrink chunks:** a chunk can't cross an outer slice (the next slice is another rank's
     region in the output), so a chunk is ≤ ceil(pages_per_outer_slice / 8) pages. Width-32 tile gathers (one tile
     per tile row) have only lane 0: one worker per direction does everything, 2 KiB packets. Misalignment itself
@@ -237,6 +270,11 @@ block). "Bank" only ever means a physical DRAM bank.
     GLM KV bf16 56k 417 vs 844 µs (2.02×), 517k 3374 vs 7621 µs; overlap window 56k 568 vs 933 µs, 517k 4455 vs 7996
     µs (top-k bound with ours, gather bound with high_bw). QuietBox: KV 1728 rows ND 65–67 µs vs high_bw 83 µs. *measured*
 
+68b. **Galaxy link peak as used in reports:** 27 GB/s (user-stated). `high_bw_all_gather`'s own Galaxy gate uses ≥ 26.9,
+    which is a derived busiest-link figure of its unbalanced ring, not a per-link measurement. *stated / code*
+68c. **Payload sweep on the Galaxy GLM KV gather:** 6144 → 9216 / 13824 B gave only +3–4%. *measured: CI run
+    36790983426*
+
 ## 6. [PROCESS]
 
 69. **An independent reviewer finds real bugs:** two Codex rounds raised 9 findings, 8 acted on: payload overflow,
@@ -272,4 +310,5 @@ block). "Bank" only ever means a physical DRAM bank.
 79. Assert the header-pool coupling (`chunks_per_cb_batch ≤ headers per RISC`).
 80. Reword the Kimi perf baseline comments (they credit this op; the gain is #56108).
 81. Bank-aware lane assignment: measurable or not?
-82. Do the old reference's rules 4 (every-8th increment) and 6 (probe placement) get replaced by items 2–3 and 8–9?
+82. Do the old reference's rules 4 (every-8th increment) and 6 (probe placement) get replaced by F11–F12 / I2 and
+    F15–F16 / I3? Rule 9 (bank-run chunks) is a CCL decision and belongs in the CCL document.
