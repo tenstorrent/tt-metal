@@ -6,12 +6,15 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/config.hpp"
+#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
@@ -1237,4 +1240,88 @@ TEST(CclTopologyUtils, StrictModeThrowsWhereWarnOnlyReturnsNullopt) {
     EXPECT_THROW(topo::reduce_scatter_output_topology(fewer_shards, 1, mesh, kRank, 3), std::runtime_error);
     const auto message = message_of([&] { topo::all_reduce_output_topology(fewer_shards, 1, mesh, kRank); });
     EXPECT_NE(message.find("row-major"), std::string::npos) << message;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The topology-level overload of the framework's union default (compute_output_placements_and_shape). The fused
+// collective + matmul ops label their matmul output with the union of the collective's result label and the weight
+// (and bias) labels through this overload, so its rule has to be the one launch() applies to plain ops: first Shard
+// on a mesh axis wins, a tensor dim already claimed by another axis reads Replicate, lower-rank sharded labels are
+// dropped, the distribution shape is the per-axis maximum.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+using UnionPlacements = std::vector<TopoPlacement>;
+
+std::pair<UnionPlacements, MeshShape> union_of(const std::vector<TensorTopology>& labels) {
+    std::vector<std::reference_wrapper<const TensorTopology>> refs(labels.begin(), labels.end());
+    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(refs);
+    return {UnionPlacements(placements.begin(), placements.end()), shape};
+}
+
+}  // namespace
+
+TEST(TopologyUnion, FirstShardOnAnAxisWinsAndAClaimedDimReadsReplicate) {
+    const MeshShape mesh(2, 4);
+
+    // A reduce_scatter result [Shard{2}, Shard{3}] with a weight [Replicate, Shard{3}]: the weight's Shard{3} is the
+    // dim axis 1 already holds, so nothing changes.
+    {
+        const auto [placements, shape] =
+            union_of({nd_label(mesh, {TopoShard{2}, TopoShard{3}}), nd_label(mesh, {TopoReplicate{}, TopoShard{3}})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{2}, TopoShard{3}}));
+    }
+    // Two labels sharding different dims on the same axis: the earliest-seen Shard is kept; an axis only the second
+    // label shards takes that label's Shard.
+    {
+        const auto [placements, shape] =
+            union_of({nd_label(mesh, {TopoShard{2}, TopoReplicate{}}), nd_label(mesh, {TopoShard{3}, TopoShard{1}})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{2}, TopoShard{1}}));
+    }
+    // A dim already claimed on one axis is not sharded again on another: the second label's Shard{3} on axis 0 is
+    // ignored because axis 1 already shards dim 3, so axis 0 stays Replicate.
+    {
+        const auto [placements, shape] = union_of(
+            {nd_label(mesh, {TopoReplicate{}, TopoShard{3}}), nd_label(mesh, {TopoShard{3}, TopoReplicate{}})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoReplicate{}, TopoShard{3}}));
+    }
+}
+
+TEST(TopologyUnion, LowerRankShardedLabelsAreDroppedAndStridesAreTheMaximum) {
+    const MeshShape mesh(2, 4);
+
+    // An N-D all_gather result with a collapsed 1-D weight label: the collapsed label has the lower distribution
+    // rank, so it does not contribute (the union default drops it the same way).
+    {
+        const auto [placements, shape] =
+            union_of({nd_label(mesh, {TopoShard{2}, TopoReplicate{}}), collapsed_label(mesh, TopoShard{3})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{2}, TopoReplicate{}}));
+    }
+    // A fully-replicated label never decides the rank while something is sharded, whichever order they come in.
+    {
+        const auto [placements, shape] =
+            union_of({collapsed_label(mesh, TopoReplicate{}), nd_label(mesh, {TopoShard{3}, TopoReplicate{}})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{3}, TopoReplicate{}}));
+    }
+    // Nothing sharded: the first label's rank, all Replicate.
+    {
+        const auto [placements, shape] =
+            union_of({collapsed_label(mesh, TopoReplicate{}), nd_label(mesh, {TopoReplicate{}, TopoReplicate{}})});
+        EXPECT_EQ(shape, MeshShape(8));
+        EXPECT_EQ(placements, (UnionPlacements{TopoReplicate{}}));
+    }
+    // Same rank, different distribution shapes: the result's shape is the per-axis maximum.
+    {
+        const auto [placements, shape] = union_of(
+            {nd_label(MeshShape(1, 8), {TopoReplicate{}, TopoShard{3}}),
+             nd_label(MeshShape(2, 4), {TopoShard{2}, TopoReplicate{}})});
+        EXPECT_EQ(shape, MeshShape(2, 8));
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{2}, TopoShard{3}}));
+    }
 }
