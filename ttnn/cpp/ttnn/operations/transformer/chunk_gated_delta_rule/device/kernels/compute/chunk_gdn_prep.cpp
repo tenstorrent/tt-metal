@@ -38,6 +38,8 @@ constexpr uint32_t cb_dl = cb_vnew;
 // WY-inverse quadrant masks (3 tiles: 0=Qtl, 1=Qbr, 2=Q10). Reuses the cb_u slot (unused in
 // the stable-form prep); the reader loads them once. Used only by invert_block.
 constexpr uint32_t cb_mask = cb_u;
+// k_dec before its transpose (ck tiles). Reuses the scan's cb_out slot (no o output in prep).
+constexpr uint32_t cb_kdec = cb_out;
 
 constexpr GdnPrepCbs CBS{
     .q = cb_q,
@@ -70,7 +72,8 @@ constexpr GdnPrepCbs CBS{
     .scr3 = cb_scr3,
     .s3 = cb_s3,
     .dl = cb_dl,
-    .mask = cb_mask};
+    .mask = cb_mask,
+    .kdec = cb_kdec};
 
 }  // namespace
 
