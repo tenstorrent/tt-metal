@@ -143,7 +143,7 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
             semaphore.setId(semaphore_data.id());
             semaphore.setCoreType(
                 semaphore_data.core_type() == CoreType::ETH ? rpc::SemaphoreCoreType::ETH
-                                                            : rpc::SemaphoreCoreType::WORKER);
+                                                            : rpc::SemaphoreCoreType::TENSIX);
             semaphore.setInitialValue(semaphore_data.initial_value());
             semaphore.setOffset(semaphore_data.offset());
             const auto core_ranges = semaphore_data.core_range_set();

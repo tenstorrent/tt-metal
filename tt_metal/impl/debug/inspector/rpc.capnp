@@ -37,7 +37,7 @@ struct LogicalCoreRange {
 }
 
 enum SemaphoreCoreType {
-    worker @0;
+    tensix @0;
     eth @1;
 }
 

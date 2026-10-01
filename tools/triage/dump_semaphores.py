@@ -42,9 +42,6 @@ script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "inspector_data", "metal_device_id_mapping"],
 )
 
-# Block type -> (ProgrammableCoreType index into kernel_config.sem_offset, semaphore core type).
-BLOCKS = {"tensix": (0, "worker"), "active_eth": (1, "eth"), "idle_eth": (2, "eth")}
-
 
 @dataclass
 class SemaphoreRow:
@@ -83,14 +80,13 @@ def global_semaphores(inspector_data, id_mapping, run_checks) -> list[tuple[int,
 
 def program_rows(location: OnChipCoordinate, dispatcher_data: DispatcherData, by_kernel) -> list[SemaphoreRow]:
     core = dispatcher_data.get_cached_core_data(location, location.noc_block.risc_names[0])
-    if core.go_message == "DONE" or core.mailboxes is None or core.block_type not in BLOCKS:
+    if core.go_message == "DONE" or core.mailboxes is None:
         return []
-    sem_offset_index, core_type = BLOCKS[core.block_type]
     kernel_config = core.mailboxes.launch[core.launch_msg_rd_ptr].kernel_config
     kernel_ids = [int(kernel_config.watcher_kernel_ids[i]) for i in range(len(kernel_config.watcher_kernel_ids))]
     semaphores: list = next((by_kernel[k] for k in kernel_ids if k in by_kernel), [])
-    base = core.kernel_config_base + int(kernel_config.sem_offset[sem_offset_index])
-    (x, y), _ = location.to("logical")
+    base = core.kernel_config_base + int(kernel_config.sem_offset[core.programmable_core_type])
+    (x, y), core_type = location.to("logical")
     rows = []
     for s in semaphores:
         if s.coreType != core_type or not covers(s.coreRanges, x, y):
