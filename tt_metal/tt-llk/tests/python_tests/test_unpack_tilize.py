@@ -110,8 +110,7 @@ def test_unpack_tilize_int8(
     )
 
 
-# Block unpack of each block row (one _llk_unpack_tilize_block_ call per row): the whole-tile SrcA path, the 8-bit
-# path and the unpack-to-dest path (both fall back to one call per tile inside the block call).
+# The whole-tile SrcA path, the 8-bit path and the unpack-to-dest path (the latter two fall back to one call per tile).
 @parametrize(
     formats=input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32], same=True

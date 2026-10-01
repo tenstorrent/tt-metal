@@ -16,7 +16,7 @@
 #include "perf.h"
 #include "profiler.h"
 
-// UNPACK_BLOCK (driver template UNPACK_BLOCK): one block call per block row instead of one call per tile
+// UNPACK_BLOCK (driver template): one block call per block row instead of one call per tile
 #ifndef UNPACK_BLOCK
 #define UNPACK_BLOCK 0
 #endif

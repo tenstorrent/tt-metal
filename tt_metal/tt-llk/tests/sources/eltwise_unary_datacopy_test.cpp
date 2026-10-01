@@ -25,8 +25,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-// UNPACK_BLOCK (driver template UNPACK_BLOCK): unpack every DEST block with one _llk_unpack_A_block_ call
-// instead of one _llk_unpack_A_ call per tile. Only the non-tilize path has a block form.
+// UNPACK_BLOCK (driver template): one _llk_unpack_A_block_ call per DEST block instead of one _llk_unpack_A_ per tile
 #ifndef UNPACK_BLOCK
 #define UNPACK_BLOCK 0
 #endif
@@ -90,7 +89,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if constexpr (!tilize_en)
                 {
 #if UNPACK_BLOCK
-                    // The tiles of the operand are one tile size apart in L1; one block call per DEST block
                     const std::uint32_t tile_stride_16B = (buffer_A[1] - buffer_A[0]) >> 4;
                     for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                     {

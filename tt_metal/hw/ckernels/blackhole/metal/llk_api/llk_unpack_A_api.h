@@ -145,8 +145,7 @@ inline void llk_unpack_A_block(
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
-    // The plain SrcA path unpacks the block from one context acquire (the tiles of a CB are one page apart); the LLK
-    // falls back to one call per tile for unpack to dest and when the last init did not record the block body.
+    // Plain SrcA path: one context acquire per block (the LLK falls back to one call per tile without a block body).
     if constexpr ((BType == BroadcastType::NONE) && !acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) {
         if (ntiles > 0) {
             WAYPOINT("UPAW");

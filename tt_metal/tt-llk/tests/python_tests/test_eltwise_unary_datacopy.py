@@ -129,8 +129,7 @@ DATACOPY_SUB_BYTE_SWEEP = dict(
     input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
 )
 
-# Block unpack (one _llk_unpack_A_block_ call per DEST block instead of one _llk_unpack_A_ per tile): the plain copy
-# only, at the shape whose DEST blocks are full (8 tiles at 16 bit, 4 at 32 bit). Shared with perf_eltwise_unary_datacopy.py.
+# The shape whose DEST blocks are full (8 tiles at 16 bit, 4 at 32 bit). Shared with perf_eltwise_unary_datacopy.py.
 DATACOPY_BLOCK_SWEEP = dict(
     formats=DATACOPY_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
@@ -230,7 +229,7 @@ def _run_unary_datacopy_test(
         "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(tilize),
-            UNPACK_BLOCK(unpack_block),  # always present: one report schema for the per tile and the block rows
+            UNPACK_BLOCK(unpack_block),  # always present: one report schema
         ],
         "runtimes": [
             DEST_INDEX(0),

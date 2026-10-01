@@ -21,7 +21,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-// UNPACK_BLOCK (driver template UNPACK_BLOCK): one block call per block row instead of one call per tile
+// UNPACK_BLOCK (driver template): one block call per block row instead of one call per tile
 #ifndef UNPACK_BLOCK
 #define UNPACK_BLOCK 0
 #endif

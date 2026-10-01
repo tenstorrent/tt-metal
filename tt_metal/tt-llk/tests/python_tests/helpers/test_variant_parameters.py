@@ -745,9 +745,9 @@ class TILIZE(TemplateParameter):
 
 @dataclass
 class UNPACK_BLOCK(TemplateParameter):
-    """Unpack a DEST block (datacopy) or a block row (tilize) with one block call instead of one call per tile.
+    """One block call per DEST block (datacopy) or block row (tilize).
 
-    Emitted as a macro rather than a constexpr so a kernel can default it to 0 when a driver does not pass it.
+    A macro, so a kernel can default it to 0 when a driver does not pass it.
     """
 
     unpack_block: bool = False

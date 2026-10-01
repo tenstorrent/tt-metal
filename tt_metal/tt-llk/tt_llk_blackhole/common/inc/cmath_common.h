@@ -241,13 +241,8 @@ inline void set_math_semaphores()
     t6_semaphore_post<p_stall::MATH | p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
 }
 
-// Publish the DEST slot of the next unpack-to-dest tile to the unpack thread. The post leaves this thread's
-// instruction stream only after every earlier math and SFPU instruction has completed (the section acquire before
-// this tile included), and the unpack thread waits for it in its own stream before the MOP that writes DEST
-// (wait_for_dest_available). The wait on max (the firmware and the test harness initialise the semaphore with
-// max 1) is a second guard against publishing a second tile before the unpack thread has consumed the first; the
-// order of the two threads' waits already keeps the count between 0 and 1. The DEST address itself travels
-// through the mailbox, whose write is held by the hardware while its four entries are full.
+// Publish the DEST slot of the next unpack-to-dest tile: the post leaves this thread's stream once every earlier math and SFPU
+// instruction has completed, and the unpack thread waits for it before the MOP that writes DEST (wait_for_dest_available).
 inline void math_unpack_to_dest_math_ready()
 {
     t6_semaphore_wait_on_max<p_stall::STALL_SYNC>(semaphore::MATH_DONE);

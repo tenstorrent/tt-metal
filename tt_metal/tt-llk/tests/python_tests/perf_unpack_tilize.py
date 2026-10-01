@@ -75,9 +75,7 @@ def test_perf_unpack_tilize_int(
     )
 
 
-# Block unpack of a block row (one _llk_unpack_tilize_block_ call per row instead of one call per tile) on the
-# whole-tile SrcA path; Float32 to Float32 stays on the per tile path inside the block call (lossless tilize
-# unpacks to dest) and is kept as the check that the fallback costs nothing.
+# Float32 to Float32 unpacks to dest and stays per tile inside the block call: the check that the fallback costs nothing.
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16], same=True)
@@ -116,7 +114,7 @@ def _perf_unpack_tilize(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[UNPACK_BLOCK(unpack_block)],  # always present: one report schema for the per tile and the block rows
+        templates=[UNPACK_BLOCK(unpack_block)],  # always present: one report schema
         runtimes=[
             generate_input_dim(dimensions, dimensions),
             TILE_COUNT(tile_count),

@@ -188,9 +188,7 @@ inline void reset_config_context()
     TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
 }
 
-// Same as switch_config_context, but from the caller's copy of the context it used. A call that keeps the context
-// in a local does not reload the global after its volatile config and semaphore stores, which the compiler would
-// otherwise force (the stores go through pointers it cannot prove distinct from the global).
+// switch_config_context from the caller's copy of the context, so the global is not reloaded after the volatile stores.
 inline void switch_config_context_from(const std::uint32_t context_used)
 {
     unp_cfg_context = 1 - context_used;
@@ -204,10 +202,8 @@ inline void switch_config_context_from(const std::uint32_t context_used)
     }
 }
 
-// Which block body the unpack thread's replay buffer holds. The init that records a body sets it, every other init of
-// this family clears it, and the block calls fall back to their per tile calls when it does not name their body, so a
-// block call after an init that recorded something else cannot replay a foreign body. The unpack A values equal the
-// face count the body was recorded for. A function local static, so that only the kernels that use it carry it.
+// Which block body the replay buffer holds: set by the init that records one, cleared by the other inits, checked by the block
+// calls, which fall back to their per tile calls otherwise. The unpack A values equal the face count the body was recorded for.
 enum class BlockReplayBody : std::uint8_t
 {
     None      = 0,
@@ -999,13 +995,8 @@ inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
     }
 }
 
-// Wait for the math thread to publish the DEST slot of this tile, then consume the publication. The math thread
-// posts MATH_DONE from its instruction stream once every earlier math instruction has completed and the section
-// acquire before this tile has passed (math_unpack_to_dest_math_ready), so the UNPACRs of the MOP, held by the
-// unpack stall, cannot write DEST before that point; the sync stall keeps the SEMGET behind the wait. The math thread
-// cannot publish a second tile before this one is consumed (its next post waits for the UNPACK_TO_DEST post of this
-// tile, which needs the MOP, which needs this wait), so the count alternates between 0 and 1 whatever the semaphore's
-// maximum (the firmware and the test harness initialise it with max 1).
+// Wait for the math thread's MATH_DONE post for this tile (math_unpack_to_dest_math_ready) and consume it: the unpack stall holds the
+// MOP's UNPACRs until then and the sync stall keeps the SEMGET behind the wait. The count alternates between 0 and 1.
 inline void wait_for_dest_available()
 {
     TTI_SEMWAIT(p_stall::STALL_SYNC | p_stall::STALL_UNPACK, semaphore::t6_sem(semaphore::MATH_DONE), p_stall::STALL_ON_ZERO);

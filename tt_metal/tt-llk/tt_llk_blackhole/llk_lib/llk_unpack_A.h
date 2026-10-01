@@ -30,19 +30,14 @@ constexpr std::uint32_t dest_reuse_dummy_unpack()
     return TT_OP_UNPACR_NOP(source, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 }
 
-// Block unpack of the plain SrcA datacopy path (_llk_unpack_A_block_): the per tile MOP template stays as it is and
-// the block replays a recorded per tile body once per tile from one context acquire. The body first adds the tile
-// stride, kept in the thread's scratch config register, to the base address register of the context in use, so the
-// RISC stores (first tile address - stride) once per block and the last instructions the block issues are UNPACRs
-// (no config write of the block is in flight when the context is released). Half 0 of the recording targets the
-// context 0 base register, half 1 the context 1 one; a replay of one half is one tile.
+// Block unpack of the plain SrcA datacopy path: _llk_unpack_A_block_ replays a recorded per tile body once per tile from one context
+// acquire. The body first adds the tile stride (SCRATCH_SEC0) to the base address register of its context; half 0 is context 0, half 1 context 1.
 constexpr std::uint32_t block_replay_half_len(const std::uint32_t num_faces)
 {
     return 2 + 2 * num_faces; // CFGSHIFTMASK, SETADCZW, then UNPACR + SrcB dvalid NOP per face
 }
 
-// The replay record instruction takes its start and length as immediates, so both halves are instantiated per
-// legal face count and selected with a switch at init.
+// The replay record takes start and length as immediates: one instantiation per legal face count.
 template <std::uint32_t base_address_reg, std::uint32_t start, std::uint32_t num_faces>
 inline void load_block_replay_half()
 {
@@ -52,10 +47,9 @@ inline void load_block_replay_half()
         block_replay_half_len(num_faces),
         []
         {
-            // base address += SCRATCH_SEC0 (the tile stride in 16 B words, written by _llk_unpack_A_block_)
+            // base address += SCRATCH_SEC0 (the tile stride)
             TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, base_address_reg);
-            // ch0 Z = 0: the faces of this tile start at the new base. This also keeps one instruction between the
-            // config write and the first UNPACR that consumes it.
+            // ch0 Z = 0; also the one instruction between the config write and the UNPACR that consumes it
             TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001);
             for (std::uint32_t face = 0; face < num_faces; ++face)
             {
@@ -356,9 +350,7 @@ inline void _llk_unpack_A_init_(
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces > 0, tensor_shape, unpack_src_format, unpack_dst_format);
 
-    // The plain SrcA path (no broadcast, no dest accumulate or reuse, no face transpose, no unpack to dest) also gets
-    // the block body of _llk_unpack_A_block_ recorded in the replay buffer. The face transpose path records its own
-    // two entries in the MOP config above and never takes the block path.
+    // The plain SrcA path also records the block body of _llk_unpack_A_block_ (the face transpose path uses the replay buffer itself).
     block_replay_body() = BlockReplayBody::None;
     if constexpr (BType == BroadcastType::NONE && !acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)
     {
@@ -424,9 +416,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
 
-    // The context poll is a RISC read of a Tensix register. Issue it first so its latency overlaps the counter reset
-    // and the register select below instead of stalling the RISC right before the address store; the value can only
-    // fall until this call posts, so an early read that shows a free context stays valid.
+    // Poll first: the read's latency overlaps the counter reset and the register select (the count can only fall until this call posts)
     std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
 
     // Clear z/w start counters
@@ -435,10 +425,9 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     // Program srcA and srcB base addresses
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-    // One copy of the config context for the whole call (see switch_config_context_from)
     std::uint32_t context = unp_cfg_context;
 
-    // Wait for free context (at most two tiles have their address programmed and their MOP not yet issued)
+    // Wait for free context
     while (contexts_in_use >= 2)
     {
         contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
@@ -490,14 +479,8 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 }
 
 /**
- * @brief Unpack a block of consecutive tiles (operand A) from L1 into SrcA with one context acquire.
- *
- * Replays the per tile body recorded by @ref _llk_unpack_A_init_ once per tile: the base address of the context in
- * use is advanced by the tile stride in the instruction stream, so the RISC programs one address and one stride per
- * block instead of one address, one semaphore round trip and one context flip per tile. Only the plain SrcA
- * datacopy path is supported (no broadcast, no dest accumulate or reuse, no face transpose). When the formats select
- * unpack to dest, the init programmed that MOP and no block body, and the call falls back to one @ref _llk_unpack_A_
- * per tile with its per tile handshake.
+ * @brief Unpack a block of consecutive tiles (operand A) from L1 into SrcA with one context acquire: the per tile body recorded by
+ *        @ref _llk_unpack_A_init_ is replayed once per tile, the base address advanced by the tile stride in the instruction stream.
  *
  * @tparam BType: Broadcast type, must be NONE.
  * @tparam acc_to_dest: Must be false.
@@ -510,7 +493,6 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @param num_faces: Faces per tile, the value the init received through its tensor shape.
  * @note Call @ref _llk_unpack_A_init_ with matching template args and transpose_of_faces 0 before this function.
- * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tiles one by one.
  */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
@@ -533,9 +515,7 @@ inline void _llk_unpack_A_block_(
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
     LLK_ASSERT(is_valid_L1_address(address + (num_tiles - 1) * tile_stride_16B), "L1 address of the last tile must be in valid L1 memory region");
 
-    // Unpack to dest keeps its per tile handshake with the math thread. A block call whose body the init did not
-    // record (a face count other than the init's, or an init of another path since) also takes the per tile calls,
-    // which run whatever the last init programmed, exactly as before the block path existed.
+    // Unpack to dest and a block whose body the init did not record take the per tile calls.
     const bool body_recorded = block_replay_body() == static_cast<BlockReplayBody>(num_faces);
     LLK_ASSERT(body_recorded, "_llk_unpack_A_block_ needs the body recorded by _llk_unpack_A_init_ of the plain path with the same num_faces");
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format) || !body_recorded)
@@ -547,17 +527,15 @@ inline void _llk_unpack_A_block_(
         return;
     }
 
-    // Tile stride into the thread's scratch config register; the replayed body adds it to the base address before
-    // every tile. Written from the instruction stream so it is ordered behind the CFGSHIFTMASKs of an earlier block
-    // that read it (they carry the same value while the operand does not change).
+    // Tile stride into SCRATCH_SEC0 from the instruction stream, so the write is ordered behind the CFGSHIFTMASKs of an earlier block
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
 
-    // Context acquire as in _llk_unpack_A_: poll first, then the counter reset and the register select
+    // Context acquire as in _llk_unpack_A_
     std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // Clear z/w start counters of both unpackers once; the body clears ch0 Z per tile
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // Clear z/w start counters
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
     std::uint32_t context                  = unp_cfg_context;
     const std::uint32_t upk0_reg           = (context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
@@ -566,7 +544,7 @@ inline void _llk_unpack_A_block_(
         contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
     }
 
-    // The body adds the stride before every tile, the first one included (32-bit wrap is fine, the register is a full word)
+    // The body adds the stride before every tile, the first one included
     cfg[upk0_reg] = address - tile_stride_16B;
 
     // Trisc::SEMPOST for context acquire
@@ -575,7 +553,6 @@ inline void _llk_unpack_A_block_(
     // Hold the body's config write and its UNPACRs until the base address store from the RISC has landed
     TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
 
-    // One replay of the context's half per tile
     const std::uint32_t half_len = llk_unpack_a_detail::block_replay_half_len(num_faces);
     const std::uint32_t start    = (context == 0) ? 0 : half_len;
     for (std::uint32_t tile = 0; tile < num_tiles; ++tile)

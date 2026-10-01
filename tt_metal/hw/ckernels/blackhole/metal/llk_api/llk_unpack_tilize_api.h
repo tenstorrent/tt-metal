@@ -144,7 +144,6 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
     const std::uint32_t base_address =
         get_local_cb_interface(operand_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
-    // One execute per tile; the state is identical for every tile of the row, so it is restated once.
     SAN_HOOK(execute<OperationUnpackTilize>(
         StateVal<OperationUnpackTilize::NarrowTile>(get_operand_narrow_tile(operand_id)),
         StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
@@ -154,7 +153,6 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
         StateDiscard<std::uint32_t>(input_tile_index),
         StateDiscard<std::uint32_t>(block_c_tiles)));
 
-    // The row is unpacked from one context acquire; 8-bit and unpack-to-dest formats fall back to one call per tile inside.
     WAYPOINT("UPTW");
     _llk_unpack_tilize_block_(
         base_address,
