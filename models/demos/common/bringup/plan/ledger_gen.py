@@ -10,6 +10,7 @@ Task ids by pipeline step:
     R.4              trim a layer subset's checkpoint after the sanity   (intake, F47)
     G.<rung>         one golden per rung that owns its golden            (goldens)
     B.1              box: mesh opens, collectives work                   (box)
+    SC.1             serving contract: how-to + tests, from tt-d-gen's code    (serving, before the plan)
     PL.1             plan fits DRAM, components mapped, ledger valid, approved   (plan)
     C.<bt>.<step>    component test of one step of the representative layer      (implement, parallel)
     S.<bt>.<nn>      swap test: steps 1..nn of the block on device, in graph order (implement, sequential)
@@ -29,6 +30,7 @@ import yaml
 
 from models.demos.common.bringup.intake import trim_checkpoint
 from models.demos.common.bringup.reference.golden import load_spec, rung_dir
+from models.demos.common.bringup.testing import serving as SV
 from models.demos.common.bringup.testing.harness import DEFAULT_THRESHOLDS
 from models.demos.common.bringup.testing.templates import component_test_path, swap_test_path
 
@@ -181,6 +183,17 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         {"chips": f"== {spec.mesh[0] * spec.mesh[1]}", "all_gather_maxabs": "== 0"},
         device=True,
     )
+    # The serving contract comes first (F58): how the inference server drives the model, as a how-to the plan and
+    # every step build to, and the frozen tests that hold each part of the model to it (agents/serving-contract.md).
+    add(
+        "SC.1",
+        "Serving contract: how tt-d-gen drives the model, a how-to for each part and its tests",
+        "serving",
+        ["R.1"],
+        f"{PY}.testing.serving",
+        {"serving_contract_errors": "== 0", "serving_contract_tests": ">= 1"},
+        role="serving",
+    )
     add(
         "PL.0",
         "Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs",
@@ -196,7 +209,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "PL.1",
         "Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved",
         "plan",
-        ["PL.0", "B.1"],
+        ["PL.0", "B.1", "SC.1"],
         f"{PY}.plan.check_plan",
         {
             "plan_fits": "== 1",
@@ -216,6 +229,10 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         approval="plan",
     )
 
+    def contract_cmds(gate: str) -> str:
+        """The serving contract tests a step's gate runs too (contract_tests.yaml, written by SC.1)."""
+        return "".join(f" && {SAFE} --no-precompile {t['test']}" for t in SV.tests_for(spec, gate))
+
     comp_rung = spec.get("tests.component_rung") or next(r["name"] for r in ladder if r.get("full_dumps"))
     comp_golden = golden_task[comp_rung]
     manifest = [str(rung_dir(spec, spec.rung(comp_rung)) / "manifest.json")]
@@ -233,7 +250,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
                 f"{bt} {st.name} ({st.kind}) on device, layer {layer}",
                 "implement",
                 ["PL.1", comp_golden],
-                f"{SAFE} {ctest}",
+                f"{SAFE} {ctest}" + contract_cmds(st.name),
                 {metric: thr(spec, "component")},
                 device=True,
                 tests=[ctest],
@@ -306,7 +323,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)",
         "contract",
         [f"L.{first['name']}"],
-        f"{SAFE} --no-precompile models/demos/common/bringup/tests/test_contract.py",
+        f"{SAFE} --no-precompile models/demos/common/bringup/tests/test_contract.py" + contract_cmds(SV.ADAPTER),
         {"contract_checks_failed": "== 0", "acks_early": "== 0", "pcc_producer_kv_*": thr(spec, "state")},
         device=True,
         paths=[f"{model_dir}/tt"],  # plus models/demos/common/prefill, for every contract step (orchestrator)

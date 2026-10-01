@@ -46,13 +46,17 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 8. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
    afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
    `results/`.
-9. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
+9. Serving contract. When the brief has a "Serving contract" section, build the part exactly as it says (it is how
+   the inference server will drive the model, read from the server's code), from the first version. Its contract
+   tests are in your gate like any frozen test. Never assume a simpler case than it states (e.g. only chunk-aligned
+   starts) to make the gate easier.
+10. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
    `models/demos/common/bringup/knowledge/known_issues.md`, in the form
    `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.`
    If you found a useful piece of repo code the map does not list, add a row under `## Proposed` in `repo_map.md`.
-10. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
+11. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
    re-run command. Facts only.
-11. Deferring a step (implement role, component tasks only). When TTNN has no proper op for a step (no op, no
+12. Deferring a step (implement role, component tasks only). When TTNN has no proper op for a step (no op, no
    composition of TTNN ops, no fork of an existing op fits) you may defer it to the op code generator instead: write
    the op request the brief describes (`plan/op_request.py new`, then the evidence, prompt, reference and binding,
    until `check` prints `valid`). The step then stays on the CPU through `testing/cpu_bridge.py` and the bring-up

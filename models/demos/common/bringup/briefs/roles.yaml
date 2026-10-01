@@ -61,6 +61,10 @@ perf: |
   runs on the representative layers only (BRINGUP_PROFILE_LAYERS picks others) and only when the section time cannot
   explain a result. Do not run the whole gate: when you exit, the orchestrator runs the frozen tests, the ladder and
   one plain profile with the change on and off, and the owner decides from that table whether it is applied.
+serving: |
+  Role: serving contract, for $model, before anything is planned or built. Follow your agent instructions
+  (agents/serving-contract.md): write `$bringup_dir/serving_contract.md`, `$bringup_dir/contract_tests.yaml` and the
+  tests under `$model_dir/tests/bringup/contract/`. Never write or change model code.
 optests: |
   Role: optests. $model calls derived bring-up ops (`ttnn.bringup.*`, see `ttnn/ttnn/bringup/INDEX.md`). Every
   distinct call it makes needs a test case in that fork's `tests/`, with random inputs (never the model's real
