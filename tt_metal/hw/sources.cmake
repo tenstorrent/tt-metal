@@ -276,6 +276,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/ethernet/tt_eth_ss_regs.h
     inc/internal/ethernet/tunneling.h
     inc/internal/tensor/array_wrapper.h
+    inc/internal/tensor/binding_id.h
     inc/internal/tensor/const.h
     inc/internal/tensor/dspec.h
     inc/internal/tensor/helpers.h
