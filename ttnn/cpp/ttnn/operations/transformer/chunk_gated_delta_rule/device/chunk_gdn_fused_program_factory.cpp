@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Program factory for the fused prep→scan chunk_gdn op: ONE program, two disjoint core sets.
-// Per head h, NP PRODUCER cores run {unchanged prep reader, unchanged prep compute, fused writer}
-// and NV RECEIVER cores run {fused-receiver reader variant, unchanged scan compute, unchanged scan
-// writer}. Receiver (h, v) is exactly the phased scan's V-block core — it carries the state slice
-// S[:, v*Vtl : (v+1)*Vtl] and produces that V-slice of o — fed over the NoC instead of from DRAM.
-// Each producer's writer hands the 7 computed intermediates of chunk c straight into the head's NV
-// receivers' CBs: the six V-independent tensors as multicasts to the head's 1xNV row rectangle, v_beta
-// as NV per-receiver slice writes — zero DRAM intermediates.
+// PRODUCER cores (NP per head, or one pool of P serving every head) run {unchanged prep reader, unchanged
+// prep compute, fused writer}; per head h, NV RECEIVER cores run {fused-receiver reader variant, unchanged
+// scan compute, unchanged scan writer}. Receiver (h, v) is exactly the phased scan's V-block core — it carries the
+// state slice S[:, v*Vtl : (v+1)*Vtl] and produces that V-slice of o — fed over the NoC instead of from DRAM. Each
+// producer's writer hands the 7 computed intermediates of chunk c straight into the head's NV receivers' CBs: the six
+// V-independent tensors as multicasts to the head's 1xNV row rectangle, v_beta as NV per-receiver slice writes — zero
+// DRAM intermediates.
 //
 // Geometry (computed by fused_placement() in chunk_gdn_device_operation.cpp, which the host-side
 // geometry tests check per grid). Placement 0 (row-major):
@@ -27,12 +27,13 @@
 // producers take their head's chunks round-robin, the extras take the share num/den of every head's
 // chunks chunk-major. Placements 0/1 are its NX = 0 case.
 //
-// Handshake: receiver (h, v) reserves its 7 slots for chunk c, resets its VALID word,
-// then atomically increments credit[h] on the producer that owns chunk c. That producer sends only
-// at credit[h] == NV, resets the word, writes, waits for the write ACKS (a flush proves departure
-// only), then multicasts VALID to the rectangle. The credit words are BH plain L1 words in the last
-// tile of the u/mask CB, which is declared on the UNION of both core sets so it has one address on
-// every core; because dispatch re-initializes only Semaphore objects per launch, each producer zeroes
+// Handshake: receiver (h, v) reserves its 7 slots for chunk c, resets slot (c % nbuf)'s VALID flag,
+// then atomically increments credit[h][c % nbuf] on the producer that owns chunk c. That producer sends
+// only at credit[h][c % nbuf] == NV, resets the word, writes, waits for the write ACKS (a flush proves
+// departure only), then sets VALID[c % nbuf] on the receivers. A receiver keeps nbuf-1 hand-offs in
+// flight; the per-slot flags keep their VALIDs apart. The credit words are BH x nbuf plain L1 words in
+// the last tile of the u/mask CB, which is declared on the UNION of both core sets so it has one address
+// on every core; because dispatch re-initializes only Semaphore objects per launch, each producer zeroes
 // its words at start and bumps the `init` semaphore on the receivers of every head it serves, which
 // wait for all their distinct producers before their first credit.
 //
@@ -71,12 +72,10 @@ using namespace tt::constants;
 
 namespace ttnn::prim {
 
-// Kickoff staggering (wall-clock cycles at the 1.35 GHz core clock). Every producer reading its first chunk and
-// every receiver reading its initial state in the same microsecond made chunk 0's reads queue for up to ~37 us on
-// the slowest heads (a 20 us item took 57). A producer whose first chunk is c waits c * kProducerKickoffStaggerCycles:
-// chunk c is needed only c receiver steps (~3 us each) after chunk 0. Receivers issue their first credits, then hold
-// the initial-state read back by kReceiverKickoffWaitCycles: the state is first needed when chunk 0 arrives, a prep
-// item later.
+// Kickoff staggering (cycles at the 1.35 GHz core clock), keeping chunk 0's reads out of one burst: a producer
+// whose first chunk is c waits c * kProducerKickoffStaggerCycles (chunk c is needed c receiver steps after
+// chunk 0); receivers issue their first credits, then hold the initial-state read back by
+// kReceiverKickoffWaitCycles.
 constexpr uint32_t kProducerKickoffStaggerCycles = 4050;  // ~3 us
 constexpr uint32_t kReceiverKickoffWaitCycles = 5400;     // ~4 us
 
@@ -106,7 +105,7 @@ constexpr uint32_t decayfac = tt::CBIndex::c_11;
 constexpr uint32_t lmask = tt::CBIndex::c_12;
 constexpr uint32_t kbeta = tt::CBIndex::c_15;
 // u: the prep's mask holder (3 tiles, pushed once, never popped) PLUS one trailing tile that holds the
-// BH producer-side credit words. Declared on the UNION so producers and receivers agree on its address
+// BH x nbuf producer-side credit words. Declared on the UNION so producers and receivers agree on its address
 // (receivers never touch the CB's data; they only compute the credit-word address from its base).
 constexpr uint32_t u = tt::CBIndex::c_17;
 constexpr uint32_t scr2 = tt::CBIndex::c_29;
@@ -249,7 +248,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // producer and receiver. Ids reach both kernels as trailing compile-time args.
     //   id 0 = ready  — legacy single counter; superseded by the credit words (kept so the shared
     //                   scan reader's trailing-arg layout is uniform across its variants)
-    //   id 1 = init   — producer -> receivers: "my credit words are zeroed"; receivers wait for NP
+    //   id 1 = init   — producer -> receivers: "my credit words are zeroed"; a receiver waits for N_INIT,
+    //                   the distinct producers serving its head
     //   ids 2 .. 2+nbuf-1 = valid[slot] — producer -> receivers: "chunk c (slot c % nbuf) is in your
     //                   CBs". One flag per hand-off slot lets a receiver keep nbuf-1 hand-offs in
     //                   flight. Consecutive ids => consecutive L1 words, so the kernels

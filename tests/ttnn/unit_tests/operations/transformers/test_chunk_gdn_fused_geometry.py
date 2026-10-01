@@ -54,6 +54,7 @@ _TAIL_US = 9.0  # last scan step -> kernel end
 _PACE_MARGIN_US = 0.4  # depth-2 jitter exposure with the supply within 10 % of the step (Vtl <= 2)
 _ROW_MAJOR_PENALTY = 1.7  # row-major placement with a link-bound chain (supply < 2 * step)
 _DEPTHS = (2, 3)  # hand-off depths the model chooses between
+_NV_CANDIDATES = (1, 2, 4, 8)  # receivers per head the model considers (those dividing Vt)
 _HANDOFF_TILES, _PRODUCER_PREP_TILES, _TILE_BYTES, _L1_BUDGET_BYTES = 19, 48, 4096, 1400 * 1024
 _PHASED_A_US, _PHASED_B_US, _PHASED_BH48_US, _PHASED_LINEAR_TO_BH = 33.9, 217.0, 1933.0, 32
 
@@ -139,7 +140,7 @@ PER_HEAD, POOL, BOTH = 0, 1, 2  # chunk_gdn_fused_geometry's `candidates`
 def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, fixed_nbuf=0, candidates=PER_HEAD):
     """Per-head candidates: over NV | Vt, NP with a feasible row-local layout and depth in {2, 3} (a pinned
     depth as is), minimise T_fused = fill(BH) + NC * pace(Vt / NV, supply, depth) + tail; with no row-local
-    layout, fall back to row-major placement with the link-sharing penalty. Pool candidates: NV in {1, 2, 4},
+    layout, fall back to row-major placement with the link-sharing penalty. Pool candidates: the same NV set,
     P = every core the receivers leave (or the pinned size), at most BH*NC, supply BH * w_p / P. Ties ->
     fewer cores in total, then smaller NV, then the shallower ring."""
     gx, gy = grid
@@ -160,7 +161,7 @@ def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, fixed_nbuf=0, candida
         return VT % nv == 0 and (VT // nv) in _T_STEP_US and (not fixed_nv or nv == fixed_nv)
 
     if candidates != POOL:
-        for nv in (1, 2, 4, 8):
+        for nv in _NV_CANDIDATES:
             if not nv_ok(nv):
                 continue
             for np_ in range(1, gx - nv + 1):
@@ -172,14 +173,14 @@ def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, fixed_nbuf=0, candida
                 if _row_local_feasible(gx, gy, bh, nv, np_eff):
                     consider(nv, np_eff, 1)
         if best is None:
-            for nv in (1, 2, 4, 8):
+            for nv in _NV_CANDIDATES:
                 if not nv_ok(nv) or not _row_major_feasible(gx, gy, bh, nv) or gx * gy - bh * nv < 1:
                     continue
                 np_ = min(fixed_np, nc) if fixed_np else min((gx * gy - bh * nv) // bh, nc)
                 if np_ >= 1 and bh * (nv + np_) <= gx * gy:
                     consider(nv, np_, 0)
     if candidates != PER_HEAD:
-        for nv in (1, 2, 4):
+        for nv in _NV_CANDIDATES:
             if not nv_ok(nv) or bh * nv >= gx * gy:
                 continue
             P = min(fixed_np if fixed_np else gx * gy - bh * nv, bh * nc)
