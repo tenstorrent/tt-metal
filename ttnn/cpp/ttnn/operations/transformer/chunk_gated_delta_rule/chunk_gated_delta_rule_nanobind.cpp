@@ -6,6 +6,7 @@
 #include "chunk_gated_delta_rule_config.hpp"
 #include "device/chunk_gdn_phased.hpp"
 #include "device/chunk_gdn_device_operation.hpp"
+#include "device/kernels/dataflow/chunk_gdn_fused_map.hpp"
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/device.hpp"
@@ -154,6 +155,7 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
 std::string py_bool(bool b) { return b ? "True" : "False"; }
 std::string py_opt(const std::optional<uint32_t>& v) { return v.has_value() ? std::to_string(*v) : "None"; }
 std::string py_opt(const std::optional<bool>& v) { return v.has_value() ? py_bool(*v) : "None"; }
+std::string py_opt(const std::optional<float>& v) { return v.has_value() ? fmt::format("{}", *v) : "None"; }
 
 }  // namespace
 
@@ -243,32 +245,53 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             unicast (bool): default True. Per-receiver unicast writes; False sends the linked
                 multicast chain.
             posted (bool): default False. Posted unicast data writes with the VALID flag ordered by
-                in-order delivery; requires unicast.)doc")
+                in-order delivery; requires unicast.
+            producer_pool (bool): default False. One producer pool for every head: the receivers and
+                BH*NPH home producers take the row-local layout of the largest NPH the pool size allows,
+                every other core of the pool is an extra producer serving all heads. num_producers is
+                then the pool size P (default: every core the receivers leave free, at most BH*NC);
+                row_local is ignored.
+            pool_extra_share (float, optional): the share of every head's chunks the pool's extras take,
+                in [0, 1]; None = NX / P, the balanced load.)doc")
         .def(
-            nb::init<std::optional<uint32_t>, std::optional<uint32_t>, std::optional<bool>, uint32_t, bool, bool>(),
+            nb::init<
+                std::optional<uint32_t>,
+                std::optional<uint32_t>,
+                std::optional<bool>,
+                uint32_t,
+                bool,
+                bool,
+                bool,
+                std::optional<float>>(),
             nb::kw_only(),
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
             nb::arg("row_local") = nb::none(),
             nb::arg("handoff_depth") = 2,
             nb::arg("unicast") = true,
-            nb::arg("posted") = false)
+            nb::arg("posted") = false,
+            nb::arg("producer_pool") = false,
+            nb::arg("pool_extra_share") = nb::none())
         .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
         .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
         .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
         .def_rw("handoff_depth", &ChunkGdnFusedProgramConfig::handoff_depth)
         .def_rw("unicast", &ChunkGdnFusedProgramConfig::unicast)
         .def_rw("posted", &ChunkGdnFusedProgramConfig::posted)
+        .def_rw("producer_pool", &ChunkGdnFusedProgramConfig::producer_pool)
+        .def_rw("pool_extra_share", &ChunkGdnFusedProgramConfig::pool_extra_share)
         .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
             return fmt::format(
                 "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
-                "unicast={}, posted={})",
+                "unicast={}, posted={}, producer_pool={}, pool_extra_share={})",
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
                 c.handoff_depth,
                 py_bool(c.unicast),
-                py_bool(c.posted));
+                py_bool(c.posted),
+                py_bool(c.producer_pool),
+                py_opt(c.pool_extra_share));
         });
 
     // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program
@@ -282,8 +305,17 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
            uint32_t NC,
            uint32_t Vt,
            uint32_t fixed_nv,
-           uint32_t fixed_np) {
-            const auto c = ttnn::prim::choose_fused_geometry(grid_x, grid_y, BH, NC, Vt, fixed_nv, fixed_np);
+           uint32_t fixed_np,
+           uint32_t candidates) {
+            const auto c = ttnn::prim::choose_fused_geometry(
+                grid_x,
+                grid_y,
+                BH,
+                NC,
+                Vt,
+                fixed_nv,
+                fixed_np,
+                static_cast<ttnn::prim::FusedCandidates>(static_cast<uint8_t>(candidates)));
             return std::make_tuple(c.nv, c.np, c.placement, c.t_fused_us, c.t_phased_us, c.fused_pays);
         },
         nb::arg("grid_x"),
@@ -293,10 +325,12 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("Vt") = 4,
         nb::arg("fixed_nv") = 0,
         nb::arg("fixed_np") = 0,
+        nb::arg("candidates") = 0,
         R"doc(Fused prep->scan geometry the op picks for (grid_x, grid_y, BH, NC, Vt) when the fused
         program config leaves it free (fixed_nv / fixed_np = a pinned num_receivers / num_producers, 0 =
         free): (nv, np, placement, T_fused_us, T_phased_us, fused_pays). nv == 0 means no fused geometry
-        fits the grid.)doc");
+        fits the grid. candidates: 0 = NP producers per head (the op's default dispatch), 1 = the
+        producer pool (placement 2, np = the pool size; what producer_pool=True resolves to), 2 = both.)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,
@@ -305,6 +339,55 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("BH"),
         nb::arg("NV"),
         nb::arg("NP"));
+    mod.def(
+        "chunk_gdn_fused_pool_feasible",
+        &ttnn::prim::fused_pool_feasible,
+        nb::arg("grid_x"),
+        nb::arg("grid_y"),
+        nb::arg("BH"),
+        nb::arg("NV"),
+        nb::arg("P"));
+    mod.def(
+        "chunk_gdn_fused_pool_home_producers",
+        &ttnn::prim::fused_pool_home_producers,
+        nb::arg("grid_x"),
+        nb::arg("grid_y"),
+        nb::arg("BH"),
+        nb::arg("NV"),
+        nb::arg("P"),
+        R"doc(Home producers per head of a producer pool of P: the largest NPH with BH*NPH <= P that has
+        a row-local layout; 0 when the pool does not fit.)doc");
+    mod.def(
+        "chunk_gdn_fused_item_map",
+        [](uint32_t BH, uint32_t NC, uint32_t NPH, uint32_t NX, uint32_t num, uint32_t den) {
+            const GdnFusedMap m{BH, NC, NPH, NX, num, den};
+            std::vector<std::vector<std::tuple<uint32_t, uint32_t>>> items(BH * NPH + NX);
+            for (uint32_t p = 0; p < items.size(); p++) {
+                const uint32_t n = gdn_fused_item_count(m, p);
+                items[p].reserve(n);
+                for (uint32_t i = 0; i < n; i++) {
+                    const GdnFusedItem it = gdn_fused_item(m, p, i);
+                    items[p].emplace_back(it.h, it.c);
+                }
+            }
+            std::vector<std::vector<uint32_t>> owner(BH, std::vector<uint32_t>(NC));
+            for (uint32_t h = 0; h < BH; h++) {
+                for (uint32_t c = 0; c < NC; c++) {
+                    owner[h][c] = gdn_fused_owner(m, h, c);
+                }
+            }
+            return std::make_tuple(items, owner);
+        },
+        nb::arg("BH"),
+        nb::arg("NC"),
+        nb::arg("NPH"),
+        nb::arg("NX"),
+        nb::arg("num"),
+        nb::arg("den"),
+        R"doc(The fused program's producer map (chunk_gdn_fused_map.hpp) for BH heads, NC chunks, NPH home
+        producers per head, NX extras taking the share num/den of every head's chunks: (items, owner) —
+        items[p] = the (head, chunk) list of producer p in its order, owner[h][c] = the producer of chunk c
+        of head h, as the kernels compute them.)doc");
     mod.def(
         "chunk_gdn_fused_placement",
         [](uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement) {
