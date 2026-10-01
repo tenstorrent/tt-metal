@@ -70,14 +70,18 @@ _CMD_MISTRAL4_CHUNKED_8X1 = (
     "pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla_chunked_prefill_loudbox "
     "--wrapper-invocation"
 )
+# Mean of CI LoudBox runs 35232459600, 35263216504 and 35304150758, which span 0.075%. SDPA is 86%
+# of this total and CCL is 0, so the row tracks the depth-proportional term almost alone.
+_MISTRAL4_MLA_CHUNKED_LB_8X1_NS = 9_726_191
 
 
 @pytest.mark.timeout(0)
 def test_mistral4_mla_chunked_perf_loudbox():
-    """Record the unapproximated PP4-stage MLA budget on eight Blackhole devices.
+    """Gate the unapproximated PP4-stage MLA budget on eight Blackhole devices.
 
-    No threshold is assigned until a real LoudBox measurement is available. The reported number
-    sums merged operation durations inside one forward, not elapsed end-to-end request latency.
+    The reported number sums merged operation durations inside one forward, not elapsed
+    end-to-end request latency. Gated only on a LoudBox: a Galaxy column is a different
+    platform and keeps recording.
     """
     galaxy = _is_galaxy_env()
     visible_devices = os.environ.get("TT_VISIBLE_DEVICES", "").split(",")
@@ -86,13 +90,14 @@ def test_mistral4_mla_chunked_perf_loudbox():
     platform = "glx_column" if galaxy else "lb"
     run_model_device_perf_test_with_merge(
         command=_CMD_MISTRAL4_CHUNKED_8X1,
-        expected_device_perf_ns_per_iteration=None,
+        expected_device_perf_ns_per_iteration=None if galaxy else _MISTRAL4_MLA_CHUNKED_LB_8X1_NS,
+        margin=adjust_margin_for_ddr_speed(0.03),
         subdir="mistral4_mla",
         model_name=f"mistral4_mla_chunked_{platform}_8x1_torus_y",
         num_iterations=1,
         batch_size=1,
         between_signposts=("MLA_START", "MLA_END"),
-        comments=f"mistral4_chunked_50k+5k_{platform}_8x1_torus_y_record_only",
+        comments=f"mistral4_chunked_50k+5k_{platform}_8x1_torus_y",
     )
 
 

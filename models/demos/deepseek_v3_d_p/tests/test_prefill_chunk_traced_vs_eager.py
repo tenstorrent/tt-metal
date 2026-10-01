@@ -3,8 +3,9 @@
 
 """Traced-vs-eager numerical equivalence for ``TtPrefillRuntime.prefill_chunk`` (#55126).
 
-The llama4 query temperature is invisible to the existing coverage: an unrefreshed buffer applies
-temperature 1.0 and moves the chunked PCC gate by only ~0.002 against a 0.98 threshold. So this test
+The llama4 query temperature is invisible to the existing coverage. Suppressing it moves the traced
+reference gate's asserted layers from 0.989719 to 0.981986, against a 0.96 bar, so that test passes
+with the bug present; it asserts layers 0..10 and the temperature compounds with depth. So this test
 measures its own sensitivity. Three passes on one traced runtime into disjoint KV slots -- traced,
 eager, and eager with the temperature suppressed -- and the control is asserted first.
 

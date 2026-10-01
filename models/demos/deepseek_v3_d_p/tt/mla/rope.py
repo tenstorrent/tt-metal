@@ -162,8 +162,9 @@ def write_chunk_metadata(
 
     One function because both are per-chunk state a captured trace reads from fixed addresses, and the
     scale is silent when stale: the buffer is initialised to ones, so a missed refresh applies no
-    temperature rather than failing, and the chunked PCC gate cannot see the difference (~0.002 against
-    a 0.98 threshold). ``values`` is (slot_id, actual_start, actual_end).
+    temperature rather than failing, and the traced reference gate cannot see the difference: measured,
+    it moves that gate's asserted layers from 0.989719 to 0.981986, still clear of its 0.96 bar.
+    ``values`` is (slot_id, actual_start, actual_end).
     """
     assert len(values) == 3, f"expected 3 values, got {len(values)}"
     assert len(metadata) >= 3, f"metadata must carry the 3 scalar tensors, got {len(metadata)}"
