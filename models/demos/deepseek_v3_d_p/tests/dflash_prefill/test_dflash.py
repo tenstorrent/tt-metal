@@ -9,15 +9,23 @@ ground truth produced by the actual HF drafter's forward.
 
     DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash MESH_DEVICE=8x4 \
     pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py -svv
+
+``test_dflash_golden_pcc`` instead feeds a GPU trace's own taps and compares against the context K/V the GPU
+drafter built from them (layouts in ``_load_golden_taps`` and ``dflash_kv_validation._load_golden_kv``).
 """
+
+import os
+from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
+from safetensors import safe_open
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import GOLDEN_KV_ENV, _load_golden_kv
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
@@ -29,6 +37,8 @@ from tests.ttnn.utils_for_testing import comp_pcc
 PCC_THRESHOLD = 0.999
 # PCC is scale-invariant, so a K off by a constant (e.g. a missing yarn cos/sin amplitude) still passes it.
 K_SCALE_TOL = 0.01
+# The GPU trace's taps that the golden K/V (GOLDEN_KV_ENV) was built from.
+GOLDEN_TAPS_ENV = "PREFILL_DFLASH_GOLDEN_TAPS_DIR"
 
 # The production chunk width: 5120 global, 640 per chip on the target 8x4 mesh (sp=8).
 CHUNK_GLOBAL = PREFILL_CHUNK_TOKENS
@@ -71,6 +81,20 @@ def _read_cache_natural(cache, mesh_device, mesh_shape, sp: int, chunk_global: i
     )
     natural = _unrotate_blockcyclic(host[:num_layers].float(), sp, chunk_global)
     return natural[:, :, :out_len, :]
+
+
+def _load_golden_taps(taps_dir: Path, target_layer_ids, out_len: int) -> list:
+    """The GPU trace's taps for positions ``[0, out_len)``: one ``[out_len, hidden]`` bf16 tensor per target layer,
+    in ``target_layer_ids`` order. ``tap_layer_{L}.safetensors`` holds tensor ``tap_layer_{L}`` of shape
+    ``[seq, hidden]``, the verifier hidden state the drafter taps for target layer ``L``."""
+    taps = []
+    for tid in target_layer_ids:
+        with safe_open(taps_dir / f"tap_layer_{tid}.safetensors", framework="pt") as f:
+            sl = f.get_slice(f"tap_layer_{tid}")
+            seq = sl.get_shape()[0]
+            assert seq >= out_len, f"tap_layer_{tid} has only {seq} positions, need {out_len}"
+            taps.append(sl[:out_len].to(torch.bfloat16))
+    return taps
 
 
 @pytest.mark.timeout(0)
@@ -181,6 +205,115 @@ def test_dflash_pcc(
         assert ok_v, f"V layer {i}: device vs HF PCC {pcc_v} < {PCC_THRESHOLD} (matmul/weights mismatch)"
         assert ok_k, f"K layer {i}: device vs HF PCC {pcc_k} < {PCC_THRESHOLD} (norm/rope mismatch if V passed)"
         assert abs(k_scale - 1.0) <= K_SCALE_TOL, f"K layer {i}: ||device|| / ||HF|| = {k_scale:.4f} (yarn amplitude?)"
+
+
+@pytest.mark.timeout(0)
+@pytest.mark.skipif(
+    not (os.environ.get(GOLDEN_KV_ENV) and os.environ.get(GOLDEN_TAPS_ENV)),
+    reason=f"set {GOLDEN_KV_ENV} (drafter golden K/V) and {GOLDEN_TAPS_ENV} (the taps it was built from)",
+)
+@pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"], indirect=True)
+@pytest.mark.parametrize(
+    "ctx_len, n_chunks",
+    [
+        pytest.param(5120, 1, id="ctx5k-1chunk"),
+        pytest.param(56320, 11, id="ctx55k-11chunk"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_dflash_golden_pcc(
+    mesh_device,
+    device_params,
+    num_links,
+    ctx_len,
+    n_chunks,
+    use_pretrained,
+    drafter_cfg,
+    drafter_state_dict,
+):
+    """Teacher-forced against a GPU trace: the trace's own taps go in, and the device context K/V must match the
+    K/V the GPU drafter built from those same taps. The verifier is not involved, so this measures the drafter
+    alone and holds it to the same threshold as against HF."""
+    topology = per_axis_topology(device_params["fabric_config"])[1]
+    cfg = drafter_cfg
+    sd = drafter_state_dict
+    golden_dir, taps_dir = Path(os.environ[GOLDEN_KV_ENV]), Path(os.environ[GOLDEN_TAPS_ENV])
+    logger.info(f"golden K/V={golden_dir}  taps={taps_dir}  ctx_len={ctx_len}  n_chunks={n_chunks}")
+
+    mesh_shape = tuple(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
+    assert cfg.num_key_value_heads % tp == 0, f"num_kv_heads {cfg.num_key_value_heads} not divisible by tp {tp}"
+    H = cfg.hidden_size
+    assert ctx_len % n_chunks == 0, f"ctx_len {ctx_len} not divisible by n_chunks {n_chunks}"
+    chunk_global = ctx_len // n_chunks
+
+    taps = _load_golden_taps(taps_dir, cfg.target_layer_ids, ctx_len)
+    gk, gv = _load_golden_kv(
+        golden_dir,
+        num_layers=cfg.num_hidden_layers,
+        num_kv_heads=cfg.num_key_value_heads,
+        head_dim=cfg.head_dim,
+        out_len=ctx_len,
+        rope_convention=cfg.rope_convention,  # reindexes the half-split golden K to the device's stored K
+    )
+
+    drafter = TtDFlashDrafter(
+        mesh_device,
+        cfg,
+        state_dict=sd,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        max_seq_len=ctx_len,
+        chunk_size=chunk_global,
+        num_links=num_links,
+        topology=topology,
+    )
+    hidden_shard = [None, None]
+    hidden_shard[tp_axis] = 3  # tap hidden TP-sharded on the hidden dim
+    hidden_shard[sp_axis] = 2  # ALSO SP-shard the tap on seq → each chip taps its own [seq/sp] slice
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=hidden_shard)
+    k_cache, v_cache = allocate_dflash_kv_cache(mesh_device, cfg, ctx_len, sp_axis=sp_axis, tp_axis=tp_axis)
+
+    for c in range(n_chunks):
+        lo = c * chunk_global
+        drafter.reset()
+        for tap, tid in zip(taps, cfg.target_layer_ids):
+            h_tt = ttnn.from_torch(
+                tap[lo : lo + chunk_global].reshape(1, 1, chunk_global, H),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            drafter.tap(h_tt, tid)
+        drafter.forward(k_cache, v_cache, lo)
+    ttnn.synchronize_device(mesh_device)
+
+    dk = _read_cache_natural(k_cache, mesh_device, mesh_shape, sp, chunk_global, cfg.num_hidden_layers, ctx_len)
+    dv = _read_cache_natural(v_cache, mesh_device, mesh_shape, sp, chunk_global, cfg.num_hidden_layers, ctx_len)
+
+    for i in range(cfg.num_hidden_layers):
+        ok_k, pcc_k = comp_pcc(gk[i], dk[i], PCC_THRESHOLD)
+        ok_v, pcc_v = comp_pcc(gv[i], dv[i], PCC_THRESHOLD)
+        k_scale = (dk[i].norm() / gk[i].norm()).item()
+        logger.info(f"layer {i}: K pcc={pcc_k} (ok={ok_k}) scale={k_scale:.4f}  V pcc={pcc_v} (ok={ok_v})")
+        assert ok_v, f"V layer {i}: device vs GPU PCC {pcc_v} < {PCC_THRESHOLD} (weights or tap order)"
+        assert ok_k, f"K layer {i}: device vs GPU PCC {pcc_k} < {PCC_THRESHOLD} (norm/rope mismatch if V passed)"
+        assert abs(k_scale - 1.0) <= K_SCALE_TOL, f"K layer {i}: ||device|| / ||GPU|| = {k_scale:.4f} (yarn amplitude?)"
 
 
 _MULTITURN_ITERS = [
