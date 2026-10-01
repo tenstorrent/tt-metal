@@ -19,6 +19,11 @@ namespace tt::tt_metal::experimental::per_core_allocation {
 DeviceAddr get_per_core_address(
     const distributed::MeshBuffer& mesh_buffer, const distributed::MeshCoordinate& device_coord, const CoreCoord& core);
 
+// Per-core address for a core that must be the same on every local device holding the buffer, as
+// when one address (e.g. a circular buffer's) is used on all of them. TT_FATALs if the devices
+// disagree, rather than answering for the reference device only.
+DeviceAddr get_uniform_per_core_address(const distributed::MeshBuffer& mesh_buffer, const CoreCoord& core);
+
 bool is_per_core_allocation(const distributed::MeshBuffer& mesh_buffer);
 
 // Creates a MeshBuffer that only allocates on a single device within the mesh.
