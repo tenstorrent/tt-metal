@@ -18,6 +18,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <hostdevcommon/common_values.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -136,6 +137,16 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
 
+    // The streaming kernel and the K/V chain below were measured on Blackhole; other archs keep main's program.
+    // fp32 DEST accumulation keeps the legacy compute kernel. The streaming kernel narrows the padded tiles of
+    // the chunk where the spatial segment ends and of the last chunk, and stamps their partial tiles.
+    const bool blackhole = device->arch() == tt::ARCH::BLACKHOLE;
+    const bool use_streaming_compute = !fp32_dest_acc_en && blackhole;
+    const uint32_t streaming_valid_Skt = padded_Nkt + valid_Lt;
+    const uint32_t k_partial_col = use_streaming_compute ? (L % TILE_HEIGHT) : 0;
+    const uint32_t n_partial_col = use_streaming_compute ? (N % TILE_HEIGHT) : 0;
+    const uint32_t mid_padded_tiles = padded_Nkt - valid_Nt;
+
     CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                           : device->compute_with_storage_grid_size();
     bool exp_approx_mode =
@@ -144,6 +155,9 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
             : true;
 
     auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+    constexpr uint32_t sender_semaphore_id = 0;
+    constexpr uint32_t receiver_semaphore_id = 1;
+    constexpr uint32_t valid_semaphore_id = 2;
     uint32_t num_cores = grid_size.x * grid_size.y;
 
     TT_FATAL(
@@ -182,7 +196,8 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
-    uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
+    uint32_t mask_tiles = use_streaming_compute ? (1u + (n_partial_col > 0 ? 1u : 0u) + (k_partial_col > 0 ? 1u : 0u))
+                                                : Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * DHt;
     uint32_t out0_t = Sq_chunk_t * DHt;
@@ -211,10 +226,19 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size);
+    auto [out_out_subblock_h, out_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
+    if (use_streaming_compute) {
+        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, DHt);
+        TT_FATAL(
+            Sq_chunk_t % out_out_subblock_h == 0,
+            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+            Sq_chunk_t,
+            out_out_subblock_h);
+    }
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -264,6 +288,10 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         padded_Nkt,
         padded_Lqt,
         padded_Lkt,
+        sender_semaphore_id,
+        receiver_semaphore_id,
+        valid_semaphore_id,
+        static_cast<uint32_t>(blackhole),  // K/V chain
     };
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -297,6 +325,10 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         static_cast<uint32_t>(use_joint_mask),
         mask_chunk_0,
         mask_chunk_1,
+        static_cast<uint32_t>(use_streaming_compute),  // arg 15
+        out_out_subblock_h,                            // arg 16: drain group height
+        k_partial_col,                                 // arg 17
+        n_partial_col,                                 // arg 18
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -321,6 +353,11 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         mask_chunk_0,
         mask_chunk_1,
         scale_packed,
+        static_cast<uint32_t>(use_streaming_compute),  // arg 19
+        streaming_valid_Skt,                           // arg 20: unpadded concatenated K tiles
+        k_partial_col,                                 // arg 21
+        n_partial_col,                                 // arg 22
+        mid_padded_tiles,                              // arg 23
     };
 
     std::map<std::string, std::string> defines_map;
@@ -336,10 +373,20 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
 
     ProgramDescriptor desc;
 
+    // The cores of one (batch, head) group read identical K and V, so they form a unicast chain: the first
+    // core streams from DRAM and every core hands each chunk to the next while the next still has q chunks.
+    if (blackhole) {
+        for (const auto& [id, initial] : std::initializer_list<std::pair<uint32_t, uint32_t>>{
+                 {sender_semaphore_id, INVALID}, {receiver_semaphore_id, INVALID}, {valid_semaphore_id, VALID}}) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = initial});
+        }
+    }
+
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
+    tt::DataFormat mask_df = use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -522,6 +569,18 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         }}},
     });
 
+    if (use_streaming_compute) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = im_tile_size,
+            .core_ranges = core_grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
+                .data_format = im_df,
+                .page_size = im_tile_size,
+            }}},
+        });
+    }
+
     // Output
     desc.cbs.push_back(CBDescriptor{
         .total_size = out0_t * out_tile_size,
@@ -557,6 +616,9 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_compile_time_args;
     compute_desc.defines = defines;
+    if (use_streaming_compute) {
+        compute_desc.defines.emplace_back("SDPA_JOINT_STREAMING", "1");
+    }
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -602,6 +664,23 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
         log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
 
+        auto q_count_of = [&](uint32_t c) {
+            const uint32_t start = std::min((c % q_parallel_factor) * q_per_core, q_num_chunks);
+            return std::min(start + q_per_core, q_num_chunks) - start;
+        };
+        // a core is in a chain when its group is a real (batch, head) and it has q chunks
+        auto active = [&](uint32_t c) {
+            return c < num_cores && (c / q_parallel_factor) / nh_parallel_factor < B && q_count_of(c) > 0;
+        };
+        const uint32_t chain_pos = i % q_parallel_factor;
+        const bool participates = blackhole && q_parallel_factor > 1 && active(i);
+        const bool is_injector = chain_pos == 0;
+        const bool has_next = participates && chain_pos + 1 < q_parallel_factor && active(i + 1);
+        const uint32_t prev_i = is_injector ? i : i - 1;
+        const uint32_t next_i = has_next ? i + 1 : i;
+        const auto prev_phys = device->worker_core_from_logical_core({prev_i % grid_size.x, prev_i / grid_size.x});
+        const auto next_phys = device->worker_core_from_logical_core({next_i % grid_size.x, next_i / grid_size.x});
+
         reader_desc.emplace_runtime_args(
             core,
             {q_buf,
@@ -615,7 +694,15 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
              local_nh_start,
              local_nh_end,
              local_q_start,
-             local_q_end});
+             local_q_end,
+             static_cast<uint32_t>(participates),
+             static_cast<uint32_t>(is_injector),
+             static_cast<uint32_t>(!has_next),
+             static_cast<uint32_t>(prev_phys.x),
+             static_cast<uint32_t>(prev_phys.y),
+             static_cast<uint32_t>(next_phys.x),
+             static_cast<uint32_t>(next_phys.y),
+             has_next ? q_count_of(i + 1) : 0u});
 
         // Writer args
         writer_desc.emplace_runtime_args(

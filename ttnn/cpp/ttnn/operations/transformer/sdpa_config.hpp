@@ -16,6 +16,8 @@ struct SDPAProgramConfig {
     std::optional<CoreRangeSet> sub_core_grids;
     std::size_t q_chunk_size;
     std::size_t k_chunk_size;
+    // Steers the rescale, first column and sink exponentials, and the softmax exp of the legacy compute kernel.
+    // The streaming kernels always run the approximate softmax exp, which keeps the pack thread within the matmul.
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
 };

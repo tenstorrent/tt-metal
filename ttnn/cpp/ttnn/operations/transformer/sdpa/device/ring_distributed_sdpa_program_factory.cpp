@@ -214,9 +214,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * 2;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
-    uint32_t mask_tiles = 2;                            // lightweight: neginf + causal diagonal
+    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
+    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    uint32_t mask_tiles = 2;                   // lightweight: neginf + causal diagonal
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
@@ -227,6 +227,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
+    // The streaming kernel was measured on Blackhole, where only fp32 DEST accumulation keeps the legacy one; other
+    // archs keep main's legacy kernel.
+    const bool use_streaming_compute = !fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE;
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
@@ -237,10 +240,20 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size);
+    auto [out_out_subblock_h, out_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
+    const uint32_t drain_group_h = use_streaming_compute ? out_out_subblock_h : 0;
+    if (use_streaming_compute) {
+        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
+        TT_FATAL(
+            Sq_chunk_t % out_out_subblock_h == 0,
+            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+            Sq_chunk_t,
+            out_out_subblock_h);
+    }
 
     // Determine granularity for statistics computation
     // Each granularity must evenly divide its tile count to avoid dropping tiles
@@ -281,20 +294,24 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         static_cast<uint32_t>(is_chunked),  //(uint32_t)is_chunked,
         block_size_t,
         page_table_stick_size,
-        0,                  // use_attention_sink
-        0,                  // use_mla
-        0,                  // mla_kv_overlap
-        qk_out_subblock_h,  // qk_subblock_h
-        0,                  // sliding_window_size (ring uses no sliding window)
-        0                   // use_streaming_compute (ring uses legacy compute)
+        0,                                            // use_attention_sink
+        0,                                            // use_mla
+        0,                                            // mla_kv_overlap
+        qk_out_subblock_h,                            // qk_subblock_h
+        0,                                            // sliding_window_size (ring uses no sliding window)
+        static_cast<uint32_t>(use_streaming_compute)  // arg 28
     };
     // Semaphore placeholders (not used in ring, but kernel expects them at indices 28-31)
-    reader_compile_time_args.push_back(0);  // sender_semaphore_id
-    reader_compile_time_args.push_back(0);  // receiver_semaphore_id
-    reader_compile_time_args.push_back(0);  // valid_semaphore_id
-    reader_compile_time_args.push_back(0);  // mcast_enabled
+    reader_compile_time_args.push_back(0);                                            // sender_semaphore_id
+    reader_compile_time_args.push_back(0);                                            // receiver_semaphore_id
+    reader_compile_time_args.push_back(0);                                            // valid_semaphore_id
+    reader_compile_time_args.push_back(0);                                            // mcast_enabled
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 32
     reader_compile_time_args.push_back(0);  // arg 33: use_windowed_narrowing — ring is never windowed
+    reader_compile_time_args.push_back(0);  // arg 34: kv chain mode, ring has no chains
+    reader_compile_time_args.push_back(0);  // arg 35: mask block map, never on ring
+    reader_compile_time_args.push_back(2);  // arg 36: K/V CB depth in chunks (double buffer)
+    reader_compile_time_args.push_back(0);  // arg 37: fwd_done_semaphore_id, ring has no chains
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -306,6 +323,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     TensorAccessorArgs().append_to(reader_compile_time_args);  // chunk_start_idx_tensor (ring has no flexible chunked)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // cu_window_seqlens (ring is never windowed)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // windowed_q_token_offset_tensor (never windowed)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // attn_mask_block_map (never on ring)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -320,18 +338,23 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         k_num_chunks,
         packed_identity_scalar,
         num_cores,
-        true,   //(std::uint32_t)is_causal,
-        false,  //(std::uint32_t)use_provided_mask,
-        false,  //(std::uint32_t)use_padded_mask,
-        true,   //(uint32_t)is_chunked,
-        0,      //(uint32_t)sliding_window_size,
-        1,      // arg 16: lightweight causal mask
-        0,      // arg 17: use_streaming_compute — always false for ring distributed (causal)
-        0,      // arg 18: out_subblock_h — unused when streaming is off
-        0,      // arg 19: k_partial_col — non-streaming, no partial mask emitted
-        static_cast<uint32_t>(use_zigzag_balancing),  // arg 20
+        true,                                          //(std::uint32_t)is_causal,
+        false,                                         //(std::uint32_t)use_provided_mask,
+        false,                                         //(std::uint32_t)use_padded_mask,
+        true,                                          //(uint32_t)is_chunked,
+        0,                                             //(uint32_t)sliding_window_size,
+        1,                                             // arg 16: lightweight causal mask
+        static_cast<uint32_t>(use_streaming_compute),  // arg 17: row grouped cb_out drain
+        drain_group_h,                                 // arg 18: drain group height
+        0,                                             // arg 19: k_partial_col — non-streaming, no partial mask emitted
+        static_cast<uint32_t>(use_zigzag_balancing),   // arg 20
         0,  // arg 21: use_windowed_mask — ring never uses windowed (block-diagonal) attention
         0,  // arg 22: out_concat_heads — ring writes the per-head layout
+        0,  // arg 23: sender_semaphore_id, ring has no chains
+        0,  // arg 24: receiver_semaphore_id
+        0,  // arg 25: valid_semaphore_id
+        0,  // arg 26: fwd_done_semaphore_id
+        0,  // arg 27: kv chain mode
     };
     // out accessor, then the cu_window and Q-offset accessors chained right after it (mirrors the regular
     // factory so the writer's accessor offset chain stays intact). Ring is never windowed → placeholders.
@@ -363,11 +386,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         scale_packed,
-        0,          //(uint32_t)sliding_window_size,
-        0,          //(std::uint32_t)use_attention_sink,
-        0,          //(std::uint32_t)use_streaming_compute - always false for ring distributed (causal)
-        valid_Skt,  // arg 25: unpadded K tiles for streaming padded_k_tiles
-        0u,         // arg 26: k_partial_col - unused on ring's non-streaming path
+        0,                                                  //(uint32_t)sliding_window_size,
+        0,                                                  //(std::uint32_t)use_attention_sink,
+        static_cast<std::uint32_t>(use_streaming_compute),  // arg 24
+        valid_Skt,                                          // arg 25: unpadded K tiles for streaming padded_k_tiles
+        0u,                                           // arg 26: k_partial_col - unused on ring's non-streaming path
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 27: unified zigzag remap
         0,                                            // arg 28: use_windowed_narrowing — ring is never windowed
     };
@@ -377,6 +400,10 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (use_streaming_compute) {
+        defines_map["SDPA_STREAMING_PHASES"] = "2";  // the Q range is walked once per ring phase
+        defines_map["SDPA_CAUSAL_V_RECONFIG"] = "1";
+    }
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
 
     // ---- Circular buffers ----
@@ -435,6 +462,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     cb_ids.windowed_q_offset = cb_ids.q_in;
     cb_ids.windowed_cu_reader = cb_ids.q_in;
     cb_ids.windowed_k_range = cb_ids.q_in;
+    cb_ids.kv_fwd_ctrl = cb_ids.q_in;
     cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
     cb_ids.mask_in = allocate_tile_cb(mask_tiles, mask_tile_size, mask_df);
@@ -446,6 +474,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         cb_ids.page_table = allocate_cb(page_table_stick_size, 1, page_table_df);
     }
 
+    if (use_streaming_compute) {
+        cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
+    }
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
     cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
