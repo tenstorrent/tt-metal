@@ -6,7 +6,8 @@ CPU by R.1) through the bring-up device model with its final norm and LM head, g
 each new token is appended and the chunk prefilled again (prompts are short, one chunk). The answer must contain
 ``expect``. Runs on the shipped defaults (an end-to-end check, not a component test).
 
-Metrics: smoke_device_ok, smoke_device_tokens."""
+Metrics: smoke_device_ok, smoke_device_tokens. Writes ``<results>/<task>_smoke.json`` (prompt, expected, answer, token
+ids, ok, seconds, mode "model") for the dashboard's "Final tests" section."""
 
 from __future__ import annotations
 
@@ -37,6 +38,7 @@ def tokenizer(s):
 
 
 def run_smoke(s, mesh, max_new: int = 8) -> dict:
+    t_all = time.time()
     tok = tokenizer(s)
     ids = prompt_ids(s, tok)
     chunk = int(s.get("target.chunk"))
@@ -75,4 +77,23 @@ def run_smoke(s, mesh, max_new: int = 8) -> dict:
     )
     metrics.record("smoke_device_ok", int(ok))
     metrics.record("smoke_device_tokens", len(out))
+    record_answer("smoke", "model", s, text, out, ok, time.time() - t_all, prompt_len=len(ids))
     return {"ok": ok, "text": text}
+
+
+def record_answer(suffix: str, mode: str, s, text: str, token_ids: list[int], ok: bool, seconds: float, **extra):
+    """The smoke's answer as ``<results>/<task>_<suffix>.json`` (small: the prompt, the answer, a few ids)."""
+    sm = s.data["intake"]["smoke"]
+    return metrics.record_json(
+        suffix,
+        {
+            "mode": mode,
+            "prompt": sm["prompt"],
+            "expected": sm["expect"],
+            "answer": text,
+            "token_ids": [int(t) for t in token_ids],
+            "ok": bool(ok),
+            "seconds": round(float(seconds), 1),
+            **extra,
+        },
+    )

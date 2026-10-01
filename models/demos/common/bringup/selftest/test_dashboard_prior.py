@@ -131,7 +131,7 @@ def test_both_styles_render_the_view(pair, fx, tmp_path, with_prior):
         assert 107 not in tt["pages"] and not tt["p107"]
         return
     assert "vs prior: 2x2 (this run) vs 1x4" in els["#s-prior"]["text"] and els["#prior-body"]["html"] > 0
-    assert tt["pages"][-1] == 107
+    assert 107 in tt["pages"] and tt["pages"][-1] == 109  # Final tests is the last page
     screens = "\n".join(tt["p107"])
     assert "PAGE ERROR" not in screens and "VS PRIOR 2X2/1X4" in screens
     for want in ("chunk device", "TTFT 0->55k", "blk", "L.s256", "state_min", "R.1"):

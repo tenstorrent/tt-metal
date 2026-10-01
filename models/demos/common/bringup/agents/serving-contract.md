@@ -92,7 +92,10 @@ PCC for the last block); otherwise from the bring-up's spec thresholds. Never lo
 ### 3. `<bringup dir>/contract_tests.yaml`
 
 One entry per test: `test` (path), `checks` (one line), `section` (the how-to section), `gates` (the model step
-whose gate runs it: a component step name such as `attention` or `embedding`, or `adapter` for the runner test).
+whose gate runs it: a component step name such as `attention` or `embedding`, or `adapter` for the runner test), and
+`kind: runner_smoke` on the runner smoke only (below): the ledger then requires its metric `smoke_runner_ok == 1` in
+K.1, and the dashboard's "Final tests" section shows its answer. The runner smoke records `smoke_runner_ok` and its
+answer with `testing.smoke.record_answer("runner_smoke", "runner", ...)` (prompt_len, boundary, records too).
 
 Tests that start processes (runner, producer) wait with bounds: they fail at once with a clear message when a
 process exits non-zero or stops making progress, never hang. Read the engine's current APIs (table encoding, producer

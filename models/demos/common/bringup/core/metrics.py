@@ -66,6 +66,20 @@ def record(name: str, value, task: str | None = None, **extra) -> None:
     os.replace(tmp, p)
 
 
+def record_json(suffix: str, data: dict, task: str | None = None) -> Path | None:
+    """Write a small side record ``<results>/<task>_<suffix>.json`` (a gate output: deleted before the gate runs and
+    committed with it). Ignored in the precompile collect pass."""
+    if in_precompile_collect_pass():
+        return None
+    task = task or task_id()
+    p = results_dir() / f"{task}_{suffix}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"task": task, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), **data}, indent=1) + "\n")
+    os.replace(tmp, p)
+    return p
+
+
 def load(task: str, root: Path | None = None) -> dict:
     p = _path(task, root)
     return json.loads(p.read_text())["metrics"] if p.exists() else {}

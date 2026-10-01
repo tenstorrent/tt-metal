@@ -8,12 +8,15 @@
        self-contained, data inlined. The spec's ``dashboard.styles`` picks the default; the /bringup skill asks.
 
 Reads: tasks.yaml, state.json, results/*.json (metrics, plan_memory.json, block_graphs.json, <task>_profile.json),
-components.yaml, plan.yaml (optional ``chips``, ``ccl_per_layer``, ``profile_sections``), findings.yaml, the HF config.
-Sections: progress, gate ladder, model graph + layer strip, op coverage, findings, chunk timing, sharding (memory
+components.yaml, plan.yaml (optional ``chips``, ``ccl_per_layer``, ``profile_sections``), the HF config.
+Sections: progress, gate ladder, model graph + layer strip, op coverage, chunk timing, sharding (memory
 from the plan gate), where the time goes (warm per-section, per-chip profile), PCC trail by layer; with a spec
 ``prior``, a vs-prior view (accuracy, chunk time and TTFT, task status next to the prior bring-up's). Steps deferred to
 op-gen (F46): a "Deferred to op-gen" section (task, block, layers, request status, evidence), a banner that the results
-include N CPU steps, and timing rows and profile sections marked when the CPU bridge ran in them.
+include N CPU steps, and timing rows and profile sections marked when the CPU bridge ran in them. Last, "Final tests":
+the model smoke and the runner smoke (<task>_smoke.json, <task>_runner_smoke.json: prompt, answer, pass, time; the
+runner's migration boundary and records), the full-target ladder rung and the contract tests (contract_tests.yaml and
+the gates that ran them, <task>_contract.json per test where recorded); what never ran shows as "not run".
 """
 
 from __future__ import annotations
@@ -157,7 +160,6 @@ def build(spec) -> dict:
     res = led.results_dir
     comp_doc = load_yaml(spec.bringup_dir / "components.yaml")
     plan_doc = load_yaml(spec.bringup_dir / "plan.yaml")
-    findings = load_yaml(spec.bringup_dir / "findings.yaml").get("findings", [])
 
     commits = {}
     for line in git(spec.repo, "log", "--format=%h|%s", f"--grep=[{spec.tag}][", "--fixed-strings").splitlines():
@@ -286,11 +288,138 @@ def build(spec) -> dict:
         "plan_ccl": plan_doc.get("ccl_per_layer") or [],
         "profile": load_profile(spec, res, plan_doc),
         "prior": load_prior(spec),
-        "findings": findings,
         "deferred": deferred_rows(spec, led, state),
+        "final": final_tests(spec, led, state),
         "thresholds": {k: spec.threshold(k, v) for k, v in DEFAULT_THRESHOLDS.items()},
         "source": str(spec.bringup_dir.relative_to(spec.repo)),
     }
+
+
+def final_tests(spec, led, state) -> dict:
+    """The "Final tests" section: the two end-to-end smokes (model smoke L.smoke, runner smoke in a contract gate),
+    the full-target ladder rung and the contract tests, all from the ledger's recorded results. Missing = not run."""
+    from models.demos.common.bringup.testing import serving as SV
+
+    res, tasks = led.results_dir, led.tasks()
+    order = led.topo_order()
+    st = lambda tid: (state.get(tid) or {}).get("status", "TODO") if tid else None  # noqa: E731
+
+    def covering(test: str) -> list[str]:
+        """Tasks whose gate runs this contract test (by path, or through testing.serving --run <gate|all>)."""
+        t = next((x for x in SV.tests(spec) if x["test"] == test), {})
+        out = []
+        for tid in order:
+            cmd = tasks[tid]["gate"]["cmd"]
+            runs = re.findall(r"testing\.serving --run (\S+)", cmd)
+            if test.split("::")[0] in cmd or any(r in ("all", t.get("gates")) for r in runs):
+                out.append(tid)
+        return out
+
+    # the smokes: the newest <task>_*smoke.json of each mode
+    smokes = {}
+    for p in res.glob("*_*smoke.json"):
+        try:
+            d = json.loads(p.read_text())
+        except Exception:
+            continue
+        if d.get("mode") in ("model", "runner") and d.get("t", "") >= smokes.get(d["mode"], {}).get("t", ""):
+            smokes[d["mode"]] = d
+    rs = SV.runner_smoke(spec)
+    want = {
+        "model": next((t for t in order if t == "L.smoke"), None),
+        # the gate that runs the runner smoke itself (K.1, or a model's own task), else any that runs it
+        "runner": (
+            (
+                [t for t in covering(rs["test"]) if rs["test"].split("::")[0] in tasks[t]["gate"]["cmd"]]
+                or covering(rs["test"])
+            )
+            or [None]
+        )[-1]
+        if rs
+        else None,
+    }
+    rows = []
+    for mode, label in (("model", "Model smoke"), ("runner", "Runner smoke")):
+        d = smokes.get(mode)
+        tid = (d or {}).get("task") or want[mode]
+        sm = (spec.data.get("intake") or {}).get("smoke") or {}
+        rows.append(
+            {
+                "mode": mode,
+                "label": label,
+                "task": tid,
+                "status": st(tid),
+                "ran": bool(d),
+                "prompt": (d or {}).get("prompt", sm.get("prompt")),
+                "expected": (d or {}).get("expected", sm.get("expect")),
+                **{
+                    k: d.get(k)
+                    for k in ("answer", "ok", "seconds", "t", "prompt_len", "boundary", "records", "prompt_variant")
+                    if d
+                },
+            }
+        )
+
+    # the full-target rung (ladder[-1], as X.3 runs it): the newest task that recorded that rung
+    ladder = spec.data.get("ladder") or []
+    lad = None
+    if ladder:
+        r = ladder[-1]
+        start = (r["seq"] // r["chunk"] - 1) * r["chunk"] if r.get("prefix_from_golden") else 0
+        best = None
+        for tid in order:
+            m = M.load(tid, res)
+            v = lambda k: m[k]["value"] if k in m else None  # noqa: E731
+            same = v("rung_seq") == r["seq"] and v("rung_chunk") == r["chunk"] and v("rung_start") in (start, None)
+            pcc = [x["value"] for k, x in m.items() if re.match(r"pcc_layer_L\d+$", k)]
+            if not pcc or not (same or tid == f"L.{r['name']}"):
+                continue
+            t = max(x.get("t", "") for x in m.values())
+            if best is None or t >= best["t"]:
+                best = {
+                    "task": tid,
+                    "t": t,
+                    "status": st(tid),
+                    "min_pcc": min(pcc),
+                    "top1": v("top1_match"),
+                    "top5": v("top5_overlap"),
+                    "final_hidden": v("pcc_final_hidden"),
+                }
+        lad = {"rung": r["name"], "seq": r["seq"], "chunk": r["chunk"], "ran": bool(best), **(best or {})}
+
+    # contract tests: per test, the newest task that ran it (a per-test record where the gate wrote one)
+    cts = SV.tests(spec)
+    con = None
+    if cts:
+        per = []
+        for i, t in enumerate(cts):
+            got = None
+            for tid in covering(t["test"]):
+                s = state.get(tid) or {}
+                if s.get("status") in (None, "TODO", "RUNNING") or not s.get("last_run"):
+                    continue
+                side = res / f"{tid}_contract.json"
+                rec = json.loads(side.read_text()).get("results", {}) if side.exists() else {}
+                if t["test"] in rec:
+                    ok = rec[t["test"]]
+                elif t["test"].split("::")[0] in tasks[tid]["gate"]["cmd"]:
+                    ok = s["status"] == "PASS"
+                else:  # a --run gate without a per-test record: it ran the first contract_tests_run tests listed
+                    n = (M.load(tid, res).get("contract_tests_run") or {}).get("value")
+                    if n is None or i >= n:
+                        continue
+                    ok = s["status"] == "PASS"
+                if got is None or s["last_run"] >= got["t"]:
+                    got = {"t": s["last_run"], "ok": ok, "task": tid}
+            per.append({"test": t["test"].rsplit("/", 1)[-1], **(got or {"ok": None})})
+        con = {
+            "total": len(per),
+            "passed": sum(1 for p in per if p["ok"]),
+            "failed": sum(1 for p in per if p["ok"] is False),
+            "not_run": sum(1 for p in per if p["ok"] is None),
+            "tests": per,
+        }
+    return {"smokes": rows, "ladder": lad, "contract": con}
 
 
 def deferred_rows(spec, led, state) -> list[dict]:
