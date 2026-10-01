@@ -84,6 +84,30 @@ def test_token_major_solve_matches_and_is_faster():
         print(
             f"\n[tm] B={B}: token-major vs batch-major solve: PCC {p:.6f}, max|diff| {mad:.4e}, FSQ codes equal {codes_eq:.4f}"
         )
+        # The arbiter: the fp32 reference solve on the same inputs (its final x before FSQ).
+        from models.experimental.voxtral_tts.reference import voxtral_flow_ref as fref
+
+        w = fref.load_flow_state()
+        sem = torch.full((B, 1), 100, dtype=torch.long)  # any non-END semantic code
+        _, trace = fref.decode_frame(
+            sem,
+            h_t[:B, 0].float(),
+            w,
+            cfg_alpha=CFG_ALPHA,
+            n_steps=N_DECODING_STEPS,
+            x_0=x0_t.reshape(B, -1),
+            return_trace=True,
+        )
+        x_ref = trace[-1]
+        p_bm, p_tm = pcc(x_bm, x_ref), pcc(x_tm, x_ref)
+        c_bm = float((_fsq_quantize(x_bm) == _fsq_quantize(x_ref)).float().mean())
+        c_tm = float((_fsq_quantize(x_tm) == _fsq_quantize(x_ref)).float().mean())
+        worst_row_bm = min(pcc(x_bm[b], x_ref[b]) for b in range(B))
+        worst_row_tm = min(pcc(x_tm[b], x_ref[b]) for b in range(B))
+        print(
+            f"[tm] B={B}: vs fp32 reference: batch-major PCC {p_bm:.6f} (worst row {worst_row_bm:.4f}, codes {c_bm:.4f}) | "
+            f"token-major PCC {p_tm:.6f} (worst row {worst_row_tm:.4f}, codes {c_tm:.4f})"
+        )
 
         os.environ["VOXTRAL_FLOW_TM"] = "0"
         ms_bm = _traced_ms(dev, lambda: fl._solve(x0, h, B, N_DECODING_STEPS, CFG_ALPHA))
@@ -105,8 +129,10 @@ def test_token_major_solve_matches_and_is_faster():
                 open(RESULTS_PATH, "w"),
                 indent=2,
             )
-        assert p >= 0.999, f"token-major solve diverged from batch-major: PCC {p:.5f}"
-        assert codes_eq >= 0.97, f"FSQ codes differ too often: {codes_eq:.3f}"
+        assert p_tm >= 0.999, f"token-major solve diverged from the fp32 reference: PCC {p_tm:.5f}"
+        assert (
+            p_tm >= p_bm - 0.001
+        ), f"token-major further from the reference than batch-major: {p_tm:.5f} vs {p_bm:.5f}"
     finally:
         os.environ.pop("VOXTRAL_FLOW_TM", None)
         ttnn.close_device(dev)
