@@ -237,6 +237,9 @@ string get_l1_target_str(
 constexpr uint64_t watcher_ring_buf_sem_peek_addr =
     TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR + 4 * (0 + 8);
 
+// A NOC sanitize record still partially written after this many consecutive polls is reported as corruption.
+constexpr uint32_t max_partial_sanitize_polls = 3;
+
 dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t::ConstView mbox_data) {
     uint32_t launch_msg_read_ptr = mbox_data.launch_msg_rd_ptr();
     TT_FATAL(
@@ -735,21 +738,46 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
     auto san = mbox_data_.watcher().sanitize()[noc];
     string error_msg;
 
+    // Quasar DMs publish this record through the cache and flush it to L1 a 64B line at a time, so a
+    // poll can see it partially written. Re-check a partial record on later polls instead of failing.
+    // A published value never equals its field's sentinel.
+    const bool all_sentinel =
+        san.noc_addr() == DEBUG_SANITIZE_SENTINEL_OK_64 && san.l1_addr() == DEBUG_SANITIZE_SENTINEL_OK_32 &&
+        san.len() == DEBUG_SANITIZE_SENTINEL_OK_32 && san.which_risc() == DEBUG_SANITIZE_SENTINEL_OK_16 &&
+        san.is_multicast() == DEBUG_SANITIZE_SENTINEL_OK_8 && san.is_write() == DEBUG_SANITIZE_SENTINEL_OK_8 &&
+        san.is_target() == DEBUG_SANITIZE_SENTINEL_OK_8;
+    const bool no_sentinel =
+        san.noc_addr() != DEBUG_SANITIZE_SENTINEL_OK_64 && san.l1_addr() != DEBUG_SANITIZE_SENTINEL_OK_32 &&
+        san.len() != DEBUG_SANITIZE_SENTINEL_OK_32 && san.which_risc() != DEBUG_SANITIZE_SENTINEL_OK_16 &&
+        san.is_multicast() != DEBUG_SANITIZE_SENTINEL_OK_8 && san.is_write() != DEBUG_SANITIZE_SENTINEL_OK_8 &&
+        san.is_target() != DEBUG_SANITIZE_SENTINEL_OK_8;
+    const bool complete = san.return_code() == dev_msgs::DebugSanitizeOK ? all_sentinel : no_sentinel;
+    const std::pair<CoreCoord, int> record_key{virtual_coord_, noc};
+    if (!complete) {
+        if (++reader_.partial_sanitize_polls_[record_key] < max_partial_sanitize_polls) {
+            return;
+        }
+        error_msg = fmt::format(
+            "Watcher unexpected noc debug state on core {}, partially written record noc{}{{0x{:08x}, {} }} return "
+            "code {}",
+            virtual_coord_.str(),
+            san.which_risc(),
+            san.noc_addr(),
+            san.len(),
+            san.return_code());
+        error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
+        log_warning(tt::LogMetal, "Watcher detected NOC error and stopped device:");
+        log_warning(tt::LogMetal, "{}: {}", core_str_, error_msg);
+        DumpWaypoints(true);
+        DumpRingBuffer(true);
+        LogRunningKernels();
+        reader_.watcher_server.set_exception_message(fmt::format("{}: {}", core_str_, error_msg));
+        TT_THROW("{}: {}", core_str_, error_msg);
+    }
+    reader_.partial_sanitize_polls_.erase(record_key);
+
     switch (san.return_code()) {
-        case dev_msgs::DebugSanitizeOK:
-            if (san.noc_addr() != DEBUG_SANITIZE_SENTINEL_OK_64 || san.l1_addr() != DEBUG_SANITIZE_SENTINEL_OK_32 ||
-                san.len() != DEBUG_SANITIZE_SENTINEL_OK_32 || san.which_risc() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
-                san.is_multicast() != DEBUG_SANITIZE_SENTINEL_OK_8 || san.is_write() != DEBUG_SANITIZE_SENTINEL_OK_8 ||
-                san.is_target() != DEBUG_SANITIZE_SENTINEL_OK_8) {
-                error_msg = fmt::format(
-                    "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
-                    virtual_coord_.str(),
-                    san.which_risc(),
-                    san.noc_addr(),
-                    san.len());
-                error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
-            }
-            break;
+        case dev_msgs::DebugSanitizeOK: break;
         case dev_msgs::DebugSanitizeNocAddrUnderflow:
             error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address underflow).";
