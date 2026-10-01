@@ -66,7 +66,7 @@ class Gemma4Attention:
         ccl_manager,
         layer_idx,
         tensor_cache_path=None,
-        max_batch_size=1,
+        num_kv_slots=1,
         max_seq_len=262144,
         weight_dtype=ttnn.bfloat16,
         ring_kv_cache=None,
@@ -107,7 +107,7 @@ class Gemma4Attention:
                     num_local_kv_heads=num_local_kv_heads,
                     max_seq_len=max_seq_len,
                     num_layers=1,
-                    num_users=max_batch_size,
+                    num_users=num_kv_slots,
                 )
             else:
                 self.ring_kv_cache = init_sliding_ring_kv_cache(
@@ -116,7 +116,7 @@ class Gemma4Attention:
                     head_dim=config.head_dim,
                     max_seq_len=max_seq_len,
                     num_layers=1,
-                    num_users=max_batch_size,
+                    num_users=num_kv_slots,
                 )
             self.ring_max_seq_len = max_seq_len
 
