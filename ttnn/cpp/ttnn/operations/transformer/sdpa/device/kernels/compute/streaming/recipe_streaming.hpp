@@ -374,6 +374,9 @@ void blocked_matmul_and_pack(
 // keeps its compensated fold.
 #if defined(SDPA_PROTO_PA) && !defined(SDPA_RECIPE_FP32)
 #define SDPA_PA 1
+#ifndef SDPA_PA_DETECT_ULPS
+#define SDPA_PA_DETECT_ULPS 256u  // perf research stand-in for the tau threshold (BF16 ordered-key distance)
+#endif
 // Set per K step: the Float32 denominator accumulates onto earlier chunks after the first.
 inline bool sdpa_pa_sum_acc = false;
 #ifndef SDPA_PA_DBG
@@ -423,7 +426,12 @@ inline void calculate_sdpa_pa_bias() {
 #endif
 #endif
 
-template <uint32_t in0_cb, uint32_t scale_cb, uint32_t row_stride, uint32_t pa_scale_fp32 = 0>
+#if defined(SDPA_PA) && defined(SDPA_PA_DETECT)
+// Overflow detection result (perf research: computed, not yet acted on).
+static volatile uint32_t sdpa_pa_overflow = 0;
+#endif
+
+template <uint32_t in0_cb, uint32_t scale_cb, uint32_t row_stride, uint32_t pa_scale_fp32 = 0, bool pa_force_reduce = false>
 void reduce_c_row_group(
     uint32_t out_cb,
     uint32_t prev_cb,
@@ -456,7 +464,7 @@ void reduce_c_row_group(
     tile_regs_acquire();
 
 #if (defined(SDPA_PA) || (defined(SDPA_PROTO_PA32) && defined(SDPA_RECIPE_FP32))) && !defined(SDPA_PA_REDUCE_PROBE)
-    if (do_eltwise_max) {
+    if (do_eltwise_max && !pa_force_reduce) {
         // Reference max: carry the previous maximum unchanged (bitwise), skipping the reduce. A plain copy:
         // the reduce's seeding copy transposes within faces for the reduce's dest layout.
         CircularBuffer(prev_cb).wait_front(cumulative_prev_tiles);
@@ -1654,6 +1662,40 @@ static void sdpa_inner_loop_step(
                 reduce_trigger,
                 overlap_first_half);
             CircularBuffer(cur.max).push_back(cur_qk_h);
+#if defined(SDPA_PA) && defined(SDPA_PA_DETECT)
+            // Overflow detection off the exp's critical path: the carried reference max is already published;
+            // compute the true max into the check CB and compare column 0 on UNPACK.
+            if (!is_first_iter) {
+                constexpr uint32_t pa_check_cb = 8;
+                CircularBuffer(pa_check_cb).reserve_back(cur_qk_h);
+                configure_single_tile_pack(pa_check_cb);
+                reduce_c_row_group<cb_qkt_im, cb_identity_scale_in, KT_stride, scale_fp32, true>(
+                    pa_check_cb, prev.max, cur_qk_index, true, cur_qk_h, active_Sk, false, false);
+                CircularBuffer(pa_check_cb).push_back(cur_qk_h);
+                CircularBuffer(pa_check_cb).wait_front(cur_qk_h);
+                UNPACK({
+                    uint32_t grew = 0;
+                    for (uint32_t t = 0; t < cur_qk_h; ++t) {
+                        auto* m_new = reinterpret_cast<volatile uint32_t*>(
+                            get_tile_l1_byte_address(get_operand_id(pa_check_cb), t));
+                        auto* m_ref = reinterpret_cast<volatile uint32_t*>(
+                            get_tile_l1_byte_address(get_operand_id(prev.max), cur_qk_index * cur_qk_h + t));
+                        for (uint32_t face = 0; face < 2; ++face) {
+                            for (uint32_t r = 0; r < 16; ++r) {
+                                const uint32_t offset = face * 256 + r * 8;
+                                // Order-preserving BF16 keys (sign-magnitude to unsigned).
+                                uint32_t a = m_new[offset] & 0xffffu, b = m_ref[offset] & 0xffffu;
+                                a = (a & 0x8000u) ? (~a & 0xffffu) : (a | 0x8000u);
+                                b = (b & 0x8000u) ? (~b & 0xffffu) : (b | 0x8000u);
+                                grew |= a > b + SDPA_PA_DETECT_ULPS;
+                            }
+                        }
+                    }
+                    sdpa_pa_overflow = sdpa_pa_overflow | grew;
+                })
+                CircularBuffer(pa_check_cb).pop_front(cur_qk_h);
+            }
+#endif
         }
 
         q_index_offset += qkt_subblock_h * in0_block_w;

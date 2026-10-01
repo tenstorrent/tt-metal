@@ -115,7 +115,7 @@ ProgramDescriptor recipe_compute_program(
     // numerator accumulates in CB 9 as Float32; the compensated root CB 8 is unused.
     const bool proto_pa = !fp32 && policy.selection.recipe != Recipe::A && std::getenv("SDPA_PROTO_PA") != nullptr;
     if (proto_pa) {
-        add_cb(8, 1, state_bytes, state_format);
+        add_cb(8, 2, state_bytes, state_format);  // overflow-check maxima (SDPA_PA_DETECT)
         add_cb(9, q_tiles * d_tiles * stride, 4096, tt::DataFormat::Float32);
     } else {
         for (uint8_t index : {8, 9}) {
