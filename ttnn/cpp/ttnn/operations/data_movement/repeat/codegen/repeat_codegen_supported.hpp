@@ -78,8 +78,13 @@ bool supported_by_codegen(
 // the L1 free now, net of the buffers the call has yet to allocate. supported_by_codegen budgets the
 // static window so that it agrees with itself across a cache miss; this keeps a call dispatched under
 // L1 pressure off a codegen leg whose CB would not place, and on native, which stages a narrower stick.
+// `output_preallocated` says the call's output already exists; a last leg that writes it in place then
+// adds nothing to what the free window has already paid for.
 bool row_major_cbs_fit_free_l1(
-    const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config);
+    const Tensor& input,
+    const ttsl::SmallVector<uint32_t>& repeat_dims,
+    const MemoryConfig& output_mem_config,
+    bool output_preallocated);
 
 // Perf-demotion gate: correct but not worth the codegen path. Routing-only --
 // consulted by ttnn::repeat only, never by validate and never by

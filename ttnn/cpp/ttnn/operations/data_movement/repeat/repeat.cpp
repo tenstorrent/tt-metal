@@ -640,7 +640,7 @@ ttnn::Tensor repeat(
         !repeat_codegen::is_demoted(working_tensor, working_repetition_vector, codegen_output_mem_config) &&
         repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, codegen_output_mem_config) &&
         repeat_codegen::row_major_cbs_fit_free_l1(
-            working_tensor, working_repetition_vector, codegen_output_mem_config)) {
+            working_tensor, working_repetition_vector, codegen_output_mem_config, optional_output_tensor.has_value())) {
         // The final leg lands in the prealloc when it can write that placement directly; otherwise the
         // result is copied in.
         return detail::finalize_into_preallocated(
