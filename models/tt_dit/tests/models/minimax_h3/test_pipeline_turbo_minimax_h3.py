@@ -62,7 +62,11 @@ SEED = 0
 PROMPT = CALIBRATED_FOX_PROMPT
 
 # NFE from the model card, plus the terminal sigma: `num_inference_steps` counts grid points.
+# 4 and 8 are the adapter's only distilled working points; any other count is a valid schedule over
+# the wrong sigma grid -- it completes and records a number off the validated operating point, so reject it.
 NUM_FORWARDS = int(os.environ.get("MINIMAX_H3_TURBO_NFE", 4))
+if NUM_FORWARDS not in (4, 8):
+    raise ValueError(f"MINIMAX_H3_TURBO_NFE must be 4 or 8 (the Turbo adapter's distilled NFE), got {NUM_FORWARDS}")
 NUM_INFERENCE_STEPS = NUM_FORWARDS + 1
 
 # One adapter file serves both; the keyframe is the only difference between the two tasks.

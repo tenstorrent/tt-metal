@@ -238,11 +238,14 @@ def _register_fused(attn, qkvs, scale, name, alphas, file_alpha, stack, idx) -> 
     a_fused = torch.cat([qkvs[slot]["A"] for slot in ("q", "k", "v")], dim=0)
 
     # Block-diagonal B over the stacked rank, so each source's delta only reaches its own columns.
+    # q/k/v fuse into one register_lora call, so each source's own alpha/rank is folded into its block
+    # here: a single scale on the call would apply to_q's alpha to all three and misscale a differing k or v.
     padded = []
     for position, slot in enumerate(("q", "k", "v")):
         b = qkvs[slot]["B"]
         if slot in ("q", "k"):
             b = _permute_rotary_rows(b, attn.num_heads, attn.head_dim, perm)
+        b = b * _scale_of(f"{stack}.{idx}.attn.to_{slot}", qkvs[slot], alphas, file_alpha)
         block = torch.zeros(attn.inner_dim, 3 * rank, dtype=b.dtype)
         block[:, position * rank : (position + 1) * rank] = b
         padded.append(block)
@@ -250,9 +253,7 @@ def _register_fused(attn, qkvs, scale, name, alphas, file_alpha, stack, idx) -> 
         padded, attn.n_local_heads, attn.head_dim, attn.parallel_config.tensor_parallel.factor
     )
 
-    alpha = alphas.get(f"{stack}.{idx}.attn.to_q", file_alpha)
-    eff = scale * (1.0 if alpha is None else alpha / rank)
-    return attn.to_qkv.register_lora(a_fused, b_fused, scale=eff, name=name)
+    return attn.to_qkv.register_lora(a_fused, b_fused, scale=scale, name=name)
 
 
 def _permute_rotary_rows(tensor: torch.Tensor, num_heads: int, head_dim: int, perm: torch.Tensor) -> torch.Tensor:
