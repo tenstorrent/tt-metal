@@ -18,8 +18,8 @@
  * (unicast writes, <=4-destination scatter writes, unicast atomic-inc, and the line-multicast
  * atomic-inc barrier), AND the extra egress shapes the reduction and fused collectives (all_reduce,
  * reduce_scatter, and the fused-collective family) need. Those ops reach the fabric through exactly
- * the same egress plumbing — their COMPUTE kernels are untouched by this header and their DATAFLOW
- * kernels are first-class consumers — and what they add is two shapes, both covered below: FUSED
+ * the same egress plumbing — their COMPUTE kernels are untouched by this header — and what they add
+ * is two shapes, both covered below: FUSED
  * write+atomic-inc (payload plus the receiver's semaphore bump in ONE packet), and DUPLEX egress
  * (one connection driving forward AND backward from a single core).
  *
@@ -835,4 +835,4 @@ private:
 
 }  // namespace dataflow_kernel_lib::ccl
 
-#include "ttnn/cpp/ttnn/kernel_lib/ccl_helpers_dataflow.inl"
+#include "ttnn/cpp/ttnn/kernel_lib/ccl/ccl_helpers_dataflow.inl"
