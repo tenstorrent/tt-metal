@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fused-program (chunk_gdn_fused) PRODUCER writer: replaces the prep writer's DRAM drain with a
-// direct NoC hand-off into the NV RECEIVER cores of ONE head (per-head producer form; the pooled
-// form generalizes the item walk and the owner function, not this protocol). Per item (chunk c):
+// direct NoC hand-off into the NV RECEIVER cores of each item's head. The items of this producer
+// (head and chunk per item) come from the shared producer map (chunk_gdn_fused_map.hpp); the head
+// selects the receivers and the credit word. Per item (head h, chunk c):
 //   1. wait for the seven compute-pushed intermediates
 //        v_beta [C,V], t_inv [C,C], nkd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl*I [1 tile]
-//   2. wait credit[h] == NV      — every receiver of head h has reserved chunk c's slots
-//      credit[h] <- 0
+//   2. wait credit[h][slot] == NV  — every receiver of head h has reserved chunk c's slots
+//      credit[h][slot] <- 0
 //   3. v_beta: NV V-slice writes (1x1-rectangle multicasts, unlinked), slice v -> receiver v's ring slot
-//   4. the six V-independent tensors: LINKED multicasts to the head's 1xNV row rectangle (num_dests NV)
+//   4. the six V-independent tensors: LINKED multicasts to the head's receiver rectangle (num_dests NV)
 //   5. noc.async_write_barrier()  — waits for ACKS. A flush only proves departure, and the unicast
 //      slices are not part of the linked chain, so only the barrier orders every byte before VALID.
 //   6. VALID multicast to the rectangle (unlinked: ends the chain)
@@ -22,13 +23,15 @@
 // slot for chunk c is base + ((c*Ct*Vtl) mod (cv*NBUF))*tile; row r of receiver v's slice is source
 // tiles [r*Vt + v*Vtl, +Vtl) of this core's front slot.
 //
-// Credit words: BH words at CB_CREDIT's base + CREDIT_OFF — the last tile of the
+// Credit words: BH x NBUF words at CB_CREDIT's base + CREDIT_OFF — the last tile of the
 // union-declared u/mask CB, hence the same L1 address on every core. Dispatch re-initializes only
 // Semaphore objects per launch, so this kernel zeroes the words itself and then bumps the SEM_INIT
-// semaphore on each of its receivers; a receiver credits nothing before all its producers have done so.
+// semaphore on each receiver of every head it serves; a receiver credits nothing before all its
+// producers have done so.
 //
-// Multicast rectangle: given by the host already ORDERED for this kernel's NoC (NOC_1 wants
-// bottom-right -> top-left; coordinates themselves are virtual and never flipped on Blackhole).
+// Receiver coordinates: common runtime args, HEAD_WORDS per head — the multicast rectangle, already
+// ORDERED for this kernel's NoC (NOC_1 wants bottom-right -> top-left; coordinates themselves are
+// virtual and never flipped on Blackhole), then the NV receivers' coords, two per word.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -37,6 +40,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
+#include "chunk_gdn_fused_map.hpp"
 
 // CB indices (prep compute's output slots == the scan side's hand-off slots;
 // must match chunk_gdn_prep.cpp, chunk_gdn_scan.cpp and the fused program factory).
@@ -60,18 +64,21 @@ void kernel_main() {
     static_assert(!POSTED || UNICAST, "posted hand-off requires the unicast transport");
     static_assert(Vtl * NV == Vt, "NV receivers must tile the full V width");
 
-    const uint32_t NC = get_arg_val<uint32_t>(0);   // GLOBAL chunk count of this head
-    const uint32_t NP = get_arg_val<uint32_t>(1);   // producers for this head
-    const uint32_t p = get_arg_val<uint32_t>(2);    // this producer's index within the head: owns c = p, p+NP, ...
-    const uint32_t h = get_arg_val<uint32_t>(3);    // head index (selects the credit word)
-    const uint32_t BH = get_arg_val<uint32_t>(4);   // number of credit words to zero
-    const uint32_t mx0 = get_arg_val<uint32_t>(5);  // multicast rectangle, ordered for this kernel's NoC
-    const uint32_t my0 = get_arg_val<uint32_t>(6);
-    const uint32_t mx1 = get_arg_val<uint32_t>(7);
-    const uint32_t my1 = get_arg_val<uint32_t>(8);
-    // Receiver v's virtual worker coords: args 9 + 2v, 10 + 2v (v_beta slice targets, init barrier).
-    auto rcv_x = [](uint32_t v) { return get_arg_val<uint32_t>(9 + 2 * v); };
-    auto rcv_y = [](uint32_t v) { return get_arg_val<uint32_t>(10 + 2 * v); };
+    const uint32_t p = get_arg_val<uint32_t>(0);        // this producer's index in the map
+    const uint32_t n_items = get_arg_val<uint32_t>(1);  // its item count
+    const uint32_t BH = get_arg_val<uint32_t>(2);       // heads: credit words to zero, head-table entries
+    const uint32_t NC = get_arg_val<uint32_t>(3);
+    const GdnFusedMap map{
+        BH, NC, get_arg_val<uint32_t>(4), get_arg_val<uint32_t>(5), get_arg_val<uint32_t>(6), get_arg_val<uint32_t>(7)};
+    // The heads this producer serves, one bit each: words 8 .. 8 + ceil(BH / 32) - 1.
+    auto serves_head = [](uint32_t h) { return (get_arg_val<uint32_t>(8 + h / 32) >> (h % 32)) & 1u; };
+    // Common args, per head: the rectangle word x0 | y0 << 8 | x1 << 16 | y1 << 24, then the receivers'
+    // coords x | y << 8, two per word (receiver v in the low half of word 1 + v/2 when v is even).
+    constexpr uint32_t HEAD_WORDS = 1 + (NV + 1) / 2;
+    auto rect_word = [](uint32_t h) { return get_common_arg_val<uint32_t>(h * HEAD_WORDS); };
+    auto rcv_word = [](uint32_t h, uint32_t v) {
+        return (get_common_arg_val<uint32_t>(h * HEAD_WORDS + 1 + v / 2) >> (16 * (v % 2))) & 0xFFFFu;
+    };
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
@@ -92,7 +99,24 @@ void kernel_main() {
     for (uint32_t s = 0; s < NBUF; s++) {
         Semaphore<>(SEM_VALID + s).set(VALID);
     }
-    // Send chunk c's VALID to the head's receivers: their word for slot (c % NBUF).
+
+    // The current item's receivers: coords of the NV receivers and the multicast rectangle of its head.
+    uint32_t rx[NV], ry[NV];
+    uint32_t mx0 = 0, my0 = 0, mx1 = 0, my1 = 0;
+    auto load_head = [&](uint32_t h) {
+        for (uint32_t v = 0; v < NV; v++) {
+            const uint32_t w = rcv_word(h, v);
+            rx[v] = w & 0xFFu;
+            ry[v] = w >> 8;
+        }
+        const uint32_t r = rect_word(h);
+        mx0 = r & 0xFFu;
+        my0 = (r >> 8) & 0xFFu;
+        mx1 = (r >> 16) & 0xFFu;
+        my1 = r >> 24;
+    };
+
+    // Send chunk c's VALID to the current head's receivers: their word for slot (c % NBUF).
     auto set_valid = [&](uint32_t slot) {
         if constexpr (POSTED) {
             // Ordered behind this item's posted data writes: same NIU, same write command buffer, same
@@ -101,32 +125,33 @@ void kernel_main() {
             const uint32_t word = get_semaphore(SEM_VALID + slot);
             for (uint32_t v = 0; v < NV; v++) {
                 noc.async_write(
-                    CoreLocalMem<uint32_t>(word),
-                    ucast_dst,
-                    4,
-                    {},
-                    {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = word});
+                    CoreLocalMem<uint32_t>(word), ucast_dst, 4, {}, {.noc_x = rx[v], .noc_y = ry[v], .addr = word});
             }
         } else if constexpr (UNICAST) {
             const uint32_t word = get_semaphore(SEM_VALID + slot);  // same L1 offset on every core
             for (uint32_t v = 0; v < NV; v++) {
-                noc_semaphore_set_remote(
-                    word, get_noc_addr(rcv_x(v), rcv_y(v), word, noc.get_noc_id()), noc.get_noc_id());
+                noc_semaphore_set_remote(word, get_noc_addr(rx[v], ry[v], word, noc.get_noc_id()), noc.get_noc_id());
             }
         } else {
             Semaphore<>(SEM_VALID + slot).set_multicast(noc, mx0, my0, mx1, my1, NV);  // unlinked: ends the chain
         }
     };
 
-    // Credit words credit[h][slot] (BH x NBUF): zero them, then tell every receiver of this head
-    // (init barrier).
+    // Credit words credit[h][slot] (BH x NBUF): zero them, then tell every receiver of every head this
+    // producer serves (init barrier).
     volatile tt_l1_ptr uint32_t* credit =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF);
     for (uint32_t i = 0; i < BH * NBUF; i++) {
         noc_semaphore_set(credit + i, 0);
     }
-    for (uint32_t v = 0; v < NV; v++) {
-        init.up(noc, rcv_x(v), rcv_y(v), 1);
+    for (uint32_t h = 0; h < BH; h++) {
+        if (!serves_head(h)) {
+            continue;
+        }
+        load_head(h);
+        for (uint32_t v = 0; v < NV; v++) {
+            init.up(noc, rx[v], ry[v], 1);
+        }
     }
 
     // Hand-off CB base addresses, captured BEFORE any pop (read_ptr starts at the CB base, and
@@ -140,7 +165,6 @@ void kernel_main() {
     const uint32_t base_dl = CircularBuffer(cb_dl).get_read_ptr();
 
     MulticastEndpoint mcast_dst;
-    // One LINKED multicast of a shared CB's front slot into the head's rectangle.
     auto send_unicast = [&](uint32_t src_addr, uint32_t v, uint32_t n, uint32_t dst_addr) {
         if constexpr (POSTED) {
             noc.async_write<NocOptions::POSTED>(
@@ -148,16 +172,17 @@ void kernel_main() {
                 ucast_dst,
                 n * tb,
                 {},
-                {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = dst_addr});
+                {.noc_x = rx[v], .noc_y = ry[v], .addr = dst_addr});
         } else {
             noc.async_write(
                 CoreLocalMem<uint32_t>(src_addr),
                 ucast_dst,
                 n * tb,
                 {},
-                {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = dst_addr});
+                {.noc_x = rx[v], .noc_y = ry[v], .addr = dst_addr});
         }
     };
+    // One LINKED multicast of a shared CB's front slot into the head's rectangle (NV unicasts with UNICAST).
     auto send_shared = [&](uint32_t cb_id, uint32_t n, uint32_t dst_addr) {
         const uint32_t addr = CircularBuffer(cb_id).get_read_ptr();
         if constexpr (UNICAST) {
@@ -187,16 +212,16 @@ void kernel_main() {
             n * tb,
             1,
             {},
-            {.noc_x_start = rcv_x(v),
-             .noc_y_start = rcv_y(v),
-             .noc_x_end = rcv_x(v),
-             .noc_y_end = rcv_y(v),
-             .addr = dst_addr},
+            {.noc_x_start = rx[v], .noc_y_start = ry[v], .noc_x_end = rx[v], .noc_y_end = ry[v], .addr = dst_addr},
             /*linked=*/false);
     };
 
-    for (uint32_t c = p; c < NC; c += NP) {
+    for (uint32_t n = 0; n < n_items; n++) {
+        const GdnFusedItem item = gdn_fused_item(map, p, n);
+        const uint32_t h = item.h;
+        const uint32_t c = item.c;
         const uint32_t slot = c % NBUF;  // the receivers' reserved slot for GLOBAL chunk c (shared CBs)
+        load_head(h);
         // Wait for the chunk's outputs in the phased prep writer's drain order (roughly
         // compute's push order), so producer-side backpressure matches that writer exactly.
         {

@@ -18,10 +18,11 @@
 //                        — arrive over the NoC from the producers' writers. This core is receiver
 //                        (h, vb) of NV per head: it carries V columns [vb*Vt, +Vt) (Vt = the slice
 //                        width, CT arg 2). Handshake per chunk: reserve the 7 CBs -> reset VALID ->
-//                        atomically increment credit[h] on the producer that owns the chunk
-//                        (c % NP of this head) -> wait VALID -> push. The producer sends only once
-//                        all NV receivers have credited. A one-time init barrier (SEM_INIT) orders
-//                        the producers' zeroing of their credit words before any credit.
+//                        atomically increment credit[h] on the producer that owns the chunk (the
+//                        shared producer map, chunk_gdn_fused_map.hpp) -> wait VALID -> push. The
+//                        producer sends only once all NV receivers have credited. A one-time init
+//                        barrier (SEM_INIT) orders the producers' zeroing of their credit words
+//                        before any credit.
 // The handshake follows the production matmul in0 mcast idiom (reader_bmm_tile_layout_in0_
 // sender_padding.cpp / _receiver.cpp): ready counts receivers that RESERVED space (so the sender
 // can never overwrite unconsumed data), the data mcasts and the valid-flag mcast share one NOC /
@@ -45,6 +46,9 @@
 #include "hostdevcommon/common_values.hpp"
 // Semaphore ids (SEM_READY/SEM_VALID) arrive as the two trailing compile-time args after the
 // accessor chain — read in kernel_main below, so factory and kernel cannot drift.
+#endif
+#if defined(GDN_FUSED_RECEIVER)
+#include "chunk_gdn_fused_map.hpp"
 #endif
 
 // The seven per-chunk input CBs sit at PREP'S OUTPUT indices (v_beta=14, dl=22; the rest were
@@ -105,14 +109,24 @@ void kernel_main() {
     const uint32_t NC = get_arg_val<uint32_t>(2);
 #if defined(GDN_FUSED_RECEIVER)
     const uint32_t s0_addr = get_arg_val<uint32_t>(3);
-    // NP producers share this head's prep work round-robin (producer p owns chunks c = p, p+NP,
-    // ...); the per-chunk credit goes to producer (c % NP) — that rotation IS the in-order delivery
-    // mechanism: a producer sends chunk c only once every receiver of the head has reserved chunk
-    // c's slots, so at most one hand-off per receiver is in flight and VALIDs cannot interleave.
-    // N_INIT = init-barrier increments to expect before the first credit (NP in the per-head form).
-    // The producers' virtual worker coords follow as NP (x, y) pairs from arg 6.
-    const uint32_t NP = get_arg_val<uint32_t>(4);
-    const uint32_t N_INIT = get_arg_val<uint32_t>(5);
+    // The per-chunk credit goes to the producer the shared map assigns chunk c of this head — a
+    // producer sends chunk c only once every receiver of the head has reserved chunk c's slots. A
+    // receiver keeps up to NBUF-1 hand-offs in flight, each signalled on its own slot's VALID flag, so
+    // the VALIDs of different chunks cannot interleave.
+    // N_INIT = init-barrier increments to expect before the first credit: the distinct producers that
+    // serve this head. kickoff_wait_cycles holds the initial-state read back, out of chunk 0's
+    // input-read burst. Map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp. Common args:
+    // the producers' virtual worker coords x | y << 8, two per word, producer p in word p / 2.
+    const uint32_t N_INIT = get_arg_val<uint32_t>(4);
+    const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(5);
+    const GdnFusedMap map{
+        get_arg_val<uint32_t>(6),
+        NC,
+        get_arg_val<uint32_t>(7),
+        get_arg_val<uint32_t>(8),
+        get_arg_val<uint32_t>(9),
+        get_arg_val<uint32_t>(10)};
+    auto producer_word = [](uint32_t p) { return (get_common_arg_val<uint32_t>(p / 2) >> (16 * (p % 2))) & 0xFFFFu; };
 #elif defined(GDN_MCAST_RECEIVER)
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
     const uint32_t s0_addr = get_arg_val<uint32_t>(4);
@@ -188,9 +202,12 @@ void kernel_main() {
         cb.push_back(R * Vt);
     };
 
-    // initial state S [K, V] (once) — a required input (the public op builds zeros for a fresh sequence). V-sliced
-    // (degenerates to the full state on fused receivers: vb = 0, Vt = Vt_full).
+    // initial state S [K, V] (once) — a required input (the public op builds zeros for a fresh sequence). V-sliced.
+    // The fused receiver reads it after its first credits (below): the state is first needed when chunk 0 arrives,
+    // and a producer whose item is done must not wait on this read for its credit.
+#if !defined(GDN_FUSED_RECEIVER)
     read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+#endif
 
     // One fp32 identity tile for the compute's `I @ v_beta` DST accumulation (scan_step). Written once,
     // never popped: the NoC zero-fills the tile (a loopback read of the firmware's zero region, no RISC
@@ -376,13 +393,9 @@ void kernel_main() {
         // Credit the owner of chunk c by incrementing ITS copy of credit[h][slot]. INVARIANT: a slot
         // is credited only after it was reserved, i.e. after compute popped the chunk
         // that last used it — which the producer's VALID for that chunk preceded, which its reset of
-        // this very word preceded. Hence the word counts exactly one chunk at a time for any NP.
-        const uint32_t pi = c % NP;
-        const uint64_t dst = get_noc_addr(
-            get_arg_val<uint32_t>(6 + 2 * pi),
-            get_arg_val<uint32_t>(7 + 2 * pi),
-            credit_base + 4 * slot,
-            noc.get_noc_id());
+        // this very word preceded. Hence the word counts exactly one chunk at a time for any map.
+        const uint32_t pw = producer_word(gdn_fused_owner(map, h, c));
+        const uint64_t dst = get_noc_addr(pw & 0xFFu, pw >> 8, credit_base + 4 * slot, noc.get_noc_id());
         noc_semaphore_inc(dst, 1, noc.get_noc_id());
     };
 
@@ -391,6 +404,12 @@ void kernel_main() {
     for (; next < nmin; next++) {
         issue(next);
     }
+    // Initial state, after the first credits are out and, if asked, after a hold that keeps this read out of the
+    // kickoff burst of chunk 0's input reads (the state is needed one prep item from now).
+    if (kickoff_wait_cycles != 0) {
+        riscv_wait(kickoff_wait_cycles);
+    }
+    read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
     for (uint32_t c = 0; c < NC; c++) {
         {
             DeviceZoneScopedN("rx_wait_valid");
