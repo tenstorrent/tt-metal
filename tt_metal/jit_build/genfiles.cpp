@@ -222,6 +222,27 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         vector<string> template_args;
     };
 
+    // Config for generating programmatic binding token getter for the binding.
+    //
+    // Programmatic binding token getter is a token getter structured like this:
+    // auto get_token_if_present() {
+    //     if constexpr (name == "entry_name") {
+    //         return &entry_name;
+    //     }
+    //     ...
+    //     else {
+    //         return nullptr;
+    //     }
+    // }
+    //
+    // This is emitted regardless of there is any entries in the binding.
+    struct ProgrammaticBindingTokenGetterConfig {
+        // The pointed-to type to return when there's no entries within the binding.
+        //
+        // If this is absent, it will use the binding type associated with the binding instead.
+        optional<string> null_binding_type;
+    };
+
     // Represent a class of Binding (e.g. Scratchpad binding)
     struct Binding {
         // Object invariant:
@@ -232,7 +253,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         bool is_binding_type_templated = false;
         set<string> includes;
         vector<BindingEntry> entries;
-        bool omit_programmatic_binding_token_getter = false;
+
+        // Generates programmatic binding token getter for the binding.
+        optional<ProgrammaticBindingTokenGetterConfig> programmatic_getter_config;
     };
 
     Binding general_dfb_binding{
@@ -240,7 +263,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         .emission_namespace = "dfb",
         .binding_type = "DFBBindingToken",
         .includes = {"api/dataflow/dataflow_buffer.h"},
-        .omit_programmatic_binding_token_getter = true};
+        // Enables programmatic binding token getter for general dfb
+        .programmatic_getter_config = ProgrammaticBindingTokenGetterConfig{},
+    };
 
     Binding relay_dfb_binding{
         .name = "RelayDFBBindingToken",
@@ -304,6 +329,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         .binding_type = "::tensor_accessor::TensorBindingToken",
         .is_binding_type_templated = true,
         .includes = {"api/tensor/tensor_binding_token.h"},
+        .programmatic_getter_config =
+            ProgrammaticBindingTokenGetterConfig{
+                .null_binding_type = "::tensor_accessor::NullTensorBindingToken",
+            },
     };
 
     // TODO: ordering && hashing
@@ -329,6 +358,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         .binding_type = "ScratchpadBindingToken",
         .includes = {"api/scratchpad.h"},
         .entries = {},  // assigned later
+        .programmatic_getter_config = ProgrammaticBindingTokenGetterConfig{},
     };
 
     // TODO: ordering && hashing
@@ -391,7 +421,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     };
 
     auto bindings_with_token_getters = ranges::filter_view(
-        all_bindings, [](const auto& binding) { return binding.omit_programmatic_binding_token_getter; });
+        all_bindings, [](const auto& binding) { return binding.programmatic_getter_config.has_value(); });
 
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
@@ -510,9 +540,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         for (const auto& binding : bindings) {
             emit_binding_entries(binding->binding_type, binding->entries);
 
-            // if (binding->omit_programmatic_binding_token_getter) {
-            //     emit_programmatic_binding_token_getter(content, binding->entries, binding->binding_type);
-            // }
+            if (const auto& getter_config = binding->programmatic_getter_config) {
+                string_view null_binding_type = binding->binding_type;
+                if (const auto& nb_override = getter_config->null_binding_type) {
+                    null_binding_type = *nb_override;
+                }
+                emit_programmatic_binding_token_getter(content, binding->entries, null_binding_type);
+            }
         }
 
         content << "}  // namespace " << namespace_ << "\n";
