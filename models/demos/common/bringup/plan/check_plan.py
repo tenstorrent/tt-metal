@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 
 import torch
 
@@ -46,6 +47,11 @@ def main(argv=None):
         print(f"  {r['group']:60s} {r['gb']:8.2f} GB")
     if "total_gb" in res:
         print(f"  {'TOTAL per chip':60s} {res['total_gb']:8.2f} GB of {res['budget_gb']:.2f} GB budget")
+    # F58: a plan made after the serving contract must say how its layout meets it
+    md = spec.bringup_dir / "serving_contract.md"
+    plan_md = spec.bringup_dir / "plan.md"
+    if md.exists() and not (plan_md.exists() and re.search(r"^##\s+Serving contract\b", plan_md.read_text(), re.M)):
+        res["errors"].append("plan.md has no '## Serving contract' section answering serving_contract.md")
     for e in res["errors"]:
         print(f"PLAN ERROR {e}")
 

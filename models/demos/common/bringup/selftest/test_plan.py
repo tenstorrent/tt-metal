@@ -142,8 +142,8 @@ def test_ledger_generator(fx):
     s = Spec.load(fx())
     out = generate(s, Reference())
     ids = [t["id"] for t in out["tasks"]]
-    assert ids[:7] == ["R.1", "R.2", "R.3", "G.s256", "G.s512", "B.1", "PL.0"]
-    assert [t["id"] for t in generate(s, early=True)["tasks"]] == ids[:7]
+    assert ids[:8] == ["R.1", "R.2", "R.3", "G.s256", "G.s512", "B.1", "SC.1", "PL.0"]
+    assert [t["id"] for t in generate(s, early=True)["tasks"]] == ids[:8]
     assert [i for i in ids if i.startswith("C.")] == [f"C.blk.{st.name}" for st in Reference().block_graph(0)]
     assert [i for i in ids if i.startswith("S.")] == [f"S.blk.{n:02d}" for n in range(1, 7)]
     assert ids[-8:] == ["L.s256", "L.s512", "L.last", "K.1", "X.1", "X.2", "X.3", "O.1"]
@@ -260,3 +260,70 @@ def test_profile_gates_size_the_profiler_for_large_models():
         int(w.split("=")[1]) for w in PROFILE_ENV.split() if w.startswith("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=")
     ]
     assert counts and counts[0] >= 4000
+
+
+SERVING_MD = """# Serving contract for fixture (tt-d-gen @ 24c381bb6d39)
+
+## Input
+Tokens arrive rotated for any start.
+
+## KV cache
+One region per slot.
+
+## Attention and cache writes
+Write the KV at any 32-aligned start.
+
+## Acks
+One device-to-host ack per layer.
+
+## Adapter and table
+build_kv_chunk_table(kv, path, first_layer_idx=..., num_my_layers=..., stage_layout=...).
+
+## Deployment
+PREFILL_FABRIC_MODE=2d.
+
+## Questions for the owner
+KV dtype for the decode side? (default bf16)
+"""
+
+
+def test_serving_contract_gates_the_steps_it_names(fx):
+    """F58: SC.1 comes before the plan; its tests join the gates of the steps they name and the runner test joins
+    K.1; a step's brief carries its how-to section; the SC.1 gate checks the files agree."""
+    from models.demos.common.bringup.testing import serving as SV
+
+    s = Spec.load(fx())
+    s.repo.mkdir(exist_ok=True)
+    tdir = s.repo / "models/demos/fixture/tests/bringup/contract"
+    tdir.mkdir(parents=True)
+    for n in ("test_contract_kv_write.py", "test_contract_runner.py"):
+        (tdir / n).write_text("def test_x():\n    assert False, 'not built'\n")
+    write(s, "serving_contract.md", SERVING_MD)
+    tests = [
+        {
+            "test": "models/demos/fixture/tests/bringup/contract/test_contract_kv_write.py",
+            "checks": "unaligned starts",
+            "section": "Attention and cache writes",
+            "gates": "attention",
+        },
+        {
+            "test": "models/demos/fixture/tests/bringup/contract/test_contract_runner.py",
+            "checks": "real runner",
+            "section": "Adapter and table",
+            "gates": "adapter",
+        },
+    ]
+    write(s, "contract_tests.yaml", {"tests": tests})
+    assert SV.check(s, s.repo) == []
+    t = {x["id"]: x for x in generate(s, Reference())["tasks"]}
+    assert t["SC.1"]["role"] == "serving" and "SC.1" in t["PL.1"]["deps"]
+    assert "test_contract_kv_write.py" in t["C.blk.attention"]["gate"]["cmd"]
+    assert "test_contract_kv_write.py" not in t["C.blk.mlp"]["gate"]["cmd"]
+    assert "test_contract_runner.py" in t["K.1"]["gate"]["cmd"]
+    text = SV.brief_text(s, "attention")
+    assert "Write the KV at any 32-aligned start." in text and "test_contract_kv_write.py" in text
+    assert SV.brief_text(s, "mlp") == ""
+    write(s, "serving_contract.md", SERVING_MD.replace("## Acks\n", "## Ackz\n"))
+    assert any("'## Acks' missing" in e for e in SV.check(s, s.repo))
+    write(s, "contract_tests.yaml", {"tests": tests[:1]})
+    assert any("no runner test" in e for e in SV.check(s, s.repo))

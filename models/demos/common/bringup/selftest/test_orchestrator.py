@@ -277,10 +277,10 @@ def test_a_task_shows_running_while_its_agent_works(orch):
     o = orch([impl_task()], {"C.1.implement.1.md": {"write": {"src/impl.txt": "1.0"}}})
     real = o.run_agent
 
-    def spy(task, role, attempt, brief):
+    def spy(task, role, attempt, brief, **kw):
         if role == "implement":
             seen.append(o.led.state().get(task["id"], {}).get("status"))
-        return real(task, role, attempt, brief)
+        return real(task, role, attempt, brief, **kw)
 
     o.run_agent = spy
     assert o.run() == DONE and seen[-1] == "RUNNING"
