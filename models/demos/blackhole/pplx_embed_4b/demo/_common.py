@@ -550,8 +550,13 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # embeddings bit-identical at both. bs32's K / V (297 KB per core) fit only beside quarter-batch QKV chunks
     # (QWEN_QKV_CHUNKS=4, above; with two half-batch chunks they clash with the first chunk's QKV matmul): SDPA per
     # layer 549 -> 499 us, device replay -1.1 ms, cold -0.7 / -1.5 ms on two chips (NEGATIVE_RESULTS 66).
-    # Opt out: QWEN_HEADS_KV_L1=0.
-    if (batch_size in (8, 16) or (batch_size == 32 and os.getenv("QWEN_QKV_CHUNKS") == "4")) and seq_len == 512:
+    # Opt out: QWEN_HEADS_KV_L1=0. Non-causal only: the causal (Qwen3-Embedding) SDPA keeps the model's own program
+    # config instead of reuse_kv q128, and its static CBs clash with K / V buffers in L1 (TT_THROW at bs8 / 16 / 32).
+    if (
+        (batch_size in (8, 16) or (batch_size == 32 and os.getenv("QWEN_QKV_CHUNKS") == "4"))
+        and seq_len == 512
+        and os.getenv("QWEN_SDPA_CAUSAL", "0") != "1"
+    ):
         os.environ.setdefault("QWEN_HEADS_KV_L1", "1")
     # bs1 SDPA: q_chunk 256 doubles the work units (32 -> 64) so the 8x8 grid is full; k stays 256.
     # Standalone at the model's config (LoFi, fp32 acc off = streaming kernel, exp approx, bfp8
