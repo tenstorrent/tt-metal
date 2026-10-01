@@ -28,6 +28,13 @@ class RingCCL:
         # forward / backward all-gather + the halo semaphore (the op takes three).
         self.ring_semaphores = [ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(3)]
         self._buffers = {}
+        self._consts = {}
+
+    def constant(self, key, build):
+        """A load-time device constant shared by every module on this mesh (built once by build())."""
+        if key not in self._consts:
+            self._consts[key] = build()
+        return self._consts[key]
 
     def gather_buffer(self, key: str, n_kv: int, seq: int, head_dim: int, dtype) -> ttnn.Tensor:
         """Persistent [1, n_kv, seq, head_dim] ring-gather scratch, replicated (TP=1: every chip holds every KV
@@ -45,6 +52,6 @@ class RingCCL:
         return self._buffers[k]
 
     def free(self):
-        for t in self._buffers.values():
+        for t in (*self._buffers.values(), *self._consts.values()):
             ttnn.deallocate(t)
-        self._buffers = {}
+        self._buffers, self._consts = {}, {}

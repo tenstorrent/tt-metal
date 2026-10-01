@@ -143,3 +143,28 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Verified: reference passes (pcc 0.999997, rel 0.0024, worst row 0.0053). Stub fails (pcc 0). The device gate already passes with the existing TtRMSNorm registration: pcc 0.999996, rel 0.0027, ratio [0.9937, 1.0062], worst row 0.0070, slices 0.0025-0.0029, x0.1 rel 0.0025 / worst row 0.0057.
 - The first `FAIL pcc=0` line is the precompile collect pass. Ignore it.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_attn_norm.py` (with `BRINGUP_IMPL=reference` / `stub` for the freeze checks).
+
+## C.sliding_moe.attention.test.1 (test review)
+- Ported the prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attention.py` (same golden: s4096 chunk 1, start 2048, attn_norm [2048, 4096] -> attn_out). It keeps all of the prior's checks: PCC >= 0.99 (gated), finite, rel L2 whole and first 128 rows <= 0.02, per-token norm ratio [0.95, 1.05], worst row rel <= 0.08, and output closer to the CPU reference at window 128 than at 127 / 129.
+- Added for CP=4: rel L2 per CP slice <= 0.02 (`rel_l2_cp_slice{r}_attention_L01`) and rel L2 over the halo rows (first 128 rows of slices 1..3) <= 0.02 (`rel_l2_halo_rows_attention_L01`).
+- CPU mutation measurements (script /tmp/cp4sa/m.py, not kept; numbers in the test docstring): a 96-row halo passes the whole-chunk rel (0.0197) but fails halo rows (0.043) and the ratio. A 120-row halo is caught by the ratio (0.937). No halo is loud (PCC 0.988). RoPE restarting per slice fails PCC (the sink-dominated softmax explodes on wrong relative positions).
+- Verified: BRINGUP_IMPL=reference passes (pcc 0.999989, rel 0.0047, slices 0.0044-0.0051, halo rows 0.0048, window check 0.0085 / 0.0093 vs 0). Stub fails (pcc 0). The device gate fails with NotImplementedError (no sliding module yet; hooks.py:115).
+- The device module must return the full chunk's attn_out in chunk row order (slice r = rows r*512..).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_attention.py` (with `BRINGUP_IMPL=reference` / `stub` for the freeze checks).
+
+## C.sliding_moe.attention.implement.1 (implement)
+- `tt/attention.py`: `TtSlidingAttention(TtFullAttention)`, CP=4, TP=1 (all 64 Q / 8 KV heads, whole qkv / o_proj per chip, no CCL after o_proj). I split `TtFullAttention.__call__` into `_qkv_rope` / `_write_cache` / `_attend` / `_o_proj` (same ops, full-layer gate unchanged: pcc 0.999997, rel 0.0028) and added `q_scale` (folded into the Q rows). Sliding: RoPE theta 1e4 (`swa_rope_theta`), SDPA scale 2^-4 with 192^-0.5 / 2^-4 folded into Q, sink / 2^-4 replicated [1, 64, 1, 1] bf16, V x 0.707 zero-padded to 192.
+- Departure from the plan (components.yaml says ring_joint): the ring op's sliding path is not used, for two reasons.
+  (1) `topology=Linear` hangs on this FABRIC_2D 1x4 box: the halo writer is stuck on a fabric write slot in the chip 3 -> chip 0 wrap (triage in the proposed known issue). `Topology.Ring` runs.
+  (2) With Ring it scores rel 0.032, ratio [0.927, 1.038] (fails). Plain SDPA on the same device Q/K/V scores 0.0133 (bf16 K/V, preset S), 0.0165 (bfp8 K/V), and 0.0087 / 0.0094 with fp32 dest. bfp8 K/V costs nothing on the CPU (0.0047 -> 0.0049), so the gap comes from the ring kernel.
+- What runs instead (all TTNN, no host work in the forward):
+  - halo = `all_gather` (dim 2, axis 1) of each chip's [this slice's last 128 K|V rows; the previous chunk's last 128 rows from its own chunk-major cache].
+  - An identical reorder on every chip ([B3 A0 A1 A2]), then `mesh_partition`, so chip r gets its predecessor's tail (chip 0 gets chip 3's tail of the previous chunk).
+  - `ttnn.transformer.scaled_dot_product_attention(concat(q[:128], q), concat(halo, k), concat(halo, v), is_causal, sliding_window_size=128, attention_sink)`, then output rows [128, 128+L), then V slice 128 -> concat_heads -> o_proj.
+  - Chunk 0 (start == 0): non-causal with a per-chip attn_mask built at load per chunk size (window, and on chip 0 no halo column), shared across layers through `RingCCL.constant`.
+  - Preset S (HiFi4, fp32 dest off, exact exp, q128/k128), as the owner rule says. `MIMO_SLIDING_SDPA_CFG=base` turns fp32 dest on.
+- Sliding ring cache: bf16, no ring gather buffers (`gather_seq=0`), not the plan's bfp8. That is about +1.7 GB per chip over the plan for the 39 sliding layers at 56320, still well inside the budget (plan 15.95 of 27.2 GiB). A plan update should record this.
+- hooks: `_attention_module` builds the sliding module (sink, window, swa theta). `DEVICE_STEPS["sliding_moe"]` = {attention}. attn_norm is not listed there yet: it passed C/S.01 through `device_component`, but it was never added to the hybrid.
+- Gate: pcc 0.999913, rel 0.0133, first 128 rows 0.0114, ratio [0.9629, 1.0450], worst row 0.045, slices 0.012-0.014, halo rows 0.0137. Window check: 0.01258 vs 0.01579 (127) and 0.01471 (129).
+- Probe (not kept): chunk 0 then chunk 1 on one device cache: chunk 0 rel 0.0143, ratio [0.9535, 1.0515] (the max is 0.0015 over the 1.05 limit; chunk 0 is not gated here, but a ladder check on chunk-0 rows may be). Chunk 1 rel 0.0133. The row norm ratio is the margin to watch; `base` would tighten it, but the owner's preset is S.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_attention.py`

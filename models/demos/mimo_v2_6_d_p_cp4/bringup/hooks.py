@@ -98,8 +98,8 @@ def _chunk_sizes(spec):
 
 
 def _attention_module(mesh, spec, layer, ccl, loader=None, cfg=None):
-    """TtFullAttention (CP=4 ring, TP=1) for one full layer, loading only its attention weights (fused qkv dequantized
-    per stored TP-rank slab and reassembled in global order, bf16 o_proj)."""
+    """TtFullAttention / TtSlidingAttention (CP=4 ring, TP=1) for one layer, loading only its attention weights
+    (fused qkv dequantized per stored TP-rank slab and reassembled in global order, bf16 o_proj, bf16 sink)."""
     import os
 
     import torch
@@ -107,29 +107,23 @@ def _attention_module(mesh, spec, layer, ccl, loader=None, cfg=None):
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig, rope_inv_freq
     from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader, qkv_weight
-    from models.demos.mimo_v2_6_d_p_cp4.tt.attention import TtFullAttention
+    from models.demos.mimo_v2_6_d_p_cp4.tt.attention import TtFullAttention, TtSlidingAttention
 
     loader = loader or WeightLoader(hf_path(spec))
     cfg = cfg or MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
-    if cfg.is_sliding(layer):
-        raise NotImplementedError(f"implement step: no device module for sliding attention (layer {layer}) yet")
-    assert not cfg.has_sink(layer)
+    sliding = cfg.is_sliding(layer)
     hq, hkv, d, dv = cfg.attn_dims(layer)
     p = f"model.layers.{layer}.self_attn."
     wqkv = qkv_weight(loader, p, (hq * d, hkv * d, hkv * dv), torch.float32)
     wo = loader.get(p + "o_proj.weight").float()
-    inv_freq = rope_inv_freq(cfg.rope_theta, cfg.rope_dim(layer))
-    module = TtFullAttention(
-        mesh,
-        ccl,
-        wqkv,
-        wo,
-        (hq, hkv, d, dv),
-        inv_freq,
-        _rope_max_seq(spec),
-        cfg.attention_value_scale,
-        _chunk_sizes(spec),
-    )
+    inv_freq = rope_inv_freq(cfg.swa_rope_theta if sliding else cfg.rope_theta, cfg.rope_dim(layer))
+    common = (mesh, ccl, wqkv, wo, (hq, hkv, d, dv), inv_freq, _rope_max_seq(spec), cfg.attention_value_scale)
+    if sliding:
+        sink = loader.get(p + "attention_sink_bias").float() if cfg.has_sink(layer) else None
+        module = TtSlidingAttention(*common, _chunk_sizes(spec), cfg.sliding_window, sink)
+    else:
+        assert not cfg.has_sink(layer)
+        module = TtFullAttention(*common, _chunk_sizes(spec))
     return module, cfg
 
 
@@ -185,7 +179,7 @@ def device_component(mesh, spec, layer, step):
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
-    "sliding_moe": set(),
+    "sliding_moe": {"attention"},
     "full_moe": set(),
 }
 

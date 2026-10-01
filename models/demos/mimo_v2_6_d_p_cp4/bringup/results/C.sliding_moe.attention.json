@@ -1,0 +1,53 @@
+{
+ "metrics": {
+  "pcc_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 0.9999131171144343
+  },
+  "rel_l2_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 0.01327882707118988
+  },
+  "rel_l2_cp_slice0_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 0.012063528411090374
+  },
+  "rel_l2_cp_slice1_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 0.014032364822924137
+  },
+  "rel_l2_cp_slice2_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 0.012567058205604553
+  },
+  "rel_l2_cp_slice3_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 0.014014863409101963
+  },
+  "rel_l2_halo_rows_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 0.01370939426124096
+  },
+  "rel_l2_head_rows_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 0.011446118354797363
+  },
+  "rel_l2_vs_cpu_window_attention_L01": {
+   "t": "2026-10-01T00:34:57",
+   "value": 0.012580492533743382
+  },
+  "row_norm_ratio_max_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 1.0450440645217896
+  },
+  "row_norm_ratio_min_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 0.9629172682762146
+  },
+  "worst_row_rel_l2_attention_L01": {
+   "t": "2026-10-01T00:34:56",
+   "value": 0.04538058862090111
+  }
+ },
+ "task": "C.sliding_moe.attention"
+}
