@@ -157,6 +157,10 @@ class LTXCausalConv3d(Module):
         # (logical_w), replacing the mask multiply over the whole activation. Only the fused 2D halo (H and W
         # both sharded) supports it.
         self.fold_w_mask = os.environ.get("LTX_VAE_FOLD_W_MASK", "1") != "0"
+        # On by default (LTX_VAE_HALO_ONLY=0 turns it off): exchange only the halo into a compact buffer that
+        # conv3d reads next to the unpadded input, skipping neighbor_pad's interior copy. conv3d masks the
+        # logical H/W pad itself. Only the 2D halo (H and W both sharded) supports it.
+        self.halo_only = os.environ.get("LTX_VAE_HALO_ONLY", "1") != "0"
 
         dims_T, dims_H, dims_W = (conv_dims.T, conv_dims.H, conv_dims.W) if conv_dims is not None else (0, 0, 0)
         self.conv_config = get_conv3d_config(
@@ -187,6 +191,25 @@ class LTXCausalConv3d(Module):
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
+        self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
+
+    def _get_pad_offset(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        """Per-device [h_start, w_start] of the local shard, which conv3d needs to place its logical-pad mask."""
+        h_dev, w_dev = x_BTHWC.shape[2], x_BTHWC.shape[3]
+        key = (h_dev, w_dev)
+        if key not in self._pad_offset_cache:
+            hp, wp = self.parallel_config.height_parallel, self.parallel_config.width_parallel
+            offsets = torch.zeros(hp.factor, wp.factor, 2, dtype=torch.int32)
+            offsets[:, :, 0] = torch.arange(hp.factor)[:, None] * h_dev
+            offsets[:, :, 1] = torch.arange(wp.factor)[None, :] * w_dev
+            self._pad_offset_cache[key] = typed_tensor_2dshard(
+                offsets,
+                self.mesh_device,
+                shard_mapping={hp.mesh_axis: 0, wp.mesh_axis: 1},
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+            )
+        return self._pad_offset_cache[key]
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # LTX-2 stores weights under "conv.weight" and "conv.bias"
@@ -269,13 +292,15 @@ class LTXCausalConv3d(Module):
             and self.parallel_config.width_parallel.factor > 1
             and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
         )
-        fold_w_mask = w_mask_needed and self.fold_w_mask and h_pad_needed and w_pad_needed
+        halo_only = self.halo_only and h_pad_needed and w_pad_needed
+        fold_w_mask = w_mask_needed and (self.fold_w_mask or halo_only) and h_pad_needed and w_pad_needed
         if w_mask_needed and not fold_w_mask:
             x_BTHWC = ttnn.mul(
                 x_BTHWC,
                 _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
             )
 
+        halo_kwargs = {}
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
@@ -298,19 +323,46 @@ class LTXCausalConv3d(Module):
                 )
                 links.append(_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
-            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
-                x_BTHWC,
-                dims=dims,
-                pad_left=pad_left,
-                pad_right=pad_right,
-                padding_mode="zeros",
-                axes=axes,
-                neighbor_sems=neighbor_sems,
-                num_links=links,
-                logical_h=(logical_h if h_pad_needed else 0),
-                t_front_pad=0,
-                logical_w=(logical_w if fold_w_mask else 0),
-            )
+            if halo_only:
+                halo_buf = self.ccl_manager.neighbor_pad_halo_only(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    padding_mode="zeros",
+                    # Ring deadlocks the neighbor-pad barrier, as in neighbor_pad_persistent_buffer.
+                    topology=ttnn.Topology.Linear,
+                )
+                h_mask = (
+                    logical_h
+                    if logical_h > 0 and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+                    else 0
+                )
+                w_mask = logical_w if fold_w_mask else 0
+                halo_kwargs = dict(
+                    halo_buffer=halo_buf,
+                    logical_h_mask=h_mask,
+                    logical_w_mask=w_mask,
+                    pad_offset_tensor=self._get_pad_offset(x_BTHWC) if (h_mask or w_mask) else None,
+                )
+                conv_padding = (conv_padding[0], self.external_padding[1], self.external_padding[2])
+            else:
+                x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    padding_mode="zeros",
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    logical_h=(logical_h if h_pad_needed else 0),
+                    t_front_pad=0,
+                    logical_w=(logical_w if fold_w_mask else 0),
+                )
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -325,6 +377,7 @@ class LTXCausalConv3d(Module):
             padding_mode=conv_padding_mode,
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
+            **halo_kwargs,
         )
 
         return x_BTHWC
