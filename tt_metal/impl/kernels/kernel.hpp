@@ -32,6 +32,9 @@
 namespace tt::tt_metal {
 
 class JitBuildOptions;
+namespace detail {
+class ProgramImpl;
+}  // namespace detail
 
 enum Eth : uint8_t {
     SENDER = 0,
@@ -107,6 +110,12 @@ struct DataflowBufferBindingHandle {
     bool is_relay = false;
     uint8_t prefetcher_pipe_id = 0xFF;
     std::optional<LLKMetadata> llk_metadata;
+    // Borrowed-memory DFB (DataflowBufferSpec::borrowed_from): the program-wide DFB id and the TensorParameter
+    // whose memory the DFB is, and whether this kernel produces into it. Op-to-op R/W inference
+    // (Kernel::resolve_buf_rw) records a producer as writing that tensor and a consumer as reading it.
+    std::optional<uint32_t> borrowed_dfb_id;
+    std::string borrowed_tensor_parameter_name;
+    bool is_producer = false;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 
@@ -184,7 +193,8 @@ struct TensorBindingSequenceHandle {
 // is the cross-op RAW comparison key -- two ops touch the "same" buffer iff their addresses match (the
 // same matching the ttnn-graph RAW analysis used). Derived by mapping each .tt.BUF_RW slot (a binding's
 // base-address CRTA byte offset) back through the kernel's tensor bindings (slot -> param name) and its
-// CRTA (slot/sizeof(u32) -> the address the runtime bound at that word).
+// CRTA (slot/sizeof(u32) -> the address the runtime bound at that word). Accesses through a borrowed-memory
+// DFB come from the program instead: the device sees only a DFB there, never the tensor.
 struct ResolvedBufRw {
     struct Access {
         // View into the kernel's TensorBindingHandle -- no allocation; valid while the kernel lives.
@@ -389,7 +399,8 @@ public:
     // Resolve query_buf_rw's raw slots to bound objects (TensorParameter name + bound buffer address).
     // Non-const: reads the kernel's CRTA (where the runtime wrote the bound addresses). Requires the
     // program run args to have been set and the binary compiled -- call after an enqueue.
-    ResolvedBufRw resolve_buf_rw(const IDevice& device);
+    // `program` is the one this kernel belongs to: it holds the address each borrowed-memory DFB is bound to.
+    ResolvedBufRw resolve_buf_rw(const IDevice& device, const detail::ProgramImpl& program);
 
     void set_precompiled_config(experimental::PrecompiledKernelConfig config);
     const std::optional<experimental::PrecompiledKernelConfig>& precompiled_config() const {

@@ -7,6 +7,8 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <set>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -34,6 +36,8 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 #include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
@@ -926,6 +930,83 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
         << "Phase A (dfb_borrowed) data did not round-trip correctly";
     EXPECT_EQ(result_b, input_b)
         << "Phase B (dfb_alias via borrowed L1) data did not round-trip correctly";
+}
+
+// Op-to-op R/W inference through borrowed-memory DFBs. The producer fills dfb_borrowed / dfb_alias, both backed by
+// ring_tensor, and the consumer drains them; neither kernel names ring_tensor in a NoC call (the producer binds it only
+// because a TensorParameter must be bound). The device can't see that a DFB is a tensor, so resolve_buf_rw takes it
+// from the program: the producer writes ring_tensor and the consumer reads it, at ring_tensor's address.
+TEST_F(UnitMeshFixture, BorrowedMemoryDFBBufRw) {
+    const NodeCoord node{0, 0};
+    constexpr uint32_t kEntrySize = 512;
+    constexpr uint32_t kNumEntries = 8;
+
+    auto [spec, in_a, in_b, out_a, out_b, ring] =
+        make_alias_borrowed_dfb_program_spec(this->device(), node, kEntrySize, kNumEntries);
+    Program program = MakeProgramFromSpec(this->device(), spec);
+    auto rtas = [&]() {
+        return MakeRuntimeArgsForSingleNode(
+            node,
+            {
+                {"chunk_offset_a", 0u},
+                {"chunk_offset_b", 0u},
+                {"entries_per_core_a", kNumEntries},
+                {"entries_per_core_b", kNumEntries},
+            });
+    };
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{.kernel = experimental::KernelSpecName{"producer"}, .runtime_arg_values = rtas()},
+        ProgramRunArgs::KernelRunArgs{.kernel = experimental::KernelSpecName{"consumer"}, .runtime_arg_values = rtas()},
+    };
+    run_params.tensor_args = {
+        {experimental::TensorParamName{"in_tensor_a"}, TensorArgument{in_a}},
+        {experimental::TensorParamName{"in_tensor_b"}, TensorArgument{in_b}},
+        {experimental::TensorParamName{"out_tensor_a"}, TensorArgument{out_a}},
+        {experimental::TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
+        {experimental::TensorParamName{"ring_tensor"}, TensorArgument{ring}},
+    };
+    SetProgramRunArgs(program, run_params);
+    if (this->device().arch() == ARCH::QUASAR) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    distributed::MeshWorkload wl = LaunchProgram(this->device(), std::move(program));
+
+    const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(this->device().shape())].impl();
+    IDevice* dev = this->device().get_devices()[0];
+    auto names = [](const auto& accesses) {
+        std::set<std::string_view> s;
+        for (const auto& a : accesses) {
+            s.insert(a.param_name);
+        }
+        return s;
+    };
+    auto addresses_of = [](const auto& accesses, std::string_view name) {
+        std::set<uint32_t> s;
+        for (const auto& a : accesses) {
+            if (a.param_name == name) {
+                s.insert(a.address);
+            }
+        }
+        return s;
+    };
+    const auto ring_address = std::set<uint32_t>{static_cast<uint32_t>(ring.address())};
+
+    auto producer = program_impl.get_kernel_by_spec_name("producer");
+    ASSERT_NE(producer, nullptr);
+    const ResolvedBufRw prw = producer->resolve_buf_rw(*dev, program_impl);
+    EXPECT_FALSE(prw.opaque);
+    EXPECT_EQ(names(prw.reads), (std::set<std::string_view>{"in_tensor_a", "in_tensor_b"}));
+    EXPECT_EQ(names(prw.writes), (std::set<std::string_view>{"ring_tensor"}));
+    EXPECT_EQ(addresses_of(prw.writes, "ring_tensor"), ring_address);
+
+    auto consumer = program_impl.get_kernel_by_spec_name("consumer");
+    ASSERT_NE(consumer, nullptr);
+    const ResolvedBufRw crw = consumer->resolve_buf_rw(*dev, program_impl);
+    EXPECT_FALSE(crw.opaque);
+    EXPECT_EQ(names(crw.reads), (std::set<std::string_view>{"ring_tensor"}));
+    EXPECT_EQ(names(crw.writes), (std::set<std::string_view>{"out_tensor_a", "out_tensor_b"}));
+    EXPECT_EQ(addresses_of(crw.reads, "ring_tensor"), ring_address);
 }
 
 }  // namespace
