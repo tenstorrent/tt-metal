@@ -13,11 +13,11 @@ using namespace dataflow_kernel_lib;
 // These type checks must compile in passing integration tests, not only in
 // negative contracts where an intended compiler error could mask their failure.
 static_assert(std::is_same_v<
-              decltype(detail::make_mcast_semaphore<SemaphoreBindingToken<0, SemScope::EXTERNAL>{}>()),
-              Semaphore<ProgrammableCoreType::TENSIX, SemScope::EXTERNAL>>);
+              decltype(detail::make_mcast_semaphore<SemaphoreBindingToken{0, SemScope::EXTERNAL}>()),
+              Semaphore<ProgrammableCoreType::TENSIX>>);
 static_assert(std::is_same_v<
-              decltype(detail::make_mcast_semaphore<SemaphoreBindingToken<0, SemScope::DM_LOCAL_CACHED>{}>()),
-              Semaphore<ProgrammableCoreType::TENSIX, SemScope::DM_LOCAL_CACHED>>);
+              decltype(detail::make_mcast_semaphore<SemaphoreBindingToken{0, SemScope::DM_LOCAL_CACHED}>()),
+              Semaphore<ProgrammableCoreType::TENSIX>>);
 static_assert(std::is_same_v<decltype(detail::make_mcast_semaphore<nullptr>()), std::nullptr_t>);
 
 template <typename Pipe, typename = void>

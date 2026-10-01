@@ -24,13 +24,13 @@ struct SpecMcastRuntime {
     .field = static_cast<decltype(dataflow_kernel_lib::mcast_wire::FamilyMetadata{}.field)>( \
         get_arg(args::TT_MCAST_SPEC_NAME(prefix, field))),
 
-// The three *_type compiler definitions name native sem::<accessor>_t aliases, or
-// std::nullptr_t for unused roles. Absent channels instantiate no resource operations.
+// The three *_token compiler definitions name native sem::<accessor> binding tokens, or
+// nullptr for unused roles. Absent channels instantiate no resource operations.
 #define MCAST_ARGS(prefix)                                                                                            \
     dataflow_kernel_lib::detail::McastArgsImpl<                                                                       \
         (get_arg(args::TT_MCAST_SPEC_NAME(prefix, tag)) == dataflow_kernel_lib::mcast_wire::FAMILY),                  \
         dataflow_kernel_lib::mcast_wire::FamilyMetadata{TT_MCAST_SPEC_METADATA(TT_MCAST_SPEC_READ_METADATA, prefix)}, \
         dataflow_kernel_lib::detail::SpecMcastRuntime<get_arg(args::TT_MCAST_SPEC_NAME(prefix, rt_base))>,            \
-        TT_MCAST_SPEC_NAME(prefix, data_ready_type){},                                                                \
-        TT_MCAST_SPEC_NAME(prefix, consumer_ready_type){},                                                            \
-        TT_MCAST_SPEC_NAME(prefix, signal_source_type){}> {}
+        TT_MCAST_SPEC_NAME(prefix, data_ready_token),                                                                 \
+        TT_MCAST_SPEC_NAME(prefix, consumer_ready_token),                                                             \
+        TT_MCAST_SPEC_NAME(prefix, signal_source_token)> {}

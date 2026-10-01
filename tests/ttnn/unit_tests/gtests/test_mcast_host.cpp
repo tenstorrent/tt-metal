@@ -1358,9 +1358,9 @@ TEST_F(McastHostFixture, SpecAttachPopulatesNamedMetadataResourcesAndRuntimePref
         EXPECT_EQ(kernel.compile_time_args.get("channel_mcast_uniform_remote_count").value(), 1u);
         EXPECT_EQ(kernel.compile_time_args.get("kept_ct").value(), 73u);
         EXPECT_EQ(
-            kernel.compiler_options.defines.get("channel_mcast_data_ready_type").value(),
-            "sem::channel_mcast_data_ready_t");
-        EXPECT_EQ(kernel.compiler_options.defines.get("channel_mcast_signal_source_type").value(), "std::nullptr_t");
+            kernel.compiler_options.defines.get("channel_mcast_data_ready_token").value(),
+            "sem::channel_mcast_data_ready");
+        EXPECT_EQ(kernel.compiler_options.defines.get("channel_mcast_signal_source_token").value(), "nullptr");
         EXPECT_EQ(args.kernel_run_args[i].common_runtime_arg_values.get("kept_common").value(), 97u);
     }
     const std::vector<uint32_t> sender_expected{
@@ -1469,8 +1469,7 @@ TEST_F(McastHostFixture, SpecAttachAdoptsNamedResourcesAndRejectsNumericConfigur
     ASSERT_EQ(spec.semaphores.size(), 1u);
     ASSERT_EQ(spec.kernels[0].semaphore_bindings.size(), 1u);
     EXPECT_EQ(spec.kernels[0].semaphore_bindings[0].semaphore_spec_name, adopted[0]);
-    EXPECT_EQ(
-        spec.kernels[0].compiler_options.defines.get("channel_mcast_consumer_ready_type").value(), "std::nullptr_t");
+    EXPECT_EQ(spec.kernels[0].compiler_options.defines.get("channel_mcast_consumer_ready_token").value(), "nullptr");
     auto numeric = make_family(device_, {GroupInput(participants, {{0, 0}})}, McastConfig{.base_sem_id = 0});
     auto fresh = spec_pair();
     EXPECT_ANY_THROW(numeric.attach(fresh, args, "numeric", spec_targets));
@@ -1504,7 +1503,7 @@ TEST_F(McastHostFixture, SpecAbsentNeedsNoResourcesOrRunArgumentObject) {
         EXPECT_TRUE(kernel.semaphore_bindings.empty());
         EXPECT_EQ(kernel.compiler_options.defines.size(), 3u);
         for (const auto& [name, value] : kernel.compiler_options.defines) {
-            EXPECT_EQ(value, "std::nullptr_t");
+            EXPECT_EQ(value, "nullptr");
         }
     }
     EXPECT_ANY_THROW(attach_absent(spec, "none", spec_targets));
