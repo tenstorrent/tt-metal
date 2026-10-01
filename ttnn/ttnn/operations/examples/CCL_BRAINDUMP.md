@@ -155,7 +155,8 @@ block). "Bank" only ever means a physical DRAM bank.
 
 ### Local copy and ND-sharded input
 40. **Keep the local copy off the sending cores:** separate local copy cores (one per link) write the own shard into
-    the own output. *measured earlier: copy on the sending core cost up to 40%*
+    the own output. *measured earlier (2-chip gather): copy on the sending core 32.6 vs 48.2 GB/s at 1 link; 57 vs 95
+    GB/s per chip at 2 links*
 41. **Non-interleaved input (ND-sharded GLM KV cache: 32 rows per bank shard) has no bank-strided contiguity**, so
     the local copy cores **convert** the own shard into the interleaved output, and the link workers read it from
     there. *code*
@@ -238,8 +239,10 @@ block). "Bank" only ever means a physical DRAM bank.
 
 ## 6. [PROCESS]
 
-69. **An independent reviewer finds real bugs:** two Codex rounds found 7 issues, 5 real (payload overflow, NoC burst
-    hang, tile alignment, semaphore coverage, search budget wrap) plus test gaps. Run one before calling a CCL done.
+69. **An independent reviewer finds real bugs:** two Codex rounds raised 9 findings, 8 acted on: payload overflow,
+    NoC-burst hang, tile alignment, semaphore coverage on first use, search-budget wrap, a trace test that proved
+    nothing, a perf helper swallowing errors, a stale docstring (the 9th, the snake-closure model, was not a bug).
+    Run one before calling a CCL done.
     Codex's own sandbox fails on this box; `codex exec --dangerously-bypass-approvals-and-sandbox` with read-only
     instructions works. *process*
 70. **CI infra:** runner pool `multihost-ci-sc1-lc6lw` repeatedly failed chip resets (no test ran); high-power
