@@ -33,6 +33,7 @@ TestVariant = PrefillModelAdapter
 TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
 DSV3 = get_adapter("deepseek_v3_d_p")
 
+from models.demos.deepseek_v3_d_p.tests import _reuse
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     assert_torus_xy_descriptor,
     fabric2d_device_params,
@@ -335,6 +336,25 @@ def pytest_collection_modifyitems(config, items):
 
         if skip_reason:
             item.add_marker(pytest.mark.skip(reason=skip_reason))
+
+
+if _reuse.reuse_enabled():
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """Root mesh_device, kept open across tests while device_params stay the same (see _reuse)."""
+        return _reuse.get_device(request, silicon_arch_name, device_params)
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_makereport(item, call):
+        outcome = yield
+        rep = outcome.get_result()
+        if rep.when in ("setup", "call") and rep.failed:
+            logger.warning(f"{item.nodeid} failed; dropping the reused mesh device and models")
+            _reuse.close_all()
+
+    def pytest_sessionfinish(session, exitstatus):
+        _reuse.close_all()
 
 
 @pytest.fixture(autouse=True)

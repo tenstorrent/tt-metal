@@ -776,39 +776,13 @@
   sp_config: sc1
 
 
-- name: "(GLM-5.3-744B) chunked prefill accuracy code_debug 55k@5k"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export LOGURU_LEVEL=INFO
-    export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
-    export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm53 and torus-xy-8x4 and L78 and warm_cache and notrace" -xvs
-    '
-  test_type: glm_chunked_accuracy
-  test_tags: [glm_5_3, transformer]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 72
-      tier: 2
-      release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
 # TRACED twin of the accuracy job above. It asserts FEWER checks than its untraced twin, by construction:
 # both modes assert the KVPE and DSA indexer-K CACHE PCCs (read back after the run), but the per-layer
 # decoder-output PCC needs return_intermediates=True -- a host readback in the middle of forward() -- and
 # a read inside begin_trace_capture() is a hard TT_FATAL. So per-layer PCC rides the notrace arm only,
 # and this job is what proves the captured/replayed forward produces the same caches as the eager one.
 # Locally traced and untraced agree EXACTLY on both caches at L10 (KVPE 0.998829, indexer-K 0.999756).
-- name: "(GLM-5.3-744B) chunked prefill accuracy code_debug 55k@5k, traced"
+- name: "(GLM-5.3-744B) chunked prefill accuracy code_debug 55k@5k + padded 15k@5k, no-trace and traced"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -818,66 +792,15 @@
     export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm53 and torus-xy-8x4 and L78 and warm_cache and traced" -xvs
+      export DS_PREFILL_REUSE_MODEL=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_padded -k "glm53 and torus-xy-8x4 and L78 and (warm_cache or mid15k)" -xvs --tb=short
     '
-  test_type: glm_chunked_accuracy
-  test_tags: [glm_5_3, transformer]
+  test_type: glm_chunked_accuracy_suite
+  test_tags: [glm_5_3, transformer, glm_chunked_accuracy, glm_chunked_padded]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 72
-      tier: 2
-      release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-- name: "(GLM-5.3-744B) chunked prefill padded accuracy 15k@5k no-trace"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export LOGURU_LEVEL=INFO
-    export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
-    export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      set -e
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_padded -k "glm53 and torus-xy-8x4 and L78 and mid15k and notrace" -vvv --tb=short
-    '
-  test_type: glm_chunked_padded
-  test_tags: [glm_5_3, transformer]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 44
-      tier: 2
-      release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-- name: "(GLM-5.3-744B) chunked prefill padded accuracy 15k@5k traced"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export LOGURU_LEVEL=INFO
-    export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
-    export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      set -e
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_padded -k "glm53 and torus-xy-8x4 and L78 and mid15k and traced" -vvv --tb=short
-    '
-  test_type: glm_chunked_padded
-  test_tags: [glm_5_3, transformer]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 24
+      timeout: 212
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
