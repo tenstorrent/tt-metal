@@ -1405,6 +1405,56 @@ void validate_matmul_multicore_config(
         attributes.output_mem_config.memory_layout());
 }
 
+// DRAMSharded multi-core variant (cores_per_bank > 0): what the program builder supports.
+void validate_matmul_dram_sharded_multicore_config(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const MatmulParams& attributes,
+    const operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& program_config) {
+    const auto config_name = ttsl::get_type_name(program_config);
+    TT_FATAL(
+        program_config.num_workers_per_dram_bank == 1,
+        "{}: cores_per_bank ({}) replaces num_workers_per_dram_bank, which must stay 1 (got {})",
+        config_name,
+        program_config.cores_per_bank,
+        program_config.num_workers_per_dram_bank);
+    TT_FATAL(
+        !program_config.fused_activation.has_value(),
+        "{}: cores_per_bank does not support a fused activation",
+        config_name);
+    TT_FATAL(!attributes.untilize_out, "{}: cores_per_bank does not support untilize_out", config_name);
+    const auto& out_mem = attributes.output_mem_config;
+    TT_FATAL(
+        out_mem.buffer_type() == BufferType::L1 && out_mem.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+        "{}: cores_per_bank needs an L1 width-sharded output",
+        config_name);
+    TT_FATAL(
+        !out_mem.shard_spec().has_value() || out_mem.shard_spec()->orientation == ShardOrientation::ROW_MAJOR,
+        "{}: cores_per_bank needs a ROW_MAJOR output shard orientation",
+        config_name);
+    TT_FATAL(
+        input_tensor_a.memory_config().buffer_type() == BufferType::L1,
+        "{}: cores_per_bank needs input A in L1",
+        config_name);
+    TT_FATAL(
+        input_tensor_b.memory_config().buffer_type() == BufferType::DRAM,
+        "{}: cores_per_bank needs input B in DRAM",
+        config_name);
+    for (const auto* t : {&input_tensor_a, &input_tensor_b}) {
+        const auto& tile = t->tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+                !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+            "{}: cores_per_bank needs 32x32 untransposed tiles",
+            config_name);
+    }
+    TT_FATAL(
+        input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0,
+        "{}: cores_per_bank needs K ({}) to be a multiple of the tile width",
+        config_name,
+        input_tensor_a.logical_shape()[-1]);
+}
+
 // DRAMSharded config: in0 width-sharded in L1, in1 width-sharded in DRAM; height must
 // be a single tile (M == 1) and K/shard dims divide in0_block_w.
 void validate_matmul_dram_sharded_config(
@@ -1458,21 +1508,27 @@ void validate_matmul_dram_sharded_config(
         config_name,
         per_core_M,
         (shard_shape[0] / in0_tile.get_height()));
-    TT_FATAL(
-        K % program_config.in0_block_w == 0,
-        "{}: K ({}) must be divisible by in0_block_w ({})",
-        config_name,
-        K,
-        program_config.in0_block_w);
-    // A block is either a fraction of one storage shard or a whole number of consecutive shards.
-    const uint32_t in0_shard_width_tiles = shard_shape[1] / in0_tile.get_width();
-    TT_FATAL(
-        in0_shard_width_tiles % program_config.in0_block_w == 0 ||
-            program_config.in0_block_w % in0_shard_width_tiles == 0,
-        "{}: shard_shape[1] / in0_tile.get_width() ({}) and in0_block_w ({}) must divide one another",
-        config_name,
-        in0_shard_width_tiles,
-        program_config.in0_block_w);
+    if (program_config.cores_per_bank > 0) {
+        // The multi-core variant reads activation rows straight from their shards and takes a ragged
+        // last K block, so neither divisibility rule below applies to it.
+        validate_matmul_dram_sharded_multicore_config(input_tensor_a, input_tensor_b, attributes, program_config);
+    } else {
+        TT_FATAL(
+            K % program_config.in0_block_w == 0,
+            "{}: K ({}) must be divisible by in0_block_w ({})",
+            config_name,
+            K,
+            program_config.in0_block_w);
+        // A block is either a fraction of one storage shard or a whole number of consecutive shards.
+        const uint32_t in0_shard_width_tiles = shard_shape[1] / in0_tile.get_width();
+        TT_FATAL(
+            in0_shard_width_tiles % program_config.in0_block_w == 0 ||
+                program_config.in0_block_w % in0_shard_width_tiles == 0,
+            "{}: shard_shape[1] / in0_tile.get_width() ({}) and in0_block_w ({}) must divide one another",
+            config_name,
+            in0_shard_width_tiles,
+            program_config.in0_block_w);
+    }
 
     // tensor in1
     TT_FATAL(

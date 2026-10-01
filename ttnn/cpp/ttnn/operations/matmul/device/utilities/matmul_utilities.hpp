@@ -378,6 +378,14 @@ struct DramBankReaderAssignment {
 
 void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
 
+// Cores for the multi-core decode variant (cores_per_bank > 0): cores_per_bank logical worker cores
+// per bank for the first num_banks banks, each the nearest free core (Manhattan distance in logical
+// coordinates, ties to the same row first) to that bank's NOC-optimal worker, taken round-robin over
+// the banks so every bank gets its nearest core first. Only the per-bank optimal worker is queried
+// from the device, so the result is the same for every chip of a mesh.
+std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
+    tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc, uint32_t cores_per_bank, uint32_t num_banks);
+
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.
