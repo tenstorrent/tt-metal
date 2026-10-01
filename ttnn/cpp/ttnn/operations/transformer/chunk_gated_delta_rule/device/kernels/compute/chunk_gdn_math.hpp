@@ -627,12 +627,22 @@ ALWI void gdn_exp_lower_tile(uint32_t idst) {
 
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
-// One face of gdn_exp_const_col_tile: exp of the first vector, stored to all 8 iterations (rows) of the face.
-inline void _gdn_exp_const_col_face_() {
-    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(sfpi::dst_reg[0]);  // the fp32 exp_tile of calculate_exponential
+// One face of gdn_exp_const_col_tile / gdn_exp_const_tile: the fp32 exp (that of exp_tile) of the first vector, stored
+// to all 8 iterations of the face.
+inline void _gdn_exp_const_face_() {
+    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(sfpi::dst_reg[0]);
 #pragma GCC unroll 8
     for (int d = 0; d < 8; d++) {
         sfpi::dst_reg[0] = y;
+        sfpi::dst_reg++;
+    }
+}
+// One face of gdn_exp_row_tile: the fp32 exp of the first two iterations only (a row of 16 columns = two SFPU vectors),
+// then the address advance of a full 8-iteration face.
+inline void _gdn_exp_row_face_() {
+    calculate_exponential<false, DST_ACCUM_MODE, false, 2, true>(p_sfpu::kCONST_1_FP16B);
+#pragma GCC unroll 6
+    for (int d = 2; d < 8; d++) {
         sfpi::dst_reg++;
     }
 }
@@ -646,10 +656,24 @@ inline void _gdn_exp_const_col_face_() {
 ALWI void gdn_exp_const_col_tile(uint32_t idst) {
 #ifdef TRISC_MATH
     _llk_math_eltwise_sfpu_start_(idst);
-    ckernel::sfpu::_gdn_exp_const_col_face_();
+    ckernel::sfpu::_gdn_exp_const_face_();
     _llk_math_eltwise_sfpu_inc_dst_face_addr_();
     _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-    ckernel::sfpu::_gdn_exp_const_col_face_();
+    ckernel::sfpu::_gdn_exp_const_face_();
+    _llk_math_eltwise_sfpu_done_();
+#endif
+}
+
+// exp of a ROW-form vector (the 32 values in row 0 of faces 0 and 1, e.g. a transposed column vector): two SFPU
+// iterations per face (the row's 16 columns) instead of the eight a column-form vector needs per face, and only on
+// faces 0 and 1. The other rows are left alone (the lanes of those first iterations that are not row 0 are
+// exponentiated along). Per lane the same fp32 exp as exp_tile.
+ALWI void gdn_exp_row_tile(uint32_t idst) {
+#ifdef TRISC_MATH
+    _llk_math_eltwise_sfpu_start_(idst);
+    ckernel::sfpu::_gdn_exp_row_face_();
+    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    ckernel::sfpu::_gdn_exp_row_face_();
     _llk_math_eltwise_sfpu_done_();
 #endif
 }
@@ -659,8 +683,9 @@ ALWI void gdn_exp_const_col_tile(uint32_t idst) {
 // Two fp32 DST round trips instead of ~10-13 single-tile FPU ops (each of which reads its operands through srcA/srcB,
 // i.e. tf32, and re-packs). Only G's own tril/ones matmuls touch the FPU; everything after is fp32 SFPU on DST, and the
 // CB -> DST loads are unpack-to-dest (lossless for fp32 CBs).
-//   p1: decay = tril@G, gsum = ones@G (matmul); decayfac = exp(gsum - decay), decay_exp = exp(decay), exp(gsum)
-//       (SFPU, column faces only). Packs decay, decay_exp, decayfac, eg (= cb_eg, exp(g_sum)).
+//   p1: decay = tril@G, gsum = ones@G (matmul); decayfac = exp(gsum - decay), decay_exp = exp(decay) (SFPU, in row form
+//       between transposes), exp(gsum) (one exp: every row of gsum is the same). Packs decay, decay_exp, decayfac, eg
+//       (= cb_eg, exp(g_sum)).
 //       G is popped inside the acquire (gb_flat: G lives in the decayfac slot, which is re-reserved for the output).
 //   p2: L_mask = tril(exp(tril(decay_i - decay_j))) (decay_j from an in-DST transpose) and dl*I = I * exp(g_sum).
 //       Pops decay and cb_eg; pushes lmask and dl.
@@ -680,12 +705,20 @@ inline void gdn_decay_sfpu_p1(const GdnPrepCbs& cb, uint32_t G, uint32_t cb_eg) 
     POP(G, 1);
     sub_binary_tile_init();
     sub_binary_tile(1, 0, 3);  // DST3 = g_sum - decay
+    // Column-form tiles: only column 0 is ever read (bcast_cols / dl at (0,0)). The two distinct-valued vectors
+    // (decayfac, decay_exp) are exponentiated in ROW form (four SFPU iterations instead of thirty-two), between
+    // transposes: the exp is elementwise and the transposes move values only, so column 0 of the result is
+    // bit-identical to exp_tile(.., C); the other columns hold other values than exp_tile's, which nothing reads.
+    transpose_dest_init<true>(cb.decay);
+    transpose_dest<true>(3);
+    transpose_dest<true>(2);
     exp_tile_init();
-    // Column-form tiles: only column 0 is ever read (bcast_cols / dl at (0,0)), so exponentiate the left
-    // faces (0, 2) only. Faces 1 and 3 keep 0 instead of exp(0) = 1; nothing reads them.
-    exp_tile(3, VectorMode::C);  // decayfac
-    exp_tile(2, VectorMode::C);  // decay_exp
-    gdn_exp_const_col_tile(1);   // exp(g_sum): every row of ones@G is the same, so one exp serves all rows
+    gdn_exp_row_tile(3);        // decayfac
+    gdn_exp_row_tile(2);        // decay_exp
+    gdn_exp_const_col_tile(1);  // exp(g_sum): every row of ones@G is the same, so one exp serves all rows
+    transpose_dest_init<true>(cb.decay);
+    transpose_dest<true>(3);
+    transpose_dest<true>(2);
     tile_regs_commit();
     cb_reserve_back(cb.decayfac, 1);  // gb_flat: G lived in this slot; popped above
     tile_regs_wait();
@@ -729,7 +762,7 @@ inline void gdn_decay_sfpu_p2(const GdnPrepCbs& cb, uint32_t cb_eg) {
     mul_binary_tile(2, 3, 2);  // L_mask
     copy_init(cb.eye);
     copy_tile(cb.eye, 0, 0);  // DST0 = I
-    copy_tile(cb_eg, 0, 1);   // DST1 = exp(g_sum) (column form)
+    copy_tile(cb_eg, 0, 1);   // DST1 = exp(g_sum)
     sfpu_bcast_col_init();
     sfpu_mul_bcast_col(0, 1);  // dl*I
     tile_regs_commit();
