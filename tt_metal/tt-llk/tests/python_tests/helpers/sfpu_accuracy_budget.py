@@ -30,6 +30,7 @@ not reach keep the declared tolerance, or a sampled measurement no gate reads ye
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, fields
 from enum import Enum
 from itertools import product
@@ -46,6 +47,26 @@ from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dt
 #: The architecture every unkeyed budget was measured on. Anywhere else an op resolves
 #: to the tolerance metric until the sweep has been re-run there.
 MEASURED_ARCH = ChipArchitecture.WORMHOLE
+
+#: The variant :func:`accuracy_contract` was last asked about and nothing has consumed
+#: yet, as ``(test_id, op, input_format, output_format, approx_mode, dest_acc)``. Read
+#: only by the ``--ulp-measure`` recorder, which tags each reading with it: a driver
+#: resolves its contract immediately before it compares, and the test id alone cannot
+#: name the variant (the per-op sweeps put the op in the function, not the parameters).
+#:
+#: Two lookups in one test with no comparison between them make the association
+#: ambiguous, and :data:`PENDING_AMBIGUOUS` tells the recorder to drop that reading
+#: rather than file it under the wrong variant. A query left over from a *previous* test
+#: is only stale -- the exhaustive sweep resolves and then skips every tolerance cell --
+#: so it is replaced, and so is the flag: flagging it dropped every reading that
+#: followed a skip, and so did a flag left behind by an ambiguous test that skipped.
+LAST_QUERY: Optional[Tuple[Any, ...]] = None
+PENDING_AMBIGUOUS: bool = False
+
+
+def _current_test() -> str:
+    """The test a query was made in, so a stale one cannot cross a test boundary."""
+    return os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
 
 
 class Metric(Enum):
@@ -413,6 +434,10 @@ def accuracy_contract(
     required, unlike the other dimensions: it is the one where the numbers explicitly do
     not transfer, so defaulting it would resolve an unknown chip straight against the
     :data:`MEASURED_ARCH` table.
+
+    Not a pure lookup: every call also publishes the variant as :data:`LAST_QUERY` for
+    the ``--ulp-measure`` recorder, and a second call in the same test marks it
+    ambiguous, dropping that test's reading. Resolve once, right before the comparison.
     """
     # Built before the enrolment fallback, so a miswired driver -- a string arch, a bool
     # dest_acc -- fails on every op, not only once its op is enrolled.
@@ -423,6 +448,15 @@ def accuracy_contract(
         dest_acc=dest_acc,
         arch=arch,
     )
+
+    # Tag the variant for --ulp-measure; LAST_QUERY explains the rules.
+    global LAST_QUERY, PENDING_AMBIGUOUS
+    here = _current_test()
+    # Recomputed, never only set: an ambiguous test that skips before comparing would
+    # otherwise hand its flag to the next test and drop that test's reading.
+    PENDING_AMBIGUOUS = LAST_QUERY is not None and LAST_QUERY[0] == here
+    LAST_QUERY = (here, op.name, input_format, output_format, approx_mode, dest_acc)
+
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:
         return TOLERANCE_CONTRACT
@@ -506,8 +540,10 @@ def usable_budget_ceiling(output_format: DataFormat) -> float:
     ``MAX_MEANINGFUL_ULP`` is the wrong bound: ``2**mantissa_bits`` is roughly 100%
     relative error, so it admits budgets that gate nothing -- and since ``passed_test``
     returns on the ULP verdict and skips both ``isclose`` and PCC, such a budget *is* the
-    whole gate. Measured, approximate tanh on an fp32 output reached 2,949,120 steps,
-    about 35% relative error, on an op bounded in (-1, 1).
+    whole gate. Measured, approximate tanh on an fp32 output reaches 655,360 steps, about
+    7.8% relative error, on an op bounded in (-1, 1) -- and that is *after* #57179 traded
+    the 3-segment SFPLUT for a 6-entry table; the same measurement was 2,949,120 steps,
+    about 35%, before it. A bound that admits either is not a gate.
 
     The real bound is the ``rtol`` half of the ``isclose`` this replaces, itself a step
     budget at large magnitude: about 419,430 steps for fp32, 51 for fp16, 6 for bf16.

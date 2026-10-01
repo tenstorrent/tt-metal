@@ -5,7 +5,7 @@ import struct
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
 from helpers.llk_params import (
@@ -15,6 +15,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.sfpu_domains import (
     SPECIALS_READY_OPS,
     edge_spec,
@@ -46,6 +47,9 @@ def _bits(value: float) -> int:
 # one kernel parameter. Presubmit drives the ops at a single representative scalar and the
 # remaining values run nightly.
 _PRESUBMIT_SCALAR = 2.0
+
+#: The approximation mode this kernel compiles, and so the one its contract names.
+_APPROX_MODE = ApproximationMode.No
 _SCALARS = (0.0, 1.0, 2.0, -2.0, 8.0, 0.25)
 _NIGHTLY_SCALARS = tuple(s for s in _SCALARS if s != _PRESUBMIT_SCALAR)
 
@@ -108,7 +112,7 @@ def _run_sfpu_binop_scalar(
         templates=[
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(scalar_bits),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -137,8 +141,24 @@ def _run_sfpu_binop_scalar(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
+    # The registry's tolerance arm, as the unary functional driver uses it. A step
+    # budget from the exhaustive sweep is derived from a whole format, far wider than
+    # this sampled domain, and would loosen the gate here.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        # The mode the kernel compiled: an unset query dimension would not match a row
+        # keyed on it.
+        approx_mode=_APPROX_MODE,
+        dest_acc=dest_acc,
+        arch=get_chip_architecture(),
+    )
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
 
 
