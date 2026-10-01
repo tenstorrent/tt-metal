@@ -3468,7 +3468,7 @@ class Qwen36Model:
         # servers give identical streams and logprob gaps, 45/45). The cause was decode bucketing: the SDPA-decode KV
         # split depends on the step's width, and the faster hand-off moved request arrivals across step boundaries, so
         # the width of some decode steps changed from run to run. QWEN36_DECODE_SDPA_PIN_MIN_WIDTH (attention/tp.py)
-        # removes that for widths >= 16.
+        # =16 removes that for widths >= 16 (default off: it costs long-context TPOT).
         _fsenv = os.environ.get("QWEN36_PLAIN_GDN_SLOT_FAST")
         _fast_slot = (not _dev_copy) and ((self.num_devices == 2) if _fsenv is None else (_fsenv == "1"))
         lens = [int(valid_lens[u]) if valid_lens is not None else int(token_ids_list[u].shape[1]) for u in range(N)]

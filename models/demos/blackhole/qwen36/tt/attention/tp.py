@@ -159,11 +159,12 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
 
 
 def _sdpa_pin_min_width(n_dev):
-    """QWEN36_DECODE_SDPA_PIN_MIN_WIDTH as a width (see TPAttention.forward_decode): unset = 16 on a 2-device mesh,
-    else 0; a non-negative integer as given ("0" or "" = off). Anything else raises."""
+    """QWEN36_DECODE_SDPA_PIN_MIN_WIDTH as a width (see TPAttention.forward_decode): unset = 0 (off) at every TP; a
+    non-negative integer as given ("0" or "" = off). Anything else raises. n_dev is unused since the default is TP
+    independent; it stays in the signature for the callers."""
     v = os.environ.get("QWEN36_DECODE_SDPA_PIN_MIN_WIDTH")
     if v is None:
-        return 16 if n_dev == 2 else 0
+        return 0
     try:
         w = int(v.strip() or 0)
     except ValueError:
@@ -1016,8 +1017,8 @@ class TPAttention:
         # iteration. Base-model layers leave it None and are byte-identical to before.
         _sdpa_grid = self.mesh.compute_with_storage_grid_size()
         _sdpa_max_cores = self.decode_sdpa_max_cores
-        # QWEN36_DECODE_SDPA_PIN_MIN_WIDTH=W (unset = 16 at TP=2, 0 elsewhere; "0" off): decode widths B >= W take
-        # the KV split of the full width Bmax (cores_per_head = min(grid, 16 * B * NKV) / B / NKV in
+        # QWEN36_DECODE_SDPA_PIN_MIN_WIDTH=W (unset or "0" = off at every TP; 16 = the validated pin): decode widths
+        # B >= W take the KV split of the full width Bmax (cores_per_head = min(grid, 16 * B * NKV) / B / NKV in
         # sdpa_decode_program_factory.cpp: at TP=2 on the 110-core grid, Bmax=32 gives 1 core per KV head, while
         # width 16 gets 3; the pin itself holds for any grid). Decode bucketing picks the width per step from the
         # number of active requests (and a slot remap forces Bmax), so without the pin a row's attention reduction
@@ -1025,8 +1026,10 @@ class TPAttention:
         # concurrent decoders (profiles/opt_round5/FASTSLOT.md). Widths below W keep their wider split (it matters
         # for 1..8-user long-context TPOT). Cost at W=16 (steps at width 9..16 only): none at 2k/8k x 16 users (ITL
         # p50 within 0.5 ms), +2..8 ms per step (+2-9%) at 32k x 16 users and +2.9 ms (+3%) at 64k x 9 users
-        # (served, fresh-server pairs, profiles/opt_round5/REMAP.md); a long-context throughput profile may set 0
-        # and give up run-to-run identity of its long decoders. No narrower W keeps the invariance: width 32 has
+        # (served, fresh-server pairs, profiles/opt_round5/REMAP.md F1). That TPOT cost is why the default is OFF:
+        # without the pin the outputs keep the same accuracy, but a concurrent long decoder's
+        # bits may differ from run to run with the request mix. Set 16 for run-to-run identity of every row at decode
+        # widths >= 16 (profiles/opt_round5/FASTSLOT.md). No narrower W keeps the invariance: width 32 has
         # 1 core per head on 110 cores, and the rows the pin slows (KV > one chunk) are the rows whose bits depend
         # on the split. Base-model decode calls outside spec verify only (a spec seed step at B >= W would be pinned
         # too; no shipped spec profile runs B >= 16).
