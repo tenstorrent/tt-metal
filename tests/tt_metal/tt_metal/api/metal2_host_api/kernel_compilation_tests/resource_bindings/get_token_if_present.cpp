@@ -281,6 +281,76 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
+// Present and absent lookup for a scratchpad accessor. Split out of the scratchpad binding smoke
+// tests so those only compile Scratchpad construction.
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentScratchpadDMJITSmoke) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "binding_lookup_scratch_dm";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {}
+
+static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
+static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
+)"};
+    dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    spec.kernels = {dm_kernel};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+// Compute-kernel counterpart of CPU_GetTokenIfPresentScratchpadDMJITSmoke.
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentScratchpadComputeJITSmoke) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+void kernel_main() {}
+
+static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
+static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
+)"};
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.kernels[1].scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+// Present and absent lookup for a tensor accessor. Split out of the tensor binding smoke test so
+// that one only compiles TensorAccessor construction.
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentTensorDMJITSmoke) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "binding_lookup_tensor_dm";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {}
+
+static_assert(tensor::get_token_if_present<"input_tensor">() == &tensor::input_tensor);
+static_assert(tensor::get_token_if_present<"not_a_tensor">() == nullptr);
+)"};
+
+    spec.kernels = {dm_kernel};
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_tensor");
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
 TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsTensorAccessorJITSmoke) {
     NodeCoord node{0, 0};
 
