@@ -92,8 +92,9 @@ struct CoreSplit {
 // An explicit sub_core_grids is authoritative; otherwise the candidate set is min(total_work, device
 // cores). row_wise=false is load-bearing: the ordinal-numbered kernels stride by num_cores from their
 // assigned ordinal, so ordinal numbering must agree with the order split_work_to_cores() carved its
-// extra-work group from (its ranges in stored order, column-major within each -- see the porting
-// guide's "Step 2/5 core-order trap").
+// extra-work group from (its ranges in stored order, column-major within each). Sweeping the device
+// grid directly instead of walking this same assigned set would silently disagree whenever the
+// grid's natural sweep order differs from how the splitter grouped its ranges.
 CoreSplit split_scatter_work(
     const MeshDevice& device, const std::optional<CoreRangeSet>& sub_core_grids, uint32_t total_work) {
     const auto grid = device.compute_with_storage_grid_size();
@@ -347,35 +348,6 @@ uint32_t scatter_rm_chunk_elems(
         chunk = std::max(chunk, kRmMinChunkElems);
     }
     return chunk;
-}
-
-bool scatter_tile_prefers_rm_strategy(
-    const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& src_tensor) {
-    // Below this many tile-rows, the per-stick ROW_MAJOR kernel reaches far more cores than the
-    // tile-row-parallel kernels can (one core per logical row instead of one per 32-row tile band).
-    constexpr uint32_t kRmStrategyMaxHt = 32;
-    // The per-stick kernel is only worth reaching for rows this narrow or less; a wider row is
-    // already well served by the tile-row-parallel kernels once enough tile-rows exist to use them.
-    constexpr uint32_t kRmStrategyMaxStickElems = 32768;
-
-    const auto geometry = compute_scatter_tile_geometry(input_tensor, index_tensor, src_tensor);
-    if (geometry.Ht > kRmStrategyMaxHt) {
-        return false;
-    }
-    const uint32_t index_logical_w = index_tensor.logical_shape()[-1];
-    if (geometry.output_logical_w > kRmStrategyMaxStickElems || index_logical_w > kRmStrategyMaxStickElems) {
-        return false;
-    }
-    // The RM factory's floor -- fully-resident input/output sticks -- must fit L1 independent of any
-    // frontier-scaled chunk depth, exactly as supported_by_codegen() requires for a naturally
-    // ROW_MAJOR call; bf16_reduce is always false here since reduction never reaches a TILE call.
-    const uint64_t input_page_bytes = scatter_rm_stick_page_bytes(input_tensor, geometry.output_logical_w);
-    return scatter_rm_min_plan_fits_l1(
-        scatter_static_l1(input_tensor),
-        input_page_bytes,
-        index_tensor.element_size(),
-        src_tensor.element_size(),
-        /*bf16_reduce=*/false);
 }
 
 ScatterCodegenParams build_scatter_codegen_params(
