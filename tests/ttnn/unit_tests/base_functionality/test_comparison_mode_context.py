@@ -62,6 +62,50 @@ def _bit_patterns(float_values, bits_dtype):
     return float_values.view(bits_dtype).to(torch.int32)
 
 
+def _linspace_tile(low, high):
+    return torch.linspace(low, high, 1024).reshape(SINGLE_TILE)
+
+
+def _repeated_tile(values):
+    return torch.tensor(values).repeat(1024 // len(values)).reshape(SINGLE_TILE)
+
+
+def _small_integer_values(shape):
+    return torch.randint(-4, 5, shape).to(torch.bfloat16)
+
+
+def _positive_operands():
+    return (
+        torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1,
+        torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1,
+        ttnn.bfloat16,
+    )
+
+
+def _small_integer_operands():
+    return (
+        torch.randint(0, 3, SINGLE_TILE).to(torch.bfloat16),
+        torch.randint(0, 3, SINGLE_TILE).to(torch.bfloat16),
+        ttnn.bfloat16,
+    )
+
+
+def _ldexp_operands():
+    return (
+        torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1,
+        torch.randint(-2, 3, SINGLE_TILE).to(torch.bfloat16),
+        ttnn.bfloat16,
+    )
+
+
+def _int32_operands():
+    return (
+        torch.randint(1, 16, SINGLE_TILE, dtype=torch.int32),
+        torch.randint(1, 16, SINGLE_TILE, dtype=torch.int32),
+        ttnn.int32,
+    )
+
+
 def _registered_golden_output(operation, *args, **kwargs):
     preprocess = (
         operation.preprocess_golden_function_inputs or ttnn.decorators.default_preprocess_golden_function_inputs
@@ -79,6 +123,15 @@ def _assert_golden_matches_output(golden, output):
     ), f"golden shape {tuple(golden.shape)} != output {tuple(torch_output.shape)}"
     assert golden.dtype == torch_output.dtype, f"golden dtype {golden.dtype} != output dtype {torch_output.dtype}"
     assert torch.equal(golden, torch_output), "golden values differ from the stored output values"
+
+
+def _assert_golden_dtype_and_close(golden, output, *, rtol, atol):
+    torch_output = ttnn.to_torch(output)
+    assert (
+        golden.shape == torch_output.shape
+    ), f"golden shape {tuple(golden.shape)} != output {tuple(torch_output.shape)}"
+    assert golden.dtype == torch_output.dtype, f"golden dtype {golden.dtype} != output dtype {torch_output.dtype}"
+    torch.testing.assert_close(golden.float(), torch_output.float(), rtol=rtol, atol=atol)
 
 
 def _capture_local_comparison_records(monkeypatch):
@@ -141,98 +194,48 @@ def test_leaky_relu_with_positional_negative_slope_in_comparison_mode(device):
     assert isinstance(output_tensor, ttnn.Tensor)
 
 
-@pytest.mark.requires_fast_runtime_mode_off
-def test_sum_with_scalar_in_comparison_mode(device):
-    torch_input = torch.ones((1, 1, 32, 32), dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # The device multiplies the reduction by scalar; the golden used to ignore it and reported a false mismatch.
-    with comparison_mode():
-        output_tensor = ttnn.sum(input_tensor, dim=-1, keepdim=True, scalar=0.5)
-
-    assert isinstance(output_tensor, ttnn.Tensor)
+def _arange_tile():
+    return torch.arange(1, 1025, dtype=torch.float32).to(torch.bfloat16).reshape(SINGLE_TILE)
 
 
-@pytest.mark.requires_fast_runtime_mode_off
-def test_sum_int32_with_fractional_scalar_in_comparison_mode(device):
-    torch_input = torch.ones((1, 1, 32, 32), dtype=torch.int32)
-    input_tensor = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
-
-    # For int32 input the scaled sum is computed in float32 and truncated back to int32, so a fractional scalar
-    # (0.5) must not leave the golden as a float tensor.
-    with comparison_mode():
-        output_tensor = ttnn.sum(input_tensor, dim=-1, keepdim=True, scalar=0.5)
-
-    assert isinstance(output_tensor, ttnn.Tensor)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_mean_with_zero_scalar_in_comparison_mode(device):
-    torch_input = torch.arange(1, 1025, dtype=torch.float32).to(torch.bfloat16).reshape(1, 1, 32, 32)
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # scalar=0.0 makes the device mean exactly zero; the golden used to ignore scalar and return the unscaled mean.
-    with comparison_mode():
-        output_tensor = ttnn.mean(input_tensor, dim=-1, keepdim=True, scalar=0.0)
-
-    assert isinstance(output_tensor, ttnn.Tensor)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_max_with_negative_scalar_in_comparison_mode(device):
-    torch_input = torch.arange(1, 1025, dtype=torch.float32).to(torch.bfloat16).reshape(1, 1, 32, 32)
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # A negative scalar flips the ordering, so the device max is scalar * min(input); the golden must swap
-    # max for min before scaling.
-    with comparison_mode():
-        output_tensor = ttnn.max(input_tensor, dim=-1, keepdim=True, scalar=-2.0)
-
-    assert isinstance(output_tensor, ttnn.Tensor)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_min_with_negative_scalar_in_comparison_mode(device):
-    torch_input = torch.arange(1, 1025, dtype=torch.float32).to(torch.bfloat16).reshape(1, 1, 32, 32)
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # A negative scalar flips the ordering, so the device min is scalar * max(input); the golden must swap
-    # min for max before scaling.
-    with comparison_mode():
-        output_tensor = ttnn.min(input_tensor, dim=-1, keepdim=True, scalar=-2.0)
-
-    assert isinstance(output_tensor, ttnn.Tensor)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_var_with_zero_scalar_in_comparison_mode(device):
+def _scaled_columns_tile():
     columns = torch.arange(32, dtype=torch.float32).reshape(1, 1, 1, 32)
     row_scales = torch.arange(1, 33, dtype=torch.float32).reshape(1, 1, 32, 1)
-    torch_input = (row_scales * columns).to(torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Variance scales with scalar**2, so scalar=0.0 must give zero; the golden used to return the unscaled variance.
-    with comparison_mode():
-        output_tensor = ttnn.var(input_tensor, dim=-1, keepdim=True, scalar=0.0, correction=False)
-
-    assert isinstance(output_tensor, ttnn.Tensor)
+    return (row_scales * columns).to(torch.bfloat16)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_std_with_zero_scalar_in_comparison_mode(device):
-    columns = torch.arange(32, dtype=torch.float32).reshape(1, 1, 1, 32)
-    row_scales = torch.arange(1, 33, dtype=torch.float32).reshape(1, 1, 32, 1)
-    torch_input = (row_scales * columns).to(torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+@pytest.mark.parametrize(
+    "operation, torch_input, input_dtype, reduction_kwargs",
+    [
+        # The device multiplies the reduction by scalar; the golden used to ignore it and reported a false mismatch.
+        pytest.param(ttnn.sum, torch.ones(SINGLE_TILE, dtype=torch.bfloat16), None, {"scalar": 0.5}, id="sum"),
+        # For int32 input the scaled sum is computed in float32 and truncated back to int32, so a fractional scalar
+        # (0.5) must not leave the golden as a float tensor.
+        pytest.param(
+            ttnn.sum,
+            torch.ones(SINGLE_TILE, dtype=torch.int32),
+            ttnn.int32,
+            {"scalar": 0.5},
+            id="sum_int32_fractional_scalar",
+        ),
+        # scalar=0.0 makes the device mean exactly zero; the golden used to ignore scalar and return the unscaled mean.
+        pytest.param(ttnn.mean, _arange_tile(), None, {"scalar": 0.0}, id="mean"),
+        # A negative scalar flips the ordering, so the device max is scalar * min(input) and the device min is
+        # scalar * max(input); the golden must swap max and min before scaling.
+        pytest.param(ttnn.max, _arange_tile(), None, {"scalar": -2.0}, id="max"),
+        pytest.param(ttnn.min, _arange_tile(), None, {"scalar": -2.0}, id="min"),
+        # Variance scales with scalar**2, so scalar=0.0 must give zero; the golden used to return the unscaled variance.
+        pytest.param(ttnn.var, _scaled_columns_tile(), None, {"scalar": 0.0, "correction": False}, id="var"),
+        # Standard deviation scales with |scalar|, so scalar=0.0 must give zero; the golden used to return it unscaled.
+        pytest.param(ttnn.std, _scaled_columns_tile(), None, {"scalar": 0.0, "correction": False}, id="std"),
+    ],
+)
+def test_reduction_with_scalar_in_comparison_mode(device, operation, torch_input, input_dtype, reduction_kwargs):
+    input_tensor = _to_device(torch_input, device, dtype=input_dtype)
 
-    # Standard deviation scales with |scalar|, so scalar=0.0 must give zero; the golden used to return it unscaled.
     with comparison_mode():
-        output_tensor = ttnn.std(input_tensor, dim=-1, keepdim=True, scalar=0.0, correction=False)
+        output_tensor = operation(input_tensor, dim=-1, keepdim=True, **reduction_kwargs)
 
     assert isinstance(output_tensor, ttnn.Tensor)
 
@@ -293,41 +296,61 @@ def test_rms_norm_with_residual_in_comparison_mode(device):
     assert isinstance(output_tensor, ttnn.Tensor)
 
 
+def _positive_complex_parts():
+    return torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1
+
+
+def _offset_imaginary_complex_parts():
+    return torch.rand(SINGLE_TILE, dtype=torch.bfloat16), torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 2
+
+
+def _polar_complex_parts():
+    return torch.full(SINGLE_TILE, 2.0, dtype=torch.bfloat16), torch.zeros(SINGLE_TILE, dtype=torch.bfloat16)
+
+
+def _partly_zero_complex_parts():
+    # Zero real and zero imaginary parts never coincide, so every value of the ops below is finite.
+    torch_real = torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1
+    torch_real[..., ::2] = 0
+    torch_imag = torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1
+    torch_imag[..., 1::4] = 0
+    return torch_real, torch_imag
+
+
 @pytest.mark.requires_fast_runtime_mode_off
-def test_abs_of_complex_tensor_in_comparison_mode(device):
-    complex_input = _complex_input(
-        torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, device
-    )
+@pytest.mark.parametrize(
+    "operation, make_parts, op_kwargs",
+    [
+        pytest.param(ttnn.abs, _positive_complex_parts, {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, id="abs"),
+        # The real-valued output must be compared with both an inherited and an explicit memory config.
+        pytest.param(ttnn.real, _offset_imaginary_complex_parts, {"memory_config": None}, id="real_inherited"),
+        pytest.param(
+            ttnn.real, _offset_imaginary_complex_parts, {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, id="real_dram"
+        ),
+        # polar takes one ComplexTensor holding (radius, angle) as (real, imag); the golden used to call torch.polar
+        # with that single argument although torch.polar needs separate radius and angle tensors.
+        pytest.param(ttnn.polar, _polar_complex_parts, {}, id="polar"),
+        pytest.param(ttnn.imag, _partly_zero_complex_parts, {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, id="imag"),
+        pytest.param(ttnn.angle, _partly_zero_complex_parts, {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, id="angle"),
+        pytest.param(ttnn.conj, _partly_zero_complex_parts, {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, id="conj"),
+        pytest.param(
+            ttnn.is_real, _partly_zero_complex_parts, {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, id="is_real"
+        ),
+        pytest.param(
+            ttnn.is_imag, _partly_zero_complex_parts, {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, id="is_imag"
+        ),
+        pytest.param(
+            ttnn.reciprocal, _partly_zero_complex_parts, {"memory_config": ttnn.DRAM_MEMORY_CONFIG}, id="reciprocal"
+        ),
+    ],
+)
+def test_complex_unary_op_in_comparison_mode(device, operation, make_parts, op_kwargs):
+    complex_input = _complex_input(*make_parts(), device)
 
     # A ComplexTensor is two real device tensors rather than a ttnn.Tensor, so default input preprocessing used to
     # pass the wrapper to torch unconverted; it must be rebuilt as a torch complex tensor.
     with comparison_mode():
-        ttnn.abs(complex_input, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize("memory_config", [None, ttnn.DRAM_MEMORY_CONFIG], ids=["inherited", "dram"])
-def test_real_of_complex_tensor_in_comparison_mode(device, memory_config):
-    complex_input = _complex_input(
-        torch.rand(SINGLE_TILE, dtype=torch.bfloat16), torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 2, device
-    )
-
-    # The ComplexTensor input must be rebuilt as a torch complex tensor for the golden, and the real-valued
-    # output must be compared with both an inherited and an explicit memory config.
-    with comparison_mode():
-        ttnn.real(complex_input, memory_config=memory_config)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_polar_of_complex_tensor_in_comparison_mode(device):
-    complex_input = _complex_input(
-        torch.full(SINGLE_TILE, 2.0, dtype=torch.bfloat16), torch.zeros(SINGLE_TILE, dtype=torch.bfloat16), device
-    )
-
-    # polar takes one ComplexTensor holding (radius, angle) as (real, imag); the golden used to call torch.polar
-    # with that single argument although torch.polar needs separate radius and angle tensors.
-    with comparison_mode():
-        ttnn.polar(complex_input)
+        operation(complex_input, **op_kwargs)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -360,14 +383,63 @@ def test_fast_and_approximate_mode_degenerate_output_in_comparison_mode(device, 
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize("operation", [ttnn.log, ttnn.log10, ttnn.log1p, ttnn.log2], ids=lambda op: op.__name__)
-def test_log_family_with_fast_and_approximate_mode_in_comparison_mode(device, operation):
-    input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 0.5, device)
+@pytest.mark.parametrize(
+    "operation, torch_input, args, op_kwargs",
+    [
+        # fast_and_approximate_mode is a TTNN-only kwarg that the generic unary golden wrapper must discard instead of
+        # forwarding it to the torch log function.
+        pytest.param(ttnn.log, _linspace_tile(0.5, 1.5), (), {"fast_and_approximate_mode": True}, id="log"),
+        pytest.param(ttnn.log10, _linspace_tile(0.5, 1.5), (), {"fast_and_approximate_mode": True}, id="log10"),
+        pytest.param(ttnn.log1p, _linspace_tile(0.5, 1.5), (), {"fast_and_approximate_mode": True}, id="log1p"),
+        pytest.param(ttnn.log2, _linspace_tile(0.5, 1.5), (), {"fast_and_approximate_mode": True}, id="log2"),
+        # The fast erf stays within PCC of the exact torch reference, so the golden need not model the mode.
+        pytest.param(ttnn.erf, _linspace_tile(-3.0, 3.0), (), {"fast_and_approximate_mode": True}, id="erf"),
+        # The golden ignores the approximation mode, so the approximate result must stay within PCC of the exact one.
+        pytest.param(ttnn.sqrt, _linspace_tile(0.01, 100.0), (), {"fast_and_approximate_mode": True}, id="sqrt"),
+        pytest.param(
+            ttnn.sigmoid,
+            _linspace_tile(-8.0, 8.0),
+            (),
+            {"vector_mode": 4, "mode": ttnn.SigmoidMode.AccurateWithFastExp},
+            id="sigmoid_accurate_with_fast_exp",
+        ),
+        pytest.param(
+            ttnn.sigmoid,
+            _linspace_tile(-8.0, 8.0),
+            (),
+            {"vector_mode": 4, "mode": ttnn.SigmoidMode.FastApproximate},
+            id="sigmoid_fast_approximate",
+        ),
+        pytest.param(
+            ttnn.sigmoid_accurate,
+            _linspace_tile(-8.0, 8.0),
+            (),
+            {"fast_and_approximate_mode": True},
+            id="sigmoid_accurate",
+        ),
+        # Half the inputs are out of domain; the golden must predict where the bfloat16 device output is non-finite.
+        pytest.param(ttnn.acos, _linspace_tile(-2.0, 2.0), (), {}, id="acos_out_of_domain"),
+        pytest.param(ttnn.asin, _linspace_tile(-2.0, 2.0), (), {}, id="asin_out_of_domain"),
+        pytest.param(ttnn.acosh, _linspace_tile(0.0, 4.0), (), {}, id="acosh_out_of_domain"),
+        # A tiny or zero bfloat16 scalar divisor is ill-conditioned; the golden relaxes the value comparison and only
+        # requires the non-finite positions to agree.
+        pytest.param(ttnn.remainder, _linspace_tile(-4.0, 4.0), (1e-3,), {}, id="remainder_tiny_scalar"),
+        pytest.param(ttnn.remainder, _linspace_tile(-4.0, 4.0), (0.0,), {}, id="remainder_zero_scalar"),
+        # Near-overflow, infinite and NaN inputs must produce the reciprocal torch predicts, including signed zero.
+        pytest.param(
+            ttnn.reciprocal,
+            _repeated_tile([2.0**126, float("-inf"), float("nan"), 2.0]),
+            (),
+            {},
+            id="reciprocal_special_values",
+        ),
+    ],
+)
+def test_unary_on_deterministic_tile_in_comparison_mode(device, operation, torch_input, args, op_kwargs):
+    input_tensor = _to_device(torch_input.to(torch.bfloat16), device)
 
-    # fast_and_approximate_mode is a TTNN-only kwarg that the generic unary golden wrapper must discard instead of
-    # forwarding it to the torch log function.
     with comparison_mode():
-        operation(input_tensor, fast_and_approximate_mode=True)
+        operation(input_tensor, *args, **op_kwargs)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -627,48 +699,46 @@ def test_binary_backward_with_keyword_scalar_in_comparison_mode(device, operatio
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_hardshrink_bw_with_keyword_lambd_in_comparison_mode(device):
+@pytest.mark.parametrize(
+    "operation, torch_input, op_kwargs",
+    [
+        # The golden named this parameter alpha, so the public lambd keyword fell into **kwargs and the default 0.5
+        # was used instead.
+        pytest.param(ttnn.hardshrink_bw, _linspace_tile(-4.0, 4.0), {"lambd": 2.2}, id="hardshrink_bw_lambd"),
+        pytest.param(ttnn.softshrink_bw, _linspace_tile(-4.0, 4.0), {"lambd": 2.0}, id="softshrink_bw_lambd"),
+        # The golden named the bounds min_val/max_val, so the public min/max keywords were ignored and the default
+        # [-1, 1] range was used; the input straddles +-0.8 and +-1 to tell them apart.
+        pytest.param(
+            ttnn.hardtanh_bw,
+            _repeated_tile([-0.9, 0.0, 0.9, 0.5]),
+            {"min": -0.8, "max": 0.8},
+            id="hardtanh_bw_bounds",
+        ),
+        # The golden named this parameter alpha, so the public negative_slope keyword was ignored and the default
+        # slope of 0.01 was used instead of 0.5.
+        pytest.param(
+            ttnn.leaky_relu_bw, _linspace_tile(-2.0, 2.0), {"negative_slope": 0.5}, id="leaky_relu_bw_negative_slope"
+        ),
+        # Torch and the device both take the negative ELU branch at x = 0, so the gradient there is alpha * grad.
+        pytest.param(ttnn.elu_bw, torch.zeros(SINGLE_TILE), {"alpha": 2.0}, id="elu_bw_at_zero"),
+        # The device evaluates sqrt(pi) / 2 * exp(erfinv(x)**2) * grad, the exact erfinv derivative that autograd
+        # gives.
+        pytest.param(ttnn.erfinv_bw, _linspace_tile(-0.9, 0.9), {}, id="erfinv_bw"),
+        # A negative eps disables clamping: torch and the device both give NaN outside [0, 1] and 1 / (x * (1 - x))
+        # inside it.
+        pytest.param(
+            ttnn.logiteps_bw, _repeated_tile([-2.0, 0.25, 0.75, 2.0]), {"eps": -0.001}, id="logiteps_bw_negative_eps"
+        ),
+        # The device writes zero for NaN inputs; torch autograd must produce the same gradient at those positions.
+        pytest.param(ttnn.relu6_bw, _repeated_tile([float("nan"), -1.0, 3.0, 7.0]), {}, id="relu6_bw_nan_input"),
+    ],
+)
+def test_unary_backward_with_unit_grad_in_comparison_mode(device, operation, torch_input, op_kwargs):
     grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
-    input_tensor = _to_device(torch.linspace(-4.0, 4.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
-
-    # The golden named this parameter alpha, so the public lambd keyword fell into **kwargs and the default 0.5
-    # was used instead of 2.2.
-    with comparison_mode():
-        ttnn.hardshrink_bw(grad, input_tensor, lambd=2.2)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_softshrink_bw_with_keyword_lambd_in_comparison_mode(device):
-    grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
-    input_tensor = _to_device(torch.linspace(-4.0, 4.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
-
-    # The golden named this parameter alpha, so the public lambd keyword fell into **kwargs and the default 0.5
-    # was used instead of 2.0.
-    with comparison_mode():
-        ttnn.softshrink_bw(grad, input_tensor, lambd=2.0)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_hardtanh_bw_with_keyword_bounds_in_comparison_mode(device):
-    grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
-    torch_input = torch.tensor([-0.9, 0.0, 0.9, 0.5]).repeat(256).reshape(SINGLE_TILE)
     input_tensor = _to_device(torch_input.to(torch.bfloat16), device)
 
-    # The golden named the bounds min_val/max_val, so the public min/max keywords were ignored and the default
-    # [-1, 1] range was used; the input straddles +-0.8 and +-1 to tell them apart.
     with comparison_mode():
-        ttnn.hardtanh_bw(grad, input_tensor, min=-0.8, max=0.8)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_leaky_relu_bw_with_keyword_slope_in_comparison_mode(device):
-    grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
-    input_tensor = _to_device(torch.linspace(-2.0, 2.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
-
-    # The golden named this parameter alpha, so the public negative_slope keyword was ignored and the default
-    # slope of 0.01 was used instead of 0.5.
-    with comparison_mode():
-        ttnn.leaky_relu_bw(grad, input_tensor, negative_slope=0.5)
+        operation(grad, input_tensor, **op_kwargs)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -772,20 +842,84 @@ def test_lerp_bw_with_public_keywords_in_comparison_mode(device, weight_form):
 
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("output_form", ["dtype", "output_tensor"])
-def test_add_with_block_float_output_in_comparison_mode(device, output_form):
-    input_a = _to_device(_block_float_sensitive_values(SINGLE_TILE), device, dtype=ttnn.float32)
-    input_b = _to_device(torch.zeros(SINGLE_TILE), device, dtype=ttnn.float32)
+@pytest.mark.parametrize(
+    "operation, make_operands",
+    [
+        pytest.param(ttnn.subtract, _positive_operands, id="subtract"),
+        pytest.param(ttnn.multiply, _positive_operands, id="multiply"),
+        pytest.param(ttnn.divide, _positive_operands, id="divide"),
+        pytest.param(ttnn.rsub, _positive_operands, id="rsub"),
+        pytest.param(ttnn.maximum, _positive_operands, id="maximum"),
+        pytest.param(ttnn.remainder, _positive_operands, id="remainder"),
+        pytest.param(ttnn.squared_difference, _positive_operands, id="squared_difference"),
+        pytest.param(ttnn.bias_gelu, _positive_operands, id="bias_gelu"),
+        pytest.param(ttnn.xlogy, _positive_operands, id="xlogy"),
+        pytest.param(ttnn.ldexp, _ldexp_operands, id="ldexp"),
+        pytest.param(ttnn.logaddexp, _positive_operands, id="logaddexp"),
+        pytest.param(ttnn.logaddexp2, _positive_operands, id="logaddexp2"),
+        pytest.param(ttnn.pow, _positive_operands, id="pow"),
+        pytest.param(ttnn.eq, _small_integer_operands, id="eq"),
+        pytest.param(ttnn.ne, _small_integer_operands, id="ne"),
+        pytest.param(ttnn.lt, _small_integer_operands, id="lt"),
+        pytest.param(ttnn.le, _small_integer_operands, id="le"),
+        pytest.param(ttnn.gt, _small_integer_operands, id="gt"),
+        pytest.param(ttnn.ge, _small_integer_operands, id="ge"),
+        pytest.param(ttnn.logical_and, _small_integer_operands, id="logical_and"),
+        pytest.param(ttnn.logical_or, _small_integer_operands, id="logical_or"),
+        pytest.param(ttnn.logical_xor, _small_integer_operands, id="logical_xor"),
+        pytest.param(ttnn.gcd, _int32_operands, id="gcd"),
+        pytest.param(ttnn.lcm, _int32_operands, id="lcm"),
+    ],
+)
+def test_binary_with_float32_output_in_comparison_mode(device, operation, make_operands, output_form):
+    torch_a, torch_b, input_dtype = make_operands()
+    input_a = _to_device(torch_a, device, dtype=input_dtype)
+    input_b = _to_device(torch_b, device, dtype=input_dtype)
+    if output_form == "dtype":
+        output_kwargs = {"dtype": ttnn.float32}
+    else:
+        output_kwargs = {"output_tensor": _to_device(torch.zeros(SINGLE_TILE), device, dtype=ttnn.float32)}
+
+    # Every binary op takes dtype and a preallocated output_tensor, and the device stores its result in that dtype
+    # (FLOAT32 here), so the golden must return FLOAT32 rather than the input dtype or a bool comparison result.
+    with comparison_mode():
+        output = operation(input_a, input_b, **output_kwargs)
+
+    _assert_golden_dtype_and_close(
+        _registered_golden_output(operation, input_a, input_b, **output_kwargs), output, rtol=1e-2, atol=1e-2
+    )
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+@pytest.mark.parametrize("output_form", ["dtype", "output_tensor"])
+@pytest.mark.parametrize(
+    "operation, identity_value, block_float_operand",
+    [
+        pytest.param(ttnn.add, 0.0, "a", id="add"),
+        pytest.param(ttnn.subtract, 0.0, "a", id="subtract"),
+        pytest.param(ttnn.multiply, 1.0, "a", id="multiply"),
+        pytest.param(ttnn.divide, 1.0, "a", id="divide"),
+        pytest.param(ttnn.rsub, 0.0, "b", id="rsub"),
+        pytest.param(ttnn.maximum, 0.0, "a", id="maximum"),
+    ],
+)
+def test_binary_with_block_float_output_in_comparison_mode(
+    device, operation, identity_value, block_float_operand, output_form
+):
+    block_float_values = _to_device(_block_float_sensitive_values(SINGLE_TILE), device, dtype=ttnn.float32)
+    identity = _to_device(torch.full(SINGLE_TILE, identity_value), device, dtype=ttnn.float32)
+    input_a, input_b = (block_float_values, identity) if block_float_operand == "a" else (identity, block_float_values)
     if output_form == "dtype":
         output_kwargs = {"dtype": ttnn.bfloat4_b}
     else:
         output_kwargs = {"output_tensor": _to_device(torch.zeros(SINGLE_TILE), device, dtype=ttnn.bfloat8_b)}
 
-    # BFLOAT4_B/BFLOAT8_B outputs share an exponent per 16 values, which flushes the 1s next to 1024 to zero. The
-    # golden used to keep full precision because it ignored both dtype and the output tensor's dtype.
+    # The identity operand makes the exact result the 1s-beside-1024 input. BFLOAT4_B/BFLOAT8_B outputs share an
+    # exponent per 16 values, which flushes those 1s to zero, so the golden must quantize the same way.
     with comparison_mode():
-        output = ttnn.add(input_a, input_b, **output_kwargs)
+        output = operation(input_a, input_b, **output_kwargs)
 
-    _assert_golden_matches_output(_registered_golden_output(ttnn.add, input_a, input_b, **output_kwargs), output)
+    _assert_golden_matches_output(_registered_golden_output(operation, input_a, input_b, **output_kwargs), output)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -803,21 +937,40 @@ def test_add_int32_with_integral_float_scalar_in_comparison_mode(device):
 
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize(
-    "minimum_kwargs",
+    "other_form, minimum_kwargs",
     [
-        pytest.param({"input_tensor_a_activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.NEG)]}, id="activation"),
-        pytest.param({"dtype": ttnn.float32}, id="dtype"),
+        # minimum takes the same activations and output dtype as the other binary ops, but its golden ignored both,
+        # so a negating activation or a float32 output gave different values.
+        pytest.param(
+            "tensor",
+            {"input_tensor_a_activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.NEG)]},
+            id="tensor_activation",
+        ),
+        pytest.param("tensor", {"dtype": ttnn.float32}, id="tensor_dtype"),
+        # The scalar overload runs on the unary path, which accepts activations but never applies them, so the
+        # golden must ignore them too; a negating activation would otherwise change the minimum of values in
+        # [1, 2) and 0.5.
+        pytest.param(
+            "scalar",
+            {"input_tensor_a_activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.NEG)]},
+            id="scalar_operand_activation",
+        ),
+        pytest.param(
+            "scalar", {"activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.NEG)]}, id="scalar_result_activation"
+        ),
     ],
 )
-def test_minimum_with_value_affecting_options_in_comparison_mode(device, minimum_kwargs):
-    input_a, input_b = (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, device) for _ in range(2))
+def test_minimum_with_value_affecting_options_in_comparison_mode(device, other_form, minimum_kwargs):
+    input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, device)
+    other = 0.5
+    if other_form == "tensor":
+        other = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, device)
 
-    # minimum takes the same activations and output dtype as the other binary ops, but its golden ignored both,
-    # so a negating activation or a float32 output gave different values.
     with comparison_mode():
-        output = ttnn.minimum(input_a, input_b, **minimum_kwargs)
+        output = ttnn.minimum(input_tensor, other, **minimum_kwargs)
 
-    _assert_golden_matches_output(_registered_golden_output(ttnn.minimum, input_a, input_b, **minimum_kwargs), output)
+    golden = _registered_golden_output(ttnn.minimum, input_tensor, other, **minimum_kwargs)
+    _assert_golden_matches_output(golden, output)
 
 
 def test_situ_glu_golden_accepts_keyword_betas():
@@ -863,14 +1016,23 @@ def test_full_with_dtype_in_comparison_mode(device, dtype):
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_ones_like_with_dtype_override_in_comparison_mode(device):
-    input_tensor = _to_device(torch.zeros(SINGLE_TILE, dtype=torch.int32), device, dtype=ttnn.int32)
+@pytest.mark.parametrize(
+    "operation, make_input, input_dtype",
+    [
+        pytest.param(ttnn.ones_like, lambda: torch.zeros(SINGLE_TILE, dtype=torch.int32), ttnn.int32, id="ones_like"),
+        pytest.param(ttnn.zeros_like, lambda: torch.rand(SINGLE_TILE, dtype=torch.bfloat16), None, id="zeros_like"),
+        # clone can convert dtype while copying, but the golden was a plain identity.
+        pytest.param(ttnn.clone, lambda: torch.rand(SINGLE_TILE, dtype=torch.bfloat16), None, id="clone"),
+    ],
+)
+def test_dtype_override_in_comparison_mode(device, operation, make_input, input_dtype):
+    input_tensor = _to_device(make_input(), device, dtype=input_dtype)
 
-    # The golden used to ignore dtype and return a tensor in the int32 input's dtype instead of float32.
+    # The golden used to ignore dtype and return a tensor in the input's dtype instead of float32.
     with comparison_mode():
-        output = ttnn.ones_like(input_tensor, dtype=ttnn.float32)
+        output = operation(input_tensor, dtype=ttnn.float32)
 
-    _assert_golden_matches_output(_registered_golden_output(ttnn.ones_like, input_tensor, dtype=ttnn.float32), output)
+    _assert_golden_matches_output(_registered_golden_output(operation, input_tensor, dtype=ttnn.float32), output)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -880,17 +1042,6 @@ def test_zeros_like_with_tensor_keyword_in_comparison_mode(device):
     # The golden named its argument input_tensor, so a call with the public keyword tensor= used to fail in it.
     with comparison_mode():
         ttnn.zeros_like(tensor=input_tensor)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_zeros_like_with_dtype_override_in_comparison_mode(device):
-    input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
-
-    # The golden used to ignore dtype and return a tensor in the bfloat16 input's dtype instead of float32.
-    with comparison_mode():
-        output = ttnn.zeros_like(input_tensor, dtype=ttnn.float32)
-
-    _assert_golden_matches_output(_registered_golden_output(ttnn.zeros_like, input_tensor, dtype=ttnn.float32), output)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -908,17 +1059,6 @@ def test_fill_rm_dtype_follows_any_in_comparison_mode(device, operation, fill_va
         output = operation(*fill_args)
 
     _assert_golden_matches_output(_registered_golden_output(operation, *fill_args), output)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_clone_with_dtype_in_comparison_mode(device):
-    input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
-
-    # clone can convert dtype while copying, but the golden was a plain identity and kept the bfloat16 input dtype.
-    with comparison_mode():
-        output = ttnn.clone(input_tensor, dtype=ttnn.float32)
-
-    _assert_golden_matches_output(_registered_golden_output(ttnn.clone, input_tensor, dtype=ttnn.float32), output)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -1000,21 +1140,62 @@ def test_allocator_skip_policy_still_rejects_shape_mismatch(operation):
 
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize(
-    "output_dtype, make_values",
+    "operation, extra_args, dtype_keyword, output_dtype, make_values",
     [
-        pytest.param(ttnn.bfloat16, _bfloat16_sensitive_values, id="bfloat16"),
-        pytest.param(ttnn.bfloat8_b, _block_float_sensitive_values, id="bfloat8_b"),
+        pytest.param(ttnn.tilize, (), "dtype", ttnn.bfloat16, _bfloat16_sensitive_values, id="tilize_bfloat16"),
+        pytest.param(ttnn.tilize, (), "dtype", ttnn.bfloat8_b, _block_float_sensitive_values, id="tilize_bfloat8_b"),
+        pytest.param(
+            ttnn.tilize_with_val_padding,
+            (list(SINGLE_TILE), 0.0),
+            "dtype",
+            ttnn.bfloat8_b,
+            _block_float_sensitive_values,
+            id="tilize_with_val_padding",
+        ),
+        # tilize_with_zero_padding names its dtype argument output_dtype.
+        pytest.param(
+            ttnn.tilize_with_zero_padding,
+            (),
+            "output_dtype",
+            ttnn.bfloat8_b,
+            _block_float_sensitive_values,
+            id="tilize_with_zero_padding",
+        ),
     ],
 )
-def test_tilize_with_output_dtype_in_comparison_mode(device, output_dtype, make_values):
+def test_tilize_with_output_dtype_in_comparison_mode(
+    device, operation, extra_args, dtype_keyword, output_dtype, make_values
+):
     input_tensor = _to_device(make_values(SINGLE_TILE), device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tilize_args = (input_tensor, *extra_args)
+    tilize_kwargs = {dtype_keyword: output_dtype}
 
-    # The golden used to be an identity, so it ignored the output dtype and kept float32 precision instead of
-    # the rounded bfloat16 / block-float values the device stores.
+    # The device stores the tiles in the output dtype, but the golden used to return the float32 input unchanged
+    # instead of the rounded bfloat16 values or the BFLOAT8_B values with the 1s beside 1024 flushed to zero.
     with comparison_mode():
-        output = ttnn.tilize(input_tensor, dtype=output_dtype)
+        output = operation(*tilize_args, **tilize_kwargs)
 
-    _assert_golden_matches_output(_registered_golden_output(ttnn.tilize, input_tensor, dtype=output_dtype), output)
+    _assert_golden_matches_output(_registered_golden_output(operation, *tilize_args, **tilize_kwargs), output)
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+def test_embedding_with_block_float_dtype_in_comparison_mode(device):
+    indices = _to_device(
+        torch.randint(0, 64, (1, 32), dtype=torch.int32), device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    weights = _to_device(
+        _block_float_sensitive_values((64, 32)), device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    embedding_kwargs = {"layout": ttnn.TILE_LAYOUT, "dtype": ttnn.bfloat8_b}
+
+    # A tiled embedding output is typecast to dtype, and BFLOAT8_B flushes the 1s beside 1024 to zero, so the
+    # golden must quantize the looked-up rows the same way.
+    with comparison_mode():
+        output = ttnn.embedding(indices, weights, **embedding_kwargs)
+
+    _assert_golden_matches_output(
+        _registered_golden_output(ttnn.embedding, indices, weights, **embedding_kwargs), output
+    )
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -1118,31 +1299,56 @@ def test_requantize_saturates_int8_output_in_comparison_mode(device):
     _assert_golden_matches_output(_registered_golden_output(ttnn.requantize, *requantize_args, dtype=ttnn.int8), output)
 
 
-@pytest.mark.requires_fast_runtime_mode_off
-def test_dequantize_fallback_defaults_to_bfloat16(device):
-    input_tensor = _to_device(torch.full(SINGLE_TILE, 3, dtype=torch.int32), device, dtype=ttnn.int32)
-
-    with comparison_mode():
-        output = ttnn.dequantize(input_tensor, 0.5, 2)
-
-    # Without dtype, dequantize outputs BFLOAT16, but the fallback's postprocessing used to cast the result back to
-    # the int32 input dtype. That postprocessor runs only on the golden fallback path, not in comparison mode.
-    fallback_output = ttnn.get_fallback_function(ttnn.dequantize)(input_tensor, 0.5, 2)
-    assert fallback_output.dtype == ttnn.bfloat16
-    assert torch.equal(ttnn.to_torch(fallback_output), ttnn.to_torch(output))
+def _integer_matmul_operands(device):
+    return (
+        _to_device(_small_integer_values((32, 32)), device),
+        _to_device(torch.eye(32, dtype=torch.bfloat16), device),
+    )
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_pad_fallback_keeps_logical_shape(device):
-    input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
-    padding = ((0, 0), (0, 0), (0, 1), (0, 1))
+@pytest.mark.parametrize(
+    "operation, make_operands, op_kwargs",
+    [
+        # The golden returns the requested FLOAT32, but the fallback's postprocessing used to cast results back to
+        # the first input's dtype.
+        pytest.param(ttnn.matmul, _integer_matmul_operands, {"dtype": ttnn.float32}, id="matmul"),
+        pytest.param(ttnn.linear, _integer_matmul_operands, {"dtype": ttnn.float32}, id="linear"),
+        pytest.param(
+            ttnn.clone, lambda device: _integer_matmul_operands(device)[:1], {"dtype": ttnn.float32}, id="clone"
+        ),
+        # Without dtype, dequantize outputs BFLOAT16, but the fallback's postprocessing used to cast the result back
+        # to the int32 input dtype.
+        pytest.param(
+            ttnn.dequantize,
+            lambda device: (
+                _to_device(torch.full(SINGLE_TILE, 3, dtype=torch.int32), device, dtype=ttnn.int32),
+                0.5,
+                2,
+            ),
+            {},
+            id="dequantize",
+        ),
+        # The fallback's postprocessing used to reshape the result to the tile-aligned padded shape, so its logical
+        # shape differed from the device output.
+        pytest.param(
+            ttnn.pad,
+            lambda device: (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device),),
+            {"padding": ((0, 0), (0, 0), (0, 1), (0, 1)), "value": 0.0},
+            id="pad",
+        ),
+    ],
+)
+def test_fallback_matches_comparison_mode_output(device, operation, make_operands, op_kwargs):
+    operands = make_operands(device)
 
     with comparison_mode():
-        output = ttnn.pad(input_tensor, padding=padding, value=0.0)
+        output = operation(*operands, **op_kwargs)
 
-    # The fallback's postprocessing used to reshape the result to the tile-aligned padded shape, so its logical
-    # shape differed from the device output. That postprocessor runs only on the fallback path, not in comparison mode.
-    fallback_output = ttnn.get_fallback_function(ttnn.pad)(input_tensor, padding=padding, value=0.0)
+    # The fallback's output postprocessing runs only on the golden fallback path, not in comparison mode, so it
+    # must keep the device output's dtype, logical shape and values.
+    fallback_output = ttnn.get_fallback_function(operation)(*operands, **op_kwargs)
+    assert fallback_output.dtype == output.dtype
     assert tuple(fallback_output.shape) == tuple(output.shape)
     assert torch.equal(ttnn.to_torch(fallback_output), ttnn.to_torch(output))
 
@@ -1169,36 +1375,26 @@ def test_fold_legacy_transpose_with_asymmetric_padding_in_comparison_mode(device
 
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
-def test_avg_pool2d_with_block_float_dtype_in_comparison_mode(device):
+@pytest.mark.parametrize(
+    "operation, extra_args",
+    [
+        pytest.param(ttnn.avg_pool2d, (), id="avg_pool2d"),
+        pytest.param(ttnn.max_pool2d, ([1, 1],), id="max_pool2d"),
+    ],
+)
+def test_pool2d_with_block_float_dtype_in_comparison_mode(device, operation, extra_args):
     batch_size, input_h, input_w, channels = 1, 8, 8, 32
     torch_input = _block_float_sensitive_values((1, 1, batch_size * input_h * input_w, channels))
     input_tensor = _to_device(torch_input.to(torch.bfloat16), device, layout=ttnn.ROW_MAJOR_LAYOUT)
-    pool_args = (input_tensor, batch_size, input_h, input_w, channels, [2, 2], [2, 2], [0, 0])
+    pool_args = (input_tensor, batch_size, input_h, input_w, channels, [2, 2], [2, 2], [0, 0], *extra_args)
     pool_kwargs = {"dtype": ttnn.bfloat8_b, "output_layout": ttnn.TILE_LAYOUT}
 
     # The golden ignored the output dtype and kept full precision, while the device output is quantized to
     # BFLOAT8_B (1s beside 1024 flush to zero).
     with comparison_mode():
-        output = ttnn.avg_pool2d(*pool_args, **pool_kwargs)
+        output = operation(*pool_args, **pool_kwargs)
 
-    _assert_golden_matches_output(_registered_golden_output(ttnn.avg_pool2d, *pool_args, **pool_kwargs), output)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
-def test_max_pool2d_with_block_float_dtype_in_comparison_mode(device):
-    batch_size, input_h, input_w, channels = 1, 8, 8, 32
-    torch_input = _block_float_sensitive_values((1, 1, batch_size * input_h * input_w, channels))
-    input_tensor = _to_device(torch_input.to(torch.bfloat16), device, layout=ttnn.ROW_MAJOR_LAYOUT)
-    pool_args = (input_tensor, batch_size, input_h, input_w, channels, [2, 2], [2, 2], [0, 0], [1, 1])
-    pool_kwargs = {"dtype": ttnn.bfloat8_b, "output_layout": ttnn.TILE_LAYOUT}
-
-    # The golden ignored the output dtype and kept full precision, while the device output is quantized to
-    # BFLOAT8_B (1s beside 1024 flush to zero).
-    with comparison_mode():
-        output = ttnn.max_pool2d(*pool_args, **pool_kwargs)
-
-    _assert_golden_matches_output(_registered_golden_output(ttnn.max_pool2d, *pool_args, **pool_kwargs), output)
+    _assert_golden_matches_output(_registered_golden_output(operation, *pool_args, **pool_kwargs), output)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -1228,6 +1424,39 @@ def test_conv2d_without_bias_in_comparison_mode(device):
             stride=(1, 1),
             padding=(0, 0),
         )
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_with_block_float_dtype_in_comparison_mode(device):
+    batch_size, in_channels, out_channels, input_height, input_width = 1, 32, 32, 8, 8
+    input_tensor = ttnn.from_torch(
+        _block_float_sensitive_values((batch_size, input_height, input_width, in_channels)), dtype=ttnn.bfloat16
+    )
+    weight_tensor = ttnn.from_torch(
+        torch.eye(out_channels, in_channels).reshape(out_channels, in_channels, 1, 1), dtype=ttnn.bfloat16
+    )
+    conv_kwargs = {
+        "input_tensor": input_tensor,
+        "weight_tensor": weight_tensor,
+        "device": device,
+        "in_channels": in_channels,
+        "out_channels": out_channels,
+        "batch_size": batch_size,
+        "input_height": input_height,
+        "input_width": input_width,
+        "kernel_size": (1, 1),
+        "stride": (1, 1),
+        "padding": (0, 0),
+        "dtype": ttnn.bfloat8_b,
+    }
+
+    # A 1x1 identity convolution reproduces the 1s-beside-1024 channels, and the BFLOAT8_B output flushes those 1s
+    # to zero, so the golden must quantize its float32 result to dtype.
+    with comparison_mode():
+        output = ttnn.conv2d(**conv_kwargs)
+
+    _assert_golden_matches_output(_registered_golden_output(ttnn.conv2d, **conv_kwargs), output)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -1287,64 +1516,79 @@ def test_scale_mask_softmax_without_scale_in_comparison_mode(device, operation):
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_rms_norm_pre_all_gather_with_dtype_in_comparison_mode(device):
+@pytest.mark.parametrize(
+    "operation, op_kwargs, stat_columns",
+    [
+        # The golden ignored dtype and returned float32 statistics, while the device stores them in the requested
+        # dtype.
+        pytest.param(ttnn.rms_norm_pre_all_gather, {"dtype": ttnn.bfloat16}, (0,), id="rms_norm"),
+        # Without dtype the device stores the statistics as BFLOAT16, as rms_norm_pre_all_gather does, so the golden
+        # must return BFLOAT16 statistics rather than float32.
+        pytest.param(ttnn.layer_norm_pre_all_gather, {}, (0, 32), id="layer_norm_default_dtype"),
+    ],
+)
+def test_norm_pre_all_gather_dtype_in_comparison_mode(device, operation, op_kwargs, stat_columns):
     input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
 
-    # The golden ignored dtype and returned float32 statistics, while the device stores them in the requested
-    # dtype (BFLOAT16 by default).
     with comparison_mode():
-        output = ttnn.rms_norm_pre_all_gather(input_tensor, dtype=ttnn.bfloat16)
+        output = operation(input_tensor, **op_kwargs)
 
-    golden = _registered_golden_output(ttnn.rms_norm_pre_all_gather, input_tensor, dtype=ttnn.bfloat16)
+    golden = _registered_golden_output(operation, input_tensor, **op_kwargs)
     torch_output = ttnn.to_torch(output)
     assert golden.dtype == torch_output.dtype, f"golden dtype {golden.dtype} != output dtype {torch_output.dtype}"
-    torch.testing.assert_close(golden[..., 0].float(), torch_output[..., 0].float(), rtol=1e-2, atol=1e-2)
+    for stat_column in stat_columns:
+        torch.testing.assert_close(
+            golden[..., stat_column].float(), torch_output[..., stat_column].float(), rtol=1e-2, atol=1e-2
+        )
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_rms_norm_post_all_gather_with_block_float_dtype_in_comparison_mode(device):
+@pytest.mark.parametrize(
+    "pre_operation, post_operation",
+    [
+        pytest.param(ttnn.rms_norm_pre_all_gather, ttnn.rms_norm_post_all_gather, id="rms_norm"),
+        # The 1s normalize to about -0.258 beside 1024's 3.87, and the BFLOAT8_B output stores them as -0.25.
+        pytest.param(ttnn.layer_norm_pre_all_gather, ttnn.layer_norm_post_all_gather, id="layer_norm"),
+    ],
+)
+def test_norm_post_all_gather_with_block_float_dtype_in_comparison_mode(device, pre_operation, post_operation):
     input_tensor = _to_device(_block_float_sensitive_values(SINGLE_TILE).to(torch.bfloat16), device)
-    stats = ttnn.rms_norm_pre_all_gather(input_tensor)
+    stats = pre_operation(input_tensor)
 
-    # The golden ignored the output dtype and kept full precision, while the device output is quantized to
-    # BFLOAT8_B (1s beside 1024 flush to zero).
+    # The golden ignored the output dtype and kept full precision, while the BFLOAT8_B device output shares one
+    # exponent per 16 values, so the golden must quantize the normalized result to dtype.
     with comparison_mode():
-        output = ttnn.rms_norm_post_all_gather(input_tensor, stats, dtype=ttnn.bfloat8_b)
+        output = post_operation(input_tensor, stats, dtype=ttnn.bfloat8_b)
 
-    golden = _registered_golden_output(ttnn.rms_norm_post_all_gather, input_tensor, stats, dtype=ttnn.bfloat8_b)
+    golden = _registered_golden_output(post_operation, input_tensor, stats, dtype=ttnn.bfloat8_b)
     torch.testing.assert_close(golden.float(), ttnn.to_torch(output).float(), rtol=1e-2, atol=1e-3)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize(
-    "input_dtype, output_dtype, make_values",
+    "operation, input_dtype, output_dtype, make_values",
     [
-        pytest.param(ttnn.float32, ttnn.bfloat16, _bfloat16_sensitive_values, id="float32_to_bfloat16"),
-        pytest.param(ttnn.bfloat16, ttnn.bfloat8_b, _block_float_sensitive_values, id="bfloat16_to_bfloat8_b"),
+        # The device rounds the result to bfloat16 / BFLOAT8_B; multiplying by the identity exposes exactly that
+        # rounding.
+        pytest.param(
+            ttnn.matmul, ttnn.float32, ttnn.bfloat16, _bfloat16_sensitive_values, id="matmul_float32_to_bfloat16"
+        ),
+        pytest.param(
+            ttnn.matmul, ttnn.bfloat16, ttnn.bfloat8_b, _block_float_sensitive_values, id="matmul_bfloat16_to_bfloat8_b"
+        ),
+        # The golden returned the bfloat16 input dtype instead of the requested float32 output.
+        pytest.param(ttnn.linear, ttnn.bfloat16, ttnn.float32, _small_integer_values, id="linear_bfloat16_to_float32"),
     ],
 )
-def test_matmul_with_output_dtype_in_comparison_mode(device, input_dtype, output_dtype, make_values):
+def test_matmul_with_output_dtype_in_comparison_mode(device, operation, input_dtype, output_dtype, make_values):
     input_a = _to_device(make_values((32, 32)), device, dtype=input_dtype)
     input_b = _to_device(torch.eye(32), device, dtype=input_dtype)
 
-    # The golden ignored the output dtype and kept the input precision, while the device rounds the result to
-    # bfloat16 / BFLOAT8_B (multiplying by the identity exposes exactly that rounding).
+    # The golden ignored the output dtype and kept the input precision and dtype.
     with comparison_mode():
-        output = ttnn.matmul(input_a, input_b, dtype=output_dtype)
+        output = operation(input_a, input_b, dtype=output_dtype)
 
-    _assert_golden_matches_output(_registered_golden_output(ttnn.matmul, input_a, input_b, dtype=output_dtype), output)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_linear_with_float32_dtype_in_comparison_mode(device):
-    input_a = _to_device(torch.randint(-4, 5, (32, 32)).to(torch.bfloat16), device)
-    input_b = _to_device(torch.eye(32, dtype=torch.bfloat16), device)
-
-    # The golden ignored dtype and returned the bfloat16 input dtype instead of the requested float32 output.
-    with comparison_mode():
-        output = ttnn.linear(input_a, input_b, dtype=ttnn.float32)
-
-    _assert_golden_matches_output(_registered_golden_output(ttnn.linear, input_a, input_b, dtype=ttnn.float32), output)
+    _assert_golden_matches_output(_registered_golden_output(operation, input_a, input_b, dtype=output_dtype), output)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -1411,35 +1655,53 @@ def test_matmul_batched_weights_with_output_dtype_in_comparison_mode(device):
         device.remove_sub_device_manager(sub_device_manager)
 
 
-@pytest.mark.requires_fast_runtime_mode_off
-def test_sparse_matmul_indexed_output_in_comparison_mode(device):
-    m, k, n, num_experts = 32, 128, 192, 8
+def _indexed_sparse_matmul_kwargs(device, num_experts):
     active_ids = [5, 1]
     sparsity_values = torch.zeros((1, 1, 1, num_experts), dtype=torch.bfloat16)
     sparsity_values[..., active_ids] = 1
+    return {
+        "sparsity": _to_device(sparsity_values, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        "indices": _to_device(
+            torch.tensor(active_ids, dtype=torch.int32).reshape(1, 1, 1, -1),
+            device,
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        "is_input_a_sparse": False,
+        "is_input_b_sparse": True,
+        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+        "program_config": _sparse_matmul_program_config(),
+    }
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+def test_sparse_matmul_indexed_output_in_comparison_mode(device):
+    m, k, n, num_experts = 32, 128, 192, 8
     input_a = _to_device(torch.randn((1, 1, m, k), dtype=torch.bfloat16), device)
     input_b = _to_device(torch.randn((1, num_experts, k, n), dtype=torch.bfloat16), device)
-    sparsity = _to_device(sparsity_values, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    indices = _to_device(
-        torch.tensor(active_ids, dtype=torch.int32).reshape(1, 1, 1, -1),
-        device,
-        dtype=ttnn.uint16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
+    sparse_matmul_kwargs = _indexed_sparse_matmul_kwargs(device, num_experts)
 
     # Indexed mode gathers the listed groups of B into a compact group axis in index order and never reads
     # sparsity; the golden used to raise NotImplementedError for any call with indices.
     with comparison_mode():
-        ttnn.sparse_matmul(
-            input_a,
-            input_b,
-            sparsity=sparsity,
-            indices=indices,
-            is_input_a_sparse=False,
-            is_input_b_sparse=True,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=_sparse_matmul_program_config(),
-        )
+        ttnn.sparse_matmul(input_a, input_b, **sparse_matmul_kwargs)
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+def test_sparse_matmul_with_block_float_dtype_in_comparison_mode(device):
+    m, k, n, num_experts = 32, 128, 192, 8
+    input_a = _to_device(_block_float_sensitive_values((1, 1, m, k)).to(torch.bfloat16), device)
+    input_b = _to_device(torch.eye(k, n, dtype=torch.bfloat16).expand(1, num_experts, k, n).contiguous(), device)
+    sparse_matmul_kwargs = {**_indexed_sparse_matmul_kwargs(device, num_experts), "dtype": ttnn.bfloat8_b}
+
+    # Every expert of B is an identity, so each gathered result repeats A's 1s-beside-1024 rows; the BFLOAT8_B
+    # output flushes those 1s to zero, so the golden must quantize to dtype.
+    with comparison_mode():
+        output = ttnn.sparse_matmul(input_a, input_b, **sparse_matmul_kwargs)
+
+    _assert_golden_matches_output(
+        _registered_golden_output(ttnn.sparse_matmul, input_a, input_b, **sparse_matmul_kwargs), output
+    )
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -1520,25 +1782,22 @@ def test_moreh_mean_over_all_dims_in_comparison_mode(device):
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_moreh_norm_of_rank_1_input_in_comparison_mode(device):
+@pytest.mark.parametrize(
+    "operation, args, op_kwargs",
+    [
+        pytest.param(ttnn.moreh_norm, (2.0,), {"dim": 0}, id="norm"),
+        # The single bfloat16 sum must match within the device's accumulation error rather than a sub-ULP tolerance.
+        pytest.param(ttnn.moreh_sum, (None,), {}, id="sum_all_dims"),
+        pytest.param(ttnn.moreh_sum, (0,), {}, id="sum_dim_0"),
+    ],
+)
+def test_moreh_reduction_of_rank_1_input_in_comparison_mode(device, operation, args, op_kwargs):
     input_tensor = _to_device(torch.empty([5]).uniform_(-1, 1).to(torch.bfloat16), device)
 
     # For a rank-1 input the reduced dimension is a tile dimension that moreh keeps as size 1, so the output is
     # [1] while torch returns a 0-d scalar, which used to fail the shape check.
     with comparison_mode():
-        ttnn.moreh_norm(input_tensor, 2.0, dim=0, keepdim=False)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize("dim", [None, 0], ids=["all_dims", "dim_0"])
-def test_moreh_sum_of_rank_1_input_in_comparison_mode(device, dim):
-    input_tensor = _to_device(torch.empty([5]).uniform_(-1, 1).to(torch.bfloat16), device)
-
-    # For a rank-1 input the reduced dimension is a tile dimension that moreh keeps as size 1, so the output is
-    # [1] while torch returns a 0-d scalar, which used to fail the shape check. The single bfloat16 value must
-    # then match within the device's accumulation error rather than a sub-ULP tolerance.
-    with comparison_mode():
-        ttnn.moreh_sum(input_tensor, dim, keepdim=False)
+        operation(input_tensor, *args, keepdim=False, **op_kwargs)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -1628,74 +1887,54 @@ def test_scaled_dot_product_attention_decode_non_causal_ignores_cur_pos_in_compa
         )
 
 
-@pytest.mark.requires_fast_runtime_mode_off
-def test_ldexp_inplace_updates_global_golden(device, tmp_path):
-    # ldexp_ overwrites input_a, but its golden was the out-of-place one, so the stored global golden of input_a
-    # kept the pre-op value and the later to_torch comparison used it.
-    with _global_comparison_mode(tmp_path):
-        input_a = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, device)
-        input_b = _to_device(torch.randint(-2, 3, SINGLE_TILE).to(torch.bfloat16), device)
-        ttnn.ldexp_(input_a, input_b)
-        ttnn.to_torch(input_a)
+def _signed_operands():
+    return tuple(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 4 - 2 for _ in range(2))
 
 
-@pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize("operation", [ttnn.logaddexp_, ttnn.logaddexp2_], ids=["logaddexp_", "logaddexp2_"])
-def test_logaddexp_inplace_updates_global_golden(device, tmp_path, operation):
-    # These in-place ops overwrite input_a, but their goldens were the out-of-place ones, so the stored global
-    # golden of input_a kept the pre-op value and the later to_torch comparison used it.
-    with _global_comparison_mode(tmp_path):
-        input_a = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 4 - 2, device)
-        input_b = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 4 - 2, device)
-        operation(input_a, input_b)
-        ttnn.to_torch(input_a)
+def _logical_mask(step):
+    mask = torch.zeros(SINGLE_TILE, dtype=torch.bfloat16)
+    mask[..., ::step] = 1
+    return mask
+
+
+def _channels_with_different_ranges():
+    # Channels with different ranges keep the normalized values from correlating with the original input.
+    return torch.cat(
+        [torch.rand(SINGLE_TILE, dtype=torch.bfloat16), torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 10 + 50], dim=1
+    )
 
 
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize(
-    "operation", [ttnn.logical_and_, ttnn.logical_or_, ttnn.logical_xor_], ids=["and", "or", "xor"]
+    "operation, make_inputs",
+    [
+        # These in-place ops overwrite input_a, but their goldens were the out-of-place ones, so the stored global
+        # golden of input_a kept the pre-op value and the later to_torch comparison used it.
+        pytest.param(ttnn.ldexp_, lambda: _ldexp_operands()[:2], id="ldexp_"),
+        pytest.param(ttnn.logaddexp_, _signed_operands, id="logaddexp_"),
+        pytest.param(ttnn.logaddexp2_, _signed_operands, id="logaddexp2_"),
+        # These in-place ops overwrite input_a; its stored global golden must become the logical result.
+        pytest.param(ttnn.logical_and_, lambda: (_logical_mask(2), _logical_mask(3)), id="logical_and_"),
+        pytest.param(ttnn.logical_or_, lambda: (_logical_mask(2), _logical_mask(3)), id="logical_or_"),
+        pytest.param(ttnn.logical_xor_, lambda: (_logical_mask(2), _logical_mask(3)), id="logical_xor_"),
+        # logical_not_ overwrites its input; the stored global golden must become the negated result.
+        pytest.param(ttnn.logical_not_, lambda: (_logical_mask(2),), id="logical_not_"),
+        # bias_gelu_ overwrites input_a with gelu(input_a + input_b); its stored global golden must become that result.
+        pytest.param(ttnn.bias_gelu_, _signed_operands, id="bias_gelu_"),
+        # normalize_hw is out-of-place, but its golden used to write the normalized values into its input tensor,
+        # which is the stored global golden of the device input, corrupting it.
+        pytest.param(ttnn.normalize_hw, lambda: (_channels_with_different_ranges(),), id="normalize_hw"),
+    ],
 )
-def test_logical_binary_inplace_updates_global_golden(device, tmp_path, operation):
-    torch_a = torch.zeros(SINGLE_TILE, dtype=torch.bfloat16)
-    torch_a[..., ::2] = 1
-    torch_b = torch.zeros(SINGLE_TILE, dtype=torch.bfloat16)
-    torch_b[..., ::3] = 1
+def test_global_golden_tracks_op_writes(device, tmp_path, operation, make_inputs):
+    torch_inputs = make_inputs()
 
-    # These in-place ops overwrite input_a; its stored global golden must become the logical result, otherwise the
-    # later to_torch comparison runs against the stale pre-op tensor.
+    # The later to_torch comparison of the first input runs against its stored global golden, which must hold what
+    # the op left in that tensor rather than a stale or corrupted value.
     with _global_comparison_mode(tmp_path):
-        input_a = _to_device(torch_a, device)
-        input_b = _to_device(torch_b, device)
-        operation(input_a, input_b)
-        ttnn.to_torch(input_a)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_logical_not_inplace_updates_global_golden(device, tmp_path):
-    torch_input = torch.zeros(SINGLE_TILE, dtype=torch.bfloat16)
-    torch_input[..., ::2] = 1
-
-    # logical_not_ overwrites its input; the stored global golden must become the negated result, otherwise the
-    # later to_torch comparison runs against the stale pre-op tensor.
-    with _global_comparison_mode(tmp_path):
-        input_tensor = _to_device(torch_input, device)
-        ttnn.logical_not_(input_tensor)
-        ttnn.to_torch(input_tensor)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_normalize_hw_keeps_global_golden_input(device, tmp_path):
-    # Channels with different ranges keep the normalized values from correlating with the original input.
-    torch_input = torch.cat(
-        [torch.rand(SINGLE_TILE, dtype=torch.bfloat16), torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 10 + 50], dim=1
-    )
-
-    # normalize_hw is out-of-place, but its golden used to write the normalized values into its input tensor, which
-    # is the stored global golden of the device input, corrupting it.
-    with _global_comparison_mode(tmp_path):
-        input_tensor = _to_device(torch_input, device)
-        ttnn.normalize_hw(input_tensor)
-        ttnn.to_torch(input_tensor)
+        inputs = [_to_device(torch_input, device) for torch_input in torch_inputs]
+        operation(*inputs)
+        ttnn.to_torch(inputs[0])
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -1758,17 +1997,6 @@ def test_group_norm_default_inplace_updates_global_golden(device, tmp_path):
             core_grid=grid_size,
         )
         ttnn.to_torch(input_tensor)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_bias_gelu_inplace_updates_global_golden(device, tmp_path):
-    # bias_gelu_ overwrites input_a with gelu(input_a + input_b); its stored global golden must become that result,
-    # otherwise the later to_torch comparison runs against the stale pre-op tensor.
-    with _global_comparison_mode(tmp_path):
-        input_a = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 4 - 2, device)
-        input_b = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 4 - 2, device)
-        ttnn.bias_gelu_(input_a, input_b)
-        ttnn.to_torch(input_a)
 
 
 def test_ring_joint_golden_with_circular_kv_cache():
@@ -1863,38 +2091,6 @@ def test_ring_joint_golden_stats_match_device_scratch_layout():
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_elu_bw_at_zero_matches_torch_in_comparison_mode(device):
-    grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
-    input_tensor = _to_device(torch.zeros(SINGLE_TILE, dtype=torch.bfloat16), device)
-
-    # Torch and the device both take the negative ELU branch at x = 0, so the gradient there is alpha * grad.
-    with comparison_mode():
-        ttnn.elu_bw(grad, input_tensor, alpha=2.0)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_erfinv_bw_matches_torch_in_comparison_mode(device):
-    grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
-    input_tensor = _to_device(torch.linspace(-0.9, 0.9, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
-
-    # The device evaluates sqrt(pi) / 2 * exp(erfinv(x)**2) * grad, the exact erfinv derivative that autograd gives.
-    with comparison_mode():
-        ttnn.erfinv_bw(grad, input_tensor)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_logiteps_bw_with_negative_eps_in_comparison_mode(device):
-    torch_input = torch.tensor([-2.0, 0.25, 0.75, 2.0]).repeat(256).reshape(SINGLE_TILE)
-    grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
-    input_tensor = _to_device(torch_input.to(torch.bfloat16), device)
-
-    # A negative eps disables clamping: torch and the device both give NaN outside [0, 1] and 1 / (x * (1 - x))
-    # inside it.
-    with comparison_mode():
-        ttnn.logiteps_bw(grad, input_tensor, eps=-0.001)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
 def test_std_hw_on_non_tile_aligned_input_in_comparison_mode(device):
     input_tensor = _to_device(torch.rand((1, 1, 33, 33), dtype=torch.bfloat16), device)
 
@@ -1910,26 +2106,6 @@ def test_random_creation_in_comparison_mode(device, operation):
     # Host and device draw different samples, so comparison mode checks only the output structure, not the values.
     with comparison_mode():
         operation(SINGLE_TILE, device=device)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize("divisor", [1e-3, 0.0], ids=["tiny", "zero"])
-def test_remainder_with_near_zero_scalar_in_comparison_mode(device, divisor):
-    input_tensor = _to_device(torch.linspace(-4.0, 4.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
-
-    # A tiny or zero bfloat16 scalar divisor is ill-conditioned; the golden relaxes the value comparison and only
-    # requires the non-finite positions to agree.
-    with comparison_mode():
-        ttnn.remainder(input_tensor, divisor)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_erf_with_fast_and_approximate_mode_in_comparison_mode(device):
-    input_tensor = _to_device(torch.linspace(-3.0, 3.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
-
-    # The fast erf stays within PCC of the exact torch reference, so the golden need not model the mode.
-    with comparison_mode():
-        ttnn.erf(input_tensor, fast_and_approximate_mode=True)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -1953,23 +2129,23 @@ def test_leaky_relu_golden_keeps_unsigned_values(dtype):
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_copy_host_to_device_tensor_updates_global_golden(device, tmp_path):
-    # The copy overwrites the device tensor, so its stored global golden must become the host values.
-    with _global_comparison_mode(tmp_path):
-        device_tensor = _to_device(torch.zeros(SINGLE_TILE, dtype=torch.bfloat16), device)
-        host_tensor = ttnn.from_torch(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT)
-        ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
-        ttnn.to_torch(device_tensor)
+@pytest.mark.parametrize(
+    "operation, source_on_device",
+    [
+        pytest.param(ttnn.copy_host_to_device_tensor, False, id="host_to_device"),
+        pytest.param(ttnn.copy_device_to_host_tensor, True, id="device_to_host"),
+    ],
+)
+def test_copy_tensor_updates_global_golden(device, tmp_path, operation, source_on_device):
+    # A None device keeps the tensor on host.
+    source_device, destination_device = (device, None) if source_on_device else (None, device)
 
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_copy_device_to_host_tensor_updates_global_golden(device, tmp_path):
-    # The copy overwrites the host tensor, so its stored global golden must become the device values.
+    # The copy overwrites the destination tensor, so its stored global golden must become the source values.
     with _global_comparison_mode(tmp_path):
-        device_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
-        host_tensor = ttnn.from_torch(torch.zeros(SINGLE_TILE, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT)
-        ttnn.copy_device_to_host_tensor(device_tensor, host_tensor)
-        ttnn.to_torch(host_tensor)
+        source = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), source_device)
+        destination = _to_device(torch.zeros(SINGLE_TILE, dtype=torch.bfloat16), destination_device)
+        operation(source, destination)
+        ttnn.to_torch(destination)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -2005,20 +2181,6 @@ def test_atanh_boundary_and_out_of_domain_matches_golden(device):
     device_values = ttnn.to_torch(output).reshape(-1)[:4].tolist()
     golden_values = ttnn.get_golden_function(ttnn.atanh)(torch_input.to(torch.bfloat16)).reshape(-1)[:4].tolist()
     assert str(device_values) == str(golden_values), f"device {device_values} != golden {golden_values}"
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize(
-    "operation, low, high",
-    [(ttnn.acos, -2.0, 2.0), (ttnn.asin, -2.0, 2.0), (ttnn.acosh, 0.0, 4.0)],
-    ids=["acos", "asin", "acosh"],
-)
-def test_inverse_trigonometric_out_of_domain_bfloat16_in_comparison_mode(device, operation, low, high):
-    input_tensor = _to_device(torch.linspace(low, high, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
-
-    # Half the inputs are out of domain; the golden must predict where the bfloat16 device output is non-finite.
-    with comparison_mode():
-        operation(input_tensor)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -2088,57 +2250,6 @@ def test_xlogy_bw_at_boundaries_in_comparison_mode(device):
     # Zero, negative and NaN operands hit every boundary of x * log(y); both gradients must match torch autograd.
     with comparison_mode():
         ttnn.xlogy_bw(grad, input_a, input_b)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_relu6_bw_with_nan_input_in_comparison_mode(device):
-    torch_input = torch.tensor([float("nan"), -1.0, 3.0, 7.0]).repeat(256).reshape(SINGLE_TILE)
-    grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
-    input_tensor = _to_device(torch_input.to(torch.bfloat16), device)
-
-    # The device writes zero for NaN inputs; torch autograd must produce the same gradient at those positions.
-    with comparison_mode():
-        ttnn.relu6_bw(grad, input_tensor)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize(
-    "operation, operation_kwargs, low, high",
-    [
-        pytest.param(ttnn.sqrt, {"fast_and_approximate_mode": True}, 0.01, 100.0, id="sqrt"),
-        pytest.param(
-            ttnn.sigmoid,
-            {"vector_mode": 4, "mode": ttnn.SigmoidMode.AccurateWithFastExp},
-            -8.0,
-            8.0,
-            id="sigmoid_accurate_with_fast_exp",
-        ),
-        pytest.param(
-            ttnn.sigmoid,
-            {"vector_mode": 4, "mode": ttnn.SigmoidMode.FastApproximate},
-            -8.0,
-            8.0,
-            id="sigmoid_fast_approximate",
-        ),
-        pytest.param(ttnn.sigmoid_accurate, {"fast_and_approximate_mode": True}, -8.0, 8.0, id="sigmoid_accurate"),
-    ],
-)
-def test_approximation_modes_in_comparison_mode(device, operation, operation_kwargs, low, high):
-    input_tensor = _to_device(torch.linspace(low, high, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
-
-    # The golden ignores the approximation mode, so the approximate result must stay within PCC of the exact one.
-    with comparison_mode():
-        operation(input_tensor, **operation_kwargs)
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_reciprocal_special_values_in_comparison_mode(device):
-    torch_input = torch.tensor([2.0**126, float("-inf"), float("nan"), 2.0]).repeat(256).reshape(SINGLE_TILE)
-    input_tensor = _to_device(torch_input.to(torch.bfloat16), device)
-
-    # Near-overflow, infinite and NaN inputs must produce the reciprocal torch predicts, including signed zero.
-    with comparison_mode():
-        ttnn.reciprocal(input_tensor)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
