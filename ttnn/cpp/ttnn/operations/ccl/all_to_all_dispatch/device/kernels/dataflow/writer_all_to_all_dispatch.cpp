@@ -49,7 +49,8 @@ void zero_buffer_barrier() {
 
 using namespace ttnn::operations::ccl::common;
 
-// Sends one completion credit to every device over both arcs; the antipode gets one per arc.
+// Sends one completion credit to every device over both arcs, dispatch_devices in all: one device (the antipode on
+// an even ring) is in both arcs' range. So every receiver counts dispatch_devices, whatever the ring size.
 // A template so non-Ring builds never instantiate the multicast, which static_asserts a 1D axis.
 template <
     bool Enable,
