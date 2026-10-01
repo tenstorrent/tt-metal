@@ -87,6 +87,22 @@ _SDPA_PRG = ttnn.SDPAProgramConfig(
     q_chunk_size=TILE, k_chunk_size=512, compute_with_storage_grid_size=ttnn.CoreCoord(8, 2)
 )
 
+
+def _sdpa_prg_for(batch, device_grid):
+    """sdpa_decode needs at least one core per user (sdpa_decode_program_factory: cores >= B), so
+    the 8x2 batch-1 grid cannot serve B > 16. B > 1 takes 8x8 (tt_transformers' 32-user choice)
+    when the chip has it, else 8 x ceil(B/8). batch=1 is _SDPA_PRG, unchanged."""
+    if batch == 1:
+        return _SDPA_PRG
+    x = min(8, device_grid.x)
+    y = max(-(-batch // x), min(8, device_grid.y))
+    if x * y < batch:
+        raise RuntimeError(f"device grid {device_grid.x}x{device_grid.y} has no {batch}-core grid for sdpa_decode")
+    return ttnn.SDPAProgramConfig(
+        q_chunk_size=TILE, k_chunk_size=512, compute_with_storage_grid_size=ttnn.CoreCoord(x, y), exp_approx_mode=False
+    )
+
+
 # Decode matmul program configs. DECODE ONLY: per_core_M=1 and fuse_batch=True assume one tile of
 # rows, so _mlp takes them as an argument. SiLU fuses via fused_activation, not activation="silu".
 _MM_CORES = 72  # every per_core_N below splits N over this many cores, whatever the grid
@@ -260,6 +276,7 @@ class TtVoxtralGPT:
         # Batched decode gathers each user's cos/sin row from these tables ON DEVICE (the
         # tt_transformers RotarySetupHF pattern); `step()` at max_batch=1 keeps the host path.
         self._rope_mem = _rope_shard_for(self.max_batch, device.compute_with_storage_grid_size())
+        self.sdpa_prg = _sdpa_prg_for(self.max_batch, device.compute_with_storage_grid_size())
         if max_seq_len:
             cos_t, sin_t = rope_tables(max_seq_len)
             self._cos_tab = ttnn.from_torch(
@@ -415,7 +432,7 @@ class TtVoxtralGPT:
             cur_pos_tensor=pos_t,
             scale=SCALE,
             compute_kernel_config=COMPUTE_CONFIG,
-            program_config=_SDPA_PRG,
+            program_config=self.sdpa_prg,
         )
         if B == 1:
             # No memory_config move: sdpa already emits the layout wo reads.
