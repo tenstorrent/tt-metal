@@ -1,4 +1,4 @@
-name: "TTNOP Injector"
+name: "LLK TTNOP Injector"
 
 on:
   workflow_dispatch:

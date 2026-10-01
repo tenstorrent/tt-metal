@@ -1,4 +1,4 @@
-name: "TTNOP Injector implementation"
+name: "LLK TTNOP Injector implementation"
 
 on:
   workflow_call:
