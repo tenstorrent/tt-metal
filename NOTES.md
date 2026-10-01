@@ -1,22 +1,22 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# t84 NOTES (conv3d precision A/B: LoFi / bf8 weights)
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
+Branch ttp/t84-vae-conv3d-precision-a-b-lofi-and-bf8-we @f45ce450901 (pushed), on t48 tip 29a0e8dfdc8 (+369f4c3c773 cherry-pick;
+8ff9ba539e4 skipped: it patches matmul_blocks_split, which t48 lacks).
 
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
+Code: LTX_VAE_CONV_FIDELITY (LoFi|HiFi2|HiFi3|HiFi4), LTX_VAE_CONV_WEIGHT_DTYPE (bf16|bf8), up-block convs only, default off.
+conv3d C++ now accepts bf8 weights with bf16 input (weight CB format/tile size, writer bias tile size fixed).
+NOTE: production default conv fidelity is HiFi4 (not HiFi2), so the reference arm "base" = HiFi4/bf16.
 
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
+## Running on blx03 (launched 2026-10-01 19:48 UTC)
+- setup/build: ~/fasth3/t84-setup.log (marker SETUP84_DONE rc=N), worktree ~/fasth3/t84 (~3.3 GB with build)
+- driver: ~/fasth3/t84drv/driver.sh, log /var/tmp/fasth3/t84/driver.log, final marker "T84_DRIVER_DONE <stage> <rc>"
+  stages: setup!=0 -> build failed; ab 8 -> broker never healthy in 2h (just relaunch driver); drop 9 -> drop/reboot
+  during OUR job -> STOP ALL device work, report; ab 0 -> success.
+- one job, arms base,hifi2,lofi,bf8,lofi_bf8: log /var/tmp/fasth3/t84/run84.log (lines "AB arm=... decode_s=... min=")
+- outputs: /var/tmp/fasth3/t84/ab/yuv_<arm>.pt, still_/crop_/diff16_<arm>.png, summary.json; scorer log compare.log
 
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+## Next step
+Read driver.log, run84.log (decode min per arm), ab/summary.json (psnr_min >= 40 dB vs base = pass), look at stills.
+Copy stills to g15blx02 under tt-project/state/runs/<run>/ for the report. Then write result.json.
+Cleanup on blx03 when done: git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/t84; rm -rf ~/fasth3/t84drv
+~/fasth3/t84-setup.* (keep /var/tmp/fasth3/t84/ab stills; yuv .pt files can go).
