@@ -14,6 +14,7 @@
 #include "tt_metal/distributed/host_rdma_window.hpp"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -90,7 +91,7 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
             return false;
         }
 
-        HostRegion& region = HostRegion::storage();
+        HostRegion& region = mesh->impl().host_region();
         uint8_t* const base = region.reserved_base(cfg.reserved_cores != 0 ? cfg.reserved_cores : cfg.cores);
 
         // 1. Both legs first: they allocate their sockets and MAP_FIXED the rings over the
