@@ -18,6 +18,7 @@ agents:
     assemble: {attempts: 3, escalate: debugger, debugger_attempts: 3}
     optests: {attempts: 3, escalate: stop}
     serving: {attempts: 2, escalate: stop}
+    settings: {attempts: 2, escalate: stop}
 
 thresholds:                # accuracy gates (PCC lower limits unless named otherwise)
   component: 0.99

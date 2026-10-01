@@ -97,11 +97,12 @@ from models.demos.common.bringup.plan import approvals
 from models.demos.common.bringup.plan import op_request as OR
 from models.demos.common.bringup.testing import accuracy_guard
 from models.demos.common.bringup.testing import serving as SV
+from models.demos.common.bringup.testing import settings_lint
 
 HERE = Path(__file__).resolve().parent
 AGENT_DEF = HERE / "agents" / "bringup-engineer.md"
 # Roles run by their own agent definition in agents/ (default: bringup-engineer).
-AGENT_OF_ROLE = {"serving": "serving-contract"}
+AGENT_OF_ROLE = {"serving": "serving-contract", "settings": "settings-audit"}
 DEBUGGER = "ttnn-expert-debugger"
 DEBUGGER_DEF = CODE_ROOT / ".claude" / "agents" / f"{DEBUGGER}.md"
 # Retry budget and escalation per role. ttnn-expert-debugger is specialized for TTNN ops (hangs, CB sync, kernel
@@ -118,6 +119,7 @@ ROLE_OF_STEP = {
     "assemble": "assemble",
     "contract": "contract",
     "serving": "serving",
+    "settings": "settings",
 }
 IGNORED = (
     r"/dashboard/[^/]+\.html$",
@@ -212,6 +214,7 @@ def agents_json(run_dir: Path, agent: str = "bringup-engineer") -> Path:
                     "description": meta["description"],
                     "prompt": body.strip(),
                     "tools": [t.strip() for t in meta["tools"].split(",")],
+                    **({"model": meta["model"]} if meta.get("model") not in (None, "inherit") else {}),
                 }
             },
             indent=1,
@@ -408,6 +411,9 @@ class Orchestrator:
         if role == "test":
             return list(task.get("tests") or []) + self.common_paths()
         extra = [f"{b}/plan.yaml", f"{b}/plan.md", f"{b}/components.yaml", f"{b}/tasks.yaml"] if role == "plan" else []
+        if role == "settings":  # the settings audit moves switches; it may touch the model's code and the forks
+            md = rel(self.spec, self.spec.model_dir)
+            return [f"{md}/tt", f"{md}/bringup/hooks.py", f"{b}/BREADCRUMBS.md", BRINGUP_OPS] + self.common_paths()
         if role == "serving":  # the how-to, its test list and the tests; never model code
             return [
                 f"{b}/serving_contract.md",
@@ -640,6 +646,15 @@ class Orchestrator:
         outside = [p for p in self.last_changed if not allowed(p, pats)]
         if outside:
             problems.append(f"changed files outside the allowed paths (revert them): {outside}")
+        # one place for a model's switches: no environment read outside tt/settings.py, none in a fork (diagnostics aside)
+        problems += [
+            f"settings: {v}"
+            for v in settings_lint.violations(
+                self.spec.repo,
+                rel(self.spec, self.spec.model_dir),
+                [p for p in self.last_changed if p.endswith((".py", ".cpp", ".hpp", ".h"))],
+            )
+        ]
         ki, _ = kcheck.check_known_issues(kcheck.HERE / "known_issues.md")
         problems += [f"known_issues.md: {e}" for e in ki]
         # Agent definitions and brief templates live in the framework checkout (which may not be the model's repo).
