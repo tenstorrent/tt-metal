@@ -84,9 +84,10 @@ void kernel_main() {
                     {.page_id = h * Wt_output + tiles_written + b, .offset_bytes = 0});
                 l1_offset += output_tile_bytes;
             }
-            noc.async_write_barrier();
+            noc.async_writes_flushed();
             out_cb.pop_front(batch);
             tiles_written += batch;
         }
     }
+    noc.async_write_barrier();
 }
