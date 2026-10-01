@@ -561,9 +561,10 @@ TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
     distributed::EnqueueMeshWorkload(cq, wl, /*blocking=*/true);
     distributed::Finish(cq);
 
-    auto kernel = wl.get_programs()[range].impl().get_kernel_by_spec_name("multi");
+    const auto& program_impl = wl.get_programs()[range].impl();
+    auto kernel = program_impl.get_kernel_by_spec_name("multi");
     ASSERT_NE(kernel, nullptr);
-    const ResolvedBufRw rw = kernel->resolve_buf_rw(*dev);
+    const ResolvedBufRw rw = kernel->resolve_buf_rw(*dev, program_impl);
 
     // Address is what the CRTA stores (MeshTensor::address()), so expectations match exactly.
     auto addr = [](const MeshTensor& t) { return static_cast<uint32_t>(t.address()); };
@@ -656,10 +657,10 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
     exp::SetProgramRunArgs(program, params);
     distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
-    auto kernel =
-        wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl().get_kernel_by_spec_name("paths");
+    const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
+    auto kernel = program_impl.get_kernel_by_spec_name("paths");
     ASSERT_NE(kernel, nullptr);
-    const ResolvedBufRw rw = kernel->resolve_buf_rw(*dev);
+    const ResolvedBufRw rw = kernel->resolve_buf_rw(*dev, program_impl);
     auto names = [](const auto& accesses) {
         std::set<std::string_view> s;
         for (const auto& a : accesses) {

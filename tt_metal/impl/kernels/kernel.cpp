@@ -27,6 +27,8 @@
 #include <tt_stl/fmt.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -481,7 +483,7 @@ ll_api::BufRwInfo Kernel::query_buf_rw(const IDevice& device) const {
     return info;
 }
 
-ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device) {
+ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device, const detail::ProgramImpl& program) {
     const ll_api::BufRwInfo raw = this->query_buf_rw(device);
     ResolvedBufRw out;
     out.opaque = raw.opaque;
@@ -509,6 +511,20 @@ ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device) {
     }
     for (uint32_t slot : raw.writes) {
         out.writes.push_back(resolve(slot));
+    }
+    // A borrowed-memory DFB is the tensor's memory, but the kernel reaches it only as a DFB, so its device code can't
+    // note the tensor. The program says which tensor each DFB borrows and the binding says which side this kernel is
+    // on: the producer fills the entries (writes the tensor), the consumer drains them (reads it).
+    for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
+        if (!handle.borrowed_dfb_id.has_value()) {
+            continue;
+        }
+        const auto dfb = program.get_dataflow_buffer(*handle.borrowed_dfb_id);
+        TT_FATAL(
+            dfb != nullptr, "Borrowed-memory DFB {} bound as '{}' not found", *handle.borrowed_dfb_id, accessor_name);
+        ResolvedBufRw::Access access{
+            .param_name = handle.borrowed_tensor_parameter_name, .address = dfb->borrowed_addr_};
+        (handle.is_producer ? out.writes : out.reads).push_back(access);
     }
     return out;
 }
