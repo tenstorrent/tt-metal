@@ -32,6 +32,10 @@ class MultichipDecoder(OptimizedDecoder):
     accurate_prefill_grid = (11, 10)
     accurate_prefill_q_chunk = 64
     accurate_prefill_max_k_chunk = 1024
+    # Stock prefill SDPA runs Q64 for the same pair-distribution reason. Rows are independent, so
+    # outputs are bitwise identical to Q128. K blocks and the 256-block bound still come from
+    # prefill_q_chunk/prefill_k_chunk.
+    stock_prefill_q_chunk = 64
 
     @classmethod
     def from_state_dict(
@@ -674,7 +678,7 @@ class MultichipDecoder(OptimizedDecoder):
                 compute_kernel_config=self.attention_compute,
                 program_config=ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=(11, 10),
-                    q_chunk_size=sdpa_chunk,
+                    q_chunk_size=min(sdpa_chunk, self.stock_prefill_q_chunk),
                     k_chunk_size=fast_k_chunk,
                     exp_approx_mode=False,
                 ),

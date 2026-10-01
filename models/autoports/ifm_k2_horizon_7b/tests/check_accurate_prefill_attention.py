@@ -66,9 +66,12 @@ def main():
             s = torch.einsum("hd,hsd->hs", q[0, :, r].float(), kk) / (128**0.5)
             expected[:, i] = torch.einsum("hs,hsd->hd", s.double().softmax(-1), vv.double())
 
-        def stock(k_chunk):
+        def stock(k_chunk, q_chunk=128):
             cfg = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(11, 10), q_chunk_size=128, k_chunk_size=k_chunk, exp_approx_mode=False
+                compute_with_storage_grid_size=(11, 10),
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
+                exp_approx_mode=False,
             )
             return lambda: ttnn.transformer.chunked_scaled_dot_product_attention(
                 qt, kt, vt, pt, chunk_start_idx=start, compute_kernel_config=compute["HiFi2"], program_config=cfg
@@ -89,6 +92,7 @@ def main():
 
         fns = {
             "stock_k256": stock(256),
+            "stock_q64_k256": stock(256, 64),
             "acc_8x8_k128": acc((8, 8), 128, 128),
             "acc_11x10_k128": acc((11, 10), 128, 128),
             "acc_11x10_k256": acc((11, 10), 128, 256),
