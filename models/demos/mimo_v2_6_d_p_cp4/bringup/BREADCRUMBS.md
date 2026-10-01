@@ -338,3 +338,13 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   - Device gate (existing attn_residual registration): PASS. pcc 0.999996, rel 0.0030, ratio [0.9998, 1.0018], slices 0.0030, coef 1.0007, attn rel 0.0028.
 - The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_attn_residual.py`
+
+## C.full_moe.ffn_norm.test.1 (test review)
+- Replaced the rendered one-liner with the cp4 `test_c_sliding_moe_ffn_norm.py`, set to layer 5. Limits unchanged: PCC >= 0.99 (gated), finite, rel L2 <= 0.03, per-token norm ratio [0.97, 1.03], worst row rel <= 0.015, rel L2 per CP slice <= 0.01, eps check (module on input x0.1 vs the CPU step: rel <= 0.02, worst row <= 0.04). This is a superset of the prior's frozen full_moe test (PCC, rel 0.03, ratio).
+- CPU measurements on layer 5 (script /tmp/cp4fmn/m.py, not kept; numbers in the test docstring). w in [-1.06, 8.75], smallest row mean square 8.1e-4. Every mutation is caught: sum-for-mean, eps 1e-3, `1 + w`, no weight, slices swapped, last 32 rows zeroed. Wrong eps (0 / 1e-7 / 2e-6) is caught only by the x0.1 check: rel 0.028-0.032 against the 0.02 limit. That margin is thinner than layer 1's, but bf16 scores 0.0023.
+- Results:
+  - Reference: PASS (pcc 0.999997, rel 0.0024).
+  - Stub: FAIL (pcc 0).
+  - Device gate: PASS with the existing TtRMSNorm registration. pcc 0.999996, rel 0.0028, ratio [0.9967, 1.0031], worst row 0.0054, slices 0.0028-0.0029, x0.1 rel 0.0023 / worst row 0.0040.
+- The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_ffn_norm.py`
