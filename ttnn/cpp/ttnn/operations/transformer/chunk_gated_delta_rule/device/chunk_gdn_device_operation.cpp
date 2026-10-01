@@ -212,6 +212,7 @@ constexpr float kWpUs = 18.5f;               // producer item; flat from 36 to 9
 constexpr float kTailUs = 9.0f;              // last scan step -> kernel end (head skew)
 constexpr float kPaceMarginUs = 0.4f;        // depth-2 jitter exposure with the supply within 10 % of the step
 constexpr float kRowMajorPenalty = 1.7f;     // row-major placement, link-bound chain (BH=16: 1.66x and 1.72x)
+constexpr float kPoolJitter = 1.10f;         // pooled pace: ordering jitter of the balanced item map (BH >= 8)
 constexpr uint32_t kHandoffTiles = 19;       // fp32 tiles per hand-off slot (C=32, K=V=128)
 constexpr uint32_t kProducerPrepTiles = 48;  // the producer's prep CBs, in fp32-tile units
 constexpr uint32_t kTileBytes = 4096;
@@ -242,6 +243,11 @@ constexpr float pace_us(uint32_t Vtl, float supply, uint32_t depth) {
         pace += kPaceMarginUs;
     }
     return pace;
+}
+// Pooled per-chunk period: the extras' statically balanced map has no slack, so ordering jitter stretches
+// max(step, supply) by kPoolJitter.
+constexpr float pace_pool_us(uint32_t Vtl, float supply, uint32_t depth) {
+    return std::max(t_step_us(Vtl, depth), supply) * kPoolJitter;
 }
 // L1 at hand-off depth `depth` on the fuller side: the slots, the 4-tile u/credit CB and the larger of
 // the receiver's scan CBs at the slice width (20*Vtl + 1 tiles) and the producer's prep CBs.
@@ -442,7 +448,8 @@ FusedGeometryChoice choose_fused_geometry(
     // Hand-off depths the model chooses between (deeper measured no better); a pinned depth is taken as is.
     const uint32_t depths[2] = {fixed_nbuf ? fixed_nbuf : 2u, fixed_nbuf ? fixed_nbuf : 3u};
     const uint32_t n_depths = fixed_nbuf ? 1u : 2u;
-    // One candidate: NP producers per head (placements 0/1) or a pool of NP serving every head (placement 2).
+    // One candidate: NP producers per head (placements 0/1) or a pool of NP serving every head (placement 2);
+    // a pool with no extras (NP = BH*NPH) paces as the per-head geometry it is.
     auto consider = [&](uint32_t nv, uint32_t np, uint32_t placement, uint32_t depth) {
         const uint32_t Vtl = Vt / nv;
         if (!fixed_nbuf && !handoff_fits_l1(Vtl, depth)) {
@@ -450,8 +457,10 @@ FusedGeometryChoice choose_fused_geometry(
         }
         const uint32_t producers = placement == 2 ? np : BH * np;
         const uint32_t cores = BH * nv + producers;
+        const bool pooled = placement == 2 && np > BH * fused_pool_home_producers(grid_x, grid_y, BH, nv, np);
         const float supply = BH * w_p_us(producers) / producers;  // us per chunk of one head
-        float t = fill_us(BH) + NC * pace_us(Vtl, supply, depth) + kTailUs;
+        const float pace = pooled ? pace_pool_us(Vtl, supply, depth) : pace_us(Vtl, supply, depth);
+        float t = fill_us(BH) + NC * pace + kTailUs;
         // Row-major: the receiver rows' shared links saturate unless the chain is well supply-bound.
         if (placement == 0 && supply < 2.0f * t_step_us(Vtl, depth)) {
             t *= kRowMajorPenalty;
@@ -518,7 +527,17 @@ FusedGeometryChoice choose_fused_geometry(
             if (!fused_pool_feasible(grid_x, grid_y, BH, nv, P)) {
                 continue;
             }
-            consider_depths(nv, P, 2);
+            const uint32_t nph = fused_pool_home_producers(grid_x, grid_y, BH, nv, P);
+            if (P == BH * nph) {
+                // No extras: the per-head geometry (NV, NPH) itself, in whichever placement the candidates allow.
+                if (candidates == FusedCandidates::Both) {
+                    consider_depths(nv, nph, 1);
+                } else {
+                    consider_depths(nv, P, 2);
+                }
+            } else {
+                consider(nv, P, 2, fixed_nbuf ? fixed_nbuf : 2u);  // pooled depth 3 measured no better
+            }
         }
     }
     best.fused_pays = have && best.t_fused_us < best.t_phased_us;
