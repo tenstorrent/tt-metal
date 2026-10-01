@@ -36,11 +36,9 @@ KDIM = 128
 VDIM = 128
 T_SMALL = 256  # NC=8 — enough chunks to exercise the recurrence, small enough to keep runtime down
 
-# The simulator runs an op 100x slower than silicon and is deterministic: repeats hunt timing races,
-# so they run on silicon only, and so do the production-length (NC=64) cases, which cost 8x an NC=8
-# case for the same protocol coverage; one NC=64 case stays (test_fused_default_dispatch, BH=12).
+# The simulator runs much slower than silicon so the test repeats run on hardware only, as well as the large input cases.
 _SIM = bool(os.environ.get("TT_METAL_SIMULATOR"))
-_hw_only = pytest.mark.skipif(_SIM, reason="silicon only: too slow on the simulator for the coverage it adds")
+_hw_only = pytest.mark.skipif(_SIM, reason="hardware test only")
 REPEATS = 0 if _SIM else 8  # extra fused runs against the first result, to give a timing race a chance to show
 
 
