@@ -143,7 +143,7 @@ def create_square_artifacts(t: ttnn.Tensor):
     compute = ttnn.KernelSpec(
         unique_id=K_COMPUTE,
         source=str(KERNEL_DIR / "compute.cpp"),
-        hw_config=ttnn.ComputeGen1Config(),
+        hw_config=ttnn.ComputeHardwareConfig(),
         dfb_bindings=[
             ttnn.consumer_of(DFB_A, "in_a"),
             ttnn.consumer_of(DFB_B, "in_b"),
