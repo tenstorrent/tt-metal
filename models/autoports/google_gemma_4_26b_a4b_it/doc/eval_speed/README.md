@@ -5,7 +5,7 @@ the current eval bottlenecks, predict the attainable speed, iterate on small
 measured experiments, then run and monitor actual CI. This is ongoing work,
 not a claim that the five-task evaluation has been repaired.
 
-## Latest checkpoint (19:43 UTC)
+## Latest checkpoint (20:04 UTC)
 
 Experimental configurable-weight BFP8 passes the existing short readiness gate
 and produces a verifier-passing Django patch both locally and in actual QB2 CI.
@@ -21,6 +21,11 @@ is complete (reward 1, but 900-second agent timeout). Follow-up
 tests clean completion with the adapter and a bounded 1,200-second cap. It reuses
 the same image and is actively monitored. No full five-task run has been launched;
 cross-task quality and clean release-topology completion remain unproven.
+Local Matplotlib subsequently finishes **natively** in 647.041 agent seconds,
+reward 1, no exception, required pickle test plus all 181 regression tests pass.
+There are zero adapter conversions. A capped Astropy check is running while the
+separate Django CI trial continues; three other full-release outcomes are still
+unproven, and the precision policy remains experimental.
 
 ## Baseline and timing model
 
@@ -895,3 +900,21 @@ normalization. Output is
 `/home/mvasiljevic/gemma4-eval-speed-evidence/local_matplotlib_bfp8_submit_seed9472`.
 This is a cross-task outcome check, not a matched speed comparison with the
 earlier unseeded Matplotlib failures. There is still only one trial per server.
+
+Matplotlib finishes at 20:00:28 UTC with native submission, agent time
+647.041329 seconds and reward 1 / no exception. Required
+`lib/matplotlib/tests/test_pickle.py::test_complete[png]` and all 181 PASS_TO_PASS
+tests pass. There are 35 responses, 368,062 prompt / 13,589 output tokens,
+3.529 seconds in tools, zero repetition stops and zero adapter conversions.
+The policy improves observed outcome versus previous failed Matplotlib probes,
+but explicit seed, cache and earlier setup differences prevent a paired causal
+speedup percentage. The baseline's 4,437-second incorrect submission is not a
+time-to-correct-solution baseline.
+
+The same already-loaded local server starts one 900-second Astropy-14096 trial
+at 20:03:07 UTC (`local_astropy_bfp8_submit_seed9472`), keeping seed 9472, guard
+1024 and the opt-in adapter. This avoids another model load and remains a
+separate-server C1 test. Meanwhile the remote follow-up server becomes reachable
+at 20:00:57 and completes a 98.167-second warmup around 20:03. Thus the DNS alias
+is confirmed by its model metrics; exact attribution of its longer startup
+awaits the final CI logs.
