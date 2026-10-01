@@ -8,7 +8,7 @@ runs; read it before changing the prompts, the classes or the packs.
 `bench.py prepare` takes held-out real bugs from the repo's history and audits each one at the commit before its fix.
 Each case is one batch holding only the files the fix touched: 36 of the 50 cases in the fresh holdout are a single
 file, and none has more than 3. The hunter prompt also tells the hunter that it is auditing a benchmark tree. A real
-audit hands a hunter up to 20 files and 1,500-3,500 lines, and nobody knows whether any bug is in them. So the
+audit hands a hunter up to 20 files and 300 lines (1,500-3,500 before the batch-size change below), and nobody knows whether any bug is in them. So the
 benchmark measures recall when the broken file is already known. Recall in a real audit is probably lower, and
 precision on normal-sized batches has not been measured.
 
@@ -84,6 +84,31 @@ longer does this), the contract-trace ledger and its trace audit, and the post-m
   commits. Same 1-3 file batches, so precision on normal-sized batches is unmeasured.
 - The trace audit overturned 24 of 223 re-checked "consistent" verdicts (11%).
 - Cost: one 50-batch wave took 37M tokens and 881 agents (about 17.7 agents per batch).
+
+## Lines per hunter: what sets depth on full-size code
+The benchmark's 1-3 file cases cannot measure batch size, so it was measured on real code: 75 files of ttnn untilize
+and argmax at a pinned commit, hunt only, the same tree and class lists in every arm. Four candidates that no
+default-size hunter reported were verified 3-0 by the standard screen and deep verifiers.
+
+| Arm | Lines per agent | Verified bugs found (of 4) | Hunter cost |
+|---|---|---|---|
+| Default batches | 1,600-2,600 | 0 | 1.28M |
+| Hunter fills a unit x class-family grid | 1,600-2,600 | 0 | 4.59M |
+| Engine hands each agent a unit list | 800 | 1 | 2.83M |
+| Engine hands each agent a unit list | 300 | 4 | 5.57M |
+| Default hunter, `--max-lines 300` (two runs) | about 300 | 4, then 4 | 6.30M, 6.34M (trace audits another 3.3M) |
+
+Cost is price-weighted tokens (cache reads at 0.1, cache writes at 1.25, output at 5). Each arm ran once, except
+the shipped one, which was rerun on the same batches: both runs found the same 4 bugs, plus the same 6 of the 7
+that the default batches found, at the same cost.
+- Depth follows lines per agent; listing the units to check does not add it. Both unit-list arms assigned every unit.
+- A hunter-written coverage table is satisfied mechanically: hunters scripted it, filling "n/a" from per-kind defaults
+  and deriving each citation's line from its quote, and a 945-cell table was too large to return. Coverage evidence
+  has to come from the engine, never from the hunter.
+- Whether a hunter handling every class family at once skips some families was measured once, with 68 bugs planted
+  across 12 families in the same 300-line batches: hunters caught 58 of them (85%), but only 1 of 5 numerics plants.
+  The plants also displaced the real findings (0 of the 10 real bugs were reported), so calibrate in a separate run
+  and never plant inside an audit.
 
 ## Does verification earn its cost?
 On round 3 verification confirmed 260 of 261 candidates: tiny batches that really held a bug produced almost no false

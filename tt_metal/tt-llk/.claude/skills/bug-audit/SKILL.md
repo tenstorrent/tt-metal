@@ -119,9 +119,9 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
    `file:line` stays valid.
 2. **Init:** `engine/init_run.py --root <tree> --out <run> --repo owner/name --prio 'A=<highest-value globs>' ...`.
    Put device kernels and core runtime first, host periphery next, and tests and models last. Batches are at most
-   20 files and 3,500 lines (1,500 for priority A), so a hunter can read every line. `--knowledge` defaults to the
-   universal classes, plus `classes-tenstorrent.md` for a `tenstorrent/` repo; pass it to name another domain
-   list, or `none` to run without a class list.
+   20 files and 300 lines (a longer file is a batch of its own), so a hunter can read and trace every line.
+   `--knowledge` defaults to the universal classes, plus `classes-tenstorrent.md` for a `tenstorrent/` repo; pass
+   it to name another domain list, or `none` to run without a class list.
    - **Submodules:** `git ls-files` lists a submodule as ONE entry, so by default its files are silently out of
      scope. `init_run.py` warns and names them. Either pass `--recurse-submodules`, or audit each submodule as its
      own run and say so in the report. An earlier whole-repo audit missed an entire submodule this way.
@@ -204,8 +204,10 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
   auditor re-traces a sample of each ledger: the first, middle and last "consistent" entries, plus every mismatch
   that has no finding. Whatever it finds joins the candidates. The persist summary reports how many verdicts the
   audit overturned. A high rate means the hunters are skimming.
-- **Less code per hunter where it matters.** Priority-A batches default to 1,500 lines (`--batch-lines A=1500`), the
-  rest to 3,500. The post-fix miss analysis found that hunters read 27 of 29 missed bugs but only skimmed them.
+- **Little code per hunter.** Batches default to 300 lines (`--max-lines`; `--batch-lines` sets a budget per
+  priority). Depth follows lines per agent: on the same full-size code, hunters found 4 of 4 verified bugs at 300
+  lines, 1 at 800 and 0 at the old 1,500-3,500 (*references/measurement-history.md*). It costs about 5x a wave of
+  the old batches. The post-fix miss analysis found the same cause: hunters read 27 of 29 missed bugs but skimmed them.
 - **Coverage is proven, not claimed.** Each hunter reports every file's line count and last non-blank line.
   `persist_wave.py` checks both against the tree, and a mismatch sends the batch back. `ledger.tsv` has one row per
   in-scope file (pending, reread or audited, plus its confirmed-finding count) and is updated on every persist. The run is not done while
@@ -329,10 +331,10 @@ in `references/measurement-history.md`. What matters when running an audit:
   findings in an area does not mean the area is clean. Say so in the report.
 - **That is an optimistic figure.** It was measured on benchmark batches of 1-3 files, each known to hold a bug, with
   the pack handed to hunters; the shipped default does not hand out the pack. Real batches are up to 20 files and
-  1,500-3,500 lines, where hunters skim more, so real recall is probably lower. Precision (24 of 25 confirmations real)
+  300 lines, and the files are not known to hold a bug, so real recall may differ. Precision (24 of 25 confirmations real)
   was measured on the same small batches; on normal-sized batches it is unmeasured.
 - **Most misses are read but not traced:** hunters read the buggy lines in 27 of 29 post-fix misses and skimmed them.
-  That is why the contract trace is recorded and audited, and why priority-A batches are smaller.
+  That is why the contract trace is recorded and audited, and why batches are 300 lines.
 - **Independent passes find different bugs.** Run the second pass (step 7) over priority A when those areas matter.
 - **Verification earns its cost on real input.** It refuted 28% of candidates in the whole-repo July audit and in the
   sibling sweep, though almost nothing on the tiny benchmark batches.
