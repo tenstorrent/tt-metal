@@ -628,12 +628,13 @@ def test_s_is_the_default_model_and_selects_p150x4(tmp_path):
     assert "tt_visible_devices=0,1,2,3\n" in result.stdout
     assert "prefix_cache=0\n" in result.stdout
     assert "experimental_overrides=<none>\n" in result.stdout
-    # S on p150x4 serves with hybrid KV, chunk-major streaming prefill and 131072 context by default.
+    # S on p150x4 serves with hybrid KV, chunk-major streaming prefill and its declared 1048576 context.
     assert "hybrid_kv=1\n" in result.stdout
     assert "hybrid_kv_status=production_qualified\n" in result.stdout
     assert "hybrid_kv_layout=four_groups_twelve_aliased_tensor_pairs\n" in result.stdout
     assert "streaming_prefill_status=production_qualified\n" in result.stdout
-    assert "max_model_len=131072\n" in result.stdout
+    assert "max_model_len=1048576\n" in result.stdout
+    assert "trace_region_size=300000000\n" in result.stdout
     assert "max_num_seqs=1\n" in result.stdout
     assert ("chunked_prefill_cli_args=--enable-chunked-prefill " "--max-num-batched-tokens 8192\n") in result.stdout
     assert 'chat_template_kwargs={"enable_thinking": true}\n' in result.stdout
@@ -655,11 +656,11 @@ def test_s_uniform_kv_rollback_needs_no_ack_and_keeps_its_measured_limit(tmp_pat
     assert "exceeds the verified p150x4 limit 32768" in too_long.stderr
 
 
-def test_s_hybrid_rejects_context_beyond_131072(tmp_path):
+def test_s_hybrid_rejects_context_beyond_its_declared_1048576(tmp_path):
     result = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
-                     LAGUNA_MAX_MODEL_LEN="262144")
+                     LAGUNA_MAX_MODEL_LEN="2097152")
     assert result.returncode == 2
-    assert "exceeds the verified p150x4 limit 131072" in result.stderr
+    assert "exceeds the verified p150x4 limit 1048576" in result.stderr
 
 
 def test_tt_laguna_model_alone_selects_the_checkpoint(tmp_path):
@@ -680,6 +681,7 @@ def test_xs_p150x4_is_unchanged_by_s_policies(tmp_path):
     assert "streaming_prefill_status=topology_inactive\n" in result.stdout
     assert "max_model_len=131072\n" in result.stdout
     assert "max_num_seqs=8\n" in result.stdout
+    assert "trace_region_size=1500000000\n" in result.stdout
 
 
 @pytest.mark.parametrize(("profile", "devices"), (("p150", "0"), ("p150x2", "0,1")))

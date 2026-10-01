@@ -85,7 +85,10 @@ HF_CONFIG_MAX_CONTEXT = MODEL_MAX_CONTEXT  # what the HF config declares (not cu
 # This is the global ceiling, not the per-profile qualification result. Env-overridable only for
 # explicit context experiments; the launcher's smaller max_model_len still bounds D1. Raising the
 # ceiling re-introduces the historical D4 OOM risk and must never be used to claim qualification.
-ADVERTISED_MAX_CONTEXT = int(os.environ.get("TT_LAGUNA_ADVERTISED_CONTEXT", "131072"))
+# Laguna-S serves its declared 1048576 on p150x4: hybrid KV plus a trace region sized to the measured
+# 27.2 MB decode trace (serve_vllm.sh) leave 16.4% DRAM free after trace at 1M. XS keeps 131072.
+_DEFAULT_ADVERTISED_CONTEXT = MODEL_MAX_CONTEXT if MODEL_ID == "poolside/Laguna-S-2.1" else 131072
+ADVERTISED_MAX_CONTEXT = int(os.environ.get("TT_LAGUNA_ADVERTISED_CONTEXT", str(_DEFAULT_ADVERTISED_CONTEXT)))
 
 
 def _prefill_rope_capacity(max_model_len: int, *, streaming: bool = True) -> int:

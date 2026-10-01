@@ -42,8 +42,8 @@ def _no_warm_cap_override(monkeypatch):
 
 
 def test_advertised_equals_servable():
-    # 1.2: advertised is the verified-servable limit, distinct from the (larger) HF config length.
-    assert gv.ADVERTISED_MAX_CONTEXT == 131072
+    # 1.2: advertised is the verified-servable limit: XS 131072 (below its HF 262144); S its full 1048576.
+    assert gv.ADVERTISED_MAX_CONTEXT == (1048576 if MODEL_ID == "poolside/Laguna-S-2.1" else 131072)
     # The HF ceiling follows the selected checkpoint (XS 262144, S 1048576).
     assert gv.HF_CONFIG_MAX_CONTEXT == MAX_POSITION_EMBEDDINGS[MODEL_ID]
     assert gv.ADVERTISED_MAX_CONTEXT <= gv.HF_CONFIG_MAX_CONTEXT
@@ -141,7 +141,7 @@ def test_get_max_tokens_honors_advertised():
     cls = gv.LagunaForCausalLM
     assert cls.get_max_tokens_all_users() == gv.ADVERTISED_MAX_CONTEXT
     assert cls.get_max_tokens_all_users(max_model_len=4096) == 4096
-    assert cls.get_max_tokens_all_users(max_model_len=999999) == gv.ADVERTISED_MAX_CONTEXT
+    assert cls.get_max_tokens_all_users(max_model_len=gv.ADVERTISED_MAX_CONTEXT + 1) == gv.ADVERTISED_MAX_CONTEXT
 
 
 def test_opt_in_multi_sequence_pool_returns_exact_two_user_budget(monkeypatch):

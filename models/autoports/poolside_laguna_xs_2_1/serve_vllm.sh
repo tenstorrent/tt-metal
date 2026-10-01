@@ -69,13 +69,17 @@ case "$HF_MODEL" in
     DEFAULT_LAGUNA_PROFILE=p150x4
     MODEL_PROFILES="p150x4"
     # Hybrid KV (default for S): the 36 sliding layers share block slots with the 12 full layers, so the
-    # pool costs 12 layer-equivalents (6.4 KiB/token/chip) and 131072 fits. Uniform KV (TT_LAGUNA_HYBRID_KV=0
-    # rollback) costs 25.5 KiB/token/chip: measured 2026-10-01 on p150x4, 32768 leaves 11.4% DRAM free after
-    # the decode trace (floor 10%) and 131072 OOMs while allocating the KV pool.
+    # pool costs 12 layer-equivalents (6.4 KiB/token/chip) and S's declared 1048576 fits: measured
+    # 2026-10-01 on p150x4 with the trace region below, 16.4% DRAM free after the decode trace (floor 10%).
+    # Uniform KV (TT_LAGUNA_HYBRID_KV=0 rollback) costs 25.5 KiB/token/chip; its 32768 cap was measured
+    # with the old 1.5 GB trace region (11.4% free) and is kept until re-measured.
     MODEL_HYBRID_DEFAULT=1
     MODEL_HYBRID_PROFILES="p150x4"
-    MODEL_HYBRID_MAX_MODEL_LEN=131072
+    MODEL_HYBRID_MAX_MODEL_LEN=1048576
     MODEL_MAX_MODEL_LEN_CAP=32768
+    # trace_region_size is reserved in EVERY DRAM bank (tt_metal allocator.cpp:39): 1.5e9 x 8 banks held
+    # 12 GB per chip for a decode trace that measures 27,238,400 B on S. 300 MB per bank leaves 11x headroom.
+    MODEL_TRACE_REGION_SIZE=300000000
     # S's chat template thinks by default (prompt ends in <think>); vLLM's poolside_v1 reasoning parser
     # only splits reasoning when enable_thinking is passed. Make the server default match the template.
     MODEL_CHAT_TEMPLATE_KWARGS='{"enable_thinking": true}'
@@ -89,6 +93,7 @@ case "$HF_MODEL" in
     MODEL_HYBRID_PROFILES="p150x2"
     MODEL_HYBRID_MAX_MODEL_LEN=
     MODEL_MAX_MODEL_LEN_CAP=
+    MODEL_TRACE_REGION_SIZE=1500000000
     MODEL_CHAT_TEMPLATE_KWARGS=
     ;;
   *)
@@ -164,7 +169,7 @@ case "$TT_LAGUNA_HYBRID_KV" in
   0|1) ;;
   *) die "TT_LAGUNA_HYBRID_KV must be 0 or 1" ;;
 esac
-# A checkpoint may hold less context than the profile's XS-qualified limit (S: larger KV per token).
+# A checkpoint sets its own limits: S's hybrid context (1048576) and S's lower uniform-KV cap (larger KV per token).
 if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ] && [ "$HYBRID_KV_DEFAULT" -eq 1 ] && [ -n "$MODEL_HYBRID_MAX_MODEL_LEN" ]; then
   PROFILE_MAX_MODEL_LEN=$MODEL_HYBRID_MAX_MODEL_LEN
   PROFILE_MAX_NUM_SEQS=1  # hybrid KV is qualified with one sequence (see the hybrid checks below)
@@ -274,7 +279,7 @@ else
   MULTI_SEQ_STATUS=profile_qualified_sequence_limit
 fi
 
-TRACE_REGION_SIZE="${LAGUNA_TRACE_REGION_SIZE:-1500000000}"
+TRACE_REGION_SIZE="${LAGUNA_TRACE_REGION_SIZE:-$MODEL_TRACE_REGION_SIZE}"
 is_positive_integer "$TRACE_REGION_SIZE" || die "LAGUNA_TRACE_REGION_SIZE must be a positive integer"
 
 # CCL topology and fabric routing must move together. Setting either variable alone derives the other,
