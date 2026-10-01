@@ -2,13 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole compressed_custom_mm LLK pair (llk_unpack_AB_compressed_custom_mm.h,
-// llk_math_compressed_custom_mm.h), the perf twin of sources/compressed_custom_mm_test.cpp. The per-tile format metadata
-// is control flow for both threads (a zero tile issues no UNPACR and a ZEROACC instead of the MVMULs), and the perf
-// harness writes no stimuli, so the driver bakes the metadata words into the build header (META_WORDS, META) together
-// with the per-k-row non-zero tile counts (META_NZ) for the dvalid mocks; both threads read the metadata from that
-// array, an L1 address like the functional kernel's buffer_C. dvalid cadence: SrcB once per k row (also on a zero first
-// tile), SrcA once per non-zero weight tile. TILE_COUNT is kt x ct weight tiles per call, zero tiles included.
+// Perf twin of sources/compressed_custom_mm_test.cpp. The tile format metadata (META, META_NZ) is baked into the build
+// header by perf_compressed_custom_mm.py; TILE_COUNT is kt x ct weight tiles per call, zero tiles included.
 
 #include <cstdint>
 

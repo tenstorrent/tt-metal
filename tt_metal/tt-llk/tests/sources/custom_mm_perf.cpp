@@ -2,16 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole custom_mm LLK pair (llk_unpack_AB_custom_mm.h, llk_math_custom_mm.h), the perf twin of
-// sources/custom_mm_test.cpp. One custom_mm call per loop iteration covers the whole [M, 32 ct] x K block exactly as the
-// functional kernel does; TILE_COUNT is kt x ct weight (in1) tiles per call, so the harness's per-tile figures are per
-// weight tile. Compile-time knobs from perf_custom_mm.py (CUSTOM_MM_PERF_FLAGS):
-//   SPLIT_ACC, FINALIZE : the split_acc init template and the finalize execute template (finalize needs split_acc)
-//   DENSE_PACKING       : output tiles 32 DEST rows apart (the pack W stride follows it)
-//   CLEAR_SRC           : the unpack call's clear_src UNPACR_NOP
-// dvalid mocks: the custom_mm unpack publishes SrcB once per k step and SrcA once per weight tile, and the math MOP
-// clears SrcA after every weight tile and SrcB at the end of the k step, which is the core matmul mock cadence with
-// rt_dim 1.
+// Perf twin of sources/custom_mm_test.cpp: one custom_mm call per loop iteration, TILE_COUNT = kt x ct weight tiles.
+// SPLIT_ACC, FINALIZE, DENSE_PACKING and CLEAR_SRC come from perf_custom_mm.py (CUSTOM_MM_PERF_FLAGS).
 
 #include <cstdint>
 

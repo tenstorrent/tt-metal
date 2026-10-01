@@ -2,13 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Perf sweep of the Blackhole sdpa_custom_mm LLK (sources/sdpa_custom_mm_perf.cpp, the perf twin of
-test_sdpa_custom_mm.py): the SDPA Q K^T matmul with its FPU -> SFPU semaphore posts.
-
-Per loop iteration one call of kt x ct K tiles (the per-tile figures are per K tile); the pack thread stands in for
-the SFPU consumer of the FPU_SFPU posts. The sweep crosses the call shape with the signal granularity (one post per
-tile against one post per call): every post drains the math pipe. ct 16 with granularity 1 would post sixteen times
-per call and overflow the 4-bit Tensix semaphore (the core hangs), so the sweep excludes it and the driver refuses it.
-"""
+test_sdpa_custom_mm.py); the per-tile figures are per K (in1) tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

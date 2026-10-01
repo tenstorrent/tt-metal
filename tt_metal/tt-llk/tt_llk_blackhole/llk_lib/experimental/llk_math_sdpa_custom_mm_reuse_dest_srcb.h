@@ -122,12 +122,8 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     static_assert(input_granularity >= 1, "input_granularity must be >= 1");
     constexpr std::uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
     std::uint32_t dest_buffer_base   = get_dest_buffer_base();
-    // The MOVD2B DEST row field is 12 bits wide and is added to the DEST target offset, so when the source (P) rows sit
-    // at or above the accumulator (the layout of compute_sdpa_chunk, whose accumulator is at offset 0) the target
-    // register is written once per call, to the accumulator, and the per-k-tile source row travels in the move
-    // instructions. That removes two configuration writes per k tile from the math thread and keeps the target
-    // register constant while the moves and the MVMULs execute. A source below the accumulator keeps the previous
-    // scheme: the target register alternates between the source tile and the accumulator per k tile.
+    // The 12-bit MOVD2B DEST row field is added to the DEST target offset: with the source at or above the accumulator
+    // the target is written once per call and the per-k-tile source row rides in the moves.
     const bool fixed_target        = src_index >= dst_index;
     const std::uint32_t src_offset = src_index - dst_index;
     LLK_ASSERT(!fixed_target || src_offset + kt_dim * 16 <= 4096, "source rows must be addressable from the 12-bit MOVD2B DEST row field");
@@ -163,7 +159,6 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
         if (signal_output && i == kt_dim - 1)
         {
             LLK_ASSERT(nt_dim % output_granularity == 0, "nt_dim must be divisible by output_granularity for FPU->SFPU output signal counts to balance");
-            // The Tensix semaphore counts to 15; the posts of one call must fit it (see llk_math_sdpa_custom_mm.h).
             LLK_ASSERT(
                 nt_dim / output_granularity <= semaphore::SEMAPHORE_MAX_VALUE,
                 "nt_dim / output_granularity FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15)");

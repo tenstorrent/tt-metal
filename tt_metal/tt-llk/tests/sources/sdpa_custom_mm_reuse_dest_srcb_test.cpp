@@ -64,7 +64,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
-#include "params.h" // build.h: KT_DIM, NT_DIM and the DST_FIRST knob, needed by the DEST placement below
+#include "params.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -87,10 +87,7 @@ static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 // packing all of DEST and finding the O accumulator at physical tile 2 (a
 // tile-0 preload of P plus a tile-2 O accumulator, non-overlapping). Confirm the
 // 64-datum offset unit on a BH p100a before trusting the exact placement.
-//
-// DST_FIRST (SDPA_REUSE_DEST_LAYOUT) swaps the two: O at tile 0 and P at tile 2, the placement compute_sdpa_chunk uses
-// (mm2_dst_offset 0, mm1 above it), on which the math LLK writes the DEST target register once per call and carries the
-// per-k-tile source row in the MOVD2B DEST row field; P below O takes the LLK's per-k-tile target rewrite.
+// DST_FIRST swaps the two: O at tile 0 and P at tile 2, the placement compute_sdpa_chunk uses.
 #ifndef DST_FIRST
 #define DST_FIRST false
 #endif

@@ -139,9 +139,7 @@ inline void _llk_math_custom_mm_reuse_dest_srcb_(
         "custom_mm_reuse_dest_srcb: in0 tile height must be 1, 2, 4 or 8");
 
     const std::uint32_t dest_buffer_base = get_dest_buffer_base();
-    // As in llk_math_sdpa_custom_mm_reuse_dest_srcb.h: with the source tiles at or above the accumulator the DEST
-    // target register is written once per call and the per-k-tile source row travels in the 12-bit DEST row field of
-    // the moves, which saves two configuration writes per k tile; otherwise the target alternates per k tile.
+    // Source at or above the accumulator: one DEST target write per call, the source row in the MOVD2B DEST row field.
     const bool fixed_target        = src_index >= dst_index;
     const std::uint32_t src_offset = src_index - dst_index;
     LLK_ASSERT(

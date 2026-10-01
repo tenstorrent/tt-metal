@@ -191,8 +191,7 @@ def _run(math_fidelity, formats, dest_acc, dst_first=False):
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
     formats=FORMATS,
     dest_acc=[DestAccumulation.No],
-    # Both DEST placements: P below O (the LLK rewrites the DEST target per k tile) and O at tile 0 with P above it
-    # (the SDPA chunk's placement, one target write per call and the source row in the MOVD2B DEST row field).
+    # Both DEST placements: P below O, and O at tile 0 with P above it (the SDPA chunk's placement).
     dst_first=[False, True],
 )
 def test_sdpa_custom_mm_reuse_dest_srcb(math_fidelity, formats, dest_acc, dst_first):

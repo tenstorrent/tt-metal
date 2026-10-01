@@ -2,15 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Perf sweep of the Blackhole compressed_custom_mm LLK pair (sources/compressed_custom_mm_perf.cpp, the perf twin of
-test_compressed_custom_mm.py).
-
-The per-tile weight format (Bfp8_b, Bfp4_b, Bfp2_b or zero) is control flow for both threads and the perf harness
-writes no stimuli, so the metadata words are baked into the build header from the same encoder the functional test uses
-(helpers.compressed_utils.encode_tile_meta), together with the per-k-row non-zero tile counts for the dvalid mocks.
-Patterns: one format, two alternations per tile (the format switch costs a tile descriptor write and a source clear)
-and 50 percent zero tiles (a k row always starts with a data tile). The per-tile figures are per weight tile with the
-zero tiles counted (TILE_COUNT = kt x ct).
-"""
+test_compressed_custom_mm.py); the figures are per weight tile, zero tiles counted."""
 
 from dataclasses import dataclass
 
@@ -98,7 +90,7 @@ CASES += [("bfp8", 8, 1, 16), ("bfp8", 8, 16, 16), ("bfp4", 8, 1, 16), ("bfp4", 
 @pytest.mark.perf
 @parametrize(case=CASES)
 def test_perf_compressed_custom_mm(perf_report, case):
-    # a single parametrized name arrives as a one-tuple (the helper's convention, as in test_dprint_tensix)
+    # a single parametrized axis arrives as a one-tuple
     pattern, in0_face_r_dim, ct, kt = case[0]
     in1_format = DECLARED_IN1[pattern]
     configuration = PerfConfig(

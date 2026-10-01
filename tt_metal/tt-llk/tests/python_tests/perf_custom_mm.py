@@ -1,15 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf sweep of the Blackhole custom_mm LLK pair (sources/custom_mm_perf.cpp, the perf twin of test_custom_mm.py).
-
-One custom_mm call per loop iteration covers a [M, 32 ct] x (32 kt) block; the harness's per-tile figures are per
-weight (in1) tile (TILE_COUNT = kt x ct). The sweep crosses the weight format (the unpack rate: 16 cycles per bf16
-tile, 8 per Bfp8_b or Bfp4_b tile), the in0 height M, the call shape (ct, kt) from a one-tile call to 128 tiles, and
-the split accumulation with its finalize (the math body without the split rewrites a DEST row group two MVMULs after
-writing it and stalls; the finalize merges the two K halves on the last k step). dense_packing and clear_src are held
-at the DeepSeek kernels' values (on).
-"""
+"""Perf sweep of the Blackhole custom_mm LLK pair (sources/custom_mm_perf.cpp, the perf twin of test_custom_mm.py);
+the per-tile figures are per weight (in1) tile."""
 
 from dataclasses import dataclass
 
@@ -34,9 +27,7 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 @dataclass
 class CUSTOM_MM_PERF_FLAGS(TemplateParameter):
-    """Compile-time knobs of sources/custom_mm_perf.cpp: the split_acc init template with its finalize execute
-    template (finalize requires split_acc), dense_layout (dense_packing: output tiles 32 DEST rows apart) and the unpack call's
-    clear_src."""
+    """Compile-time knobs of sources/custom_mm_perf.cpp (finalize requires split_acc)."""
 
     split_acc: bool = False
     finalize: bool = False

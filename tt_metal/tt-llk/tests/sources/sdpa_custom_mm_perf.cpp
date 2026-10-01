@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole sdpa_custom_mm LLK (the SDPA Q K^T matmul with its FPU -> SFPU semaphore posts), the perf
-// twin of sources/sdpa_custom_mm_test.cpp. Per loop iteration: one unpack call, one math call (ZEROACC of the ct output
-// tiles, the kt-deep MVMUL walk, one FPU_SFPU post per SIGNAL_GRANULARITY tiles on the last k step) and the pack thread
-// standing in for the SFPU consumer (one FPU_SFPU get per post), as the functional kernel does. TILE_COUNT is kt x ct
-// K (in1) tiles per call. dvalid mocks: the custom_mm cadence (rt_dim 1). No mask re-entry.
-// SIGNAL_GRANULARITY, READ_TRANSPOSED and MM_TRANSPOSE come from SDPA_CUSTOM_MM_FLAGS.
+// Perf twin of sources/sdpa_custom_mm_test.cpp; the pack thread stands in for the SFPU consumer of the FPU_SFPU posts.
+// TILE_COUNT is kt x ct K tiles per call; the flags come from SDPA_CUSTOM_MM_FLAGS.
 
 #include <cstdint>
 
@@ -35,8 +31,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #define MM_TRANSPOSE false
 #endif
 
-// The pack thread takes its FPU_SFPU tokens after the matmul, so the posts of one call must fit the 4-bit Tensix
-// semaphore; sixteen posts wedge the core.
 static_assert(
     CT_DIM / SIGNAL_GRANULARITY <= ckernel::semaphore::SEMAPHORE_MAX_VALUE,
     "CT_DIM / SIGNAL_GRANULARITY FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15)");
@@ -160,8 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// The SFPU consumer stand-in: one FPU_SFPU get per post (CT_DIM / SIGNAL_GRANULARITY posts per call). Waiting until the
-// semaphore is non-zero before each get keeps the pack thread from running ahead of the math in MATH_ISOLATE.
+// The SFPU consumer stand-in: one FPU_SFPU get per post; the wait keeps the pack thread behind the math.
 inline void consume_fpu_sfpu_posts()
 {
     for (std::uint32_t signal = 0; signal < CT_DIM / SIGNAL_GRANULARITY; ++signal)

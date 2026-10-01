@@ -1,15 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf sweep of the Blackhole sdpa_custom_mm_reuse_dest_srcb LLK (sources/sdpa_custom_mm_reuse_dest_srcb_perf.cpp,
-the perf twin of test_sdpa_custom_mm_reuse_dest_srcb.py): the SDPA P V matmul that takes SrcB from DEST with MOVD2B.
-
-Per loop iteration one call of kt x nt V tiles (the per-tile figures are per V tile). MATH_ISOLATE and UNPACK_ISOLATE
-loop the reuse matmul alone (the P tiles are written into DEST once in the INIT zone); L1_TO_L1 repeats the P preload
-per call and is not a steady-state figure. The sweep varies nt at fixed kt to separate the per-k-tile DEST to SrcB
-move block from the per-V-tile MVMUL body, and kt at fixed nt for the per-call cost. LoFi only (the fidelity template
-of this LLK is unused).
-"""
+"""Perf sweep of the Blackhole sdpa_custom_mm_reuse_dest_srcb LLK (sources/sdpa_custom_mm_reuse_dest_srcb_perf.cpp, the perf
+twin of test_sdpa_custom_mm_reuse_dest_srcb.py); the figures are per V (in1) tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

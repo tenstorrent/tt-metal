@@ -346,9 +346,6 @@ def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
     )
 
 
-# Bfp2_b in1 on the plain path: the compressed sibling computes Bfp2_b tiles through its own per-format tile descriptor,
-# the plain path configures the unpacker once from the operand format. The 2-bit tile is 320 bytes (256 of mantissas,
-# 64 of exponents); the golden folds the same bytes back through unpack_bfp2_b.
 BFP2_CASES = [
     pytest.param(8, 4, 4, InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b), id="M8-k4-ct4-bfp2"),
     pytest.param(8, 4, 8, InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b), id="M8-k4-ct8-bfp2"),

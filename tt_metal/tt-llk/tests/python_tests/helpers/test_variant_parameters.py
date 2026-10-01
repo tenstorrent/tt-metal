@@ -2017,12 +2017,7 @@ class SDPA_CUSTOM_MM_REUSE_DEST(TemplateParameter):
 
 @dataclass
 class SDPA_REUSE_DEST_LAYOUT(TemplateParameter):
-    """DEST placement of the sdpa_custom_mm_reuse_dest_srcb test kernels.
-
-    dst_first: the O accumulator at DEST tile 0 and the P source tiles above it (the placement of
-               compute_sdpa_chunk, on which the math LLK writes the DEST target register once per call);
-               False puts P at tile 0 and O above it (the LLK rewrites the target register per k tile).
-    """
+    """DEST placement of the sdpa_custom_mm_reuse_dest_srcb kernels: dst_first puts O at tile 0 and P above it."""
 
     dst_first: bool = False
 

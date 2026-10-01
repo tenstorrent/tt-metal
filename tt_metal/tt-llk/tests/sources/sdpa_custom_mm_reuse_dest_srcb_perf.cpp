@@ -2,19 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole sdpa_custom_mm_reuse_dest_srcb LLK (the SDPA P V matmul that takes SrcB from DEST with
-// MOVD2B), the perf twin of sources/sdpa_custom_mm_reuse_dest_srcb_test.cpp. The functional kernel's sequence per pass
-// is: P preload (ceil(KT/2) A2D datacopies into DEST tiles 0..), the SrcB dummy valid, the reuse unpack of KT x NT V tiles
-// and the reuse math (per k tile: DEST to SrcB moves, one UNPACK_MATH_DONE wait and get, NT x REPLAY(4)); the pack thread
-// stands in for the SFPU producer of UNPACK_MATH_DONE.
-// Run types: L1_TO_L1 repeats the whole pass per iteration (preload included, so it is not a steady-state figure);
-// MATH_ISOLATE and UNPACK_ISOLATE do the preload once in INIT and loop the reuse matmul only (the P image in DEST is
-// reused; the values do not matter for the cycle count), with dvalid mocks: 1 SrcB dummy valid + KT x NT SrcA valids
-// per call, the math clearing SrcA per V tile (the replay's fourth MVMUL carries CLR_A) and SrcB at the end (SETRWC
-// CLR_B). Semaphore stand-in: the pack thread keeps UNPACK_MATH_DONE topped up (SEMWAIT on max + SEMPOST per token,
-// max = min(15, 2 KT)) one call ahead of the math, so the math never waits for a token the functional kernel would have
-// had (it posts KT tokens up front). DST_TILE = max(2, ceil(KT/2)) keeps the functional layout for KT 2 (O at tile 2).
-// TILE_COUNT is kt x nt V (in1) tiles per call. KT_DIM and NT_DIM come from SDPA_CUSTOM_MM_REUSE_DEST.
+// Perf twin of sources/sdpa_custom_mm_reuse_dest_srcb_test.cpp. L1_TO_L1 repeats the whole pass (P preload included)
+// per iteration; the isolates preload P once in INIT and loop the reuse matmul. The pack thread stands in for the SFPU.
 
 #include <cstdint>
 
@@ -37,8 +26,7 @@ static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 #ifndef DST_FIRST
 #define DST_FIRST false
 #endif
-// DST_FIRST (SDPA_REUSE_DEST_LAYOUT): O at tile 0 and P above it, the placement of compute_sdpa_chunk (one DEST target
-// write per call in the math LLK); otherwise P at tile 0 and O at the first free tile (the functional test's layout).
+// DST_FIRST: O at tile 0 and P above it (the placement of compute_sdpa_chunk); otherwise P at tile 0 and O above it.
 constexpr std::uint32_t P_TILES    = (KT_DIM + 1) / 2;                                      // datacopy tiles holding the KT 16-row P chunks
 constexpr std::uint32_t O_TILES    = (NT_DIM + 3) / 4;                                      // 32x32 tiles covered by the NT 16-row O tiles
 constexpr std::uint32_t SRC_TILE   = DST_FIRST ? (O_TILES > 2 ? O_TILES : 2) : 0;           // P tile base for the datacopy preload

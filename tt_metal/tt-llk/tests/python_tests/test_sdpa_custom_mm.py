@@ -209,9 +209,6 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
     assert (
         ct % signal_granularity == 0
     ), "ct_dim must be divisible by signal_granularity"
-    # PACK drains the FPU_SFPU posts only after the matmul, so the posts of one call must fit the 4-bit Tensix
-    # semaphore (15). ct 16 with granularity 1 posts 16 times: the last post is dropped and the get never returns,
-    # which wedges the core (two card resets in the stage 2 sweep of 2026-09-30).
     if ct // signal_granularity > SEMAPHORE_MAX_VALUE:
         raise ValueError(
             f"ct_dim / signal_granularity = {ct // signal_granularity} FPU->SFPU posts per call exceed the "
@@ -373,12 +370,9 @@ def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
 
 
 def test_sdpa_custom_mm_rejects_semaphore_overflow():
-    """ct 16 with granularity 1 posts sixteen FPU_SFPU tokens per call; the 4-bit semaphore holds fifteen and the
-    consumer's sixteenth get never returns. The driver must refuse the combination before it touches the device
-    (the C++ driver refuses it at compile time as well). No hardware is needed for this check."""
+    """The driver refuses more FPU_SFPU posts per call than the 4-bit semaphore holds; no hardware needed."""
     with pytest.raises(ValueError, match="posts per call exceed"):
         _run(8, 256, 512, signal_granularity=1, read_transposed=False, mm_transpose=False)
-    # Fifteen posts are the largest legal count; sixteen with a coarser granularity are fine.
     assert 16 // 16 <= SEMAPHORE_MAX_VALUE
     assert 15 // 1 <= SEMAPHORE_MAX_VALUE
     assert 16 // 1 > SEMAPHORE_MAX_VALUE

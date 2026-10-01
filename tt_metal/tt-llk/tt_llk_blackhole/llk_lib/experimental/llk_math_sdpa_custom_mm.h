@@ -142,9 +142,7 @@ inline void _llk_math_sdpa_custom_mm_(
 {
     static_assert(signal_granularity >= 1, "signal_granularity must be >= 1");
     LLK_ASSERT(ct_dim % signal_granularity == 0, "ct_dim must be divisible by signal_granularity for FPU->SFPU signal counts to balance");
-    // The Tensix semaphore counts to 15. A consumer that takes its tokens only after the whole matmul has finished (the
-    // tt-llk test kernel does) sees every post of a call before its first get, so the posts of one call must fit the
-    // counter: a sixteenth post is dropped and the sixteenth get never returns, which wedges the core.
+    // A consumer that drains after the matmul sees every post of a call before its first get; a sixteenth post is lost.
     LLK_ASSERT(
         ct_dim / signal_granularity <= semaphore::SEMAPHORE_MAX_VALUE,
         "ct_dim / signal_granularity FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15)");
