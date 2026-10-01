@@ -14,7 +14,8 @@ from loguru import logger
 from transformers.models.t5.modeling_t5 import T5EncoderModel
 
 import ttnn
-from models.tt_dit.encoders.t5.model_t5 import RelativeTextEmbeddings, T5Config, T5EncoderLayer
+from models.tt_dit.encoders.t5.model_t5 import RelativePositionEmbeddings, T5Config, T5EncoderLayer
+from models.tt_dit.layers.embeddings import Embedding
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -101,19 +102,17 @@ def test_t5_layers_individually(
 
     state_dict = hf_model.state_dict()
 
-    tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
-    embeddings_state_dict = {
-        "token_embedding_weights": state_dict["encoder.embed_tokens.weight"],
-        "relative_attention_bias_weights": state_dict[
-            "encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight"
-        ],
-    }
-
-    tt_embedding.load_torch_state_dict(embeddings_state_dict)
+    tt_token_embed = Embedding(config.vocab_size, config.embed_dim, device=encoder_submesh)
+    tt_token_embed.load_torch_state_dict({"weight": state_dict["encoder.embed_tokens.weight"]})
+    tt_relative_position_embed = RelativePositionEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
+    tt_relative_position_embed.load_torch_state_dict(
+        {"weight": state_dict["encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight"]}
+    )
 
     # time TT model inference only
     tt_start_time = time.time()
-    tt_embeddings_output, tt_position_bias = tt_embedding(tt_prompt, encoder_submesh)
+    tt_embeddings_output = tt_token_embed(tt_prompt)
+    tt_position_bias = tt_relative_position_embed(tt_embeddings_output.shape[1])
 
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
@@ -138,7 +137,8 @@ def test_t5_layers_individually(
     logger.info("\n=== Testing each layer individually ===")
     pcc_values = []
 
-    tt_embeddings_output, tt_position_bias = tt_embedding(tt_prompt, encoder_submesh)
+    tt_embeddings_output = tt_token_embed(tt_prompt)
+    tt_position_bias = tt_relative_position_embed(tt_embeddings_output.shape[1])
     with torch.no_grad():
         hf_token_embeddings = hf_model.encoder.embed_tokens(tokens)
         hf_position_bias = (
@@ -154,7 +154,12 @@ def test_t5_layers_individually(
         tt_start_time = time.time()
         layer = i
 
-        tt_encoder_layer = T5EncoderLayer(config, encoder_submesh, ccl_manager, parallel_config)
+        # Block 0 is the only one carrying relative_attention_bias in the HF checkpoint, so it
+        # must be built with the bias parameter or the strict state-dict load rejects the key.
+        # This mirrors T5Stack, which passes config.use_relative_position_bias[i].
+        tt_encoder_layer = T5EncoderLayer(
+            config, encoder_submesh, ccl_manager, parallel_config, config.use_relative_position_bias[i]
+        )
         tt_encoder_layer.load_torch_state_dict(substate(hf_model.state_dict(), f"encoder.block.{layer}"))
 
         tt_layer_output = tt_encoder_layer(tt_embeddings_output, tt_position_bias)

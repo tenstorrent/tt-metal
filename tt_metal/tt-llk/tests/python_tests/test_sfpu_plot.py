@@ -16,13 +16,17 @@ single op with:  pytest test_sfpu_plot.py -k <Op> -s
 
 import math
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import torch
+from conftest import skip_for_coverage
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -45,7 +49,10 @@ from helpers.param_config import (
 from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand, _subtract_intervals
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
-from helpers.stimuli_generator.strategies.structured import _enumerate_representable
+from helpers.stimuli_generator.strategies.structured import (
+    _enumerate_representable,
+    ulp_sweep_value_count,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -117,7 +124,7 @@ _LOW_HIGH_BOUNDED = {
 }
 
 
-def _allowed_intervals_for(
+def allowed_intervals_for(
     spec: StimuliSpec,
     x: np.ndarray,
 ) -> List[Tuple[float, float]]:
@@ -332,6 +339,39 @@ _ULP_THRESHOLDS = (
 )
 
 
+# Above this many points, only the drawn markers are thinned; all statistics
+# still use the full sweep.
+_MAX_PLOT_POINTS = 100_000
+# When thinning, always keep this many worst-error points so the extremes stay visible.
+_PLOT_KEEP_WORST = 2000
+
+
+def _draw_indices(
+    abs_error: np.ndarray,
+    budget: int = _MAX_PLOT_POINTS,
+    keep_worst: int = _PLOT_KEEP_WORST,
+) -> np.ndarray:
+    """Sorted indices of the points to draw: an even sample plus the worst errors.
+
+    Returns every index when the data fits the budget. Otherwise evenly samples
+    the bulk (so the curve shape is preserved) and force-includes the largest
+    |error| points (so the offenders and the max always appear on the picture).
+    """
+    n = abs_error.size
+    if n <= budget:
+        return np.arange(n)
+    base = np.linspace(0, n - 1, max(1, budget - keep_worst)).astype(np.int64)
+    worst = np.argsort(abs_error)[-keep_worst:]
+    return np.unique(np.concatenate([base, worst]))  # sorted -> stays x-ordered
+
+
+def _thin_evenly(n: int, budget: int = _MAX_PLOT_POINTS) -> np.ndarray:
+    """Sorted indices of an even sample of `n` items (all of them if within budget)."""
+    if n <= budget:
+        return np.arange(n)
+    return np.unique(np.linspace(0, n - 1, budget).astype(np.int64))
+
+
 def _visible_ulp_thresholds(max_val: float) -> List[Tuple[int, str]]:
     """(threshold, color) entries to draw given the data's max |ULP| = max_val.
 
@@ -345,7 +385,7 @@ def _visible_ulp_thresholds(max_val: float) -> List[Tuple[int, str]]:
     ]
 
 
-def _plot_and_print(
+def plot_and_print(
     mathop: MathOperation,
     fmt: DataFormat,
     x: np.ndarray,
@@ -355,7 +395,18 @@ def _plot_and_print(
     title_suffix: str = "",
     allowed_intervals: Optional[List[Tuple[float, float]]] = None,
     undefined_ranges: Optional[List[Tuple[float, float]]] = None,
+    param_line: Optional[str] = None,
 ):
+    """Draw the multi-panel accuracy figure and print the stats summary.
+
+    `param_line`, when given, is rendered as a second, smaller title line under
+    the suptitle — the place for the run's parameters (in/out format, Dest
+    route, dest_acc, approx mode, point count) so a saved PNG is self-describing.
+
+    Pass the FULL sweep. Every statistic is computed on all points; only the
+    markers drawn on the point-level panels are thinned above _MAX_PLOT_POINTS
+    (see _draw_indices), and the subtitle says so when that happens.
+    """
     # Keep the raw inputs/outputs around so we can still surface non-finite
     # points on the top plot — even though they're masked out of error stats.
     x_raw = x.copy()
@@ -404,6 +455,17 @@ def _plot_and_print(
             fontsize=14,
             fontweight="bold",
         )
+        if param_line:
+            fig.text(
+                0.5,
+                0.90,
+                param_line,
+                ha="center",
+                va="top",
+                fontsize=9,
+                color="#555555",
+                fontfamily="monospace",
+            )
         ax.axis("off")
         ax.text(0.5, 0.5, msg, ha="center", va="center", fontfamily="monospace")
         plt.savefig(plot_path, dpi=150)
@@ -416,6 +478,19 @@ def _plot_and_print(
         return
 
     error = y_hw - y_golden
+
+    # Which finite points get DRAWN on the point-level panels. Statistics below
+    # never use this — they run on the full arrays.
+    draw = _draw_indices(np.abs(error))
+    n_drawn = int(draw.size)
+    x_d, y_golden_d, y_hw_d = x[draw], y_golden[draw], y_hw[draw]
+    if n_drawn < x.size:
+        logger.info(
+            "plot draws {} of {} points (even sample + worst cases); statistics use all",
+            n_drawn,
+            x.size,
+        )
+
     # nonzero_mask guards only against division by zero in the relative error
     # calculation — do not use a large threshold like bfloat16.eps, which would
     # incorrectly exclude small-magnitude outputs (e.g. reciprocal of large inputs).
@@ -510,19 +585,19 @@ def _plot_and_print(
     HW_COLOR = "#ff7f0e"  # orange
 
     # Plot lines per allowed-interval segment so they don't bridge across the
-    # shaded undefined / excluded regions. Scatter still draws every sampled
-    # point regardless of intervals.
+    # shaded undefined / excluded regions. Scatter still draws every drawn
+    # point regardless of intervals. (Drawing only — uses the thinned arrays.)
     line_segments = (
         sorted(allowed_intervals) if allowed_intervals else [(x.min(), x.max())]
     )
     first_g = first_h = True
     for lo, hi in line_segments:
-        seg_mask = (x >= lo) & (x <= hi)
+        seg_mask = (x_d >= lo) & (x_d <= hi)
         if not seg_mask.any():
             continue
         axes[0].plot(
-            x[seg_mask],
-            y_golden[seg_mask],
+            x_d[seg_mask],
+            y_golden_d[seg_mask],
             label="Golden (torch)" if first_g else "_nolegend_",
             linewidth=1.0,
             color=GOLDEN_COLOR,
@@ -531,8 +606,8 @@ def _plot_and_print(
         )
         first_g = False
         axes[0].plot(
-            x[seg_mask],
-            y_hw[seg_mask],
+            x_d[seg_mask],
+            y_hw_d[seg_mask],
             label="Hardware" if first_h else "_nolegend_",
             linewidth=1.0,
             color=HW_COLOR,
@@ -541,10 +616,10 @@ def _plot_and_print(
             zorder=3,
         )
         first_h = False
-    axes[0].scatter(x, y_golden, s=8, alpha=0.7, color=GOLDEN_COLOR, zorder=4)
+    axes[0].scatter(x_d, y_golden_d, s=8, alpha=0.7, color=GOLDEN_COLOR, zorder=4)
     axes[0].scatter(
-        x,
-        y_hw,
+        x_d,
+        y_hw_d,
         s=18,
         alpha=0.7,
         facecolors="none",
@@ -630,6 +705,7 @@ def _plot_and_print(
             (gold_only_nf, "C0", 0.10, "inf/nan (golden only)", 35),
         ):
             xs = x_raw[mask]
+            xs = xs[_thin_evenly(xs.size)]  # drawing only; counts below use all
             if len(xs):
                 ys = np.full_like(xs, y_max - offset_frac * y_span)
                 axes[0].scatter(
@@ -677,9 +753,25 @@ def _plot_and_print(
         fontweight="bold",
         y=0.995,
     )
+    # Parameter block under the suptitle, in a smaller monospace font so the op
+    # name stays the headline.
+    param_lines = param_line.count("\n") + 1 if param_line else 0
+    if param_line:
+        fig.text(
+            0.5,
+            0.977,
+            param_line,
+            ha="center",
+            va="top",
+            fontsize=10,
+            color="#555555",
+            fontfamily="monospace",
+        )
     subtitle = f"x ∈ [{x.min():.2g}, {x.max():.2g}]"
     if n_nonfinite:
         subtitle += f"  ({n_nonfinite} inf/nan excluded)"
+    if n_drawn < x.size:
+        subtitle += f"  (drawing {n_drawn:,} of {x.size:,} points; stats use all)"
     axes[0].set_title(subtitle, fontsize=9, color="#666666")
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
@@ -701,8 +793,8 @@ def _plot_and_print(
     # Stem plot makes the sign and magnitude of each point obvious — kept thin
     # and semi-transparent so dense data doesn't turn it into a solid block.
     markerline, stemlines, baseline = axes[1].stem(
-        x,
-        err_for_panel,
+        x_d,
+        err_for_panel[draw],
         linefmt="-",
         markerfmt="o",
         basefmt=" ",
@@ -773,9 +865,14 @@ def _plot_and_print(
     # (points where hw == golden exactly are silently dropped by matplotlib).
     plot_mask = nonzero_mask & (rel_error > 0)
     n_exact = int(nonzero_mask.sum()) - int(plot_mask.sum())
-    if plot_mask.any():
+    plot_mask_d = plot_mask[draw]  # drawing only
+    if plot_mask_d.any():
         axes[2].scatter(
-            x[plot_mask], rel_error[plot_mask], s=1, alpha=0.5, color="blue"
+            x_d[plot_mask_d],
+            rel_error[draw][plot_mask_d],
+            s=1,
+            alpha=0.5,
+            color="blue",
         )
     if ulp_rel is not None:
         max_ulp_rel2 = (
@@ -808,7 +905,11 @@ def _plot_and_print(
             sorted_ulp = np.sort(ulp_err_mag)
             n = len(sorted_ulp)
             cdf = np.arange(1, n + 1) / n
-            axes[3].plot(sorted_ulp, cdf, color="#0d47a1", linewidth=1.5)
+            # The CDF is computed on all points; only the drawn line is thinned.
+            cdf_draw = _thin_evenly(n)
+            axes[3].plot(
+                sorted_ulp[cdf_draw], cdf[cdf_draw], color="#0d47a1", linewidth=1.5
+            )
             axes[3].set_xscale("log")
             max_ulp = float(sorted_ulp.max())
             visible_thresholds = _visible_ulp_thresholds(max_ulp)
@@ -1200,7 +1301,8 @@ def _plot_and_print(
             bbox=summary_bbox_kwargs,
         )
 
-    plt.tight_layout()
+    top = 0.98 - (0.012 + 0.009 * param_lines if param_lines else 0.0)
+    plt.tight_layout(rect=(0, 0, 1, top))
 
     # Draw a thin vertical separator between the plot column and the summary
     # column. Done after tight_layout so the position lines up with the actual
@@ -1242,12 +1344,12 @@ def _plot_and_print(
 #       fmt=FP32   float32  in/out   (auto-runs the fp32 dest-accumulator path;
 #                                     judge accuracy in abs/rel error — fp32 ULP
 #                                     is not meaningful, see the notes inside
-#                                     _plot_and_print)
+#                                     plot_and_print)
 #
 #   Run one op:   pytest test_sfpu_plot.py -k Exp -s
 #   Run all:      pytest test_sfpu_plot.py -s
 #
-#   Each case writes _plot_output/sfpu_<id>.png and prints a stats summary, then
+#   Each case writes _plot_output/{wh,bh}/sfpu_<id>.png and prints a stats summary, then
 #   asserts the hardware result matches golden.
 #   Set expect_pass=False to keep the run green while exploring a known-inaccurate op.
 #
@@ -1266,11 +1368,38 @@ BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 FP16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
 FP32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
 
-_FMT_SHORT = {
+FMT_SHORT = {
     DataFormat.Float16_b: "bf16",
     DataFormat.Float16: "fp16",
     DataFormat.Float32: "fp32",
 }
+
+# Plots go to tests/python_tests/_plot_output/<arch>/
+PLOT_OUTPUT_ROOT = Path(__file__).resolve().parent / "_plot_output"
+_ARCH_PLOT_DIR = {
+    ChipArchitecture.WORMHOLE: "wh",
+    ChipArchitecture.BLACKHOLE: "bh",
+    ChipArchitecture.QUASAR: "qsr",
+}
+_ARCH_TITLE = {
+    ChipArchitecture.WORMHOLE: "Wormhole",
+    ChipArchitecture.BLACKHOLE: "Blackhole",
+    ChipArchitecture.QUASAR: "Quasar",
+}
+
+
+def plot_output_dir(arch: Optional[ChipArchitecture] = None) -> Path:
+    """Per-arch plot folder: _plot_output/{wh,bh,qsr} (default: the current arch)."""
+    if arch is None:
+        arch = get_chip_architecture()
+    return PLOT_OUTPUT_ROOT / _ARCH_PLOT_DIR[arch]
+
+
+def arch_title_suffix(arch: Optional[ChipArchitecture] = None) -> str:
+    """Title tag naming the arch, e.g. ' [Wormhole]'."""
+    if arch is None:
+        arch = get_chip_architecture()
+    return f" [{_ARCH_TITLE[arch]}]"
 
 
 @dataclass
@@ -1289,12 +1418,15 @@ class Case:
     clamp_negative: bool = False
     input_dimensions: Optional[List[int]] = None
     extra_undefined_ranges: Optional[List[Tuple[float, float]]] = None
+    # ulp_sweep only: sweep a range too large for one run in batches of this
+    # many tiles (offset walks the range). None = single run.
+    batch_tiles: Optional[int] = None
 
     @property
     def test_id(self) -> str:
         if self.name:
             return self.name
-        short = _FMT_SHORT.get(self.fmt.output_format, self.fmt.output_format.name)
+        short = FMT_SHORT.get(self.fmt.output_format, self.fmt.output_format.name)
         return f"{self.op.name}-{short}"
 
 
@@ -1326,6 +1458,15 @@ CASES = [
         approx_mode=ApproximationMode.Yes,
         name="Reciprocal-bf16-approx-exhaustive",
     ),
+    # host-batched fp32 sweep: every fp32 value in a full octave [1.0, 2.0]
+    # (2^23 values) in 64-tile batches. Exercises the batching loop + timing.
+    # Slow — ~128 device runs (minutes).
+    Case(
+        op=MathOperation.Reciprocal,
+        spec=StimuliSpec.ulp_sweep(low=1.0, high=2.0),
+        fmt=FP32,
+        name="Reciprocal-fp32-batched",
+    ),
     # Diagnostic-only example (uncomment to explore a known-inaccurate op without failing the run):
     # Case(op=MathOperation.Gelu, spec=StimuliSpec.ramp(low=-13.0, high=13.0), expect_pass=False),
 ]
@@ -1334,6 +1475,8 @@ CASES = [
 # One 32x32 tile = 1024 elements. A ulp_sweep is bounded by L1, not dest.
 _TILE_ELEMENTS = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
 _MAX_SWEEP_TILES = 64
+
+_MAX_SWEEP_BATCHES = 512
 
 
 def _ulp_sweep_dims(
@@ -1378,7 +1521,7 @@ def run_case(case: Case) -> bool:
     """Run one Case end-to-end: stimuli -> golden -> hardware -> plot + stats.
 
     Returns whether the hardware result matched golden (passed_test) and writes
-    _plot_output/sfpu_<id>.png. This only assembles inputs for _plot_and_print;
+    _plot_output/<arch>/sfpu_<id>.png. This only assembles inputs for plot_and_print;
     it does not alter any metric or plotting behavior.
     """
     formats = case.fmt
@@ -1394,84 +1537,169 @@ def run_case(case: Case) -> bool:
     if unpack_to_dest is None:
         unpack_to_dest = is_fp32
 
-    if case.input_dimensions is not None:
-        input_dimensions = case.input_dimensions
-    elif case.spec.distribution == DistributionKind.ULP_SWEEP:
-        input_dimensions = _ulp_sweep_dims(
-            formats.input_format, case.spec.low, case.spec.high, dest_acc
-        )
-    else:
-        input_dimensions = [32, 32]
     mathop = case.op
     spec = case.spec
-    plot_path = f"_plot_output/sfpu_{case.test_id}.png"
-
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        spec_A=spec,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
-
-    generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-    )
-
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(case.approx_mode),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(case.clamp_negative),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
-    )
-
-    res_from_L1 = configuration.run().result
+    plot_path = str(plot_output_dir() / f"sfpu_{case.test_id}.png")
     torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    generate_golden = get_golden_generator(UnarySFPUGolden)
+
+    def _run_chunk(chunk_spec, dims):
+        """Run one chunk on the device and return (input, golden, hardware result).
+
+        Builds the stimuli, computes the torch golden, runs the kernel, reads the
+        result back. Called once for a normal run, or once per batch when batching.
+        """
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=dims,
+            spec_A=chunk_spec,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=dims,
+        )
+        golden = generate_golden(
+            mathop, src_A, formats.output_format, dest_acc, formats.input_format, dims
+        )
+        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+            DestSync.Half,
+            dest_acc,
+            formats,
+            dims,
+            TILE_DIMENSIONS,
+            BlocksCalculationAlgorithm.Standard,
+        )
+        configuration = TestConfig(
+            "sources/eltwise_unary_sfpu_test.cpp",
+            formats,
+            templates=[
+                generate_input_dim(dims, dims),
+                APPROX_MODE(case.approx_mode),
+                FAST_MODE(FastMode.No),
+                CLAMP_NEGATIVE(case.clamp_negative),
+                MATH_OP(mathop=mathop),
+            ],
+            runtimes=[
+                TILE_COUNT(tile_cnt_A),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=unpack_to_dest,
+        )
+        res = torch.tensor(configuration.run().result, dtype=torch_format)
+        return src_A, golden, res
+
+    # Pick batching for a ulp_sweep. Use batch_tiles if set; otherwise auto-batch
+    # when the range is too big for one run, so it can't silently truncate.
+    # If input_dimensions is set, use that size as-is (no auto-batching).
+    is_ulp = spec.distribution == DistributionKind.ULP_SWEEP
+    batch_tiles = case.batch_tiles
+    if is_ulp:
+        if batch_tiles is not None and not 1 <= batch_tiles <= _MAX_SWEEP_TILES:
+            raise ValueError(
+                f"{case.test_id}: batch_tiles={batch_tiles} must be between 1 and "
+                f"{_MAX_SWEEP_TILES} tiles"
+            )
+        total = ulp_sweep_value_count(formats.input_format, spec.low, spec.high)
+        # Reject a range that would take too many device runs. Skipped when
+        # input_dimensions is set — that is a single, quick run.
+        if case.input_dimensions is None:
+            run_tiles = batch_tiles if batch_tiles is not None else _MAX_SWEEP_TILES
+            run_values = run_tiles * _TILE_ELEMENTS
+            num_runs = math.ceil(total / run_values)
+            if num_runs > _MAX_SWEEP_BATCHES:
+                raise ValueError(
+                    f"{case.test_id}: ulp_sweep [{spec.low}, {spec.high}] has "
+                    f"{total:,} values = {num_runs:,} runs of {run_tiles} tiles, "
+                    f"over the {_MAX_SWEEP_BATCHES}-run limit — narrow the range "
+                    f"(at most {run_values * _MAX_SWEEP_BATCHES:,} values)."
+                )
+        if (
+            batch_tiles is None
+            and case.input_dimensions is None
+            and total > _MAX_SWEEP_TILES * _TILE_ELEMENTS
+        ):
+            batch_tiles = _MAX_SWEEP_TILES
+            logger.info(
+                "ulp_sweep [{}, {}] has {} values — too many for one run, "
+                "auto-batching at {} tiles",
+                spec.low,
+                spec.high,
+                total,
+                batch_tiles,
+            )
+
+    if is_ulp and batch_tiles is not None:
+        # Sweep a range too large for one run in fixed-size batches (offset walks
+        # the range) and join them. Every batch is the same size, so the kernel is
+        # compiled once and reused.
+        batch_values = batch_tiles * _TILE_ELEMENTS
+        batch_dims = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * batch_tiles]
+        num_batches = max(1, math.ceil(total / batch_values))
+        logger.info(
+            "ulp_sweep batched: {} values -> {} batch(es) of {} tiles ({} values each)",
+            total,
+            num_batches,
+            batch_tiles,
+            batch_values,
+        )
+        src_parts, golden_parts, res_parts = [], [], []
+        start = time.perf_counter()
+        for k in range(num_batches):
+            s, g, r = _run_chunk(replace(spec, offset=k * batch_values), batch_dims)
+            # Full batches are all real; the last is zero-padded at the tail, so
+            # keep only its real values — padding is not test data.
+            real = min(batch_values, total - k * batch_values)
+            src_parts.append(s[:real])
+            golden_parts.append(g[:real])
+            res_parts.append(r[:real])
+            logger.info(
+                "  batch {}/{} done ({:.1f}s elapsed)",
+                k + 1,
+                num_batches,
+                time.perf_counter() - start,
+            )
+        src_A = torch.cat(src_parts)
+        golden_tensor = torch.cat(golden_parts)
+        res_tensor = torch.cat(res_parts)
+        logger.info(
+            "ulp_sweep batched: {} values swept in {:.1f}s",
+            src_A.numel(),
+            time.perf_counter() - start,
+        )
+    else:
+        if case.input_dimensions is not None:
+            input_dimensions = case.input_dimensions
+        elif is_ulp:
+            input_dimensions = _ulp_sweep_dims(
+                formats.input_format, spec.low, spec.high, dest_acc
+            )
+        else:
+            input_dimensions = [32, 32]
+        src_A, golden_tensor, res_tensor = _run_chunk(spec, input_dimensions)
+        if is_ulp:
+            # Drop the trailing zero-padding a ulp_sweep adds when the range has
+            # fewer values than the tensor holds — it is not test data.
+            real = min(total, input_dimensions[0] * input_dimensions[1])
+            src_A = src_A[:real]
+            golden_tensor = golden_tensor[:real]
+            res_tensor = res_tensor[:real]
 
     sort_idx = torch.argsort(src_A.to(torch.float32))
     x = src_A.to(torch.float32)[sort_idx].numpy()
     y_golden = golden_tensor.to(torch.float32)[sort_idx].numpy()
     y_hw = res_tensor.to(torch.float32)[sort_idx].numpy()
 
-    allowed_intervals = _allowed_intervals_for(spec, x)
+    allowed_intervals = allowed_intervals_for(spec, x)
     # extra_undefined_ranges, when supplied (even as an empty list), fully
     # overrides the registry — letting callers inject custom asymptote bands or
     # suppress the registry's red shading entirely.
@@ -1482,20 +1710,29 @@ def run_case(case: Case) -> bool:
             _SFPU_UNDEFINED_RANGES.get(mathop, {}).get(Operand.A, [])
         )
 
-    # ULP/eps spacing in _plot_and_print is taken from this format, so it must
+    # ULP/eps spacing in plot_and_print is taken from this format, so it must
     # match the format the compared values live in: golden and hw are produced
     # in output_format, so pass output_format (not input_format). Identical for
     # symmetric cases; for a mixed case like (Float32, Float16_b), using the
     # input format would measure ULP on the wrong (finer) grid and under-report.
-    _plot_and_print(
+    param_line = (
+        f"{case.test_id}  |  in {formats.input_format.name} → out "
+        f"{formats.output_format.name}  |  dest_acc={dest_acc.name}  |  "
+        f"unpack_to_dest={unpack_to_dest}  |  approx={case.approx_mode.name}  |  "
+        f"clamp_negative={case.clamp_negative}  |  "
+        f"{spec.distribution.name.lower()}, {x.size} points"
+    )
+    plot_and_print(
         mathop,
         formats.output_format,
         x,
         y_golden,
         y_hw,
         plot_path,
+        title_suffix=arch_title_suffix(),
         allowed_intervals=allowed_intervals,
         undefined_ranges=undefined_ranges,
+        param_line=param_line,
     )
 
     test_passed = passed_test(golden_tensor, res_tensor, formats.output_format)
@@ -1533,6 +1770,12 @@ def run_case(case: Case) -> bool:
     return test_passed
 
 
+# Gated under coverage for the same reason as accuracy/test_sfpu_accuracy.py: three of
+# the cases below drive Reciprocal, whose coverage build returns wrong results on
+# Blackhole (tt-metal#56751), and the module-private exclusion table in
+# test_eltwise_unary_sfpu.py does not reach here. This is a diagnostic sweep whose
+# coverage data duplicates the unary sweep's, so gating the whole test is enough.
+@skip_for_coverage
 @pytest.mark.accuracy
 @pytest.mark.parametrize("case", CASES, ids=[c.test_id for c in CASES])
 def test_sfpu_stress(case: Case):
