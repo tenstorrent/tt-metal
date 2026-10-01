@@ -12,8 +12,8 @@ writing it holds unrelated data, so a handoff bug fails that slot however close 
 
 seq 640, because shorter sequences finish every expert before combine reaches it and never exercise
 the wait. Every case runs the threshold the model ships: on (8, 1) balanced leaves every expert under it
-so the fused pass takes them all, hot-expert lifts one into the unified half, and real (8x4 only) replays
-measured routing from one layer and chunk of each model.
+so the fused pass takes them all, hot-expert lifts one into the unified half, and real-L45c3 and real-L11c9
+(8x4 only) replay measured routing from that layer and chunk of each model.
 
 The perf test times every program replayed from a trace, as the model runs it. Eager, the host writes each
 chip's program in turn and, on 8x4, issues the overlap slower than the device runs it, so a ring's chips
@@ -110,31 +110,57 @@ _CAPTURED_COUNTS = {
     },
 }
 # fmt: on
-# One real cell per model for (8, 4): MoE layer 45, chunk 3 of the same code_debug prefill, the median-skew
-# cell of both models (busiest expert 7.6x the mean for GLM, 11.7x for Kimi). Unlike balanced and hot-expert, it
-# keeps the model's own top-8 spread across the dispatch groups, so a token lands a variable 0-8 of its experts
-# in each group and the groups carry unequal totals. GLM 5.3 replays the device's top-8 ids token by token, in
-# origin-chip order; Kimi K2.7 only has per-expert counts captured, so its tokens are rebuilt from those.
-_GLM53_REAL_ROUTING = Path(__file__).parent / "routing_captures" / "glm53_code_debug_L45_c3.pt"
+# Two real cells per model for (8, 4), from the same code_debug prefill, named by layer and chunk. L45c3 is the
+# median-skew cell of both models (busiest expert 7.6x the mean for GLM, 11.7x for Kimi). L11c9 is Kimi's most
+# skewed of its 60 x 11 cells (expert 205 takes 3458 tokens, 32.4x the mean); the same cell is flat for GLM
+# (busiest expert 523 tokens, 3.3x). Unlike balanced and hot-expert, a real cell keeps the model's own top-8
+# spread across the dispatch groups, so a token lands a variable 0-8 of its experts in each group and the groups
+# carry unequal totals. GLM 5.3 replays the device's top-8 ids token by token, in origin-chip order; Kimi K2.7
+# only has per-expert counts captured, so its tokens are rebuilt from those.
+_GLM53_REAL_ROUTING = {
+    "real-L45c3": Path(__file__).parent / "routing_captures" / "glm53_code_debug_L45_c3.pt",
+    "real-L11c9": Path(__file__).parent / "routing_captures" / "glm53_code_debug_L11_c9.pt",
+}
 # fmt: off
-_KIMI_K27_REAL_COUNTS = (
-    8, 94, 151, 131, 63, 110, 79, 2, 49, 130, 104, 168, 48, 71, 222, 62, 151, 38, 22, 32, 123, 77, 151, 148, 51, 49,
-    26, 168, 76, 50, 12, 49, 12, 113, 64, 35, 125, 89, 44, 197, 41, 127, 250, 47, 42, 45, 307, 65, 128, 12, 56, 11,
-    68, 88, 109, 80, 21, 126, 294, 80, 10, 28, 24, 83, 154, 259, 13, 432, 365, 93, 105, 39, 56, 103, 139, 6, 38, 62,
-    55, 53, 5, 111, 31, 182, 138, 47, 27, 35, 30, 38, 99, 17, 92, 125, 109, 93, 24, 79, 22, 77, 759, 36, 8, 72, 76,
-    143, 78, 138, 423, 71, 43, 38, 80, 73, 163, 65, 39, 98, 131, 148, 64, 39, 243, 23, 68, 149, 24, 54, 46, 104, 73,
-    45, 110, 4, 51, 499, 231, 86, 80, 90, 85, 108, 212, 109, 6, 69, 68, 162, 33, 87, 65, 153, 39, 249, 47, 83, 134,
-    110, 43, 344, 81, 58, 408, 14, 112, 164, 79, 190, 123, 127, 18, 50, 208, 37, 329, 81, 53, 246, 74, 336, 43,
-    1252, 2, 138, 46, 319, 101, 95, 32, 35, 127, 190, 133, 125, 80, 70, 1129, 43, 113, 161, 36, 63, 266, 94, 24, 8,
-    130, 3, 53, 3, 321, 38, 81, 307, 111, 72, 112, 45, 45, 82, 32, 7, 111, 101, 214, 30, 19, 3, 99, 19, 48, 54, 74,
-    300, 165, 108, 2, 67, 82, 564, 194, 24, 100, 440, 140, 57, 1156, 52, 44, 52, 39, 114, 29, 177, 89, 102, 148, 77,
-    25, 115, 56, 16, 260, 39, 34, 117, 96, 50, 118, 13, 70, 156, 37, 14, 68, 80, 131, 57, 80, 117, 102, 150, 67, 58,
-    95, 278, 393, 157, 44, 33, 70, 114, 63, 123, 106, 44, 125, 58, 174, 312, 115, 13, 130, 2, 136, 39, 49, 53, 226,
-    61, 81, 199, 34, 162, 69, 42, 38, 6, 8, 35, 28, 79, 102, 47, 72, 53, 97, 67, 71, 34, 2, 366, 58, 45, 233, 106,
-    49, 42, 11, 15, 30, 71, 105, 86, 124, 61, 17, 83, 94, 40, 53, 60, 26, 78, 66, 197, 149, 128, 81, 72, 90, 118,
-    49, 79, 6, 60, 38, 42, 136, 197, 8, 50, 112, 129, 27, 130, 90, 100, 86, 185, 134, 116, 31, 27
-)
+_KIMI_K27_REAL_COUNTS = {
+    "real-L45c3": (
+        8, 94, 151, 131, 63, 110, 79, 2, 49, 130, 104, 168, 48, 71, 222, 62, 151, 38, 22, 32, 123, 77, 151, 148, 51, 49,
+        26, 168, 76, 50, 12, 49, 12, 113, 64, 35, 125, 89, 44, 197, 41, 127, 250, 47, 42, 45, 307, 65, 128, 12, 56, 11,
+        68, 88, 109, 80, 21, 126, 294, 80, 10, 28, 24, 83, 154, 259, 13, 432, 365, 93, 105, 39, 56, 103, 139, 6, 38, 62,
+        55, 53, 5, 111, 31, 182, 138, 47, 27, 35, 30, 38, 99, 17, 92, 125, 109, 93, 24, 79, 22, 77, 759, 36, 8, 72, 76,
+        143, 78, 138, 423, 71, 43, 38, 80, 73, 163, 65, 39, 98, 131, 148, 64, 39, 243, 23, 68, 149, 24, 54, 46, 104, 73,
+        45, 110, 4, 51, 499, 231, 86, 80, 90, 85, 108, 212, 109, 6, 69, 68, 162, 33, 87, 65, 153, 39, 249, 47, 83, 134,
+        110, 43, 344, 81, 58, 408, 14, 112, 164, 79, 190, 123, 127, 18, 50, 208, 37, 329, 81, 53, 246, 74, 336, 43,
+        1252, 2, 138, 46, 319, 101, 95, 32, 35, 127, 190, 133, 125, 80, 70, 1129, 43, 113, 161, 36, 63, 266, 94, 24, 8,
+        130, 3, 53, 3, 321, 38, 81, 307, 111, 72, 112, 45, 45, 82, 32, 7, 111, 101, 214, 30, 19, 3, 99, 19, 48, 54, 74,
+        300, 165, 108, 2, 67, 82, 564, 194, 24, 100, 440, 140, 57, 1156, 52, 44, 52, 39, 114, 29, 177, 89, 102, 148, 77,
+        25, 115, 56, 16, 260, 39, 34, 117, 96, 50, 118, 13, 70, 156, 37, 14, 68, 80, 131, 57, 80, 117, 102, 150, 67, 58,
+        95, 278, 393, 157, 44, 33, 70, 114, 63, 123, 106, 44, 125, 58, 174, 312, 115, 13, 130, 2, 136, 39, 49, 53, 226,
+        61, 81, 199, 34, 162, 69, 42, 38, 6, 8, 35, 28, 79, 102, 47, 72, 53, 97, 67, 71, 34, 2, 366, 58, 45, 233, 106,
+        49, 42, 11, 15, 30, 71, 105, 86, 124, 61, 17, 83, 94, 40, 53, 60, 26, 78, 66, 197, 149, 128, 81, 72, 90, 118,
+        49, 79, 6, 60, 38, 42, 136, 197, 8, 50, 112, 129, 27, 130, 90, 100, 86, 185, 134, 116, 31, 27
+        ),
+    "real-L11c9": (
+        127, 310, 144, 63, 61, 39, 133, 14, 73, 6, 11, 99, 60, 59, 55, 71, 32, 120, 36, 63, 82, 68, 37, 58, 2, 56, 83,
+        20, 0, 207, 29, 108, 93, 74, 65, 29, 85, 50, 189, 29, 91, 22, 20, 72, 83, 73, 187, 78, 74, 126, 32, 4, 118, 36,
+        74, 137, 71, 110, 67, 124, 189, 88, 72, 21, 111, 31, 98, 47, 113, 104, 51, 159, 66, 309, 167, 29, 24, 110, 23,
+        107, 18, 188, 70, 117, 54, 49, 85, 60, 73, 76, 272, 92, 81, 41, 53, 2, 104, 192, 75, 127, 131, 121, 56, 68, 177,
+        138, 30, 70, 122, 49, 87, 192, 66, 302, 46, 1, 10, 295, 180, 29, 44, 26, 3, 86, 270, 50, 32, 110, 186, 5, 7,
+        131, 66, 95, 82, 140, 155, 45, 91, 69, 340, 367, 74, 162, 62, 35, 157, 5, 53, 19, 20, 31, 92, 96, 54, 19, 322,
+        31, 44, 105, 680, 72, 76, 43, 50, 48, 90, 18, 21, 244, 95, 113, 178, 72, 7, 102, 94, 148, 53, 151, 47, 109, 61,
+        335, 106, 9, 150, 69, 10, 1, 63, 77, 116, 56, 76, 19, 213, 136, 77, 108, 78, 113, 59, 251, 85, 3458, 136, 50,
+        80, 67, 93, 56, 87, 121, 116, 151, 50, 196, 79, 498, 1, 49, 243, 79, 320, 151, 373, 146, 130, 31, 135, 50, 117,
+        90, 57, 95, 85, 234, 144, 27, 39, 75, 108, 101, 3, 6, 63, 36, 49, 32, 69, 114, 93, 44, 78, 50, 25, 51, 90, 144,
+        134, 161, 3, 59, 81, 75, 353, 182, 71, 69, 81, 20, 36, 38, 196, 25, 43, 469, 47, 150, 73, 112, 163, 106, 30, 10,
+        21, 132, 64, 45, 109, 90, 475, 80, 815, 175, 119, 34, 25, 4, 37, 54, 46, 119, 288, 28, 71, 66, 207, 563, 119,
+        31, 84, 70, 17, 58, 109, 51, 116, 45, 70, 57, 89, 5, 10, 120, 95, 136, 58, 86, 39, 147, 27, 384, 104, 46, 34,
+        60, 64, 136, 69, 235, 165, 82, 69, 169, 251, 89, 50, 66, 9, 17, 73, 43, 91, 93, 132, 94, 168, 64, 38, 54, 0,
+        138, 86, 88, 57, 10, 8, 17, 122, 70, 86, 118, 114, 87, 59, 58, 243, 114, 43, 22, 112, 184
+    ),
+}
 # fmt: on
+# The real cells every model runs on (8, 4), named by MoE layer and chunk.
+_REAL_CELLS = ("real-L45c3", "real-L11c9")
 # Timed replays per program; the mean wall time per replay is reported.
 _PERF_ITERS = 5
 
@@ -164,7 +190,7 @@ def _mesh_params():
     for mesh, fabric_cfg in _MESHES.items():
         topo = "ring" if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y else f"mesh-{mesh[0]}x{mesh[1]}"
         for model_id in _MODELS:
-            for threshold_id in ("balanced", "hot-expert") + (("real",) if mesh == _FULL_MESH else ()):
+            for threshold_id in ("balanced", "hot-expert") + (_REAL_CELLS if mesh == _FULL_MESH else ()):
                 params.append(
                     pytest.param(
                         mesh,
@@ -318,13 +344,13 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     )
     # Replay the measured routing rather than the draw initialize_test_inputs made; x and the gate weights
     # it produced are kept.
-    if threshold_id == "real":
-        assert tuple(mesh_device.shape) == _FULL_MESH, "the real cell is whole-mesh routing"
+    if threshold_id in _REAL_CELLS:
+        assert tuple(mesh_device.shape) == _FULL_MESH, "a real cell is whole-mesh routing"
         if model_id == "glm-53":
-            indices = torch.load(_GLM53_REAL_ROUTING)["expert_ids"].to(torch.int32)
+            indices = torch.load(_GLM53_REAL_ROUTING[threshold_id])["expert_ids"].to(torch.int32)
         else:
             indices = _spread_indices_from_counts(
-                _KIMI_K27_REAL_COUNTS, dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok
+                _KIMI_K27_REAL_COUNTS[threshold_id], dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok
             )
         assert tuple(indices.shape) == (dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok)
         assert int(indices.max()) < num_routed_experts
