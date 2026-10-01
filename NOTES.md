@@ -37,3 +37,17 @@ Job: blx03 broker 987, wrapper tmp/t17/run_ab.sh, log blx03:~/fasth3/out/t17_ab.
 Check: ssh g14blx03 tt-device-mcp status 1 | grep -w 987
 Next: new faster at every site + identical -> keep 9a02249fdfb, put measured us in the table comments.
 Any site slower -> revert that row. Chip drop -> stop, report job/chips/time.
+
+## Result, job 987 (2026-10-01 02:03, 1x1 on blx03, AICLK capped 1150 MHz, no chip drop)
+| site | old (4x8/8x4) us | new (16x2) us | identical |
+|---|---|---|---|
+| s1_res | 2090 | 2974 | yes |
+| s1_up | 19035 | 25498 | yes |
+| s2_res | 14875 | 17611 | yes |
+| s3_res | 6640 | 7481 | yes |
+| s3_chg | 13146 | 14706 | yes |
+| total | 55786 | 68271 (+22%) | PCC 1.0, maxabs 0 |
+New blocking is slower at every site -> reverted to the 145f table (no net change to conv3d.py vs 16ba9a383dc).
+The 153f-sweep H16xW2 win does not carry over to 145f: T and the T block differ, so the per-frame numbers aren't comparable.
+Old per-call times run ~9% above the table comments, consistent with the 1150 MHz clock cap.
+Raw rows: tmp/t17/job987_result.txt. blx03 worktree ~/fasth3/t17 to be removed (done below).
