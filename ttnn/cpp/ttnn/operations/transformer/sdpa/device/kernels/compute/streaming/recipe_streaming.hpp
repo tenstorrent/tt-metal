@@ -393,6 +393,12 @@ inline bool sdpa_pa_sum_acc = false;
         pack_reconfig_data_format(restore_cb); \
     } while (0)
 #endif
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE) && defined(SDPA_PA_DIRECT_SUM)
+// Unchanged groups (and the first chunk) sum P straight into the Float32 l; changed groups use CB 12.
+#define PA_SUM_CB_G(g) ((is_first_iter || ((pa_pack_ident >> (g)) & 1u)) ? cur.sum : 12u)
+#else
+#define PA_SUM_CB_G(g) PA_SUM_CB(cur.sum)
+#endif
 #if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
 #define PA_SUM_CB(cb) 12  // chunk-local BF16 row sums
 #else
@@ -859,16 +865,23 @@ void sub_exp_block_bcast_cols(
         }
 #endif
 #if !defined(SDPA_RECIPE_FP32) && !defined(SDPA_KO_SUMPACK) && !defined(SDPA_PA_DENOM)
-#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16) && !defined(SDPA_PA_SAFE)
-        pack_reconfig_data_format(reduce_cb);
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16) && (!defined(SDPA_PA_SAFE) || defined(SDPA_PA_DIRECT_SUM))
+#ifdef SDPA_PA_SAFE
+        const bool pa_fp32_sum = reduce_cb != 12;
+#else
+        constexpr bool pa_fp32_sum = true;
+#endif
+        if (pa_fp32_sum) {
+            pack_reconfig_data_format(reduce_cb);
+        }
 #endif
         configure_single_tile_pack(reduce_cb);
         {
             uint32_t dst_index = 0;
 #pragma GCC unroll 1
             for (uint32_t i = 0; i < tiles_per_row; i++) {
-#if defined(SDPA_PA) && !defined(SDPA_PA_SAFE)
-                if (global_col_base > 0 || sdpa_pa_sum_acc) {
+#if defined(SDPA_PA) && (!defined(SDPA_PA_SAFE) || defined(SDPA_PA_DIRECT_SUM))
+                if (global_col_base > 0 || (pa_fp32_sum && sdpa_pa_sum_acc)) {
 #else
                 if (global_col_base > 0) {
 #endif
@@ -885,8 +898,10 @@ void sub_exp_block_bcast_cols(
                 }
             }
         }
-#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16) && !defined(SDPA_PA_SAFE)
-        pack_reconfig_data_format(inout_cb);
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16) && (!defined(SDPA_PA_SAFE) || defined(SDPA_PA_DIRECT_SUM))
+        if (pa_fp32_sum) {
+            pack_reconfig_data_format(inout_cb);
+        }
 #endif
 #endif
     }
@@ -1532,6 +1547,10 @@ static void sdpa_inner_loop_step(
     // Per-K-step flags; only UNPACK fills these. Other threads obtain the
     // matching decision at the original correction mailbox rendezvous.
     uint32_t sdpa_identity_flags[Sq_chunk_t] = {};
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE) && defined(SDPA_PA_DIRECT_SUM)
+    // PACK's copy of the per-group identity bits, received one group at a time from UNPACK.
+    uint32_t pa_pack_ident = 0;
+#endif
 #endif
     uint32_t pushed_rows = 0;
     // Q lives at [q_base_tiles, q_base_tiles + Sq_chunk_t*DHt) from the CB front. wait_front counts
@@ -1640,10 +1659,23 @@ static void sdpa_inner_loop_step(
 #ifndef SDPA_RECIPE_FP32
                     sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
 #endif
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE) && defined(SDPA_PA_DIRECT_SUM)
+                    if (kt_subblock == 0) {
+                        PACK({
+                            if (!is_first_iter) {
+                                const uint32_t f = mailbox_read(ckernel::ThreadId::UnpackThreadId);
+                                pa_pack_ident |= f << prev_q_subblock;
+                                sdpa_pa_sum_acc = f != 0;
+                            } else {
+                                sdpa_pa_sum_acc = false;
+                            }
+                        })
+                    }
+#endif
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
-                        PA_SUM_CB(cur.sum),
+                        PA_SUM_CB_G(prev_q_subblock),
                         KT_stride,
                         prev_q_subblock,
                         kt_subblock * actual_sbw,
@@ -1702,6 +1734,9 @@ static void sdpa_inner_loop_step(
                         if (!is_first_iter && q_subblock > 0 && kt_subblock == 0) {
                             sdpa_identity_flags[q_subblock - 1] =
                                 sdpa_scan_identity_maxima(prev.max, cur.max, q_subblock - 1, qkt_subblock_h);
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE) && defined(SDPA_PA_DIRECT_SUM)
+                            mailbox_write(ckernel::ThreadId::PackThreadId, sdpa_identity_flags[q_subblock - 1] ? 1u : 0u);
+#endif
                         }
                     })
 #endif
@@ -1900,6 +1935,27 @@ static void sdpa_inner_loop_step(
 #endif
             // Groups 0..N-2 were scanned during Phase 1; the last group is scanned in the drain and sent
             // after it (pa_ident_last below), so nothing waits for the last row's maximum here.
+#ifdef SDPA_PA_DIRECT_SUM
+            // The last group's scan happens here (PACK needs its flag before its exp in the drain).
+            CircularBuffer(prev.max).wait_front(Sq_chunk_t);
+            CircularBuffer(cur.max).wait_front(Sq_chunk_t);
+            UNPACK({
+                constexpr uint32_t last = q_num_subblocks - 1;
+                sdpa_identity_flags[last] = sdpa_scan_identity_maxima(prev.max, cur.max, qk_index(last), qk_rows(last));
+                for (uint32_t g = 0; g < q_num_subblocks; ++g) {
+                    pa_ident |= (sdpa_identity_flags[g] ? 1u : 0u) << g;
+                }
+                mailbox_write(ckernel::ThreadId::MathThreadId, pa_ident);
+                mailbox_write(ckernel::ThreadId::PackThreadId, sdpa_identity_flags[last] ? 1u : 0u);
+            })
+            MATH(pa_ident = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+            PACK({
+                const uint32_t f = mailbox_read(ckernel::ThreadId::UnpackThreadId);
+                pa_pack_ident |= f << (q_num_subblocks - 1);
+                pa_ident = pa_pack_ident;
+                sdpa_pa_sum_acc = f != 0;
+            })
+#else
             if constexpr (q_num_subblocks == 1) {
                 CircularBuffer(prev.max).wait_front(Sq_chunk_t);
                 CircularBuffer(cur.max).wait_front(Sq_chunk_t);
@@ -1917,11 +1973,17 @@ static void sdpa_inner_loop_step(
             })
             MATH(pa_ident = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
             PACK(pa_ident = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+#endif
         }
 #if defined(SDPA_PA_SAFE_DBG) && (SDPA_PA_SAFE_DBG & 1)
         auto pa_is_ident = [&](uint32_t g) -> bool { return !is_first_iter; };  // debug: force identity
 #else
         auto pa_is_ident = [&](uint32_t g) -> bool { return !is_first_iter && ((pa_ident >> g) & 1u); };
+#endif
+#ifdef SDPA_PA_DIRECT_SUM
+        if (is_first_iter) {
+            PACK(sdpa_pa_sum_acc = false;)
+        }
 #endif
 #if defined(SDPA_PA_SAFE_DBG) && (SDPA_PA_SAFE_DBG & 2)
         // debug: report how many groups are identity this chunk via the overflow word
@@ -1942,6 +2004,11 @@ static void sdpa_inner_loop_step(
                 CircularBuffer(lsum_cb).pop_front(rows * sdpa_sum_stride);
                 return;
             }
+#endif
+#ifdef SDPA_PA_DIRECT_SUM
+            if (first || ident) {
+                // Their row sums went straight into the Float32 l; only the ring slot advances.
+            } else
 #endif
             if (first || ident) {
                 reconfig_data_format_srca(lsum_cb);
@@ -2093,7 +2160,7 @@ static void sdpa_inner_loop_step(
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
-                        PA_SUM_CB(cur.sum),
+                        PA_SUM_CB_G(q_num_subblocks - 1),
                         KT_stride,
                         qk_index(q_num_subblocks - 1),
                         kt_sub * matmul_inner,
@@ -2207,7 +2274,7 @@ static void sdpa_inner_loop_step(
         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 #if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
         if constexpr (q_num_subblocks > 1) {
-#if !(defined(SDPA_PA_SAFE_DBG) && (SDPA_PA_SAFE_DBG & 2))
+#if !(defined(SDPA_PA_SAFE_DBG) && (SDPA_PA_SAFE_DBG & 2)) && !defined(SDPA_PA_DIRECT_SUM)
             if (!is_first_iter) {
                 UNPACK({
                     pa_ident |= (sdpa_identity_flags[q_num_subblocks - 1] ? 1u : 0u) << (q_num_subblocks - 1);
