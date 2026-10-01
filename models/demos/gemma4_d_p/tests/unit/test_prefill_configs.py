@@ -10,7 +10,7 @@ import pytest
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.operations import projection_math_fidelity
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_sdpa_chunk_sizes
-from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config
+from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, short_m_sharded_memcfg
 from models.demos.gemma4_d_p.tt.rms_norm import _block_shard_geometry
 
 GRID = SimpleNamespace(x=11, y=10)
@@ -51,8 +51,14 @@ def test_projection_math_fidelity(rows, expected):
     assert projection_math_fidelity(rows) == expected
 
 
-def _tensor(rows, cols):
-    return SimpleNamespace(padded_shape=(1, 1, rows, cols))
+def _tensor(rows, cols, shard_cols=None):
+    """A host stand-in for a tensor; shard_cols makes it width-sharded with that shard width."""
+    shard_spec = SimpleNamespace(shape=(rows, shard_cols))
+    return SimpleNamespace(
+        padded_shape=(1, 1, rows, cols),
+        is_sharded=lambda: shard_cols is not None,
+        memory_config=lambda: SimpleNamespace(shard_spec=shard_spec),
+    )
 
 
 @pytest.mark.parametrize("n", [2048, 5376])
@@ -63,12 +69,29 @@ def test_1d_matmul_config_at_short_m(n):
     assert 5376 // 32 % config.in0_block_w == 0 and config.in0_block_w <= 16
 
 
+def test_1d_matmul_config_reads_sharded_activation_one_shard_per_k_block():
+    # Chunk 2048's MLP down: 8 tile rows, K 5376 in 8-tile shards, 4 weight columns per core.
+    config = prefill_1d_matmul_program_config(
+        _tensor(256, 5376, shard_cols=256), _tensor(5376, 5376), GRID, per_core_n=4
+    )
+    assert (config.in0_block_w, config.per_core_N) == (8, 4)
+    # fp32 dest: at most 4 tiles per output subblock.
+    assert config.out_subblock_h * config.out_subblock_w <= 4
+
+
 @pytest.mark.parametrize(
     "rows, n",
     [(512, 2048), (256, 2 * 32 * 111), (256, 3 * 32)],  # M above 8 tiles, more columns than cores, odd width
 )
 def test_1d_matmul_config_falls_back(rows, n):
     assert prefill_1d_matmul_program_config(_tensor(rows, 5376), _tensor(5376, n), GRID) is None
+
+
+@pytest.mark.parametrize("k_tiles", [13, 8 * 111])
+def test_short_m_sharded_layout_rejects_unshardable_k(k_tiles, expect_error):
+    device = SimpleNamespace(compute_with_storage_grid_size=lambda: GRID)
+    with expect_error(ValueError, f"{k_tiles} K tiles"):
+        short_m_sharded_memcfg(device, 256, k_tiles)
 
 
 # Rows per device after the TP row split: 64 / 128 / 256 at chunk 2048 / 4096 / 8192.
