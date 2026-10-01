@@ -223,6 +223,16 @@ def get_allocator_base_address(device, buffer_type):
     return ttnn._ttnn.device.GetAllocatorBaseAddress(device, buffer_type)
 
 
+def experimental_get_l1_occupied_ranges(mesh_device, device_coord, core=None):
+    """Occupied L1 ``(start, end)`` ranges on ``core`` of one mesh device, or a dict over every L1-bank core.
+
+    Covers lockstep, per-core and persistent L1; requires the HYBRID allocator.
+    """
+    if core is None:
+        return ttnn._ttnn.device.ExperimentalGetL1OccupiedRanges(mesh_device, device_coord)
+    return ttnn._ttnn.device.ExperimentalGetL1OccupiedRanges(mesh_device, device_coord, core)
+
+
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
