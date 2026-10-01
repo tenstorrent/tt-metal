@@ -256,6 +256,14 @@ ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim) {
     switch (reference_layout.get_data_type()) {
         case tt::tt_metal::DataType::BFLOAT4_B:
         case tt::tt_metal::DataType::BFLOAT8_B:
+        case tt::tt_metal::DataType::MXFP8_E4M3:
+        case tt::tt_metal::DataType::MXFP8_E5M2:
+        case tt::tt_metal::DataType::MXFP6_E2M3:
+        case tt::tt_metal::DataType::MXFP6_E3M2:
+        case tt::tt_metal::DataType::MXFP4:
+        case tt::tt_metal::DataType::MXINT8:
+        case tt::tt_metal::DataType::MXINT4:
+        case tt::tt_metal::DataType::MXINT2:
         case tt::tt_metal::DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::BFLOAT16: return adaptor::concat_impl<bfloat16>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::INT32: return adaptor::concat_impl<int32_t>(tensors, reference_layout, dim);

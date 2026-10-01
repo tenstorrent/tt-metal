@@ -89,6 +89,14 @@ ttnn::Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const 
                 shape,
                 MemoryPin{});
         case DataType::FP8_E4M3: TT_THROW("H2DStreamService: FP8_E4M3 is not supported");
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: TT_THROW("H2DStreamService: {} is not supported", spec.data_type());
         case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
     }
     TT_THROW("Unreachable");

@@ -113,9 +113,9 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
              dtype == DataType::UINT8 || dtype == DataType::INT8 || dtype == DataType::UINT16 ||
              dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B ||
-             dtype == DataType::FP8_E4M3),
-            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or FP8_E4M3 dtypes are "
-            "supported on device!");
+             dtype == DataType::FP8_E4M3 || is_mx(dtype)),
+            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, FP8_E4M3, or MX dtypes "
+            "are supported on device!");
     };
     auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
@@ -129,6 +129,17 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
                 TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
+                break;
+            case DataType::MXFP8_E4M3:
+            case DataType::MXFP8_E5M2:
+            case DataType::MXFP6_E2M3:
+            case DataType::MXFP6_E3M2:
+            case DataType::MXFP4:
+            case DataType::MXINT8:
+            case DataType::MXINT4:
+            case DataType::MXINT2:
+                // Arch validation (MX is Quasar only) happens when the tensor is placed on a device.
+                TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for {} dtype!", dtype);
                 break;
             case DataType::FP8_E4M3:
                 // Arch validation is each producer op's responsibility (e.g., the combine op

@@ -18,6 +18,14 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_ty
         case DataType::INT32: return os << "DataType::INT32";
         case DataType::FP8_E4M3: return os << "DataType::FP8_E4M3";
         case DataType::INT8: return os << "DataType::INT8";
+        case DataType::MXFP8_E4M3: return os << "DataType::MXFP8_E4M3";
+        case DataType::MXFP8_E5M2: return os << "DataType::MXFP8_E5M2";
+        case DataType::MXFP6_E2M3: return os << "DataType::MXFP6_E2M3";
+        case DataType::MXFP6_E3M2: return os << "DataType::MXFP6_E3M2";
+        case DataType::MXFP4: return os << "DataType::MXFP4";
+        case DataType::MXINT8: return os << "DataType::MXINT8";
+        case DataType::MXINT4: return os << "DataType::MXINT4";
+        case DataType::MXINT2: return os << "DataType::MXINT2";
         case DataType::INVALID:
         default: return os << "Invalid";
     }
@@ -75,7 +83,17 @@ bool is_floating_point(DataType dtype) {
         case DataType::FLOAT32:
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
-        case DataType::FP8_E4M3: return true;
+        case DataType::FP8_E4M3:
+        // MXINT elements are integers, but every MX value carries a block exponent and the hardware
+        // computes on them as Float16_b, so all MX formats count as floating point.
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: return true;
         default: return false;
     }
 }
@@ -84,6 +102,20 @@ bool is_block_float(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return true;
+        default: return false;
+    }
+}
+
+bool is_mx(DataType dtype) {
+    switch (dtype) {
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: return true;
         default: return false;
     }
 }
@@ -100,6 +132,15 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
         case tt::tt_metal::DataType::UINT16: return tt::DataFormat::UInt16;
         case tt::tt_metal::DataType::UINT8: return tt::DataFormat::UInt8;
         case tt::tt_metal::DataType::FP8_E4M3: return tt::DataFormat::Fp8_e4m3;
+        // tt-metal names the MX variants R ("range", more exponent bits) and P ("precision").
+        case tt::tt_metal::DataType::MXFP8_E4M3: return tt::DataFormat::MxFp8P;
+        case tt::tt_metal::DataType::MXFP8_E5M2: return tt::DataFormat::MxFp8R;
+        case tt::tt_metal::DataType::MXFP6_E2M3: return tt::DataFormat::MxFp6P;
+        case tt::tt_metal::DataType::MXFP6_E3M2: return tt::DataFormat::MxFp6R;
+        case tt::tt_metal::DataType::MXFP4: return tt::DataFormat::MxFp4;
+        case tt::tt_metal::DataType::MXINT8: return tt::DataFormat::MxInt8;
+        case tt::tt_metal::DataType::MXINT4: return tt::DataFormat::MxInt4;
+        case tt::tt_metal::DataType::MXINT2: return tt::DataFormat::MxInt2;
         default: TT_THROW("Unsupported DataType"); return tt::DataFormat::Float16_b;  // for clang-tidy
     }
 }
@@ -121,6 +162,14 @@ tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataforma
         case tt::DataFormat::UInt16: return tt::tt_metal::DataType::UINT16;
         case tt::DataFormat::UInt8: return tt::tt_metal::DataType::UINT8;
         case tt::DataFormat::Fp8_e4m3: return tt::tt_metal::DataType::FP8_E4M3;
+        case tt::DataFormat::MxFp8P: return tt::tt_metal::DataType::MXFP8_E4M3;
+        case tt::DataFormat::MxFp8R: return tt::tt_metal::DataType::MXFP8_E5M2;
+        case tt::DataFormat::MxFp6P: return tt::tt_metal::DataType::MXFP6_E2M3;
+        case tt::DataFormat::MxFp6R: return tt::tt_metal::DataType::MXFP6_E3M2;
+        case tt::DataFormat::MxFp4: return tt::tt_metal::DataType::MXFP4;
+        case tt::DataFormat::MxInt8: return tt::tt_metal::DataType::MXINT8;
+        case tt::DataFormat::MxInt4: return tt::tt_metal::DataType::MXINT4;
+        case tt::DataFormat::MxInt2: return tt::tt_metal::DataType::MXINT2;
         default: TT_THROW("Unsupported DataFormat"); return tt::tt_metal::DataType::BFLOAT16;  // for clang-tidy
     }
 }
@@ -146,6 +195,14 @@ auto fmt::formatter<tt::tt_metal::DataType>::format(tt::tt_metal::DataType dt, f
         case tt::tt_metal::DataType::INT32: name = "DataType::INT32"; break;
         case tt::tt_metal::DataType::FP8_E4M3: name = "DataType::FP8_E4M3"; break;
         case tt::tt_metal::DataType::INT8: name = "DataType::INT8"; break;
+        case tt::tt_metal::DataType::MXFP8_E4M3: name = "DataType::MXFP8_E4M3"; break;
+        case tt::tt_metal::DataType::MXFP8_E5M2: name = "DataType::MXFP8_E5M2"; break;
+        case tt::tt_metal::DataType::MXFP6_E2M3: name = "DataType::MXFP6_E2M3"; break;
+        case tt::tt_metal::DataType::MXFP6_E3M2: name = "DataType::MXFP6_E3M2"; break;
+        case tt::tt_metal::DataType::MXFP4: name = "DataType::MXFP4"; break;
+        case tt::tt_metal::DataType::MXINT8: name = "DataType::MXINT8"; break;
+        case tt::tt_metal::DataType::MXINT4: name = "DataType::MXINT4"; break;
+        case tt::tt_metal::DataType::MXINT2: name = "DataType::MXINT2"; break;
         case tt::tt_metal::DataType::INVALID:
         default: name = "Invalid"; break;
     }

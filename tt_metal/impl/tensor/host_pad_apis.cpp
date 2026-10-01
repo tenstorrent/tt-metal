@@ -334,6 +334,13 @@ HostTensor pad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, 
     TT_THROW("pad: FP8_E4M3 is not supported");
 }
 
+template <>
+HostTensor pad_impl<tensor_impl::mx_tiles>(
+    const HostTensor& tensor, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&, float) {
+    // pad() requires ROW_MAJOR and MX tensors are TILE-only, so this is unreachable in practice.
+    TT_THROW("pad: {} is not supported", tensor.dtype());
+}
+
 template <typename T>
 HostTensor unpad_impl(
     const HostTensor& tensor,
@@ -412,6 +419,13 @@ template <>
 HostTensor unpad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&) {
     // See pad_impl<float8_e4m3>: not wired up, no current op needs it.
     TT_THROW("unpad: FP8_E4M3 is not supported");
+}
+
+template <>
+HostTensor unpad_impl<tensor_impl::mx_tiles>(
+    const HostTensor& tensor, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&) {
+    // See pad_impl<mx_tiles>: unpad() requires ROW_MAJOR and MX tensors are TILE-only.
+    TT_THROW("unpad: {} is not supported", tensor.dtype());
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE

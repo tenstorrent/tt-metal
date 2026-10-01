@@ -464,7 +464,10 @@ ProgramArtifacts create_no_bcast_artifacts(
 
         const bool is_integer_division =
             (op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 && b_dtype == DataType::INT32);
-        if (binary::utils::is_typecast(a_dtype, c_dtype) && !is_integer_division) {
+        // MX conversions are done by the packer, never by a fused TYPECAST: that define carries host
+        // DataFormat values, and the device numbers MxInt8/4/2 differently.
+        const bool involves_mx = is_mx(a_dtype) || is_mx(c_dtype);
+        if (binary::utils::is_typecast(a_dtype, c_dtype) && !is_integer_division && !involves_mx) {
             post_activations.push_back({
                 unary::UnaryOpType::TYPECAST,
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
@@ -597,8 +600,9 @@ ProgramArtifacts create_no_bcast_artifacts(
     dfbs.push_back(
         make_dfb(OUT, c_tile_bytes, c_entries, c_df, c_tile, c_borrowed ? std::optional{T_C} : std::nullopt));
 
-    const tt::DataFormat a_inter_df = is_sfpu ? a_df : (op_has_exp ? tt::DataFormat::Float16_b : a_df);
-    const tt::DataFormat b_inter_df = is_sfpu ? b_df : (op_has_exp ? tt::DataFormat::Float16_b : b_df);
+    // An MX intermediate would re-quantize between the activation and the binary op, so keep it in Float16_b.
+    const tt::DataFormat a_inter_df = (is_mx(a_dtype) || (!is_sfpu && op_has_exp)) ? tt::DataFormat::Float16_b : a_df;
+    const tt::DataFormat b_inter_df = (is_mx(b_dtype) || (!is_sfpu && op_has_exp)) ? tt::DataFormat::Float16_b : b_df;
     // post_lhs/post_rhs intermediate rings (c_3/c_4): num_tiles_per_cycle entries, matching the
     // descriptor factory's intermediate CBs. Allocated only when that operand has an activation chain.
     // The compute kernel both produces (PREPROCESS) and consumes (binary op) these in strict program

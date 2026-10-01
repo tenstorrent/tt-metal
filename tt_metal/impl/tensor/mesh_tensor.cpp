@@ -75,7 +75,15 @@ std::size_t MeshTensor::element_size() const {
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::INT8: return sizeof(int8_t);
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return sizeof(std::byte);
+        case DataType::BFLOAT4_B:
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");
     }
 }

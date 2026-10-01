@@ -36,7 +36,16 @@ enum class DataType {
     // by the DeepSeek V3 prefill combine and dispatch ops. Check op support before opting in.
     FP8_E4M3 = 8,
     INT8 = 9,
-    INVALID = 10,
+    // OCP microscaling (MX) formats: 32 elements share one E8M0 scale. Quasar only, TILE layout only.
+    MXFP8_E4M3 = 10,
+    MXFP8_E5M2 = 11,
+    MXFP6_E2M3 = 12,
+    MXFP6_E3M2 = 13,
+    MXFP4 = 14,
+    MXINT8 = 15,
+    MXINT4 = 16,
+    MXINT2 = 17,
+    INVALID = 18,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
@@ -65,6 +74,10 @@ consteval DataType convert_to_data_type() {
 bool is_floating_point(DataType dtype);
 
 bool is_block_float(DataType dtype);
+
+// True for the MX formats. Kept separate from is_block_float(): BFP and MX share the "TILE-only,
+// packed on the host" property but use different encodings, packers and supported architectures.
+bool is_mx(DataType dtype);
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
