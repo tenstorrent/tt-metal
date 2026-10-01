@@ -340,6 +340,14 @@ five-task release suite has not been rerun. Resume requires a new user request.
   running from 19:28:37. This is explicitly a harness-policy intervention,
   separate from precision. The CI image was reused, and the full five-task suite
   remains unrun. Approximately 77% of the improved CI request path is now TTFT.
+- At 19:38:29 UTC the local adapter trial finishes cleanly in 585.413 agent
+  seconds, reward 1, no exception and all 104 tests passing. Its first 34 work
+  commands match the previous candidate trial. The adapter converts exactly one
+  final marker; the 276.273-second improvement across identical first-35-response
+  token totals is predominantly cache-state, not a causal adapter speedup. One
+  1,200-second CI follow-up (36916089719 / 110550407919) tests clean completion,
+  and one separate-server 900-second Matplotlib probe tests generalization.
+  Both are bounded and monitored; images are reused, the full suite stays gated.
 - Measure their TTFT and TSU.
 - Separate model/device performance from eval-framework overhead.
 - Check whether the same evals can run with more parallelism and finish sooner.
