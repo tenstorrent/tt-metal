@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 
-# Copy of tt-metal's `.github/workflows/accuracy-report-command.yaml`; keep the two in step. Setup: docs/pr-command.md.
+# Two copies kept in step: tt-metal `.github/workflows/accuracy-report-command.yaml`, and
+# tenstorrent/tt-eltwise-accuracy-report `docs/tt-metal-accuracy-report-command.yaml`.
+# Setup, tokens and what it measures: that repository's `docs/pr-command.md`.
 
 name: accuracy-report-command
 
@@ -72,7 +74,13 @@ jobs:
           BODY: ${{ github.event.comment.body }}
         run: |
           # First line only, and anchored: prose below the command, and `foo-ops=`, are not arguments.
-          [[ ${BODY%%$'\n'*} =~ (^|[[:space:]])ops=([A-Za-z0-9_,]+) ]] && ops=${BASH_REMATCH[2]} || ops=
+          # Taken whole then validated, so `ops=exp.gelu` is refused rather than measuring `exp` alone.
+          ops=
+          if [[ ${BODY%%$'\n'*} =~ (^|[[:space:]])ops=([^[:space:]]+) ]]; then
+            ops=${BASH_REMATCH[2]}
+            [[ $ops =~ ^[A-Za-z0-9_,]+$ ]] || {
+              echo "::error::ops= takes comma-separated op names, got '$ops'"; exit 1; }
+          fi
 
           since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           if ! gh workflow run accuracy-command.yml --repo "$ORACLE" \
