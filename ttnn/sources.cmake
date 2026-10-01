@@ -157,7 +157,6 @@ endif()
 set(TTNN_CORE_JIT_API_HEADERS
     api/ttnn/tensor/layout/layout.hpp
     cpp/ttnn/kernel/compute/bmm_tilize_untilize.cpp
-    cpp/ttnn/kernel/compute/dest_format_helpers.hpp
     cpp/ttnn/kernel/compute/eltwise_copy.cpp
     cpp/ttnn/kernel/compute/eltwise_copy_metal2.cpp
     cpp/ttnn/kernel/compute/moreh_common.hpp
