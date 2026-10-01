@@ -310,7 +310,7 @@ void copy_tile(
 }
 
 // Generic fill with -inf that works for all supported mask formats (bfp4, bfp8, bfloat16).
-// neg_bf16 overrides the bf16 fill value (see sliding_window_mask_neg_bf16).
+// neg_bf16 overrides the bf16 fill value (see quasar_mask_neg_bf16).
 template <uint32_t tile_bytes, uint16_t neg_bf16 = 0xFF80>
 void fill_neginf_tile(uint32_t dfb_id, uint32_t tile_id) {
     constexpr uint32_t num_exponents = tt::constants::FACE_HEIGHT * (tt::constants::TILE_HW / tt::constants::FACE_HW);
@@ -898,14 +898,15 @@ void fill_vertical_tile_bfp4(Noc noc, uint32_t dfb_id, uint32_t tile_id, uint32_
 
 enum class MaskType { FULLY_ALLOWED, FULLY_MASKED, PARTIAL_MASK };
 
-// bf16 value for masked positions in the causal/sliding-window mask. A sliding window can mask a row
-// across an entire K chunk; with -inf that row's max is -inf and exp(-inf - -inf) is NaN on Quasar
-// (WH's FPU does not produce the NaN). A large finite negative gives exp(0) garbage for that chunk,
-// which the next chunk's rescale exp(scale * (m_old - m_new)) zeroes out.
+// bf16 value for masked positions in the generated sliding-window and windowed (block-diagonal) masks.
+// Both can mask a row across an entire K chunk; with -inf that row's max is -inf and exp(-inf - -inf)
+// is NaN on Quasar (WH's FPU does not produce the NaN). A large finite negative gives exp(0) garbage
+// for that chunk, which the next chunk's rescale exp(scale * (m_old - m_new)) zeroes out, as long as
+// the row has an allowed key in some processed chunk.
 #ifdef ARCH_QUASAR
-constexpr uint16_t sliding_window_mask_neg_bf16 = 0xCE6E;  // ~ -1e9
+constexpr uint16_t quasar_mask_neg_bf16 = 0xCE6E;  // ~ -1e9
 #else
-constexpr uint16_t sliding_window_mask_neg_bf16 = 0xFF80;  // -inf
+constexpr uint16_t quasar_mask_neg_bf16 = 0xFF80;  // -inf
 #endif
 
 template <uint32_t dfb_mask_in>
@@ -1028,7 +1029,7 @@ void generate_causal_sliding_window_mask(
                     break;
                 case MaskType::FULLY_MASKED:
                     if (inf_tile_idx == -1) {
-                        fill_neginf_tile<tile_bytes, sliding_window_mask_neg_bf16>(dfb_mask_in, in_mask_tile_id);
+                        fill_neginf_tile<tile_bytes, quasar_mask_neg_bf16>(dfb_mask_in, in_mask_tile_id);
                         inf_tile_idx = in_mask_tile_id;
                     } else {
                         copy_tile<tile_bytes>(noc, write_ptr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
@@ -1036,7 +1037,7 @@ void generate_causal_sliding_window_mask(
                     break;
                 case MaskType::PARTIAL_MASK:
                     if constexpr (tile_bytes == tt::constants::TILE_HW * sizeof(uint16_t)) {
-                        fill_custom_diagonal_tile_bf16<tile_bytes, sliding_window_mask_neg_bf16>(
+                        fill_custom_diagonal_tile_bf16<tile_bytes, quasar_mask_neg_bf16>(
                             noc, dfb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset);
                     } else {
                         fill_custom_diagonal_tile_bfp4<tile_bytes>(

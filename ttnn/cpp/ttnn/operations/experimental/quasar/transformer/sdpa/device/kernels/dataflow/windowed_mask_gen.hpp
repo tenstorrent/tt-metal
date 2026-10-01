@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Vendored copy of ttnn/operations/transformer/sdpa/device/kernels/dataflow/windowed_mask_gen.hpp for the
-// quasar sdpa fork. Byte-identical to the main-tree header (unmodified on the port branch); vendored to
+// quasar sdpa fork. Identical to the main-tree header except that Quasar fills masked positions with a
+// large finite negative instead of -inf (see quasar_mask_neg_bf16); vendored to
 // insulate the fork from future in-place Metal 2.0 ports of the prefill sdpa op. Transitive includes
 // (windowed_loop_geometry.hpp, dataflow_common.hpp) still resolve to the unmodified main-tree headers.
 
@@ -155,7 +156,7 @@ inline void generate_windowed_mask_for_q_chunk(
                 }
 
                 if (inf_tile_idx == -1) {
-                    fill_neginf_tile<mask_tile_bytes>(dfb_mask_in, in_mask_tile_id);
+                    fill_neginf_tile<mask_tile_bytes, quasar_mask_neg_bf16>(dfb_mask_in, in_mask_tile_id);
                 } else {
                     copy_tile<mask_tile_bytes>(
                         noc, mask_write_ptr_base, mask_write_ptr_base, inf_tile_idx, in_mask_tile_id);
