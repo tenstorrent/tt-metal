@@ -25,7 +25,7 @@ Tensor fabric_all_gather(
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
     const std::optional<GlobalSemaphore>& data_valid_semaphore) {
-    return ttnn::prim::fabric_all_gather(
+    auto [params, inputs] = high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
         dim,
@@ -42,6 +42,7 @@ Tensor fabric_all_gather(
         gathered_slab_global,
         ready_semaphore,
         data_valid_semaphore);
+    return ttnn::device_operation::launch<FabricAllGatherDeviceOperation>(params, inputs);
 }
 
 }  // namespace ttnn::operations::experimental::fabric_all_gather

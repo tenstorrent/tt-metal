@@ -5,9 +5,9 @@
 // Sender of a link worker (terms: fabric_all_gather_chunk_walk.hpp):
 //   1. fence: signal the downstream link worker that sends back into this chip (ready counter), then wait for our own
 //      downstream's signal;
-//   2. send every chunk of the send list one fabric hop into the same pages of the next chip's output; the last chunk
-//      of each entry (or a bare packet, if the entry has no chunk on this worker's banks) increments the downstream
-//      arrival counter;
+//   2. send every chunk of the send list one fabric hop into the same pages of the next chip's output (a chunk is one
+//      packet; only a single page larger than the payload takes several); the last packet of each entry (or a bare
+//      packet, if the entry has no chunk on this worker's banks) increments the downstream arrival counter;
 //   3. wait until all of upstream's entries have landed (the output is complete when the op ends) and reset the
 //      arrival counter for the next call.
 
@@ -41,7 +41,8 @@ void kernel_main() {
     constexpr uint32_t num_banks = get_compile_time_arg_val(4);
     constexpr uint32_t batch_chunks = get_compile_time_arg_val(5);
     constexpr bool kPrefixFromMetadata = get_compile_time_arg_val(6) != 0;
-    constexpr auto output_args = TensorAccessorArgs<7>();
+    constexpr uint32_t packet_bytes = get_compile_time_arg_val(7);  // fabric payload
+    constexpr auto output_args = TensorAccessorArgs<8>();
     constexpr auto prefix_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr uint32_t chunk_bytes = pages_per_chunk * page_bytes;
     constexpr uint32_t cb_chunks = 2 * batch_chunks;
@@ -96,7 +97,17 @@ void kernel_main() {
 
         // 2. send, in the reader's batches (full, at the end of the CB, at the end of an entry)
         const uint64_t downstream_arrivals = get_noc_addr(downstream_x, downstream_y, arrival_addr);
-        uint32_t cb_offset = 0, next_header = 0;
+        uint32_t cb_offset = 0, next_header = 0, unflushed_headers = 0;
+        auto take_header = [&]() {  // flush before a header is reused
+            if (unflushed_headers == batch_chunks) {
+                noc_async_writes_flushed();
+                unflushed_headers = 0;
+            }
+            ++unflushed_headers;
+            auto* header = headers[next_header];
+            next_header = (next_header + 1) % batch_chunks;
+            return header;
+        };
         for (uint32_t k = 0; k < num_entries; ++k) {
             const uint32_t entry = get_arg_val<uint32_t>(entries_arg + k);
             const uint32_t entry_chunks =
@@ -104,6 +115,7 @@ void kernel_main() {
             uint32_t batch = 0, sent = 0;
             auto pop = [&]() {
                 noc_async_writes_flushed();  // the batch's chunks and headers have left L1
+                unflushed_headers = 0;
                 cb_pop_front(cb, pages_per_chunk * batch);
                 cb_offset = (cb_offset + batch) % cb_chunks;
                 batch = 0;
@@ -118,20 +130,23 @@ void kernel_main() {
                 [&](uint32_t stripe, uint32_t page, uint32_t num_pages) {
                     cb_wait_front(cb, pages_per_chunk * (batch + 1));
                     const uint64_t dst = output.get_noc_addr(output_page(shard, entry_rank(entry), stripe, page), 0, 0);
-                    auto* header = headers[next_header];
-                    next_header = (next_header + 1) % batch_chunks;
-                    if (++sent == entry_chunks) {
-                        header->to_noc_fused_unicast_write_atomic_inc(
-                            NocUnicastAtomicIncFusedCommandHeader{dst, downstream_arrivals, 1, true},
-                            num_pages * page_bytes);
-                    } else {
-                        header->to_noc_unicast_write(NocUnicastCommandHeader{dst}, num_pages * page_bytes);
+                    const uint32_t src = get_read_ptr(cb) + batch * chunk_bytes;
+                    const uint32_t bytes = num_pages * page_bytes;
+                    const bool last_chunk = ++sent == entry_chunks;
+                    for (uint32_t offset = 0; offset < bytes; offset += packet_bytes) {
+                        const uint32_t size = bytes - offset < packet_bytes ? bytes - offset : packet_bytes;
+                        auto* header = take_header();
+                        if (last_chunk && offset + size == bytes) {
+                            header->to_noc_fused_unicast_write_atomic_inc(
+                                NocUnicastAtomicIncFusedCommandHeader{dst + offset, downstream_arrivals, 1, true},
+                                size);
+                        } else {
+                            header->to_noc_unicast_write(NocUnicastCommandHeader{dst + offset}, size);
+                        }
+                        connection.wait_for_empty_write_slot();
+                        connection.send_current_slot_non_blocking(
+                            src + offset, size, reinterpret_cast<uint32_t>(header));
                     }
-                    connection.wait_for_empty_write_slot();
-                    connection.send_current_slot_non_blocking(
-                        get_read_ptr(cb) + batch * chunk_bytes,
-                        num_pages * page_bytes,
-                        reinterpret_cast<uint32_t>(header));
                     const uint32_t batch_cap =
                         batch_chunks < cb_chunks - cb_offset ? batch_chunks : cb_chunks - cb_offset;
                     if (++batch == batch_cap) {
@@ -142,7 +157,7 @@ void kernel_main() {
                 pop();
             }
             if (entry_chunks == 0) {  // none of this entry is on our banks: still count it downstream
-                auto* header = headers[next_header];
+                auto* header = take_header();
                 header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{downstream_arrivals, 1, true});
                 connection.wait_for_empty_write_slot();
                 connection.send_payload_flush_blocking_from_address(

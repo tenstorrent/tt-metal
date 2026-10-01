@@ -79,6 +79,7 @@ struct GatherPlan {
     uint32_t num_ranks = 0;
     uint32_t num_rings = 0;
     uint32_t num_links = 0;
+    uint32_t mesh_cols = 0;
     std::vector<uint32_t> rank_of_chip;                            // [linear chip index]
     std::vector<std::vector<ChipOnRing>> chip_on_ring;             // [linear chip index][ring]
     std::vector<std::vector<LinkWorker>> link_workers;             // [linear chip index][link_worker_index(...)]
@@ -113,7 +114,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> send_lists_at_ring_posit
         for (uint32_t i = 0; i < num_forward; ++i) {
             forward.push_back(chunk_walk::make_send_entry((position + G - i) % G, chunk_walk::kWholeShard));
         }
-        for (uint32_t i = 0; num_backward > 0 && i < num_backward; ++i) {
+        for (uint32_t i = 0; i < num_backward; ++i) {
             backward.push_back(chunk_walk::make_send_entry((position + i) % G, chunk_walk::kWholeShard));
         }
     } else {  // open line: every shard travels to both ends
@@ -153,9 +154,10 @@ std::pair<std::vector<Coord>, std::vector<Coord>> hamiltonian_decomposition(uint
         visited[0] = true;
         uint64_t search_budget = 200000;
         std::function<bool()> extend = [&]() -> bool {
-            if (search_budget-- == 0) {
-                return false;
+            if (search_budget == 0) {
+                return false;  // exhausted: every branch above gives up too
             }
+            --search_budget;
             if (cycle_a.size() == num_chips) {
                 const auto closing = torus_neighbours(cycle_a.back());
                 return std::find(closing.begin(), closing.end(), cycle_a[0]) != closing.end();
@@ -241,6 +243,15 @@ std::pair<std::vector<Coord>, std::vector<Coord>> hamiltonian_decomposition(uint
     TT_THROW("fabric_all_gather: no Hamiltonian decomposition found for a {}x{} torus", rows, cols);
 }
 
+// A link worker's downstream sends back into this chip (the opposite direction) iff its send list is not empty; then
+// this link worker sends it a ready signal.
+bool sends_ready_signal(const GatherPlan& plan, uint32_t chip_index, uint32_t ring, uint32_t direction) {
+    const auto downstream = plan.chip_on_ring[chip_index][ring].neighbour(direction);
+    const uint32_t mesh_cols = plan.mesh_cols;
+    return downstream.has_value() &&
+           !plan.chip_on_ring[linear_chip_index(*downstream, mesh_cols)][ring].send_list(1 - direction).empty();
+}
+
 std::vector<tt::tt_metal::CoreCoord> cores_in_row_major_order(const CoreRangeSet& core_ranges) {
     std::vector<tt::tt_metal::CoreCoord> cores;
     for (const auto& range : core_ranges.ranges()) {
@@ -264,6 +275,7 @@ GatherPlan build_gather_plan(
     const uint32_t mesh_rows = mesh_shape[0], mesh_cols = mesh_shape[1];
     const uint32_t num_chips = mesh_rows * mesh_cols;
     GatherPlan plan;
+    plan.mesh_cols = mesh_cols;
     plan.rank_of_chip.assign(num_chips, 0);
     plan.chip_on_ring.assign(num_chips, {});
     plan.link_workers.assign(num_chips, {});
@@ -365,14 +377,6 @@ GatherPlan build_gather_plan(
         }
     }
 
-    // A link worker's downstream sends into this chip (on the opposite direction) iff its send list is not empty;
-    // then this link worker sends it a ready signal.
-    auto sends_ready_signal = [&](const Coord& chip, uint32_t ring, uint32_t direction) {
-        const auto downstream = plan.chip_on_ring[index_of(chip)][ring].neighbour(direction);
-        return downstream.has_value() &&
-               !plan.chip_on_ring[index_of(*downstream)][ring].send_list(1 - direction).empty();
-    };
-
     // Links: the requested number, else the fewest any used hop offers.
     uint32_t num_links = args.num_links.value_or(UINT32_MAX);
     for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
@@ -425,7 +429,7 @@ GatherPlan build_gather_plan(
                 const auto downstream = on_ring.neighbour(direction);
                 const bool has_fabric_connection =
                     downstream.has_value() &&
-                    (!on_ring.send_list(direction).empty() || sends_ready_signal(chip, ring, direction));
+                    (!on_ring.send_list(direction).empty() || sends_ready_signal(plan, chip_index, ring, direction));
                 if (!has_fabric_connection) {
                     continue;
                 }
@@ -549,6 +553,9 @@ ShardPageGeometry derive_shard_page_geometry(
         shape,
         dim);
     geometry.local_gather_dim_size = shape[dim];
+    geometry.gather_dim_elements_per_page = tile && dim == tensor_rank - 1
+                                                ? tile_spec.get_width()
+                                                : (tile && dim == tensor_rank - 2 ? tile_spec.get_height() : 1);
     geometry.num_ranks = args.num_devices;
     if (tensor_args.has_gathered_prefix_metadata()) {
         const uint32_t full_extent_global = shape[dim] * args.num_devices;
@@ -557,6 +564,12 @@ ShardPageGeometry derive_shard_page_geometry(
             "fabric_all_gather: gathered_slab_global {} must divide the full gathered extent {}",
             args.gathered_slab_global,
             full_extent_global);
+        TT_FATAL(
+            (args.gathered_slab_global / args.num_devices) % geometry.gather_dim_elements_per_page == 0,
+            "fabric_all_gather: the per-chip slab {} must be a multiple of the {}-element page extent along dim {}",
+            args.gathered_slab_global / args.num_devices,
+            geometry.gather_dim_elements_per_page,
+            dim);
         const uint32_t num_slabs = full_extent_global / args.gathered_slab_global;
         TT_FATAL(
             geometry.stripe_pages % num_slabs == 0,
@@ -573,6 +586,12 @@ uint32_t host_active_stripe_pages(const FabricAllGatherParams& args, const Shard
         return geometry.stripe_pages;
     }
     const uint64_t active_local_extent = *args.gathered_dim_size / args.num_devices;
+    TT_FATAL(
+        active_local_extent % geometry.gather_dim_elements_per_page == 0,
+        "fabric_all_gather: the active extent {} per chip must be a multiple of the {}-element page extent (tile "
+        "alignment)",
+        active_local_extent,
+        geometry.gather_dim_elements_per_page);
     const uint64_t pages = active_local_extent * geometry.stripe_pages;
     TT_FATAL(
         pages % geometry.local_gather_dim_size == 0,
@@ -699,7 +718,16 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
     auto arrival_counter = external_counters ? *args.data_valid_semaphore
                                              : ttnn::global_semaphore::create_global_semaphore(
                                                    mesh_device, available_cores, 0, counter_buffer_type);
-    if (!external_counters) {
+    if (external_counters) {
+        for (const auto& chip_link_workers : plan.link_workers) {
+            std::vector<tt::tt_metal::CoreCoord> cores;
+            for (const auto& link_worker : chip_link_workers) {
+                cores.push_back(link_worker.core);
+            }
+            validate_semaphore_core_coverage(ready_counter, to_range_set(cores), "ready_semaphore");
+            validate_semaphore_core_coverage(arrival_counter, to_range_set(cores), "data_valid_semaphore");
+        }
+    } else {
         // every chip's counters must be zero before any chip's first call can increment a neighbour's
         ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
@@ -707,6 +735,7 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
 
     const uint32_t page_bytes = input.buffer()->aligned_page_size();
     const uint32_t packet_payload_bytes = static_cast<uint32_t>(args.packet_size);
+    // a page larger than the payload is a chunk of its own, sent as several packets
     const uint32_t pages_per_chunk = std::max<uint32_t>(1, packet_payload_bytes / page_bytes);
     const uint32_t chunk_bytes = pages_per_chunk * page_bytes;
     const uint32_t chunks_per_batch =
@@ -765,7 +794,8 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
         pages_per_chunk,
         num_dram_banks,
         chunks_per_batch,
-        prefix_from_metadata ? 1u : 0u};
+        prefix_from_metadata ? 1u : 0u,
+        packet_payload_bytes};
     append_accessor(sender_compile_args, output_tensor);
     append_accessor(sender_compile_args, prefix_tensor);
     const auto sender_config = tt::tt_metal::DataMovementConfig{
@@ -826,8 +856,6 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
                     .set_page_size(metadata_cb, kMetadataCbBytes));
         }
 
-        // one per copy core, consecutive ids: blocks of the own shard that copy core has converted (non-interleaved
-        // input)
         if (!input_interleaved) {
             tt::tt_metal::CreateCircularBuffer(
                 program,
@@ -836,6 +864,8 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
                     2 * chunks_per_batch * kRunCbPageBytes, {{kRunCbIndex, tt::DataFormat::UInt32}})
                     .set_page_size(kRunCbIndex, kRunCbPageBytes));
         }
+        // one per copy core, consecutive ids: blocks of the own shard that copy core has converted (non-interleaved
+        // input)
         const uint32_t staged_semaphore = tt::tt_metal::CreateSemaphore(program, link_worker_core_set, 0);
         for (uint32_t c = 1; c < num_copy_cores; ++c) {
             TT_FATAL(
@@ -872,9 +902,7 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
                 const auto& send_list = on_ring.send_list(direction);
                 const uint32_t upstream_entries =
                     upstream ? plan.chip_on_ring[index_of(*upstream)][ring].send_list(direction).size() : 0;
-                const bool sends_ready_signal =
-                    downstream.has_value() &&
-                    !plan.chip_on_ring[index_of(*downstream)][ring].send_list(1 - direction).empty();
+                const bool send_ready = sends_ready_signal(plan, chip_index, ring, direction);
                 for (uint32_t link = 0; link < L; ++link) {
                     const auto& link_worker = link_workers[link_worker_index(ring, direction, link, L)];
                     const uint32_t first_bank = ring * L + link;
@@ -899,7 +927,7 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
                     std::vector<uint32_t> sender_args{
                         first_bank,
                         bank_stride,
-                        sends_ready_signal ? 1u : 0u,
+                        send_ready ? 1u : 0u,
                         static_cast<uint32_t>(ready_target.x),
                         static_cast<uint32_t>(ready_target.y),
                         static_cast<uint32_t>(downstream_worker.x),
@@ -922,9 +950,9 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
                 }
             }
         }
-        // Copy core c of n owns banks c, c + n, ... of this chip's shard (interleaved input), or the c-th of n
-        // contiguous shares of every stripe (non-interleaved input); the latter then signals every link worker of this
-        // chip.
+        // Copy core c of n owns banks c, c + n, ... of this chip's shard (interleaved input), or blocks c, c + n, ...
+        // of it (non-interleaved input, for_each_input_run); the latter signals every link worker of this chip per
+        // block.
         const uint32_t rank = plan.rank_of_chip[chip_index];
         auto* device = mesh_device->get_device(chip);
         std::vector<uint32_t> copy_writer_args{0, num_copy_cores, rank, static_cast<uint32_t>(link_workers.size())};
@@ -952,10 +980,9 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
                 .link_worker_sender_kernel_id = link_worker_sender_id,
                 .copy_core_reader_kernel_id = copy_core_reader_id,
                 .copy_core_writer_kernel_id = copy_core_writer_id,
-                .has_copy_cores = num_copy_cores > 0,
                 .ready_counter = ready_counter,
                 .arrival_counter = arrival_counter,
-                .all_op_cores = all_core_set,
+                .link_worker_cores = link_worker_core_set,
                 .shard_page_geometry = shard_page_geometry});
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
@@ -971,8 +998,9 @@ void FabricAllGatherFactory::override_runtime_arguments(
         if (args.ready_semaphore.has_value() &&
             (shared.ready_counter.address() != args.ready_semaphore->address() ||
              shared.arrival_counter.address() != args.data_valid_semaphore->address())) {
-            validate_semaphore_core_coverage(*args.ready_semaphore, shared.all_op_cores, "ready_semaphore");
-            validate_semaphore_core_coverage(*args.data_valid_semaphore, shared.all_op_cores, "data_valid_semaphore");
+            validate_semaphore_core_coverage(*args.ready_semaphore, shared.link_worker_cores, "ready_semaphore");
+            validate_semaphore_core_coverage(
+                *args.data_valid_semaphore, shared.link_worker_cores, "data_valid_semaphore");
             shared.ready_counter = *args.ready_semaphore;
             shared.arrival_counter = *args.data_valid_semaphore;
         }
@@ -994,10 +1022,8 @@ void FabricAllGatherFactory::override_runtime_arguments(
         };
         patch_common_args(shared.link_worker_reader_kernel_id, reader_common);
         patch_common_args(shared.link_worker_sender_kernel_id, writer_common);
-        if (shared.has_copy_cores) {
-            patch_common_args(shared.copy_core_reader_kernel_id, reader_common);
-            patch_common_args(shared.copy_core_writer_kernel_id, reader_common);
-        }
+        patch_common_args(shared.copy_core_reader_kernel_id, reader_common);
+        patch_common_args(shared.copy_core_writer_kernel_id, reader_common);
     }
 }
 
