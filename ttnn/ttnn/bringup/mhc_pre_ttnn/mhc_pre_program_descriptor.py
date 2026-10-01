@@ -258,7 +258,40 @@ def _reader_noc_of(group_y0, flip_rows):
 # mod banks measure slower (640x1792: 4 -> 48.7, 8 -> 45.4 us). 0 = even split.
 OWNER_C_DISCOUNT = 7
 W_ROLE_DRAM, W_ROLE_SPREAD = 0, 1  # mirrors the writer's W_ROLE_* constants
-W_MCAST_PLACEHOLDER_CT = [0, SEM_W_READY, 0xFFFFFFFF, 0, 0x2, 0]  # inactive McastArgs wire (Counter)
+W_MCAST_PLACEHOLDER_CT = [0]  # #57547: an absent McastArgs block is one ABSENT tag word (no RT words, no semaphores)
+
+
+class _McastWire:
+    """The positional wire of one multicast family, on #57547's attachment API.
+
+    #57547 replaced the old helpers' compile_time_args() / runtime_args(core) with attach(descriptor, prefix,
+    kernels), which appends a family's blocks to a kernel's CURRENT argument lists. This builder places the wire at
+    fixed bases in the middle of the writer's lists (the kernel decodes it with the still-positional
+    McastArgs<CT, RT>), so the family is attached to a scratch data-movement kernel with empty argument lists and the
+    blocks are read back: exactly what attach() would append. The C++ factory does the same (device/mcast_wire.hpp).
+    """
+
+    def __init__(self, family, cores, noc, existing_semaphores):
+        scratch_kernel = ttnn.KernelDescriptor(
+            kernel_source="mcast_wire_scratch",
+            core_ranges=cores,
+            compile_time_args=[],
+            runtime_args=ttnn.RuntimeArgs(),
+            config=ttnn.DataMovementConfigDescriptor(noc=noc),
+        )
+        scratch = ttnn.ProgramDescriptor(semaphores=list(existing_semaphores))
+        family.attach(scratch, "mcast_wire", [scratch_kernel])
+        self.ct = [int(v) for v in scratch_kernel.compile_time_args]
+        self.rt = {
+            (c.x, c.y): [int(v) for v in scratch_kernel.runtime_args[c.x][c.y]]
+            for c in ttnn.corerange_to_cores(cores, None, True)
+        }
+
+    def compile_time_args(self):
+        return list(self.ct)
+
+    def runtime_args(self, core):
+        return list(self.rt[(core.x, core.y)])
 
 
 # Measurement hook (perf tournaments): extra preprocessor defines for ALL three kernels, read from the environment
@@ -605,10 +638,14 @@ def create_program_descriptor(
                 noc=_other_noc(rnoc),
                 handshake=False,
                 data_ready=ttnn.McastDataReady.Counter,
-                rotating_sender=True,
                 sem_ids=[SEM_W_READY],
             )
-            w_mcast[rnoc] = ttnn.Mcast1D(device, w_rect, ttnn.Mcast1DShape.PerColumn, 0, w_cfg)
+            w_mcast[rnoc] = _McastWire(
+                ttnn.Mcast1D(device, w_rect, ttnn.Mcast1DShape.PerColumn, ttnn.Mcast1DRotatingSenderConfig(), w_cfg),
+                w_rect,
+                _other_noc(rnoc),
+                semaphores,
+            )
 
     # fp32 W hi/lo split done per column share (bf16 X only: the fp32-X grid split needs the whole slice's max).
     w_presplit = bool(w_mcast) and w_pieces(w_tensor.dtype) > 1 and x_pieces(x_tensor.dtype) == 1
@@ -630,13 +667,18 @@ def create_program_descriptor(
                     )
                 ]
             )
-            helpers[g] = ttnn.Mcast2D(device, rect, ttnn.CoreCoord(gx0, gy0), mcast_cfg)
+            helpers[g] = _McastWire(
+                ttnn.Mcast2D(device, rect, ttnn.Mcast2DFixedSenderConfig(sender=ttnn.CoreCoord(gx0, gy0)), mcast_cfg),
+                rect,
+                _other_noc(rnoc),
+                semaphores,
+            )
             ct = list(helpers[g].compile_time_args())
             assert mcast_ct.get(rnoc, ct) == ct, "mcast CT wire must be identical across the groups of a set"
             mcast_ct[rnoc] = ct
     else:
-        # group_cores == 1: no receivers, the pipe is never used. Placeholder wire with real sem ids.
-        mcast_ct = {rnoc: [0, SEM_MCAST_READY, SEM_MCAST_CONSUMED, 0, 1, 0] for rnoc in reader_nocs}
+        # group_cores == 1: no receivers, the pipe is never used. #57547: an absent block (one ABSENT tag word).
+        mcast_ct = {rnoc: [0] for rnoc in reader_nocs}
 
     # ---- kernel CT args ----
     reader_ct = [
@@ -771,7 +813,7 @@ def create_program_descriptor(
                 own = [0, 0]
                 share_on_reader = 0
                 if not w_mcast:
-                    w_rt, w_mc_rt = [W_ROLE_DRAM, 0, 0, 0, 0], [0, 0, 0, 0]
+                    w_rt, w_mc_rt = [W_ROLE_DRAM, 0, 0, 0, 0], []  # absent block: no runtime words
                 else:
                     # Column share: row y of the column reads / splits / multicasts W tiles [own0, own1).
                     sizes, starts = _split(n * cc, active_rows)
@@ -783,7 +825,7 @@ def create_program_descriptor(
                 reader_rt[rnoc][x][y] = [x_tensor.buffer_address(), ts, ctt, cs, cc, num_blocks] + (
                     [w_tensor.buffer_address(), share_on_reader] + own
                 )
-                mcast_rt = list(helpers[g].runtime_args(ttnn.CoreCoord(x, y))) if G > 1 else [0, 0, 0, 0]
+                mcast_rt = list(helpers[g].runtime_args(ttnn.CoreCoord(x, y))) if G > 1 else []
                 writer_rt[rnoc][x][y] = (
                     [
                         y_tensor.buffer_address(),
