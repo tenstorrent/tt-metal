@@ -10,6 +10,17 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
+#ifndef NLP_BATCH
+#define NLP_BATCH 4
+#endif
+
+constexpr uint32_t nlp_pick_batch(uint32_t n, uint32_t a) {
+    while (n > 1 && a % n != 0) {
+        n >>= 1;
+    }
+    return n;
+}
+
 void kernel_main() {
     Noc noc;
 
@@ -73,25 +84,29 @@ void kernel_main() {
             cb_qv.pop_front(transfer_tiles);
         }
     } else {
+        // Batch up to NLP_BATCH tiles per barrier. The batch size divides q_out_w_tiles (the tile count of
+        // every wait/pop group), so a batch never straddles the CB wrap point (no remainder case).
+        constexpr uint32_t nt_wr = nlp_pick_batch(NLP_BATCH, q_out_w_tiles);
         for (uint32_t block = 0; block < num_blocks; block++) {
             // q + create q head --> outputs: [B, num_q_heads, S, head_dim]
             out_tensor_current_tile_id_along_c = q_out_tensor_tile_id;
             for (uint32_t c_dim = 0; c_dim < q_out_c; c_dim++) {
                 q_out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
-                for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
-                    cb_qv.wait_front(out_num_tiles_read);
+                for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim += nt_wr) {
+                    cb_qv.wait_front(nt_wr);
                     l1_read_addr = cb_qv.get_read_ptr();
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(l1_read_addr),
-                        sq,
-                        tile_bytes_qv,
-                        {},
-                        {.page_id = q_out_tensor_current_tile_id});
-
+                    for (uint32_t j = 0; j < nt_wr; ++j) {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(l1_read_addr),
+                            sq,
+                            tile_bytes_qv,
+                            {},
+                            {.page_id = q_out_tensor_current_tile_id});
+                        l1_read_addr += tile_bytes_qv;
+                        q_out_tensor_current_tile_id++;
+                    }
                     noc.async_write_barrier();
-                    cb_qv.pop_front(out_num_tiles_read);
-
-                    q_out_tensor_current_tile_id++;
+                    cb_qv.pop_front(nt_wr);
                 }
                 out_tensor_current_tile_id_along_c += q_out_HtWt;
             }
@@ -106,24 +121,25 @@ void kernel_main() {
 #ifndef TRANSPOSE_K_HEADS
                 k_out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
 #endif
-                for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
-                    cb_k.wait_front(out_num_tiles_read);
+                for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim += nt_wr) {
+                    cb_k.wait_front(nt_wr);
                     l1_read_addr = cb_k.get_read_ptr();
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(l1_read_addr),
-                        sk,
-                        tile_bytes_k,
-                        {},
-                        {.page_id = k_out_tensor_current_tile_id});
-
-                    noc.async_write_barrier();
-                    cb_k.pop_front(out_num_tiles_read);
-
+                    for (uint32_t j = 0; j < nt_wr; ++j) {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(l1_read_addr),
+                            sk,
+                            tile_bytes_k,
+                            {},
+                            {.page_id = k_out_tensor_current_tile_id});
+                        l1_read_addr += tile_bytes_k;
 #ifndef TRANSPOSE_K_HEADS
-                    k_out_tensor_current_tile_id++;
+                        k_out_tensor_current_tile_id++;
 #else
-                    k_out_tensor_current_tile_id += q_out_h_tiles;
+                        k_out_tensor_current_tile_id += q_out_h_tiles;
 #endif
+                    }
+                    noc.async_write_barrier();
+                    cb_k.pop_front(nt_wr);
                 }
 #ifndef TRANSPOSE_K_HEADS
                 out_tensor_current_tile_id_along_c += q_out_HtWt;
@@ -134,20 +150,21 @@ void kernel_main() {
             out_tensor_current_tile_id_along_c = v_out_tensor_tile_id;
             for (uint32_t c_dim = 0; c_dim < kv_out_c; c_dim++) {
                 v_out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
-                for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
-                    cb_qv.wait_front(out_num_tiles_read);
+                for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim += nt_wr) {
+                    cb_qv.wait_front(nt_wr);
                     l1_read_addr = cb_qv.get_read_ptr();
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(l1_read_addr),
-                        sv,
-                        tile_bytes_qv,
-                        {},
-                        {.page_id = v_out_tensor_current_tile_id});
-
+                    for (uint32_t j = 0; j < nt_wr; ++j) {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(l1_read_addr),
+                            sv,
+                            tile_bytes_qv,
+                            {},
+                            {.page_id = v_out_tensor_current_tile_id});
+                        l1_read_addr += tile_bytes_qv;
+                        v_out_tensor_current_tile_id++;
+                    }
                     noc.async_write_barrier();
-                    cb_qv.pop_front(out_num_tiles_read);
-
-                    v_out_tensor_current_tile_id++;
+                    cb_qv.pop_front(nt_wr);
                 }
                 out_tensor_current_tile_id_along_c += q_out_HtWt;
             }

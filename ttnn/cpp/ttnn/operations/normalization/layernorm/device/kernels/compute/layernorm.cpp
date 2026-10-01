@@ -371,7 +371,9 @@ void kernel_main() {
         add_init(dfb_ex2_id, dfb_eps_id);
         add_tiles(dfb_ex2_id, dfb_eps_id, 0, 0, dst0);
         rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
+        // T45 V1: rsqrt only on faces 0 and 2 (VectorMode::C); the result is read only through column bcast.
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::calculate_rsqrt<APPROX, 8, DST_ACCUM_MODE, false, LEGACY_RSQRT>, dst0, VectorMode::C)));
         tile_regs_commit();
 
         dfb_ex2.pop_front(1);

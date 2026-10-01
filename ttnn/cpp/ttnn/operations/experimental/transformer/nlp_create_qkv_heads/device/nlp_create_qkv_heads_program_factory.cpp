@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -225,6 +227,16 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
         reader_defines.emplace_back("KV_TIED", "1");
     }
 
+    // Non-head-parallel path: batch nlp_batch tiles per NoC barrier in reader and writer. Without the
+    // compute kernel in the path the CB holds 2 x nlp_batch tiles (double buffer: reader fills one half
+    // while the writer drains the other); with transpose_k_heads the CBs keep the original 4 tiles.
+    uint32_t nlp_batch = 4;
+    if (!split.head_parallel && !transpose_k_heads) {
+        nlp_batch = 8;
+    }
+    reader_defines.emplace_back("NLP_BATCH", std::to_string(nlp_batch));
+    writer_defines.emplace_back("NLP_BATCH", std::to_string(nlp_batch));
+
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
@@ -247,7 +259,7 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
 
     // Create circular buffers
     // Retain the original four-tile capacity, including batched head transfers.
-    uint32_t cb_num_tiles = 4;
+    uint32_t cb_num_tiles = (!split.head_parallel && !transpose_k_heads) ? 2 * nlp_batch : 4;
 
     // TODO: Investigate perf allocating full in0_w_tiles with double buffer
     // uint32_t cb1_num_tiles = in0_w_tiles * 2; // double buffer; this runs out of space for generic shapes

@@ -9,6 +9,17 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
+#ifndef NLP_BATCH
+#define NLP_BATCH 4
+#endif
+
+constexpr uint32_t nlp_pick_batch(uint32_t n, uint32_t a, uint32_t b) {
+    while (n > 1 && (a % n != 0 || b % n != 0)) {
+        n >>= 1;
+    }
+    return n;
+}
+
 void kernel_main() {
     Noc noc;
 
@@ -69,33 +80,43 @@ void kernel_main() {
             }
         }
     } else {
+        // Batch up to NLP_BATCH tiles per barrier (the factory sizes the CB to 2 x NLP_BATCH tiles, or to
+        // NLP_BATCH = 4 tiles when compute is in the path). Halve until the batch divides every tile count
+        // pushed to the CB, so a batch never straddles the CB wrap point (no remainder case).
+        constexpr uint32_t nt_rd = nlp_pick_batch(NLP_BATCH, q_num_tiles, kv_num_tiles);
         for (uint32_t block = 0; block < num_blocks; block++) {
             // Q
-            for (uint32_t i = 0; i < q_num_tiles; i++) {
-                cb_qv.reserve_back(onetile);
+            for (uint32_t i = 0; i < q_num_tiles; i += nt_rd) {
+                cb_qv.reserve_back(nt_rd);
                 uint32_t l1_write_addr = cb_qv.get_write_ptr();
-                noc.async_read(
-                    s0, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_qv, {.page_id = in0_tensor_tile_id}, {});
+                for (uint32_t j = 0; j < nt_rd; ++j) {
+                    noc.async_read(
+                        s0, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_qv, {.page_id = in0_tensor_tile_id}, {});
+                    l1_write_addr += tile_bytes_qv;
+                    in0_tensor_tile_id++;
+                }
                 noc.async_read_barrier();
-                cb_qv.push_back(onetile);
-                in0_tensor_tile_id++;
+                cb_qv.push_back(nt_rd);
             }
 
             // K
-            for (uint32_t i = 0; i < kv_num_tiles; i++) {
-                cb_k.reserve_back(onetile);
+            for (uint32_t i = 0; i < kv_num_tiles; i += nt_rd) {
+                cb_k.reserve_back(nt_rd);
                 uint32_t l1_write_addr = cb_k.get_write_ptr();
+                for (uint32_t j = 0; j < nt_rd; ++j) {
 #ifdef READ_FROM_INPUT_TENSOR_KV
-                noc.async_read(
-                    s1, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_k, {.page_id = in1_tensor_tile_id}, {});
-                in1_tensor_tile_id++;
+                    noc.async_read(
+                        s1, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_k, {.page_id = in1_tensor_tile_id}, {});
+                    in1_tensor_tile_id++;
 #else
-                noc.async_read(
-                    s0, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_k, {.page_id = in0_tensor_tile_id}, {});
-                in0_tensor_tile_id++;
+                    noc.async_read(
+                        s0, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_k, {.page_id = in0_tensor_tile_id}, {});
+                    in0_tensor_tile_id++;
 #endif
+                    l1_write_addr += tile_bytes_k;
+                }
                 noc.async_read_barrier();
-                cb_k.push_back(onetile);
+                cb_k.push_back(nt_rd);
             }
 
             // V
@@ -111,20 +132,23 @@ void kernel_main() {
             in0_tensor_tile_id -= kv_num_tiles;
 #endif
 #endif
-            for (uint32_t i = 0; i < kv_num_tiles; i++) {
-                cb_qv.reserve_back(onetile);
+            for (uint32_t i = 0; i < kv_num_tiles; i += nt_rd) {
+                cb_qv.reserve_back(nt_rd);
                 uint32_t l1_write_addr = cb_qv.get_write_ptr();
+                for (uint32_t j = 0; j < nt_rd; ++j) {
 #ifdef READ_FROM_INPUT_TENSOR_KV
-                noc.async_read(
-                    s1, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_qv, {.page_id = in1_tensor_tile_id}, {});
-                in1_tensor_tile_id++;
+                    noc.async_read(
+                        s1, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_qv, {.page_id = in1_tensor_tile_id}, {});
+                    in1_tensor_tile_id++;
 #else
-                noc.async_read(
-                    s0, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_qv, {.page_id = in0_tensor_tile_id}, {});
-                in0_tensor_tile_id++;
+                    noc.async_read(
+                        s0, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_qv, {.page_id = in0_tensor_tile_id}, {});
+                    in0_tensor_tile_id++;
 #endif
+                    l1_write_addr += tile_bytes_qv;
+                }
                 noc.async_read_barrier();
-                cb_qv.push_back(onetile);
+                cb_qv.push_back(nt_rd);
             }
         }
     }

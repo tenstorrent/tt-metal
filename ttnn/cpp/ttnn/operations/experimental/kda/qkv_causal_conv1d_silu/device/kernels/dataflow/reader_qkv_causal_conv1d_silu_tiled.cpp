@@ -43,6 +43,10 @@
 #ifndef QKV_CONV_OPT
 #define QKV_CONV_OPT 24
 #endif
+// T48_CONV variant C1: build the shifted tiles with one whole-tile copy per (k, tile) plus the face-head fixes.
+#ifndef QKV_C_SHIFT_BULK
+#define QKV_C_SHIFT_BULK 1
+#endif
 
 // tt-1xx only. The scratch zero fills (noc.async_write_zeros) are NoC loopback reads from
 // MEM_ZEROS_BASE on Wormhole/Blackhole, so they carry the current read transaction id and the
@@ -302,6 +306,37 @@ TT_KERNEL void reader(uint32_t step_start, uint32_t step_count) {
         shift.reserve_back(3 * B);
         noc_async_read_set_trid(trid_copy, noc_id);
         const uint32_t shift_base = shift.get_write_ptr();
+#if QKV_C_SHIFT_BULK
+        // Phase 1: S_k[k rows .. end] <- X[0 .. end - k rows] as ONE copy of 2048 - 32 k bytes per tile. Rows
+        // k..15 of every face are then right. Rows 0..k-1 of F0 are not written; rows 0..k-1 of F1, F2, F3
+        // hold wrong bytes (the tail rows of the previous face of X). Phase 2 overwrites these 4 heads.
+        for (uint32_t k = 1; k <= 3; ++k) {
+            const uint32_t s_k = shift_base + (k - 1) * B * tile_bytes;
+            noc_async_read_one_packet_set_state(self_noc, tile_bytes - k * face_row_bytes, 0, noc_id);
+            for (uint32_t i = 0; i < B; ++i) {
+                noc_async_read_one_packet_with_state(
+                    x_cur + i * tile_bytes, s_k + i * tile_bytes + k * face_row_bytes, 0, noc_id);
+            }
+        }
+        // The head copies overwrite bytes that phase 1 writes: phase 1 must have landed.
+        noc_async_read_barrier_with_trid(trid_copy, noc_id);
+        for (uint32_t k = 1; k <= 3; ++k) {
+            const uint32_t head = k * face_row_bytes;
+            const uint32_t tail = (face_rows - k) * face_row_bytes;
+            const uint32_t halo_rows = (3 - k) * face_row_bytes;
+            const uint32_t s_k = shift_base + (k - 1) * B * tile_bytes;
+            noc_async_read_one_packet_set_state(self_noc, head, 0, noc_id);
+            for (uint32_t i = 0; i < B; ++i) {
+                const uint32_t x = x_cur + i * tile_bytes;
+                const uint32_t d = s_k + i * tile_bytes;
+                noc_async_read_one_packet_with_state(halo_left + i * halo_stride + halo_rows, d, 0, noc_id);
+                noc_async_read_one_packet_with_state(
+                    halo_right + i * halo_stride + halo_rows, d + face_bytes, 0, noc_id);
+                noc_async_read_one_packet_with_state(x + tail, d + 2 * face_bytes, 0, noc_id);
+                noc_async_read_one_packet_with_state(x + face_bytes + tail, d + 3 * face_bytes, 0, noc_id);
+            }
+        }
+#else
         for (uint32_t k = 1; k <= 3; ++k) {
             const uint32_t head = k * face_row_bytes;
             const uint32_t tail = (face_rows - k) * face_row_bytes;
@@ -327,6 +362,7 @@ TT_KERNEL void reader(uint32_t step_start, uint32_t step_count) {
                 noc_async_read_one_packet_with_state(x + 3 * face_bytes, d + 3 * face_bytes + head, 0, noc_id);
             }
         }
+#endif
         // The step is complete: hand it to compute now, not after the next step's input lands.
         noc_async_read_barrier_with_trid(trid_copy, noc_id);
         shift.push_back(3 * B);
