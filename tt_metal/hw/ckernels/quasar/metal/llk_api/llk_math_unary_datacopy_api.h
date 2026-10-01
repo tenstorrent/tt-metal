@@ -91,10 +91,16 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
         static_assert(type == DataCopyType::B2D, "Unary broadcast math path requires DataCopyType::B2D");
         static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
+        LLK_ASSERT(
+            (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+            "llk_math_eltwise_unary_datacopy: dst_index exceeds dest capacity");
         _llk_math_eltwise_unary_broadcast_<false /*unpack_to_dest*/>(dst_index);
     } else {
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
         if constexpr (!unpack_to_dest) {
+            LLK_ASSERT(
+                (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+                "llk_math_eltwise_unary_datacopy: dst_index exceeds dest capacity");
             _llk_math_eltwise_unary_datacopy_(dst_index);
         }
     }
@@ -124,6 +130,9 @@ inline void llk_math_eltwise_unary_datacopy_block(
 
     // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
     if constexpr (!unpack_to_dest) {
+        LLK_ASSERT(
+            (start_dst_index + ntiles <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+            "llk_math_eltwise_unary_datacopy_block: dst range exceeds dest capacity");
         for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
             _llk_math_eltwise_unary_datacopy_(dst_index);
         }
