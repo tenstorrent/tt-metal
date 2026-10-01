@@ -267,6 +267,23 @@ jobs:
               break
           PYTHON
 
+      - name: Read the regression acceptance
+        if: github.event_name == 'pull_request' && steps.measured.outputs.complete == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Read now, not from the event: an edit or an approval since the push counts (#57871).
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > pr.json
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq '.[] | @json' > pr_comments.jsonl
+          # The approvers come from main, so a PR cannot add its own.
+          git show "origin/main:${LLK_PATH}/perf/regression_approvers.json" > approvers.json 2>/dev/null \
+            || echo '{}' > approvers.json
+          python3 "${LLK_PATH}/perf/regression_accept.py" read \
+            --pr pr.json --comments pr_comments.jsonl --approvers approvers.json --out acceptance_in.json
+          cat acceptance_in.json
+
       - name: Compare regressions
         id: compare
         if: >-
@@ -280,6 +297,8 @@ jobs:
         run: |
           set +e
           BASELINE_SHA=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha') or 'unknown')")
+          ACCEPT_ARG=()
+          [ -f acceptance_in.json ] && ACCEPT_ARG=(--accept acceptance_in.json)
 
           python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
             --current 'current_perf/**/*.csv' \
@@ -293,7 +312,8 @@ jobs:
             --baseline-sha "$BASELINE_SHA" \
             --current-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
             --baseline-label "${{ inputs.baseline_artifact_pattern && 'branch point on main' || 'pinned baseline' }}" \
-            --current-label "${{ github.event_name == 'pull_request' && 'PR head' || github.ref_name }}"
+            --current-label "${{ github.event_name == 'pull_request' && 'PR head' || github.ref_name }}" \
+            "${ACCEPT_ARG[@]}"
           EXIT_CODE=$?
           echo "gate_exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
           if [ -f perf_gate_report.verdict.json ]; then
@@ -342,6 +362,7 @@ jobs:
             perf_gate_report.md
             perf_gate_report.points.csv
             perf_gate_report.regressions.csv
+            perf_gate_report.acceptance.json
           if-no-files-found: ignore
 
       - name: Build the Slack payload
@@ -402,6 +423,8 @@ jobs:
             --baseline-sha "$BASELINE_SHA" \
             --commit "$COMMIT_SHA" \
             --mode "$MODE" \
+            --acceptance perf_gate_report.acceptance.json \
+            --approvers approvers.json \
             --out slack_payload.json && exit 0
 
           echo "::error::The gate could not build its Slack notification."

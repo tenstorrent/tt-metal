@@ -1,0 +1,91 @@
+name: "LLK perf gate: accept regressions"
+
+# A perf approver's /accept-regression, or an edit to the REGRESSION ACCEPTANCE
+# table, runs the perf gate's compare jobs again for the PR head (#57871).
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [edited]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: llk-perf-gate-accept-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  accept:
+    name: "Accept regressions"
+    # issue_comment runs on main, so the approvers and the checker are main's.
+    if: >-
+      ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request
+          && startsWith(github.event.comment.body, '/accept-regression') }}
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/scripts
+            tt_metal/tt-llk/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - name: Check the approver and record the approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > pr.json
+          set +e
+          python3 tt_metal/tt-llk/perf/regression_accept.py approve --pr pr.json \
+            --approvers tt_metal/tt-llk/perf/regression_approvers.json \
+            --commenter "$COMMENTER" > reply.md
+          STATUS=$?
+          set -e
+          cat reply.md
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F body=@reply.md > /dev/null
+          [ "$STATUS" = 0 ] || exit 0
+          .github/scripts/llk-perf-gate-rerun.sh \
+            "$(python3 -c "import json; print(json.load(open('pr.json'))['head']['sha'])")"
+
+  rerun-on-edit:
+    name: "Gate again after an edit to the table"
+    if: >-
+      ${{ github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate')
+          && github.event.changes.body.from != null }}
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/scripts
+            tt_metal/tt-llk/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - name: Run the gate again if the table changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLD_BODY: ${{ github.event.changes.body.from }}
+          NEW_BODY: ${{ github.event.pull_request.body }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          OLD=$(printf '%s' "$OLD_BODY" | python3 tt_metal/tt-llk/perf/regression_accept.py hash)
+          NEW=$(printf '%s' "$NEW_BODY" | python3 tt_metal/tt-llk/perf/regression_accept.py hash)
+          echo "REGRESSION ACCEPTANCE section: ${OLD} -> ${NEW}"
+          if [ "$OLD" = "$NEW" ]; then
+            echo "The section did not change, so the gate does not run again."
+            exit 0
+          fi
+          .github/scripts/llk-perf-gate-rerun.sh "$HEAD_SHA"
