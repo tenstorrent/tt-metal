@@ -49,7 +49,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 9. Serving contract. When the brief has a "Serving contract" section, build the part exactly as it says (it is how
    the inference server will drive the model, read from the server's code), from the first version. Its contract
    tests are in your gate like any frozen test. Never assume a simpler case than it states (e.g. only chunk-aligned
-   starts) to make the gate easier.
+   starts) to make the gate easier. The model has one KV cache format: the ladder, the contract and serving all use
+   the one the contract names, never a second, more precise one kept for the accuracy gates.
 10. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
    `models/demos/common/bringup/knowledge/known_issues.md`, in the form
    `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.`
