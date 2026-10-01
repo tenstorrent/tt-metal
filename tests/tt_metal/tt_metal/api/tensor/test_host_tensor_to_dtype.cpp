@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -85,6 +86,58 @@ std::pair<UnpackedBfp, PackedBfp> generate_float_to_bfp4_dataset(const Shape& sh
 template <typename T>
 HostTensor make_host_tensor(std::vector<T> data, const TensorSpec& spec) {
     return HostTensor::from_buffer(HostBuffer(std::move(data)), spec);
+}
+
+// Repeats a short pattern until it fills a tensor, so a boundary table can be checked through the
+// same shapes the rest of this file uses.
+template <typename T>
+std::vector<T> repeat_to_volume(const std::vector<T>& pattern, size_t volume) {
+    std::vector<T> data(volume);
+    for (size_t i = 0; i < volume; ++i) {
+        data[i] = pattern[i % pattern.size()];
+    }
+    return data;
+}
+
+// Boundary floats for the conversions to integral dtypes. A plain static_cast of any of the
+// out-of-range rows is undefined behavior and the host architectures disagree on it: 2^31 to INT32
+// is INT32_MIN on x86_64 and INT32_MAX on aarch64, and -1.0f to UINT32 is 0xFFFFFFFF on x86_64 and
+// 0 on aarch64. Every conversion below has to saturate, on both.
+constexpr float k_largest_below_int32_max = 2147483520.0f;   // largest float below 2^31
+constexpr float k_two_pow_31 = 2147483648.0f;                // first float past INT32_MAX
+constexpr float k_largest_below_uint32_max = 4294967040.0f;  // largest float below 2^32
+constexpr float k_two_pow_32 = 4294967296.0f;                // first float past UINT32_MAX
+
+std::vector<float> boundary_floats() {
+    return {
+        0.0f,
+        -1.0f,
+        k_largest_below_int32_max,
+        k_two_pow_31,
+        k_largest_below_uint32_max,
+        k_two_pow_32,
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN(),
+    };
+}
+
+// The same table in bfloat16, whose largest finite value is far past every integral destination.
+std::vector<bfloat16> boundary_bfloat16s() {
+    return {
+        bfloat16(0.0f),
+        bfloat16(-1.0f),
+        bfloat16::truncate(std::numeric_limits<float>::max()),  // largest finite bfloat16, ~3.39e38
+        bfloat16(k_two_pow_31),
+        bfloat16(std::numeric_limits<float>::infinity()),
+        bfloat16(-std::numeric_limits<float>::infinity()),
+        bfloat16(std::numeric_limits<float>::quiet_NaN()),
+    };
+}
+
+TensorSpec row_major_spec(const Shape& shape, DataType dtype) {
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    return TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
 }
 
 bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
@@ -431,6 +484,135 @@ TEST(HostTensorToDtype, Int32ToInt8RowMajorValueCheck) {
     for (size_t i = 0; i < data.size(); ++i) {
         EXPECT_EQ(result_data[i], static_cast<int8_t>(data[i]));
     }
+}
+
+TEST(HostTensorToDtype, Float32ToInt32SaturatesOutOfRange) {
+    const Shape shape{32, 32};
+    auto data = CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(CMAKE_UNIQUE_NAMESPACE::boundary_floats(), shape.volume());
+    auto source =
+        HostTensor::from_vector<float>(data, CMAKE_UNIQUE_NAMESPACE::row_major_spec(shape, DataType::FLOAT32));
+
+    auto result = to_dtype(source, DataType::INT32);
+
+    constexpr int32_t int32_max = std::numeric_limits<int32_t>::max();
+    const std::vector<int32_t> expected_pattern = {
+        0,                                    // 0.0f
+        -1,                                   // -1.0f
+        2147483520,                           // largest float below 2^31, exactly representable
+        int32_max,                            // 2^31
+        int32_max,                            // largest float below 2^32
+        int32_max,                            // 2^32
+        int32_max,                            // +inf
+        std::numeric_limits<int32_t>::min(),  // -inf
+        0,                                    // NaN
+    };
+    EXPECT_THAT(
+        result.to_vector<int32_t>(),
+        Pointwise(Eq(), CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(expected_pattern, shape.volume())));
+}
+
+TEST(HostTensorToDtype, Float32ToUint32SaturatesOutOfRange) {
+    const Shape shape{32, 32};
+    auto data = CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(CMAKE_UNIQUE_NAMESPACE::boundary_floats(), shape.volume());
+    auto source =
+        HostTensor::from_vector<float>(data, CMAKE_UNIQUE_NAMESPACE::row_major_spec(shape, DataType::FLOAT32));
+
+    auto result = to_dtype(source, DataType::UINT32);
+
+    constexpr uint32_t uint32_max = std::numeric_limits<uint32_t>::max();
+    const std::vector<uint32_t> expected_pattern = {
+        0u,           // 0.0f
+        0u,           // -1.0f: the standard invalid-index sentinel is not expressible here
+        2147483520u,  // largest float below 2^31
+        2147483648u,  // 2^31, in range for UINT32
+        4294967040u,  // largest float below 2^32, exactly representable
+        uint32_max,   // 2^32
+        uint32_max,   // +inf
+        0u,           // -inf
+        0u,           // NaN
+    };
+    EXPECT_THAT(
+        result.to_vector<uint32_t>(),
+        Pointwise(Eq(), CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(expected_pattern, shape.volume())));
+}
+
+TEST(HostTensorToDtype, Float32ToUint16SaturatesOutOfRange) {
+    const Shape shape{32, 32};
+    auto data = CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(CMAKE_UNIQUE_NAMESPACE::boundary_floats(), shape.volume());
+    auto source =
+        HostTensor::from_vector<float>(data, CMAKE_UNIQUE_NAMESPACE::row_major_spec(shape, DataType::FLOAT32));
+
+    auto result = to_dtype(source, DataType::UINT16);
+
+    constexpr uint16_t uint16_max = std::numeric_limits<uint16_t>::max();
+    const std::vector<uint16_t> expected_pattern = {
+        0,           // 0.0f
+        0,           // -1.0f
+        uint16_max,  // largest float below 2^31
+        uint16_max,  // 2^31
+        uint16_max,  // largest float below 2^32
+        uint16_max,  // 2^32
+        uint16_max,  // +inf
+        0,           // -inf
+        0,           // NaN
+    };
+    EXPECT_THAT(
+        result.to_vector<uint16_t>(),
+        Pointwise(Eq(), CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(expected_pattern, shape.volume())));
+}
+
+TEST(HostTensorToDtype, Float32ToUint8SaturatesOutOfRange) {
+    const Shape shape{32, 32};
+    auto data = CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(CMAKE_UNIQUE_NAMESPACE::boundary_floats(), shape.volume());
+    auto source =
+        HostTensor::from_vector<float>(data, CMAKE_UNIQUE_NAMESPACE::row_major_spec(shape, DataType::FLOAT32));
+
+    auto result = to_dtype(source, DataType::UINT8);
+
+    constexpr uint8_t uint8_max = std::numeric_limits<uint8_t>::max();
+    const std::vector<uint8_t> expected_pattern = {0, 0, uint8_max, uint8_max, uint8_max, uint8_max, uint8_max, 0, 0};
+    EXPECT_THAT(
+        result.to_vector<uint8_t>(),
+        Pointwise(Eq(), CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(expected_pattern, shape.volume())));
+}
+
+TEST(HostTensorToDtype, Float32ToInt8SaturatesOutOfRange) {
+    const Shape shape{32, 32};
+    auto data = CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(CMAKE_UNIQUE_NAMESPACE::boundary_floats(), shape.volume());
+    auto source =
+        HostTensor::from_vector<float>(data, CMAKE_UNIQUE_NAMESPACE::row_major_spec(shape, DataType::FLOAT32));
+
+    auto result = to_dtype(source, DataType::INT8);
+
+    constexpr int8_t int8_max = std::numeric_limits<int8_t>::max();
+    constexpr int8_t int8_min = std::numeric_limits<int8_t>::min();
+    const std::vector<int8_t> expected_pattern = {0, -1, int8_max, int8_max, int8_max, int8_max, int8_max, int8_min, 0};
+    EXPECT_THAT(
+        result.to_vector<int8_t>(),
+        Pointwise(Eq(), CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(expected_pattern, shape.volume())));
+}
+
+TEST(HostTensorToDtype, Bfloat16ToInt32SaturatesOutOfRange) {
+    const Shape shape{32, 32};
+    auto data = CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(CMAKE_UNIQUE_NAMESPACE::boundary_bfloat16s(), shape.volume());
+    auto source =
+        HostTensor::from_vector<bfloat16>(data, CMAKE_UNIQUE_NAMESPACE::row_major_spec(shape, DataType::BFLOAT16));
+
+    auto result = to_dtype(source, DataType::INT32);
+
+    constexpr int32_t int32_max = std::numeric_limits<int32_t>::max();
+    const std::vector<int32_t> expected_pattern = {
+        0,                                    // 0.0
+        -1,                                   // -1.0
+        int32_max,                            // largest finite bfloat16
+        int32_max,                            // 2^31
+        int32_max,                            // +inf
+        std::numeric_limits<int32_t>::min(),  // -inf
+        0,                                    // NaN
+    };
+    EXPECT_THAT(
+        result.to_vector<int32_t>(),
+        Pointwise(Eq(), CMAKE_UNIQUE_NAMESPACE::repeat_to_volume(expected_pattern, shape.volume())));
 }
 
 }  // namespace
