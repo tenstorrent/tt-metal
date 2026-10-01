@@ -92,9 +92,11 @@ def _build_shim() -> tuple[type, dict]:
 
     ns: dict = {
         "torch": torch,
+        "math": __import__("math"),
         "os": __import__("os"),
         "time": __import__("time"),
         "logger": mock.MagicMock(name="logger"),
+        "timing_tree": mock.MagicMock(name="timing_tree"),
         "walltime": mock.MagicMock(name="walltime"),  # .timed(...) is a CM; .record(...) a no-op
         "latent_grid": _latent_grid,
         "TEMPORAL_COMPRESSION": _TEMPORAL_COMPRESSION,
@@ -125,7 +127,18 @@ def _make_warmup_pipe():
     obj = Pipe()
     obj._traced = True
     obj.dynamic_load = False
+    obj.fps = 24.0
+    obj._resolve_fps = lambda fps: obj.fps if fps is None else float(fps)
+    obj._device_prompt_handoff = False
+    obj._trace_variant_key = lambda key, per_token: key if key is None or not per_token else f"{key}_i2v"
+    obj._device_resident = mock.MagicMock(return_value=False)
+    obj._prefetch_noise = mock.MagicMock()
+    obj._log_latent_stats = mock.MagicMock()
+    obj._vae_traced = False
+    obj._trace_euler_tail = False
+    obj.transformer = SimpleNamespace(image_conditioning=False)
     obj.in_channels = 128
+    obj.upsampler = mock.MagicMock(name="upsampler")
     obj.vae_encoder = mock.MagicMock(name="vae_encoder")
     obj.parallel_config = SimpleNamespace(sequence_parallel=SimpleNamespace(factor=1, mesh_axis=2))
     obj.gemma_encoder_pair = SimpleNamespace(
@@ -144,6 +157,7 @@ def _make_warmup_pipe():
         "_warmup_encode",
         "_warmup_ref_encode",
         "_ensure_upsampler_frames",
+        "_prepare_upsampler",
         "_ensure_vae_decoder_frames",
         "decode_audio",
     ):
@@ -243,6 +257,16 @@ def test_warmup_base_path_unchanged_no_ref(monkeypatch):
 def _make_prealloc_pipe(sp_factor=1):
     Pipe, _ns = _build_shim()
     obj = Pipe()
+    obj.fps = 24.0
+    obj._resolve_fps = lambda fps: obj.fps if fps is None else float(fps)
+    obj._device_prompt_handoff = False
+    obj._trace_variant_key = lambda key, per_token: key if key is None or not per_token else f"{key}_i2v"
+    obj._device_resident = mock.MagicMock(return_value=False)
+    obj._prefetch_noise = mock.MagicMock()
+    obj._log_latent_stats = mock.MagicMock()
+    obj._vae_traced = False
+    obj._trace_euler_tail = False
+    obj.transformer = SimpleNamespace(image_conditioning=False)
     obj.in_channels = 128
     obj.mesh_device = mock.MagicMock(name="mesh_device")
     obj.parallel_config = SimpleNamespace(sequence_parallel=SimpleNamespace(factor=sp_factor, mesh_axis=2))
@@ -325,6 +349,16 @@ def _make_generate_pipe():
     obj = Pipe()
     obj._traced = True
     obj.dynamic_load = False
+    obj.fps = 24.0
+    obj._resolve_fps = lambda fps: obj.fps if fps is None else float(fps)
+    obj._device_prompt_handoff = False
+    obj._trace_variant_key = lambda key, per_token: key if key is None or not per_token else f"{key}_i2v"
+    obj._device_resident = mock.MagicMock(return_value=False)
+    obj._prefetch_noise = mock.MagicMock()
+    obj._log_latent_stats = mock.MagicMock()
+    obj._vae_traced = False
+    obj._trace_euler_tail = False
+    obj.transformer = SimpleNamespace(image_conditioning=False)
     obj.in_channels = 128
     obj.vae_encoder = mock.MagicMock(name="vae_encoder")
     obj.vae_ref_encoder_s1 = mock.MagicMock(name="ref_enc_s1")
