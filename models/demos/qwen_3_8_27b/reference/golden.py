@@ -15,10 +15,13 @@ The graded artifact (P1/P2) is the separate full-depth golden trace named by ``P
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import torch
+from safetensors import safe_open
 
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ReferenceCacheKey,
@@ -30,6 +33,20 @@ from models.demos.qwen_3_8_27b.config import Qwen38Config
 from models.demos.qwen_3_8_27b.reference import qwen3_8_ref as ref
 
 VARIANT = SimpleNamespace(name="qwen_3_8_27b", ref_cache_env="QWEN38_REF_CACHE")
+
+
+def trace_token_ids(trace_dir) -> torch.Tensor:
+    """The golden trace's input token ids ``[T]`` (int64), from either trace layout."""
+    trace_dir = Path(trace_dir)
+    meta = json.loads((trace_dir / "metadata.json").read_text())
+    if "token_ids" in meta:
+        return torch.tensor(meta["token_ids"], dtype=torch.int64)
+    # agentic-prefill-goldens: one shared token cache per model; a trace is its first n_tokens
+    with safe_open(str(trace_dir / meta["token_cache"]), "pt") as f:
+        ids = f.get_tensor("token_ids")
+    n = meta["n_tokens"]
+    assert ids.numel() >= n, f"token cache holds {ids.numel()} ids; the trace needs {n}"
+    return ids[:n].to(torch.int64)
 
 
 def _load_layer(layer: torch.nn.Module, sd: dict):

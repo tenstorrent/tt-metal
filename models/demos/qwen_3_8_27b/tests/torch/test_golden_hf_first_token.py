@@ -10,7 +10,6 @@ full width, real weights, streamed one layer at a time (fp32, like the trace).
 (pattern: minimax_m3/tests/golden_hf_first_token.py)
 """
 
-import json
 import os
 from pathlib import Path
 
@@ -36,7 +35,7 @@ def trace_dir():
 
 
 def test_reference_matches_upstream_on_real_checkpoint(trace_dir):
-    ids = torch.tensor(json.loads((trace_dir / "metadata.json").read_text())["token_ids"][:N])[None]
+    ids = golden.trace_token_ids(trace_dir)[:N][None]
     h, states = golden.stream_forward(QWEN38, ids, reader=CheckpointReader(), dtype=torch.float32)
     with safe_open(str(trace_dir / "final_hidden.safetensors"), "pt") as f:
         want_h = f.get_slice("final_hidden")[:, :N].float()

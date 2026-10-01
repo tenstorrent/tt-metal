@@ -10,7 +10,6 @@ Prints, per layer: hidden PCC, relative max error, and the top outlier channels'
 accuracy loss can be pinned to the layer (and block type) where it enters.
 """
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -32,7 +31,7 @@ def main():
     N = int(sys.argv[1]) if len(sys.argv) > 1 else 2048
     spec = PrefillSpec.load().validate()
     cfg = Qwen38Config.from_hf_json(checkpoint_dir() / "config.json")
-    ids = torch.tensor(json.loads(Path(os.environ["PREFILL_TRACE_DIR"], "metadata.json").read_text())["token_ids"][:N])
+    ids = golden.trace_token_ids(os.environ["PREFILL_TRACE_DIR"])[:N]
     ref_cache = Path(os.environ.get("QWEN38_DIAG_CACHE", "/tmp/qwen38_diag")) / f"ref_hidden_{N}.pt"
     if ref_cache.exists():
         ref_h = torch.load(ref_cache)

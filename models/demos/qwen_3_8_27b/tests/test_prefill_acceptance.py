@@ -32,6 +32,7 @@ from safetensors import safe_open
 
 import ttnn
 from models.demos.qwen_3_8_27b.config import Qwen38Config
+from models.demos.qwen_3_8_27b.reference import golden
 from models.demos.qwen_3_8_27b.reference.checkpoint import CheckpointReader, checkpoint_dir
 from models.demos.qwen_3_8_27b.tests.common import pcc
 from models.demos.qwen_3_8_27b.tt.common import weight_cache_dir
@@ -48,17 +49,6 @@ def _golden(trace_dir: Path, layer: int, is_full: bool):
         return f.get_tensor(f"recurrent_state_layer_{layer}").float(), f.get_tensor(f"conv_state_layer_{layer}").float()
 
 
-def _token_ids(trace_dir: Path, meta: dict) -> torch.Tensor:
-    if "token_ids" in meta:
-        return torch.tensor(meta["token_ids"], dtype=torch.int64)
-    # agentic-prefill-goldens: one shared token cache per model; a trace is its first n_tokens
-    with safe_open(str(trace_dir / meta["token_cache"]), "pt") as f:
-        ids = f.get_tensor("token_ids")
-    n = meta["n_tokens"]
-    assert ids.numel() >= n, f"token cache holds {ids.numel()} ids; the trace needs {n}"
-    return ids[:n].to(torch.int64)
-
-
 @pytest.mark.timeout(7200)  # cold weight conversion + 64-layer read-back exceed the repo's 300 s default
 def test_prefill_kv(mesh, mesh_config, ccl_manager, spec):
     chunked = os.environ.get("PREFILL_CHUNKED", "0") == "1"
@@ -69,7 +59,7 @@ def test_prefill_kv(mesh, mesh_config, ccl_manager, spec):
     # dimensions come from the checkpoint's own config.json (not from constants)
     cfg = Qwen38Config.from_hf_json(hf_dir / "config.json")
     meta = json.loads((trace_dir / "metadata.json").read_text())
-    token_ids = _token_ids(trace_dir, meta)
+    token_ids = golden.trace_token_ids(trace_dir)
     T = token_ids.numel()
     chunk = spec.chunk_size
     assert meta["num_layers"] == cfg.num_hidden_layers, "trace depth != model depth"
