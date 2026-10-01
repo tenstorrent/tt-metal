@@ -27,11 +27,9 @@ using tt::tt_metal::distributed::InterProcessCounterChannel;
 namespace {
 namespace mh = tt::tt_metal::distributed::multihost;
 // Fixed MPI tag for layer-completion traffic. Distinct from any other
-// host-to-host channel in the job. Shared by both protocol versions — a job
-// is homogeneous (protocol is chosen once at launch), so they never mix.
+// host-to-host channel in the job.
 constexpr mh::Tag kLayerCompletionTag{4242};
 
-// v1 master egress: the reordered contiguous count into the scheduler's counter channel.
 class CounterChannelEgress final : public SchedulerEgress {
 public:
     explicit CounterChannelEgress(const std::string& shm_name) :
@@ -43,7 +41,6 @@ private:
     std::unique_ptr<InterProcessCounterChannel> channel_;
 };
 
-// v2 master egress: forward-as-arrived into the scheduler-facing structured ring.
 class RingEgress final : public SchedulerEgress {
 public:
     explicit RingEgress(const std::string& shm_name) : ring_(LayerCompletionQueueV2::create(shm_name)) {}
@@ -60,8 +57,6 @@ LayerCompletionRouter::LayerCompletionRouter(LayerCompletionRouterConfig cfg) : 
         !is_master() || !cfg_.scheduler_shm_name.empty(),
         "LayerCompletionRouter: master requires scheduler_shm_name (protocol {})",
         static_cast<int>(cfg_.protocol));
-    // The protocol is chosen once per job and fixes every dynamic type below for the
-    // process's lifetime — the master/subordinate loops recover them via static_cast.
     switch (cfg_.protocol) {
         case LayerCompletionProtocol::kCountOnlyV1:
             queue_ = LayerCompletionQueue::create(cfg_.ring_shm_name);
@@ -103,12 +98,8 @@ void LayerCompletionRouter::stop() {
     }
 }
 
-// Shared master skeleton: drain the host-local ring + fan in subordinate completions over MPI,
-// with sentinel-coordinated teardown. `forward` is the per-protocol output action (v1: reorder →
-// bare count; v2: backpressured forward-as-arrived) — everything else is protocol-identical.
 template <typename MsgT, typename Forward>
 void LayerCompletionRouter::run_master_impl(Forward&& forward) {
-    // Dynamic type fixed by cfg_.protocol at construction — safe downcast.
     auto& queue = static_cast<LayerCompletionQueueT<MsgT>&>(*queue_);
 
     // Arm one irecv per subordinate (only when there is real MPI traffic).
@@ -200,8 +191,6 @@ void LayerCompletionRouter::run_master_impl(Forward&& forward) {
 void LayerCompletionRouter::run_master() {
     switch (cfg_.protocol) {
         case LayerCompletionProtocol::kCountOnlyV1: {
-            // v1 output policy: reorder by seq, inject the newly-contiguous COUNT. Dynamic type
-            // fixed by cfg_.protocol at construction — safe downcast.
             auto& egress = static_cast<CounterChannelEgress&>(*sched_egress_);
             LayerCompletionReorderBuffer reorder;
             std::vector<LayerCompletionMessage> drained;
@@ -215,14 +204,6 @@ void LayerCompletionRouter::run_master() {
             break;
         }
         case LayerCompletionProtocol::kStructuredV2: {
-            // v2 output policy: forward as-arrived — every completion is self-describing (request,
-            // slot, position range, layer range), so the scheduler keys work on content, not arrival
-            // order; no reorder buffer, no per-request head-of-line blocking. A full scheduler ring
-            // means the scheduler is behind: spin (backpressure propagates to the producers via their
-            // own full rings) — but bounded once stop_ is set, so a dead scheduler can't wedge
-            // teardown; the drops are logged after the loop. After the first timed-out push the
-            // scheduler is known-gone: fail fast so the remaining backlog drops without paying one
-            // full timeout per message.
             auto& egress = static_cast<RingEgress&>(*sched_egress_);
             uint64_t dropped = 0;
             bool scheduler_gone = false;
@@ -261,7 +242,6 @@ void LayerCompletionRouter::run_master() {
 }
 
 void LayerCompletionRouter::run_subordinate() {
-    // Dynamic type fixed by cfg_.protocol at construction — safe downcasts.
     switch (cfg_.protocol) {
         case LayerCompletionProtocol::kCountOnlyV1:
             run_subordinate_impl(static_cast<LayerCompletionQueue&>(*queue_));

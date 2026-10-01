@@ -1,12 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-//
-// Host-only tests for the layer-completion SHM ring, covering both protocol
-// versions: v1 (LayerCompletionMessage, 24B packed cells, magic 'LCQ1') and
-// v2 (LayerCompletionMessageV2, 48B self-describing messages, cache-line
-// cells, magic 'LCQ2'). No device or MPI needed — owner and connector are
-// two LayerCompletionQueueT objects in this process sharing /dev/shm.
 
 #include <gtest/gtest.h>
 
@@ -34,42 +28,32 @@ MsgT make_msg(uint64_t seq);
 
 template <>
 LayerCompletionMessage make_msg<LayerCompletionMessage>(uint64_t seq) {
-    return LayerCompletionMessage{
-        seq,
-        /*source_rank=*/1u,
-        /*layer_idx=*/static_cast<uint32_t>(seq % 61),
-        /*request_id=*/static_cast<uint32_t>(seq / 61),
-        /*reserved=*/0u};
+    return LayerCompletionMessage{seq, 1u, static_cast<uint32_t>(seq % 61), static_cast<uint32_t>(seq / 61), 0u};
 }
 
 template <>
 LayerCompletionMessageV2 make_msg<LayerCompletionMessageV2>(uint64_t seq) {
     return LayerCompletionMessageV2{
         seq,
-        /*source_rank=*/1u,
-        /*request_id=*/static_cast<uint32_t>(seq / 61),
-        /*slot_id=*/3u,
-        /*pos_start=*/5120u,
-        /*pos_end=*/10240u,
-        /*layer_start=*/static_cast<uint32_t>(seq % 61),
-        /*layer_end=*/static_cast<uint32_t>(seq % 61) + 1u,
-        /*flags=*/0u};
+        1u,
+        static_cast<uint32_t>(seq / 61),
+        3u,
+        5120u,
+        10240u,
+        static_cast<uint32_t>(seq % 61),
+        static_cast<uint32_t>(seq % 61) + 1u,
+        0u};
 }
 
 void unlink_if_exists(const std::string& shm_name) { std::remove(("/dev/shm" + shm_name).c_str()); }
 
 }  // namespace
 
-// ---------------------------------------------------------------------------
-// Wire geometry (the compile-time contract lives beside the layouts in the
-// headers; these EXPECTs surface a drift as a test failure too).
-// ---------------------------------------------------------------------------
-
 TEST(LayerCompletionLayout, V1GeometryIsFrozen) {
     EXPECT_EQ(sizeof(LayerCompletionMessage), 24u);
     EXPECT_EQ(alignof(LayerCompletionMessage), 8u);
     EXPECT_TRUE(std::is_trivially_copyable_v<LayerCompletionMessage>);
-    EXPECT_EQ(sizeof(LayerCompletionCell), 32u);  // packed, two cells per cache line
+    EXPECT_EQ(sizeof(LayerCompletionCell), 32u);
     EXPECT_EQ(alignof(LayerCompletionCell), 8u);
     EXPECT_EQ(layer_completion_cells_offset<LayerCompletionMessage>(), 128u);
     EXPECT_EQ(kLayerCompletionRingBytes<LayerCompletionMessage>, 32896u);
@@ -81,13 +65,11 @@ TEST(LayerCompletionLayout, V2Geometry) {
     EXPECT_EQ(offsetof(LayerCompletionMessageV2, host_ts_ns), 40u);
     EXPECT_EQ(alignof(LayerCompletionMessageV2), 8u);
     EXPECT_TRUE(std::is_trivially_copyable_v<LayerCompletionMessageV2>);
-    // One cache line per cell — a packed 56B cell would straddle lines.
     EXPECT_EQ(sizeof(LayerCompletionCellV2), kLayerCompletionCacheLine);
     EXPECT_EQ(alignof(LayerCompletionCellV2), kLayerCompletionCacheLine);
     EXPECT_EQ(layer_completion_cells_offset<LayerCompletionMessageV2>() % kLayerCompletionCacheLine, 0u);
     EXPECT_EQ(kLayerCompletionRingBytes<LayerCompletionMessageV2> % kLayerCompletionCacheLine, 0u);
     EXPECT_EQ(LayerCompletionRingTraits<LayerCompletionMessageV2>::magic, 0x4C435132u);
-    // The version key is what keeps a cross-protocol attach from corrupting.
     EXPECT_NE(
         LayerCompletionRingTraits<LayerCompletionMessage>::magic,
         LayerCompletionRingTraits<LayerCompletionMessageV2>::magic);
@@ -116,10 +98,6 @@ TEST(LayerCompletionLayout, Sentinels) {
     EXPECT_TRUE(is_layer_completion_sentinel(v2));
 }
 
-// ---------------------------------------------------------------------------
-// Ring behaviour, both instantiations
-// ---------------------------------------------------------------------------
-
 template <typename MsgT>
 class LayerCompletionRingTest : public ::testing::Test {
 protected:
@@ -127,7 +105,6 @@ protected:
 
     void SetUp() override { ring_names_.clear(); }
 
-    // Unique SHM names per case so parallel/repeated runs never collide.
     std::string fresh_name(const char* tag) {
         std::string name = fmt::format("/tt_lcq_test_{}_{}_{}", tag, ::getpid(), ring_names_.size());
         ring_names_.push_back(name);
@@ -155,9 +132,9 @@ TYPED_TEST(LayerCompletionRingTest, FifoRoundtrip) {
     MsgT out{};
     for (uint64_t i = 0; i < 8; ++i) {
         ASSERT_TRUE(conn->try_pop(out));
-        EXPECT_EQ(out.seq, i);  // FIFO
+        EXPECT_EQ(out.seq, i);
     }
-    EXPECT_FALSE(conn->try_pop(out));  // empty
+    EXPECT_FALSE(conn->try_pop(out));
     owner->shutdown();
 }
 
@@ -170,7 +147,7 @@ TYPED_TEST(LayerCompletionRingTest, RejectsPushWhenFull) {
     for (uint32_t i = 0; i < Queue::capacity(); ++i) {
         ASSERT_TRUE(owner->try_push(make_msg<MsgT>(i)));
     }
-    EXPECT_FALSE(owner->try_push(make_msg<MsgT>(9999)));  // full → reject, no overwrite
+    EXPECT_FALSE(owner->try_push(make_msg<MsgT>(9999)));
     owner->shutdown();
 }
 
@@ -198,7 +175,6 @@ TYPED_TEST(LayerCompletionRingTest, WrapsAroundPastCapacity) {
     owner->shutdown();
 }
 
-// Multiple producer threads, single consumer — the prefill topology.
 TYPED_TEST(LayerCompletionRingTest, MpscProducersAllDelivered) {
     using MsgT = TypeParam;
     using Queue = LayerCompletionQueueT<MsgT>;
@@ -244,10 +220,6 @@ TYPED_TEST(LayerCompletionRingTest, MpscProducersAllDelivered) {
     owner->shutdown();
 }
 
-// ---------------------------------------------------------------------------
-// V2-specific: full field round-trip, and the cross-version guard.
-// ---------------------------------------------------------------------------
-
 TEST(LayerCompletionQueueV2, AllFieldsRoundTrip) {
     const std::string name = "/tt_lcq_test_v2_fields";
     unlink_if_exists(name);
@@ -255,16 +227,7 @@ TEST(LayerCompletionQueueV2, AllFieldsRoundTrip) {
     auto conn = LayerCompletionQueueV2::connect(name, 5'000);
 
     const LayerCompletionMessageV2 in{
-        /*seq=*/7u * 61 + 14,
-        /*source_rank=*/2u,
-        /*request_id=*/7u,
-        /*slot_id=*/5u,
-        /*pos_start=*/5120u,
-        /*pos_end=*/10213u,
-        /*layer_start=*/14u,
-        /*layer_end=*/15u,
-        /*flags=*/0u,
-        /*host_ts_ns=*/1'790'000'000'123'456'789u};
+        7u * 61 + 14, 2u, 7u, 5u, 5120u, 10213u, 14u, 15u, 0u, 1'790'000'000'123'456'789u};
     ASSERT_TRUE(owner->try_push(in));
 
     LayerCompletionMessageV2 out{};
@@ -282,23 +245,13 @@ TEST(LayerCompletionQueueV2, AllFieldsRoundTrip) {
     owner->shutdown();
 }
 
-// A range message (stage-level completion) travels as one slot, unsplit.
 TEST(LayerCompletionQueueV2, RangeMessageRoundTrip) {
     const std::string name = "/tt_lcq_test_v2_range";
     unlink_if_exists(name);
     auto owner = LayerCompletionQueueV2::create(name);
     auto conn = LayerCompletionQueueV2::connect(name, 5'000);
 
-    ASSERT_TRUE(owner->try_push(LayerCompletionMessageV2{
-        /*seq=*/3u * 61,
-        /*source_rank=*/0u,
-        /*request_id=*/3u,
-        /*slot_id=*/1u,
-        /*pos_start=*/0u,
-        /*pos_end=*/5120u,
-        /*layer_start=*/0u,
-        /*layer_end=*/14u,  // 14 layers, one message
-        /*flags=*/0u}));
+    ASSERT_TRUE(owner->try_push(LayerCompletionMessageV2{3u * 61, 0u, 3u, 1u, 0u, 5120u, 0u, 14u, 0u}));
 
     LayerCompletionMessageV2 out{};
     ASSERT_TRUE(conn->try_pop(out));
@@ -310,13 +263,12 @@ TEST(LayerCompletionQueueV2, RangeMessageRoundTrip) {
 TEST(LayerCompletionQueue, CrossVersionConnectFails) {
     const std::string name = "/tt_lcq_test_xver";
     unlink_if_exists(name);
-    auto owner = LayerCompletionQueue::create(name);  // v1 segment ('LCQ1')
-    // A v2 connector must be rejected by the magic check, not map and corrupt.
+    auto owner = LayerCompletionQueue::create(name);
     EXPECT_THROW(LayerCompletionQueueV2::connect(name, 5'000), std::runtime_error);
     owner->shutdown();
 
     unlink_if_exists(name);
-    auto owner2 = LayerCompletionQueueV2::create(name);  // v2 segment ('LCQ2')
+    auto owner2 = LayerCompletionQueueV2::create(name);
     EXPECT_THROW(LayerCompletionQueue::connect(name, 5'000), std::runtime_error);
     owner2->shutdown();
 }

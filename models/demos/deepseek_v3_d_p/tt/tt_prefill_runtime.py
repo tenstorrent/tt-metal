@@ -147,8 +147,6 @@ class TtPrefillRuntime:
         self.config = config
         assert config.model_cfg is not None, "TtPrefillRuntimeConfig.model_cfg must be set by the model adapter"
         self._on_layer_complete = None
-        # Completion sink (pipelined mode), set by set_layer_completion_sink() — a polymorphic
-        # LayerCompletionSink fired per completion event from prefill_chunk's per-call closure.
         self._layer_completion_sink = None
         # DFlash drafter, built in _build_model when config.dflash_enabled (else all None and prefill_chunk's
         # dflash branches are inert). Its tap closure + last-rank K/V caches are set there.
@@ -180,10 +178,9 @@ class TtPrefillRuntime:
         #   _trace_captured   — flips True once capture_trace() records the segmented capture (single-shot)
         #   _kv_cache         — the engine cache handle from compile(), used by capture_trace()
         #   _trace_request_id — the request/chunk id of the replay in flight. The controller's per-layer
-        #                       callback is fixed at capture time, so a traced run cannot bind the
-        #                       per-chunk fields into a fresh closure per call (the eager path does);
-        #                       prefill_chunk() publishes them here and set_layer_completion_sink()'s
-        #                       callback reads them at replay. Same for _trace_slot_id/_trace_pos_*.
+        #                       callback is fixed at capture time, so a traced run cannot bind request_id
+        #                       into a fresh closure per call (the eager path does); prefill_chunk()
+        #                       publishes it here and set_layer_completion_sink()'s callback reads it.
         self._controller = None
         self._trace_input = None
         self._trace_metadata = None
@@ -973,9 +970,9 @@ class TtPrefillRuntime:
             )
             # Per-layer completion callbacks live on the CONTROLLER, registered once at capture time (a
             # host-side callback cannot execute inside a trace, so the capture splits at each ack point).
-            # That means the per-chunk fields cannot be re-bound per call the way the eager path does
-            # below — publish them instead; the captured callback built by set_layer_completion_sink()
-            # reads them at replay time.
+            # That means the pipelined sink's request_id cannot be re-bound per call the way the eager
+            # path does below — publish this chunk's id instead; the captured callback built by
+            # set_layer_completion_sink() reads it at replay time.
             assert mtp_tokens is None and not self.config.mtp_levels, (
                 "use_trace does not support MTP: the union is built per chunk (fresh addresses) and the "
                 "levels run after the captured segment, neither of which survives a capture; run with "
@@ -1498,21 +1495,12 @@ class TtPrefillRuntime:
         )
 
     def set_layer_completion_sink(self, sink) -> None:
-        """Register the completion sink for pipelined prefill.
+        """Register a per-layer completion sink for pipelined prefill.
 
-        `sink` is a LayerCompletionSink (runners/layer_completion_sink.py) —
-        protocol-polymorphic: once per completion event the runtime fires
-        `sink.layers_completed(layer_start, layer_end, request_id, slot_id,
-        actual_start, actual_end)` with the span at this model's natural
-        granularity (per layer here, so [layer_idx, layer_idx+1)) and the
-        chunk's request id / cache slot / KV-position range bound per
-        prefill_chunk() call (so the sink need not read any mutable runtime
-        state). The v1 implementation maps the span to one ring message per
-        covered layer ({seq, source_rank, layer_idx, request_id}, reordered by
-        the master into a bare scheduler count); the v2 implementation emits
-        one self-describing message per span, forwarded as-arrived to the
-        scheduler-facing structured ring (issue #54632). Both replace the
-        direct counter-channel inject used in single-host mode.
+        `sink.layers_completed(layer_idx, layer_idx + 1, request_id, slot_id,
+        actual_start, actual_end)` is called once per layer with the chunk
+        identity prefill() binds per call (so the sink need not read any
+        mutable runtime state).
 
         use_trace: the callback must be known at CAPTURE time (a host push cannot live inside a
         trace), so it is registered on the controller and the eager capture is re-recorded to split at

@@ -417,14 +417,12 @@ class TtPrefillRuntime:
         # per-chunk host reshard, and the tensors are persistent (do NOT deallocate them here). The KV
         # cache is engine-owned and passed in. If a LayerAck channel is registered, the model bumps it
         # once per layer via on_layer_complete.
-        # Pipelined mode registers a polymorphic completion sink; bind the per-chunk fields per call so
-        # the synchronous per-layer callback reads no mutable state. Single-host mode uses the ack.
+        # Pipelined mode registers a completion sink keyed by (global_layer_idx, request_id); bind request_id
+        # per call so the synchronous per-layer callback reads no mutable state. Single-host mode uses the ack.
         if self._layer_completion_sink is not None:
             sink = self._layer_completion_sink
 
             def on_layer_complete(layer_idx: int) -> None:
-                # The model reports a rank-local index; globalize it (every rank's local layer k would
-                # otherwise collide across ranks).
                 global_layer = self.config.first_layer_idx + layer_idx
                 sink.layers_completed(global_layer, global_layer + 1, request_id, slot_id, actual_start, actual_end)
 
@@ -456,11 +454,6 @@ class TtPrefillRuntime:
         return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
 
     def set_layer_completion_sink(self, sink) -> None:
-        """Register the completion sink for pipelined (multi-rank) prefill: a polymorphic
-        LayerCompletionSink (runners/layer_completion_sink.py) fired per layer as
-        ``sink.layers_completed(layer_start, layer_end, request_id, slot_id, actual_start,
-        actual_end)`` with the per-chunk fields bound per ``prefill_chunk`` call. Replaces the
-        single-host ack-counter inject."""
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
 
