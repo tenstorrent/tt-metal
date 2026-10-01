@@ -267,8 +267,11 @@ TT_VISIBLE_DEVICES=0 PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
 
 Standalone **p150a** (host: AMD Ryzen 9 7900X), checkpoint converted from
 `gs://openpi-assets/checkpoints/pi05_base`. Mean of 3 fresh-process repeats per config
-(20 timed chunks each, D2H included; repeats agree within 0.06 ms); AICLK held at 1350 MHz.
-2-camera runs set `PI0_VLM_CHUNK_SIZE=768`, 3-camera runs use the env-file default 1024:
+(20 timed chunks each, D2H included; repeats agree within 0.05 ms); AICLK held at 1350 MHz.
+2-camera runs set `PI0_VLM_CHUNK_SIZE=768`, 3-camera runs use the env-file default 1024.
+Measured after merging tt-metal `main` (2026-10-01) with the default approximate-exp softmax in
+SDPA and `kv_sdpa`; `PI0_SDPA_EXP_APPROX=0` switches the SDPA ops to exact exp (+1.3 ms at
+2 cameras, +2.1 ms at 3 cameras, 5 steps):
 
 ```bash
 source models/experimental/pi0_5/common/pi05_production.env
@@ -279,8 +282,8 @@ TT_VISIBLE_DEVICES=0 PI0_NUM_CAMERAS=2 PI0_VLM_CHUNK_SIZE=768 PI05_NUM_DENOISE_S
 
 | Denoise steps | 2 cameras | 3 cameras |
 |---|---|---|
-| **5 steps** | 34.60 ms | 38.28 ms |
-| **10 steps** | 48.87 ms | 53.46 ms |
+| **5 steps** | 35.36 ms | 39.43 ms |
+| **10 steps** | 50.42 ms | 55.69 ms |
 
 | | Physical Tensix grid | Tensix cores | Usable compute grid (what ttnn reports) |
 |---|---|---|---|
