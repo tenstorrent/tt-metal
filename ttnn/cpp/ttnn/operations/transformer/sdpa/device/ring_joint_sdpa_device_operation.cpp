@@ -827,14 +827,25 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(NKH == 1, "Latent-V mode currently supports one shared KV head. Got K/V heads: {}", NKH);
         TT_FATAL(
             NVH == NKH,
-            "Latent-V mode reads V from K's prefix, so V head count must match K head count. Got V: {}, K: {}",
+            "Latent-V mode reads V from K's rows, so V head count must match K head count. Got V: {}, K: {}",
             NVH,
             NKH);
-        TT_FATAL(
-            VDH < DH,
-            "Latent-V mode reads V from K's strict prefix, so V head dim must be < K head dim. Got V: {}, K: {}",
-            VDH,
-            DH);
+        if (tensor_args.has_packed_kv()) {
+            TT_FATAL(
+                VDH <= k_shape[3] && k_shape[3] % tt::constants::TILE_WIDTH == 0 &&
+                    tensor_args.input_k.logical_shape()[3] == k_shape[3],
+                "Packed KV (K rows wider than Q) reads V as K's last V-head-dim columns, so V must fit in the row and "
+                "the gathered K must have K's row width. Got K: {}, gathered K: {}, V: {}",
+                tensor_args.input_k.logical_shape()[3],
+                k_shape[3],
+                VDH);
+        } else {
+            TT_FATAL(
+                VDH < DH,
+                "Latent-V mode reads V from K's strict prefix, so V head dim must be < K head dim. Got V: {}, K: {}",
+                VDH,
+                DH);
+        }
         TT_FATAL(
             VDH % tt::constants::TILE_WIDTH == 0,
             "Latent-V head dim must be tile aligned. Got V: {}, tile width: {}",
@@ -893,7 +904,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 joint_v_shape[3]);
         }
     } else {
-        TT_FATAL(k_shape[3] == DH, "Q/K head dimensions must match. Got Q: {}, K: {}", DH, k_shape[3]);
+        if (!tensor_args.has_packed_kv()) {
+            TT_FATAL(k_shape[3] == DH, "Q/K head dimensions must match. Got Q: {}, K: {}", DH, k_shape[3]);
+        }
         if (has_joint_tensors) {
             TT_FATAL(
                 joint_k_shape[3] == DH,
@@ -1204,7 +1217,10 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    tt::tt_metal::MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    // QK^T and softmax @ V dominate the modeled cycles, so use their fidelity when it is overridden.
+    const auto matmul_fidelity =
+        args.program_config.has_value() ? args.program_config->matmul_math_fidelity : std::nullopt;
+    tt::tt_metal::MathFidelity fidelity = matmul_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
 
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];

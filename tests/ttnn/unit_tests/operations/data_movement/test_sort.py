@@ -3,13 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 import threading
 
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
 
 TILE_HEIGHT = 32
@@ -1504,10 +1502,6 @@ def _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, de
         assert_equal(torch_indices, dev_indices)
 
 
-@pytest.mark.skipif(
-    bool(os.environ.get("TT_METAL_SIMULATOR")) and is_blackhole(),
-    reason="#54590: CrossCore sort semaphore handshake deadlocks under the Blackhole simulator",
-)
 @pytest.mark.parametrize("descending", [False, True])
 @pytest.mark.parametrize(
     "width, layout",
