@@ -104,13 +104,11 @@ def _detect_arch() -> Optional[str]:
     return None
 
 
-def _bundled_mgd(shape: Sequence[int]) -> Optional[str]:
-    """The bundled descriptor for the host arch and ``shape``, or ``None`` if there isn't one."""
-    name = _BUNDLED_MGD.get((_detect_arch(), tuple(shape)))
-    if name is None:
-        return None
-    path = os.path.join(_MGD_DIR, name)
-    return path if os.path.isfile(path) else None
+def _bundled_mgd(arch: Optional[str], shape: Sequence[int]) -> Optional[str]:
+    """The bundled descriptor for ``arch`` and ``shape``, or ``None`` if there isn't one."""
+    name = _BUNDLED_MGD.get((arch, tuple(shape)))
+    path = name and os.path.join(_MGD_DIR, name)
+    return path if path and os.path.isfile(path) else None
 
 
 def _restore_mgd_path(previous: Optional[str]) -> None:
@@ -154,8 +152,8 @@ def _fresh_device_mesh(
     """
     _skip_if_host_too_small(shape, what)
     previous_mgd = os.environ.get(_MGD_ENV)
-    mgd = _bundled_mgd(shape)
     arch = _detect_arch()
+    mgd = _bundled_mgd(arch, shape)
     if require_mgd and not previous_mgd and mgd is None and arch is not None:
         pytest.skip(
             f"{what} need a mesh graph descriptor for arch={arch!r} shape={tuple(shape)}; "
