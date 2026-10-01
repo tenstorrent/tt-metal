@@ -100,6 +100,9 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
         this->set_global_circular_buffer(*descriptor.global_circular_buffer);
     } else {
         if (globally_allocated()) {
+            if (descriptor.tensor != nullptr) {
+                global_mesh_buffer_ = &descriptor.tensor->mesh_buffer();
+            }
             // As above: resolve a per-core buffer's address against this CB's cores at construction.
             if (config_.shadow_global_buffer != nullptr) {
                 this->assign_global_address();
@@ -222,18 +225,21 @@ void CircularBufferImpl::set_global_buffer(const Buffer& buffer, uint32_t total_
     // Reject a buffer this CB's cores cannot share before changing any backing-buffer state.
     cb_buffer_base_address(buffer, nullptr, this->core_ranges_);
     config_.set_globally_allocated_address_and_total_size(buffer, total_size, address_offset);
+    global_mesh_buffer_ = nullptr;
     assign_global_address();
 }
 
 void CircularBufferImpl::set_global_buffer(const MeshTensor& tensor, uint32_t total_size, uint32_t address_offset) {
-    cb_buffer_base_address(*tensor.mesh_buffer().get_reference_buffer(), &tensor.mesh_buffer(), this->core_ranges_);
-    config_.set_globally_allocated_address_and_total_size(tensor, total_size, address_offset);
+    const Buffer& reference_buffer = *tensor.mesh_buffer().get_reference_buffer();
+    cb_buffer_base_address(reference_buffer, &tensor.mesh_buffer(), this->core_ranges_);
+    config_.set_globally_allocated_address_and_total_size(reference_buffer, total_size, address_offset);
+    global_mesh_buffer_ = &tensor.mesh_buffer();
     assign_global_address();
 }
 
 void CircularBufferImpl::assign_global_address() {
     globally_allocated_address_ =
-        cb_buffer_base_address(*config_.shadow_global_buffer, config_.shadow_global_mesh_buffer, this->core_ranges_) +
+        cb_buffer_base_address(*config_.shadow_global_buffer, global_mesh_buffer_, this->core_ranges_) +
         config_.address_offset();
     ++config_generation_;
 }
