@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -201,9 +202,12 @@ class MiniMaxH3Attention(Module):
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
+        sdpa_fidelity = ttnn.MathFidelity.HiFi2
+        if self.use_ring and os.environ.get("MINIMAX_H3_SDPA_FIDELITY"):
+            sdpa_fidelity = getattr(ttnn.MathFidelity, os.environ["MINIMAX_H3_SDPA_FIDELITY"])
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=sdpa_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
         )
@@ -304,11 +308,20 @@ class MiniMaxH3Attention(Module):
             grid = (
                 ttnn.CoreCoord(*self.sdpa_worker_grid) if ring else ttnn.CoreCoord(self.full_grid.x, self.full_grid.y)
             )
+            phase_fidelity = {}
+            if ring:
+                for field, var in (
+                    ("qk_math_fidelity", "MINIMAX_H3_SDPA_QK_FIDELITY"),
+                    ("pv_math_fidelity", "MINIMAX_H3_SDPA_PV_FIDELITY"),
+                ):
+                    if os.environ.get(var):
+                        phase_fidelity[field] = getattr(ttnn.MathFidelity, os.environ[var])
             self._sdpa_program_configs[key] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
                 exp_approx_mode=False,  # NOTE: False is more correct
+                **phase_fidelity,
             )
         return self._sdpa_program_configs[key]
 
