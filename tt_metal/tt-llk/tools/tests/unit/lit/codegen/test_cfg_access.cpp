@@ -274,3 +274,96 @@ extern "C" std::uint32_t expected_thread_field()
     ckernel::wait(1);
     return ckernel::reg_read(RISCV_DEBUG_REG_TENSIX_CREG_RDDATA) & 3u;
 }
+
+// A field group anchors whole-word access on its Raw field.
+extern "C" void actual_group_array(const std::array<std::uint32_t, 4>& values)
+{
+    write<Access::MMIO, Thcon[Reg0].TileDescriptor, Sec::S1, 4>(values);
+}
+
+extern "C" void expected_group_array(const std::array<std::uint32_t, 4>& values)
+{
+    auto cfg = expected_state_bank();
+    cfg[112] = values[0];
+    cfg[113] = values[1];
+    cfg[114] = values[2];
+    cfg[115] = values[3];
+}
+
+extern "C" std::uint32_t actual_group_read_word()
+{
+    return read_word<Access::MMIO, Thcon[Reg0].TileDescriptor, Sec::S0, 3>();
+}
+
+extern "C" std::uint32_t expected_group_read_word()
+{
+    return expected_state_bank()[67];
+}
+
+extern "C" void actual_group_gpr()
+{
+    write<Access::TensixCfgUnit, Thcon[Reg0].TileDescriptor, Sec::S1, GprTransferSize::Bits128>(hal::gpr<4>());
+}
+
+extern "C" void expected_group_gpr()
+{
+    TTI_WRCFG(4, 1, 112);
+    TTI_NOP;
+}
+
+extern "C" void actual_group_from_gpr()
+{
+    write<Access::TensixCfgUnit>(from_gpr<Thcon[Reg0].TileDescriptor, Sec::S1, GprTransferSize::Bits128>(hal::gpr<4>()));
+}
+
+extern "C" void expected_group_from_gpr()
+{
+    TTI_WRCFG(4, 1, 112);
+    TTI_NOP;
+}
+
+// Whole-word access includes every word occupied by the selected section.
+extern "C" void actual_wide_anchor_array(const std::array<std::uint32_t, 3>& values)
+{
+    write<Access::MMIO, state_sectioned_wide, Sec::S0, 3>(values);
+}
+
+extern "C" void expected_wide_anchor_array(const std::array<std::uint32_t, 3>& values)
+{
+    auto cfg = expected_state_bank();
+    cfg[64]  = values[0];
+    cfg[65]  = values[1];
+    cfg[66]  = values[2];
+}
+
+extern "C" std::uint32_t actual_wide_anchor_read_word()
+{
+    return read_word<Access::MMIO, state_sectioned_wide, Sec::S0, 2>();
+}
+
+extern "C" std::uint32_t expected_wide_anchor_read_word()
+{
+    return expected_state_bank()[66];
+}
+
+extern "C" void actual_aligned_section_array(const std::array<std::uint32_t, 2>& values)
+{
+    write<Access::MMIO, state_sectioned_wide, Sec::S1, 2>(values);
+}
+
+extern "C" void expected_aligned_section_array(const std::array<std::uint32_t, 2>& values)
+{
+    auto cfg = expected_state_bank();
+    cfg[67]  = values[0];
+    cfg[68]  = values[1];
+}
+
+extern "C" std::uint32_t actual_aligned_section_read_word()
+{
+    return read_word<Access::MMIO, state_sectioned_wide, Sec::S1, 1>();
+}
+
+extern "C" std::uint32_t expected_aligned_section_read_word()
+{
+    return expected_state_bank()[68];
+}
