@@ -20,7 +20,7 @@ Config: [`configs/MiniMax-M3/config.json`](configs/MiniMax-M3/config.json).
 
 - **Sequence-parallel prefill** (SP=8) over the mesh rows, **tensor-parallel** (TP=4) over the columns, **expert-parallel** (EP=32) MoE.
 - **Dense attention:** `ring_joint` SDPA (first-chunk + block-cyclic SP-sharded KV-cache read).
-- **Sparse attention (MSA):** `indexer_score_msa` → top-k blocks → `sparse_sdpa_msa`, token-level causal mask, per-device causality via mesh-coord `cluster_axis`. On-device indexed RoPE (whole-cache block-cyclic cos/sin built once).
+- **Sparse attention (MSA):** `indexer_score_msa` → top-k blocks → `sparse_sdpa_msa` (per-core L1 block cache, auto-sized), token-level causal mask, per-device causality via mesh-coord `cluster_axis`. On-device indexed RoPE (whole-cache block-cyclic cos/sin built once).
 - **MoE:** DeepSeek EP dispatch/combine + the fused `unified_routed_expert_ffn` kernel with M3's clamped swigluoai activation (`RoutedExpertActivation.SwiGluOai`).
 - **KV cache:** SP-sharded, block-cyclic; chunked prefill reads the accumulated prefix on-device.
 
