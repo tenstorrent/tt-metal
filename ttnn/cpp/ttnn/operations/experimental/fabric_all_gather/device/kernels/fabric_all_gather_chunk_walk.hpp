@@ -15,11 +15,12 @@
 //                                    p, p + num_dram_banks, p + 2 * num_dram_banks, ... are physically contiguous.
 //                       ND-sharded   pages are grouped into shards of consecutive pages, each shard in one bank, so
 //                                    logically consecutive pages are physically contiguous within a shard.
-//   logical bank      page_in_slice % num_dram_banks. Within one outer slice of an interleaved tensor, the physical
-//   bank
-//                     is the logical bank rotated by where the slice starts, so different logical banks are different
-//                     physical banks, and the pages of one logical bank are physically contiguous. "Bank" in names
-//                     (first_owned_bank, owned_bank_stride, bank_half) means logical bank.
+//   page lane         Lane k of an outer slice is its pages k, k + num_dram_banks, k + 2 * num_dram_banks, ...
+//                     (page_in_slice % num_dram_banks == k): there are num_dram_banks lanes. In an interleaved tensor
+//                     each lane is stored in exactly one DRAM bank, its pages one after another, and different lanes
+//                     are in different banks. Which bank holds lane k depends on where the slice starts (page
+//                     slice_start + page_in_slice is in bank (slice_start + page_in_slice) % num_dram_banks), but the
+//                     kernels never need it: they only rely on those two properties.
 //
 // What is gathered
 //   ring              Chips the gather travels along (closed or open). Each chip sends forward (to the next chip) and
@@ -37,12 +38,12 @@
 //   cache slot        The batch index of a persistent cache that is gathered; its pages start at cache_slot_first_page.
 //
 // How it moves
-//   fabric chunk      Up to pages_per_fabric_chunk pages of one logical bank of one outer slice: physically contiguous
-//   in
-//                     an interleaved tensor, so one DRAM read and one fabric packet (a page larger than the payload is
-//                     a chunk of its own, sent as several packets). A core owns the logical banks first_owned_bank,
-//                     first_owned_bank + owned_bank_stride, ... and walks their chunks in a fixed order
-//                     (for_each_fabric_chunk), the same on every chip.
+//   fabric chunk      Up to pages_per_fabric_chunk consecutive pages of one page lane of one outer slice: one run in
+//                     one DRAM bank of an interleaved tensor, so one DRAM read and one fabric packet (a page larger
+//                     than the payload is a chunk of its own, sent as several packets). A core owns the lanes
+//                     first_owned_lane, first_owned_lane + owned_lane_stride, ... and walks their chunks in a fixed
+//                     order (for_each_fabric_chunk), the same on every chip. Cores that own different lanes never use
+//                     the same DRAM bank within an outer slice.
 //   CB batch          chunks_per_cb_batch chunk slots of the chunk CB, reserved, read and handed over together. The CB
 //                     holds two batches: the reader fills one while the sender (or copy writer) drains the other.
 //   fabric link worker  One core per (ring, direction, link). Its reader reads this chip's own shard from the input,
@@ -51,10 +52,10 @@
 //   local copy core   Writes this chip's own shard into its own output, without the fabric: one per link.
 //
 // Protocol
-//   outgoing shards   The shards a link worker sends, in order: make_outgoing_shard(rank, bank_half). Outgoing shard 0
+//   outgoing shards   The shards a link worker sends, in order: make_outgoing_shard(rank, lane_half). Outgoing shard 0
 //                     is the chip's own shard; outgoing shard k >= 1 is forwarded: what upstream sent as its k - 1.
-//                     bank_half 1 / 2 = the first / second half of the owned banks: on an even ring the opposite shard
-//                     goes half each way.
+//                     lane_half 1 / 2 = the first / second half of the owned lanes: on an even ring the opposite
+//                     shard goes half each way.
 //   shards-arrived counter  +1 when one of upstream's outgoing shards has fully landed (fused onto its last packet).
 //                     The reader waits for k before forwarding outgoing shard k; the sender waits for every shard
 //                     expected from upstream at the end, then resets it.
@@ -74,11 +75,11 @@
 
 namespace ttnn::operations::experimental::fabric_all_gather::chunk_walk {
 
-constexpr uint32_t kWholeChipShard = 0, kFirstBankHalf = 1, kSecondBankHalf = 2;
+constexpr uint32_t kWholeChipShard = 0, kFirstLaneHalf = 1, kSecondLaneHalf = 2;
 
-constexpr uint32_t make_outgoing_shard(uint32_t rank, uint32_t bank_half) { return rank | (bank_half << 16); }
+constexpr uint32_t make_outgoing_shard(uint32_t rank, uint32_t lane_half) { return rank | (lane_half << 16); }
 constexpr uint32_t outgoing_shard_rank(uint32_t outgoing_shard) { return outgoing_shard & 0xFFFF; }
-constexpr uint32_t outgoing_shard_bank_half(uint32_t outgoing_shard) { return outgoing_shard >> 16; }
+constexpr uint32_t outgoing_shard_lane_half(uint32_t outgoing_shard) { return outgoing_shard >> 16; }
 
 struct ChipShardGeometry {
     uint32_t num_outer_slices;
@@ -92,45 +93,45 @@ inline uint32_t output_page_index(
     return (outer_slice * geometry.num_ranks + rank) * geometry.pages_per_outer_slice + page_in_slice;
 }
 
-// The owned logical banks a bank half covers: indices [begin, end) of first_owned_bank, first_owned_bank +
-// owned_bank_stride, ...
-inline uint32_t num_owned_banks(uint32_t num_dram_banks, uint32_t first_owned_bank, uint32_t owned_bank_stride) {
-    return (num_dram_banks - first_owned_bank + owned_bank_stride - 1) / owned_bank_stride;
+// The owned lanes a lane half covers: indices [begin, end) of first_owned_lane, first_owned_lane +
+// owned_lane_stride, ...
+inline uint32_t num_owned_lanes(uint32_t num_dram_banks, uint32_t first_owned_lane, uint32_t owned_lane_stride) {
+    return (num_dram_banks - first_owned_lane + owned_lane_stride - 1) / owned_lane_stride;
 }
-inline uint32_t bank_half_begin(uint32_t num_owned, uint32_t bank_half) {
-    return bank_half == kSecondBankHalf ? num_owned / 2 : 0;
+inline uint32_t lane_half_begin(uint32_t num_owned, uint32_t lane_half) {
+    return lane_half == kSecondLaneHalf ? num_owned / 2 : 0;
 }
-inline uint32_t bank_half_end(uint32_t num_owned, uint32_t bank_half) {
-    return bank_half == kFirstBankHalf ? num_owned / 2 : num_owned;
+inline uint32_t lane_half_end(uint32_t num_owned, uint32_t lane_half) {
+    return lane_half == kFirstLaneHalf ? num_owned / 2 : num_owned;
 }
 
-// Walks the fabric chunks of one shard (or bank half): outer slice by outer slice, the first chunk of every owned
-// bank, then the second, ... visit(outer_slice, first_page_in_slice, num_pages).
+// Walks the fabric chunks of one shard (or lane half): outer slice by outer slice, the first chunk of every owned
+// lane, then the second, ... visit(outer_slice, first_page_in_slice, num_pages).
 template <typename Visit>
 inline void for_each_fabric_chunk(
     const ChipShardGeometry& geometry,
     uint32_t num_dram_banks,
     uint32_t pages_per_fabric_chunk,
-    uint32_t first_owned_bank,
-    uint32_t owned_bank_stride,
-    uint32_t bank_half,
+    uint32_t first_owned_lane,
+    uint32_t owned_lane_stride,
+    uint32_t lane_half,
     Visit&& visit) {
-    const uint32_t num_owned = num_owned_banks(num_dram_banks, first_owned_bank, owned_bank_stride);
+    const uint32_t num_owned = num_owned_lanes(num_dram_banks, first_owned_lane, owned_lane_stride);
     for (uint32_t outer_slice = 0; outer_slice < geometry.num_outer_slices; ++outer_slice) {
-        for (uint32_t bank_row = 0; bank_row * num_dram_banks < geometry.valid_pages_per_outer_slice;
-             bank_row += pages_per_fabric_chunk) {
-            for (uint32_t i = bank_half_begin(num_owned, bank_half); i < bank_half_end(num_owned, bank_half); ++i) {
+        for (uint32_t row_in_lane = 0; row_in_lane * num_dram_banks < geometry.valid_pages_per_outer_slice;
+             row_in_lane += pages_per_fabric_chunk) {
+            for (uint32_t i = lane_half_begin(num_owned, lane_half); i < lane_half_end(num_owned, lane_half); ++i) {
                 const uint32_t first_page_in_slice =
-                    first_owned_bank + i * owned_bank_stride + bank_row * num_dram_banks;
+                    first_owned_lane + i * owned_lane_stride + row_in_lane * num_dram_banks;
                 if (first_page_in_slice >= geometry.valid_pages_per_outer_slice) {
                     continue;
                 }
-                const uint32_t pages_left_in_bank =
+                const uint32_t pages_left_in_lane =
                     (geometry.valid_pages_per_outer_slice - first_page_in_slice + num_dram_banks - 1) / num_dram_banks;
                 visit(
                     outer_slice,
                     first_page_in_slice,
-                    pages_left_in_bank < pages_per_fabric_chunk ? pages_left_in_bank : pages_per_fabric_chunk);
+                    pages_left_in_lane < pages_per_fabric_chunk ? pages_left_in_lane : pages_per_fabric_chunk);
             }
         }
     }
@@ -142,17 +143,16 @@ inline uint32_t count_fabric_chunks(
     const ChipShardGeometry& geometry,
     uint32_t num_dram_banks,
     uint32_t pages_per_fabric_chunk,
-    uint32_t first_owned_bank,
-    uint32_t owned_bank_stride,
-    uint32_t bank_half) {
-    const uint32_t num_owned = num_owned_banks(num_dram_banks, first_owned_bank, owned_bank_stride);
+    uint32_t first_owned_lane,
+    uint32_t owned_lane_stride,
+    uint32_t lane_half) {
+    const uint32_t num_owned = num_owned_lanes(num_dram_banks, first_owned_lane, owned_lane_stride);
     uint32_t chunks_per_outer_slice = 0;
-    for (uint32_t i = bank_half_begin(num_owned, bank_half); i < bank_half_end(num_owned, bank_half); ++i) {
-        const uint32_t logical_bank = first_owned_bank + i * owned_bank_stride;
-        const uint32_t pages =
-            logical_bank < geometry.valid_pages_per_outer_slice
-                ? (geometry.valid_pages_per_outer_slice - logical_bank + num_dram_banks - 1) / num_dram_banks
-                : 0;
+    for (uint32_t i = lane_half_begin(num_owned, lane_half); i < lane_half_end(num_owned, lane_half); ++i) {
+        const uint32_t lane = first_owned_lane + i * owned_lane_stride;
+        const uint32_t pages = lane < geometry.valid_pages_per_outer_slice
+                                   ? (geometry.valid_pages_per_outer_slice - lane + num_dram_banks - 1) / num_dram_banks
+                                   : 0;
         chunks_per_outer_slice += (pages + pages_per_fabric_chunk - 1) / pages_per_fabric_chunk;
     }
     return chunks_per_outer_slice * geometry.num_outer_slices;
