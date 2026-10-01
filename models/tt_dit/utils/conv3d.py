@@ -5,6 +5,7 @@
 import collections
 import hashlib
 import math
+import os
 from itertools import repeat
 from typing import NamedTuple
 
@@ -727,6 +728,24 @@ def _t_relaxed_blocking(h_factor, w_factor, in_channels, out_channels, kernel_si
     return C_in_block, C_out_block, T_out_block, H_out_block, W_out_block, src_T
 
 
+def _blocking_mesh_override(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W):
+    """Profiling aid: ``LTX_CONV3D_BLOCKING_MESH=4,8`` looks up blockings as if on that mesh.
+
+    A smaller (sub)mesh at a lower resolution can have the same per-chip T/H/W as production
+    (e.g. 544x960 on 2x4 vs 1080p on 4x8), but the table keys on the mesh factors, so it would
+    fall back to slow default blockings. The override applies only when the overridden key has
+    an exact or T-relaxed entry; otherwise the real factors are kept. Unset means no change.
+    """
+    spec = os.environ.get("LTX_CONV3D_BLOCKING_MESH")
+    if not spec:
+        return h_factor, w_factor
+    hf, wf = (int(x) for x in spec.split(","))
+    key = (hf, wf, in_channels, out_channels, kernel_size, T, H, W)
+    if key in _BLOCKINGS or _t_relaxed_blocking(*key) is not None:
+        return hf, wf
+    return h_factor, w_factor
+
+
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):
@@ -754,6 +773,7 @@ def get_conv3d_config(
             compute_with_storage_grid_size=grid_size,
         )
 
+    h_factor, w_factor = _blocking_mesh_override(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
     blocking_key = (h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
     channel_key = (in_channels, out_channels, kernel_size)
 
