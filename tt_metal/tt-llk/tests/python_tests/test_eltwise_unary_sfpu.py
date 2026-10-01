@@ -1489,3 +1489,74 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+# Every finite BF16 value through the BF16 kernel (FP32 DEST off), in the approximation
+# mode whose instance the BF16 kernel replaces. Subnormal inputs and
+# NaN lanes are outside a step count (see helpers/ulp_sweep.py); finite/non-finite
+# disagreements on normal inputs are failures in their own right.
+_BF16_EXHAUSTIVE_OPS = [
+    (MathOperation.Erf, ApproximationMode.No),
+]
+
+
+@pytest.mark.nightly
+@pytest.mark.parametrize("mathop,approx_mode", _BF16_EXHAUSTIVE_OPS)
+def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode):
+    from helpers.ulp_sweep import measurable_mask, nonfinite_failures, sweep_spec
+
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    dest_acc = DestAccumulation.No
+    dimensions = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=dimensions,
+        spec_A=sweep_spec(),
+    )
+    golden = get_golden_generator(UnarySFPUGolden)(
+        mathop, src_A, formats.output_format, dest_acc, formats.input_format, dimensions
+    )
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(dimensions, dimensions),
+            APPROX_MODE(approx_mode),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=False,
+    )
+    result = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    )
+    assert not nonfinite_failures(src_A, golden, result, formats.input_format).any()
+    mask = measurable_mask(src_A, golden, result, formats.input_format)
+    assert passed_test(golden, result, formats.output_format, max_ulp=1, mask=mask)
