@@ -29,34 +29,83 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::detail {
 
-// Function variance of whole tensor.
+namespace {
+
+// d = y - mean(y) is scaled before squaring: d^2 underflows to zero below |d| = sqrt(FLT_MIN) =
+// 1.0842e-19, and the sum of squares saturates or overflows far below the largest representable
+// standard deviation, so squaring d as it is loses both ends of the range.
+//
+// The scale s is a power of two within a factor of two of max|d|, read from the exponent bits of
+// max|d| in bfloat16, so d / s is exact whenever the reciprocal of s is. A constant plane has no
+// deviation and gets s = 1. Valid while max|d| is below about 8.5e37: Blackhole's reciprocal returns
+// 0 for inputs at or above 2^126.
+Tensor _deviation_scale(const Tensor& y_minus_mean_y, const std::optional<MemoryConfig>& output_mem_config) {
+    ttsl::SmallVector<int> dims = {2, 3};
+    Tensor m = ttnn::max(ttnn::abs(y_minus_mean_y, output_mem_config), dims, true, output_mem_config);
+    m = ttnn::where(ttnn::eqz(m, output_mem_config), 1.0f, m, output_mem_config);
+    const DataType dtype = m.dtype();
+    if (dtype != DataType::BFLOAT16) {
+        m = ttnn::typecast(m, DataType::BFLOAT16, output_mem_config);
+    }
+    constexpr int32_t bfloat16_exponent_bits = 0x7F80;
+    Tensor exponent = ttnn::bitwise_and(
+        ttnn::bitcast(m, DataType::UINT16, output_mem_config), bfloat16_exponent_bits, output_mem_config);
+    Tensor scale = ttnn::bitcast(exponent, DataType::BFLOAT16, output_mem_config);
+    return dtype == DataType::BFLOAT16 ? scale : ttnn::typecast(scale, dtype, output_mem_config);
+}
+
+// d / scale, every element in (-2, 2). The reciprocal of the scale rides on the multiply.
+Tensor _normalised_deviation(
+    const Tensor& y_minus_mean_y, const Tensor& deviation_scale, const std::optional<MemoryConfig>& output_mem_config) {
+    const std::array recip_of_scale = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RECIP}};
+    return ttnn::multiply(
+        y_minus_mean_y, deviation_scale, std::nullopt, output_mem_config, std::nullopt, {}, {}, recip_of_scale);
+}
+
+// mean(x^2) over H x W.
+Tensor _mean_of_squares(const Tensor& y, const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    ttsl::SmallVector<int> dims = {2, 3};
+    constexpr float correction = 0.0f;
+    auto shape_wh = y.padded_shape();
+    float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
+    Tensor sqr_x = ttnn::square(x, output_mem_config);
+    return ttnn::sum(sqr_x, dims, true, std::nullopt, std::nullopt, scale);
+}
+
+}  // namespace
+
+// Function variance of whole tensor: scale^2 * mean((d / scale)^2).
 Tensor _variance_impl(
     const Tensor& y,
     const Tensor& /*mean_y*/,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
-    ttsl::SmallVector<int> dims = {2, 3};
-    constexpr float correction = 0.0f;
-    auto shape_wh = y.padded_shape();
-    float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
-    Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
-    return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
+    Tensor scale = _deviation_scale(y_minus_mean_y, output_mem_config);
+    Tensor scaled =
+        _mean_of_squares(y, _normalised_deviation(y_minus_mean_y, scale, output_mem_config), output_mem_config);
+    return ttnn::multiply(ttnn::square(scale, output_mem_config), scaled, std::nullopt, output_mem_config);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     return _variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
 }
 
-Tensor _std(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(_variance_impl(y, mean_y, output_mem_config));
-}
-
+// Function std: scale * sqrt(mean((d / scale)^2)). The scale is restored after the square root, so
+// only the scale has to be in range, not its square.
 Tensor _std(
     const Tensor& y,
-    const Tensor& mean_y,
+    const Tensor& /*mean_y*/,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config));
+    Tensor scale = _deviation_scale(y_minus_mean_y, output_mem_config);
+    Tensor scaled =
+        _mean_of_squares(y, _normalised_deviation(y_minus_mean_y, scale, output_mem_config), output_mem_config);
+    return ttnn::multiply(scale, ttnn::sqrt(scaled), std::nullopt, output_mem_config);
+}
+
+Tensor _std(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
+    return _std(y, mean_y, y_minus_mean_y, output_mem_config);
 }
 
 std::vector<Tensor> split_tensor_for_glu(
@@ -142,7 +191,12 @@ Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_con
 // compute standard deviation of tensor y = sqrt( E((y-<y>)^2)/ y.volume() )
 //  Ref: torch.std
 Tensor std_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(var_hw(y, output_mem_config));
+    // _std rather than sqrt(var_hw): var_hw forms scale^2, which leaves the float range long before
+    // the standard deviation does.
+    auto output_memory_config = output_mem_config.value_or(y.memory_config());
+    ttsl::SmallVector<int> dims = {2, 3};
+    Tensor mean_y = ttnn::mean(y, dims, true);
+    return detail::_std(y, mean_y, output_memory_config);
 }
 
 // Function normalize
@@ -151,12 +205,18 @@ Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_m
     ttsl::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
+    // The deviation and its rms are both taken on d / scale, so the scale cancels and only
+    // mean((d / scale)^2), which is at most 4, is formed.
     // The divisor was built as reciprocal(sqrt(variance)), two dispatches for
     // what rsqrt is, and multiply applies a unary chain to its operands anyway,
     // so the rsqrt rides on the multiply that was going to read it.
-    Tensor var_y = detail::_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
-    const std::array rsqrt_of_var = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSQRT}};
-    return ttnn::multiply(y_minus_mean_y, var_y, std::nullopt, output_mem_config, std::nullopt, {}, {}, rsqrt_of_var);
+    Tensor scale = detail::_deviation_scale(y_minus_mean_y, output_mem_config);
+    Tensor normalised = detail::_normalised_deviation(y_minus_mean_y, scale, output_mem_config);
+    Tensor scaled_var = detail::_mean_of_squares(y, normalised, output_mem_config);
+    const std::array rsqrt_of_scaled_var = {
+        operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSQRT}};
+    return ttnn::multiply(
+        normalised, scaled_var, std::nullopt, output_mem_config, std::nullopt, {}, {}, rsqrt_of_scaled_var);
 }
 
 // Function Clip
