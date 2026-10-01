@@ -165,7 +165,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
 
     auto grid_size = device->compute_with_storage_grid_size();
-    uint32_t max_cores_y = grid_size.y;
     uint32_t tiles_per_core_y = Wt;
 
     // Declare all variables that will be used later
@@ -186,21 +185,27 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     }
 
     if (use_2d_kernel) {
-        // 2D kernel layout: distribute work across cores in a 2D grid
-        cores_x = std::min(max_cores_y, num_tile_rows);
-        while (num_tile_rows % cores_x != 0 && cores_x > 1) {
-            cores_x--;
+        // 2D kernel layout: every core owns exactly ONE tile row and a Wt / cores_y slice of it. The
+        // reader and writer walk a core's tiles contiguously from tile_offset, which is that core's
+        // region only when it has one row; the former rectangular layout gave a core
+        // num_tile_rows / grid.y rows and read/wrote the wrong tiles for all but the first (e.g. 20 tile
+        // rows on a 10-row grid: ~2% error, garbage from column 128 on). More rows than cores cannot
+        // be laid out this way, so those fall back to the 1D row split, which is correct.
+        const uint32_t total_cores = grid_size.x * grid_size.y;
+        if (num_tile_rows > total_cores) {
+            use_2d_kernel = false;
+        } else {
+            cores_x = num_tile_rows;
+            tiles_per_core_x = 1;
+            cores_y = std::min(total_cores / num_tile_rows, Wt);
+            while (Wt % cores_y != 0 && cores_y > 1) {
+                cores_y--;
+            }
+            tiles_per_core_y = Wt / cores_y;
+            all_cores = tt::tt_metal::num_cores_to_corerangeset(cores_x * cores_y, grid_size, /*row_wise=*/true);
         }
-        tiles_per_core_x = num_tile_rows / cores_x;
-        cores_y = std::min(max_cores_y, Wt);
-        while (Wt % cores_y != 0 && cores_y > 1) {
-            cores_y--;
-        }
-        tiles_per_core_y = Wt / cores_y;
-
-        CoreRange all_cores_range({0, 0}, {cores_x - 1, cores_y - 1});
-        all_cores = CoreRangeSet(std::vector{all_cores_range});
-    } else {
+    }
+    if (!use_2d_kernel) {
         auto
             [num_cores_result,
              all_cores_result,
@@ -229,8 +234,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
 
     const double available_L1 =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    if ((!(operation_attributes.use_2d_core_grid.has_value() && *operation_attributes.use_2d_core_grid)) &&
-        (cb_length * in_single_tile_size > available_L1 * 0.95)) {
+    if (!use_2d_kernel && (cb_length * in_single_tile_size > available_L1 * 0.95)) {
         cb_length = ((available_L1 / in_single_tile_size) * 0.95) / 7;
     }
     const uint32_t in0_tiles = cb_length;
@@ -532,7 +536,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     if (use_2d_kernel) {
         for (uint32_t x = 0; x < cores_x; ++x) {
             for (uint32_t y = 0; y < cores_y; ++y) {
-                CoreCoord core = {x, y};
+                // Same row-major order num_cores_to_corerangeset used for all_cores.
+                const uint32_t core_idx = x * cores_y + y;
+                CoreCoord core = {core_idx % grid_size.x, core_idx / grid_size.x};
 
                 uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
                 uint32_t stats_offset = x * stats_tiles_cols;

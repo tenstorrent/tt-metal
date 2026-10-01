@@ -27,14 +27,26 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
     uint32_t n_routed_experts = operation_attributes.n_routed_experts;
 
-    // Input is TILE + interleaved (no shard spec). Derive the work split from the shape: keep the
-    // fixed 8x8 (64-core) grid and the binary-tree reduction, giving each core a contiguous range of
-    // token rows. Each core reads the TILE pages covering its rows from interleaved memory and untiles
-    // in-kernel. tile_h (32) is the tile height; the token count is tile-aligned by construction.
+    // Input is TILE + interleaved (no shard spec). Derive the work split from the shape: up to an 8x8
+    // (64-core) grid and a binary-tree reduction, giving each core a contiguous range of token rows.
+    // The grid is the fewest cores that keeps each at <= MAX_ROWS_PER_CORE rows: below that the tree's
+    // per-level round trips cost more than the rows they split (640 tokens: 35.0 us on 64 cores vs
+    // 16.7 us on 5-8; 4096 tokens: 38.6 us on 64 vs 33.6 on 32). Larger inputs keep all 64. Each core reads the TILE
+    // pages covering its rows from interleaved memory and untiles in-kernel. tile_h (32) is the tile height; the token
+    // count is tile-aligned by construction.
     const uint32_t tile_h = input.tensor_spec().page_config().get_tile().get_height();
     const uint32_t tokens = input.padded_shape()[0];
 
-    CoreRangeSet all_cores(CoreRange(CoreCoord(0, 0), CoreCoord(7, 7)));
+    constexpr uint32_t MAX_CORES = 64;
+    constexpr uint32_t MAX_ROWS_PER_CORE = 128;
+    uint32_t grid_cores = MAX_CORES;
+    for (uint32_t n = 1; n <= MAX_CORES; ++n) {
+        if (tokens % n == 0 && tokens / n <= MAX_ROWS_PER_CORE) {
+            grid_cores = n;
+            break;
+        }
+    }
+    CoreRangeSet all_cores = tt::tt_metal::num_cores_to_corerangeset(grid_cores, CoreCoord(8, 8), /*row_wise=*/true);
     uint32_t num_cores = all_cores.num_cores();
     TT_FATAL(tokens % num_cores == 0, "Token count ({}) must be divisible by the {}-core grid", tokens, num_cores);
     uint32_t shard_height = tokens / num_cores;  // rows per core

@@ -99,8 +99,15 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
 
-    // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
-    uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
+    // c_0: the reader fetches all of a token's expert rows under one NoC barrier and double-buffers
+    // tokens, so reads overlap compute instead of paying a round trip per row. Only when two tokens'
+    // rows fit in C0_BATCH_BUDGET_BYTES; wider rows (DeepSeek/Kimi 7168 x 8 experts) keep streaming one
+    // expert at a time to hold the L1 footprint.
+    constexpr uint32_t C0_BATCH_BUDGET_BYTES = 64 * 1024;
+    const uint32_t token_rows_bytes = num_experts * emb_dim_cb_tiles * tile_size;
+    const bool batch_experts = 2 * token_rows_bytes <= C0_BATCH_BUDGET_BYTES;
+    const uint32_t experts_per_batch = batch_experts ? num_experts : 1;
+    uint32_t combine_cb_size = batch_experts ? 2 * token_rows_bytes : emb_dim_cb_tiles * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = combine_cb_size,
         .core_ranges = core_range_set,
@@ -111,8 +118,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         }}},
     });
 
-    // c_1: Stream one weight at a time (matching expert-by-expert input streaming).
-    uint32_t weight_cb_size = tile_size;
+    // c_1: the writer reads all of a token's weights under one barrier; two tokens deep.
+    uint32_t weight_cb_size = 2 * num_experts * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = weight_cb_size,
         .core_ranges = core_range_set,
@@ -201,12 +208,13 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     auto* indices_buffer = use_dispatch_table_skip ? indices_opt->buffer() : nullptr;
     auto* dispatch_table_buffer = use_dispatch_table_skip ? dispatch_table_opt->buffer() : nullptr;
 
-    // Reader compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_bytes, combine accessor.
+    // Reader compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_bytes, experts_per_batch, combine accessor.
     // Reader does not need to know about expert-skip; that logic lives in compute + writer.
     std::vector<uint32_t> reader_compile_time_args = {
         num_experts,
         emb_dim_cb_tiles,
         emb_dim_bytes,
+        experts_per_batch,
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
 

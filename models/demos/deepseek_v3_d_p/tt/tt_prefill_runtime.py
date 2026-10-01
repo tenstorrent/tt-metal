@@ -596,11 +596,9 @@ class TtPrefillRuntime:
         and the offset advances every chunk, so the memo never hits. Offsets are deterministic
         (k * chunk_size), so build them all here and device-to-device copy the right one in per chunk.
 
-        One shared set for all layers, but linear in max_seq_len, and the cost per offset scales with
-        heads_local, i.e. inversely with TP:
-
-            8x4 single-rank (TP=4)   3.28 MB/device/offset   62.5 MiB/device at 102,400
-            (8,1) PP=4 stage (TP=1)  13.1 MB/device/offset     250 MiB/device at 102,400
+        One shared set for all layers, but linear in max_seq_len. Each offset is [1, 1, chunk_local,
+        q_lora_rank] bf16 (the scale is applied to the TP-replicated q_a latent), so the cost is the same
+        at any TP: 1.31 MB/device/offset at chunk 5120 over 8 SP, 25 MiB/device at 102,400.
         """
         self._llama4_scale_by_offset = {}
         if self._trace_metadata.llama4_scale is None:

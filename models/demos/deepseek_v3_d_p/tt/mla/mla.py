@@ -421,6 +421,18 @@ class ttMLA:
             packer_l1_acc=True,
         )
 
+        # Same HiFi2 fidelity with an fp32 dest, for tuned matmuls that set fp32_dest_acc. A wide
+        # in0_block_w accumulates that much more K in dest before the packer spills; in bf16 dest that
+        # costs precision (Mistral q_a_proj at in0_block_w=8: 1.4% rel. error vs 0.86% default), in fp32
+        # it is both faster and more accurate than the default (0.44%).
+        self.hifi2_fp32_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         self.hifi4_fp32_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -763,6 +775,10 @@ class ttMLA:
         # fall back so a same-heads/same-seq variant doesn't pick up an invalid program_config.
         if cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
             return False
+        # Per-device K/N follow the TP split, so a tiling sized for TP=4 overflows the grid at TP=1
+        # (Mistral's PP=4 stages run [8,1] at the same 640-row seq_len_local as its 8x4 single rank).
+        if cfg.get("tp_factor") not in (None, self.tp_factor):
+            return False
         # The chunked-prefill 640 set is only dimensionally valid in chunked mode (e.g. wkv_b1/wkv_b2
         # are true batched per-head matmuls over the per-head SDPA output; the single-shot path applies
         # them to a batch=1 latent). Fall back to defaults when this ttMLA was not built for chunked.
@@ -820,16 +836,30 @@ class ttMLA:
         return cfg["act_mem_config"] if cfg is not None else ttnn.DRAM_MEMORY_CONFIG
 
     def _get_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
-        """Get matmul kwargs from config, falling back to defaults."""
+        """Get matmul kwargs from config, falling back to defaults.
+
+        Always carries compute_kernel_config: HiFi2 by default, or HiFi2 with an fp32 dest when the
+        tuned config sets ``fp32_dest_acc``. Pinned either way -- a program_config with no explicit
+        compute config silently drops the matmul to LoFi.
+        """
         cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
         if cfg is None:
             if weight_name in self._BATCHED_MM_DIMS:
                 return self._make_batched_mm_kwargs(weight_name, seq_len_local)
-            return {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": self.MM_DEFAULT_DTYPES[weight_name]}
+            return {
+                "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                "dtype": self.MM_DEFAULT_DTYPES[weight_name],
+                "compute_kernel_config": self.default_compute_kernel_config,
+            }
         return {
             "memory_config": cfg["out_mem_config"],
             "program_config": cfg["program_config"],
             "dtype": cfg["out_dtype"],
+            "compute_kernel_config": (
+                self.hifi2_fp32_compute_kernel_config
+                if cfg.get("fp32_dest_acc")
+                else self.default_compute_kernel_config
+            ),
         }
 
     def _make_batched_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
@@ -864,6 +894,7 @@ class ttMLA:
         return {
             "memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "dtype": self.MM_DEFAULT_DTYPES[weight_name],
+            "compute_kernel_config": self.default_compute_kernel_config,
             "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
                 in0_block_w=in0_block_w,
@@ -1057,7 +1088,6 @@ class ttMLA:
         attn_out = ttnn.linear(
             attn_out,
             self.wkv_b2_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
         return attn_out
@@ -1072,7 +1102,6 @@ class ttMLA:
         qr = ttnn.linear(
             hidden_states,
             self.q_a_proj_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("q_a_proj", seq_len_local),
         )
 
@@ -1120,10 +1149,19 @@ class ttMLA:
         """Absorbed-Q stem from the q_a latent: q_b_proj → heads → split → wkv_b1(nope) → RoPE(rope)
         → concat. Consumes qr (the indexer, if any, has already read it by this point)."""
         num_heads_local = self.num_heads // self.tp_factor
+        if self._llama4_beta is not None:
+            # Mistral's per-position query temperature, applied to the normed q_a latent rather than to
+            # Q: every step from here to Q (q_b_proj, head split, wkv_b1, RoPE) is linear or a per-row
+            # rotation, so s * f(qr) == f(s * qr), and the latent is [S, 1024] in L1 against Q's
+            # [8, S, 320] in DRAM. 8.2 us vs 27.1 at 8x4, and a 2.5x smaller scale buffer.
+            scaled = ttnn.multiply(
+                qr, self._llama4_scale(kv_actual_isl, seq_len_local, metadata), memory_config=qr.memory_config()
+            )
+            ttnn.deallocate(qr)
+            qr = scaled
         tt_q = ttnn.linear(
             qr,
             self.q_b_proj_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("q_b_proj", seq_len_local),
         )
         ttnn.deallocate(qr)
@@ -1140,7 +1178,6 @@ class ttMLA:
         tt_q_nope = ttnn.linear(
             tt_q_nope,
             self.wkv_b1_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("wkv_b1", seq_len_local),
         )
 
@@ -1150,11 +1187,6 @@ class ttMLA:
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
-
-        if self._llama4_beta is not None:
-            scaled = ttnn.multiply(tt_q, self._llama4_scale(kv_actual_isl, seq_len_local, metadata))
-            ttnn.deallocate(tt_q)
-            tt_q = scaled
         return tt_q
 
     def _llama4_scale(self, kv_actual_isl: Optional[int], seq_len_local: int, metadata) -> ttnn.Tensor:
@@ -1171,8 +1203,9 @@ class ttMLA:
         self.tp_factor, which are the same value on a 2-D mesh but reached from different state. Keep
         the two in step by hand -- a divergence shows up only as a copy/shape failure at runtime.
 
-        NOTE ON RESIDENCY: the cache holds one [1, heads_local, chunk, width] bf16 tensor per distinct
-        offset -- 3.28 MB per entry at 8x4 / chunk 5120, freed only with the model. Growth is linear in
+        NOTE ON RESIDENCY: the cache holds one [1, 1, chunk, q_lora_rank] bf16 tensor per distinct
+        offset -- 1.31 MB per entry at 8x4 / chunk 5120 (3.28 MB before the scale moved from Q onto the
+        q_a latent; the figures below were measured at that size), freed only with the model. Growth is linear in
         context depth, since an offset is visited once per request and never repeats.
         TtPrefillTransformer builds ONE dict and threads it down, so the layers pay that once. Measured
         at 102,400 tokens (20 offsets, L36 chunked): 20 tensors / 0.07 GB per device against 700 /
@@ -1232,8 +1265,8 @@ class ttMLA:
             start,
             self.sp_factor,
             seq_len_local,
-            self.num_heads // self.tp_factor,
-            self.kv_lora_rank + self.qk_rope_head_dim,
+            1,  # the q_a latent's shape; see rope._llama4_scale_geometry
+            self.q_lora_rank,
             self._llama4_beta,
             self._llama4_orig_max,
         )
@@ -1278,7 +1311,6 @@ class ttMLA:
         tt_kv = ttnn.linear(
             hidden_states,
             self.kv_a_proj_with_mqa_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
             **kv_mm_kwargs,
         )
 
@@ -1343,7 +1375,6 @@ class ttMLA:
         return ttnn.linear(
             t,
             self.wkv_b2_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
@@ -1432,7 +1463,6 @@ class ttMLA:
         g = ttnn.linear(
             h,
             self.g_proj_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("g_proj", seq_len_local),
         )
         # The TP gather aliases a construction-time persistent output buffer shared across serial MLA
@@ -1468,7 +1498,6 @@ class ttMLA:
         v_out = ttnn.linear(
             v_out,
             self.o_proj_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("o_proj", seq_len_local),
         )
         if self.tp_factor > 1:
