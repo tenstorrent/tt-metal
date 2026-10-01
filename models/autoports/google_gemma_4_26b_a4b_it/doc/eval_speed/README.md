@@ -872,6 +872,7 @@ requested. Monitor command:
 
 ```bash
 python3 models/autoports/google_gemma_4_26b_a4b_it/tools/monitor_eval_ci.py 36916089719 \
+  --server http://qb2-120-p04t07:8000 \
   --output /home/mvasiljevic/gemma4-eval-speed-evidence/bfp8_submit_ci_live_metrics.jsonl
 ```
 
@@ -879,3 +880,18 @@ The monitor records read-only job states and serving counters every 30 seconds,
 handles unassigned runner names, and exits only when the run completes. Its
 completed-run path is checked against run 36910894168. Artifact/verifier review
 is still required after a green workflow result.
+
+The follow-up uses job **110550407919**, Actions runner `120-qb2-p04t07`.
+Its verified DNS alias is `qb2-120-p04t07` (10.32.49.17). The monitor initially
+assumed a `qb2-` runner prefix and missed this job in its filtered view; checking
+the unfiltered Actions job list corrected that at 19:44–19:45 UTC. Job selection
+now uses the workflow's run-tests job name, with an explicit verified server
+alias when needed. The run was executing, not waiting for a runner.
+
+At 19:46 UTC the owned local BFP8 server is restarted for one parallel, separate-
+server Matplotlib generalization probe: task `matplotlib__matplotlib-25332`,
+900 seconds, seed 9472, same image/precision/guard and explicit submission
+normalization. Output is
+`/home/mvasiljevic/gemma4-eval-speed-evidence/local_matplotlib_bfp8_submit_seed9472`.
+This is a cross-task outcome check, not a matched speed comparison with the
+earlier unseeded Matplotlib failures. There is still only one trial per server.

@@ -17,6 +17,7 @@ def main():
     parser.add_argument("run", type=int)
     parser.add_argument("--repo", default="tenstorrent/tt-agentic-bringup-qb2")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--server", help="Verified HTTP server alias when it differs from the Actions runner name")
     args = parser.parse_args()
     names = (
         "num_requests_running|num_requests_waiting|prompt_tokens_total|generation_tokens_total|"
@@ -45,12 +46,13 @@ def main():
                     "active_steps": [s["name"] for s in j["steps"] if s["status"] == "in_progress"],
                 }
                 for j in jobs
-                if j["runner_name"] and j["runner_name"].startswith("qb2-")
+                if j["runner_name"] and "/ run-tests /" in j["name"]
             ]
             done = run["status"] == "completed"
             running = [j for j in row["jobs"] if j["status"] == "in_progress"]
             if len(running) == 1:
-                endpoint = f"http://{running[0]['runner']}:8000/metrics"
+                row["server"] = args.server or f"http://{running[0]['runner']}:8000"
+                endpoint = row["server"].rstrip("/") + "/metrics"
                 try:
                     with urlopen(endpoint, timeout=3) as response:
                         metrics = {}
