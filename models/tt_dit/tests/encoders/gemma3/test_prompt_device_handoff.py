@@ -313,10 +313,14 @@ def test_prompt_device_handoff(mesh_device, device_params):
                             LTXTransformerModel.inner_step._tracers_keyed.get(pipe.transformer, {}).values()
                         )
                         assert len(consumer_tracers) >= 2 and all(t.trace_captured for t in consumer_tracers)
-                        assert (
-                            pipe.vae_decoder._decode_tracer is not None
-                            and pipe.vae_decoder._decode_tracer.trace_captured
-                        )
+                        # The conv decoder runs eagerly unless LTX_VIDEO_VAE_TRACE=1.
+                        if pipe.vae_decoder.trace_decode:
+                            assert (
+                                pipe.vae_decoder._decode_tracer is not None
+                                and pipe.vae_decoder._decode_tracer.trace_captured
+                            )
+                        else:
+                            assert pipe.vae_decoder._decode_tracer is None
                         for module in (
                             pipe.tt_mel_decoder,
                             pipe.tt_vocoder_with_bwe.vocoder,
