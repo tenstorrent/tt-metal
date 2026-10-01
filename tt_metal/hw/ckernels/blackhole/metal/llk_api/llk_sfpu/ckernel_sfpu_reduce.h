@@ -258,24 +258,19 @@ inline void perform_reduce_col_sum_avg_group() {
     constexpr bool HAS_NEXT = (GROUP + 1 < NUM_FACES);
     constexpr std::uint32_t NEXT_LOWER =
         HAS_NEXT ? COL_SUM_LOWER_FACE_ADDRS[GROUP + 1] + COL_SUM_COLUMN_OFFSETS[GROUP + 1] : 0;
-    // Mode 9 (SFPSTORE_MOD0_FMT_LO16) is only needed when the packer-visible OUTPUT is UInt16 in a
-    // 32-bit dest: there the reduced value sits in the low 16 bits but the packer reads the high 16,
-    // so we move low->high. When the output is a full 32-bit format (e.g. UInt32) the packer reads
-    // the whole dest word, so we use the plain INSTRUCTION_MODE store even for UInt16 input.
+    // Mode 9 (SFPSTORE_MOD0_FMT_LO16) only for a UInt16 output in a 32-bit dest: the packer reads the high 16 bits of
+    // the word, so the low half is moved up; a 32-bit output takes the plain store.
     constexpr std::uint32_t STORE_MODE =
         pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
 
-    // Step 1: Tree-reduce across registers (LREG0-3→LREG0, LREG4-7→LREG4) without transpose.
-    // After this, each of the 4 positions in LREG0 holds the sum of rows at that position
-    // across all 4 loaded LREGs (e.g., LREG0[i] = sum of row[i], row[i+4], row[i+8], row[i+12]).
+    // Step 1: tree-reduce LREG0-3 -> LREG0 and LREG4-7 -> LREG4 (the replay); each position holds a 4-row partial sum.
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG0, UPPER>();
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG1, UPPER + ROWS_PER_LOAD>();
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG2, UPPER + 2 * ROWS_PER_LOAD>();
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG3, UPPER + 3 * ROWS_PER_LOAD>();
     lltt::replay(0, 6);
 
-    // Step 2: Cross-face addition. Unlike the old approach where only position 0 of the
-    // cross-face sum was meaningful, here ALL 4 positions carry useful partial sums.
+    // Step 2: cross-face addition; all four positions carry partial sums.
     if constexpr (is_integer_mode) {
         TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, 4);  // LREG0 = upper + lower (int)
     } else {
@@ -283,8 +278,7 @@ inline void perform_reduce_col_sum_avg_group() {
             p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0);  // LREG0 = upper + lower (float)
     }
 
-    // Result of column reduction now stored in LREG0 as 4 partial sums
-    // Step 3: Transpose to rearrange the 4 partial sums for final reduction
+    // Step 3: transpose the four partial sums for the final reduction.
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed), issued inline so that the next
@@ -325,13 +319,8 @@ template <
     bool pack_low16,
     bool is_signed_int>
 inline void perform_reduce_col_sum_avg() {
-    // Optimized column reduction: Reduce → Add → Transpose → HalfReduce
-    // Instead of the naive Transpose → Reduce → Transpose → Reduce → Add approach, we first reduce
-    // across registers, then add upper+lower faces (all 4 positions carry meaningful partial sums),
-    // then transpose, then do a final half-reduce on LREG0-3 only. This eliminates one transpose
-    // and halves the second reduction pass, saving 4 instructions per iteration.
-    // On Blackhole a multiply-add result read by the very next instruction costs a stall cycle, so the next group's
-    // lower-face loads sit between the dependent adds; every push is a TTI_ immediate to keep the RISC ahead.
+    // Reduce across registers, add the faces, transpose, half-reduce LREG0-3; the next group's lower-face loads sit
+    // between the half tree's dependent adds (a multiply-add result read next stalls a cycle), every push a TTI_ immediate.
     constexpr std::uint32_t LOWER0 = COL_SUM_LOWER_FACE_ADDRS[0] + COL_SUM_COLUMN_OFFSETS[0];
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4, LOWER0>();
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG5, LOWER0 + ROWS_PER_LOAD>();
