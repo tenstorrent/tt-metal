@@ -30,6 +30,7 @@ import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
+from ...models.transformers.ltx.attention_ltx import LTX_FUSE_GATE_ON_DEVICE
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -1056,6 +1057,15 @@ class LTXPipeline:
         # prep code that produced it: without this the entry is content-blind and a mismatched or
         # half-written cache is served back silently instead of missing and rebuilding.
         sources = [self.checkpoint_name, *(s.path for s in state.lora_specs)]
+        post_load_hook = getattr(self, "_transformer_post_load_hook", None)
+        if LTX_FUSE_GATE_ON_DEVICE:
+            quant_hook = post_load_hook
+
+            def post_load_hook(model):
+                if quant_hook is not None:
+                    quant_hook(model)
+                model.fold_gates_on_device()
+
         cache_module.load_model(
             state.model,
             model_name=state.cache_name,
@@ -1066,7 +1076,7 @@ class LTXPipeline:
             is_fsdp=self.is_fsdp,
             sources=sources,
             get_torch_state_dict=state.state_dict_provider,
-            post_load_hook=getattr(self, "_transformer_post_load_hook", None),
+            post_load_hook=post_load_hook,
         )
         self.transformer = state.model
 

@@ -35,6 +35,11 @@ LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "t
 # it. A green gate that has never been shown to go red proves nothing.
 LTX_DEDUP_GATE_MUTANT = os.environ.get("LTX_DEDUP_GATE_MUTANT", "0") in ("1", "true", "True")
 
+# Fold the gate into Q/QKV after load, on device, from the unfused cache's shards. Device d's fused
+# weight is [qkv_d | gate_d zero-padded to a tile], the exact layout the LTX_FUSE_GATE cache holds,
+# so the fused model runs without a second ~37 GB weight cache.
+LTX_FUSE_GATE_ON_DEVICE = os.environ.get("LTX_FUSE_GATE_ON_DEVICE", "0") in ("1", "true", "True")
+
 
 def _can_preserve_qk_rope_rounding(norm, x, cos, sin, transform, heads):
     """The initial device variant supports only the resident scalar LTX TP4 path."""
@@ -216,6 +221,11 @@ class LTXAttention(Module):
             and quant_config is None
             and os.environ.get("LTX_FUSE_GATE", "0") != "0"
         )
+        self.can_fold_gate_on_device = (
+            apply_gated_attention and uses_fused_agmm and quant_config is None and fsdp_mesh_axis is None
+        )
+        # Set by fold_gate_on_device; held outside the module tree so loading still sees the unfused layout.
+        self._folded_proj = None
 
         # Gate is num_heads/TP columns per device (sub-tile); pad to a whole tile so it's a legal chunk.
         self.gate_width_per_device = self.n_local_heads
@@ -622,6 +632,45 @@ class LTXAttention(Module):
             )
         return output
 
+    def fold_gate_on_device(self) -> None:
+        """Concatenate the loaded Q/QKV and gate shards into one fused projection, per device.
+
+        The unfused linears stay in the module tree with their data released, so a reload reads the
+        same cache and folds again.
+        """
+        if not (self.can_fold_gate_on_device and self._gate_is_live()):
+            return
+        proj = self.to_qkv if self.is_self else self.to_q
+        gate = self.to_gate_logits
+        n_chunks = 3 if self.is_self else 1
+        gate_fused_width = self.gate_padded_per_device * self.parallel_config.tensor_parallel.factor
+        fused = ColParallelLinear(
+            proj.in_features,
+            proj.out_features + gate_fused_width,
+            bias=proj.bias is not None,
+            dtype=proj.weight.dtype,
+            mesh_device=proj.mesh_device,
+            mesh_axis=proj.mesh_axis,
+            ccl_manager=proj.ccl_manager,
+            chunks=n_chunks + 1,
+            chunk_sizes=[proj.out_features // n_chunks] * n_chunks + [gate_fused_width],
+            compute_kernel_config=proj.compute_config,
+        )
+        pad = self.gate_padded_per_device - self.gate_width_per_device
+
+        def fold(p, g):
+            g_padded = ttnn.pad(g, padding=[(0, 0), (0, pad)], value=0.0) if pad else g
+            return ttnn.concat([p, g_padded], dim=-1, memory_config=p.memory_config())
+
+        fused.weight.data = fold(proj.weight.data, gate.weight.data)
+        if fused.bias is not None:
+            fused.bias.data = fold(proj.bias.data, gate.bias.data)
+        for param in (proj.weight, proj.bias, gate.weight, gate.bias):
+            if param is not None:
+                ttnn.deallocate(param.data)
+                param._data = None
+        object.__setattr__(self, "_folded_proj", fused)
+
     def _gate_is_live(self) -> bool:
         """True when the gate projection will actually run (and so will gather its input).
 
@@ -712,7 +761,8 @@ class LTXAttention(Module):
         qkv_parallel_config = None if (use_nonfused_agmm or dedup_gate_gather) else self.parallel_config
 
         # When fused, the gate falls out of the QKV/Q matmul below; otherwise it's its own projection.
-        if self.fuse_gate:
+        gate_fused = self.fuse_gate or self._folded_proj is not None
+        if gate_fused:
             gate_bhne = None
         else:
             gate_input = spatial_1BND
@@ -721,8 +771,8 @@ class LTXAttention(Module):
             gate_bhne = self._compute_gate(gate_input, qkv_parallel_config)
 
         if self.is_self:
-            if self.fuse_gate:
-                q_1BNF, k_1BNF, v_1BNF, gate_logits = self.to_qkv(
+            if gate_fused:
+                q_1BNF, k_1BNF, v_1BNF, gate_logits = (self.to_qkv if self._folded_proj is None else self._folded_proj)(
                     spatial_1BND,
                     compute_kernel_config=self.mm_compute_kernel_config,
                     parallel_config=qkv_parallel_config,
@@ -748,8 +798,8 @@ class LTXAttention(Module):
                         )
                     else:
                         kv_parallel_config = self.parallel_config
-            if self.fuse_gate:
-                q_1BNF, gate_logits = self.to_q(
+            if gate_fused:
+                q_1BNF, gate_logits = (self.to_q if self._folded_proj is None else self._folded_proj)(
                     spatial_1BND,
                     compute_kernel_config=self.mm_compute_kernel_config,
                     parallel_config=qkv_parallel_config,

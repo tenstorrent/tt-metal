@@ -815,6 +815,15 @@ class LTXTransformerModel(Module):
         fused = any(getattr(block.attn1, "fuse_gate", False) for block in self.transformer_blocks)
         return "transformer_fusedgate" if fused else "transformer"
 
+    def fold_gates_on_device(self) -> None:
+        """Post-load hook for LTX_FUSE_GATE_ON_DEVICE: fold every block's gates into Q/QKV."""
+        names = ("attn1", "attn2", "audio_attn1", "audio_attn2", "audio_to_video_attn", "video_to_audio_attn")
+        for block in self.transformer_blocks:
+            for name in names:
+                attn = getattr(block, name, None)
+                if attn is not None:
+                    attn.fold_gate_on_device()
+
     def forward(
         self,
         # Video
