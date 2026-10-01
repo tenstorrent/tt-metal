@@ -185,7 +185,7 @@ def _d2h_page_plan(numel: int, elem_bytes: int, page_cap_bytes: int, pcie_alignm
 def _create_socket_pair(from_submesh, to_submesh, socket_l1_bytes: int):
     """Directed L1 D2D socket pair ``(sender, receiver)`` between two 1xTP submeshes.
 
-    Cores (0,0) and (0,1) of every rank, one socket each, rank ``r`` to rank ``r``, with
+    Cores (0,0) and (0,1) of every rank, one socket eachf, rank ``r`` to rank ``r``, with
     ``socket_l1_bytes`` of L1 per core. The ``*_direct_async`` ops only push a handshake page
     through the FIFO and write the payload straight into the receiver's tensor, so the payload
     may be far larger than the FIFO.
@@ -217,11 +217,17 @@ def _is_l1_tensor(value) -> bool:
     )
 
 
-def _gcb_holders(root, match: Callable = _is_gcb) -> dict[int, tuple]:
+def _is_device_tensor(value) -> bool:
+    return isinstance(value, ttnn.Tensor) and value.storage_type() == ttnn.StorageType.DEVICE and value.is_allocated()
+
+
+def _gcb_holders(root, match: Callable = _is_gcb, skip: Sequence = (), replaceable: bool = True) -> dict[int, tuple]:
     """``id(value) -> (value, [holder])`` for every ``match``-ing value (GCBs by default) reachable from
-    ``root`` through this package's objects, dicts and lists; a holder is ``(container, key, is_attribute)``."""
+    ``root`` through this package's objects (``__dict__`` or ``__slots__``), dicts, lists and tuples; a holder is
+    ``(container, key, is_attribute)``. Objects in ``skip`` are not entered. With ``replaceable`` (the holders
+    will be reassigned) a match held in a tuple raises."""
     found: dict[int, tuple] = {}
-    seen: set[int] = set()
+    seen: set[int] = {id(obj) for obj in skip}
     stack = [root]
     while stack:
         obj = stack.pop()
@@ -234,13 +240,16 @@ def _gcb_holders(root, match: Callable = _is_gcb) -> dict[int, tuple]:
             items, is_attr = list(enumerate(obj)), False
         elif type(obj).__module__.startswith(_PACKAGE) and hasattr(obj, "__dict__"):
             items, is_attr = list(vars(obj).items()), True
+        elif type(obj).__module__.startswith(_PACKAGE) and hasattr(type(obj), "__slots__"):
+            items = [(name, getattr(obj, name)) for name in type(obj).__slots__ if hasattr(obj, name)]
+            is_attr = True
         else:
             continue
         for key, value in items:
             if not match(value):
                 stack.append(value)
                 continue
-            if isinstance(obj, tuple):
+            if replaceable and isinstance(obj, tuple):
                 raise RuntimeError(f"a {type(value).__name__} held in a tuple cannot be released and restored in place")
             found.setdefault(id(value), (value, []))[1].append((obj, key, is_attr))
     return found
@@ -254,6 +263,11 @@ def prefill_bias_slots(prefill) -> dict:
         for li, layer in enumerate(prefill.layers)
         if prefill.config.layer_types[li] == COMPRESSED_SPARSE_ATTENTION
     }
+
+
+def _held(holder: tuple):
+    container, key, is_attr = holder
+    return getattr(container, key) if is_attr else container[key]
 
 
 def _assign_holder(holder: tuple, value) -> None:
@@ -323,6 +337,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         tp_size: int = 1,
         num_stages: Optional[int] = None,
         submeshes: Optional[Sequence[ttnn.MeshDevice]] = None,
+        use_prefetcher: Optional[bool] = None,
     ):
         """Build the V4-Flash model off the checkpoint.
 
@@ -355,7 +370,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         weight on it (see :func:`make_decode_prefetch_buffers`), so the cost is 288 KB of L1
         per receiver core for the whole model rather than per layer, and the prefetcher stays
         on under TP for every projection whose per-rank B-core count still matches that GCB
-        (see :class:`~.decode.attention.DeepSeekV4Attention`).
+        (see :class:`~.decode.attention.DeepSeekV4Attention`). ``use_prefetcher=False`` builds no
+        GCB at all: every projection copies its weight DRAM -> L1 per call instead (slower), and
+        :meth:`prefetcher_session` is a no-op. ``None`` keeps the prefetcher on.
 
         ``system_config`` is the per-machine tuning profile (see :mod:`.system_config`); it
         defaults to the one matching ``full_device``'s device count and supplies every
@@ -382,15 +399,19 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         self.weight_dtype = weight_dtype if weight_dtype is not None else system_config.decode.ttnn_weight_dtype
         weight_dtype = self.weight_dtype
-        # The DRISC weight prefetcher is always on: every decode projection streams its
-        # weights through a shared GCB rather than copying DRAM -> L1 per call.
-        self.use_prefetcher = True
+        self.use_prefetcher = True if use_prefetcher is None else bool(use_prefetcher)
         if num_prefetch_pages is None:
             num_prefetch_pages = system_config.prefetcher.num_prefetch_pages
         self._prefetch_buffers_by_device: dict[int, dict] = {}
         # GCBs dropped by :meth:`release_prefetch_buffers`: ``[(serial, recipe, holders)]``, or None.
         self._released_gcbs: Optional[list] = None
         self._evicted_l1: list = []
+        # The holders of the L1 tensors the first release parked; a release after the decode capture parks these.
+        self._l1_holders: list = []
+        # The device tensors that outlived release_prefetch_buffers (allocated before any prefill capture), held
+        # by id until snapshot_resident_state so no id is reused, and the host copies it took of every other one.
+        self._pre_release: Optional[dict[int, ttnn.Tensor]] = None
+        self._resident_snapshot: list = []
         if cache is None and cache_dir is not None:
             cache = WeightCache(cache_dir)
         cache = _as_cache(cache)
@@ -530,7 +551,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
             is_hash = config.mlp_layer_types[li] == "hash_moe"
             layer_cache = cache.sub(f"layers.{li}")
             weights = layer_weights[li]
-            prefetch_buffers = self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages)
+            prefetch_buffers = (
+                self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages)
+                if self.use_prefetcher
+                else None
+            )
             gate = (
                 self._hash_gate(li, prefetch_buffers=prefetch_buffers, weight_dtype=weight_dtype) if is_hash else None
             )
@@ -555,6 +580,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     use_prefetcher=self.use_prefetcher,
                     prefetch_buffers=prefetch_buffers,
                     tp_size=tp_size,
+                    matmul_decode=True,
                 )
             )
             _profile(current_device)
@@ -580,6 +606,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # in ``prepare_static_decode`` would make the unwind itself raise and mask the
         # error being unwound.
         self._traced_captured = False
+        self._traces_compiled = False
         self._eager_decode = not _traced_decode_enabled()
         # Eager mode: positions posted by :meth:`replay_traced`, each run once its packet is
         # written, and the previous step's outputs, freed once that step has been read.
@@ -873,16 +900,21 @@ class DeepSeekV4Model(DeepSeekV4Module):
         identical ones and hands them back. Decode's other resident L1 tensors (the CSA windows, position
         bias, ...) are parked on host the same way and uploaded back. Decode cannot run in between.
 
-        Only before the first :meth:`decode_traced`: stopping the prefetcher discards the prefetch requests
-        the decode traces recorded, so captured traces would stall on replay. Idempotent.
+        With the prefetcher on, only before the first :meth:`decode_traced`: stopping the prefetcher discards
+        the prefetch requests the decode traces recorded, so captured traces would stall on replay. With it off
+        the release may be repeated after the capture (e.g. around a prefill capture): it then parks the same
+        L1 tensors the first release did, and :meth:`restore_prefetch_buffers` checks each comes back at the
+        address the traces recorded. Idempotent.
         """
         if self._released_gcbs is not None:
             return
-        if self._traced_captured:
+        if self._traced_captured and self._prefetch_buffers_by_device:
             raise RuntimeError(
                 "release the prefetch buffers before the first decode_traced(): stopping the prefetcher drops the "
                 "prefetch requests the captured decode traces replay"
             )
+        if self._traced_captured and not self._l1_holders:
+            raise RuntimeError("after the decode capture, only the L1 tensors parked before it can be parked again")
         devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
         for device in devices:
             ttnn.synchronize_device(device)
@@ -898,20 +930,29 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # L1 allocation alive after every Python reference is gone.
         for device in devices:
             device.clear_program_cache()
+        if self._traced_captured:
+            # The capture's outputs are L1 tensors too (held in tuples); they stay where the traces put them.
+            l1 = [(_held(holders[0]), holders) for holders in self._l1_holders]
+        else:
+            l1 = list(_gcb_holders(self, _is_l1_tensor).values())
         evicted = []
-        for tensor, holders in _gcb_holders(self, _is_l1_tensor).values():
-            memory_config, device = tensor.memory_config(), tensor.device()
+        for tensor, holders in l1:
+            memory_config, device, address = tensor.memory_config(), tensor.device(), tensor.buffer_address()
             parked = ttnn.from_device(tensor)
             ttnn.deallocate(tensor)
             for holder in holders:
                 _assign_holder(holder, parked)
-            evicted.append((memory_config, device, parked, holders))
-        tensor = parked = None
+            evicted.append((memory_config, device, parked, holders, address))
+        tensor = parked = l1 = None
         gc.collect()
         self._released_gcbs = released
         self._evicted_l1 = evicted
+        self._l1_holders = [holders for *_, holders, _ in evicted]
+        self._pre_release = {
+            key: tensor for key, (tensor, _) in _gcb_holders(self, _is_device_tensor, replaceable=False).items()
+        }
         if os.environ.get("DEEPSEEK_V4_DUMP_L1", "0") == "1":
-            for i, device in enumerate(devices):
+            for i, device in enumerate(devices or self.submeshes):
                 ttnn.synchronize_device(device)
                 ttnn.dump_device_memory_state(device, prefix=f"after_release_sm{i}_")
         logger.info(
@@ -925,13 +966,19 @@ class DeepSeekV4Model(DeepSeekV4Module):
         released, self._released_gcbs = self._released_gcbs, None
         if released is None:
             return
+        self._prefill_footprint = self._allocated_buffers()
         for _, recipe, holders in sorted(released, key=lambda entry: entry[0]):
             gcb = build_gcb_from_recipe(recipe)
             for holder in holders:
                 _assign_holder(holder, gcb)
         evicted, self._evicted_l1 = self._evicted_l1, []
-        for memory_config, device, parked, holders in evicted:
+        for memory_config, device, parked, holders, address in evicted:
             tensor = ttnn.to_device(parked, device, memory_config=memory_config)
+            if self._traced_captured and tensor.buffer_address() != address:
+                raise RuntimeError(
+                    f"an L1 tensor parked after the decode capture came back at {tensor.buffer_address():#x}, not at "
+                    f"{address:#x} where the decode traces address it: something allocated in between stayed"
+                )
             for holder in holders:
                 _assign_holder(holder, tensor)
         devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
@@ -940,6 +987,73 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for device in devices:
             ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
         logger.info(f"prefetch buffers restored: {len(released)} GCB(s)")
+
+    def snapshot_resident_state(self) -> None:
+        """Keep host copies of every decode tensor a prefill replay may overwrite, for :meth:`reload_resident_state`.
+
+        For a prefill captured between :meth:`release_prefetch_buffers` and :meth:`restore_prefetch_buffers`
+        and replayed between decode steps. Its traces were recorded while only the tensors that outlived the
+        release were allocated, so everything decode allocated after that (the restored L1 tensors, and what
+        the decode capture created) may sit under prefill's buffers. Call once after the decode traces are
+        captured; the prefill model itself is not copied. Prefetcher-off models only: a GCB's config pages
+        are not reachable from here.
+        """
+        if self._pre_release is None:
+            raise RuntimeError("call release_prefetch_buffers() before the prefill capture, and snapshot only once")
+        if self._prefetch_buffers_by_device:
+            raise RuntimeError("a prefill replay would overwrite the GCB config pages, which cannot be snapshot")
+        skip = [self.prefill_model] if getattr(self, "prefill_model", None) is not None else []
+        tensors = [
+            tensor
+            for key, (tensor, _) in _gcb_holders(self, _is_device_tensor, skip=skip, replaceable=False).items()
+            if key not in self._pre_release
+        ]
+        self._pre_release = None
+        self._resident_snapshot = [(ttnn.from_device(tensor), tensor) for tensor in tensors]
+        logger.info(f"resident decode state: {len(tensors)} tensor(s) copied to host")
+        self._audit_unsnapshot_buffers(tensors)
+
+    def _allocated_buffers(self) -> dict[int, dict[tuple, int]]:
+        """``submesh index -> {(buffer type, address): bytes per bank}`` of every buffer its allocator holds."""
+        return {
+            i: {
+                (str(info.buffer_type), info.address): info.max_size_per_bank
+                for info in ttnn._ttnn.reports.get_buffers(device)
+            }
+            for i, device in enumerate(self.submeshes)
+        }
+
+    def _audit_unsnapshot_buffers(self, snapshot: list) -> None:
+        """Log every buffer decode allocated after the prefill capture that the snapshot does not cover.
+
+        A prefill replay may overwrite any of them and :meth:`reload_resident_state` cannot put them back: these
+        are buffers held inside ops (global semaphores, program-cache buffers) rather than by a model tensor.
+        """
+        footprint = getattr(self, "_prefill_footprint", None)
+        if footprint is None:
+            return
+        covered = {(str(t.memory_config().buffer_type), t.buffer_address()) for t in snapshot}
+        total = 0
+        for i, buffers in self._allocated_buffers().items():
+            missing = sorted(
+                (key, size) for key, size in buffers.items() if key not in footprint.get(i, {}) and key not in covered
+            )
+            total += len(missing)
+            for (buffer_type, address), size in missing:
+                logger.warning(
+                    f"submesh {i}: {buffer_type} buffer at {address:#x} ({size} B/bank) allocated after the prefill "
+                    "capture is not in the resident snapshot"
+                )
+        logger.info(f"resident snapshot audit: {total} buffer(s) a prefill replay could overwrite unrestored")
+
+    def reload_resident_state(self) -> None:
+        """Write :meth:`snapshot_resident_state`'s copies back in place, after a prefill replay and before decode.
+
+        The addresses do not change, so the decode traces stay valid. Per-sequence state among them is then
+        reset / committed as usual (:meth:`reset_static_caches`, :meth:`commit_prefill_state`).
+        """
+        for host, tensor in self._resident_snapshot:
+            ttnn.copy_host_to_device_tensor(host, tensor)
 
     def _expert_provider(self, layer_idx: int):
         """Host expert provider for one routed MoE layer: ``(gate_up [2I, D], down
@@ -977,6 +1091,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             use_prefetcher=self.use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype if weight_dtype is not None else ttnn.bfloat16,
+            matmul_decode=True,
         )
 
     # -- compressor pooling schedule -------------------------------------------- #
@@ -2073,6 +2188,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # Re-arm capture. The replay queue/thread stay owned by ``__init__`` (see there),
         # so a model whose prepare never finished can still be unwound.
         self._traced_captured = False
+        self._traces_compiled = False
 
         # The step output's return path. The page size is only known once the trace
         # builds the output tensor, so it is set on first use (see
@@ -2410,7 +2526,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 streams.deallocate()
                 streams_rm.deallocate()
                 next_on_device = self._next_layer_on_submesh(li)
-                if next_on_device is not None:
+                if self.use_prefetcher and next_on_device is not None:
                     self.layers[next_on_device].prefetch_weights(index_sparse=index_sparse)
         return out if out is not None else streams
 
@@ -2552,8 +2668,50 @@ class DeepSeekV4Model(DeepSeekV4Module):
         hazard. Each trace's output ``[B, 1, N]`` is persistent and rewritten in place by
         every replay.
         """
-        # Plan first: which submeshes need their own capture for each phase, and
-        # which just alias an earlier phase's trace.
+        plan = self._capture_plan()
+        if not self._traces_compiled:
+            self._compile_plan(plan, token_id, pos)
+
+        # Pass 2 -- record the captures and bind every variant to a trace.
+        for variant, flags, pending in plan:
+            causal, phase_idx, index_sparse = variant
+            for sm in pending:
+                device = sm["device"]
+                logger.info(
+                    f"[traced-decode] capturing submesh {sm['index']} "
+                    f"({len(sm['layers'])} layers) phase {phase_idx} pool={flags} "
+                    f"causal={causal} index_sparse={index_sparse}"
+                )
+                tid = ttnn.begin_trace_capture(device, cq_id=0)
+                with _trace_capture_guard():
+                    out = self._decode_submesh_static(sm, flags, causal, index_sparse)
+                ttnn.end_trace_capture(device, tid, cq_id=0)
+                # ``out`` is persistent; overwritten in place by every execute_trace.
+                sm["traces"][self._sm_pool_key(sm, flags, causal, index_sparse)] = (tid, out)
+            for sm in self.submeshes_io:
+                sm["tids"][variant], sm["outputs"][variant] = sm["traces"][
+                    self._sm_pool_key(sm, flags, causal, index_sparse)
+                ]
+        self._traced_captured = True
+
+    def compile_traces(self, token_id, pos: int) -> None:
+        """Run every decode variant's compile pass now, without capturing (the first :meth:`decode_traced` then
+        only captures).
+
+        For a prefill captured after this, between :meth:`release_prefetch_buffers` and
+        :meth:`restore_prefetch_buffers`: the buffers decode's ops keep for themselves (global semaphores,
+        cached constants) are allocated here, before prefill lays out its memory, so a prefill replay cannot
+        overwrite them; :meth:`snapshot_resident_state` only reaches the model's own tensors.
+        """
+        if self._traced_captured:
+            raise RuntimeError("the decode traces are already captured")
+        if not self._traces_compiled and not self._eager_decode:
+            self.ensure_session_capacity(pos)
+            self._compile_plan(self._capture_plan(), token_id, pos)
+
+    def _capture_plan(self) -> list:
+        """``[(variant, pool flags, submeshes to capture)]``: which submeshes need their own capture for each
+        phase, and which just alias an earlier phase's trace."""
         plan = []
         planned_keys: list[set] = [set() for _ in self.submeshes_io]
         for variant in self._reachable_variants():
@@ -2566,7 +2724,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     planned_keys[i].add(key)
                     pending.append(sm)
             plan.append((variant, flags, pending))
+        return plan
 
+    def _compile_plan(self, plan: list, token_id, pos: int) -> None:
+        """Pass 1 of :meth:`_capture_traces`: one executed (compile) run per planned variant."""
         # Pass 1 -- every compile run, while no trace exists yet. The run is issued for
         # *all* submeshes, not just the pending ones: the slices contain the cross-submesh
         # socket send/recv, so a submesh sitting the round out would leave its neighbours'
@@ -2599,28 +2760,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             for out in compile_outs:
                 if out is not None:
                     out.deallocate(True)
-
-        # Pass 2 -- record the captures and bind every variant to a trace.
-        for variant, flags, pending in plan:
-            causal, phase_idx, index_sparse = variant
-            for sm in pending:
-                device = sm["device"]
-                logger.info(
-                    f"[traced-decode] capturing submesh {sm['index']} "
-                    f"({len(sm['layers'])} layers) phase {phase_idx} pool={flags} "
-                    f"causal={causal} index_sparse={index_sparse}"
-                )
-                tid = ttnn.begin_trace_capture(device, cq_id=0)
-                with _trace_capture_guard():
-                    out = self._decode_submesh_static(sm, flags, causal, index_sparse)
-                ttnn.end_trace_capture(device, tid, cq_id=0)
-                # ``out`` is persistent; overwritten in place by every execute_trace.
-                sm["traces"][self._sm_pool_key(sm, flags, causal, index_sparse)] = (tid, out)
-            for sm in self.submeshes_io:
-                sm["tids"][variant], sm["outputs"][variant] = sm["traces"][
-                    self._sm_pool_key(sm, flags, causal, index_sparse)
-                ]
-        self._traced_captured = True
+        self._traces_compiled = True
 
     def decode_traced(self, token_id, pos: int) -> torch.Tensor:
         """One traced decode step: feed ``token_id`` at absolute position ``pos`` and
@@ -2787,8 +2927,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         Requires the traces to already be captured: dispatch one blocking
         :meth:`decode_traced` first (the compile/capture path).
         """
-        if self._variant_key(pos)[2]:
-            logger.info(f"indexer {'eager' if self._eager_decode else 'trace'} pos={pos}")
         if self._eager_decode:
             self._eager_pending.append(pos)
             return
@@ -2896,6 +3034,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
             lm_head=lm_head,
             **kwargs,
         )
+        # Each receiver FIFO is permanent L1 on its stage, so a second set would cost prefill's ops that room.
+        self.prefill_model.shared_socket_pairs = {
+            (id(self.submeshes[from_id]), id(self.submeshes[to_id])): pair
+            for (from_id, to_id), pair in self.submesh_socket_pairs.items()
+        }
         return self.prefill_model
 
     def prefill(
@@ -3320,6 +3463,9 @@ class DeepSeekV4PrefillModel(DeepSeekV4Module):
         self.vocab_size = config.vocab_size
         self.hc = config.hc_mult
         self._traced: Optional[TracedPrefill] = None
+        # ``(id(from_device), id(to_device)) -> (sender, receiver)``: D2D socket pairs the traced prefill reuses
+        # rather than opening its own (set by :meth:`DeepSeekV4Model.build_prefill` to the decode model's).
+        self.shared_socket_pairs: dict = {}
         cache = _as_cache(cache)
 
         if embedding_weight is not None:
@@ -3617,6 +3763,21 @@ class DeepSeekV4PrefillModel(DeepSeekV4Module):
         self._traced = TracedPrefill(self)
         self._traced.prepare(max_len, chunk_size)
 
+    def compile_traced_prefill(self, max_len: int, chunk_size: int = 1024) -> None:
+        """The first half of :meth:`prepare_traced_prefill`: persistent buffers, sockets and the compile run, no
+        capture yet; :meth:`capture_traced_prefill` finishes it."""
+        if self._traced is not None and (self._traced.prepared or self._traced.compiled):
+            raise RuntimeError("a traced prefill plan is already compiled; release_traced_prefill() first")
+        self._traced = TracedPrefill(self)
+        self._traced.compile(max_len, chunk_size)
+
+    def capture_traced_prefill(self) -> None:
+        """The second half of :meth:`prepare_traced_prefill`: capture the plan :meth:`compile_traced_prefill`
+        compiled, one trace per stage."""
+        if self._traced is None:
+            raise RuntimeError("call compile_traced_prefill(max_len, chunk_size) first")
+        self._traced.capture()
+
     def prefill_traced(
         self,
         input_ids,
@@ -3741,6 +3902,7 @@ class TracedPrefill:
         self.model = model
         self.config = model.config
         self.prepared = False
+        self.compiled = False
         self.stages: list[_Stage] = []
         self.buffers: dict = {}
         self._entry_capacity: dict = {}  # layer type -> FIFO rows, every one of which each chunk reads
@@ -3928,9 +4090,10 @@ class TracedPrefill:
         # ``recv_async_h2d`` cross-checks this against the packet's aligned page size on every program-cache miss.
         self._pkt_socket.set_page_size(self._pkt_page_bytes)
         for upstream, downstream in zip(self.stages, self.stages[1:]):
-            upstream.send, downstream.recv = _create_socket_pair(
-                upstream.device, downstream.device, pipeline.socket_l1_bytes
-            )
+            pair = self.model.shared_socket_pairs.get((id(upstream.device), id(downstream.device)))
+            if pair is None:
+                pair = _create_socket_pair(upstream.device, downstream.device, pipeline.socket_l1_bytes)
+            upstream.send, downstream.recv = pair
         self._out_socket = ttnn.D2HSocket(
             last.device,
             ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(*_OUT_SOCKET_CORE)),
@@ -4088,11 +4251,20 @@ class TracedPrefill:
         the model does anything else that allocates on its devices per prompt (eager prefills included).
         ``max_len`` and ``chunk_size`` are multiples of ``ALIGNMENT``; ``max_len`` sizes the FIFOs every chunk reads.
         """
+        self.compile(max_len, chunk_size)
+        self.capture()
+
+    def compile(self, max_len: int, chunk_size: int = 1024) -> None:
+        """The first half of :meth:`prepare`: the persistent buffers, the sockets and the executed compile run.
+
+        Everything prefill keeps on its devices is allocated here, so :meth:`capture` may follow later (e.g. after
+        another model's capture), as long as nothing allocated in between overlaps what the compile run used.
+        """
         model = self.model
         for name, value in (("max_len", max_len), ("chunk_size", chunk_size)):
             if value <= 0 or value % ALIGNMENT:
                 raise ValueError(f"{name}={value} must be a positive multiple of {ALIGNMENT}")
-        if self.prepared:
+        if self.prepared or self.compiled:
             raise RuntimeError("traced prefill is already prepared; another plan needs another TracedPrefill")
         self._max_len, self._chunk_size = max_len, chunk_size
         model._tag = "traced prepare"
@@ -4114,8 +4286,17 @@ class TracedPrefill:
         self._read_logits()
         for stage in self.stages:
             ttnn.synchronize_device(stage.device)
+        self.compiled = True
 
-        # Pass 2: capture.
+    def capture(self) -> None:
+        """The second half of :meth:`prepare`: capture the compiled chunk step, one trace per stage."""
+        if not self.compiled:
+            raise RuntimeError("compile() the traced prefill before capturing it")
+        if self.prepared:
+            raise RuntimeError("traced prefill is already captured")
+        model = self.model
+        model._tag = "traced prepare"
+        self._stop_prefetcher()
         for stage in self.stages:
             model._note(f"traced prefill: capturing stage {stage.index}", important=True)
             tid = ttnn.begin_trace_capture(stage.device, cq_id=0)
@@ -4153,7 +4334,7 @@ class TracedPrefill:
             stage.trace = None
             stage.send = stage.recv = None
         self._pkt_socket = self._out_socket = None
-        self.prepared = False
+        self.prepared = self.compiled = False
 
     def _replay(self, chunks: queue.Queue) -> None:
         """Replay-thread body: post every stage's trace for each queued chunk index, until ``None`` arrives."""
