@@ -335,11 +335,26 @@ def generate(spec, ref=None, early: bool = False) -> dict:
             paths=impl_paths,
         )
         prev = tid
+    # The intake smoke (R.1's prompt and answer) on the device model with its LM head, shipped defaults: the first
+    # check of the final norm and LM head, before the serving contract (the runner smoke is the contract's last test).
+    smoke = None
+    if spec.get("intake.smoke") and max(spec.layers()) == spec.num_layers - 1 and min(spec.layers()) == 0:
+        smoke = "L.smoke"
+        add(
+            smoke,
+            "Intake smoke on the device model: R.1's prompt, greedy, the expected answer",
+            "integrate",
+            [prev],
+            f"{SAFE} --no-precompile models/demos/common/bringup/tests/test_smoke.py",
+            {"smoke_device_ok": "== 1"},
+            device=True,
+            paths=impl_paths,
+        )
     add(
         "K.1",
         "Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)",
         "contract",
-        [f"L.{first['name']}"],
+        [f"L.{first['name']}"] + ([smoke] if smoke else []),
         f"{SAFE} --no-precompile models/demos/common/bringup/tests/test_contract.py" + contract_cmds(SV.ADAPTER),
         {"contract_checks_failed": "== 0", "acks_early": "== 0", "pcc_producer_kv_*": thr(spec, "state")},
         device=True,
