@@ -114,6 +114,7 @@ struct KernelPlan {
     uint32_t ring_filled_addr = 0;
     uint32_t ring_freed_addr = 0;
     uint32_t fwd_arrived_addr = 0;
+    uint32_t launch_credit_addr = 0;
 };
 
 // The other end of one untilizer handshake: the core to address, and the counter that core's peer owns there.

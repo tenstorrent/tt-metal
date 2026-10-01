@@ -164,18 +164,24 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 }
 
 // The reader/sender ring handshake is two monotonic single-writer counters, plus one counter the upstream
-// chip's sender bumps as it fills this stream's forwarding region.
+// chip's sender bumps as it fills this stream's forwarding region, and one the downstream chip bumps when it
+// starts a launch.
+//
+// That launch credit crosses direction: our stream s sender grants it to the downstream chip's reverse stream
+// core, and our own `launch_credit` is granted by that core's sender. Our sender takes one before its first
+// send, so nothing it writes reaches the downstream chip before that chip is in the same launch.
 //
 // GlobalSemaphores rather than the op's own L1 region so they sit at an address uniform across the mesh:
-// `fwd_arrived` is bumped by the upstream chip, which has to know where it lives.
+// `fwd_arrived` and `launch_credit` are bumped by a neighbouring chip, which has to know where they live.
 //
 // Nothing zeroes them between launches — they outlive the cached workload — so the kernels undo each launch's
-// count at end of stream. `filled` and `freed` are zeroed, which is safe because only the reader and sender
-// on the same core bump them. `fwd_arrived` is bumped by the upstream chip, which may already be in the next
-// launch, so the reader subtracts what it consumed instead. Skipping that leaves the next launch reading this
+// count. `filled` and `freed` are zeroed at end of stream, which is safe because only the reader and sender
+// on the same core bump them. The reader subtracts the `fwd_arrived` count it consumed rather than zeroing
+// it, which stays right without relying on the launch credit. Skipping that leaves the next launch reading this
 // one's totals, and a stale `freed` underflows the reader's free-slot arithmetic into a silent buffer
-// overwrite rather than a clean failure.
-// The untilizer handshake needs the same treatment for the same reason. `untilized[j]` lives on a reader's
+// overwrite rather than a clean failure. The sender takes `launch_credit` by subtracting one at the start of
+// its stream, because the downstream chip can grant the next launch's credit before this launch ends.
+// The untilizer handshake needs the same treatment as the ring counters. `untilized[j]` lives on a reader's
 // core and is bumped by its group's j-th untilizer; `unt_freed[c]` lives on an untilizer's core and is
 // bumped by the reader on link c. One semaphore per INDEX serves the whole mesh, because a core only ever
 // sees the copies it owns and the per-core copy at a uniform offset already separates them.
@@ -187,11 +193,13 @@ struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;
     tt::tt_metal::GlobalSemaphore fwd_arrived;
+    tt::tt_metal::GlobalSemaphore launch_credit;
     std::vector<tt::tt_metal::GlobalSemaphore> untilized;
     std::vector<tt::tt_metal::GlobalSemaphore> unt_freed;
 
     uint32_t lowest_address() const {
-        uint32_t lowest = static_cast<uint32_t>(std::min({filled.address(), freed.address(), fwd_arrived.address()}));
+        uint32_t lowest = static_cast<uint32_t>(
+            std::min({filled.address(), freed.address(), fwd_arrived.address(), launch_credit.address()}));
         for (const auto* group : {&untilized, &unt_freed}) {
             for (const auto& sem : *group) {
                 lowest = std::min(lowest, static_cast<uint32_t>(sem.address()));
@@ -210,7 +218,7 @@ RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, uint32_t num_lin
     auto make = [&] {
         return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     };
-    RingSemaphores sems{make(), make(), make(), {}, {}};
+    RingSemaphores sems{make(), make(), make(), make(), {}, {}};
     if (untilizers_per_group != 0) {
         for (uint32_t j = 0; j < untilizers_per_group; j++) {
             sems.untilized.push_back(make());
@@ -274,6 +282,7 @@ KernelPlan make_kernel_plan(
     plan.ring_filled_addr = static_cast<uint32_t>(sems.filled.address());
     plan.ring_freed_addr = static_cast<uint32_t>(sems.freed.address());
     plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
+    plan.launch_credit_addr = static_cast<uint32_t>(sems.launch_credit.address());
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
     // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
     // derivation as the production reader's compile-time `offset`.
@@ -357,6 +366,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         KernelPlan plan = chip_plan;
         plan.stream = stream;
         const auto& downstream = placement.at(self.downstream_coord).streams.at(stream);
+        // The downstream chip's stream back toward us: its sender writes to this chip, so it is the one our
+        // launch credit releases.
+        const auto& returning = placement.at(self.downstream_coord).streams.at(reverse_stream(stream));
+        TT_FATAL(
+            returning.downstream_coord == coord,
+            "combine_fabric2d: stream {} on the downstream chip does not send back to this chip",
+            reverse_stream(stream));
         const auto& work = work_by_stream.at(stream);
 
         tt::tt_metal::KernelDescriptor snd;
@@ -365,7 +381,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "sender_combine_fabric2d.cpp";
         snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-        snd.compile_time_args = cmbf2d::SenderCtArgs(tensor_args, self, downstream, l1, plan).to_ct_word_arr();
+        snd.compile_time_args =
+            cmbf2d::SenderCtArgs(tensor_args, self, downstream, returning, l1, plan).to_ct_word_arr();
         snd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -508,6 +525,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     workload_descriptor.semaphores.push_back(sems.filled);
     workload_descriptor.semaphores.push_back(sems.freed);
     workload_descriptor.semaphores.push_back(sems.fwd_arrived);
+    workload_descriptor.semaphores.push_back(sems.launch_credit);
     for (const auto* group : {&sems.untilized, &sems.unt_freed}) {
         for (const auto& sem : *group) {
             workload_descriptor.semaphores.push_back(sem);
