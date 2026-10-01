@@ -7,7 +7,7 @@
 // build_gather_plan decides the rings, every fabric link worker's outgoing shards and every core's placement; the
 // kernels only walk what they are given. Rings: an axis ring or line (cluster_axis 0 / 1), a snake over the whole mesh
 // (cluster_axis None), or on a torus with both sides >= 3 two edge-disjoint Hamiltonian cycles that each own half of
-// the (logical) DRAM banks, so every chip uses all four neighbours.
+// the page lanes, so every chip uses all four neighbours.
 
 #include "fabric_all_gather_factory.hpp"
 #include "kernels/fabric_all_gather_chunk_walk.hpp"
@@ -105,9 +105,9 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> outgoing_shards_at_ring_
         for (uint32_t i = 0; i < per_direction; ++i) {
             const bool last = i == per_direction - 1;
             forward.push_back(chunk_walk::make_outgoing_shard(
-                (position + G - i) % G, last ? chunk_walk::kFirstBankHalf : chunk_walk::kWholeChipShard));
+                (position + G - i) % G, last ? chunk_walk::kFirstLaneHalf : chunk_walk::kWholeChipShard));
             backward.push_back(chunk_walk::make_outgoing_shard(
-                (position + i) % G, last ? chunk_walk::kSecondBankHalf : chunk_walk::kWholeChipShard));
+                (position + i) % G, last ? chunk_walk::kSecondLaneHalf : chunk_walk::kWholeChipShard));
         }
     } else if (closed_ring) {
         const uint32_t num_forward = G / 2;
@@ -354,7 +354,7 @@ GatherPlan build_gather_plan(
                 for (auto& outgoing_shard : outgoing_shards) {
                     outgoing_shard = chunk_walk::make_outgoing_shard(
                         plan.rank_of_chip[index_of(ring[chunk_walk::outgoing_shard_rank(outgoing_shard)])],
-                        chunk_walk::outgoing_shard_bank_half(outgoing_shard));
+                        chunk_walk::outgoing_shard_lane_half(outgoing_shard));
                 }
                 return outgoing_shards;
             };
@@ -749,10 +749,10 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
         1, std::min<uint32_t>(kMaxChunksPerCbBatch, kFabricChunkCbBudgetBytes / (2 * fabric_chunk_bytes)));
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     const uint32_t L = plan.num_links;
-    const uint32_t owned_bank_stride = plan.num_rings * L;
+    const uint32_t owned_lane_stride = plan.num_rings * L;
     TT_FATAL(
-        owned_bank_stride <= num_dram_banks,
-        "fabric_all_gather: {} rings x {} links exceed {} DRAM banks",
+        owned_lane_stride <= num_dram_banks,
+        "fabric_all_gather: {} rings x {} links exceed the {} page lanes (one per DRAM bank)",
         plan.num_rings,
         L,
         num_dram_banks);
@@ -928,10 +928,10 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
                 for (uint32_t link = 0; link < L; ++link) {
                     const auto& fabric_link_worker =
                         fabric_link_workers[fabric_link_worker_index(ring, direction, link, L)];
-                    const uint32_t first_owned_bank = ring * L + link;
+                    const uint32_t first_owned_lane = ring * L + link;
 
                     std::vector<uint32_t> reader_args{
-                        first_owned_bank, owned_bank_stride, static_cast<uint32_t>(outgoing_shards.size())};
+                        first_owned_lane, owned_lane_stride, static_cast<uint32_t>(outgoing_shards.size())};
                     reader_args.insert(reader_args.end(), outgoing_shards.begin(), outgoing_shards.end());
                     tt::tt_metal::SetRuntimeArgs(
                         program, fabric_link_worker_reader_id, fabric_link_worker.core, reader_args);
@@ -950,8 +950,8 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
                         downstream_node = fabric_node(*downstream);
                     }
                     std::vector<uint32_t> sender_args{
-                        first_owned_bank,
-                        owned_bank_stride,
+                        first_owned_lane,
+                        owned_lane_stride,
                         signal_started_to_downstream ? 1u : 0u,
                         static_cast<uint32_t>(started_signal_target.x),
                         static_cast<uint32_t>(started_signal_target.y),
@@ -976,7 +976,7 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
                 }
             }
         }
-        // Local copy core c of n owns logical banks c, c + n, ... of this chip's shard (interleaved input), or
+        // Local copy core c of n owns page lanes c, c + n, ... of this chip's shard (interleaved input), or
         // conversion blocks c, c + n, ... of it (non-interleaved input, for_each_contiguous_input_run); the latter
         // signals every fabric link worker of this chip per block.
         const uint32_t rank = plan.rank_of_chip[chip_index];
