@@ -10,7 +10,7 @@ Plain python (argparse, no pytest) so it can be run directly:
         --out models/demos/blackhole/qwen36/demo/bench_results/run.json
 
 Prefer the wrapper models/demos/blackhole/qwen36/demo/run_bench_e2e_p150.sh, which pins every
-QWEN36_*/QWEN_GDN_*/QWEN_* env flag explicitly first (see REPRODUCE_P150_PERF.md).
+QWEN36_*/QWEN_GDN_*/QWEN_* env flag explicitly first (see README_P150_PERF.md).
 
 WHY REUSE, NOT REIMPLEMENT
 ---------------------------

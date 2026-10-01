@@ -4,7 +4,7 @@
 #
 # Reproducible runner for bench_e2e_p150.py: pins every QWEN36_*/QWEN_GDN_*/QWEN_* env flag
 # explicitly (so results never depend on a stale shell), checks the device is free, and runs the
-# benchmark under a 30-minute watchdog. See ../REPRODUCE_P150_PERF.md.
+# benchmark under a 30-minute watchdog. See ../README_P150_PERF.md.
 #
 # Usage: run_bench_e2e_p150.sh [isl|demo] [osl] [runs]
 #   isl  (default 4096) - or the literal "demo": passes --demo-prompt to bench_e2e_p150.py
@@ -204,7 +204,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 cd "$REPO_ROOT"
 
 if [ ! -f "$REPO_ROOT/python_env/bin/activate" ]; then
-  echo "ERROR: $REPO_ROOT/python_env/bin/activate not found -- run ./create_venv.sh first (see REPRODUCE_P150_PERF.md)." >&2
+  echo "ERROR: $REPO_ROOT/python_env/bin/activate not found -- run ./create_venv.sh first (see README_P150_PERF.md)." >&2
   exit 1
 fi
 # shellcheck disable=SC1091
