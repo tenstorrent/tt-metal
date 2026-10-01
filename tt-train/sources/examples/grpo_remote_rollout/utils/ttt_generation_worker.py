@@ -18,6 +18,7 @@ from typing import Any, Callable, List, Optional, Sequence
 
 import torch
 import ttnn
+from huggingface_hub import snapshot_download
 from models.common.sampling import SamplingParams
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -66,6 +67,14 @@ class TttGenerationWorker:
         self._global_batch_size: int = self._max_batch_size_per_dp * self._data_parallel
 
         os.environ["HF_MODEL"] = model_source  # ModelArgs reads HF_MODEL from env
+        if not dummy_weights and not os.path.isdir(model_source):
+            # ModelArgs reads the HF config with local_files_only=True under CI. CI does not have
+            # every model available locally, so download it as needed.
+            print(f"[TttGenerationWorker] Downloading HuggingFace snapshot for {model_source}")
+            snapshot_download(
+                repo_id=model_source,
+                allow_patterns=["*.safetensors", "*.bin", "*.json", "*.model", "*.txt"],
+            )
 
         # paged block-table sizing (per submesh), sized for worst-case prompt+decode
         required_blocks_per_user = (max_seq_len + paged_block_size - 1) // paged_block_size
@@ -236,7 +245,15 @@ class TttGenerationWorker:
                 kv_cache=self.tt_kv_cache,
                 enable_trace=enable_trace,
                 sampling_params=self._sampling_params,
-                reset_batch=(step == 0),
+                # Prefill supplies the first token. On the first decode, load
+                # that token and start a new sampling state. A traced decode
+                # then feeds its sampled token and next position back on device.
+                reload_inputs=step == 0 or not enable_trace,
+                reload_page_table=False,
+                # Preserve the old worker behavior: it uploaded params on
+                # every decode, while sampling history reset only at step 0.
+                reload_sampling_params=True,
+                reset_sampling_state=step == 0,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
                 read_from_device=False,

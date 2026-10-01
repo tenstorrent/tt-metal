@@ -832,9 +832,12 @@ class TtModelArgs:
 
             # Chunk values based on what works best empirically,
             # while sticking to sdpa limitations
+            # exp_approx_mode=True keeps the replay-buffer exponential the model was tuned on. Since #57180 the
+            # fp32-dest SDPA kernel honours False with the accurate SFPU exponential, ~20x the SFPU cost per QK
+            # tile, which doubled prefill latency at 128k tokens (see the prefix-caching benchmark).
             self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
-                exp_approx_mode=False,
+                exp_approx_mode=True,
                 q_chunk_size=256
                 if seqlen >= 2048 and chunk_start_idx == 0
                 else 64
@@ -856,7 +859,7 @@ class TtModelArgs:
             # Chunk sizes must match SDPA_CHUNK_ALIGN; generator aligns num_cached_tokens to it.
             self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
-                exp_approx_mode=False,
+                exp_approx_mode=True,
                 q_chunk_size=SDPA_CHUNK_ALIGN,
                 k_chunk_size=SDPA_CHUNK_ALIGN,
             )

@@ -983,7 +983,7 @@ class ModelArgs:
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
             # Mixtral prefill program configs
             self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                m=min(seq_len, self.prefill_len_cutoff),
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
@@ -1177,7 +1177,9 @@ class ModelArgs:
             )
 
             def _get_xattn_kv_prefill_mem_cfg(seq_len):
-                M = (self.n_kv_heads // self.num_devices) * seq_len
+                # max(1, ...): KV replication (n_kv_heads < num_devices) makes the integer
+                # divide 0, which would build a 0-row shard config; clamp to one KV head/device.
+                M = max(1, self.n_kv_heads // self.num_devices) * seq_len
                 cores_x, cores_y = self.find_grid(M // ttnn.TILE_SIZE)
                 return ttnn.create_sharded_memory_config(
                     (
@@ -1378,7 +1380,7 @@ class ModelArgs:
         """Get the sharded memory config for MLP input."""
         if mode == Mode.DECODE:
             if self.is_galaxy:
-                return self.get_mlp_act_mem_config("decode")
+                return self.get_mlp_act_mem_config(Mode.DECODE)
             elif prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
                     shape=(32, self.dim // prefetcher.ring_size),
@@ -1449,6 +1451,18 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
+                # N150/Llama 8B: default K block 8 exceeded available L1 by
+                # 60,256 bytes with trace-owned tensors live. Four 32-wide tiles
+                # still divide K=4096 and halve the input CB staging vs. 8.
+                # Validated at 512/1024/2048 tokens (MLP PCC > 0.9996); this is
+                # a measured fit, not an assertion that 4 is throughput-optimal.
+                in0_block_w=(
+                    4
+                    if self.device_name == "N150"
+                    and self.base_model_name == "Llama-3.1-8B"
+                    and seq_len >= self.prefill_len_cutoff
+                    else None
+                ),
                 per_core_N=(
                     math.ceil(
                         (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
@@ -1498,7 +1512,7 @@ class ModelArgs:
                         num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.FF2, self.dim),
                     )
         elif mode == Mode.PREFILL:
-            if seq_len > 128:
+            if self.use_minimal_prefill_matmul(seq_len):
                 grid = self.mlp2_grid(seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
@@ -1848,8 +1862,13 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    def use_minimal_prefill_matmul(self, seq_len: int) -> bool:
+        # Qwen's 128-token prompts can run singly or be flattened into a larger
+        # batched prefill.
+        return seq_len > 128 or (seq_len == 128 and self.base_model_name == "Qwen3-32B" and self.device_name == "T3K")
+
     def use_minimal_qkv_prefill_matmul(self, seq_len: int) -> bool:
-        if seq_len > 128:
+        if self.use_minimal_prefill_matmul(seq_len):
             return True
 
         # The regular 128-token QKV prefill matmul over-allocates L1 on Llama 8B
@@ -2275,8 +2294,10 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_kv_prefill_mem_config(self, seq_len: int = 1):
         """Get the memory config for KV cache fill during prefill."""
+        # max(1, ...): KV replication (n_kv_heads < num_devices) makes the integer divide 0,
+        # which would build a 0-row shard config; clamp to one KV head per device.
         return ttnn.create_sharded_memory_config(
-            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+            ((max(1, self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
             ttnn.CoreGrid(y=8, x=8),
             ttnn.ShardStrategy.HEIGHT,
             ttnn.ShardOrientation.ROW_MAJOR,
@@ -2894,7 +2915,9 @@ class ModelArgs:
         )
 
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
+        self.norm_eps = text_config.get(
+            "norm_eps", text_config.get("rms_norm_eps", text_config.get("layer_norm_eps"))
+        )  # layer_norm_eps: Command-R (cohere) HF key
         self.vocab_size = text_config["vocab_size"]
         # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
         tile_size = 32
@@ -3025,6 +3048,8 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+        # Command-R (cohere): final-logit scalar applied post-linear on the LM head.
+        self.logit_scale = text_config.get("logit_scale", None)
 
         # Final logit soft-capping (Gemma-2): logits -> tanh(logits / cap) * cap.
         # Attn-score softcapping is not applied (see __init__ comment); only the
@@ -3551,6 +3576,15 @@ class ModelArgs:
             if self.use_hf_rope:
                 # For Attention: skip QKV format conversion
                 state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            elif self.model_type == "cohere":
+                # Command-R rotates Q/K INTERLEAVED-native (HF modeling_cohere overrides
+                # rotate_half: adjacent pairs (2i,2i+1) + repeat_interleave cache) — unlike
+                # llama's NeoX half-split. The stock NeoX->Meta reverse_permute therefore
+                # SCRAMBLES already-interleaved cohere Q/K pairs; the ttnn interleaved
+                # rotary op is correct only with the unpermuted layout. Root-caused
+                # 2026-08-28 (quality defect): layer-0 PCC 0.9324 -> 0.9998 at seq 36
+                # (served math probe 422 restored) by skipping the permute.
+                state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
             else:
                 # Standard: convert to Meta format
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
@@ -3621,6 +3655,51 @@ class ModelArgs:
             fused_activation=fused_activation,
             fuse_batch=fuse_batch,
         )
+
+    def dram_decode_in0_block_w(self, k: int, n: int, num_cores: int) -> int:
+        """in0_block_w for a DRAM-sharded decode matmul with one reader per bank.
+
+        The activation multicast is one semaphore-gated block per sender, chained across senders,
+        so the chain costs the block count K / in0_block_w. The factory lets a block span several
+        consecutive activation shards, which takes the block count off the shard grid.
+
+        Widening is not free. A block wider than a shard is gathered over the NoC into the sender
+        before the multicast, so those shards cross the NoC twice. The multicast overlaps the
+        block's weight read, so the chain is exposed only while a hop costs more than the weight
+        a worker reads for that block: once bw x per_worker_N covers it, a wider block buys
+        nothing and still pays the gather. Sweeping every legal in0_block_w over 21 decode shapes
+        on P300 (Llama-3.2-1B, Llama-3.1-8B, Qwen3-8B and Qwen3-32B at one, four and eight
+        devices) puts a hop at about HOP_IN_WEIGHT_TILES weight tiles: the rule then picks the
+        measured optimum on 20 of the 21, one step short on the last, and no width slower than
+        stock on any. 100 and 112 give the same result, so it sits in a plateau rather than on a
+        cliff.
+
+        The constant is a hardware ratio, one hop's fixed cost over the time a worker takes to
+        stream one weight tile, so it moves with the bank count, the DRAM bandwidth and the NoC,
+        not with the model. Anything that changes the fixed cost of a hop moves it down and this
+        has to be refitted.
+        """
+        HOP_IN_WEIGHT_TILES = 100
+        k_tiles = k // ttnn.TILE_SIZE
+        per_core_k = k_tiles // num_cores
+        per_worker_n = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
+        l1_budget_tiles = 800 * 1024 // (3 * 1088)
+        base = self.find_largest_divisor(per_core_k)
+        # Only ever widen, and only while a block's own weight read is shorter than one hop.
+        # Widening halves the hops and doubles the weight a hop has to hide behind, so past the
+        # crossover it buys nothing and still pays the gather. The L1 budget is the looser of the
+        # two bounds and stays as a cap. A wide-N projection such as the LM head is already past
+        # the crossover at the stock width, which is why the stock width is also the floor.
+        for bw in range(min(16, k_tiles), base, -1):
+            if k_tiles % bw:
+                continue
+            if per_core_k % bw and bw % per_core_k:
+                continue
+            if bw * per_worker_n > HOP_IN_WEIGHT_TILES:
+                continue
+            if bw * per_worker_n <= l1_budget_tiles:
+                return bw
+        return base
 
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
@@ -3765,8 +3844,12 @@ class ModelArgs:
                 k % (ttnn.TILE_SIZE * num_cores) == 0
             ), f"k must be divisible by tile_size * num_cores: {k} % {ttnn.TILE_SIZE * num_cores} != 0"
             # assert n % (ttnn.TILE_SIZE * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {ttnn.TILE_SIZE * num_cores} != 0"
+        if not self.is_galaxy and self.prefetcher is None:
+            in0_block_w = self.dram_decode_in0_block_w(k, n, num_cores)
+        else:
+            in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores))
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores)),
+            in0_block_w=in0_block_w,
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
             per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,

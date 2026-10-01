@@ -1,0 +1,381 @@
+name: "Copilot flow: mark finished Copilot PRs ready for review"
+
+# Closes the gap between "Copilot finished" and "CI/review actually starts" for PRs that
+# came out of the copilot-ready flow (issue-monster.md / squad-plan.md, or a human
+# assigning Copilot to a `copilot-ready` issue directly).
+#
+# The problem this solves, verified against tt-metal's own history (2026-09-28):
+#   * The Copilot coding agent opens every PR as a draft and, per GitHub's docs, "cannot
+#     mark its pull requests as Ready for review". When it finishes it emits a
+#     `copilot_work_finished` timeline event and requests review from the assigner —
+#     and then the PR sits in draft until a human flips it (PR #56833: finished 07:20,
+#     marked ready by a human at 15:17, eight hours later).
+#   * pr-gate.yaml / merge-gate.yaml gate every job on `!pull_request.draft`, the
+#     "Automatic Copilot PR Review" ruleset has `review_draft_pull_requests: false`, and
+#     CODEOWNERS review requests only fire on `ready_for_review`. Nothing at all happens
+#     to a Copilot draft until it leaves draft state.
+#
+# Why this is a plain Actions workflow and not a gh-aw agent: the decision is a
+# deterministic read of the PR timeline (did the last Copilot session finish, fail, or
+# is it still running?) plus a label lookup. No judgement is needed, so no model should
+# be in the loop — same house rule as issue-monster.md's pre-activation script. gh-aw
+# (v0.86.2 and v0.89.21 alike) does have a `mark-pull-request-as-ready-for-review` safe
+# output, but using it would mean starting an agent session to emit a value a script
+# already knows.
+#
+# Why a schedule rather than `pull_request_target: review_requested`: Actions runs whose
+# triggering actor is Copilot are subject to "Require approval for workflow runs" (repo
+# setting under Settings > Copilot > Cloud agent). On tt-metal that gate fired on 4 of the
+# last 18 Copilot PRs — including `pull_request_target` runs (e.g. auto-approve.yaml on
+# PR #57148 sat in `action_required`). An event-triggered bridge would therefore sometimes
+# be stuck waiting for a human on exactly the PR it exists to unstick. A scheduled run's
+# actor is never Copilot, so it is never gated; ten minutes of latency is immaterial next
+# to a 20-60 minute Copilot session and a 20 minute pr-gate.
+#
+# Why writes use a PAT (`GH_AW_AGENT_TOKEN`) and not GITHUB_TOKEN: events caused by
+# GITHUB_TOKEN never trigger other workflows, so a GITHUB_TOKEN flip would produce a
+# `ready_for_review` that pr-gate never sees. The PAT is the same one issue-monster.md
+# already requires for `assign-to-agent`, so the whole flow depends on exactly one
+# credential. The `ready_for_review` runs it triggers are attributed to the PAT owner
+# and — verified on #56833 and #57754 — execute without the Copilot approval gate.
+#
+# What it never does: it does not approve workflow runs (that is the repo setting's job),
+# does not request reviewers (CODEOWNERS + the Copilot review ruleset do that on
+# `ready_for_review`), does not touch PRs whose linked issue was never `copilot-ready`,
+# does not re-apply `copilot-flow` to a PR a maintainer removed it from (see FLOW_LABEL),
+# does not at-mention Copilot (that would start a new session), and never merges.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Only consider this PR number (default: every open Copilot PR)"
+        required: false
+        type: string
+
+# One bridge at a time: a manual run overlapping a scheduled one must not race on the
+# same PR. Queued, not cancelled.
+concurrency:
+  group: copilot-flow-ready
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  # PR label that records "this PR came out of the copilot-ready flow". It is the
+  # provenance snapshot pr-sous-chef.md keys on (`label:copilot-flow`), applied here at
+  # the moment the linked issue is checked so that later edits to the issue's labels do
+  # not change which PRs the follow-up automation considers its own. Must exist in the
+  # repository (see the merge checklist in PR #58063). Removing it from a PR opts that
+  # PR out of the whole flow — pr-sous-chef nudges AND this bridge — and the opt-out is
+  # sticky: the scan below reads the PR's label timeline and, when the most recent
+  # `copilot-flow` event is an `unlabeled`, treats the absence as a maintainer decision
+  # instead of re-applying the label on the next tick. Adding the label back opts in again.
+  FLOW_LABEL: copilot-flow
+  # The opt-in label on the *issue* (issue-monster.md's PICKUP_LABEL).
+  PICKUP_LABEL: copilot-ready
+
+jobs:
+  bridge:
+    name: Flip finished copilot-ready PRs out of draft
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - name: Decide what each open Copilot PR needs
+        id: scan
+        # Read-only, GITHUB_TOKEN. Produces a list of actions; performs none of them.
+        # Pinned to the same commit the gh-aw compiler resolves v9.0.0 to in this repo's
+        # .lock.yml files (a tag can be moved; a SHA cannot).
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ONLY_PR: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const FLOW_LABEL = process.env.FLOW_LABEL;
+            const PICKUP_LABEL = process.env.PICKUP_LABEL;
+            // Same heuristic as issue-monster.md's isCopilotActor: REST shows the PR
+            // author as `Copilot` (type Bot), GraphQL as `copilot-swe-agent`, search as
+            // `app/copilot-swe-agent`. One predicate for all three spellings.
+            const isCopilotActor = (login) => /^copilot/i.test(login || '');
+            const READY_MARKER = '<!-- copilot-flow-ready -->';
+            const FAILED_MARKER_PREFIX = '<!-- copilot-flow-session-failed:';
+            const ZERO_DIFF_MARKER_PREFIX = '<!-- copilot-flow-zero-diff:';
+            // Every open Copilot PR is a candidate; the search API caps at 1000 and tt-metal
+            // has never had more than a handful open at once (3 on 2026-09-28).
+            const MAX_CANDIDATES = 100;
+
+            const actions = [];
+            const rows = [];
+            const note = (n, what) => { rows.push(`| #${n} | ${what} |`); core.info(`#${n}: ${what}`); };
+
+            // 1. Candidates: open PRs authored by the Copilot coding agent. The search API
+            //    already returns `draft` and `labels` on each item (verified live), so a
+            //    snapshot of those is kept to skip the per-PR `pulls.get` below for PRs that
+            //    are already done (ready + labeled) -- the common steady state once a PR has
+            //    been flipped, and previously the majority of this workflow's REST calls at
+            //    144 ticks/day. Worst case on a stale snapshot is a PR converted back to draft
+            //    moments before this run gets re-checked on the NEXT tick (10 min later), which
+            //    is fine: this bridge only ever adds a label or flips ready, never removes
+            //    anything, so there is nothing unsafe about deferring by one tick.
+            let candidates = [];
+            const searchSnapshot = new Map(); // number -> { draft, labels: Set<string> }
+            if (process.env.ONLY_PR) {
+              const n = parseInt(process.env.ONLY_PR, 10);
+              if (!Number.isInteger(n) || n <= 0) {
+                core.setFailed(`pr_number must be a positive integer, got ${process.env.ONLY_PR}`);
+                return;
+              }
+              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: n });
+              if (pr.state !== 'open' || !isCopilotActor(pr.user?.login) || pr.user?.type !== 'Bot') {
+                note(n, 'skipped: not an open Copilot-authored PR');
+              } else {
+                candidates = [pr.number];
+                searchSnapshot.set(pr.number, { draft: !!pr.draft, labels: new Set((pr.labels || []).map(l => l.name)) });
+              }
+            } else {
+              const q = `repo:${owner}/${repo} is:pr is:open author:app/copilot-swe-agent`;
+              const res = await github.rest.search.issuesAndPullRequests({ q, per_page: MAX_CANDIDATES, sort: 'updated', order: 'desc' });
+              candidates = res.data.items.map(i => i.number);
+              for (const item of res.data.items) {
+                searchSnapshot.set(item.number, { draft: !!item.draft, labels: new Set((item.labels || []).map(l => (typeof l === 'string' ? l : l.name))) });
+              }
+              core.info(`Open Copilot PRs: ${candidates.length}`);
+            }
+
+            for (const number of candidates) {
+              try {
+                const snap = searchSnapshot.get(number);
+                if (snap && !snap.draft && snap.labels.has(FLOW_LABEL)) {
+                  note(number, 'nothing to do: labeled and already ready for review (from search snapshot, no PR fetch needed)');
+                  continue;
+                }
+                // 2. Current PR state (REST: draft flag, labels, head repo/branch, node id).
+                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+                if (pr.state !== 'open') { note(number, 'skipped: no longer open'); continue; }
+                if (!isCopilotActor(pr.user?.login) || pr.user?.type !== 'Bot') { note(number, 'skipped: author is not the Copilot bot'); continue; }
+                if (pr.head?.repo?.full_name !== `${owner}/${repo}` || !/^copilot\//.test(pr.head?.ref || '')) {
+                  // Copilot only ever pushes to same-repo `copilot/*` branches; anything else
+                  // is not a coding-agent PR whatever the author field says.
+                  note(number, `skipped: head ${pr.head?.repo?.full_name}:${pr.head?.ref} is not a same-repo copilot/* branch`);
+                  continue;
+                }
+                const hasFlowLabel = (pr.labels || []).some(l => l.name === FLOW_LABEL);
+                if (hasFlowLabel && !pr.draft) { note(number, 'nothing to do: labeled and already ready for review'); continue; }
+
+                // 3. Provenance: which issues does this PR close / is it connected to, and did
+                //    any of them carry the pickup label (now, or at any point in the past —
+                //    a LabeledEvent survives the label being removed later). Structured
+                //    references only; the PR body is never parsed.
+                const prov = await github.graphql(`
+                  query($owner: String!, $repo: String!, $number: Int!) {
+                    repository(owner: $owner, name: $repo) {
+                      pullRequest(number: $number) {
+                        closingIssuesReferences(first: 10) {
+                          nodes {
+                            number
+                            labels(first: 50) { nodes { name } }
+                            timelineItems(itemTypes: [LABELED_EVENT], first: 100) {
+                              nodes { ... on LabeledEvent { label { name } } }
+                            }
+                          }
+                        }
+                        timelineItems(itemTypes: [CONNECTED_EVENT], first: 20) {
+                          nodes {
+                            ... on ConnectedEvent {
+                              subject {
+                                ... on Issue {
+                                  number
+                                  labels(first: 50) { nodes { name } }
+                                  timelineItems(itemTypes: [LABELED_EVENT], first: 100) {
+                                    nodes { ... on LabeledEvent { label { name } } }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }`, { owner, repo, number });
+                const prNode = prov?.repository?.pullRequest;
+                const linked = [
+                  ...(prNode?.closingIssuesReferences?.nodes || []),
+                  ...((prNode?.timelineItems?.nodes || []).map(e => e?.subject).filter(s => s && s.number))
+                ];
+                const qualifying = [...new Set(linked.filter(issue =>
+                  (issue.labels?.nodes || []).some(l => l.name === PICKUP_LABEL) ||
+                  (issue.timelineItems?.nodes || []).some(e => e?.label?.name === PICKUP_LABEL)
+                ).map(i => i.number))];
+                const qualifies = qualifying.length > 0;
+                if (!qualifies) {
+                  note(number, `skipped: linked issues [${[...new Set(linked.map(i => i.number))].join(', ') || 'none'}] never carried ${PICKUP_LABEL}`);
+                  continue;
+                }
+
+                // 4. Copilot session state from the issue timeline. `copilot_work_started`,
+                //    `copilot_work_finished` and `copilot_work_finished_failure` are the
+                //    events the coding agent emits (seen on #56833 / #57148). We also need
+                //    the latest draft-state change so a finish that a human has already
+                //    reacted to (marked ready, or converted back to draft) is not replayed —
+                //    and the latest `copilot-flow` label event, for the opt-out below.
+                const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, {
+                  owner, repo, issue_number: number, per_page: 100
+                });
+                let lastWork = null;
+                let lastDraftChange = null;
+                let lastFlowLabelEvent = null;
+                for (const ev of timeline) {
+                  if (typeof ev.event !== 'string') continue;
+                  if (ev.event.startsWith('copilot_work_')) lastWork = ev;
+                  if (ev.event === 'ready_for_review' || ev.event === 'convert_to_draft') lastDraftChange = ev;
+                  if ((ev.event === 'labeled' || ev.event === 'unlabeled') && ev.label?.name === FLOW_LABEL) lastFlowLabelEvent = ev;
+                }
+                const workState = lastWork ? lastWork.event : 'none';
+                const workAt = lastWork?.created_at || null;
+                const finishIsFresh = workAt && (!lastDraftChange || new Date(workAt) > new Date(lastDraftChange.created_at));
+
+                // 4b. Maintainer opt-out. The label is absent AND the most recent label-history
+                //     event for it is a removal with no re-add after it: somebody took this PR
+                //     out of the flow on purpose. Re-applying the label here would silently undo
+                //     the documented kill switch every ten minutes, so the bridge does nothing at
+                //     all for this PR (no label, no flip, no notice) until the label is added
+                //     back by hand. A PR that never carried the label has no such event and is
+                //     labeled normally.
+                if (!hasFlowLabel && lastFlowLabelEvent?.event === 'unlabeled') {
+                  note(number, `opted out: ${FLOW_LABEL} was removed by ${lastFlowLabelEvent.actor?.login || 'a maintainer'} at ${lastFlowLabelEvent.created_at} and not re-added; leaving this PR alone`);
+                  continue;
+                }
+
+                // 5. Existing bridge comments, for idempotency of the failure / zero-diff notices.
+                const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 });
+                const failedNoticeExists = workAt && comments.some(c => (c.body || '').includes(`${FAILED_MARKER_PREFIX}${workAt} -->`));
+                const zeroDiffNoticeExists = workAt && comments.some(c => (c.body || '').includes(`${ZERO_DIFF_MARKER_PREFIX}${workAt} -->`));
+
+                const todo = [];
+                if (!hasFlowLabel) todo.push({ type: 'label' });
+                if (pr.draft && workState === 'copilot_work_finished' && finishIsFresh) {
+                  // Safety check (2026-09-29): a session can report `copilot_work_finished`
+                  // and still have written nothing -- a real, observed failure mode (PR
+                  // #58341's second session: ran 15 min, zero commits, write-back errors). A
+                  // zero-diff PR flipped ready burns pr-gate, the review bot and a CODEOWNERS
+                  // request on a PR with nothing to look at. `changed_files` is on the REST
+                  // response already fetched above; no extra call needed.
+                  if (pr.changed_files === 0) {
+                    if (!zeroDiffNoticeExists) todo.push({ type: 'zero_diff_notice', finished_at: workAt });
+                  } else {
+                    todo.push({ type: 'ready', node_id: pr.node_id, finished_at: workAt });
+                  }
+                } else if (pr.draft && workState === 'copilot_work_finished_failure' && !failedNoticeExists) {
+                  todo.push({ type: 'failed_notice', failed_at: workAt });
+                }
+                const why = `session=${workState}${workAt ? '@' + workAt : ''}${pr.draft ? ' draft' : ' ready'}${finishIsFresh === false ? ' (finish predates last draft-state change; not replayed)' : ''}; issues ${qualifying.join(', ')} carried ${PICKUP_LABEL}`;
+                if (todo.length === 0) { note(number, `nothing to do: ${why}`); continue; }
+                actions.push({ number, todo, issues: qualifying });
+                note(number, `${todo.map(t => t.type).join(' + ')} — ${why}`);
+              } catch (error) {
+                // Fail closed per PR: an unreadable PR gets no action this tick and is
+                // re-examined on the next one.
+                note(number, `skipped: could not evaluate (${error.message})`);
+              }
+            }
+
+            core.setOutput('actions', JSON.stringify(actions));
+            core.setOutput('action_count', String(actions.length));
+            await core.summary
+              .addHeading('Copilot flow: ready-for-review bridge', 3)
+              .addRaw(`\n${candidates.length} open Copilot PR(s) examined, ${actions.length} with actions.\n\n| PR | Decision |\n|---|---|\n${rows.join('\n')}\n`)
+              .write();
+
+      - name: Apply label / ready-for-review / failure notice
+        if: steps.scan.outputs.action_count != '0'
+        # Writes only, with the PAT. Kept separate from the decision step so the elevated
+        # credential is only ever handed to code that does nothing but the three writes
+        # decided above. Same pinned commit as the read step.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ACTIONS_JSON: ${{ steps.scan.outputs.actions }}
+          PAT_PRESENT: ${{ secrets.GH_AW_AGENT_TOKEN != '' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
+          script: |
+            if (process.env.PAT_PRESENT !== 'true') {
+              core.setFailed('GH_AW_AGENT_TOKEN is not set. This step must run as a human-identity PAT (see the header comment); with GITHUB_TOKEN the ready_for_review event would not trigger pr-gate. Nothing was changed.');
+              return;
+            }
+            const { owner, repo } = context.repo;
+            const FLOW_LABEL = process.env.FLOW_LABEL;
+            const PICKUP_LABEL = process.env.PICKUP_LABEL;
+            const RUN_URL = process.env.RUN_URL;
+            const actions = JSON.parse(process.env.ACTIONS_JSON);
+            let failures = 0;
+
+            for (const { number, todo, issues } of actions) {
+              for (const t of todo) {
+                try {
+                  if (t.type === 'label') {
+                    await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [FLOW_LABEL] });
+                    core.info(`#${number}: added ${FLOW_LABEL}`);
+                  } else if (t.type === 'ready') {
+                    await github.graphql(`
+                      mutation($id: ID!) {
+                        markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { number isDraft } }
+                      }`, { id: t.node_id });
+                    core.info(`#${number}: marked ready for review`);
+                    // No at-mention of Copilot anywhere in this text: a mention starts a new
+                    // coding-agent session, which is pr-sous-chef's job, not this one's.
+                    const body = [
+                      '<!-- copilot-flow-ready -->',
+                      `🤖 **Copilot flow** — Copilot finished (\`copilot_work_finished\` at ${t.finished_at}); marked **ready for review**.`,
+                      '',
+                      `Linked \`${PICKUP_LABEL}\` issue(s): ${issues.map(n => `#${n}`).join(', ')} · label \`${FLOW_LABEL}\` keeps PR Sous Chef nudging this PR — remove it to opt out.`,
+                      '',
+                      `> [Copilot flow: ready-for-review bridge](${RUN_URL})`
+                    ].join('\n');
+                    await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+                  } else if (t.type === 'failed_notice') {
+                    const body = [
+                      `<!-- copilot-flow-session-failed:${t.failed_at} -->`,
+                      `🤖 **Copilot flow** — Copilot's session ended in **failure** (\`copilot_work_finished_failure\` at ${t.failed_at}); left as draft, no CI/review started.`,
+                      '',
+                      `To retry: @-mention Copilot with guidance (a later successful session is picked up automatically). To stop: close the PR — linked issue(s) ${issues.map(n => `#${n}`).join(', ')} won't retry indefinitely.`,
+                      '',
+                      `> [Copilot flow: ready-for-review bridge](${RUN_URL})`
+                    ].join('\n');
+                    await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+                    core.info(`#${number}: posted failed-session notice`);
+                  } else if (t.type === 'zero_diff_notice') {
+                    // Literal marker, not the ZERO_DIFF_MARKER_PREFIX constant: each
+                    // actions/github-script step is a separate Node.js scope (that constant
+                    // is only defined in the scan step above), same as failed_notice's literal
+                    // marker string just above.
+                    const body = [
+                      `<!-- copilot-flow-zero-diff:${t.finished_at} -->`,
+                      `🤖 **Copilot flow** — Copilot finished (\`copilot_work_finished\` at ${t.finished_at}) but the PR has zero changed files; left as draft rather than flipped ready — there is nothing for reviewers or CI to look at yet.`,
+                      '',
+                      'A maintainer decides what happens next: @-mention Copilot with guidance, or close the PR.',
+                      '',
+                      `> [Copilot flow: ready-for-review bridge](${RUN_URL})`
+                    ].join('\n');
+                    await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+                    core.info(`#${number}: posted zero-diff notice`);
+                  }
+                } catch (error) {
+                  // "already ready" (a human beat us to it between scan and apply) is benign.
+                  if (t.type === 'ready' && /not a draft|already/i.test(error.message)) {
+                    core.info(`#${number}: already ready for review (${error.message})`);
+                    continue;
+                  }
+                  failures += 1;
+                  core.error(`#${number}: ${t.type} failed: ${error.message}`);
+                }
+              }
+            }
+            if (failures > 0) core.setFailed(`${failures} write(s) failed; see log`);

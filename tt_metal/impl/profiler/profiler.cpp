@@ -1683,6 +1683,17 @@ void DeviceProfiler::readRiscProfilerResults(
             }
         }
 
+        {
+            tracy::TTDeviceMarker lane;
+            lane.chip_id = device_id;
+            lane.core_x = phys_coord.x;
+            lane.core_y = phys_coord.y;
+            lane.risc = riscType;
+            if (const uint32_t lane_thread = lane.get_thread_id(); named_lane_threads.insert(lane_thread).second) {
+                tracy::SetThreadName(lane_thread, std::string(enchantum::to_string(riscType)).c_str());
+            }
+        }
+
         if (bufferEndIndex > 0) {
             uint32_t bufferRiscShift = (riscEndIndex * profiler_dram_bank_vector_size_per_risc) + startIndex;
             if (data_source == ProfilerDataBufferSource::L1) {

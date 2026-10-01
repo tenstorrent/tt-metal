@@ -69,6 +69,6 @@ Flag a test that violates its pipeline's runtime contract (e.g., a 10-minute tes
 - [ ] Runner-routing changes (direct `runs-on:` edits or indirect reorg/`sku_config.yaml` changes) verified against the pipeline reorg tooling
 - [ ] `time_budget.yaml` changes justified
 - [ ] `fetch-depth: 1` unless full history required
-- [ ] Test yaml entries have all required keys (`name`, `cmd`, `sku`, `owner_id`, `team`, `timeout`)
+- [ ] Test yaml entries have all required keys (`name`, `cmd`, `sku`, `owner_id`, `team`, `budget_type`, `timeout`)
 - [ ] `sku` values match `.github/sku_config.yaml`
 - [ ] Tests are in a pipeline level appropriate for their runtime

@@ -133,6 +133,13 @@ ALWI void reconfig_ts_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_
 // (SrcOrder::Reverse maps icb0 -> SrcB and icb1 -> SrcA, so matmul can pass its operands unswapped, matching
 // compute_kernel_hw_startup). The srcA-only / srcB-only overloads reconfigure a single source and take no SrcOrder.
 //
+// Conditional (old, new) overloads compare operand descriptors, not hardware state. The old operand is the caller's
+// claim about the current source configuration; a different buffer is valid only if its relevant descriptor fields
+// are equivalent. A stale claim can skip a required reconfiguration. For compile-time-known operands/descriptors,
+// the comparison can fold away. The format guard compares both unpack source and destination formats.
+// The new-only overloads do not require knowledge of the old configuration, but still require the correct target
+// operand -- including when restoring configuration after a temporary operation.
+//
 // NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init. reconfig_data_format
 // only reprograms THCON data formats (gasket), not the MOP. When operands or buffer descriptors change, call the op
 // init again for the new operand pair before the next unpack operation. Because tile geometry lives in the MOP,
