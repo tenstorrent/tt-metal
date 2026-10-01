@@ -168,3 +168,28 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate: pcc 0.999913, rel 0.0133, first 128 rows 0.0114, ratio [0.9629, 1.0450], worst row 0.045, slices 0.012-0.014, halo rows 0.0137. Window check: 0.01258 vs 0.01579 (127) and 0.01471 (129).
 - Probe (not kept): chunk 0 then chunk 1 on one device cache: chunk 0 rel 0.0143, ratio [0.9535, 1.0515] (the max is 0.0015 over the 1.05 limit; chunk 0 is not gated here, but a ladder check on chunk-0 rows may be). Chunk 1 rel 0.0133. The row norm ratio is the margin to watch; `base` would tighten it, but the owner's preset is S.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_attention.py`
+
+## S.sliding_moe.02.implement.1 (implement, attn_norm + attention on device)
+- Attempt 1 failed on the harness's step check: attention vs the CPU attention on the same device input, row norm ratio [0.973, 1.047] against 1 +- 0.02 (`SWAP_STEP_DEFAULTS.swap_step_ratio`). pcc_swap_out was already 0.999995.
+- Diagnosis (probe test in `tt/`, since deleted; CPU emulation scripts in /tmp/cp4s02, not kept), per-row ratio vs the fp32 CPU step:
+  - CPU attention on the device bf16 Q/K/V: [0.979, 1.012], median -0.54%. Device Q/K norms were +0.08% / +0.05% high (V was fine), which points to the bf16 RoPE.
+  - The SDPA kernel on its own, vs CPU attention on the same device Q/K/V: preset S [0.972, 1.049], base (fp32 dest) [0.996, 1.006]. S cannot pass the check at all.
+  - With fp32 projections and fp32 RoPE: [0.992, 1.019], median +0.45%. CPU emulation shows that +0.45% comes from bf16 rounding of the q/k weights on attn_norm's massive channels (column mean |x| up to 34). Exact weights for the top 32 channels remove it, but the set changes per layer. bf16 rounding of Q contributes [0.989, 1.010]; bf16 rounding of K is small.
+- What changed in `tt/attention.py` (TtSlidingAttention only; TtFullAttention's forward is unchanged):
+  - `_qkv_rope` computes x @ W + x @ W_lo in fp32, with W_lo = W - bf16(W) stored as bfp8 (HiFi4).
+  - Heads are formed by reshape+permute in fp32.
+  - RoPE runs in fp32: tables built at load with fp32 angles (the reference/HF formula), sin sign-folded, rotate-half done as tile-aligned half swaps.
+  - Q goes in as [bf16 hi | bf16 lo] (head dim 384), K' = [k | k], V' = [v | v]. The output is sliced to 128 before the o_proj, as before.
+  - The cache still stores bf16 K/V of width 192.
+  - Sliding SDPA default preset is now "base" (fp32 dest).
+  - Env switches for comparison: `MIMO_SLIDING_SDPA_CFG=S`, `MIMO_SLIDING_QK=fp32|bf16`, `MIMO_SLIDING_WLO=0`.
+- **Owner-rule departure:** the owner asked to keep preset "S". S fails this gate's frozen per-row check (above), so the default is fp32 dest. The owner should confirm or revisit this. Cost at chunk 2048 (512 rows per chip, one layer, host-timed, before W_lo was added): S/bf16 3.7 ms, base/bf16 4.0 ms, base/split 8.7 ms. The W_lo matmuls add to that (not measured). This is a target for the perf step: fusing the fp32 elementwise RoPE/split ops.
+- Memory: W_lo (bfp8) is about 64 MB per sliding layer (about 2.5 GB per chip for 39 layers) on top of the plan. The fp32 RoPE tables are small. A plan update should record both.
+- hooks: `DEVICE_STEPS["sliding_moe"]` = {attn_norm, attention} (attn_norm was missing from the hybrid).
+- Gate: PASS. pcc_swap_out 0.999996. Attention vs CPU on the same input: rel 0.0032, worst row 0.0084, ratio [0.9927, 1.0082], bias +0.0001. Block out vs CPU attention: 0.00022.
+- Regressions re-run, all PASS:
+  - C.sliding_moe.attention: pcc 0.999985, rel 0.0056, ratio [0.984, 1.017]. Window check 0.0032 vs 0.0095 / 0.0095 (was 0.0126 vs 0.0158 / 0.0147).
+  - C.full_dense.attention: unchanged, 0.999997.
+  - S.full_dense.02: PASS.
+- Probe (not kept): chunk 0 (first-mask path), then chunk 1 on the same cache, ran the split path at rows [0.996, 1.013], before W_lo was added.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_swap_sliding_moe_02_attention.py` (the first `FAIL pcc=0` lines come from the precompile collect pass).

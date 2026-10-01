@@ -179,7 +179,7 @@ def device_component(mesh, spec, layer, step):
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
-    "sliding_moe": {"attention"},
+    "sliding_moe": {"attn_norm", "attention"},
     "full_moe": set(),
 }
 

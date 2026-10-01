@@ -63,6 +63,14 @@ def rope_tables(inv_freq: torch.Tensor, positions: torch.Tensor) -> tuple[torch.
     return emb.cos().float(), emb.sin().float()
 
 
+def rope_tables_fp32(inv_freq: torch.Tensor, positions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Rotate-half cos/sin with the angles in fp32, as the HF model and the reference (and so the golden KV prefix)
+    compute them."""
+    freqs = positions.float()[:, None] * inv_freq.float()[None, :]
+    emb = torch.cat([freqs, freqs], dim=-1)
+    return emb.cos(), emb.sin()
+
+
 def chunk_major_positions(chip: int, cp: int, chunk: int, rows: int) -> torch.Tensor:
     """Global position of each of chip ``chip``'s first ``rows`` local rows for chunk size ``chunk``."""
     L = chunk // cp
@@ -199,6 +207,8 @@ class TtKVCacheRing:
 
 
 class TtFullAttention:
+    KEEP_HOST_QKV = False
+
     def __init__(
         self,
         mesh,
@@ -235,6 +245,7 @@ class TtFullAttention:
         wkv = torch.cat([wk.reshape(hkv, d, H), wv_pad], dim=1).reshape(hkv * 2 * d, H)  # per head [k_h | v_h pad]
         self.wq = _replicate(mesh, wq.T[None, None], dtype)
         self.wkv = _replicate(mesh, wkv.T[None, None], dtype)
+        self._host_qkv = (wq, wkv) if self.KEEP_HOST_QKV else None  # fp32, for a subclass's __init__ only
         self.wo = _replicate(mesh, wo.float().T.reshape(1, 1, hq * dv, H), dtype)  # rows head-major, as concat_heads
 
         self.max_seq = -(-max_seq // TILE) * TILE
@@ -390,14 +401,19 @@ class TtFullAttention:
 # Sliding-window layers (window 128, per-head sink)
 # ---------------------------------------------------------------------------------------------------------------------
 
-# Sliding SDPA presets (env MIMO_SLIDING_SDPA_CFG), as the prior: "S" (default, owner rule) HiFi4, fp32 dest off
-# (streaming), exact exp; "base" HiFi4 + fp32 dest. q128/k128.
+# Sliding SDPA presets (env MIMO_SLIDING_SDPA_CFG): "base" (default) HiFi4 + fp32 dest; "S" (the prior's, owner preset)
+# HiFi4, fp32 dest off (streaming), exact exp. q128/k128. S fails the swap harness's per-row check (attention vs the CPU
+# step on the same input, row norm ratio within 1 +- 0.02): on its own it scores [0.972, 1.049] against the CPU
+# attention on the same device Q/K/V (bf16 dest rounds scores of magnitude ~26 by ~0.1); base scores [0.996, 1.006].
 SLIDING_PRESETS = {"S": False, "base": True}
+# Sliding Q/K precision (env MIMO_SLIDING_QK): "split" (default) fp32 projections + fp32 RoPE, Q passed to the SDPA as
+# [bf16 hi | bf16 lo] against K' = [k | k]; "fp32" the same rounded once to bf16; "bf16" the full-attention path.
+SLIDING_QK_MODES = ("split", "fp32", "bf16")
 SLIDING_Q_CHUNK, SLIDING_K_CHUNK = 128, 128
 
 
 def _sliding_compute_config():
-    fp32 = SLIDING_PRESETS[os.environ.get("MIMO_SLIDING_SDPA_CFG", "S")]
+    fp32 = SLIDING_PRESETS[os.environ.get("MIMO_SLIDING_SDPA_CFG", "base")]
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=fp32, packer_l1_acc=False
     )
@@ -410,7 +426,9 @@ class TtSlidingAttention(TtFullAttention):
     chip r > 0 the tail of chip r-1's slice of this chunk, chip 0 the tail of chip 3's slice of the previous chunk
     (in chip 3's ring cache). The halo is exchanged with one all_gather; the attention is local:
 
-        q, kv, RoPE, cache write   as TtFullAttention (RoPE theta 1e4, chunk-major ring cache, bf16, V padded)
+        q, kv, RoPE, cache write   as TtFullAttention (RoPE theta 1e4, chunk-major ring cache, bf16, V padded), but
+                                   the projections and RoPE in fp32 and Q handed over as [bf16 hi | bf16 lo]
+                                   (head dim 384) against K = [k | k], V = [v | v] (MIMO_SLIDING_QK, see _qkv_rope)
         blk   = concat([k|v][L-T:L], cache[k|v][row-T:row])   [1, 8, 2T, 384] (A_r: this slice's tail, B_r: the
                                                               previous chunk's tail on this chip; row = start/4)
         g     = all_gather(blk, dim 2, axis 1)                [1, 8, 8T, 384] = [A0 B0 A1 B1 A2 B2 A3 B3], every chip
@@ -425,6 +443,8 @@ class TtSlidingAttention(TtFullAttention):
     golden against 0.013 for this plain SDPA on the same Q/K/V (its sliding path also needs bfp8 K/V and fp32 dest
     off). Scale: SDPA scale 2^-4 with 192^-0.5 / 2^-4 folded into the Q rows, sink pre-divided by 2^-4 (exact in bf16;
     the kernel folds the sink with a bf16-truncated scale, known issue). Adapted from the prior's TtSlidingAttention."""
+
+    KEEP_HOST_QKV = True
 
     def __init__(
         self,
@@ -457,12 +477,45 @@ class TtSlidingAttention(TtFullAttention):
             dtype,
             q_scale=true_scale / scale,
         )
+        wq32, wkv32 = self._host_qkv
+        self._host_qkv = None
         self.scale = scale
         self.window = int(window)
         self.halo = -(-self.window // TILE) * TILE
         assert self.halo >= self.window - 1
         for c in self.tables:
             assert self.halo <= c // self.cp, f"chunk {c}: slice {c // self.cp} shorter than the halo {self.halo}"
+        # fp32 Q/K path (see _qkv_rope): fp32 cos and sign-folded sin [cos | sin] per chunk size, same row layout.
+        self.qk_mode = os.environ.get("MIMO_SLIDING_QK", "split")
+        assert self.qk_mode in SLIDING_QK_MODES, self.qk_mode
+        self.qk_fp32 = self.qk_mode != "bf16"
+        self.q_split = self.qk_mode == "split"
+        self.tables32 = {}
+        if self.qk_fp32:
+            R, h = self.rope_dim, self.rope_dim // 2
+            for c in self.tables:
+                L = c // self.cp
+                rows = -(-self.max_seq // c) * L
+                cs = [rope_tables_fp32(inv_freq, chunk_major_positions(r, self.cp, c, rows)) for r in range(self.cp)]
+                cos = torch.stack([t[0] for t in cs])[:, None]
+                sin = torch.stack([t[1] for t in cs])[:, None].clone()
+                sin[..., :h] = -sin[..., :h]  # rotate_half(x) * sin == swap_halves(x) * [-sin_lo | sin_hi]
+                self.tables32[c] = (
+                    _per_chip(mesh, cos, dim=0, dtype=ttnn.float32),
+                    _per_chip(mesh, sin, dim=0, dtype=ttnn.float32),
+                )
+            assert R % (2 * TILE) == 0, "fp32 RoPE swaps tile-aligned halves"
+        # Low parts of the q / kv weights (W - bf16(W), bfp8): with them x @ W is as exact as the fp32-dequantized
+        # weights. The attn_norm input has massive channels (column mean |x| up to 34, median 0.005), so bf16 weight
+        # rounding on those channels shifts every Q and K row by a common vector; through the sink-dominated softmax
+        # that is a systematic +0.45% attn_out row norm (CPU: +0.0045 median, gone with exact weights).
+        self.w_lo = self.qk_fp32 and os.environ.get("MIMO_SLIDING_WLO", "1") == "1"
+        self.wq_lo = self.wkv_lo = None
+        if self.w_lo:
+            lo = lambda w: (w - w.to(torch.bfloat16).float()).T[None, None]  # noqa: E731
+            self.wq_lo = _replicate(mesh, lo(wq32), ttnn.bfloat8_b)
+            self.wkv_lo = _replicate(mesh, lo(wkv32), ttnn.bfloat8_b)
+        del wq32, wkv32
         self.sink = None
         if sink is not None:
             self.sink = _replicate(mesh, (sink.float() / scale).reshape(1, hq, 1, 1))  # [1, 64, 1, 1] bf16
@@ -498,6 +551,91 @@ class TtSlidingAttention(TtFullAttention):
 
     def new_cache(self, max_seq: int, chunk: int | None = None) -> TtKVCacheRing:
         return TtKVCacheRing(self.mesh, self.ccl, self.nkv, self.d, self.dv, max_seq, chunk, gather_seq=0)
+
+    @staticmethod
+    def _proj32(x, w, w_lo):
+        """x @ (w + w_lo) in fp32 (two HiFi4 matmuls, fp32 out)."""
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        y = ttnn.linear(x, w, compute_kernel_config=_hifi4(), memory_config=mc, dtype=ttnn.float32)
+        if w_lo is None:
+            return y
+        y_lo = ttnn.linear(x, w_lo, compute_kernel_config=_hifi4(), memory_config=mc, dtype=ttnn.float32)
+        out = ttnn.add(y, y_lo, memory_config=mc)
+        ttnn.deallocate(y)
+        ttnn.deallocate(y_lo)
+        return out
+
+    @staticmethod
+    def _doubled(t):
+        out = ttnn.concat([t, t], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(t)
+        return out
+
+    def _rope32(self, t, cos, sin, split: bool = False):
+        """fp32 rotate-half RoPE on the first R dims of t [1, h, L, D] fp32 -> bf16 [1, h, L, D], or with split
+        [hi | lo] [1, h, L, 2D] bf16 (hi = bf16(t), lo = bf16(t - hi): hi + lo carries ~16 mantissa bits)."""
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        R, h = self.rope_dim, self.rope_dim // 2
+        n, L, D = t.shape[1], t.shape[2], t.shape[3]
+        lo = ttnn.slice(t, [0, 0, 0, 0], [1, n, L, h], memory_config=mc)
+        hi = ttnn.slice(t, [0, 0, 0, h], [1, n, L, R], memory_config=mc)
+        rot = ttnn.concat([lo, hi], dim=-1, memory_config=mc)
+        sw = ttnn.concat([hi, lo], dim=-1, memory_config=mc)
+        ttnn.deallocate(lo)
+        ttnn.deallocate(hi)
+        a = ttnn.multiply(rot, cos, memory_config=mc)
+        b = ttnn.multiply(sw, sin, memory_config=mc)
+        ttnn.deallocate(rot)
+        ttnn.deallocate(sw)
+        r = ttnn.add(a, b, memory_config=mc)
+        ttnn.deallocate(a)
+        ttnn.deallocate(b)
+        rest = ttnn.slice(t, [0, 0, 0, R], [1, n, L, D], memory_config=mc)
+        out = ttnn.concat([r, rest], dim=-1, memory_config=mc)
+        ttnn.deallocate(r)
+        ttnn.deallocate(rest)
+        o16 = ttnn.typecast(out, ttnn.bfloat16)
+        if split:
+            hi32 = ttnn.typecast(o16, ttnn.float32)
+            lo32 = ttnn.subtract(out, hi32, memory_config=mc)
+            ttnn.deallocate(hi32)
+            lo = ttnn.typecast(lo32, ttnn.bfloat16)
+            ttnn.deallocate(lo32)
+            both = ttnn.concat([o16, lo], dim=-1, memory_config=mc)
+            ttnn.deallocate(lo)
+            ttnn.deallocate(o16)
+            o16 = both
+        ttnn.deallocate(out)
+        return o16
+
+    def _qkv_rope(self, x, start: int, L: int, C: int):
+        """As TtFullAttention, but x @ (W + W_lo) in fp32 and RoPE in fp32, rounded once at the end (Q as [hi | lo]).
+        The sink-dominated softmax turns small systematic Q/K errors into attn_out row-norm errors: the bf16 path's
+        Q/K norms are +0.08% / +0.05% high (bf16 RoPE tables and outputs), which alone gave rows down to 0.977."""
+        if not self.qk_fp32:
+            return super()._qkv_rope(x, start, L, C)
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        qp = self._proj32(x, self.wq, self.wq_lo)
+        kvp = self._proj32(x, self.wkv, self.wkv_lo)
+        q = ttnn.permute(ttnn.reshape(qp, [1, L, self.nq, self.d]), (0, 2, 1, 3), memory_config=mc)
+        kv = ttnn.permute(ttnn.reshape(kvp, [1, L, self.nkv, 2 * self.d]), (0, 2, 1, 3), memory_config=mc)
+        ttnn.deallocate(qp)
+        ttnn.deallocate(kvp)
+        k = ttnn.slice(kv, [0, 0, 0, 0], [1, self.nkv, L, self.d], memory_config=mc)
+        v32 = ttnn.slice(kv, [0, 0, 0, self.d], [1, self.nkv, L, 2 * self.d], memory_config=mc)
+        ttnn.deallocate(kv)
+        v = ttnn.typecast(v32, ttnn.bfloat16)
+        ttnn.deallocate(v32)
+        r = self.rope_dim
+        cos_t, sin_t = self.tables32[C]
+        row = start // self.cp
+        cos = ttnn.slice(cos_t, [0, 0, row, 0], [1, 1, row + L, r])
+        sin = ttnn.slice(sin_t, [0, 0, row, 0], [1, 1, row + L, r])
+        q16 = self._rope32(q, cos, sin, split=self.q_split)
+        k16 = self._rope32(k, cos, sin)
+        for t in (q, k, cos, sin):
+            ttnn.deallocate(t)
+        return q16, k16, v
 
     def _halo(self, k, v, cache: TtKVCacheRing, start: int):
         """Each chip's predecessor tail [1, nkv, T, 2D] (K | V) from one all_gather (see the class docstring)."""
@@ -554,7 +692,9 @@ class TtSlidingAttention(TtFullAttention):
         ttnn.deallocate(hk)
         ttnn.deallocate(hv)
         self._write_cache(cache, k, v, start)  # frees k, v
-        q_pad = ttnn.slice(q, [0, 0, 0, 0], [1, self.nq, T, self.d])
+        if self.q_split:  # Q is [q_hi | q_lo]: K' = [k | k] gives q.k with Q rounded once to ~16 bits; V' = [v | v]
+            k_cat, v_cat = self._doubled(k_cat), self._doubled(v_cat)
+        q_pad = ttnn.slice(q, [0, 0, 0, 0], [1, self.nq, T, q.shape[-1]])
         q_cat = ttnn.concat([q_pad, q], dim=2, memory_config=mc)
         ttnn.deallocate(q_pad)
         ttnn.deallocate(q)
@@ -579,6 +719,14 @@ class TtSlidingAttention(TtFullAttention):
 
     def free(self):
         super().free()
+        for cos, sin in self.tables32.values():
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
+        self.tables32 = {}
+        for t in (self.wq_lo, self.wkv_lo):
+            if t is not None:
+                ttnn.deallocate(t)
+        self.wq_lo = self.wkv_lo = None
         if self.sink is not None:
             ttnn.deallocate(self.sink)
             self.sink = None

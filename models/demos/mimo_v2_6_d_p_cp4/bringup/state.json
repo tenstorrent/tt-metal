@@ -1367,6 +1367,107 @@
   "started": "2026-10-01T00:10:32",
   "status": "PASS"
  },
+ "S.sliding_moe.02": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "1e67daad-fe9c-46de-9811-40b98abc8c89"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/briefs/S.sliding_moe.02.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/agents/S.sliding_moe.02.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 1276.4,
+    "session_id": "1e67daad-fe9c-46de-9811-40b98abc8c89",
+    "t": "2026-10-01T00:58:15"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 43.3,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T00:36:56"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-01T00:59:01"
+   }
+  ],
+  "last_run": "2026-10-01T00:59:01",
+  "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/logs/S.sliding_moe.02.log",
+  "metrics": {
+   "pcc_swap_attn_norm": 0.9999962760517888,
+   "pcc_swap_attn_out": 0.9999744161015907,
+   "pcc_swap_experts_out": 0.9999212714361394,
+   "pcc_swap_ffn_norm": 0.9999971754426422,
+   "pcc_swap_h_mid": 0.9999972024559437,
+   "pcc_swap_out": 0.9999955280230053,
+   "pcc_swap_router": 0.9992171903503461,
+   "swap_attention_bias": 9.691715240478516e-05,
+   "swap_attention_component_err": 0.01318202454600102,
+   "swap_attention_finite": 1,
+   "swap_attention_out_rel": 0.00021650783310178667,
+   "swap_attention_out_row": 0.012190626002848148,
+   "swap_attention_ratio_max": 1.0082322359085083,
+   "swap_attention_ratio_min": 0.9927169680595398,
+   "swap_attention_rel": 0.0031667063012719154,
+   "swap_attention_rel_limit": 0.02,
+   "swap_attention_row": 0.008399941958487034,
+   "swap_attention_vs_cpu": 0.9999951185137754,
+   "swap_attention_vs_golden": 0.9999744161015907,
+   "swap_attn_norm_bias": 0.00011026859283447266,
+   "swap_attn_norm_component_err": 0.0027290834400006086,
+   "swap_attn_norm_finite": 1,
+   "swap_attn_norm_ratio_max": 1.003034234046936,
+   "swap_attn_norm_ratio_min": 0.9964608550071716,
+   "swap_attn_norm_rel": 0.0018810678739100695,
+   "swap_attn_norm_rel_limit": 0.005458166880001217,
+   "swap_attn_norm_row": 0.00384506001137197,
+   "swap_attn_norm_vs_cpu": 0.9999982301909105,
+   "swap_attn_norm_vs_golden": 0.9999962760517888
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-10-01T00:58:18",
+  "status": "PASS",
+  "waiting": null
+ },
  "_run": {
   "branch": "sjovic/mimo-llm-perf",
   "created": "2026-09-30T22:59:41",
