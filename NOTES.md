@@ -1,22 +1,14 @@
-# t48 notes: all LTX-2.5 wins on one branch
-
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
-
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
-
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
-
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+# t76 notes
+- Branch ttp/t76-cut-vae-conv-decode-neighbor-pad-and-ln- @428e0104180 (pushed), based on t48 a613d669eef.
+- 8a2f5548851: TT_NEIGHBOR_PAD_LOCAL_BATCH=<n> (default off) batches neighbor_pad_async's local copy
+  (one NOC barrier per row-batch instead of per stick). Host C++ syntax-checked (clang-20); kernels not compiled yet
+  (JIT on device). CPU test models/tt_dit/tests/models/ltx/test_neighbor_pad_local_batch_ref.py: 17 pass.
+- blx03 build started 2026-10-01 11:30 (off-device): ~/fasth3/t76, log ~/fasth3/t76-setup.log, marker "SETUP76_DONE rc=0".
+- Next: once built, on blx03: cd ~/fasth3/tt-metal && tmp/blx03/submit.sh 1500 bash /home/smarton/fasth3/t76/tmp/blx03/run76.sh
+  Read /var/tmp/fasth3/t76/run76.log: T76_CMP identical=True and the AB timing lines (b0 vs b128).
+- After the A/B: git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/t76; rm -rf /var/tmp/fasth3/t76/jit.
+- Result (2026-10-01, blx03 job 039, full 4x8 open + create_submesh(2,4), 544x960/145f, 1 warmup + 3 decodes):
+  T76_CMP b128_vs_b0 identical=True max_abs_diff=0 shape=(145, 816, 960) uint8.
+  b0 decode_s 2.0510 2.0549 2.0552 (min 2.0510); b128 decode_s 2.0747 2.0716 2.0760 (min 2.0716): +20.6 ms (+1.0%), slower.
+  b128 built 6 new local_copy kernel variants in the JIT cache, so the batched path ran. Not made default; not on t48.
+  Arm order was fixed (b0 first); a reversed-order run or a per-op profile would show whether neighbor_pad itself got slower.
