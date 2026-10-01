@@ -374,17 +374,8 @@ void blocked_matmul_and_pack(
 // keeps its compensated fold.
 #if defined(SDPA_PROTO_PA) && !defined(SDPA_RECIPE_FP32)
 #define SDPA_PA 1
-// Each chunk's P row sums accumulate (BF16, tile-shaped) in CB 12 as in the compensated recipes; each
-// row group then folds once per chunk into the Float32 total in CB 13.
-#define SDPA_PA_CHUNK_SUM_CB 12
-#define PA_SUM_CB(cb) SDPA_PA_CHUNK_SUM_CB
-#define PA_FOLD(rows) pa_fold_sum(rows)
-#else
-#define PA_SUM_CB(cb) (cb)
-#define PA_FOLD(rows)
-#endif
-#if defined(SDPA_PROTO_PA) && !defined(SDPA_RECIPE_FP32)
-
+// Set per K step: the Float32 denominator accumulates onto earlier chunks after the first.
+inline bool sdpa_pa_sum_acc = false;
 #ifndef SDPA_PA_DBG
 #define SDPA_PA_DBG 0
 #endif
@@ -767,13 +758,19 @@ void sub_exp_block_bcast_cols(
         }
 #endif
 #if !defined(SDPA_RECIPE_FP32) && !defined(SDPA_KO_SUMPACK)
-
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16)
+        pack_reconfig_data_format(reduce_cb);
+#endif
         configure_single_tile_pack(reduce_cb);
         {
             uint32_t dst_index = 0;
 #pragma GCC unroll 1
             for (uint32_t i = 0; i < tiles_per_row; i++) {
+#ifdef SDPA_PA
+                if (global_col_base > 0 || sdpa_pa_sum_acc) {
+#else
                 if (global_col_base > 0) {
+#endif
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 } else {
                     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -787,7 +784,9 @@ void sub_exp_block_bcast_cols(
                 }
             }
         }
-
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16)
+        pack_reconfig_data_format(inout_cb);
+#endif
 #endif
     }
 
@@ -1154,7 +1153,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 #ifdef SDPA_PA
             // The matmul unpack path does not read Float32 into a 16-bit dest: round the accumulated
             // denominator to BF16 through dest into the spare CB 12 (the unused ping-pong bank) first.
-            constexpr uint32_t pa_sum_bf16_cb = 8;
+            constexpr uint32_t pa_sum_bf16_cb = 12;
             CircularBuffer(cur_sum_cb).wait_front(sdpa_sum_stride);
             reconfig_data_format_srca(cur_sum_cb);
             copy_init(cur_sum_cb);
@@ -1435,7 +1434,7 @@ static void sdpa_inner_loop_step(
 
     CircularBuffer(cur.sum).reserve_back(Sq_chunk_t * sdpa_sum_stride);
 #ifdef SDPA_PA
-    CircularBuffer(SDPA_PA_CHUNK_SUM_CB).reserve_back(Sq_chunk_t * sdpa_sum_stride);
+    sdpa_pa_sum_acc = !is_first_iter;
 #endif
 #ifndef SDPA_RECIPE_FP32
     if (is_first_iter) {
@@ -1511,7 +1510,7 @@ static void sdpa_inner_loop_step(
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
-                        PA_SUM_CB(cur.sum),
+                        cur.sum,
                         KT_stride,
                         prev_q_subblock,
                         kt_subblock * actual_sbw,
@@ -1705,31 +1704,6 @@ static void sdpa_inner_loop_step(
         }
 #endif
         const uint32_t out_cb = cur.out;
-#ifdef SDPA_PA
-        // Fold this chunk's BF16 row-sum tiles of `rows` Q tile rows into the Float32 total (CB 13).
-        auto pa_fold_sum = [&](uint32_t rows) {
-            constexpr uint32_t chunk_cb = SDPA_PA_CHUNK_SUM_CB;
-            CircularBuffer(chunk_cb).push_back(rows * sdpa_sum_stride);
-            CircularBuffer(chunk_cb).wait_front(rows * sdpa_sum_stride);
-            copy_init(chunk_cb);
-            tile_regs_acquire();
-            for (uint32_t r = 0; r < rows; ++r) {
-                copy_tile(chunk_cb, r * sdpa_sum_stride, r);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(cur.sum);
-            configure_single_tile_pack(cur.sum);
-            PACK((llk_pack_reconfig_l1_acc(is_first_iter ? 0 : 1)));
-            for (uint32_t r = 0; r < rows; ++r) {
-                pack_tile<true>(r, cur.sum, r * sdpa_sum_stride);
-            }
-            PACK((llk_pack_reconfig_l1_acc(0)));
-            pack_reconfig_data_format(cb_qkt_im);
-            tile_regs_release();
-            CircularBuffer(chunk_cb).pop_front(rows * sdpa_sum_stride);
-        };
-#endif
 #ifndef SDPA_RECIPE_FP32
         // Odd K begins with empty local; put PV directly in its final local plane.
 #ifdef SDPA_PA
@@ -1793,7 +1767,7 @@ static void sdpa_inner_loop_step(
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
-                        PA_SUM_CB(cur.sum),
+                        cur.sum,
                         KT_stride,
                         qk_index(q_num_subblocks - 1),
                         kt_sub * matmul_inner,
@@ -1973,7 +1947,6 @@ static void sdpa_inner_loop_step(
                 group2_bootstrap_row(prev.out, out_cb, pushed * qktv_h, 0, sbh, vDHt);
             }
 #endif
-            PA_FOLD(sbh);
             CircularBuffer(cur.sum).push_back(sbh * sdpa_sum_stride);
             CircularBuffer(out_cb).push_back(sbh * vDHt * sdpa_out_stride);
             normalize_row_streaming<
@@ -2198,8 +2171,7 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
                     } else {
-                        PA_FOLD(qktv_h);
-            CircularBuffer(cur.sum).push_back(qktv_h * sdpa_sum_stride);
+                        CircularBuffer(cur.sum).push_back(qktv_h * sdpa_sum_stride);
                         CircularBuffer(out_cb).push_back(qktv_h * vDHt * sdpa_out_stride);
                         pushed_rows++;
                     }
@@ -2209,8 +2181,7 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, drain_h);
                     } else {
-                        PA_FOLD(drain_h);
-            CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
+                        CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
                         CircularBuffer(out_cb).push_back(drain_h * vDHt * sdpa_out_stride);
                         pushed_rows++;
                     }
@@ -2219,8 +2190,7 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
                     } else {
-                        PA_FOLD(qktv_h);
-            CircularBuffer(cur.sum).push_back(qktv_h * sdpa_sum_stride);
+                        CircularBuffer(cur.sum).push_back(qktv_h * sdpa_sum_stride);
                         CircularBuffer(out_cb).push_back(qktv_h * vDHt * sdpa_out_stride);
                         pushed_rows++;
                     }
@@ -2231,8 +2201,7 @@ static void sdpa_inner_loop_step(
 #ifndef SDPA_RECIPE_FP32
                 group2_bootstrap_row(prev.out, out_cb, salad_row * qktv_h, salad_row * qktv_h, qktv_h, vDHt);
 #endif
-                PA_FOLD(qktv_h);
-            CircularBuffer(cur.sum).push_back(qktv_h * sdpa_sum_stride);
+                CircularBuffer(cur.sum).push_back(qktv_h * sdpa_sum_stride);
                 CircularBuffer(out_cb).push_back(qktv_h * vDHt * sdpa_out_stride);
                 pushed_rows++;
             }
@@ -2268,8 +2237,7 @@ static void sdpa_inner_loop_step(
                         group2_bootstrap_row(prev.out, out_cb, 0, 0, drain_h, vDHt);
                     }
 #endif
-                    PA_FOLD(drain_h);
-            CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
+                    CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
                     CircularBuffer(out_cb).push_back(drain_h * vDHt * sdpa_out_stride);
                     pushed_rows++;
                 }
@@ -2284,8 +2252,7 @@ static void sdpa_inner_loop_step(
                         group2_bootstrap_row(
                             prev.out, out_cb, last_group * qktv_h, last_group * qktv_h, drain_h, vDHt);
 #endif
-                        PA_FOLD(drain_h);
-            CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
+                        CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
                         CircularBuffer(out_cb).push_back(drain_h * vDHt * sdpa_out_stride);
                         pushed_rows++;
                     }

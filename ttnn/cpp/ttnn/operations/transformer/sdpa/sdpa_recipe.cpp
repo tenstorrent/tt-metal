@@ -127,7 +127,7 @@ ProgramDescriptor recipe_compute_program(
     }
     if (proto_pa) {
         // The kernel starts with cur.sum = CB 13 and keeps that bank for the whole Q chunk.
-        add_cb(12, q_tiles * stride, state_bytes, state_format);  // chunk-local BF16 row sums
+        add_cb(12, 1, state_bytes, state_format);
         add_cb(13, q_tiles * stride, 4096, tt::DataFormat::Float32);
     } else {
         for (uint8_t index : {12, 13}) {
