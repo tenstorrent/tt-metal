@@ -622,9 +622,10 @@
     # this replaces -- a failure in an early section now masks the later ones.
     #
     # Each body is the leg's previous `cmd` verbatim, wrapped in a subshell with its mpirun bounded,
-    # so it can be diffed against the leg it replaces. The subshell is load-bearing, not hygiene:
-    # one of these sections deliberately sets no KIMI_K3_HF_MODEL and test_mla.py flips its `cpu`
-    # reference case to pretrained weights when it sees that variable.
+    # so it can be diffed against the leg it replaces. All three sections here happen to export the
+    # same environment, so the subshell is only keeping them independent -- unlike the accuracy suite
+    # above, where it is load-bearing because one section must NOT see another's KIMI_K3_HF_MODEL.
+    # Repeating the exports per section rather than hoisting them is what keeps each body verbatim.
 
     k3_transformer_depth() (
       export LOGURU_LEVEL=INFO
