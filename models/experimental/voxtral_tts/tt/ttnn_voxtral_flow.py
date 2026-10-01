@@ -75,6 +75,17 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
+# Matmul fidelity for the token-major (B > 1) blocks only, for the fidelity experiment: at 192
+# folded rows the matmuls are compute-bound, so HiFi2 would halve their time; the fp32-reference
+# gate in tests/perf/test_flow_tm.py decides whether it is acceptable. Default HiFi4 (= COMPUTE_CONFIG).
+_FID = {"hifi4": ttnn.MathFidelity.HiFi4, "hifi2": ttnn.MathFidelity.HiFi2, "lofi": ttnn.MathFidelity.LoFi}
+COMPUTE_CONFIG_TM = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=_FID.get(os.environ.get("VOXTRAL_FLOW_FIDELITY", "hifi4").lower(), ttnn.MathFidelity.HiFi4),
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
 # Activation dtype; every op inherits it from its input. Accumulation stays fp32 (COMPUTE_CONFIG).
 DTYPE = ttnn.bfloat16
 
@@ -410,7 +421,7 @@ class TtVoxtralFlow:
         self._tm_B2 = B2
         prg = self._prg(rows)
         h = self._norm(x, w["an"])
-        qkv = ttnn.linear(h, w["wqkv"], program_config=prg["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
+        qkv = ttnn.linear(h, w["wqkv"], program_config=prg["wqkv"], compute_kernel_config=COMPUTE_CONFIG_TM)
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
             ttnn.reshape(qkv, [1, 1, rows, _QKV_WIDTH]),
             num_heads=FM_N_HEADS,
@@ -433,17 +444,25 @@ class TtVoxtralFlow:
         a = ttnn.reshape(ttnn.experimental.nlp_concat_heads(a, memory_config=_L1), [1, rows, FM_N_HEADS * FM_HEAD_DIM])
         x = ttnn.add_(
             x,
-            ttnn.linear(a, w["wo"], program_config=prg["wo"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1),
+            ttnn.linear(
+                a, w["wo"], program_config=prg["wo"], compute_kernel_config=COMPUTE_CONFIG_TM, memory_config=_L1
+            ),
         )
         h = self._norm(x, w["fn"])
-        g = ttnn.linear(h, w["w1"], program_config=prg["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
+        g = ttnn.linear(
+            h, w["w1"], program_config=prg["w1"], compute_kernel_config=COMPUTE_CONFIG_TM, memory_config=_L1
+        )
         u = ttnn.multiply_(
             g,
-            ttnn.linear(h, w["w3"], program_config=prg["w3"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1),
+            ttnn.linear(
+                h, w["w3"], program_config=prg["w3"], compute_kernel_config=COMPUTE_CONFIG_TM, memory_config=_L1
+            ),
         )
         return ttnn.add_(
             x,
-            ttnn.linear(u, w["w2"], program_config=prg["w2"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1),
+            ttnn.linear(
+                u, w["w2"], program_config=prg["w2"], compute_kernel_config=COMPUTE_CONFIG_TM, memory_config=_L1
+            ),
         )
 
     def _trunk_tm(self, p0, p1, p2, B2):

@@ -53,6 +53,9 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (
 )
 
 
+PER_BATCH_TRACE = os.environ.get("VOXTRAL_TRACE_PER_BATCH", "0") == "1"
+
+
 class TtVoxtralBatchedPipeline:
     """B users per decode step on one chip. See the module docstring."""
 
@@ -138,6 +141,7 @@ class TtVoxtralBatchedPipeline:
         finally:
             ttnn.end_trace_capture(dev, tid, cq_id=0)
         self._tr = (tid, buf, lg, xr)
+        self._tr_args = (float(cfg_alpha), int(n_steps))
         ttnn.synchronize_device(dev)
 
     def _trace_release(self):
@@ -206,7 +210,13 @@ class TtVoxtralBatchedPipeline:
                 emit(f"[batched] warmup: trace captured in {time.perf_counter() - t0:.1f}s")
             except Exception as exc:
                 logger.warning(f"[batched] warmup: trace capture failed ({type(exc).__name__}: {exc})")
-            finally:
+                self._trace_release()
+            # Trace once: keep it for every batch. Every tensor a replay touches (KV caches, the trace's
+            # own input buffers, the flow constants) was allocated before this capture, prefill
+            # temporaries are freed before the first replay, and per-frame inputs are copied into the
+            # trace's buffers, so later allocations cannot be clobbered by a replay (the tt_transformers
+            # rule). VOXTRAL_TRACE_PER_BATCH=1 restores capture-per-batch.
+            if PER_BATCH_TRACE:
                 self._trace_release()
         self.warmed = {"prefill_shapes": shapes, "codec_buckets": buckets, "traced": traced, "batch": B}
         self.warmed["seconds"] = time.perf_counter() - t_all
@@ -313,7 +323,11 @@ class TtVoxtralBatchedPipeline:
         # Frame 0 from the prefill hidden, eager (TtVoxtralPipeline does the same).
         codes = self.flow(h0, cfg_alpha=cfg_alpha, n_steps=n_steps, x_0=x0[0])
         traced = False
-        if TRACE_REGION_SIZE > 0:
+        kept = self._tr is not None and getattr(self, "_tr_args", None) == (float(cfg_alpha), int(n_steps))
+        if kept:
+            traced = True  # the warmup trace; positions, inputs and noise are copied in per frame
+        elif TRACE_REGION_SIZE > 0:
+            self._trace_release()
             try:
                 self._trace_capture(lens, cfg_alpha, n_steps)
                 traced = True
@@ -344,7 +358,8 @@ class TtVoxtralBatchedPipeline:
                         f"[batched] {t + 1} frames, {int((~stopped).sum())} rows active, {el / (t + 1) * 1e3:.1f} ms/frame"
                     )
         finally:
-            self._trace_release()
+            if PER_BATCH_TRACE or not kept:
+                self._trace_release()
         t_decode = time.perf_counter() - t0
         n_frames = [len(f) for f in frames]
         self.last_timings = {
@@ -355,6 +370,7 @@ class TtVoxtralBatchedPipeline:
             "frames": n_frames[:n],
             "stopped_naturally": [bool(n_frames[b] < int(caps[b])) for b in range(n)],
             "traced": traced,
+            "trace_reused": bool(kept),
             "batch": B,
             "requests": n,
         }
