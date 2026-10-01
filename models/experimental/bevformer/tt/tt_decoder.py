@@ -18,16 +18,19 @@ and the error compounds across layers through the reference-point refinement.
 """
 
 import dataclasses
+import math
 
 import ttnn
-from models.experimental.bevformer.config.decoder_config import REG_XY, REG_Z
 from models.experimental.bevformer.tt.tt_common import layer_norm
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
 GRID_DTYPE = ttnn.float32
 
 
-def inverse_sigmoid(x, eps=1e-5):
+INVERSE_SIGMOID_EPS = 1e-5
+
+
+def inverse_sigmoid(x, eps=INVERSE_SIGMOID_EPS):
     x = ttnn.clamp(x, min=0, max=1)
     x1 = ttnn.clamp(x, min=eps)
     x2 = ttnn.clamp(ttnn.rsub(x, 1.0), min=eps)
@@ -122,7 +125,8 @@ class TtDetectionTransformerDecoder:
     def _reg_branch(x, branch):
         x = ttnn.relu(ttnn.linear(x, branch[0].weight, bias=branch[0].bias))
         x = ttnn.relu(ttnn.linear(x, branch[1].weight, bias=branch[1].bias))
-        # Emitted in GRID_DTYPE: its output is added to the reference points' logits.
+        # (x, y, z) logit updates (see create_reg_branch_parameters), in GRID_DTYPE as they
+        # are added to the reference points' logits.
         return ttnn.linear(x, branch[2].weight, bias=branch[2].bias, dtype=GRID_DTYPE)
 
     def __call__(self, query, value, query_pos, reference_points, reg_branches):
@@ -140,16 +144,21 @@ class TtDetectionTransformerDecoder:
             output = ttnn.permute(output, (1, 0, 2))
             value = ttnn.permute(value, (1, 0, 2))
             query_pos = ttnn.permute(query_pos, (1, 0, 2))
+        # The reference refines with sigmoid(delta + inverse_sigmoid(points)). Every layer's
+        # points are the previous layer's sigmoid, and inverse_sigmoid(sigmoid(z)) is z clamped
+        # to its eps bound, so the logits are carried instead of recomputed.
+        logit_bound = math.log(1.0 / INVERSE_SIGMOID_EPS)
+        logits = inverse_sigmoid(reference_points)
         intermediate = []
         intermediate_reference_points = []
-        for layer, branch in zip(self.layers, reg_branches, strict=True):
+        for index, (layer, branch) in enumerate(zip(self.layers, reg_branches, strict=True)):
             # The cross-attention's single level is the new axis 2.
             output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
-            box_delta = self._reg_branch(output, branch)
-            updated_xy = ttnn.add(box_delta[..., REG_XY], inverse_sigmoid(reference_points[..., :2]))
-            updated_z = ttnn.add(box_delta[..., REG_Z], inverse_sigmoid(reference_points[..., 2:3]))
-            reference_points = ttnn.sigmoid(ttnn.concat([updated_xy, updated_z], dim=-1))
+            if index:
+                logits = ttnn.clamp(logits, min=-logit_bound, max=logit_bound)
+            logits = ttnn.add(self._reg_branch(output, branch), logits)
+            reference_points = ttnn.sigmoid(logits)
 
             intermediate.append(output)
             intermediate_reference_points.append(reference_points)
