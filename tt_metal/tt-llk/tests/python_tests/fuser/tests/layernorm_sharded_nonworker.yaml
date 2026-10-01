@@ -28,9 +28,9 @@ indexes:
 operands:
   - {name: x, dims: [64, 128], format: Float16_b}
   - {name: residual, dims: [64, 128], format: Float16_b}
-  - {name: scaler, dims: [32, 32], format: Float16_b, const_value: 0.0078125}
+  - {name: scaler, dims: [32, 32], format: Float16_b, stimuli: 0.0078125}
   - {name: ex_global, dims: [64, 32], format: Float32}
-  - {name: inv_std_global, dims: [64, 32], format: Float32, const_value: 1.0}
+  - {name: inv_std_global, dims: [64, 32], format: Float32, stimuli: 1.0}
   - {name: gamma, dims: [32, 128], format: Float32}
   - {name: beta, dims: [32, 128], format: Float32}
   - {name: input_sum, dims: [64, 128], format: Float32}

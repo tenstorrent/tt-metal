@@ -43,6 +43,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import 
 from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.common import pooling_mask
 from models.experimental.nomic_embed_text_v2_moe.tt.model import TtNomicBertModel, encode
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
@@ -122,7 +123,7 @@ def pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim=None):
     These three calls are the same stages encode() makes, in the same order, which is also how a
     reference user reaches them: directly, not through a wrapper on the model.
     """
-    kernel_config = tt_model.tt_config.compute_kernel_config
+    kernel_config = tt_model.tt_config.compute_kernel_config(OpGroup.REDUCE)
     hidden = tt_model(input_ids, attention_mask)
     pooled = pooling.mean_pool(
         hidden,
@@ -149,19 +150,21 @@ def test_last_hidden_state(config, reference_model, tt_model, batch, seqlen):
     assert_with_pcc(ref, got, MODEL_PCC)
 
 
-# B*S past one output tile row per core hangs ttnn's broadcast-batch matmul unless the expert
-# bank splits the token axis; see tt/experts.py. 3584 is the smallest crossing shape, 4096 the
-# one the hang was reported at. Kept out of MODEL_SHAPES, which several tests multiply over.
-CHUNKING_SHAPES = [(7, 512), (8, 512)]
+# B*S past MAX_TOKENS_PER_PASS, 4096, makes the expert bank split the token axis; see
+# tt/experts.py. 9x512 ends in a 512-token pass, 6x704 in a 128-token one, so its forward runs
+# both pass layouts. Kept out of MODEL_SHAPES, which several tests multiply over.
+CHUNKING_SHAPES = [(9, 512), (6, 704)]
 
 
 @pytest.mark.parametrize("batch, seqlen", CHUNKING_SHAPES)
 def test_a_batch_that_chunks_the_expert_token_axis(config, reference_model, tt_model, batch, seqlen):
-    """Shapes past the expert bank's pass limit, which used to hang rather than fail.
+    """Shapes past the expert bank's pass limit, which once hung rather than failed.
 
-    Same gates as the single-pass shapes, since the split is arithmetically a no-op;
-    test_chunking_the_token_axis_does_not_change_the_answer holds it bit-exact at module level.
-    This one exists for the shape, so a regression in the pass limit is caught end to end.
+    Same gates as the single-pass shapes. The split changes the arithmetic, since each pass
+    picks its own layout and K blocks: 4096 + 512 transposed at 9x512, 4096 transposed + 128
+    token-major at 6x704. test_chunking_the_token_axis_does_not_change_the_answer bounds that at
+    module level; this one exists for the shape, so a regression in the pass limit is caught end
+    to end.
     """
     input_ids, attention_mask = random_input_ids(batch, seqlen, config, seed=0)
 
@@ -379,10 +382,11 @@ def test_token_type_ids_must_be_zero(config, tt_model, expect_error):
 
 @pytest.mark.parametrize("batch, seqlen", MODEL_SHAPES)
 def test_no_mask_matches_an_all_ones_mask(config, tt_model, batch, seqlen):
-    """forward(attention_mask=None) skips building a (B, 1, S, S) mask, so it must be equivalent.
+    """forward skips building a (B, 1, S, S) mask when there is none or it keeps every token.
 
-    The saving is real, 1 MB at B=2 S=512 plus the SDPA work, and the equivalence is what
-    test_an_all_ones_mask_is_a_no_op established at module level. This holds the model to it.
+    The saving is real: a mask doubled SDPA's time at 8x512, read by every head of every call.
+    The equivalence is what test_an_all_ones_mask_is_a_no_op established at module level. This
+    holds the model to it.
     """
     input_ids, _ = random_input_ids(batch, seqlen, config)
 

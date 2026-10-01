@@ -49,9 +49,10 @@ const TensorParamName UC_INPUT{"input"};
 const TensorParamName UC_INDEX_T{"index"};
 const TensorParamName UC_PAGE_TABLE_T{"page_table"};
 
-bool enable_fp32_dest(const tt_metal::IDevice* device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
+bool enable_fp32_dest(
+    const tt_metal::distributed::MeshDevice& device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
     return fp32_dest_acc_en;
 }
@@ -87,7 +88,7 @@ std::vector<UpdateCachePerCoreOffsets> compute_update_cache_offsets(
 
     const auto& cache_tensor = tensor_args.cache_tensor;
     const auto& input_tensor = tensor_args.input_tensor;
-    const bool fp32_dest_acc_en = enable_fp32_dest(input_tensor.device(), operation_attributes.compute_kernel_config);
+    const bool fp32_dest_acc_en = enable_fp32_dest(*input_tensor.device(), operation_attributes.compute_kernel_config);
 
     const uint32_t Wt = input_tensor.padded_shape()[-1] / TILE_WIDTH;
     const uint32_t Wbytes = fp32_dest_acc_en ? input_tensor.padded_shape()[-1] * sizeof(float)
@@ -133,7 +134,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     const auto& update_idxs_tensor = tensor_args.update_idxs_tensor;
     const auto& page_table = tensor_args.page_table;
 
-    tt_metal::IDevice* device = input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     tt::DataFormat cache_dfb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor.dtype());
     uint32_t cache_single_tile_size = tt::tile_size(cache_dfb_data_format);
@@ -141,7 +142,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     tt::DataFormat input_dfb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
 
-    bool fp32_dest_acc_en = enable_fp32_dest(device, operation_attributes.compute_kernel_config);
+    bool fp32_dest_acc_en = enable_fp32_dest(*device, operation_attributes.compute_kernel_config);
 
     tt::DataFormat interm_dfb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt::tile_size(interm_dfb_data_format);
@@ -369,7 +370,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                 {"cache_position_modulo", cache_position_modulo},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"cache_start_id", "my_batch_idx", "wait_to_start"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
 
     // ---------------- Writer ----------------
@@ -455,24 +456,23 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                   "send_signal",
                   "send_core_x",
                   "send_core_y"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     // ---------------- Compute ----------------
 
-    // Select the compute hardware-config generation for the target arch and map the caller's common
-    // knobs (leaving the per-DFB unpack_modes default for us to set below). Required on Quasar, where a
-    // KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1 config. Unlike the previous
-    // bare ComputeGen1Config (which set only enable_32_bit_dest and otherwise took the struct defaults,
-    // HiFi4/precise), this preserves the caller's compute_kernel_config — whose no-arg TTNN default maps
-    // to LoFi/approximate/double-buffered Dest. That differs only in the fidelity/approx knobs, which do
-    // not affect this op: it untilizes cache/input, patches a row, and re-tilizes (data-format moves) —
-    // there is no fidelity-sensitive FPU or SFPU math, and bfp_pack_precision_mode is left default either way.
-    auto compute_hw_cfg = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    // Map the caller's common knobs (leaving the per-DFB unpack_modes default for us to set below).
+    // Unlike a bare ComputeHardwareConfig (which would set only enable_32_bit_dest and otherwise take the
+    // struct defaults, HiFi4/precise), this preserves the caller's compute_kernel_config — whose no-arg
+    // TTNN default maps to LoFi/approximate/double-buffered Dest. That differs only in the fidelity/approx
+    // knobs, which do not affect this op: it untilizes cache/input, patches a row, and re-tilizes
+    // (data-format moves) — there is no fidelity-sensitive FPU or SFPU math, and bfp_pack_precision_mode
+    // is left default either way.
+    auto compute_hw_cfg = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         // A 32-bit Dest requires an explicit unpack mode for every Float32 buffer the compute kernel
         // consumes. Legacy named none, which resolved to unpacking into SrcA/B.
-        auto& um = unpack_modes(compute_hw_cfg);
+        auto& um = compute_hw_cfg.unpack_modes;
         const auto require_unpack_mode = [&](const DFBSpecName& dfb, tt::DataFormat format) {
             if (format == tt::DataFormat::Float32) {
                 um.emplace(dfb, UnpackMode::UnpackToSrc);

@@ -19,7 +19,7 @@ operands:
     dims: [256, 256]
     tile_dims: [16, 32]
     format: "Float16_b"
-    const_value: 1.0
+    stimuli: 1.0
   - name: "reduce_block_max_tiny_out"
     dims: [256, 256]
     tile_dims: [16, 32]

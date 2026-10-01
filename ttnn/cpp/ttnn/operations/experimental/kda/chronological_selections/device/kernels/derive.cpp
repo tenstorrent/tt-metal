@@ -28,7 +28,7 @@ TT_KERNEL void derive() {
     const uint32_t start = words[0];
     auto topology = derive(start, sp_rank, sp_size, local_rows);
     if constexpr (has_actual_end) {
-        const auto actual_end = TensorAccessor(tensor::actual_end);
+        const auto actual_end = TensorAccessor(*tensor::get_token_if_present<"actual_end">());
         noc.async_read(actual_end, CoreLocalMem<uint32_t>(address), sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
         topology = derive_interval(start, words[0], sp_rank, sp_size, local_rows);

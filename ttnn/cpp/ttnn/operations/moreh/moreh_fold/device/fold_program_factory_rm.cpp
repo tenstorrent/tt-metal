@@ -59,7 +59,7 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
     uint32_t LH = ls[0];
     uint32_t LW = ls[1];
 
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
 
     // MeshTensors for the tensor-parameter bindings (Metal 2.0 speaks MeshTensor).
     const auto& input_mesh_tensor = input.mesh_tensor();
@@ -187,7 +187,7 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
                   "start_id",
                   "num_units_per_core",
                   "aligned"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer kernel ----
@@ -199,7 +199,7 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
             .dfb_spec_name = OUTPUT_CB, .accessor_name = "output", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"output_cb_page_size", "start_id", "num_units_per_core"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ---- Runtime args per core ----

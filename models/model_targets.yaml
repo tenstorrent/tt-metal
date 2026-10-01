@@ -6,6 +6,19 @@ description: Centralized perf/accuracy targets for models CI.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
+  gemma4-31b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy:
+              # First 10/198 Diamond questions, 32K output budget; minimum 80%.
+              # The validator uses symmetric bands: 100 +/- 20% gives that floor.
+              gpqa: 100
+              gpqa_tolerance: 0.2
+            owner_id: U03HY7MK4BT
+            team: models
   llama3.1-8b-qb2:
     skus:
       p300x2:
@@ -18,6 +31,18 @@ targets:
               ifeval: 80.47
               ifeval_tolerance: 0.07
             owner_id: U03HY7MK4BT
+            team: models
+  qwen38-27b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy:
+              # First 10/198 GPQA Diamond questions; require at least 9/10.
+              gpqa: 100
+              gpqa_tolerance: 0.1
+            owner_id: U08BGTAMU1W
             team: models
   # Consolidation: additive central-accuracy targets for models whose TTTv2 demo has no committed CI e2e
   # leg (qwen2_7b / phi4 / deepseek); consumed by the demo's CI=true central accuracy gate. Values are
@@ -342,6 +367,17 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+
+  paddleocr-vl-1.6:
+    aliases: ["PaddleOCR-VL-1.6", "PaddlePaddle/PaddleOCR-VL-1.6"]
+    skus:
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
 
   gemma-4-26b-a4b:
     aliases: ["gemma-4-26b-a4b", "google/gemma-4-26B-A4B-it"]
@@ -1456,6 +1492,16 @@ targets:
             accuracy: {}
             owner_id: U08FBKRKTB8 # Kohei Yamaguchi
             team: models
+          # accuracy_512 (text_demo.py): measured 98.44 / 100.00 on bh_quietbox_2, 2026-09-18.
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 97
+              top5: 99
+            owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+            team: models
   qwen3.6-27b:
     aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B"]
     skus:
@@ -1549,6 +1595,16 @@ targets:
               decode_t/s/u: 14.67
               tolerance: 0.2
             accuracy: {}
+            owner_id: U08HL8X1ECD # Aniruddha Tupe
+            team: models
+          # accuracy_512 (text_demo.py): measured 98.63 / 100.00 on bh_quietbox_2, 2026-09-18.
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 97
+              top5: 99
             owner_id: U08HL8X1ECD # Aniruddha Tupe
             team: models
   qwq-32b:

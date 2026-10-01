@@ -30,6 +30,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.events import profiler_event_callback
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
+from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
 
 # Truthy values for H3_LOG_QUALITY (quality logs) and ENABLE_USER_INPUT (post-perf prompt REPL).
 _QUALITY_LOG_ON = ("1", "true", "yes", "on")
@@ -459,23 +460,23 @@ def temporal_seam_score(frames: np.ndarray, period: int) -> float:
 
 # ------------------------------------------------------------------ shared e2e gate scaffolding
 
-# Matched pair with the tier-6 bars (CLIP 37.37, imaging_quality 0.6896); imported by fl2va so it cannot drift.
+# This is our default testing prompt.
 CALIBRATED_FOX_PROMPT = (
-    "A red fox trots across a snowy field at dawn, its breath visible in the cold air."
+    "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "  # <- NOTE THE SPACE HERE! DON'T DELETE IT, else it changes the token count!
     "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
 )
+CALIBRATED_FOX_PROMPT_NUM_TOKENS = 39
 
 
 def weights_dir(*required_subdirs: str) -> Path:
-    """The snapshot dir from MINIMAX_H3_MODEL_PATH; skips when it or a required partition is missing."""
-    root = os.environ.get("MINIMAX_H3_MODEL_PATH", "")
-    if not root or not Path(root).is_dir():
-        pytest.skip("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
-    directory = Path(root)
-    missing = [name for name in required_subdirs if not (directory / name).is_dir()]
-    if missing:
-        pytest.skip(f"MiniMax-H3 snapshot at {directory} is missing {missing}")
-    return directory
+    """The snapshot dir, from MINIMAX_H3_MODEL_PATH / the HF cache / a download; skips when unresolved.
+
+    A download needs TT_DIT_ALLOW_HF_DOWNLOAD=1; without it an absent snapshot still skips as before.
+    """
+    try:
+        return resolve_weights_dir(*required_subdirs)
+    except WeightsNotFoundError as error:
+        pytest.skip(str(error))
 
 
 def artifact_dir(name: str) -> Path:

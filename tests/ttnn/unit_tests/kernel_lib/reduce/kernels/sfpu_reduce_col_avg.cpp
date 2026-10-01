@@ -16,25 +16,28 @@
 
 namespace {
 
-constexpr std::uint32_t cb_input = 0;
-constexpr std::uint32_t cb_output = 16;
+constexpr std::uint32_t cb_input_id = 0;
+constexpr std::uint32_t cb_output_id = 16;
 
 }  // namespace
 
 void kernel_main() {
     const std::uint32_t num_tiles = get_arg_val<std::uint32_t>(0);
 
-    compute_kernel_hw_startup(cb_input, cb_output);
-    copy_init(cb_input);
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_output(cb_output_id);
+
+    compute_kernel_hw_startup(cb_input.get_cb_id(), cb_output.get_cb_id());
+    copy_init(cb_input.get_cb_id());
 
     // The input CB is backed by a sharded tensor that is already in L1; make it visible.
-    cb_reserve_back(cb_input, num_tiles);
-    cb_push_back(cb_input, num_tiles);
+    cb_input.reserve_back(num_tiles);
+    cb_input.push_back(num_tiles);
 
     for (std::uint32_t tile = 0; tile < num_tiles; ++tile) {
         tile_regs_acquire();
-        cb_wait_front(cb_input, 1);
-        copy_tile(cb_input, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+        cb_input.wait_front(1);
+        copy_tile(cb_input.get_cb_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
         sfpu_reduce_init<PoolType::AVG, REDUCE_FORMAT>();
         sfpu_reduce<PoolType::AVG, REDUCE_FORMAT, ReduceDim::REDUCE_COL>(0 /*idst*/);
@@ -42,11 +45,11 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 
-        cb_reserve_back(cb_output, 1);
-        pack_tile(0 /*ifrom_dst*/, cb_output);
-        cb_push_back(cb_output, 1);
+        cb_output.reserve_back(1);
+        pack_tile(0 /*ifrom_dst*/, cb_output.get_cb_id());
+        cb_output.push_back(1);
 
-        cb_pop_front(cb_input, 1);
+        cb_input.pop_front(1);
         tile_regs_release();
     }
 }

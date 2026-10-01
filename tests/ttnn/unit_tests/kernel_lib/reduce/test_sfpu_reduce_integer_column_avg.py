@@ -162,11 +162,6 @@ def test_sfpu_reduce_integer_column_average(device, dtype, band):
     arch = str(device.arch()).upper()
     if "QUASAR" in arch:
         pytest.skip("Quasar's SFPU reduce does not support 32-bit integer formats")
-    if "BLACKHOLE" in arch:
-        pytest.skip(
-            "Blackhole has the same integer-average defects; fixed separately in "
-            "https://github.com/tenstorrent/tt-metal/pull/57661"
-        )
 
     column_sums = torch.tensor((UINT32_BANDS if dtype == "uint32" else INT32_BANDS)[band], dtype=torch.int64)
     # Every row holds floor(sum / 32) and row 0 also carries the remainder in [0, 31], so the column

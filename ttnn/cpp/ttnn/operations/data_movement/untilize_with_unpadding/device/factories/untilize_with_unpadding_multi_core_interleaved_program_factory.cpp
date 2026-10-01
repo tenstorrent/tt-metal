@@ -54,7 +54,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
     const auto& output_shape = output.padded_shape();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet default_grid(default_cores);
@@ -111,7 +111,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
             .accessor_name = "src",
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     /** writer
@@ -141,7 +141,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
                          input_dfb_data_format == tt::DataFormat::Int32)},
              {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "start_stick_id", "n_block_reps"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     /** compute
@@ -151,7 +151,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         input_dfb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
         compute_hw_config.unpack_modes = {{MCI_IN, UnpackMode::UnpackToDest}};
     }

@@ -1206,7 +1206,7 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
 // is the preferred mode for anything the SFPU consumes, so these assignments stay legal but become
 // slower than they need to be. They want revisiting before this op targets Gen2.
 void set_compute_unpack_modes(m2::KernelSpec& kernel, const m2::ProgramSpec& spec, const SpecConfig& c) {
-    auto& modes = m2::unpack_modes(std::get<m2::ComputeHardwareConfig>(kernel.hw_config));
+    auto& modes = std::get<m2::ComputeHardwareConfig>(kernel.hw_config).unpack_modes;
     if (c.welford_fp32_alias) {
         modes.emplace(X_WELFORD, UnpackMode::UnpackToDest);
     }
@@ -1237,10 +1237,22 @@ void add_kernel_and_work_unit_specs(
     const bool has_not_all_to_all_workers = workers.num_none_all_to_all_workers > 0;
     const bool has_inactive_cores = !core_ranges.inactive_cores.empty();
 
-    const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_0, .noc = c.reader_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-    const m2::DataMovementHardwareConfig writer_hw = m2::DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_1, .noc = c.writer_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+    const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementHardwareConfig{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = c.reader_noc,
+                .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+            },
+    };
+    const m2::DataMovementHardwareConfig writer_hw = m2::DataMovementHardwareConfig{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = c.writer_noc,
+                .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+            },
+    };
 
     // The reader's trailing coordinate block is one X coordinate per multicast column followed by one
     // Y coordinate per multicast row. Its length is a compile-time property of the kernel, but the
@@ -1545,28 +1557,28 @@ namespace {
 
 // The multicast range this sender covers, plus its own position within the grid.
 std::vector<uint32_t> reader_sender_named_values(
-    const CoreCoord& core, const RuntimeArgsContext& ctx, IDevice* device) {
+    const CoreCoord& core, const RuntimeArgsContext& ctx, const MeshDevice& device) {
     CoreCoord mcast_start, mcast_end;
     if (ctx.grid.mcast_1d) {
         CoreCoord top_left = {(std::size_t)ctx.core_ranges.start_core.x, (std::size_t)ctx.core_ranges.start_core.y};
         CoreCoord bottom_right = {
             (std::size_t)ctx.core_ranges.start_core.x + ctx.grid.grid_size.x - 1,
             (std::size_t)ctx.core_ranges.start_core.y + ctx.grid.grid_size.y - 1};
-        mcast_start = device->worker_core_from_logical_core(top_left);
-        mcast_end = device->worker_core_from_logical_core(bottom_right);
+        mcast_start = device.worker_core_from_logical_core(top_left);
+        mcast_end = device.worker_core_from_logical_core(bottom_right);
     } else {
         if (ctx.grid.row_wise) {
             CoreCoord left_plus_one = {(std::size_t)ctx.core_ranges.start_core.x + 1, (std::size_t)core.y};
             CoreCoord right = {
                 (std::size_t)ctx.core_ranges.start_core.x + ctx.grid.grid_size.x - 1, (std::size_t)core.y};
-            mcast_start = device->worker_core_from_logical_core(left_plus_one);
-            mcast_end = device->worker_core_from_logical_core(right);
+            mcast_start = device.worker_core_from_logical_core(left_plus_one);
+            mcast_end = device.worker_core_from_logical_core(right);
         } else {
             CoreCoord top_plus_one = {(std::size_t)core.x, (std::size_t)ctx.core_ranges.start_core.y + 1};
             CoreCoord bottom = {
                 (std::size_t)core.x, (std::size_t)ctx.core_ranges.start_core.y + ctx.grid.grid_size.y - 1};
-            mcast_start = device->worker_core_from_logical_core(top_plus_one);
-            mcast_end = device->worker_core_from_logical_core(bottom);
+            mcast_start = device.worker_core_from_logical_core(top_plus_one);
+            mcast_end = device.worker_core_from_logical_core(bottom);
         }
     }
     if (ctx.reader_noc == NOC::NOC_1) {
@@ -1670,7 +1682,7 @@ RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
     const SpecConfig& config,
-    IDevice* device,
+    const MeshDevice& device,
     const Tensor& input,
     const std::optional<Tensor>& residual,
     const std::optional<Tensor>& gamma,

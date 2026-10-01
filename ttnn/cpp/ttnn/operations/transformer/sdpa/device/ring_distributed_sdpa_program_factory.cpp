@@ -99,7 +99,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         operation_attributes.program_config;
     const std::optional<int64_t>& chunk_start_idx = operation_attributes.chunk_start_idx;
 
-    IDevice* device = input_tensor_q.device();
+    MeshDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -331,6 +331,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,      // arg 19: k_partial_col — non-streaming, no partial mask emitted
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 20
         0,  // arg 21: use_windowed_mask — ring never uses windowed (block-diagonal) attention
+        0,  // arg 22: out_concat_heads — ring writes the per-head layout
     };
     // out accessor, then the cu_window and Q-offset accessors chained right after it (mirrors the regular
     // factory so the writer's accessor offset chain stays intact). Ring is never windowed → placeholders.
