@@ -112,6 +112,18 @@ class TtEmbedding:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(3, None)),
         )
 
+    def clamp_ids(self, ids: ttnn.Tensor) -> ttnn.Tensor:
+        """Device ids [.., n] uint32 ROW_MAJOR (the engine's [1, 1, n] or ids_to_device's [1, 1, 1, n]) -> [1, 1, 1, n]
+        with the server's pad id 0xFFFFFFFF mapped to V - 1 (real ids are < V and pass unchanged). On the device;
+        the pad tokens sit after every real token, so causality keeps them out of the real rows."""
+        n = ids.shape[-1]
+        t = ttnn.to_layout(ids, ttnn.TILE_LAYOUT)
+        m = ttnn.minimum(t, self.vocab - 1)
+        ttnn.deallocate(t)
+        rm = ttnn.to_layout(m, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(m)
+        return ttnn.reshape(rm, (1, 1, 1, n))
+
     def __call__(self, ids: ttnn.Tensor) -> ttnn.Tensor:
         mc = ttnn.DRAM_MEMORY_CONFIG
         s4 = ids.shape[-1]
@@ -174,12 +186,13 @@ class TtXingBlock:
         norm = {s: build_norm(mesh, loader, cfg, layer, s) for s in ("attn_norm", "ffn_norm")}
         self.q_a = build_q_a(mesh, loader, cfg, layer)
         self.attn = build_attention(mesh, loader, cfg, layer)
+        self._end = None  # actual_end of the chunk being run (__call__)
         steps = {
             "attn_hc": lambda ctx, x: hc["attn_hc"](x),
             "attn_collapse": lambda ctx, x, h: collapse(x, h),
             "attn_norm": lambda ctx, x: norm["attn_norm"](x),
             "q_a": lambda ctx, x: self.q_a(x),
-            "attention": lambda ctx, x, qr: self.attn(x, qr, ctx.start),
+            "attention": lambda ctx, x, qr: self.attn(x, qr, ctx.start, self._end),
             "attn_residual": lambda ctx, x, h, y: residual(x, h, y),
             "ffn_hc": lambda ctx, x: hc["ffn_hc"](x),
             "ffn_collapse": lambda ctx, x, h: collapse(x, h),
@@ -239,9 +252,11 @@ class TtXingBlock:
         return {"kv_latent": self.attn.read_state(length)}
 
     # ---- forward
-    def __call__(self, x: ttnn.Tensor, start: int) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, start: int, end: int | None = None) -> ttnn.Tensor:
         """x: the chip's streams [1, 1, S/4, 4 x 1792] fp32 (not freed) -> block output, same layout. The geometry
-        (chunk, max_seq) must be set up."""
+        (chunk, max_seq) must be set up. start: the chunk's first absolute position, any multiple of 32, with the
+        tokens on the SP rows as the server places them (tt/layout.py:server_order); end: actual_end (None = the
+        whole chunk is real). Only the attention depends on positions; every other step is per token."""
         from models.demos.common.bringup.reference.interface import Ctx, run_block
 
         def missing(name):
@@ -251,7 +266,11 @@ class TtXingBlock:
         chunk = x.shape[-2] * self.sp
         assert g is not None and g.chunk == chunk, f"layer {self.i}: setup({chunk}, max_seq) first"
         ctx = Ctx(self.i, start, chunk, None)
-        return run_block(self.graph, missing, ctx, x, overrides=self.overrides)
+        self._end = end
+        try:
+            return run_block(self.graph, missing, ctx, x, overrides=self.overrides)
+        finally:
+            self._end = None
 
 
 class TtXingModel:
