@@ -507,9 +507,10 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             .target_devices = {0},
             .emu_host = host,
             .emu_port = port,
-            // sival bring-up is owned by chippy, which has already run against this server. INIT
-            // would reset the model and undo it.
-            .emu_skip_init = rtoptions_.get_sival_emu_bringup(),
+            // Chippy owns clock, cold reset, CCE remap, GDDR, and (on mmk) the D2D
+            // links before Metal attaches. INIT on the SiVal server re-asserts reset
+            // and drops that bring-up.
+            .emu_skip_init = true,
         });
     } else if (this->target_type_ == TargetDevice::GrendelJtag) {
         const std::string& endpoint = rtoptions_.get_grendel_jtag_server();
@@ -854,6 +855,12 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
     this->driver_->assert_risc_reset(core.chip, core_coord, soft_resets);
+}
+
+void Cluster::release_cce_uncore_for_firmware_load(const tt_cxy_pair& core) const {
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->get_chip(core.chip)->release_cce_uncore_for_firmware_load(core_coord);
 }
 
 void Cluster::write_dram_vec(

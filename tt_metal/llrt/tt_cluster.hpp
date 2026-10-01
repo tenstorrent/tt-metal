@@ -137,6 +137,9 @@ public:
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
     void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
+    // Quasar CCE only. Releases the uncore with the harts still held and programs the DMRISC remap.
+    // No-op on any other core. Call after a full CCE reset assert and before loading firmware.
+    void release_cce_uncore_for_firmware_load(const tt_cxy_pair& core) const;
 
     void write_dram_vec(
         const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;

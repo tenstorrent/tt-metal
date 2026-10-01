@@ -251,6 +251,8 @@ private:
     void init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size);
 
     bool initialized_ = false;
+    // True when the current initialization stopped before firmware, dispatch, and JIT setup.
+    bool minimal_ = false;
     bool force_reinit_ = false;
 
     uint8_t num_hw_cqs_ = 0;

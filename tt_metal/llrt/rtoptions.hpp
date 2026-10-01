@@ -305,6 +305,8 @@ class RunTimeOptions {
     std::filesystem::path simulator_path = "";
     std::string emu_server;
     std::string emu_soc_desc_path;
+    // Parsed for compatibility. Gtest selection and emu INIT do not read this:
+    // attach always skips INIT, and each test follows the soc descriptor.
     bool sival_emu_bringup = false;
     std::string grendel_jtag_server;
     std::string grendel_jtag_soc_desc_path;

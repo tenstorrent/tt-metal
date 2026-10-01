@@ -178,26 +178,35 @@ void MetalContext::initialize(
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
 
     if (initialized_) {
-        if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
-            worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
-            fw_compile_hash != fw_compile_hash_) {
+        const bool params_changed = dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
+                                    worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
+                                    fw_compile_hash != fw_compile_hash_;
+        // A minimal context has no firmware initializer, dispatch state, or JIT build state. It
+        // cannot stand in for a full one: a later full request must run the complete path, or
+        // the cores stay in reset and the first kernel build dereferences null.
+        const bool needs_upgrade = minimal_ && !minimal;
+        if (params_changed) {
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
             teardown();
-        } else {
+        } else if (needs_upgrade) {
+            // This teardown also satisfies any pending force re-init.
+            force_reinit_ = false;
+            log_debug(tt::LogAlways, "Re-initializing minimal MetalContext as a full context.");
+            teardown();
+        } else if (force_reinit_) {
             // Re-init request with the same parameters, do nothing unless force re-init requested.
-            if (force_reinit_) {
-                force_reinit_ = false;
-                log_debug(
-                    tt::LogAlways,
-                    "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
-                teardown();
-            } else {
-                return;
-            }
+            force_reinit_ = false;
+            log_debug(
+                tt::LogAlways,
+                "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
+            teardown();
+        } else {
+            return;
         }
     }
 
     initialized_ = true;
+    minimal_ = minimal;
 
     // Store the resolved config
     dispatch_core_config_ = resolved_config;

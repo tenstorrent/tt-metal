@@ -73,21 +73,35 @@ void SingleHostContext::broadcast(ttsl::Span<std::byte> buf [[maybe_unused]], Ra
     TT_THROW("method broadcast is unsupported for single-host distributed contexts.");
 }
 
+// With a single rank there is nothing to combine, so the operator never applies and the result is
+// this rank's own contribution. Same reasoning as all_gather below.
 void SingleHostContext::all_reduce(
-    ttsl::Span<std::byte> send_buf [[maybe_unused]],
-    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
+    ttsl::Span<std::byte> send_buf,
+    ttsl::Span<std::byte> recv_buf,
     ReduceOp op [[maybe_unused]],
     DType dtype [[maybe_unused]]) const {
-    TT_THROW("method all_reduce is unsupported for single-host distributed contexts.");
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "all_reduce: recv buffer {} bytes, expected {}",
+        recv_buf.size(),
+        send_buf.size());
+
+    std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
 }
 
 void SingleHostContext::reduce(
-    ttsl::Span<std::byte> send_buf [[maybe_unused]],
-    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
+    ttsl::Span<std::byte> send_buf,
+    ttsl::Span<std::byte> recv_buf,
     ReduceOp op [[maybe_unused]],
     DType dtype [[maybe_unused]],
     Rank root [[maybe_unused]]) const {
-    TT_THROW("method reduce is unsupported for single-host distributed contexts.");
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "reduce: recv buffer {} bytes, expected {}",
+        recv_buf.size(),
+        send_buf.size());
+
+    std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
 }
 
 void SingleHostContext::gather(

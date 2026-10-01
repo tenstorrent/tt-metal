@@ -1311,6 +1311,13 @@ void RiscFirmwareInitializer::initialize_firmware(
         case HalProgrammableCoreType::DRAM: {
             cluster_.assert_risc_reset_at_core(
                 tt_cxy_pair(device_id, virtual_core), dram_core_reset_riscs(cluster_.arch()));
+            // Quasar CCE: cold reset is bring-up's. A full reset then asserts the uncore, which
+            // drops the DMRISC block. Release the uncore with the harts still held and reprogram
+            // the remap before the firmware image and the reset vectors below. The harts are
+            // released later, after this function returns.
+            if (cluster_.arch() == ARCH::QUASAR) {
+                cluster_.release_cce_uncore_for_firmware_load(tt_cxy_pair(device_id, virtual_core));
+            }
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_class_num_fw_binaries(core_type_idx, processor_class);
