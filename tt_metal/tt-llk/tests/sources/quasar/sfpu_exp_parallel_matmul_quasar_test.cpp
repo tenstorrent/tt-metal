@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -36,7 +37,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
         const ckernel::TensorShape tensor_shape_A = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_A);
@@ -56,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
@@ -97,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -109,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
@@ -188,7 +189,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     ckernel_template mop(PARAM_SRCS_SLICE_COUNT, 1 /*inner_loop_len*/, _exp_loadmacro_op_(num_sfpu_iterations));
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         const ckernel::TensorShape srcs_shape = tensor_shape_from_dimensions(PARAM_SRCS_YDIM, PARAM_SRCS_XDIM, PARAM_SRCS_ZDIM, PARAM_SRCS_ZDIM);
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(srcs_shape, L1_ADDRESS(params.buffer_S[0]), formats.unpack_S_src);
         _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
@@ -216,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
             const std::uint8_t bfd_unpack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>();
@@ -258,7 +259,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask because CFG state can persist across run types.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -277,7 +278,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }

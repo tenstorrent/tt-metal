@@ -667,9 +667,11 @@ def timeseries_events(riscData, name, analysis):
     if analysis["type"] == "event":
         riscData["events"][name] = []
 
+        marker_risc = analysis["marker"]["risc"]
+        marker_riscs = [marker_risc] if isinstance(marker_risc, str) else marker_risc
         for index, (timerID, timestamp, attachedData, risc, *_) in enumerate(riscData["timeseries"]):
             if (timerID["type"] == "TS_EVENT" or timerID["type"] == "TS_DATA") and (
-                risc == analysis["marker"]["risc"] or analysis["marker"]["risc"] == "ANY"
+                risc in marker_riscs or "ANY" in marker_riscs
             ):
                 riscData["events"][name].append((timerID, timestamp, attachedData, risc, *_))
 
