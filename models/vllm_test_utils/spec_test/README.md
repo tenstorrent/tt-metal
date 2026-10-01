@@ -24,7 +24,19 @@ some declarations from the model class before constructing an instance.
   successor rule `(token * 31 + position * 7 + 11) % vocab`. Each verification
   column reads its candidate input token, which can be a preceding draft. The
   rule does not copy the candidate successor being scored. Use this target in
-  both arms of an ordinary/speculative output-sequence comparison.
+  both arms of an ordinary/speculative output-sequence comparison. Where logits
+  are returned, they are a distribution with the rule's choice at probability
+  0.4 and the shared tokens 17, 4099 and 65537 at 0.3, 0.2 and 0.1, and every
+  other token at 0. The argmax is the rule, so greedy output is the rule's
+  sequence; a sampled request has a distribution to sample, the same one for
+  a prefill, an ordinary decode, and every verification column.
+- `TT_SPEC_ACCEPT_MODES=argmax_ids` (default): what a verification can return,
+  as a comma-separated list of `argmax_ids` and `logits`. With `logits` the
+  verification returns full-vocabulary `[B, 1+K, V]` logits through
+  `VerifyOutput.logits`: the fixed target's distribution per column, or a
+  point mass at the `depth` target's ids. A launch declaring both lets the
+  plugin keep `argmax_ids` for greedy steps; a launch declaring only `logits`
+  checks that greedy speculation does not depend on `argmax_ids`.
 - `TT_SPEC_ACCEPT_DEPTH=-1` (default): accept all valid model-owned drafts.
   `0` requests zero accepted drafts; a nonnegative `n` requests at most the
   first `n` valid drafts per row. For `depth`, verification enforces the depth.
@@ -78,10 +90,55 @@ The TT runner does not import that marker or load a second model from it;
 the TT runner calls `propose_draft_tokens` on the loaded `DummySpecDecodeModel`.
 The actual serving model is still `models/vllm_test_utils/spec_test`.
 
-Send greedy requests (`temperature: 0`) without logprobs, structured output,
-token filters, or penalties. The paired plugin's implemented speculative path
-uses `argmax_ids` and rejects unsupported sampling semantics. A normal text
-prompt is sufficient for the model-owned drafter.
+With the default `TT_SPEC_ACCEPT_MODES=argmax_ids`, send greedy requests
+(`temperature: 0`) without logprobs, structured output, token filters, or
+penalties: the plugin speculates only for greedy requests on a model without
+`logits`. A normal text prompt is sufficient for the model-owned drafter.
+
+## Sampled speculation
+
+Declare `logits` and keep host sampling, which is the plugin default:
+
+```bash
+TT_SPEC_TARGET=fixed TT_SPEC_ACCEPT_MODES=argmax_ids,logits TT_SPEC_DRAFT_POLICY=always \
+vllm serve models/vllm_test_utils/spec_test \
+    --tokenizer meta-llama/Llama-3.1-8B-Instruct \
+    --additional-config '{"tt": {"register_test_models": true}}' \
+    --speculative-config '{"method": "custom_class",
+                           "model": "vllm_tt_plugin.model_owned_drafter",
+                           "num_speculative_tokens": 5}' \
+    --max-num-seqs 8 \
+    --no-async-scheduling
+```
+
+The plugin then rejection-samples sampled and penalized requests on the host
+against the returned logits. Temperature, top-k, top-p and the presence,
+frequency and repetition penalties are applied; logprobs, structured output and
+token filters remain refused, and vLLM refuses `min_p` and `logit_bias` with
+speculation before the plugin sees the request. The model-owned drafter
+proposes the rule's argmax deterministically and declares
+`spec_deterministic_drafts`, which is what lets the plugin treat each proposal
+as a point mass and offer sampled requests the model's drafts. A draft bent past `TT_SPEC_ACCEPT_DEPTH`
+has probability 0, and is rejected, unless it coincides with a shared token.
+
+The fixed target's device-sampling answer is the argmax, which is right for a
+greedy request only. The model declares `max_device_top_k: 0` and
+`supports_device_penalties: False`, so on a launch with `sample_on_device_mode`
+a step carrying a sampled or penalized row samples on the host and a
+greedy-only step can still sample on the device; the model raises if a sampled
+row ever reaches device sampling. Host-sampled decodes always reload their
+inputs, so the argmax the ordinary decode feeds back into its resident buffer
+is never read for a sampled request.
+
+The shared tokens are placed modulo the vocabulary: with the 128256-token
+vocabulary of `config.json` they are 17, 4099 and 65537 as stated, and the
+plugin's `tests/tt/spec/dummy_arithmetic.py` mirrors them.
+
+The plugin's `tests/tt/spec/test_sampled_speculation.py` checks every committed
+token against its context's support, compares the pooled support counts with
+the expected counts, and compares greedy penalized output with an exact
+reference. `run_spec_regression.sh` runs it in the `sampled-*`
+configurations.
 
 ## Asynchronous scheduling
 
@@ -96,7 +153,8 @@ requirements, and the plugin evaluates them in this order:
 2. If speculation is configured and asynchronous scheduling remains enabled,
    `TTPlatform` requires `supports_async_spec_decode`. If this declaration is
    absent or false, `TTPlatform` rejects the combination. The speculative
-   capability covers deferred readback of a `[B, 1+K]` verification result and
+   capability covers deferred readback of a verification result in its mode,
+   `[B, 1+K]` ids or `[B, 1+K, V]` logits, and
    retention of the hidden handle until the dependent proposal.
 
 `supports_async_spec_decode` does not imply `supports_async_decode` or enable
@@ -104,7 +162,8 @@ asynchronous scheduling by itself. `supports_async_decode` does not establish
 speculative output or hidden-state lifetime safety. Other plugin admission
 checks still apply after these capability checks.
 
-For a model-owned asynchronous run, use the preceding command with
+For a model-owned asynchronous run, use the command under "Synchronous
+model-owned launch" with
 `TT_SPEC_TARGET=fixed`, `TT_SPEC_DRAFT_POLICY=solo`, and `--async-scheduling`
 in place of `--no-async-scheduling`. Replace `--additional-config` with:
 
@@ -193,7 +252,9 @@ these properties.
 
 `models/vllm_test_utils/tests/host/test_spec_test_model.py` covers verification
 layout, per-row acceptance, draft construction, hidden identity, fixed-target
-arithmetic, solo policy, resident ordinary decode, and prefill replay. The full
+arithmetic, the fixed-target distribution, the `logits` mode and its
+declaration, the device-sampling refusal, solo policy, resident ordinary
+decode, and prefill replay. The full
 suite requires `vllm_tt_plugin` on `PYTHONPATH` because contract calls import its
 validators and value types. Isolated arithmetic helpers need no TT device.
 

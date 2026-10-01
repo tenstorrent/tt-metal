@@ -28,6 +28,7 @@ below the row's count, and the column at the row's count carries the bonus that
 follows a fully accepted row.
 """
 
+import pytest
 import torch
 
 from models.vllm_test_utils.spec_test.test_model import DummySpecDecodeModel
@@ -887,6 +888,220 @@ def test_the_depth_target_prefill_is_untouched(monkeypatch):
     logits = model.prefill_forward(tokens=prompt, prompt_lens=torch.tensor([4]), start_pos=torch.tensor([0]))
 
     assert int(logits.reshape(1, -1).argmax(dim=-1)) == 0
+
+
+# The `fixed` target's distribution and the `logits` accept mode. A sampled
+# request is speculated by rejection sampling against the target distribution,
+# so the target needs one, and an ordinary sampled run is a reference only if
+# prefill, ordinary decode and every verify column return the same one.
+
+
+def _logits_model(monkeypatch, modes="logits", target="fixed", accept_depth=None):
+    monkeypatch.setenv("TT_SPEC_ACCEPT_MODES", modes)
+    monkeypatch.setenv("TT_SPEC_TARGET", target)
+    return _model(monkeypatch, accept_depth=accept_depth)
+
+
+def _verify(model, tokens, positions, spec_mode):
+    rows, width = tokens.shape
+    return model.decode_forward(
+        tokens=tokens,
+        start_pos=positions,
+        num_valid_drafts=torch.full((rows,), width - 1, dtype=torch.int32),
+        accepted_counts=torch.ones(rows, dtype=torch.int32),
+        spec_mode=spec_mode,
+    )
+
+
+def test_the_fixed_distribution_s_argmax_is_the_rule(monkeypatch):
+    """The argmax of the distribution is the rule, so a greedy request follows it.
+
+    The four supported tokens carry exactly the declared probabilities.
+    """
+    from models.vllm_test_utils.spec_test.test_model import FIXED_PROBABILITIES
+
+    model = _fixed_model(monkeypatch)
+    tokens = torch.tensor([[100, 3, 900, 51]], dtype=torch.int32)
+    positions = torch.tensor([[5, 6, 7, 8]], dtype=torch.int32)
+
+    logits = model._fixed_logits(tokens, positions)
+
+    assert logits.shape == (1, 4, VOCAB)
+    assert logits.argmax(dim=-1).tolist() == model._fixed_choice(tokens, positions).tolist()
+    probs = logits.exp()
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(1, 4))
+    assert (probs > 0).sum(dim=-1).tolist() == [[4, 4, 4, 4]]
+    top = probs.sort(dim=-1, descending=True).values[..., :4]
+    assert torch.allclose(top, torch.tensor(FIXED_PROBABILITIES).expand(1, 4, 4))
+
+
+def test_a_shared_token_that_is_the_rule_s_choice_takes_both_shares(monkeypatch):
+    """At token 0, position 586, the rule chooses 17, one of the shared tokens."""
+    model = _fixed_model(monkeypatch)
+    tokens = torch.tensor([[0]], dtype=torch.int32)
+    positions = torch.tensor([[586]], dtype=torch.int32)
+    assert int(model._fixed_choice(tokens, positions)[0, 0]) == 17
+
+    probs = model._fixed_logits(tokens, positions).exp()[0, 0]
+
+    assert float(probs[17]) == pytest.approx(0.7)
+    assert int((probs > 0).sum()) == 3
+
+
+def test_every_answer_of_the_fixed_target_reads_one_distribution(monkeypatch):
+    """Prefill, ordinary decode and each verify column agree for the same input.
+
+    That is what makes an ordinary sampled run a reference for a speculative
+    one: both sample one model, whatever was drafted.
+    """
+    model = _logits_model(monkeypatch)
+    prompt = torch.tensor([[11, 12, 13, 14]], dtype=torch.int32)
+    prefill = model.prefill_forward(tokens=prompt, prompt_lens=torch.tensor([4]), start_pos=torch.tensor([0]))
+    plain = _decode(model, torch.tensor([[14]], dtype=torch.int32), torch.tensor([3], dtype=torch.int32))
+    verify = _verify(
+        model,
+        torch.tensor([[14, 77, 88]], dtype=torch.int32),
+        torch.tensor([[3, 4, 5]], dtype=torch.int32),
+        "logits",
+    )
+    expected = model._fixed_logits(torch.tensor([[14]]), torch.tensor([[3]]))
+
+    assert torch.equal(prefill, expected)
+    assert torch.equal(plain, expected)
+    assert verify.spec_mode == "logits"
+    assert verify.argmax_ids is None
+    assert torch.equal(verify.logits[:, :1], expected)
+    # Later columns read the drafts as inputs and never copy them.
+    assert torch.equal(
+        verify.logits[:, 1:],
+        model._fixed_logits(torch.tensor([[77, 88]]), torch.tensor([[4, 5]])),
+    )
+    assert verify.hidden is model._verify_hidden
+
+
+def test_the_depth_target_answers_logits_as_a_point_mass_at_its_ids(monkeypatch):
+    """Acceptance accounting in logits mode commits what argmax mode commits."""
+    model = _logits_model(monkeypatch, target="depth", accept_depth=1)
+    tokens = _block(2)
+    num_valid = torch.tensor([3, 1], dtype=torch.int32)
+
+    out = model.decode_forward(
+        tokens=tokens,
+        start_pos=torch.zeros(2, 4, dtype=torch.int32),
+        num_valid_drafts=num_valid,
+        accepted_counts=torch.ones(2, dtype=torch.int32),
+        spec_mode="logits",
+    )
+
+    assert out.logits.argmax(dim=-1).tolist() == model._verified_ids(tokens, num_valid).tolist()
+    assert int(torch.isfinite(out.logits).sum()) == 2 * 4
+
+
+def test_a_mode_the_launch_did_not_declare_is_refused(monkeypatch, expect_error):
+    """The runner asks only for declared modes; a stand-in that served others
+    would hide a runner that did not."""
+    argmax_only = _logits_model(monkeypatch, modes="argmax_ids")
+    with expect_error(NotImplementedError, "TT_SPEC_ACCEPT_MODES"):
+        _verify(argmax_only, _block(1), torch.zeros(1, 4, dtype=torch.int32), "logits")
+
+    logits_only = _logits_model(monkeypatch, modes="logits")
+    with expect_error(NotImplementedError, "TT_SPEC_ACCEPT_MODES"):
+        _verify(logits_only, _block(1), torch.zeros(1, 4, dtype=torch.int32), "argmax_ids")
+
+
+@pytest.mark.parametrize(
+    ("raw", "declared"),
+    [
+        (None, ("argmax_ids",)),
+        ("argmax_ids,logits", ("argmax_ids", "logits")),
+        ("logits", ("logits",)),
+    ],
+)
+def test_the_declared_accept_modes_follow_the_environment(monkeypatch, raw, declared):
+    from types import SimpleNamespace
+
+    if raw is None:
+        monkeypatch.delenv("TT_SPEC_ACCEPT_MODES", raising=False)
+    else:
+        monkeypatch.setenv("TT_SPEC_ACCEPT_MODES", raw)
+    config = SimpleNamespace(model_config=SimpleNamespace(max_model_len=2048))
+
+    assert DummySpecDecodeModel.spec_plan(config, 8, 5).accept_modes == declared
+
+
+@pytest.mark.parametrize("raw", ["logit", "logits,logits", ""])
+def test_an_unknown_or_repeated_accept_mode_is_refused(monkeypatch, expect_error, raw):
+    monkeypatch.setenv("TT_SPEC_ACCEPT_MODES", raw)
+
+    with expect_error(ValueError, "TT_SPEC_ACCEPT_MODES"):
+        DummySpecDecodeModel(mesh_device=None, max_batch_size=8, vocab_size=VOCAB)
+
+
+@pytest.mark.parametrize(
+    "controls",
+    [
+        {"temperature": [0.0, 0.7]},
+        {"temperature": [0.0, 0.0], "presence_penalty": [0.0, 0.5]},
+        {"temperature": [0.0, 0.0], "repetition_penalty": [1.0, 1.2]},
+    ],
+    ids=["temperature", "presence", "repetition"],
+)
+def test_device_sampling_a_sampled_request_is_refused(monkeypatch, expect_error, controls):
+    """The device answer is the argmax, so it cannot stand in for a sample."""
+    from types import SimpleNamespace
+
+    model = _fixed_model(monkeypatch)
+    params = SimpleNamespace(**controls)
+
+    with expect_error(ValueError, "launch without sample_on_device_mode"):
+        _decode(
+            model,
+            torch.tensor([[100], [200]], dtype=torch.int32),
+            torch.tensor([5, 6], dtype=torch.int32),
+            sampling_params=params,
+        )
+    with expect_error(ValueError, "launch without sample_on_device_mode"):
+        model.prefill_forward(
+            tokens=torch.tensor([[11, 12], [13, 14]], dtype=torch.int32),
+            prompt_lens=torch.tensor([2, 2]),
+            start_pos=torch.tensor([0, 0]),
+            sampling_params=params,
+        )
+
+
+def test_device_sampling_a_greedy_batch_still_answers_ids(monkeypatch):
+    from types import SimpleNamespace
+
+    model = _fixed_model(monkeypatch)
+    params = SimpleNamespace(
+        temperature=[0.0, 0.0],
+        presence_penalty=[0.0, 0.0],
+        frequency_penalty=[0.0, 0.0],
+        repetition_penalty=[1.0, 1.0],
+    )
+    tokens = torch.tensor([[100], [200]], dtype=torch.int32)
+    positions = torch.tensor([5, 6], dtype=torch.int32)
+
+    ids = _decode(model, tokens, positions, sampling_params=params)
+
+    assert ids.tolist() == model._fixed_choice(tokens, positions.reshape(2, 1)).reshape(2).tolist()
+
+
+def test_the_model_routes_sampled_steps_to_the_host_sampler():
+    """The declarations the plugin's device-sampling check reads.
+
+    `TTModelRunner.check_perform_device_sampling` sends a step to the host
+    sampler when a row is random and its `top_k` lies outside
+    `1..max_device_top_k`, which a bound of 0 makes true for every random row,
+    and when a row is penalized and the model does not support device
+    penalties.
+    """
+    capabilities = DummySpecDecodeModel.model_capabilities
+
+    assert capabilities["max_device_top_k"] == 0
+    assert capabilities["supports_device_penalties"] is False
+    # The drafter is deterministic, which lets sampled requests get its drafts.
+    assert capabilities["spec_deterministic_drafts"] is True
 
 
 def test_a_short_row_s_unwritten_verify_column_is_zero(monkeypatch):

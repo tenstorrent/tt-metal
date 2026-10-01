@@ -28,6 +28,22 @@ TARGET_FIXED = "fixed"
 DRAFT_POLICY_ALWAYS = "always"
 DRAFT_POLICY_SOLO = "solo"
 
+# The accept modes a launch can make this model declare, by the plugin's names.
+# Spelled here rather than imported because the plugin is imported only where
+# a contract call needs it.
+ACCEPT_MODES = ("argmax_ids", "logits")
+
+# The ``fixed`` target's distribution after each input token: the successor
+# rule's choice and three tokens shared by every context, at these
+# probabilities, and zero everywhere else. The rule's choice keeps the largest
+# share, so the argmax is the rule and a greedy request emits exactly the rule's
+# sequence. The shared tokens recur in sampled output, which is what gives a
+# penalty something to act on. They are placed modulo the vocabulary, and
+# vllm-tt-plugin's tests/tt/spec/dummy_arithmetic.py mirrors both tuples for
+# the 128256-token vocabulary, so the two must change together.
+FIXED_SHARED_ALTERNATIVES = (17, 4099, 65537)
+FIXED_PROBABILITIES = (0.4, 0.3, 0.2, 0.1)
+
 
 def _draft_policy():
     """The configured draft policy, read from the environment.
@@ -55,6 +71,22 @@ def _declared_spec_requirements():
     if _draft_policy() == DRAFT_POLICY_SOLO:
         return ["device_propose"]
     return ["device_propose", "hidden_feed"]
+
+
+def _accept_modes():
+    """The accept modes this model declares, read from ``TT_SPEC_ACCEPT_MODES``.
+
+    A comma-separated list of ``argmax_ids`` and ``logits``, defaulting to
+    ``argmax_ids``. ``logits`` lets the plugin rejection-sample sampled and
+    penalized requests on the host. A launch declaring only ``logits`` checks
+    that greedy speculation does not depend on ``argmax_ids``.
+    """
+    raw = os.environ.get("TT_SPEC_ACCEPT_MODES", "argmax_ids")
+    modes = tuple(mode.strip() for mode in raw.split(",") if mode.strip())
+    unknown = [mode for mode in modes if mode not in ACCEPT_MODES]
+    if not modes or unknown or len(set(modes)) != len(modes):
+        raise ValueError(f"TT_SPEC_ACCEPT_MODES must list distinct values from {list(ACCEPT_MODES)}, " f"got {raw!r}")
+    return modes
 
 
 class DummySpecDecodeModel(DummyNoOpModel):
@@ -106,6 +138,8 @@ class DummySpecDecodeModel(DummyNoOpModel):
         ``TT_SPEC_TARGET``  ``depth`` for acceptance accounting or ``fixed``
             for matching ordinary/speculative output sequences.
         ``TT_SPEC_DRAFT_POLICY``  ``always`` or ``solo``.
+        ``TT_SPEC_ACCEPT_MODES``  ``argmax_ids`` (default), ``logits``, or
+            both, comma-separated: what a verify can return.
         ``TT_SPEC_MAX_TOKENS_ALL_USERS``  declared logical KV token capacity;
             defaults to 131072 and allocates no device KV cache.
     """
@@ -149,6 +183,17 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # declared. Backed by ``decode_forward``'s split submission, by
         # ``read_decode_output``, and by the resident forward inputs below.
         "supports_async_decode": True,
+        # The device answer of the ``fixed`` target is the argmax, so this
+        # model cannot device-sample a request with a non-zero temperature or a
+        # penalty. A ``max_device_top_k`` of 0 routes every step carrying a
+        # sampled row to the host sampler, and so does a penalty here, while a
+        # greedy-only step can still sample on the device.
+        "max_device_top_k": 0,
+        "supports_device_penalties": False,
+        # The drafter walks the rule's argmax, a deterministic function of the
+        # committed block, so a logits verify may treat each draft as a point
+        # mass and the plugin offers sampled requests this model's drafts.
+        "spec_deterministic_drafts": True,
         # Left at 1 by omission. Any value above 1 selects the block-output
         # rail, which owns the committed width per step and cannot be combined
         # with speculation.
@@ -167,6 +212,7 @@ class DummySpecDecodeModel(DummyNoOpModel):
                 f"TT_SPEC_DRAFT_POLICY must be {DRAFT_POLICY_ALWAYS!r} or "
                 f"{DRAFT_POLICY_SOLO!r}, got {self.draft_policy!r}"
             )
+        self.accept_modes = _accept_modes()
         # Set by every verify and checked by the drafter. None before the first
         # verify, which is also the state a propose arriving before any verify
         # would be caught by.
@@ -187,7 +233,7 @@ class DummySpecDecodeModel(DummyNoOpModel):
         logger.info(
             f"DummySpecDecodeModel: target={self.target} accept_depth="
             f"{'all' if self.accept_depth is None else self.accept_depth} "
-            f"draft_policy={self.draft_policy}"
+            f"draft_policy={self.draft_policy} accept_modes={','.join(self.accept_modes)}"
         )
 
     def _fixed_choice(self, tokens, positions):
@@ -205,6 +251,65 @@ class DummySpecDecodeModel(DummyNoOpModel):
         """
         ids = tokens.to(torch.int64) * 31 + positions.to(torch.int64) * 7 + 11
         return (ids % self.vocab_size).to(torch.int32)
+
+    def _fixed_logits(self, tokens, positions):
+        """``fixed`` target: the distribution that follows each input.
+
+        Log-probabilities over the whole vocabulary, ``[..., V]`` for inputs of
+        shape ``[...]``. The support is ``_fixed_choice`` at
+        ``FIXED_PROBABILITIES[0]`` and ``FIXED_SHARED_ALTERNATIVES`` at the
+        rest; a shared token that coincides with the rule's choice adds its
+        share to it. Every other token is ``-inf``, so a committed token
+        outside the support is evidence of a wrong commit rather than noise.
+        """
+        choice = self._fixed_choice(tokens, positions).to(torch.int64)
+        probs = torch.zeros(*choice.shape, self.vocab_size, dtype=torch.float32)
+        probs.scatter_(-1, choice.unsqueeze(-1), FIXED_PROBABILITIES[0])
+        for token, probability in zip(FIXED_SHARED_ALTERNATIVES, FIXED_PROBABILITIES[1:]):
+            probs[..., token % self.vocab_size] += probability
+        return probs.log()
+
+    def _point_mass_logits(self, ids):
+        """``[..., V]`` logits that put all mass on ``ids``: the ``depth`` target's."""
+        logits = torch.full((*ids.shape, self.vocab_size), float("-inf"), dtype=torch.float32)
+        logits.scatter_(-1, ids.to(torch.int64).unsqueeze(-1), 0.0)
+        return logits
+
+    @staticmethod
+    def _refuse_device_sampled_requests(sampling_params, call):
+        """Refuse device sampling for a request that is not greedy.
+
+        The ``fixed`` target answers device sampling with the rule's choice,
+        which is the argmax: right for a greedy request and wrong for any
+        other, and a greedy token presented as a sample is the failure a
+        sampled reference exists to catch. ``max_device_top_k`` and
+        ``supports_device_penalties`` already route such a step to the host
+        sampler, so this is an assertion that the routing held.
+        """
+
+        def values(name):
+            value = getattr(sampling_params, name, None)
+            if value is None:
+                return []
+            if isinstance(value, torch.Tensor):
+                value = value.tolist()
+            if not isinstance(value, (list, tuple)):
+                value = [value]
+            return [float(item) for item in value]
+
+        sampled = any(value > 0 for value in values("temperature"))
+        penalized = (
+            any(value != 0 for value in values("presence_penalty"))
+            or any(value != 0 for value in values("frequency_penalty"))
+            or any(value != 1 for value in values("repetition_penalty"))
+        )
+        if sampled or penalized:
+            raise ValueError(
+                f"DummySpecDecodeModel was asked to sample a {call} on device for a "
+                "request with a non-zero temperature or a penalty. Its device answer "
+                "is the argmax, so it cannot serve one; launch without "
+                "sample_on_device_mode so the plugin samples on the host"
+            )
 
     @classmethod
     def get_max_tokens_all_users(cls, **kwargs):
@@ -243,7 +348,7 @@ class DummySpecDecodeModel(DummyNoOpModel):
         arithmetic and L1 budget and returns ``SpecReject`` for a point it
         cannot fit.
         """
-        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, DRAFTER_STATE_INTERNAL, SpecPlan, SpecReject
+        from vllm_tt_plugin.spec_decode import DRAFTER_STATE_INTERNAL, SpecPlan, SpecReject
 
         del max_num_seqs  # no cost scales with concurrency here
         if requested_k < 1:
@@ -266,7 +371,7 @@ class DummySpecDecodeModel(DummyNoOpModel):
             lanes_per_request=1,
             extra_bytes_per_seq=0,
             extra_bytes_per_token=0,
-            accept_modes=(ACCEPT_MODE_ARGMAX_IDS,),
+            accept_modes=_accept_modes(),
             drafter_state=DRAFTER_STATE_INTERNAL,
             # Under the adaptive policy this model is asked to decode steps
             # that verify nothing, which is the whole point of that policy:
@@ -298,13 +403,14 @@ class DummySpecDecodeModel(DummyNoOpModel):
         if spec_mode is None:
             return self._plain_decode(*args, **kwargs)
 
-        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, VerifyOutput, check_spec_side_tensors
+        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_LOGITS, VerifyOutput, check_spec_side_tensors
 
-        if spec_mode != ACCEPT_MODE_ARGMAX_IDS:
-            # Declared in accept_modes, so the runner should never ask; raise by
+        if spec_mode not in self.accept_modes:
+            # Absent from accept_modes, so the runner should never ask; raise by
             # name rather than returning a field the mode does not carry.
             raise NotImplementedError(
-                f"DummySpecDecodeModel serves {ACCEPT_MODE_ARGMAX_IDS!r}, " f"asked for {spec_mode!r}"
+                f"DummySpecDecodeModel serves {list(self.accept_modes)} "
+                f"(TT_SPEC_ACCEPT_MODES), asked for {spec_mode!r}"
             )
 
         tokens = kwargs.get("tokens")
@@ -332,6 +438,18 @@ class DummySpecDecodeModel(DummyNoOpModel):
         positions = kwargs.get("start_pos")
         if positions is None and len(args) > 1:
             positions = args[1]
+        if spec_mode == ACCEPT_MODE_LOGITS:
+            # Under ``fixed``, column ``j`` is the distribution after candidate
+            # input ``j``, the same one a prefill and an ordinary decode
+            # return, so an ordinary sampled run and a speculative one sample
+            # one model. Under ``depth`` it is a point mass at the ids that
+            # target claims, which serves acceptance accounting only.
+            logits = (
+                self._fixed_logits(tokens, positions)
+                if self.target == TARGET_FIXED
+                else self._point_mass_logits(self._verified_ids(tokens, num_valid_drafts))
+            )
+            return VerifyOutput(spec_mode=spec_mode, logits=logits, hidden=self._verify_hidden)
         if self.target == TARGET_FIXED:
             # Predict each successor from the corresponding candidate input.
             # Acceptance depth does not alter this target rule; the drafter
@@ -340,7 +458,7 @@ class DummySpecDecodeModel(DummyNoOpModel):
         else:
             verified = self._verified_ids(tokens, num_valid_drafts)
         return VerifyOutput(
-            spec_mode=ACCEPT_MODE_ARGMAX_IDS,
+            spec_mode=spec_mode,
             argmax_ids=verified,
             hidden=self._verify_hidden,
         )
@@ -484,12 +602,11 @@ class DummySpecDecodeModel(DummyNoOpModel):
         )
         last_index = (lengths[:rows] - 1).clamp(min=0)
         last_token = tokens.to(torch.int64).gather(1, last_index.unsqueeze(1))
-        choice = self._fixed_choice(last_token, last_index.unsqueeze(1))
         if kwargs.get("sampling_params") is not None:
+            self._refuse_device_sampled_requests(kwargs["sampling_params"], "prefill")
+            choice = self._fixed_choice(last_token, last_index.unsqueeze(1))
             return choice.reshape(rows).to(torch.int64)
-        logits = torch.zeros(rows, 1, self.vocab_size, dtype=torch.float32)
-        logits.scatter_(2, choice.to(torch.int64).unsqueeze(2), 1.0)
-        return logits
+        return self._fixed_logits(last_token, last_index.unsqueeze(1))
 
     def _plain_decode(self, *args, **kwargs):
         """An ordinary decode, from whichever inputs the commands make current.
@@ -617,14 +734,19 @@ class DummySpecDecodeModel(DummyNoOpModel):
         0 at every step, so an unspeculated run of it emits one token forever
         and cannot be compared with anything. This follows the same rule the
         verify follows, which is what makes the two arms comparable.
+
+        Host sampling draws from the returned distribution, so a sampled
+        ordinary run is a reference for a sampled speculative one. The plugin
+        reloads inputs on every host-sampled decode, so the argmax this method
+        feeds back into the resident buffer is never read for such a request.
         """
-        choice = self._fixed_choice(tokens.reshape(rows, -1)[:, :1], positions.reshape(rows, -1)[:, :1])
+        first_tokens = tokens.reshape(rows, -1)[:, :1]
+        first_positions = positions.reshape(rows, -1)[:, :1]
         if kwargs.get("sampling_params") is not None:
             # Device sampling asks for ids rather than logits.
-            return choice.reshape(rows).to(torch.int64)
-        logits = torch.zeros(rows, 1, self.vocab_size, dtype=torch.float32)
-        logits.scatter_(2, choice.to(torch.int64).unsqueeze(2), 1.0)
-        return logits
+            self._refuse_device_sampled_requests(kwargs["sampling_params"], "decode")
+            return self._fixed_choice(first_tokens, first_positions).reshape(rows).to(torch.int64)
+        return self._fixed_logits(first_tokens, first_positions)
 
     def _verified_ids(self, tokens, num_valid_drafts):
         """What this model claims at each candidate position.
