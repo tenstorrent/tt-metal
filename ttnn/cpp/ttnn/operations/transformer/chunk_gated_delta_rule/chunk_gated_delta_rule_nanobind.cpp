@@ -306,6 +306,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
            uint32_t Vt,
            uint32_t fixed_nv,
            uint32_t fixed_np,
+           uint32_t fixed_nbuf,
            uint32_t candidates) {
             const auto c = ttnn::prim::choose_fused_geometry(
                 grid_x,
@@ -315,8 +316,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 Vt,
                 fixed_nv,
                 fixed_np,
+                fixed_nbuf,
                 static_cast<ttnn::prim::FusedCandidates>(static_cast<uint8_t>(candidates)));
-            return std::make_tuple(c.nv, c.np, c.placement, c.t_fused_us, c.t_phased_us, c.fused_pays);
+            return std::make_tuple(c.nv, c.np, c.placement, c.nbuf, c.t_fused_us, c.t_phased_us, c.fused_pays);
         },
         nb::arg("grid_x"),
         nb::arg("grid_y"),
@@ -325,12 +327,14 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("Vt") = 4,
         nb::arg("fixed_nv") = 0,
         nb::arg("fixed_np") = 0,
+        nb::arg("fixed_nbuf") = 0,
         nb::arg("candidates") = 0,
         R"doc(Fused prep->scan geometry the op picks for (grid_x, grid_y, BH, NC, Vt) when the fused
-        program config leaves it free (fixed_nv / fixed_np = a pinned num_receivers / num_producers, 0 =
-        free): (nv, np, placement, T_fused_us, T_phased_us, fused_pays). nv == 0 means no fused geometry
-        fits the grid. candidates: 0 = NP producers per head (the op's default dispatch), 1 = the
-        producer pool (placement 2, np = the pool size; what producer_pool=True resolves to), 2 = both.)doc");
+        program config leaves it free (fixed_nv / fixed_np / fixed_nbuf = a pinned num_receivers /
+        num_producers / handoff_depth, 0 = free): (nv, np, placement, handoff_depth, T_fused_us,
+        T_phased_us, fused_pays). nv == 0 means no fused geometry fits the grid. candidates: 0 = NP
+        producers per head (the op's default dispatch), 1 = the producer pool (placement 2, np = the
+        pool size; what producer_pool=True resolves to), 2 = both.)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,
