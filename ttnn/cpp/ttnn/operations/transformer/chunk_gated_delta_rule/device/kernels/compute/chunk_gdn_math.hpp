@@ -625,6 +625,35 @@ ALWI void gdn_exp_lower_tile(uint32_t idst) {
 #endif
 }
 
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+// One face of gdn_exp_const_col_tile: exp of the first vector, stored to all 8 iterations (rows) of the face.
+inline void _gdn_exp_const_col_face_() {
+    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(sfpi::dst_reg[0]);  // the fp32 exp_tile of calculate_exponential
+#pragma GCC unroll 8
+    for (int d = 0; d < 8; d++) {
+        sfpi::dst_reg[0] = y;
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+#endif
+
+// exp of a column-form tile whose EVERY row holds the same vector (ones @ G: g_sum in column 0 of all rows, 0 in the
+// other columns), faces 0 and 2 (VectorMode::C): the exp of the first row pair is stored to all 16 row pairs, one exp
+// instead of sixteen. Bit-identical to exp_tile(idst, VectorMode::C) (the same fp32 exp on identical inputs, lane for
+// lane).
+ALWI void gdn_exp_const_col_tile(uint32_t idst) {
+#ifdef TRISC_MATH
+    _llk_math_eltwise_sfpu_start_(idst);
+    ckernel::sfpu::_gdn_exp_const_col_face_();
+    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    ckernel::sfpu::_gdn_exp_const_col_face_();
+    _llk_math_eltwise_sfpu_done_();
+#endif
+}
+
 #if defined(GDN_DECAY_SFPU)
 // ---- SFPU decay chain (GDN_DECAY_SFPU), Ct == 1, shared by prep_chunk_c1 and prep_chunk_generic ----
 // Two fp32 DST round trips instead of ~10-13 single-tile FPU ops (each of which reads its operands through srcA/srcB,
@@ -656,7 +685,7 @@ inline void gdn_decay_sfpu_p1(const GdnPrepCbs& cb, uint32_t G, uint32_t cb_eg) 
     // faces (0, 2) only. Faces 1 and 3 keep 0 instead of exp(0) = 1; nothing reads them.
     exp_tile(3, VectorMode::C);  // decayfac
     exp_tile(2, VectorMode::C);  // decay_exp
-    exp_tile(1, VectorMode::C);  // exp(g_sum)
+    gdn_exp_const_col_tile(1);   // exp(g_sum): every row of ones@G is the same, so one exp serves all rows
     tile_regs_commit();
     cb_reserve_back(cb.decayfac, 1);  // gb_flat: G lived in this slot; popped above
     tile_regs_wait();
@@ -695,7 +724,7 @@ inline void gdn_decay_sfpu_p2(const GdnPrepCbs& cb, uint32_t cb_eg) {
     mul_binary_tile_init();
     mul_binary_tile(2, 3, 2);  // zero the upper triangle before exp (it holds sums of -g >= 0)
     exp_tile_init();
-    exp_tile(2);
+    gdn_exp_lower_tile(2);  // face 1 (strictly upper) is +0 after the mask above and again after the one below
     mul_binary_tile_init();
     mul_binary_tile(2, 3, 2);  // L_mask
     copy_init(cb.eye);
