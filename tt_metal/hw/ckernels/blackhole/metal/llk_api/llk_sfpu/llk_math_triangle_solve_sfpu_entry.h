@@ -15,7 +15,8 @@
 namespace ckernel {
 
 /**
- * @brief Configure the SFPU for the triangle solve: the ADDR_MOD_7 its SFPLOAD/SFPSTOREs use, nothing else.
+ * @brief Program the SFPU for the triangle solve: ADDR_MOD_7 for its SFPLOAD/SFPSTOREs, the default SFPU config
+ * register, and reset RWCs.
  *
  * @note Call before the first @ref llk_math_triangle_solve_sfpu_tile of a kernel section; the solve keeps no other
  * state.

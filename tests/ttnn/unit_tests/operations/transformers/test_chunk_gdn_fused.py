@@ -894,7 +894,7 @@ def test_fused_tinv_vs_horner(device):
 
 
 def test_fused_tinv_cache_identity(device):
-    """N1 for wy_inverse on both prims: AUTO resolves to FORWARD_SUBSTITUTION on this device (the explicit form is the same
+    """Cache identity for wy_inverse on both prims: AUTO resolves to FORWARD_SUBSTITUTION on this device (the explicit form is the same
     program and the same bits), HORNER compiles its own fused program and its own phased prep program (the
     scan is unchanged, so phased compiles exactly one), and revisits are cache hits."""
     hk, hv = NP_BH_KV_HEADS

@@ -652,18 +652,17 @@ inline void invert_block(
 //   cb_eye : CB holding the identity tile.
 //   out    : fp32 CB that receives T_inv (one tile pushed).
 inline void sfpu_tinv(uint32_t negN, uint32_t cb_eye, uint32_t out) {
-    CircularBuffer l(negN);
     cb_reserve_back(out, 1);
-    // The solve loads/stores DEST rows in the SrcB-implied format: keep both source formats on the fp32
-    // identity so DEST is read back as fp32.
-    reconfig_data_format(cb_eye, cb_eye);
+    // copy_tile reads the identity through SrcA; the solve's DEST loads and stores are fp32 under fp32 dest
+    // accumulation.
+    reconfig_data_format_srca(cb_eye);
     pack_reconfig_data_format(out);
     copy_init(cb_eye);
     constexpr uint32_t DST_RHS = 0, DST_X = 1;
     tile_regs_acquire();
     copy_tile(cb_eye, 0, DST_RHS);  // RHS = I
     triangle_solve_tile_init();
-    triangle_solve_tile<DataFormat::Float32, true /*L_NEGATED*/>(l, 0 /*l_tile_idx*/, DST_RHS, DST_X);
+    triangle_solve_tile<DataFormat::Float32, true /*L_NEGATED*/>(negN, 0 /*l_tile_idx*/, DST_RHS, DST_X);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(DST_X, out, 0);

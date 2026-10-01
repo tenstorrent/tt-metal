@@ -57,8 +57,9 @@ static_assert(TRIANGLE_SOLVE_DEST_TILE_ROWS == 2 * TRIANGLE_SOLVE_FACE_PAIR_ROWS
 
 static_assert(TRIANGLE_SOLVE_FACE_DIM % TRIANGLE_SOLVE_ROWS_PER_GROUP == 0, "a row group's columns must not straddle a face boundary");
 
-constexpr std::uint32_t TRIANGLE_SOLVE_IMM16_MASK     = 0xFFFFu; // a 16-bit SFPLOADI immediate
-constexpr std::uint32_t TRIANGLE_SOLVE_IMM16_SIGN_BIT = 0x8000u; // its sign bit: bit 15 of a bf16, bit 31 of an fp32 in the upper half
+constexpr std::uint32_t TRIANGLE_SOLVE_IMM16_BITS     = 16;                                    // width of an SFPLOADI immediate
+constexpr std::uint32_t TRIANGLE_SOLVE_IMM16_MASK     = (1u << TRIANGLE_SOLVE_IMM16_BITS) - 1; // a 16-bit SFPLOADI immediate
+constexpr std::uint32_t TRIANGLE_SOLVE_IMM16_SIGN_BIT = 1u << (TRIANGLE_SOLVE_IMM16_BITS - 1); // its sign bit
 
 template <DataFormat L_FORMAT>
 using _triangle_solve_l_elem_t_ = std::conditional_t<L_FORMAT == DataFormat::Float32, std::uint32_t, std::uint16_t>;
@@ -118,7 +119,7 @@ inline void _triangle_solve_sfploadi_lreg7_lo_pack_(const std::uint32_t bits)
     static_assert(MOD0 <= 0xF, "SFPLOADI mod0 is a 4-bit field");
     static_assert((OPCODE & TRIANGLE_SOLVE_IMM16_MASK) == 0, "the immediate must fill the zero low half of the SFPLOADI word");
 #if defined(__riscv_xttzbkb) || defined(__riscv_zbkb)
-    const std::uint32_t opcode_hi = OPCODE >> 16;
+    const std::uint32_t opcode_hi = OPCODE >> TRIANGLE_SOLVE_IMM16_BITS;
     std::uint32_t word;
     __asm__("pack %0, %1, %2" : "=r"(word) : "r"(bits), "r"(opcode_hi));
     TT_INSN(word);
@@ -145,7 +146,7 @@ inline void _triangle_solve_load_l_(const std::uint32_t bits)
     constexpr std::uint32_t SIGN_FLIP = L_NEGATED ? 0 : TRIANGLE_SOLVE_IMM16_SIGN_BIT;
     if constexpr (L_FORMAT == DataFormat::Float32)
     {
-        _triangle_solve_sfploadi_lreg7_<sfpi::SFPLOADI_MOD0_UPPER, SIGN_FLIP>(bits >> 16);
+        _triangle_solve_sfploadi_lreg7_<sfpi::SFPLOADI_MOD0_UPPER, SIGN_FLIP>(bits >> TRIANGLE_SOLVE_IMM16_BITS);
         _triangle_solve_sfploadi_lreg7_lo_pack_<sfpi::SFPLOADI_MOD0_LOWER>(bits);
     }
     else

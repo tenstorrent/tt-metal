@@ -596,7 +596,7 @@ class TPGatedDeltaNet:
 
         _use_fused = fused_chunk_enabled()
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        # const_tiles / program_config only apply to the fused op; the seq adapter has neither param.
+        # const_tiles / program_config / wy_inverse only apply to the fused op; the seq adapter has none of them.
         _extra = (
             {
                 "const_tiles": self._fused_const_tiles,

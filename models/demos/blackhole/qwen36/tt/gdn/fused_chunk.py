@@ -17,8 +17,9 @@ Notes:
   to what the seq adapter does internally.
 * The fused op runs at chunk_size=32 (chunk=128 exceeds the L1 CB budget). chunk size is an
   internal tiling choice; the result is identical to chunk=128. At 32 each per-chunk WY matrix
-  is a single 32x32 tile whose (I + strictly_lower)^-1 is computed by the 16x16-blocked inverse
-  (mirroring FLA solve_tril's merge_16x16_to_32x32) — numerically exact-to-PCC across seeds.
+  is a single 32x32 tile whose (I + strictly_lower)^-1 the op's wy_inverse computes: AUTO is the
+  SFPU forward-substitution solve on Blackhole, HORNER the 16x16-blocked inverse (mirroring FLA
+  solve_tril's merge_16x16_to_32x32) — both numerically exact-to-PCC across seeds.
   chunk_size=64 splits the WY matrix into a 2x2 tile-block whose bottom-right 32x32 sub-block can
   be ill-conditioned enough that the fp32 block inverse loses precision on some chunks; 32 avoids
   that with identical math (see tests/.../test_gdn_phased_perchunk.py).
