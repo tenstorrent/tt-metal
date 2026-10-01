@@ -32,3 +32,12 @@ t40_drive.sh probably died with it. On the next wake: ssh in, check ~/fasth3/out
 broker status of the job ids there. If DONE is missing and t40_drive.sh is not running, check /var/tmp/fasth3
 still holds Gemma + caches, then relaunch the driver (setsid nohup bash ~/fasth3/t40/tmp/blx03/t40_drive.sh
 > ~/fasth3/out/t40/drive.log 2>&1 &), one device job at a time.
+
+## 2026-10-01 10:00 UTC (attempt 1, wake 3)
+The 2026-09-30 driver never submitted anything (no jobs.txt). blx03 rebooted ~08:09 UTC with none of our jobs
+running (broker startup + fabric-check passed at 08:11). Rules now: full mesh + create_submesh(2,4) only, no 4x8.
+- 49af172e201: timing test opens (4,8) and runs on create_submesh(2,4), TP=4 on axis 1. Driver is prof-only;
+  the 4x8 e2e step is commented out until full-mesh runs are allowed.
+- blx03 ~/fasth3/t40 checked out at 49af172e20; prof driver relaunched: broker job 027 (started 09:59 UTC).
+Next: read ~/fasth3/out/t40/prof.log (GEMMA4_TIMING / GEMMA4_PCC). If blx03 dropped while 027 ran: stop all
+device work, kill our queued jobs, report. Numbers are TP=4 on 2x4, not the TP=8 production layout.
