@@ -80,6 +80,45 @@ def test_model_chunk_perf(mesh_device, device_params):
         f"(per layer {h[len(h) // 2] / N_LAYERS:.2f}); all wall {[round(v, 1) for v in wall]}"
     )
 
+    if os.environ.get("MIMO_PERF_SPLIT"):  # where the eager wall above the traced replay goes
+        idx = block_cyclic_index(KV_ACTUAL, model.sp, model.chunk_local) - KV_ACTUAL
+        split = []
+        for _ in range(1 + ITERS):
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            x = model.embed_device(model.tokens_to_device(ids[idx]))
+            ttnn.synchronize_device(mesh_device)
+            t1 = time.perf_counter()
+            out = model.forward_device(x, KV_ACTUAL)
+            t2 = time.perf_counter()
+            ttnn.synchronize_device(mesh_device)
+            t3 = time.perf_counter()
+            out.deallocate(True)
+            split.append(((t1 - t0) * 1e3, (t2 - t1) * 1e3, (t3 - t1) * 1e3))
+        e, h, w = (sorted(v[k] for v in split[1:])[ITERS // 2] for k in range(3))
+        _report(f"SPLIT {tag}: embed (synced) {e:.2f} ms | layers: host enqueue {h:.2f} ms, wall {w:.2f} ms")
+        from models.demos.mimo_v2_d_p.tt.model import clamp_pad_tokens
+
+        steps = {
+            "H2D": lambda: model.tokens_to_device(ids[idx]),
+            "H2D+clamp": lambda: clamp_pad_tokens(model.tokens_to_device(ids[idx]), model.vocab),
+            "H2D+embed": lambda: model.embed_device(model.tokens_to_device(ids[idx])),
+        }
+        parts = []
+        for name, fn in steps.items():
+            ts = []
+            for _ in range(1 + ITERS):
+                ttnn.synchronize_device(mesh_device)
+                t0 = time.perf_counter()
+                o = fn()
+                t1 = time.perf_counter()
+                ttnn.synchronize_device(mesh_device)
+                ts.append(((t1 - t0) * 1e3, (time.perf_counter() - t0) * 1e3))
+                o.deallocate(True)
+            hh, ww = (sorted(v[k] for v in ts[1:])[ITERS // 2] for k in range(2))
+            parts.append(f"{name} host {hh:.2f} / synced {ww:.2f}")
+        _report(f"SPLIT {tag}: " + " | ".join(parts) + " ms")
+
     if N_TRACE:
         idx = block_cyclic_index(KV_ACTUAL, model.sp, model.chunk_local) - KV_ACTUAL
         x_in = model.embed_device(model.tokens_to_device(ids[idx]))
