@@ -12,6 +12,7 @@ Run with --profile (a few chunks: MIMO_EC_SEQ=8192) to also get each chunk's per
     docs_prompt.txt), MIMO_EC_OUT (generated/mimo_expert_counts/counts_<mesh>.pt)
 """
 
+import collections
 import os
 from pathlib import Path
 
@@ -38,6 +39,11 @@ SEQ = int(os.environ.get("MIMO_EC_SEQ", "57344"))
 CHUNK = int(os.environ.get("MIMO_EC_CHUNK", "4096"))
 N_LAYERS = int(os.environ.get("MIMO_EC_LAYERS", "48"))
 PROMPT = os.environ.get("MIMO_EC_PROMPT", str(GOLDEN_DIR / "docs_prompt.txt"))
+# MIMO_EC_TIMES=1 (+ TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1):
+# per-chip FlatRoutedExpert kernel time of every MoE layer, read in process after each layer (the longest full-grid
+# device program of the layer's MoE part)
+TIMES = os.environ.get("MIMO_EC_TIMES") == "1"
+MOE_FROM = 20  # program index past the attention block (33-34 programs per MoE layer)
 
 
 @pytest.mark.timeout(14400)
@@ -66,8 +72,31 @@ def test_expert_counts(mesh_device, device_params):
     by_layer = {i: model.layers[k].ffn.ag for k, i in enumerate(model.layer_ids) if cfg.is_moe(i)}
     n_chunks = SEQ // CHUNK
     counts = torch.zeros(n_chunks, len(moe_layers), n_dev, epc, dtype=torch.int32)
+    times = torch.full((n_chunks, len(moe_layers), n_dev), float("nan"))
+    n_progs = collections.Counter()
+    chip_ids = list(mesh_device.get_device_ids())  # mesh (row-major) order -> chip id
+    if TIMES:
+        ttnn.ReadDeviceProfiler(mesh_device)
+
+    def read_times(c, layer_idx):
+        ttnn.ReadDeviceProfiler(mesh_device)
+        data = ttnn.get_latest_programs_perf_data()
+        if layer_idx not in by_layer:
+            return
+        m = moe_layers.index(layer_idx)
+        for d, chip in enumerate(chip_ids):
+            progs = sorted(data.get(chip, []), key=lambda p: p.program_execution_uid.runtime_id)
+            n_progs[len(progs)] += 1
+            # the expert: the longest full-grid program after the attention block (the local reduces are full-grid too,
+            # but ~10x shorter; the collectives that wait for it run on a few cores)
+            dur = lambda p: p.program_analyses_results["DEVICE KERNEL DURATION [ns]"].duration / 1e3
+            tail = [p for p in progs[MOE_FROM:] if p.core_count == p.num_available_cores]
+            if tail:
+                times[c, m, d] = max(dur(p) for p in tail)
 
     def capture(layer_idx, x, kv_actual):
+        if TIMES:
+            read_times(kv_actual // CHUNK, layer_idx)
         if layer_idx not in by_layer:
             return
         c, m = kv_actual // CHUNK, moe_layers.index(layer_idx)
@@ -99,7 +128,18 @@ def test_expert_counts(mesh_device, device_params):
         )
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    if TIMES:
+        ok = times.isfinite()
+        logger.info(f"expert times: {int(ok.sum())} of {ok.numel()} samples; programs per layer window {dict(n_progs)}")
     torch.save(
-        {"counts": counts, "gids": gids, "moe_layers": moe_layers, "chunk": CHUNK, "mesh": (rows, cols)}, out_path
+        {
+            "counts": counts,
+            "times": times,
+            "gids": gids,
+            "moe_layers": moe_layers,
+            "chunk": CHUNK,
+            "mesh": (rows, cols),
+        },
+        out_path,
     )
     logger.info(f"saved {tuple(counts.shape)} to {out_path}")
