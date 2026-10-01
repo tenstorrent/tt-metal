@@ -3,7 +3,7 @@
 
 import pytest
 from helpers.format_config import DataFormat
-from helpers.golden_generators import TILE_DIMENSIONS
+from helpers.golden_generators import FACES_PER_TILE, TILE_DIMENSIONS
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     BroadcastType,
@@ -27,11 +27,16 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 
-# A 32-bit input with dest accumulation selects the unpack-to-dest broadcast path.
+# A 32-bit input with dest accumulation (DEST_ACC) selects the unpack-to-dest broadcast path.
 PERF_FORMATS = input_output_formats([DataFormat.Float32, DataFormat.Int32], same=True)
 
 # Eight 32-bit tiles fill both DEST halves in two blocks of four, so every DEST tile slot is measured.
 NUM_TILES = 8
+
+# Passes over the tile set inside TILE_LOOP, enough to amortise profiler overhead.
+LOOP_FACTOR_VALUE = 32
+
+DEST_ACC = DestAccumulation.Yes
 
 
 @pytest.mark.perf
@@ -42,13 +47,12 @@ NUM_TILES = 8
         BroadcastType.Row,
         BroadcastType.Scalar,
     ],
-    loop_factor=[32],
 )
-def test_perf_unpack_bcast(perf_report, formats, broadcast_type, loop_factor):
+def test_perf_unpack_bcast(perf_report, formats, broadcast_type):
     input_dimensions = [TILE_DIMENSIONS[0] * NUM_TILES, TILE_DIMENSIONS[1]]
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        DestAccumulation.Yes,
+        DEST_ACC,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -61,11 +65,11 @@ def test_perf_unpack_bcast(perf_report, formats, broadcast_type, loop_factor):
         run_types=[PerfRunType.L1_TO_L1],
         templates=[BROADCAST_TYPE(broadcast_type)],
         runtimes=[
-            NUM_FACES(4),
+            NUM_FACES(FACES_PER_TILE),
             TILE_COUNT(NUM_TILES),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            LOOP_FACTOR(loop_factor),
+            LOOP_FACTOR(LOOP_FACTOR_VALUE),
         ],
         variant_stimuli=StimuliConfig(
             None,
@@ -76,9 +80,9 @@ def test_perf_unpack_bcast(perf_report, formats, broadcast_type, loop_factor):
             tile_count_A=NUM_TILES,
             tile_count_B=NUM_TILES,
             tile_count_res=NUM_TILES,
-            num_faces=4,
+            num_faces=FACES_PER_TILE,
         ),
-        dest_acc=DestAccumulation.Yes,
+        dest_acc=DEST_ACC,
         unpack_to_dest=True,
     )
 

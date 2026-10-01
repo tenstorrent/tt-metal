@@ -32,6 +32,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
+    DEST_SYNC,
     DISABLE_SRC_ZERO_FLAG,
     INPUT_DIMENSIONS,
     NUM_BLOCKS,
@@ -65,7 +66,8 @@ supported_formats = [
 # full 32x32 tiles have 4 faces with face_r_dim=16.
 # BroadcastType.None_ is a datacopy (unpack A -> DEST -> pack to L1).
 # num_tiles_in_input=8 stacks tiles along rows so math writes DEST tile slots past 0;
-# for 32-bit / dest-accumulation variants it also spans two blocks, using both DEST halves.
+# for 32-bit / dest-accumulation variants under DestSync.Half it also spans two blocks, using both DEST halves.
+# DestSync.Full runs the unpack-to-dest variants with all eight 32-bit tiles in one block (DEST tiles 4-7 included).
 
 
 @parametrize(
@@ -81,6 +83,7 @@ supported_formats = [
         BroadcastType.Scalar,
     ],
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    dest_sync=[DestSync.Half, DestSync.Full],
 )
 def test_unpack_bcast(
     tile_dimensions,
@@ -88,8 +91,16 @@ def test_unpack_bcast(
     formats,
     broadcast_type,
     dest_acc,
+    dest_sync,
 ):
     # --- Skips -----------------------------------------------------------
+
+    if dest_sync == DestSync.Full and not (
+        num_tiles_in_input == 8
+        and dest_acc == DestAccumulation.Yes
+        and formats.input_format.is_32_bit()
+    ):
+        pytest.skip("DestSync.Full only adds coverage for 8 unpack-to-dest tiles")
 
     if dest_acc == DestAccumulation.No and formats.input_format in (
         DataFormat.Float32,
@@ -164,7 +175,7 @@ def test_unpack_bcast(
         golden_tensor = src_A.to(format_dict[formats.output_format])
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -188,6 +199,7 @@ def test_unpack_bcast(
                 partial_face_math=False,
             ),
             DISABLE_SRC_ZERO_FLAG(False),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),

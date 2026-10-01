@@ -156,7 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-            formats.pack_src, formats.pack_dst, FACE_R_DIM * TILE_C_DIM * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
+            formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
