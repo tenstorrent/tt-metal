@@ -891,6 +891,10 @@ class ModelArgs:
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             self.prefill_rows = 8
             self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
+            # Sweep on P150 (QKV 32x3840x8192): the same 30 cores laid out 6x5 instead of 10x3
+            # runs the DRAM-sharded QKV matmul at ~90.6 us vs ~114 us, bit-exact.
+            if self.attn_input_grid.num_cores == 30 and self.device_name == "P150":
+                self.attn_input_grid = ttnn.CoreGrid(y=5, x=6)
             self.mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
