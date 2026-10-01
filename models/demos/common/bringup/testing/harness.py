@@ -30,12 +30,14 @@ import os
 
 import torch
 
-from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.core import defaults, metrics
 from models.demos.common.bringup.core.runs import IMPL_ENV
 from models.demos.common.bringup.reference.golden import Golden, load_spec
 from models.demos.common.bringup.reference.interface import Ctx
 
-DEFAULT_THRESHOLDS = {"component": 0.99, "block": 0.98, "layer": 0.97, "state": 0.97, "final_hidden": 0.97, "top5": 0.9}
+DEFAULT_THRESHOLDS = {
+    k: defaults.get(f"thresholds.{k}") for k in ("component", "block", "layer", "state", "final_hidden", "top5")
+}
 
 
 def impl_mode() -> str:
@@ -51,7 +53,7 @@ def spec():
     return load_spec()
 
 
-DEVICE_TEST_TIMEOUT_S = 3600
+DEVICE_TEST_TIMEOUT_S = defaults.get("box.test_timeout_s")
 
 
 def device_timeout(s):
@@ -60,7 +62,7 @@ def device_timeout(s):
     """
     import pytest
 
-    return pytest.mark.timeout(int(s.get("box.test_timeout_s", DEVICE_TEST_TIMEOUT_S)))
+    return pytest.mark.timeout(int(s.get("box.test_timeout_s")))
 
 
 def threshold(s, key: str) -> float:
