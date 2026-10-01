@@ -836,6 +836,8 @@ class CohereForCausalLM(Generator):
     Canada Quant Labs (org-internal) - bounty tt-metal#49307 track.
     """
 
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -1136,6 +1138,8 @@ class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
     full-attention layers. Vision inputs are not yet wired through vLLM —
     this serves text-only requests.
     """
+
+    decode_input_update_contract = 1
 
     # Class-level capabilities
     model_capabilities = {

@@ -102,10 +102,13 @@ def test_cohere_vllm_e2e_decode(mesh_device):
             enable_trace=False,
             page_table=page_table,
             kv_cache=kv_cache,
-            reset_batch=(i == 0),
             sampling_params=None,
             prompt_tokens=tokens,
             output_tokens=out_tok,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         out_tok = torch.argmax(logits, dim=-1).reshape(-1)
         gen_tokens.append(int(out_tok[0].item()))

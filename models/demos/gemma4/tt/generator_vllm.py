@@ -3802,7 +3802,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             return kwargs
         self._dflash_stale_rows.clear()
         kwargs = dict(kwargs)
-        kwargs["reset_batch"] = True
+        kwargs["reload_inputs"] = True
         return kwargs
 
     def _dflash_note_step(self, row, kwargs, page_tables_per_layer):

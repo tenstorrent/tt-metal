@@ -134,9 +134,11 @@ class TT_Qwen3VLProcessingInfo(Qwen3VLProcessingInfo):
     Qwen3VLMultiModalProcessor, info=TT_Qwen3VLProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
 class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
+    decode_input_update_contract = 1
+
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
+        "supports_async_decode": False,
     }
 
     def __init__(self, *args, **kwargs):
@@ -370,7 +372,12 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         rope_deltas_list: list = kwargs.pop(
             "rope_deltas_all_users", None
         )  # [INFO] update the cos/sin matrices for the current users in the batch
+        slot_remap = kwargs.pop("slot_remap", None)
         if rope_deltas_list is not None:
             super().update_rope_deltas(rope_deltas_list)
+        elif slot_remap is not None:
+            super().remap_rope_deltas(slot_remap)
+        if slot_remap is not None:
+            kwargs["slot_remap"] = slot_remap
 
         return super().decode_forward(*args, **kwargs)

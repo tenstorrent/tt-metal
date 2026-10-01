@@ -584,7 +584,7 @@ def test_the_first_plain_decode_after_a_straddle_reloads_host_inputs(model):
     """The traced decode keeps tokens and positions on the device and reloads them
     only on a layout change. The owner's rows were answered from the drafter, so
     the peers' decode in the straddle and the owner's first plain decode after
-    it both carry reset_batch."""
+    it both request a full input reload."""
     _start_solo(model)
     _verify(
         model,
