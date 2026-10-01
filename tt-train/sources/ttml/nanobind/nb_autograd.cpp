@@ -64,7 +64,7 @@ void py_module(nb::module_& m) {
             "add_node",
             [](Graph& self,
                GradFunction grad_function,
-               const std::vector<NodeId>& links,
+               std::vector<NodeId> links,
                std::optional<nb::list> outputs_obj) {
                 std::vector<TensorPtr> outputs;
                 if (outputs_obj.has_value() && nb::len(*outputs_obj) > 0) {
