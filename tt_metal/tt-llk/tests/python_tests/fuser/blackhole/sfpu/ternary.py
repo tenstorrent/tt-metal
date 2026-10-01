@@ -5,6 +5,7 @@
 from fuser.base_sfpu import Sfpu
 from fuser.golden.sfpu.ternary import ternary_golden
 from fuser.indexing import InvocationGranularity
+from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, MathOperation
 
 
@@ -41,7 +42,14 @@ class TernarySfpu(Sfpu):
             if operation.tile_shape.tile_dims in ((16, 32), (32, 16))
             else "ckernel::VectorMode::RC"
         )
-        data_format = config.sentinel._sfpu_format.cpp_enum_value
+        data_format = config.sentinel._sfpu_format
+        if self.operation == MathOperation.SfpuWhere and data_format not in (
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.UInt32,
+        ):
+            data_format = DataFormat.Float16_b
+        data_format = data_format.cpp_enum_value
         return (
             "test_utils::call_ternary_sfpu_operation<"
             f"{operation.dest_sync.cpp_enum_value}, {config.dest_acc.cpp_enum_value}, "
