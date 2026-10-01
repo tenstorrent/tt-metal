@@ -132,6 +132,10 @@ struct KernelPlan {
     uint32_t final_arrived_addr = 0;
     // Overlapped only: this ring's first row of global_expert_idx_table.
     uint32_t expert_table_page_base = 0;
+    // Standalone only: the launch credit's address, and the downstream chip's stream core that sends back to
+    // this chip, which this chip's sender grants it to.
+    uint32_t launch_credit_addr = 0;
+    tt::tt_metal::CoreCoord launch_credit_core;
 };
 
 // The other end of one untilizer handshake: the core to address, and the counter that core's peer owns there.
