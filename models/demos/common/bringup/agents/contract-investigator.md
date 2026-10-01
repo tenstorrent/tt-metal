@@ -20,6 +20,14 @@ Read the code at its latest commit, every time.
   `git -C <repo> rev-parse HEAD`. If the repo is missing, stop and say who must clone it.
 - **tt-metal prefill engine**: `models/demos/common/prefill` (adapter API, runners, producer, docs). It is what the
   model plugs into; the server drives it.
+- **What tt-metal CI tests** (not what production runs): the `blaze-models-prefill-tests` workflow
+  (`.github/workflows/blaze-models-prefill-tests.yaml`, its `disagg_prefill` group in
+  `tests/pipeline_reorg/blaze_models_prefill_tests.yaml`), its launcher `runners/ci/run_multirank_pcc.sh` and the
+  manifests `models/demos/deepseek_v3_d_p/tt/runners/manifests/*.json`. Use the latest nightly in which the model's
+  family leg was green (record run URL and sha; the latest green run overall is often a partial branch dispatch).
+  It shows the prefill side that is tested (D2H acks, KV table and entry decode, per-cache PCC, slot counts), but
+  its migration is mocked, its starts are chunk-aligned, prefix reuse is off and there is no decode: questions 1, 4
+  and 8 and the decode KV format must come from the server code or the owner, never from CI.
 - **Reference model already served**: `models/demos/deepseek_v3_d_p` (tt/mla/mla.py, tt/kv_ack.py,
   utils/kv_cache_utils.py, tt/runners/). Use it to show how a requirement is met with existing ops.
 
@@ -64,6 +72,14 @@ code agrees, contradicts it, or does not cover it, with a citation on both sides
 Also list what the server requires that the docs never mention. This is the list of fixes those docs need; the
 bring-up must follow the server, not the doc.
 
+## Deployment drift (always)
+
+For each deployment field (ack mode, slots / NUM_USERS, max seq, chunk, fabric mode, migration mode, manifest file,
+mesh descriptor), compare three sources: the server's deployments (`engine/tools/manifests/<model>/*` and
+`models/*.json` in tt-d-gen), the tt-metal manifest JSONs, and the CI leg's launcher settings. Flag every
+disagreement and every field a source leaves to a default (e.g. a manifest name the server references that tt-metal
+lacks, fabric `2d` in the server vs the runner default in CI).
+
 ## When the model already has a serving adapter
 
 (`models/demos/<model>/tt/runners/` or the spec's `contract.adapter`): add an **audit**. For each answer above, check
@@ -79,6 +95,7 @@ Write `<bringup dir>/serving.md` (replace it if it exists) with:
 - one `## <n>. <question>` section per question, answer first, then the citations;
 - `## Prefill engine docs vs the server`: a table (doc statement, doc file:line, server says, server file:line,
   agrees / contradicts / not covered), then the server requirements the docs never mention;
+- `## Deployment drift`: the three-way table, disagreements first;
 - `## Audit` (only when an adapter exists);
 - `## Questions for the owner`: what the code cannot answer (KV dtype / layout the decode side expects, slot count,
   prefix reuse on or off, which decode implementation), each with the default the findings suggest.
