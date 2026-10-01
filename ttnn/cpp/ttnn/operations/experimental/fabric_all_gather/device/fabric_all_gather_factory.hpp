@@ -12,29 +12,29 @@
 
 namespace ttnn::operations::experimental::fabric_all_gather {
 
-// Shard layout of one cached program (terms: kernels/fabric_all_gather_chunk_walk.hpp). The slot base page and
-// the active stripe pages are runtime values derived from it on every dispatch (host scalars) or on device
-// (metadata tensors).
-struct ShardPageGeometry {
-    uint32_t num_stripes = 0;
-    uint32_t stripe_pages = 0;
-    uint32_t pages_per_slot = 0;         // input pages of one batch slot (selected-batch gathers)
-    uint32_t local_gather_dim_size = 0;  // this chip's (input) extent of the gather dim
+// Chip shard layout of one cached program (terms: kernels/fabric_all_gather_chunk_walk.hpp). The cache slot's first
+// page and the valid pages per outer slice are runtime values derived from it on every dispatch (host scalars) or on
+// device (metadata tensors).
+struct ChipShardPageGeometry {
+    uint32_t num_outer_slices = 0;
+    uint32_t pages_per_outer_slice = 0;
+    uint32_t pages_per_cache_slot = 0;          // input pages of one cache slot (selected-batch gathers)
+    uint32_t local_gather_dim_length = 0;       // this chip's (input) length of the gather dim
     uint32_t gather_dim_elements_per_page = 1;  // tile height / width when gathering a tile dim, else 1
     uint32_t num_ranks = 0;
-    uint32_t pages_per_slab = 0;  // active pages per stripe per block-cyclic slab (prefix metadata path)
+    uint32_t pages_per_kv_slab = 0;  // valid pages per outer slice per KV slab (prefix metadata path)
 };
 
 struct FabricAllGatherFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle link_worker_reader_kernel_id{};
-        tt::tt_metal::KernelHandle link_worker_sender_kernel_id{};
-        tt::tt_metal::KernelHandle copy_core_reader_kernel_id{};
-        tt::tt_metal::KernelHandle copy_core_writer_kernel_id{};
-        tt::tt_metal::GlobalSemaphore ready_counter;
-        tt::tt_metal::GlobalSemaphore arrival_counter;
-        CoreRangeSet link_worker_cores;  // the cores that use the ready / arrival counters
-        ShardPageGeometry shard_page_geometry;
+        tt::tt_metal::KernelHandle fabric_link_worker_reader_kernel_id{};
+        tt::tt_metal::KernelHandle fabric_link_worker_sender_kernel_id{};
+        tt::tt_metal::KernelHandle local_copy_core_reader_kernel_id{};
+        tt::tt_metal::KernelHandle local_copy_core_writer_kernel_id{};
+        tt::tt_metal::GlobalSemaphore downstream_started_counter;
+        tt::tt_metal::GlobalSemaphore shards_arrived_counter;
+        CoreRangeSet fabric_link_worker_cores;  // the cores that use the two global counters
+        ChipShardPageGeometry chip_shard_geometry;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
