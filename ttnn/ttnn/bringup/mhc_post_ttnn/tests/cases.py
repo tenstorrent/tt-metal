@@ -32,6 +32,7 @@ CASES = [
         "id": "xing40_a4b_d_p-4x2-s1280-c1792-n4-fp32-comb",
         "model": "xing40_a4b_d_p",
         "task": "P.2",
+        "sig": "f7215974bc",  # O.1: the captured call this case reproduces (fork_calls.json)
         "mesh": [4, 2],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "input": {"shape": [1, 1, 1280, 1792], "dtype": "FLOAT32", "layout": "TILE"},

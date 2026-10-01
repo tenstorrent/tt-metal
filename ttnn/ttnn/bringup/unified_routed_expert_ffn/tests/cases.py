@@ -159,4 +159,41 @@ CASES = [
         "pcc": 0.9999,
         "rel": 0.008,
     },
+    {
+        # Xing4.0 routed experts (tt/experts.py) on the 4x2 mesh: 8 experts per chip, SwiGLU (Silu), hidden 3584,
+        # moe intermediate 1024, high_precision, HiFi4 + fp32 dest + packer_l1_acc. Captured per device: buffer
+        # [20704, 3584] bf16 RM, regions / counts [1, 64] uint32 RM, global ids [8] uint32 RM, 8 x gate / up
+        # [3584, 1024] and 8 x down [1024, 3584] bfp8 TILE (the model's bfp8 weights). seq_len_per_chip here is the
+        # dispatch group's token count (4 chips x 1280), so the counts are as loaded as the model's.
+        "id": "xing40_a4b_d_p-4x2-silu-hp-hifi4-h3584-i1024-epc8",
+        "model": "xing40_a4b_d_p",
+        "task": "O.1",
+        "sig": "c30d4661c3",
+        "mesh": [4, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "buffer_rows": 20704,
+        "emb_dim": 3584,
+        "hidden_dim": 1024,
+        "num_routed_experts": 64,
+        "experts_per_chip": 8,
+        "seq_len_per_chip": 5120,
+        "num_experts_per_tok": 4,
+        "buffer": {"dtype": "BFLOAT16", "layout": "ROW_MAJOR"},
+        "weights": {"dtype": "BFLOAT8_B", "layout": "TILE"},
+        "max_dispatched_tokens_per_expert": 8192,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": True,
+            "dst_full_sync_en": False,
+        },
+        "activation": "Silu",
+        "high_precision": True,
+        "seed": 0,
+        # measured (seed 0, 8 chips, ~2500 routed rows each): pcc 0.999996, rel 0.0030-0.0031 vs the reference on the
+        # bfp8-rounded weights; limits as the other HiFi4 high_precision cases (a 1.01 output scale, rel ~0.01, fails).
+        "pcc": 0.9999,
+        "rel": 0.008,
+    },
 ]

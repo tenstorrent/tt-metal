@@ -207,4 +207,56 @@ CASES = [
         "atol": 0.002,
         "rtol": 0.006,
     },
+    {
+        # Xing4.0 kv_a_layernorm (kv_lora_rank 512) on the 1280 rows of a 4x2 chip, fp32 in / out, fp32 row-major weight
+        # ([1, 1, 16, 32]: the 512 channels as rows of 32, replicated); DRAM interleaved.
+        "id": "xing40_a4b_d_p-4x2-s1280-h512-fp32-rmw-eps1e-6",
+        "model": "xing40_a4b_d_p",
+        "task": "O.1",
+        "sig": "0aa85ca05d",
+        "mesh": [4, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "input": {"shape": [1, 1, 1280, 512], "dtype": "FLOAT32", "layout": "TILE"},
+        "weight": {"shape": [1, 1, 16, 32], "dtype": "FLOAT32", "layout": "ROW_MAJOR"},
+        "epsilon": 1e-06,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "seed": 0,
+        # vs the float64 reference on the same fp32 x / w. Measured (8 chips): pcc 0.9999998, max abs err <= 0.022, max
+        # rel err <= 0.0030; limits as the hy4 fp32 row-major-weight cases (2x the measured rel error).
+        "pcc": 0.99999,
+        "atol": 0.002,
+        "rtol": 0.006,
+    },
+    {
+        # Xing4.0 q_a_layernorm (q_lora_rank 768) on the 1280 rows of a 4x2 chip, fp32 in / out, fp32 row-major weight
+        # ([1, 1, 24, 32]: the 768 channels as rows of 32, replicated); DRAM interleaved.
+        "id": "xing40_a4b_d_p-4x2-s1280-h768-fp32-rmw-eps1e-6",
+        "model": "xing40_a4b_d_p",
+        "task": "O.1",
+        "sig": "c83e5f680d",
+        "mesh": [4, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "input": {"shape": [1, 1, 1280, 768], "dtype": "FLOAT32", "layout": "TILE"},
+        "weight": {"shape": [1, 1, 24, 32], "dtype": "FLOAT32", "layout": "ROW_MAJOR"},
+        "epsilon": 1e-06,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "seed": 1,
+        # vs the float64 reference on the same fp32 x / w. Measured (8 chips): pcc 0.9999998, max abs err <= 0.022, max
+        # rel err <= 0.0030; limits as the hy4 fp32 row-major-weight cases (2x the measured rel error).
+        "pcc": 0.99999,
+        "atol": 0.002,
+        "rtol": 0.006,
+    },
 ]

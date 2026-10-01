@@ -4,7 +4,8 @@
 """ttnn.bringup.scaled_dot_product_attention / chunked_scaled_dot_product_attention / sparse_sdpa against their torch semantics
 (reference.py), one random-input case per captured call (cases.py). Math: PCC plus a bound on the relative L2 error,
 per device. Every input differs per device (sharded on dim 0 over the mesh) so each chip is checked on its own data.
-The chunked case uses a random permutation as the page table (the model's is the identity; any valid table must work)."""
+The chunked case uses a random permutation as the page table (the model's is the identity; any valid table must work).
+"""
 
 import importlib.util
 from pathlib import Path
@@ -31,6 +32,9 @@ CASES = _load("cases").CASES
 def _device_params(c):
     p = dict(c["device_params"])
     p["fabric_config"] = getattr(ttnn.FabricConfig, p["fabric_config"])
+    # A case runs on a box of its own mesh size only (conftest skips it elsewhere): a smaller mesh opened on a bigger
+    # box fails the FABRIC_2D router handshake (e.g. a 2x2 case on a 4x2 box), and the case's math depends on its mesh.
+    p["require_exact_physical_num_devices"] = True
     return p
 
 
@@ -123,6 +127,133 @@ def _sparse_sdpa(mesh_device, c):
         assert c["ratio"][0] <= lo and hi <= c["ratio"][1], f"dev {d}: norm ratio [{lo}, {hi}] outside {c['ratio']}"
 
 
+def _ring_mla(mesh_device, c):
+    """ttnn.bringup.ring_mla (latent-V ring attention over cluster_axis 0, the mesh rows). The chunk's queries
+    [isl, isl + chunk) are split over the rows in order (row r holds isl + r * chunk / rows ..), the heads over the
+    mesh columns (column col holds heads col * H ..); the latent cache holds keys [0, logical_n) in the block-cyclic
+    order (period = chunk, row r's shard holds positions slab * chunk + r * chunk / rows + i), replicated over the
+    columns, ND-sharded over the DRAM banks as captured. K = the 576 columns, V = the first head_dim_v. Every output
+    row of every head of both columns is checked vs a float32 causal reference on the same bf16 inputs: PCC, rel L2
+    and the worst row's relative error."""
+    rows, cols = c["mesh"]
+    _, nh, sq, kd = c["q"]
+    dv, chunk, isl, n = c["head_dim_v"], c["chunk"], c["kv_actual_isl"], c["logical_n"]
+    local = c["kv"][2]
+    max_seq = local * rows
+    assert sq * rows == chunk and n == isl + chunk and c["persistent_output_buffer_kv"][2] == max_seq
+    g = torch.Generator().manual_seed(c["seed"])
+    q = (torch.randn(1, nh * cols, chunk, kd, generator=g) * c["q_scale"]).to(torch.bfloat16)
+    kv = torch.zeros(max_seq, kd)
+    kv[:n] = torch.randn(n, kd, generator=g)
+    kv = kv.to(torch.bfloat16)
+
+    # block-cyclic shard order: shard row -> natural position (deepseek_v3_d_p tt/mla/utils.blockcyclic_positions)
+    cl = chunk // rows
+    r_of = torch.arange(rows).repeat_interleave(local)
+    lr = torch.arange(local).repeat(rows)
+    pos = (lr // cl) * chunk + r_of * cl + lr % cl
+    cache = kv[pos].reshape(1, 1, max_seq, kd)
+    nd = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, 32, kd],
+            grid=ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0))
+                    for b in range(mesh_device.dram_grid_size().x)
+                ]
+            ),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+    shard = lambda dims: ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+    tq = ttnn.from_torch(
+        q,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=shard((2, 1)),
+    )
+    tkv = ttnn.from_torch(
+        cache,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=nd,
+        mesh_mapper=shard((2, None)),
+    )
+    buf = ttnn.from_torch(
+        torch.zeros(c["persistent_output_buffer_kv"]),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    assert list(tq.shape) == c["q"] and list(tkv.shape) == c["kv"], (tq.shape, tkv.shape)
+    assert "ND_SHARDED" in str(tkv.memory_config().memory_layout), tkv.memory_config()
+    gr = mesh_device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gr.x - 1, gr.y - 1))})
+    sems = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(2)]
+    ck, pc = c["compute_kernel_config"], c["program_config"]
+    out, stats = ttnn.bringup.ring_mla(
+        tq,
+        tkv,
+        persistent_output_buffer_kv=buf,
+        head_dim_v=dv,
+        logical_n=n,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*pc["grid"]),
+            q_chunk_size=pc["q_chunk_size"],
+            k_chunk_size=pc["k_chunk_size"],
+            exp_approx_mode=pc["exp_approx_mode"],
+            max_cores_per_head_batch=16,
+        ),
+        scale=c["scale"],
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=getattr(ttnn.MathFidelity, ck["math_fidelity"]),
+            math_approx_mode=ck["math_approx_mode"],
+            fp32_dest_acc_en=ck["fp32_dest_acc_en"],
+            packer_l1_acc=ck["packer_l1_acc"],
+            dst_full_sync_en=ck["dst_full_sync_en"],
+        ),
+        dim=c["dim"],
+        multi_device_global_semaphore=sems,
+        num_links=c["num_links"],
+        cluster_axis=c["cluster_axis"],
+        mesh_device=mesh_device,
+        topology=getattr(ttnn.Topology, c["topology"]),
+        ccl_core_grid_offset=tuple(c["ccl_core_grid_offset"]),
+        use_column_major_ccl=c["use_column_major_ccl"],
+        is_balanced=c["is_balanced"],
+        kv_cache_batch_idx=c["kv_cache_batch_idx"],
+        kv_actual_isl=isl,
+    )
+    devs = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(out)]
+    assert len(devs) == rows * cols
+    for d in devs:
+        assert list(d.shape) == [1, nh, sq, dv], d.shape
+    keys = kv[:n].float()
+    causal = torch.arange(n)[None, :] > torch.arange(isl, n)[:, None]  # [chunk, n]
+    for col in range(cols):
+        got = torch.cat([devs[r * cols + col] for r in range(rows)], dim=2)[0]  # [nh, chunk, dv]
+        want = torch.empty_like(got)
+        for h in range(nh):
+            s_ = (q[0, col * nh + h].float() @ keys.T) * c["scale"]
+            want[h] = s_.masked_fill_(causal, float("-inf")).softmax(-1) @ keys[:, :dv]
+        pcc = _pcc(got, want)
+        rel = float((got - want).norm() / want.norm())
+        row = float(((got - want).norm(dim=-1) / want.norm(dim=-1)).max())
+        print(f"column {col}: pcc {pcc:.7f} rel L2 err {rel:.5f} worst row {row:.5f}")
+        assert pcc >= c["pcc"], f"column {col}: pcc {pcc} < {c['pcc']}"
+        assert rel <= c["rel"], f"column {col}: rel L2 err {rel} > {c['rel']}"
+        assert row <= c["row"], f"column {col}: worst row rel err {row} > {c['row']}"
+    for t in (tq, tkv, buf, out, stats):
+        ttnn.deallocate(t)
+
+
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "mesh_device, device_params, case",
@@ -134,6 +265,8 @@ def test_sdpa(mesh_device, device_params, case):
     c = case
     if c["op"] == "sparse_sdpa":
         return _sparse_sdpa(mesh_device, c)
+    if c["op"] == "ring_mla":
+        return _ring_mla(mesh_device, c)
     rows, cols = c["mesh"]
     n_dev = rows * cols
     g = torch.Generator().manual_seed(c["seed"])

@@ -110,4 +110,25 @@ CASES = [
         "seed": 1,
         "exact": True,
     },
+    {
+        # Xing4.0: offsets over each mesh column's dispatch group (cluster_axis 0, 4 chips) of the 4x2 mesh; hist [64]
+        # uint32 RM DRAM per device, counting only the column's 32 experts; a chip's 1280 tokens pick an expert at
+        # most once (max count 1280).
+        "id": "xing40_a4b_d_p-4x2-axis0-e64-epc8",
+        "model": "xing40_a4b_d_p",
+        "task": "O.1",
+        "sig": "803a41809b",
+        "mesh": [4, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "hist_shape": [64],
+        "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "max_count": 1280,
+        "local_experts_only": True,
+        "cluster_axis": 0,
+        "num_links": 1,
+        "experts_per_chip": 8,
+        "memory_config": "DRAM",
+        "seed": 0,
+        "exact": True,
+    },
 ]
