@@ -279,7 +279,7 @@ def test_cpu_threads_are_physical_cores():
 
 
 def test_state_keeps_only_gated_metrics_when_a_test_records_many(sandbox):
-    """F50: a swap test records hundreds of informational metrics; state.json keeps the gated ones, results all."""
+    """F52: a swap test records hundreds of informational metrics; state.json keeps the gated ones, results all."""
     many = {f"info_{i:03d}": 1.0 for i in range(70)}
     led = sandbox.tasks(task("A.1", record_cmd(pcc_out=0.995, **many), metrics={"pcc_*": ">= 0.99"}))
     res = run_gate(sandbox.spec, led, "A.1")

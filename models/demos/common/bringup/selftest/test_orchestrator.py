@@ -393,7 +393,7 @@ def test_the_contract_step_may_change_the_prefill_engine(orch):
 
 
 def test_the_contract_step_may_change_the_hooks(orch):
-    """F51: K.1 needs hooks.contract_state_pcc for fixed-size state; the contract agent may add it and the gate commits it."""
+    """F53: K.1 needs hooks.contract_state_pcc for fixed-size state; the contract agent may add it and the gate commits it."""
     from models.demos.common.bringup.core.gate import stage_paths
 
     o = orch([impl_task()], {})
