@@ -343,6 +343,19 @@ class TtV4PrefillRuntime:
             on_layer_hidden=self._layer_hidden_hook(int(actual_start)) if not warmup else self._drafter_alloc_hook(),
         )
         t_issue1 = time.perf_counter()
+        from models.demos.deepseek_v3_d_p.tt.v4 import block as _blk
+
+        if _blk._ISLAND_TIMING and _blk.ISLAND_TIMES and not warmup:
+            # DS4F-0300: per-chunk device+host seconds per (layer kind, step), summed over the layers (sync after each step)
+            parts = sorted(_blk.ISLAND_TIMES.items(), key=lambda kv: -kv[1])
+            logger.info(
+                f"[v4 timing] chunk @{actual_start} real {int(actual_end) - int(actual_start)}: total "
+                f"{sum(_blk.ISLAND_TIMES.values()) * 1e3:.1f} ms | "
+                + ", ".join(f"{k}:{st} {v * 1e3:.1f}" for (k, st), v in parts)
+            )
+            _blk.ISLAND_TIMES.clear()
+        elif warmup:
+            _blk.ISLAND_TIMES.clear()
         if deferred:
             if self._ack_mode == "lag1":
                 # LAG-1 acks: mark this chunk's end with a device event and ack the PREVIOUS chunk once its event has passed

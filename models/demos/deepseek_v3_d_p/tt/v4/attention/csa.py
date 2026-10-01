@@ -22,6 +22,9 @@ import os
 import torch
 
 import ttnn
+
+_RAGGED_FULL_CUT = os.environ.get("PREFILL_RAGGED_FULL_CUT", "0") == "1"  # DS4F-0300: full-width cut on a ragged chunk
+_TRACED_CHUNK0 = os.environ.get("PREFILL_TRACED_CHUNK0", "0") == "1"  # DS4F-0300: chunk 0 on a captured A2 island
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import (
     SharedScalar,
     TtHCA,
@@ -864,6 +867,9 @@ class TtCSA(TtHCA):
                 self.indexer._host_q_b_proj_weight, tp_shard_dim=None, cache_name="wq_b_all"
             )
         self.precreate_ring_consts(int(real_len))
+        if _TRACED_CHUNK0:
+            self._chunk0_perm(seq_local)
+            self._sentinel_block(seq_local)
         self._entries_per_chunk = int(seq_local) * self.sp_factor // rate
         self._entry_row_mask(self._entries_per_chunk)
 
@@ -975,6 +981,13 @@ class TtCSA(TtHCA):
             # distinct width compiled a new slice_write program (~3 s host, once per length); the extra columns belong to
             # entries past the real ones, whose tokens no real query can see, so the cut leaves them -inf anyway
             n_cut = min(-(-n_new // ttnn.TILE_SIZE) * ttnn.TILE_SIZE, int(entries.shape[2]))
+            if _RAGGED_FULL_CUT:
+                # DS4F-0300: the FULL-width cut for every chunk -- the captured constant (built before the islands), one
+                # slice_write program for every tail length, no per-request host build + upload of a [S_l, n_cut] mask per
+                # CSA layer. Same visibility for every real query: the cut shows entry j to row s only when 4j + 3 <= s, so
+                # the columns past n_new (entries beyond the real tokens) stay hidden from rows < real_len; the slot's next
+                # prompt re-initialises the mask (reset_slot copies the -inf constant).
+                n_cut = int(entries.shape[2])
             full_width = n_cut == int(
                 entries.shape[2]
             )  # the captured (full-chunk) width: its constant predates the islands
@@ -1020,14 +1033,63 @@ class TtCSA(TtHCA):
         ttnn.copy(const, state.score_mask)
         state.mask_zeroed_upto = 0
 
-    def forward_attn(self, hidden_states, outs, state, real_len: int):
+    # DS4F-0300: chunk 0 replays a second A2 island (PREFILL_TRACED_CHUNK0=1) whose index rows are repacked per query
+    supports_chunk0_island = True
+
+    def _chunk0_perm(self, seq_local: int):
+        """[1, 1, S_l, W + K] uint32 ROW_MAJOR per SP chip: the chunk-0 repacking of the sparse attention's index rows
+        ``[window W | top-k K]`` into ``[valid window | valid top-k | sentinels]`` (sparse_sdpa reads sentinels only as a
+        contiguous tail). At chunk 0 both counts are STATIC per global row s: the window holds min(W, s + 1) real keys (the
+        LAST ones of the row: earlier slots point at the carry, i.e. the previous request) and the top-k min(K, (s + 1) // 4)
+        valid entries (the cut shows entry j iff 4j + 3 <= s; topk_large_indices puts the -inf picks, as sentinels, after
+        them). Index W + K = the sentinel block appended by _chunk0_pack. Rows with a full window and top-k: identity.
+        """
+        key = ("chunk0_perm", seq_local)
+        dev = self.__dict__.setdefault("_chunk0_consts", {}).get(key)
+        if dev is None:
+            S = seq_local * self.sp_factor
+            W, K = self.sliding_window, self.indexer.topk
+            perm = torch.arange(W + K, dtype=torch.int64).view(1, -1).repeat(S, 1)
+            for r in range(min(S, K * 4)):
+                w, k = min(W, r + 1), min(K, (r + 1) // 4)
+                row = list(range(W - w, W)) + list(range(W, W + k))
+                perm[r] = torch.tensor(row + [W + K] * (W + K - len(row)), dtype=torch.int64)
+            dev = self._chunk0_consts[key] = self._from_torch(
+                perm.to(torch.int32).view(1, 1, S, W + K),
+                mesh_mapper=self._mesh_mapper(sp_dim=2),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        return dev
+
+    def _sentinel_block(self, seq_local: int):
+        """[1, 1, S_l, 32] uint32 ROW_MAJOR of sparse_sdpa's sentinel 0xFFFFFFFF (the gather source of the repacked tail)."""
+        key = ("chunk0_sent", seq_local)
+        dev = self.__dict__.setdefault("_chunk0_consts", {}).get(key)
+        if dev is None:
+            S = seq_local * self.sp_factor
+            dev = self._chunk0_consts[key] = self._from_torch(
+                torch.full((1, 1, S, ttnn.TILE_SIZE), -1, dtype=torch.int32),
+                mesh_mapper=self._mesh_mapper(sp_dim=2),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        return dev
+
+    def _chunk0_pack(self, idx, seq_local: int):
+        cat = ttnn.concat([idx, self._sentinel_block(seq_local)], dim=3)
+        out = ttnn.gather(cat, 3, index=self._chunk0_perm(seq_local))
+        ttnn.deallocate(cat)
+        return out
+
+    def forward_attn(self, hidden_states, outs, state, real_len: int, chunk0: bool = False):
         """Island A2 (chunk-invariant): the static fused scorer + top-k over the whole key cache, the sparse gather
         over the persistent slab, the TP head<->seq transposes, V's un-RoPE and the output projection -> y; plus the
         static halves of the export (H128-rotated index keys, the window ring rows, the pending-state block), so the
         eager epilogue is only writes. -> (y, k_rot, ring, pending_block)."""
         q, q_latent, sliding_kv_g, _nc, entries, keys, cos, sin = outs[:8]
         idx = self.indexer.select_indices_static(q_latent, hidden_states, cos, sin, state.index_k, state.score_mask)
-        attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2])
+        attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2], chunk0=chunk0)
         y = self._o_proj(attn)
         # export prep (contract dtypes from kv_contract): rotated index keys (bfp8 tiles), the unified rows as RM pieces
         # -- entries land at unified row 128 + entry_count, so their pieces are 128 rows (gcd of 128 + k*1280 and 1280);
@@ -1106,7 +1168,7 @@ class TtCSA(TtHCA):
         # NOT _update_in_place: that deallocates its source, and next_carry is island A1's PERSISTENT output
         ttnn.copy(next_carry, state.sliding_carry)
 
-    def _sparse_core(self, q, topk_idx, cos, sin, slab_rm, *, seq_len: int):
+    def _sparse_core(self, q, topk_idx, cos, sin, slab_rm, *, seq_len: int, chunk0: bool = False):
         """The chunk-invariant heart of path A: indices [window | top-k] -> TP head->seq transpose -> sparse_sdpa over
         the slab (fixed T) -> back -> V un-RoPE. Shared by the eager path (_attention_sparse) and island A2."""
         batch, seq_local = q.shape[0], q.shape[2]
@@ -1117,6 +1179,12 @@ class TtCSA(TtHCA):
         if ent.layout != ttnn.ROW_MAJOR_LAYOUT:
             ent = ttnn.to_layout(ent, ttnn.ROW_MAJOR_LAYOUT)
         idx = ttnn.concat([self._window_indices(seq_local), ent], dim=3)  # [1, 1, S_l, 128 + topk]
+        if chunk0:
+            # chunk 0 (DS4F-0300): drop the window slots that point at the carry and the top-k slots past the row's valid
+            # count (whose sentinel the + seq_len above turned into a real row index), as one static gather
+            packed = self._chunk0_pack(idx, seq_local)
+            ttnn.deallocate(idx)
+            idx = packed
         transpose = self.tp_factor > 1 and heads_local % ttnn.TILE_SIZE != 0
         if transpose:
             q = ttnn.experimental.all_to_all_async_generic(

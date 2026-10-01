@@ -24,6 +24,16 @@ from typing import Callable, Optional
 import torch
 
 _TRACED_RAGGED = os.environ.get("PREFILL_TRACED_RAGGED", "0") == "1"  # DS4F-0268: ragged final chunk on the islands
+# DS4F-0300: a ragged FIRST chunk (every prompt shorter than one chunk) replays islands A + B like a full chunk 0; only its
+# attention runs eager (trace_ready is False at kv_actual 0). Without it the whole layer runs eager (~5.6 s at 43 layers).
+_TRACED_RAGGED0 = os.environ.get("PREFILL_TRACED_CHUNK0_RAGGED", "0") == "1"
+# DS4F-0300: chunk 0's attention on a second captured A2 island per slot (the modules' forward_attn(chunk0=True): CSA repacks
+# its index rows, HCA / SWA mask the carry columns) instead of the eager path (trace_ready is False at kv_actual 0).
+_TRACED_CHUNK0 = os.environ.get("PREFILL_TRACED_CHUNK0", "0") == "1"
+# DS4F-0300 measurement only (PREFILL_ISLAND_TIMING=1): synchronize after every island / glue step of a traced layer and add the
+# wall time to ISLAND_TIMES[(kind, step)]; the runtime logs and clears it per chunk. Serialises host and device -- timing runs only.
+_ISLAND_TIMING = os.environ.get("PREFILL_ISLAND_TIMING", "0") == "1"
+ISLAND_TIMES: dict = {}
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -303,6 +313,10 @@ class TtV4PrefillBlock(LightweightModule):
                 warm = self.attn.forward_pre(h, state, chunk_tokens)
                 self.attn.glue_chunk(state, warm, chunk_tokens, None)
                 a2_warm = self.attn.forward_attn(h, warm, state, chunk_tokens)
+                chunk0_island = _TRACED_CHUNK0 and getattr(self.attn, "supports_chunk0_island", False)
+                if chunk0_island:
+                    # compile the chunk-0 variant too (DS4F-0300) before any attention island is captured
+                    a2_warm = list(a2_warm) + list(self.attn.forward_attn(h, warm, state, chunk_tokens, chunk0=True))
                 for t in list(a2_warm) + list(warm):
                     if t is not None:  # the SWA phases carry None for entries / mask
                         ttnn.deallocate(t)
@@ -322,7 +336,17 @@ class TtV4PrefillBlock(LightweightModule):
                     name=f"layer{self.layer_idx}.A2.slot{slot}",
                 )
                 A2.capture()
-                self._attn_islands[slot] = (A1, A2)
+                A2c0 = None
+                if chunk0_island:
+                    A2c0 = TraceIsland(
+                        self.mesh_device,
+                        lambda _o=outs, _st=state: self.attn.forward_attn(h, _o, _st, chunk_tokens, chunk0=True),
+                        [],
+                        name=f"layer{self.layer_idx}.A2c0.slot{slot}",
+                    )
+                    A2c0.capture()
+                self._attn_islands[slot] = (A1, A2, A2c0)
+                self._chunk_tokens = chunk_tokens
         if self.kv_only:
             self._islands = (A, None, S_in, None, None)
             return
@@ -364,7 +388,8 @@ class TtV4PrefillBlock(LightweightModule):
         release_trace). Idempotent."""
         for islands in (getattr(self, "_attn_islands", None) or {}).values():
             for i in islands:
-                i.release()
+                if i is not None:
+                    i.release()
         self._attn_islands = {}
         if self._islands is not None:
             for i in self._islands[:2]:
@@ -377,29 +402,68 @@ class TtV4PrefillBlock(LightweightModule):
         if release is not None:
             release()
 
+    def _tick(self, step: str, t0: float) -> float:
+        """PREFILL_ISLAND_TIMING: drain the device, charge the wall since t0 to (kind, step), return the new t0."""
+        import time as _time
+
+        ttnn.synchronize_device(self.mesh_device)
+        t1 = _time.perf_counter()
+        key = (str(self.kind), step)
+        ISLAND_TIMES[key] = ISLAND_TIMES.get(key, 0.0) + (t1 - t0)
+        return t1
+
     def _forward_traced(self, streams, *, slot, caches, real_len, input_ids, on_layer_complete, on_layer_hidden):
         A, B, S_in, y_buf, ids_buf = self._islands
         state = self.states[slot]
+        if _ISLAND_TIMING:
+            import time as _time
+
+            ttnn.synchronize_device(self.mesh_device)
+            t0 = _time.perf_counter()
         for dst, src in zip(S_in, streams):
             copy_into(dst, src)
         post, comb, h = A.replay()
+        if _ISLAND_TIMING:
+            t0 = self._tick("A", t0)
         state.fresh = False
         attn_islands = self._attn_islands.get(slot) if getattr(self, "_attn_islands", None) else None
         traced_attn = attn_islands is not None and self.attn.trace_ready(state)
         if traced_attn:
-            A1, A2 = attn_islands
+            A1, A2 = attn_islands[0], attn_islands[1]
+        elif (
+            attn_islands is not None
+            and len(attn_islands) > 2
+            and attn_islands[2] is not None
+            and int(state.kv_actual) == 0
+            and (real_len >= 256 or real_len == getattr(self, "_chunk_tokens", -1))
+        ):
+            # chunk 0 on its own A2 island (DS4F-0300); a ragged chunk 0 under 256 tokens keeps the eager attention (the
+            # traced ragged path's alignment floor, DS4F-0268)
+            A1, A2 = attn_islands[0], attn_islands[2]
+            traced_attn = True
+        if traced_attn:
             export = self._export_target(caches, slot)
             self.attn.prepare_chunk(state, real_len)
             outs = A1.replay()
+            if _ISLAND_TIMING:
+                t0 = self._tick("A1", t0)
             self.attn.glue_chunk(state, outs, real_len, export)
+            if _ISLAND_TIMING:
+                t0 = self._tick("glue", t0)
             a2 = A2.replay()
+            if _ISLAND_TIMING:
+                t0 = self._tick("A2c0" if A2 is not attn_islands[1] else "A2", t0)
             y = a2[0]
             if getattr(on_layer_hidden, "detail", False):  # DS4F-0272 probe: island outputs before the epilogue writes
                 on_layer_hidden(f"{self.layer_idx}:A1.outs", list(outs))
                 on_layer_hidden(f"{self.layer_idx}:A2.rest", list(a2[1:]))
             self.attn.epilogue_chunk(state, outs, a2, export, real_len)
+            if _ISLAND_TIMING:
+                t0 = self._tick("epilogue", t0)
         else:
             y = self.attn(h, seq_len_actual=real_len, state=state, export=self._export_target(caches, slot))
+            if _ISLAND_TIMING:
+                t0 = self._tick("attn_eager", t0)
         if getattr(on_layer_hidden, "detail", False):
             on_layer_hidden(f"{self.layer_idx}:attn.y", [y])
         if on_layer_complete is not None:
@@ -414,6 +478,8 @@ class TtV4PrefillBlock(LightweightModule):
         if ids_buf is not None:
             copy_into(ids_buf, input_ids)
         out = list(B.replay())
+        if _ISLAND_TIMING:
+            t0 = self._tick("B", t0)
         if on_layer_hidden is not None:
             on_layer_hidden(self.layer_idx, out)
         return out
@@ -474,7 +540,11 @@ class TtV4PrefillBlock(LightweightModule):
             and slot in self._attn_islands
             and self.attn.trace_ready(state)
         )
-        if self._islands is not None and (real_len == chunk or ragged_traced):
+        # DS4F-0300: a ragged chunk 0 (the whole prompt fits in one chunk) takes the same route as a full chunk 0: islands A
+        # + B replay on the chunk-wide buffers (the MoE island routes the pad rows as tokens, as for the traced ragged tail;
+        # attention is causal, so no real row reads a pad row) and the attention runs eager with the real length.
+        ragged0_traced = _TRACED_RAGGED0 and 0 < real_len < chunk and int(actual_start) == 0
+        if self._islands is not None and (real_len == chunk or ragged_traced or ragged0_traced):
             # full chunk: the captured islands' MoE padding config (actual_isl = chunk) and the hash gate's device ids
             # buffer hold; a ragged FINAL chunk (real_len < chunk) runs the eager path below unless ragged_traced
             if not self.hash_layer or isinstance(input_ids, ttnn.Tensor):

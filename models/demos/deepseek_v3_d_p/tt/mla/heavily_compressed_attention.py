@@ -1267,7 +1267,11 @@ class TtHCA(_TtHCABase):
         if export is not None:
             self._export_entries(export, merged, tile_start)
 
-    def forward_attn(self, hidden_states, outs, state, real_len: int):
+    # DS4F-0300: a second A2 island per slot replays chunk 0 (PREFILL_TRACED_CHUNK0=1): the same core with the carry
+    # columns -inf (the slab's carry rows are the previous request's tail, which chunk 0 must not see)
+    supports_chunk0_island = True
+
+    def forward_attn(self, hidden_states, outs, state, real_len: int, chunk0: bool = False):
         q, sliding_kv, _e, mask_block, cos, sin = outs
         attn, next_carry, slab = self._attention(
             q,
@@ -1277,7 +1281,7 @@ class TtHCA(_TtHCABase):
             cos,
             sin,
             carry=state.sliding_carry,
-            kv_actual=1,  # never chunk 0 here (trace_ready): the carry columns are visible
+            kv_actual=0 if chunk0 else 1,  # 1: never chunk 0 (trace_ready), the carry columns are visible
             real_len=real_len,
         )
         y = self._o_proj(attn)

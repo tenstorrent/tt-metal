@@ -85,11 +85,24 @@ class DeepSeekV4FlashAdapter(PrefillModelAdapter):
 
         model_dir = os.environ.get("PREFILL_HF_MODEL", self.hf_model_default)
         weight_map = hf_names.read_weight_map(model_dir)
+        # DS4F-0300: with PREFILL_SKIP_CACHED_EXPERTS=1, a layer whose routed-expert .tensorbin files are all in the cache does
+        # not read + dequantise its 256 checkpoint experts (TtRoutedExpert's "load-cache" mode, torch_weights=None; the v4 MoE
+        # builder documents None for a complete cache). Every start used to read them although only the cache was used.
+        cached = (
+            self._complete_expert_layers(params, hf_config)
+            if os.environ.get("PREFILL_SKIP_CACHED_EXPERTS", "0") == "1"
+            else set()
+        )
 
         def layer_weights(layer_idx: int) -> dict:
             w = hf_names.layer_torch_dict(model_dir, layer_idx, weight_map=weight_map)
             w.pop("__kind__", None)
-            w["__experts__"] = [e for _, e in hf_names.iter_layer_experts(model_dir, layer_idx, weight_map=weight_map)]
+            if layer_idx in cached:
+                w["__experts__"] = None
+            else:
+                w["__experts__"] = [
+                    e for _, e in hf_names.iter_layer_experts(model_dir, layer_idx, weight_map=weight_map)
+                ]
             return w
 
         top = hf_names.top_level_torch_dict(model_dir, weight_map=weight_map)
@@ -117,6 +130,38 @@ class DeepSeekV4FlashAdapter(PrefillModelAdapter):
             num_links=params.num_links,
             dispatch_buffer_capacity_factor=params.capacity_factor,
         )
+
+    @staticmethod
+    def _complete_expert_layers(params: PrefillRunParams, hf_config) -> set:
+        """Layers of this rank's slice whose routed experts are complete in the .tensorbin cache: every local expert's
+        gate / up / down file (``layer_{L}.routed_expert.local_{i}_{proj}*.tensorbin``, TtRoutedExpert.check_cache_complete's
+        pattern), one directory scan."""
+        cache = getattr(params, "weight_cache_path", None)
+        if cache is None or not Path(cache).is_dir():
+            return set()
+        n_dev = 1
+        for d in tuple(params.mesh_shape):
+            n_dev *= int(d)
+        per_chip = int(getattr(hf_config, "n_routed_experts")) // n_dev
+        names = [f.name for f in Path(cache).iterdir()]
+        done = set()
+        for L in range(params.first_layer_idx, params.first_layer_idx + params.num_layers):
+            ok = True
+            for i in range(per_chip):
+                for proj in ("gate", "up", "down"):
+                    pre = f"layer_{L}.routed_expert.local_{i}_{proj}"
+                    if not any(n.startswith(pre) and n.endswith(".tensorbin") for n in names):
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if ok:
+                done.add(L)
+        logger.info(
+            f"[dsv4-flash] routed experts complete in the cache for {len(done)}/{params.num_layers} layers ({per_chip} per chip): "
+            f"those skip the checkpoint expert read (PREFILL_SKIP_CACHED_EXPERTS=1)"
+        )
+        return done
 
     # --- test metadata ---
     hf_repo_id = "deepseek-ai/DeepSeek-V4-Flash"
