@@ -67,13 +67,12 @@ DEFAULT_MAX_LOCATIONS = 10
 
 def _frame_signature(
     callstack: list[CallstackEntry], message: str | None
-) -> tuple[str | None | tuple[str | None, str | None, int | None, int | None], ...]:
+) -> tuple[str | None | tuple[str | None, str | None, int | None], ...]:
     return (message,) + tuple(
         (
             frame.function_name,
             frame.file_info.file if frame.file_info is not None else None,
             frame.file_info.line if frame.file_info is not None else None,
-            frame.file_info.column if frame.file_info is not None else None,
         )
         for frame in callstack
     )

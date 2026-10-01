@@ -7,6 +7,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include "impl/sub_device/sub_device_impl.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 
@@ -42,7 +43,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
         "EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWMUL", "EltwiseBinaryType::ELWSUB"};
 
     const auto cores_for_program = sub_device_for_program.has_value()
-                                       ? sub_device_for_program->get().cores(HalProgrammableCoreType::TENSIX)
+                                       ? sub_device_for_program->get().impl()->cores(HalProgrammableCoreType::TENSIX)
                                        : CoreRange(CoreCoord{0, 0}, CoreCoord(2, 2)); /* end_coord */
 
     auto program = std::make_shared<Program>();

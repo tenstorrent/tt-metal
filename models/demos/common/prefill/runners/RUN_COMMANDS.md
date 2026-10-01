@@ -10,8 +10,8 @@ Per host, once:
 - `bash build_metal.sh` and `bash create_venv.sh` in that clone.
 - The model's TTNN weight cache reachable at the adapter's default path, or
   `PREFILL_TTNN_CACHE` pointed elsewhere:
-  - kimi27: `/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill`
-  - glm52: `/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache`
+  - kimi27: `/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill`
+  - glm53: `/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill`
 - Passwordless ssh between the hosts, both directions.
 
 `HOSTS` order is the **pipeline order**, which must follow the physical galaxy
@@ -76,7 +76,7 @@ python3 $TT_METAL_HOME/ttnn/ttnn/distributed/ttrun.py \
 ```
 
 The mesh-graph descriptor is per-SKU, not per-model; `sc4_mgd.textproto` is shared
-across models. For glm52, swap the manifest path to `glm52.json`.
+across models. For glm53, swap the manifest path to `glm53.json`.
 
 The runner allocates, captures its trace, warms up, logs `setup complete,
 entering request loop`, and then blocks there until requests arrive. That idle

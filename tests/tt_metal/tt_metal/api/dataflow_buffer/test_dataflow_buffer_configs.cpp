@@ -35,7 +35,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include "../metal2_host_api/test_helpers.hpp"
+#include "../metal2_host_api/test_helpers/test_helpers.hpp"
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -2336,8 +2336,7 @@ TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
 // DFBs on disjoint cores all fit at slot 0.
 TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
     const bool is_quasar = this->device().arch() == ARCH::QUASAR;
-    const uint32_t max_slots =
-        is_quasar ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal::get_arch_num_circular_buffers();
+    const uint32_t max_slots = is_quasar ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal::get_num_dataflow_buffers();
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     const uint32_t num_dfbs = max_slots + 4;
     if (grid.x * grid.y < num_dfbs) {

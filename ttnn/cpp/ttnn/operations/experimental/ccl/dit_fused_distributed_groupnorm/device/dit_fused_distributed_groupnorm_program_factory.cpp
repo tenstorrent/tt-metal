@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cstring>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -32,16 +31,6 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
-
-namespace {
-
-uint32_t float_to_u32(float v) {
-    uint32_t out;
-    std::memcpy(&out, &v, sizeof(float));
-    return out;
-}
-
-}  // namespace
 
 // Multi-core mcast GroupNorm across the device grid — the on-device reduction is identical to the
 // stock ttnn::group_norm mcast path (groupnorm_mcast_program_factory.cpp): cores split into
@@ -69,7 +58,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
 
     Program program = CreateProgram();
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     auto* mesh_device = input_tensor.device();
 
     const bool is_local = (args.ring_size <= 1);
@@ -604,6 +593,15 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             go_sem_id,
         };
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
+        // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
+        TT_FATAL(
+            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+                ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
+            "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
+        const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+            mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+        fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
+        fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
         // The coalescing forwarder is fully parameterized by these CT args (stick_bytes,
         // max_rounds, num_chunks_per_device), so it is shared verbatim with the fused rmsnorm op.
         forwarder_kernel_ids[f] = CreateKernel(
@@ -835,7 +833,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         }
 
         std::vector<uint32_t> writer_rt = {
-            float_to_u32(args.eps),
+            std::bit_cast<uint32_t>(args.eps),
             output_addr,
             gamma_addr,
             beta_addr,

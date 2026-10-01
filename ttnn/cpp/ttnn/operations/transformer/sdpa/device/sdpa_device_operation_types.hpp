@@ -32,6 +32,7 @@ struct SDPAParams {
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
+    bool output_concat_heads = false;
 };
 
 struct SDPAInputs {
