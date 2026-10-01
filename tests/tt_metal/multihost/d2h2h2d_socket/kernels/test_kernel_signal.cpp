@@ -3,7 +3,7 @@
 
 // The receive leg. apply_signal runs inside land_one, so the signal advances by exactly one
 // per landed frame: asking tt_uva_test for seen+1 IS the per-frame hook.
-#include <stdint.h>
+#include <cstdint>
 
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
