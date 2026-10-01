@@ -124,18 +124,36 @@ class TtLocalDiT:
         import torch
 
         half = self.hidden_size // 2
-        frequencies = torch.exp(torch.arange(half, dtype=torch.float32) * (-log(10000) / (half - 1)))
-        self.frequencies = upload(frequencies.reshape(1, half), device, ttnn.float32)
+        # Native SinusoidalPosEmb performs arange, the exponent multiply and exp
+        # in the timestep dtype. Computing this table in FP32 then casting misses
+        # BF16 rounding of both the index and exponent, especially above index 256.
+        self.frequencies = {
+            tt_dtype: upload(
+                torch.exp(torch.arange(half, dtype=torch_dtype) * (-log(10000) / (half - 1))).reshape(1, half),
+                device,
+                tt_dtype,
+            )
+            for tt_dtype, torch_dtype in (
+                (ttnn.bfloat16, torch.bfloat16),
+                (ttnn.float32, torch.float32),
+            )
+        }
 
     def _time_embedding(self, t, batch):
         ttnn, _, _, _ = _runtime()
         if tuple(t.shape) != (batch,):
             raise ValueError("Local DiT t / dt must have shape [batch]")
-        angles = ttnn.multiply(
-            ttnn.multiply(ttnn.reshape(ttnn.typecast(t, ttnn.float32), (batch, 1)), 1000.0),
-            self.frequencies,
+        if t.dtype not in self.frequencies:
+            raise ValueError("Local DiT timestep dtype must be BF16 or FP32")
+        # Both multiplications have native timestep storage/rounding boundaries.
+        # Promote only the rounded angles for trigonometry, then round its result
+        # back to timestep dtype before the native cast to the projection dtype.
+        scaled_t = ttnn.multiply(ttnn.reshape(t, (batch, 1)), 1000.0)
+        angles = ttnn.multiply(scaled_t, self.frequencies[t.dtype])
+        angles = ttnn.typecast(angles, ttnn.float32)
+        embedding = ttnn.concat(
+            [ttnn.typecast(ttnn.sin(angles), t.dtype), ttnn.typecast(ttnn.cos(angles), t.dtype)], dim=-1
         )
-        embedding = ttnn.concat([ttnn.sin(angles), ttnn.cos(angles)], dim=-1)
         return ttnn.reshape(ttnn.typecast(embedding, self.dtype), (batch, 1, self.hidden_size))
 
     def __call__(self, x, mu, t, cond, dt):
@@ -143,7 +161,7 @@ class TtLocalDiT:
         if len(x.shape) != 3 or x.shape[1] != self.in_channels:
             raise ValueError("Local DiT x must have shape [batch, in_channels, time]")
         batch, channels, length = tuple(x.shape)
-        if len(cond.shape) != 3 or tuple(cond.shape[:2]) != (batch, channels):
+        if len(cond.shape) != 3 or tuple(cond.shape)[:2] != (batch, channels):
             raise ValueError("Local DiT condition must match x batch and feature dimensions")
         if len(mu.shape) not in (2, 3) or mu.shape[0] != batch:
             raise ValueError("Local DiT mu must be [batch, tokens * hidden] or [batch, tokens, hidden]")
