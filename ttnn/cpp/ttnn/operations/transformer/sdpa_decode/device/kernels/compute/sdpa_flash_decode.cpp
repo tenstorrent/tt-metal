@@ -246,7 +246,8 @@ void kernel_main() {
 #ifdef DYNAMIC_CHUNK_SIZE
     const uint32_t qk_subblock_h_dynamic = 1;
     const uint32_t qk_subblock_w_dynamic = Sk_chunk_t_dynamic;  // Guaranteed < DST
-    const uint32_t qk_in0_num_subblocks_dynamic = 1;
+    // Subblocks are one tile-row high, so Sq_chunk_t of them fill every Q row of cb_qk_im.
+    const uint32_t qk_in0_num_subblocks_dynamic = Sq_chunk_t;
     const uint32_t qk_in1_num_subblocks_dynamic = 1;
     const uint32_t out_in0_block_w_dynamic = Sk_chunk_t_dynamic;
     const uint32_t qk_chunk_tiles_dynamic = Sq_chunk_t * Sk_chunk_t_dynamic;

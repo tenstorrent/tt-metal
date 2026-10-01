@@ -75,3 +75,28 @@ def test_flash_mla_decode(
         reuse_k,
         max_cores_per_head_batch=4,
     )
+
+
+# k_chunk_size=0 takes the dynamic-chunk path, whose QK matmul used to produce only the first tile-row of Q
+# heads. With more than 32 heads on a core (64 or 128 with DRAM Q: 2 or 4 tile-rows) the next step waited
+# forever. nh=8 fits in one tile-row and is the control. kv_lora_rank=128 keeps the CBs within L1.
+@pytest.mark.parametrize("nh, kv_lora_rank", [(8, 512), (64, 128), (128, 128)])
+def test_flash_mla_decode_dynamic_chunk(device, nh, kv_lora_rank, function_level_defaults, reset_seeds):
+    run_flash_mla_decode_impl(
+        device,
+        batch=4,
+        seq_len=1024,
+        nh=nh,
+        nkv=1,
+        kv_lora_rank=kv_lora_rank,
+        d_rope=64,
+        q_num_cores=0,
+        q_dtype=ttnn.bfloat16,
+        q_mem_config=None,
+        dtype=ttnn.bfloat8_b,
+        use_paged_attention=True,
+        block_size=64,
+        reuse_k=True,
+        max_cores_per_head_batch=4,
+        k_chunk_size=0,
+    )
