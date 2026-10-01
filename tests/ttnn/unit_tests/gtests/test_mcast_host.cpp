@@ -1320,7 +1320,7 @@ m2::ProgramSpec spec_pair(uint32_t prefix = 0) {
             .source = m2::KernelSpec::SourceCode{"void kernel_main() {}"},
             .compile_time_args = {{"kept_ct", 73}},
             .runtime_arg_schema = {.runtime_arg_names = {"kept_rt"}, .common_runtime_arg_names = {"kept_common"}},
-            .hw_config = m2::DataMovementHardwareConfig{m2::CreateReaderGen1DataMovementConfig()}};
+            .hw_config = m2::CreateReaderDataMovementConfig()};
         kernel.advanced_options.num_runtime_varargs = prefix;
         spec.kernels.push_back(std::move(kernel));
     }
@@ -1423,8 +1423,7 @@ TEST_F(McastHostFixture, SpecAttachFailuresLeaveBothObjectsUnchanged) {
             args.kernel_run_args[1].advanced_options.runtime_varargs[{3, 0}] = {37};
         }
         if (std::string_view(violation) == "wrong-sender-noc") {
-            std::get<m2::DataMovementGen1Config>(std::get<m2::DataMovementHardwareConfig>(spec.kernels[0].hw_config))
-                .noc = NOC::NOC_1;
+            std::get<m2::DataMovementHardwareConfig>(spec.kernels[0].hw_config).config_1xx->noc = NOC::NOC_1;
         }
         if (std::string_view(violation) == "duplicate-prefix") {
             spec.kernels[1].compile_time_args["channel_mcast_flags"] = 55;
@@ -1516,8 +1515,7 @@ TEST_F(McastHostFixture, SpecAttachAllowsOtherNocOnlyOnPureMulticastReceivers) {
     auto multicast = make_family(device_, {GroupInput(participants, {{0, 0}})});
     auto chain = make_family(device_, {GroupInput(participants, {{0, 0}})}, chain_config());
     auto spec = spec_pair();
-    std::get<m2::DataMovementGen1Config>(std::get<m2::DataMovementHardwareConfig>(spec.kernels[1].hw_config)).noc =
-        NOC::NOC_1;
+    std::get<m2::DataMovementHardwareConfig>(spec.kernels[1].hw_config).config_1xx->noc = NOC::NOC_1;
     m2::ProgramRunArgs args;
     EXPECT_ANY_THROW(chain.attach(spec, args, "chain", spec_targets));
     EXPECT_TRUE(args.kernel_run_args.empty());
@@ -1559,7 +1557,9 @@ void run_spec_device_contract(
         .unique_id = targets.front(),
         .source = "tests/ttnn/unit_tests/kernel_lib/kernels/mcast_spec.cpp",
         .compile_time_args = {{"rounds", rounds}, {"control", control ? 1u : 0u}},
-        .hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = noc}};
+        .hw_config = m2::DataMovementHardwareConfig{
+            .config_1xx = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = noc}}};
     kernel.advanced_options.num_runtime_varargs = 2;
     kernel.scratchpad_bindings.push_back(
         {.scratchpad_spec_name = m2::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
