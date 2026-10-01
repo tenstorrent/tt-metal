@@ -6,6 +6,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 
@@ -240,6 +241,35 @@ AllToAllAsyncGenericDeviceOperation::tensor_return_value_t AllToAllAsyncGenericD
     }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncGenericDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // all_to_all along `cluster_axis` (or over the whole mesh) is an all_gather of `in_dim` followed by each device
+    // keeping its own ring-index piece of `out_dim`, so the label is composed the same way: the all_gather label for
+    // in_dim (Replicate on the cluster axis; a gather that would interleave a 1-D-mapped tensor's shards is refused),
+    // then Shard{out_dim} on the cluster axis through the reduce_scatter-shaped alias -- which also collapses an N-D
+    // [Shard{out_dim}, Shard{in_dim}] exchanged along axis 1 to the row-major {N}, [Shard{out_dim}] that
+    // test_all_to_all_async_generic composes with ConcatMeshToTensor(out_dim). Routing the INPUT label through the
+    // alias alone would refuse that case and accept the interleaving one (the all_to_all caveat on the 2026-10-01
+    // mesh_partition amendment). The caller's persistent output buffer IS the result. in_dim / out_dim are stored
+    // unsigned as given; the helper normalises. No honest label (nullopt, already warned about): {} keeps the union
+    // default.
+    const auto gathered = ttnn::operations::ccl::common::all_gather_output_topology(
+        tensor_args.input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.in_dim));
+    if (!gathered.has_value()) {
+        return {};
+    }
+    const auto output_topology = ttnn::operations::ccl::common::all_to_all_output_topology(
+        *gathered,
+        operation_attributes.cluster_axis,
+        tensor_args.input_tensor.device()->shape(),
+        static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank()),
+        static_cast<int32_t>(operation_attributes.out_dim));
+    if (!output_topology.has_value()) {
+        return {};
+    }
+    return {*output_topology};
 }
 
 ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
