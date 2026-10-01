@@ -4,7 +4,8 @@
 """The serving contract a bring-up builds to (agents/serving-contract.md writes it at the start, before the plan):
 
     <bringup dir>/serving_contract.md    the how-to for the bring-up engineer, one `## <section>` per part of the model
-    <bringup dir>/contract_tests.yaml    tests: [{test, checks, section, gates}], gates = a component step or "adapter"
+    <bringup dir>/contract_tests.yaml    tests: [{test, checks, section, gates, kind?}], gates = a component step or
+                                         "adapter"; kind: runner_smoke marks the runner smoke (records smoke_runner_ok)
 
 The orchestrator puts a step's how-to section in its brief, ledger_gen adds a step's contract tests to its gate, and
 `python -m models.demos.common.bringup.testing.serving` is the SC.1 gate (the files exist and agree)."""
@@ -52,6 +53,16 @@ def tests(spec) -> list[dict]:
 
 def tests_for(spec, gate: str) -> list[dict]:
     return [t for t in tests(spec) if t.get("gates") == gate]
+
+
+RUNNER_SMOKE = "runner_smoke"
+
+
+def runner_smoke(spec, gate: str | None = None) -> dict | None:
+    """The contract test marked ``kind: runner_smoke`` (for this gate, if given), or None."""
+    return next(
+        (t for t in tests(spec) if t.get("kind") == RUNNER_SMOKE and (gate is None or t.get("gates") == gate)), None
+    )
 
 
 def brief_text(spec, gate: str) -> str:
@@ -104,6 +115,8 @@ def check(spec, repo: Path) -> list[str]:
             )
         if not t.get("gates"):
             errs.append(f"contract_tests.yaml: {t.get('test')}: no 'gates'")
+        if t.get("kind") not in (None, RUNNER_SMOKE):
+            errs.append(f"contract_tests.yaml: {t.get('test')}: unknown kind '{t.get('kind')}' (known: {RUNNER_SMOKE})")
     return errs
 
 
@@ -140,6 +153,8 @@ def main(argv=None) -> int:
     spec = load_spec(a.spec)
     if a.run:
         failed = run_tests(spec, Path(spec.repo), a.run)
+        ran = [t["test"] for t in tests(spec) if a.run == "all" or t.get("gates") == a.run]
+        metrics.record_json("contract", {"run": a.run, "results": {t: t not in failed for t in ran}})
         metrics.record("contract_tests_run", len([t for t in tests(spec) if a.run == "all" or t.get("gates") == a.run]))
         metrics.record("contract_tests_failed", len(failed))
         return 0 if not failed else 1

@@ -90,6 +90,7 @@ def records(fx, monkeypatch):
 def test_data_model(records):
     d = build(records)
     assert d["page_title"] == "fixture Prefill Bring-up" and d["layer_types"] == ["blk"] * 3
+    assert "findings" not in d  # findings stay in findings.yaml; the dashboard does not show them
     t = {x["id"]: x for x in d["tasks"]}
     assert t["C.blk.attention"]["status"] == "STOPPED" and "debugger 3" in t["C.blk.attention"]["agent"]
     assert t["PL.1"]["waiting"] == "approve the plan"
@@ -131,7 +132,6 @@ def test_page_renders_every_section(records, tmp_path):
         "#dag",
         "#strip",
         "#ops tbody",
-        "#findings",
         "#timing",
         "#pos",
         "#pos-table",
@@ -281,3 +281,96 @@ def test_timeline_alignment_splits_programs_by_op_mode_counts():
     assert tl["summary"]["kernel_ms"] + tl["summary"]["gap_ms"] == 60
     assert "error" in align_timeline(op_seq, tl_seq[:2], progs, {0: 0, 1: 1})  # sequences differ
     assert "error" in align_timeline(op_seq, tl_seq, {0: progs[0][:3], 1: progs[1]}, {0: 0, 1: 1})  # lost programs
+
+
+@pytest.fixture
+def final_records(fx, monkeypatch):
+    """The "Final tests" section, last on both pages: the model smoke and the runner smoke (their recorded answers),
+    the full-target ladder rung and the contract tests; whatever never ran shows as not run."""
+    from models.demos.common.bringup.testing.smoke import record_answer
+
+    s = Spec.load(fx(intake={"smoke": {"prompt": "What is the capital of France?", "expect": "Paris"}}))
+    tdir = s.repo / "models/demos/fixture/tests/bringup/contract"
+    tdir.mkdir(parents=True)
+    tests = []
+    for name, gates, kind in (("kv_write", "attention", None), ("runner_smoke", "adapter", "runner_smoke")):
+        (tdir / f"test_{name}.py").write_text("def test_x():\n    pass\n")
+        tests.append(
+            {"test": f"models/demos/fixture/tests/bringup/contract/test_{name}.py", "section": "x", "gates": gates}
+            | ({"kind": kind} if kind else {})
+        )
+    s.bringup_dir.mkdir(parents=True, exist_ok=True)
+    (s.bringup_dir / "contract_tests.yaml").write_text(yaml.safe_dump({"tests": tests}))
+    led = Ledger(s.bringup_dir)
+    led.write_tasks(generate(s, Reference()))
+    res = led.results_dir
+    monkeypatch.setenv(M.RESULTS_ENV, str(res))
+
+    F = build(s)["final"]
+    assert [(r["mode"], r["task"], r["ran"], r["expected"]) for r in F["smokes"]] == [
+        ("model", "L.smoke", False, "Paris"),
+        ("runner", "K.1", False, "Paris"),
+    ]
+    assert not F["ladder"]["ran"] and F["ladder"]["rung"] == "last"
+    assert (F["contract"]["total"], F["contract"]["passed"], F["contract"]["not_run"]) == (2, 0, 2)
+
+    monkeypatch.setenv(M.TASK_ENV, "L.smoke")
+    record_answer("smoke", "model", s, " Paris", [12366], True, 41.3, prompt_len=16)
+    monkeypatch.setenv(M.TASK_ENV, "K.1")
+    record_answer(
+        "runner_smoke", "runner", s, "Paris.", [12366, 13], True, 312.0, prompt_len=135, boundary=128, records=80
+    )
+    for i in range(3):
+        M.record(f"pcc_layer_L{i:02d}", 0.99 - 0.01 * i, task="L.last")
+    for k, v in dict(rung_seq=512, rung_chunk=128, rung_start=384, top1_match=0.95, top5_overlap=1.0).items():
+        M.record(k, v, task="L.last")
+    for tid in ("L.last", "L.smoke", "K.1"):
+        led.update(tid, status="PASS", last_run="2026-10-01T10:00:00")
+    assert (res / "L.smoke_smoke.json").exists() and (res / "K.1_runner_smoke.json").exists()
+
+    F = build(s)["final"]
+    m, r = F["smokes"]
+    assert (m["ran"], m["ok"], m["answer"], m["seconds"], m["task"]) == (True, True, " Paris", 41.3, "L.smoke")
+    assert (r["ran"], r["ok"], r["boundary"], r["records"], r["prompt_len"], r["task"]) == (
+        True,
+        True,
+        128,
+        80,
+        135,
+        "K.1",
+    )
+    L = F["ladder"]
+    assert (L["ran"], L["task"], L["min_pcc"], L["top1"], L["top5"]) == (True, "L.last", 0.97, 0.95, 1.0)
+    C = F["contract"]
+    assert (C["passed"], C["not_run"]) == (1, 1) and C["tests"][1]["task"] == "K.1"
+    return s
+
+
+def test_final_tests_data(final_records):
+    assert [r["ok"] for r in build(final_records)["final"]["smokes"]] == [True, True]
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node not installed")
+def test_final_tests_section_renders(final_records, tmp_path):
+    s = final_records
+    out = tmp_path / "index.html"
+    main(["--spec", str(s.path), "--out", str(out)])
+    r = subprocess.run(["node", str(SHIM), str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    els = json.loads(r.stdout)
+    assert els["#final tbody"]["html"] > 0 and els["#final-lines"]["html"] > 0
+    html = out.read_text()
+    assert html.index('id="final-sec"') > html.index('id="s-pcc"')  # the last section
+
+    # teletext: page 109, the last page; its screens as text (the page's own debugging aid)
+    page = main(["--spec", str(s.path), "--style", "teletext", "--out", str(tmp_path)])
+    src = page.read_text()
+    i = src.rindex("</script>")
+    probe = 'process.stderr.write("@@" + pFinal().map(toText).join("\\n") + "@@");'
+    (tmp_path / "probe.html").write_text(src[:i] + probe + src[i:])
+    r = subprocess.run(["node", str(TELETEXT_SHIM), str(tmp_path / "probe.html"), "1"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    text = r.stderr.split("@@")[1]
+    assert "FINAL TESTS" in text and "PAGE ERROR" not in text
+    assert "MODEL SMOKE" in text and "RUNNER SMOKE" in text and "bound 128 rec 80" in text
+    assert "NOT RUN" in text and "kv_write" in text  # the attention contract test never ran
