@@ -14,10 +14,13 @@ Root cause (craq-sim, 2026-09-24/25): the compute kernel (kernels/compute/layern
 build) pops the input DFB -- dfb_in0 borrows the already-resident input shard -- during the x - E[x] pass
 without ever pushing it. WH/BH tolerate an ack with no post; Quasar's hardware tile counters do not
 (occupancy 0xFFFE = -2: two pops, zero posts). The mcast reduction is not at fault: its ex_global counter
-was balanced. Fix: post the resident tiles once (reserve_back / push_back / wait_front) before the pass,
-plus a guarded pack_init after every packer output switch (Quasar bakes the pack destination at
-pack_init). A second, independent fault -- the packer firmware clearing the intra-tensix remapper pairs
-while the unpacker still pops -- is fixed in firmware by #57984.
+was balanced. Fix: the kernel reads the resident input by absolute tile index (index_h_offset) and never
+pushes or pops it -- the idiom layernorm_sharded_pre_allgather.cpp already used -- so the DFB's tile
+counters are never touched; only the fused pre-add scratch buffer is still popped, once, after its last
+read. Plus a guarded pack_init after every packer output switch (Quasar bakes the pack destination at
+pack_init; pack_reconfig_data_format only reprograms the format gasket). A second, independent fault --
+the packer firmware clearing the intra-tensix remapper pairs while the unpacker still pops -- is fixed in
+firmware by #57984.
 
 This reproduces just the sharded RMSNorm with the model's exact program config (rmsnorm_1d.py
 _create_sharded_norm_program_config: block_w=2, subblock_w=2, block_h=1, grid 8x4). fp32_dest_acc_en is
