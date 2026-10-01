@@ -238,8 +238,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // This is emitted regardless of there is any entries in the binding.
     struct ProgrammaticBindingTokenGetterConfig {
         // The pointed-to type to return when there's no entries within the binding.
-        //
         // If this is absent, it will use the binding type associated with the binding instead.
+        //
+        // auto get_token_if_present() { // No binding entries.
+        //   using null_token_ptr_t = const <null_binding_type>*;
+        //   return null_token_ptr_t{nullptr};
+        // }
         optional<string> null_binding_type;
     };
 
@@ -275,8 +279,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     };
 
     // Get the DFB bindings from the settings callback
-    // Sort them to ensure the file output is deterministic for the JIT build cache
-    // (aka the on-disk per-object dephash cache)
     settings.process_dataflow_buffer_binding_handles([&](const string& name,
                                                          uint16_t id,
                                                          bool is_relay,
@@ -299,8 +301,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             general_dfb_binding.entries.push_back(std::move(entry));
         }
     });
-    // TODO: fix this.
-    // sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+
+    // Sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
+    ranges::sort(general_dfb_binding.entries, [](const auto& a, const auto& b) { return a.name < b.name; });
+    ranges::sort(relay_dfb_binding.entries, [](const auto& a, const auto& b) { return a.name < b.name; });
 
     Binding semaphore_binding{
         .name = "SemaphoreBindingToken",
@@ -316,8 +321,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             .name = name,
             .args = {fmt::format("{}u", id), fmt::format("::SemScope::{}", sem_scope_enumerator(scope))}});
     });
-    // TODO: fix this ordering.
-    // sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+    ranges::sort(semaphore_binding.entries, [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the tensor binding handles from the settings callback
     // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
@@ -335,7 +339,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             },
     };
 
-    // TODO: ordering && hashing
     settings.process_tensor_binding_handles([&](const string& name,
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
@@ -361,7 +364,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         .programmatic_getter_config = ProgrammaticBindingTokenGetterConfig{},
     };
 
-    // TODO: ordering && hashing
     settings.process_scratchpad_binding_handles([&](const string& name,
                                                     uint32_t size_bytes,
                                                     uint32_t addr_crta_word,
@@ -387,8 +389,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         prefetcher_pipe_binding.entries.push_back(
             BindingEntry{.name = name, .args = {fmt::format("{}u", prefetcher_pipe_id)}});
     });
-    // TODO: ordering
-    // sort(pipe_entries.begin(), pipe_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+    ranges::sort(prefetcher_pipe_binding.entries, [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
 
@@ -530,16 +531,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Emit binding by namespace
     for (const auto& [namespace_, bindings] : bindings_by_namespace) {
-        // Here we group all the bindings by their namespace and emit them all at once.
+        // Bindings with the same namespace are emitted together.
         content << fmt::format("namespace {} {{\n", namespace_);
 
-        // Here the ordering of the bindings needs to be respected,
+        // The ordering of the bindings within a namespace needs to be respected,
         // as some bindings could depend on the others.
         //
         // e.g. tensor binding sequence depends on the tensor bindings.
         for (const auto& binding : bindings) {
             emit_binding_entries(binding->binding_type, binding->entries);
 
+            // Emit programmatic binding token getter.
             if (const auto& getter_config = binding->programmatic_getter_config) {
                 string_view null_binding_type = binding->binding_type;
                 if (const auto& nb_override = getter_config->null_binding_type) {
