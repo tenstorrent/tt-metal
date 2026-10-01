@@ -46,6 +46,9 @@ inline constexpr bool kGdnHoistReconfig = false;
 
 #if defined(GDN_TINV_SFPU)
 #include "api/compute/triangle_solve.h"
+inline constexpr bool kGdnTinvSfpu = true;
+#else
+inline constexpr bool kGdnTinvSfpu = false;
 #endif
 
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
@@ -184,7 +187,11 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool ski
 // them at many sites; kept out of line (one copy each) so the Ct == 2 prep program fits the kernel-config buffer.
 [[gnu::noinline]] inline void sfpu_sub_dst(uint32_t a, uint32_t b, uint32_t o) { sub_binary_tile(a, b, o); }
 [[gnu::noinline]] inline void sfpu_mul_dst(uint32_t a, uint32_t b, uint32_t o) { mul_binary_tile(a, b, o); }
-[[gnu::noinline]] inline void sfpu_exp_dst(uint32_t d) { exp_tile(d); }
+// Mode selects the faces the exp runs on: RC all four, C faces 0 and 2 (columns 0..15).
+template <VectorMode Mode = VectorMode::RC>
+[[gnu::noinline]] inline void sfpu_exp_dst(uint32_t d) {
+    exp_tile(d, Mode);
+}
 
 // ---- fused single-DST-pass prep blocks (C3). Each replaces a chain of one-op helper blocks whose
 // intermediates were packed to scratch and re-unpacked; here the FPU op lands in DST and the rest of
@@ -196,6 +203,9 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool ski
 // DST3, and DST2 = DST1 * DST3 -- dl as the exact fp32 product of the two exps, not the broadcast product whose
 // rounded factors cost ~1e-3 on the value that decays the state every chunk. Packs: decay -> o_decay[i],
 // decay_exp -> o_exp[i], decayfac -> o_fac[i], dl -> o_fac[Ct] (from tile 0's window; every row holds g_sum).
+// ColExp: exp faces 0 and 2 only; every reader of decay_exp and decayfac broadcasts column 0 (bcast_cols_mul*,
+// dl_tile), so faces 1 and 3 of o_exp / o_fac are never read.
+template <bool ColExp = false>
 inline void decay_all(
     uint32_t tril, uint32_t ones, uint32_t g, uint32_t o_decay, uint32_t o_exp, uint32_t o_fac, uint32_t Ct) {
     cb_reserve_back(o_decay, Ct);
@@ -213,9 +223,10 @@ inline void decay_all(
         }
         sub_binary_tile_init();
         sfpu_sub_dst(1, 0, 1);  // g_sum - decay_i
+        constexpr VectorMode kExpMode = ColExp ? VectorMode::C : VectorMode::RC;
         exp_tile_init();
-        sfpu_exp_dst(1);  // decayfac_i
-        sfpu_exp_dst(3);  // decay_exp_i
+        sfpu_exp_dst<kExpMode>(1);  // decayfac_i
+        sfpu_exp_dst<kExpMode>(3);  // decay_exp_i
         if (i == 0) {
             mul_binary_tile_init();
             sfpu_mul_dst(1, 3, 2);  // dl = decayfac_i * decay_exp_i = exp(g_sum)
@@ -777,7 +788,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         GDN_ZONE("pp_decay");
         // ---- P2: decay = tril@g, decay_exp, decayfac = exp(g_sum - decay), dl = exp(g_sum): one DST pass;
         // then decay_row ----
-        decay_all(cb.tril, cb.ones, cb.g, cb.decay, cb.decay_exp, cb.decayfac, ct);
+        decay_all<kGdnTinvSfpu && Ct == 1>(cb.tril, cb.ones, cb.g, cb.decay, cb.decay_exp, cb.decayfac, ct);
         WAIT(cb.decay, Ct);  // decay_exp / decayfac are waited for at pp_kd / pp_kdec
         POP(cb.g, Ct);
         transpose_col(cb.decay, cb.scr1, ct);  // decay_row in scr1
@@ -910,14 +921,13 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         bcast_cols_mul(Q, cb.decay_exp, cb.qdecay, ct, Kt);
         POP(Q, ck);
     }
-    // decay_exp kept alive: reused at the scan to recompute dl = exp(g_sum).
     {
         GDN_ZONE("pp_kdec");
         WAIT(cb.decayfac, Ct + 1);
         bcast_cols_mul(Kk, cb.decayfac, cb.scr1, ct, Kt);  // k * exp(decay_last-decay)
         WAIT(cb.scr1, ck);
         POP(Kk, ck);
-        // decayfac kept alive: reused at the scan to recompute dl = exp(g_sum).
+        // decayfac[Ct] (dl) is read at pp_dl.
         // k_dec_t = transpose(k_dec) [K,C]: transpose each [Ct,Kt] tile block into [Kt,Ct].
         cb_reserve_back(cb.kdec_t, Kt * Ct);
         pack_reconfig_data_format(cb.kdec_t);
