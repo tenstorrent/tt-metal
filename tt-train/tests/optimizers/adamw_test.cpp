@@ -7,6 +7,8 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <tt-metalium/bfloat16.hpp>
@@ -632,6 +634,45 @@ namespace {
 using AdamWDeviceOperation = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
 using AdamWAdapter = ttnn::device_operation::MeshDeviceOperationAdapter<AdamWDeviceOperation>;
 
+struct WritableAliasCase {
+    std::size_t first;
+    std::size_t second;
+    bool amsgrad;
+    std::string_view name;
+};
+
+constexpr std::array<WritableAliasCase, 6> kWritableAliasCases = {{
+    {0U, 1U, false, "param_exp_avg"},
+    {0U, 2U, false, "param_exp_avg_sq"},
+    {1U, 2U, false, "exp_avg_exp_avg_sq"},
+    {0U, 3U, true, "param_max_exp_avg_sq"},
+    {1U, 3U, true, "exp_avg_max_exp_avg_sq"},
+    {2U, 3U, true, "exp_avg_sq_max_exp_avg_sq"},
+}};
+
+std::array<ttnn::Tensor, 4> make_adamw_writable_tensors() {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    return {
+        make_adamw_test_tensor(shape, 1.0F),
+        make_adamw_test_tensor(shape, 0.1F),
+        make_adamw_test_tensor(shape, 0.2F),
+        make_adamw_test_tensor(shape, 0.3F),
+    };
+}
+
+void expect_only_selected_writable_pair_shares_backing_allocation(
+    const std::array<ttnn::Tensor, 4>& writable_tensors, const WritableAliasCase& alias_case) {
+    const std::size_t active_roles = alias_case.amsgrad ? writable_tensors.size() : writable_tensors.size() - 1U;
+    for (std::size_t first = 0; first < active_roles; ++first) {
+        for (std::size_t second = first + 1U; second < active_roles; ++second) {
+            const auto& first_root = writable_tensors[first].device_storage().get_root_mesh_buffer();
+            const auto& second_root = writable_tensors[second].device_storage().get_root_mesh_buffer();
+            const bool is_selected_pair = first == alias_case.first && second == alias_case.second;
+            EXPECT_EQ(&first_root == &second_root, is_selected_pair);
+        }
+    }
+}
+
 void expect_adamw_validation_error_on_miss_and_hit(
     const AdamWDeviceOperation::operation_attributes_t& attributes,
     const AdamWDeviceOperation::tensor_args_t& tensor_args,
@@ -679,6 +720,45 @@ TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
         /* beta2_pow */ 0.999f,
         /* epsilon */ 1e-8f,
         /* weight_decay */ 0.0f));
+}
+
+TEST_F(AdamWValidationTest, DirectValidationRejectsWritableStorageAliases) {
+    constexpr std::string_view expected_diagnostic = "must use distinct, non-overlapping device storage";
+    const ttnn::Shape shape{1, 1, 32, 32};
+    auto grad = make_adamw_test_tensor(shape, 0.4F);
+
+    for (const auto& alias_case : kWritableAliasCases) {
+        for (const bool use_view_alias : {false, true}) {
+            SCOPED_TRACE(alias_case.name);
+            SCOPED_TRACE(use_view_alias ? "same-shape view" : "tensor copy");
+
+            auto writable_tensors = make_adamw_writable_tensors();
+            if (use_view_alias) {
+                writable_tensors[alias_case.second] = writable_tensors[alias_case.first].reshape(
+                    writable_tensors[alias_case.first].logical_shape(),
+                    writable_tensors[alias_case.first].padded_shape());
+                ASSERT_NE(writable_tensors[alias_case.first].buffer(), writable_tensors[alias_case.second].buffer())
+                    << "view regression must exercise distinct Buffer wrappers";
+                ASSERT_EQ(
+                    writable_tensors[alias_case.first].buffer()->address(),
+                    writable_tensors[alias_case.second].buffer()->address());
+            } else {
+                writable_tensors[alias_case.second] = writable_tensors[alias_case.first];
+                ASSERT_EQ(writable_tensors[alias_case.first].buffer(), writable_tensors[alias_case.second].buffer());
+            }
+            expect_only_selected_writable_pair_shares_backing_allocation(writable_tensors, alias_case);
+
+            const auto attributes = AdamWDeviceOperation::operation_attributes_t{.amsgrad = alias_case.amsgrad};
+            const auto tensor_args = AdamWDeviceOperation::tensor_args_t{
+                .param = writable_tensors[0],
+                .grad = grad,
+                .exp_avg = writable_tensors[1],
+                .exp_avg_sq = writable_tensors[2],
+                .max_exp_avg_sq = alias_case.amsgrad ? std::make_optional(writable_tensors[3]) : std::nullopt,
+            };
+            expect_adamw_validation_error_on_miss_and_hit(attributes, tensor_args, expected_diagnostic);
+        }
+    }
 }
 
 TEST_F(AdamWValidationTest, RejectsNonCanonicalTileGeometry) {

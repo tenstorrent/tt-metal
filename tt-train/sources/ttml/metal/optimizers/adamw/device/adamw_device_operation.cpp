@@ -4,6 +4,7 @@
 
 #include "adamw_device_operation.hpp"
 
+#include <cstdint>
 #include <enchantum/enchantum.hpp>
 
 #include "adamw_program_factory.hpp"
@@ -137,6 +138,47 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
     if (max_exp_avg_sq.has_value()) {
         check_tensor(
             max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+    }
+
+    auto check_distinct_writable_storage =
+        [](const ttnn::Tensor& lhs, const std::string& lhs_name, const ttnn::Tensor& rhs, const std::string& rhs_name) {
+            const auto& lhs_root = lhs.device_storage().get_root_mesh_buffer();
+            const auto& rhs_root = rhs.device_storage().get_root_mesh_buffer();
+            const bool shares_backing_allocation = &lhs_root == &rhs_root;
+
+            const auto* lhs_buffer = lhs.buffer();
+            const auto* rhs_buffer = rhs.buffer();
+            const auto ranges_overlap =
+                [](uint64_t lhs_address, uint64_t lhs_size, uint64_t rhs_address, uint64_t rhs_size) {
+                    return lhs_address <= rhs_address ? rhs_address - lhs_address < lhs_size
+                                                      : lhs_address - rhs_address < rhs_size;
+                };
+            const bool overlaps_device_address =
+                ranges_overlap(lhs_buffer->address(), lhs_buffer->size(), rhs_buffer->address(), rhs_buffer->size());
+
+            TT_FATAL(
+                !shares_backing_allocation && !overlaps_device_address,
+                "AdamW writable tensors '{}' and '{}' must use distinct, non-overlapping device storage.",
+                lhs_name,
+                rhs_name);
+        };
+
+    check_distinct_writable_storage(param, "Parameter", exp_avg, "Exponential Average Buffer");
+    check_distinct_writable_storage(param, "Parameter", exp_avg_sq, "Exponential Average Squared Buffer");
+    check_distinct_writable_storage(
+        exp_avg, "Exponential Average Buffer", exp_avg_sq, "Exponential Average Squared Buffer");
+
+    if (max_exp_avg_sq.has_value()) {
+        const auto& max_exp_avg_sq_tensor = max_exp_avg_sq.value();
+        check_distinct_writable_storage(
+            param, "Parameter", max_exp_avg_sq_tensor, "Max Exponential Average Squared Buffer");
+        check_distinct_writable_storage(
+            exp_avg, "Exponential Average Buffer", max_exp_avg_sq_tensor, "Max Exponential Average Squared Buffer");
+        check_distinct_writable_storage(
+            exp_avg_sq,
+            "Exponential Average Squared Buffer",
+            max_exp_avg_sq_tensor,
+            "Max Exponential Average Squared Buffer");
     }
 }
 
