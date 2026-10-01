@@ -602,7 +602,8 @@ ttnn::Tensor repeat_force_codegen(
     // Never falls back to native, so a forced call measures codegen even where routing would demote it.
     TT_FATAL(
         repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, output_mem_config),
-        "repeat_force_codegen: this case fails repeat_codegen::supported_by_codegen; use ttnn::repeat to route it");
+        "repeat_force_codegen invoked for a case the codegen path does not support "
+        "(repeat_codegen::supported_by_codegen); use ttnn::repeat to route it");
     return repeat_via_codegen(working_tensor, working_repetition_vector, output_mem_config);
 }
 
