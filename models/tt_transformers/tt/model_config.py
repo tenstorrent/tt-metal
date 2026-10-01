@@ -1532,6 +1532,19 @@ class ModelArgs:
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
                     )
+                elif (
+                    self.device_name == "P150"
+                    and self.mlp2_core_grid.num_cores == 40
+                    and (self.hidden_dim // self.cluster_shape[1]) // (ttnn.TILE_SIZE * 40) % 4 == 0
+                ):
+                    # Sweep on P150 (FF2 32x15360x3840, 40 cores): in0_block_w=4 ran 127.3 us vs 131.5 us at 6.
+                    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                        in0_block_w=4,
+                        per_core_M=math.ceil(self.tile_padded_batch_rows / ttnn.TILE_SIZE),
+                        per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * 40)),
+                        fused_activation=None,
+                        num_workers_per_dram_bank=3,
+                    )
                 else:
                     return self.dram_matmul_config(
                         m=self.tile_padded_batch_rows,
