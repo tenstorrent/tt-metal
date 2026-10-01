@@ -175,8 +175,8 @@ Three prerequisites specific to this mode:
 - **Per-mesh-shape weight cache.** The tilized cache is keyed by mesh shape — the sub-meshes need
   `tensor_cache_bfp8_MeshShape([4, 4])` / `([2, 4])`, which the default checkpoint dir does not carry
   (populating takes ~1 h per shape, once; the ranks populate their own slices in parallel). Point
-  `TT_CACHE_PATH` at a root that has them — both shapes are currently populated at
-  `/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill` (its `[8, 4]` dir is empty, so do NOT use it for whole-galaxy runs).
+  `TT_CACHE_PATH` at a root that has them: `/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill`
+  carries `[2, 4]`, `[4, 4]` and `[8, 4]`, so one root serves both the sub-mesh and whole-galaxy runs.
 - **PRTE slot fix.** Multi-rank on one host under a Slurm allocation fails with "All nodes which are
   allocated for this job are already filled" (the galaxy advertises `CPUTot=1`). Before launching:
   ```bash
@@ -208,6 +208,13 @@ TT_CACHE_PATH=<pp-cache-root> PREFILL_MANIFEST=models/demos/minimax_m3/tt/runner
 
 The producer command is the multi-galaxy one with `PREFILL_SP=4` (2-stage) / `PREFILL_SP=2` (4-stage) —
 same plot/readout (`parse_iteration_times.py`, `plot_pipeline_trace`).
+
+For an A/B, read the steady state off the runner log:
+```bash
+python models/demos/minimax_m3/scripts/parse_pipeline_perf.py pp_intra4.log
+```
+It prints each rank's median inter-chunk gap (fill and drain chunks dropped), the bottleneck stage's ms/chunk and
+tok/s, and per-request TTFT p50/p90.
 
 ### Accuracy — KV PCC (merged mock)
 
