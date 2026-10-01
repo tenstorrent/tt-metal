@@ -51,11 +51,20 @@ def main(out: str) -> int:
 
     def checked_loop(runtime, kv_caches, *a, **k):
         log = (out / "producer.log").open("w")
-        cmd = [sys.executable, "-m", "models.demos.xing40_a4b_d_p.tests.bringup.contract.producer_case", str(out)]
+        # Under sh so the producer's exit code lands in <out>/producer.rc even on a crash: the parent test watches it,
+        # because this process cannot (the request loop spins in C++ holding the GIL; no thread or signal handler
+        # runs until a chunk arrives).
+        cmd = [
+            "/bin/sh",
+            "-c",
+            '"$0" -m models.demos.xing40_a4b_d_p.tests.bringup.contract.producer_case "$1"; echo $? > "$1/producer.rc"',
+            sys.executable,
+            str(out),
+        ]
         prod = subprocess.Popen(cmd, env=dict(os.environ), stdout=log, stderr=subprocess.STDOUT)
         try:
             loop(runtime, kv_caches, *a, **k)
-            rc = prod.wait(timeout=600)
+            rc = prod.wait(timeout=120)
             if rc != 0:
                 result["errors"].append(f"producer exited {rc} (see producer.log / producer.json)")
             pj = json.loads((out / "producer.json").read_text())
@@ -74,7 +83,7 @@ def main(out: str) -> int:
         finally:
             if prod.poll() is None:
                 prod.terminate()
-                prod.wait(timeout=60)
+                prod.wait(timeout=30)
             log.close()
             (out / "result.json").write_text(json.dumps(result, indent=1))
 
