@@ -25,12 +25,13 @@ from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.common import TOKENIZER
 from models.experimental.nomic_embed_text_v2_moe.reference.postprocessing import l2_normalize, mean_pool
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    LayerNormParameters,
     flatten_tokens,
     to_device,
     transpose_linear_weight,
     unflatten_tokens,
 )
-from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import dense_linear
+from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import SMALL_M_TILES, dense_linear
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -148,6 +149,35 @@ def test_layer_norm_fuses_the_post_norm_residual(device, tt_config, config, batc
     assert_with_pcc(ref, out, OPERATOR_PCC)
 
 
+@pytest.mark.parametrize("batch, seqlen", [(1, 128), (2, 512), (8, 512)])
+def test_layer_norm_reads_both_weight_forms_alike(device, tt_config, config, batch, seqlen):
+    """LayerNormParameters' tiled DRAM and row-major L1 forms give the same norm, bit for bit.
+
+    The norm takes the row-major copy above SMALL_M_TILES tile rows of M and the tiled one up to
+    it, so the choice has to be speed alone. 1x128 and 2x512 read the tiled form, 8x512 the
+    row-major one.
+    """
+    hidden = config.hidden_size
+    x = to_device(torch.randn(batch, 1, seqlen, hidden), device)
+    residual = to_device(torch.randn(batch, 1, seqlen, hidden), device)
+    parameters = LayerNormParameters(torch.randn(hidden), torch.randn(hidden), device, tt_config.weight_dtype)
+
+    def norm(weight, bias):
+        out = ttnn.layer_norm(
+            x,
+            residual_input_tensor=residual,
+            weight=weight,
+            bias=bias,
+            epsilon=config.layer_norm_epsilon,
+            compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
+        )
+        return ttnn.to_torch(out)
+
+    assert torch.equal(norm(*parameters.tiled), norm(*parameters.row_major))
+    wide = batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE) > SMALL_M_TILES
+    assert parameters.for_input(x) is (parameters.row_major if wide else parameters.tiled)
+
+
 # Projections.
 
 
@@ -261,21 +291,23 @@ def test_typecast(device, config):
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_mean_pool_excludes_padding(device, config, batch, seqlen):
-    """Mask-weighted mean over the sequence axis: ttnn.mul, ttnn.sum, ttnn.div.
+def test_mean_pool_excludes_padding(device, tt_config, config, batch, seqlen):
+    """Mask-weighted mean over the sequence axis: one batched ttnn.matmul of mask / count weights.
 
     Padding has to be excluded because the <pad> embedding is non-zero, so counting it would
-    make a text's embedding depend on its batch-mates.
+    make a text's embedding depend on its batch-mates. The divisor rides in the weights.
     """
     hidden = config.hidden_size
     x = torch.randn(batch, 1, seqlen, hidden)
     mask = torch.ones(batch, seqlen, dtype=torch.long)
     mask[0, (seqlen * 3) // 4 :] = 0
 
-    x_tt = to_device(x, device)
-    mask_tt = to_device(mask.reshape(batch, 1, seqlen, 1).float(), device)
-    pooled = ttnn.divide(
-        ttnn.sum(ttnn.multiply(x_tt, mask_tt), dim=2, keepdim=True), ttnn.sum(mask_tt, dim=2, keepdim=True)
+    weights = (mask / mask.sum(dim=1, keepdim=True)).reshape(batch, 1, 1, seqlen)
+    pooled = ttnn.matmul(
+        to_device(weights, device, dtype=ttnn.float32),
+        to_device(x, device),
+        dtype=ttnn.float32,
+        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.REDUCE),
     )
 
     ref = mean_pool(x.squeeze(1), mask).reshape(batch, 1, 1, hidden)
