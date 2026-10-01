@@ -98,6 +98,15 @@ def test_load_config_from_dictionary(expect_error):
     ttnn.load_config_from_dictionary({"no_such_key": 1}, from_file=True)
 
 
+def test_matmul_registry_mode_config():
+    for mode in (ttnn.MatmulRegistryMode.Off, ttnn.MatmulRegistryMode.Shadow, ttnn.MatmulRegistryMode.On):
+        ttnn.CONFIG.matmul_registry_mode = mode
+        assert ttnn.CONFIG.matmul_registry_mode == mode
+
+    ttnn.load_config_from_dictionary({"matmul_registry_mode": "shadow"})
+    assert ttnn.CONFIG.matmul_registry_mode == ttnn.MatmulRegistryMode.Shadow
+
+
 def test_saved_config_holds_exactly_the_overridable_keys(tmp_path):
     path = tmp_path / "config.json"
     ttnn.save_config_to_json_file(path)

@@ -33,6 +33,11 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
+      matmul-registry-mode:
+        required: false
+        type: string
+        default: "off"
+        description: "Matmul registry mode for test processes"
       tier:
         required: true
         type: string
@@ -186,6 +191,7 @@ jobs:
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
+        TTNN_CONFIG_OVERRIDES: '{"matmul_registry_mode":"${{ inputs.matmul-registry-mode }}"}'
       volumes:
         # The image owns /work, so no bind mount: one would mask the payload. A
         # single-path entry is an anonymous volume on an unused path.
@@ -322,5 +328,6 @@ jobs:
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode }}
       prefer-wheel-libs: ${{ inputs.prefer-wheel-libs }}
       summary-scope: ${{ inputs.summary-scope }}

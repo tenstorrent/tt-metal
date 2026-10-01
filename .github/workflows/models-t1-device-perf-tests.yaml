@@ -60,6 +60,15 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      matmul-registry-mode:
+        description: "Matmul registry mode"
+        required: false
+        type: choice
+        default: "off"
+        options:
+          - "off"
+          - "shadow"
+          - "on"
 
 permissions:
   packages: write
@@ -111,3 +120,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}

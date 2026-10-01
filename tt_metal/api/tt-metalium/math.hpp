@@ -5,10 +5,18 @@
 #pragma once
 
 #include <cassert>
+#include <concepts>
 #include <cstdint>
 #include <type_traits>
 
 namespace tt {
+
+// Matches the C23 ckd_mul contract: stores the wrapped product and returns
+// true exactly when the mathematical product is not representable in T.
+template <std::integral T>
+constexpr bool checked_mul(T* result, T lhs, T rhs) noexcept {
+    return __builtin_mul_overflow(lhs, rhs, result);
+}
 
 /**
  * @brief Computes the ceiling of a / b.
