@@ -22,6 +22,7 @@ pytestmark = pytest.mark.use_module_device
     "low, high, testing_dtype, expected_rtol, expected_atol",
     [
         (-87.3, 88.7, "float32", 1e-2, 1e-3),
+        (-80.0, 80.0, "bfloat16", 1.6e-2, 1e-3),
     ],
 )
 def test_exp_atol(input_shapes, low, high, testing_dtype, expected_rtol, expected_atol, device):

@@ -301,36 +301,13 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
-    // Number of instructions in one iteration of the loop body. Used by
-    // TTI_REPLAY/record and TTI_REPLAY/replay below; MUST match exactly the count of
-    // TTI_ instructions emitted between the TTI_REPLAY/record call and the
-    // replay loop, or the replay buffer will misalign.
-    //
-    //   Base body:                                                17
-    //     SFPLOAD, SFPMAD, SFPNOP, SFPSWAP, SFPNOP,
-    //     SFPEXEXP, SFPEXMAN8, SFPSHFT, SFPEXMAN9, SFPCAST,
-    //     SFPMAD poly1, SFPNOP, SFPMAD poly2,
-    //     SFPLOADI, SFPSETEXP, SFPSTORE. INCRWC
-    //   + SCALE_EN ? 1 : 0                  (SFPMULI scale + SFPNOP)
-    //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
-    //   + CLAMP_NEGATIVE ? 2 : 0            (SFPSWAP + SFPNOP)
-    constexpr unsigned BODY_LEN = 17 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1) + (CLAMP_NEGATIVE ? 2 : 0);
-
-    // Record the loop body into replay buffer slot 0 the first time
-    // through. Subsequent iterations replay the recorded sequence, which
-    // shrinks the unrolled kernel binary from ~ITERATIONS*BODY_LEN
-    // instructions down to BODY_LEN + (ITERATIONS - 1) replays.
-    //
-    // Per-element runtime is unchanged: the recorded instructions execute
-    // exactly as if they had been issued inline, and dst_reg is advanced
-    // by ADDR_MOD_6 inside the body so each replay walks to the next
-    // element correctly.
-    //
-    // The accurate path (APPROXIMATION_MODE=false) does not otherwise use
-    // the replay buffer, so slot 0 is free here. Callers that mix this
-    // function with other replay-buffer clients should ensure they don't
-    // require slot 0 to survive across the call.
-    TTI_REPLAY(0, BODY_LEN, 1, 1);
+    // SFPU owns replay slots [0, 16); matmul uses [16, 32). Record only the
+    // range-reduction prefix so EXP cannot overwrite a concurrent matmul's MOP.
+    // Base prefix: load, MAD, NOP, swap, NOP, EXEXP, EXMAN8, shift, EXMAN9, cast.
+    // Scaling adds MULI + NOP; lower clamping adds MOV + swap.
+    constexpr unsigned PREFIX_LEN = 10 + (SCALE_EN ? 2 : 0) + (CLAMP_NEGATIVE ? 2 : 0);
+    static_assert(PREFIX_LEN <= 16);
+    TTI_REPLAY(0, PREFIX_LEN, 1, 1);
 
     // val = sfpi::dst_reg[0]
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
@@ -374,43 +351,42 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // frac = convert<vFloat>(fractional_part, RoundMode::Nearest)
     TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
 
-    // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
-    //   frac = c0 + frac * (c1 + frac * c2)
-    //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
-    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-    TTI_SFPNOP;
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG1, 0);
-
-    // Refresh LREG2 = 255.0f for next iteration's upper-clamp. Hidden in
-    // the SFPMAD's 2-cycle latency window before LREG1 is consumed.
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
-
-    // y = setexp(frac, exponential_part) — recombine 2^x_i * 2^x_f.
-    constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
-    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
-
-    if constexpr (!is_fp32_dest_acc_en) {
-        // Round float32 -> bfloat16 using round-to-nearest before
-        // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
-        TTI_SFP_STOCH_RND(
-            sfpi::SFPSTOCHRND_RND_EVEN,
-            0,
-            p_sfpu::LREG0,
-            p_sfpu::LREG0,
-            p_sfpu::LREG0,
-            sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    }
-
-    // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-    TTI_INCRWC(0, 2, 0, 0);
-
 #pragma GCC unroll 8
-    for (std::uint32_t i = 1; i < ITERATIONS; i++) {
-        // Replay the recorded body for the remaining ITERATIONS - 1 elements.
-        // Each replay is one REPLAY-equivalent issue; the body executes as
-        // if it had been issued inline, dst_reg advancing via ADDR_MOD_6.
-        TTI_REPLAY(0, BODY_LEN, 0, 0);
+    for (std::uint32_t i = 0; i < ITERATIONS; i++) {
+        // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
+        //   frac = c0 + frac * (c1 + frac * c2)
+        //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG1, 0);
+
+        // Refresh LREG2 = 255.0f for next iteration's upper-clamp. Hidden in
+        // the SFPMAD's 2-cycle latency window before LREG1 is consumed.
+        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
+
+        // y = setexp(frac, exponential_part) — recombine 2^x_i * 2^x_f.
+        constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
+        TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            // Round float32 -> bfloat16 using round-to-nearest before
+            // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        }
+
+        // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+
+        if (i + 1 < ITERATIONS) {
+            TTI_REPLAY(0, PREFIX_LEN, 0, 0);
+        }
     }
 }
 
@@ -720,11 +696,7 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-template <
-    bool APPROXIMATION_MODE,
-    std::uint32_t scale,
-    bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
