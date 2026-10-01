@@ -52,7 +52,7 @@ struct handshake_info_t {
     uint8_t neighbor_device_id;  // Byte 6: Peer's device_id (populated via scratch[1])
     uint8_t padding0;            // Byte 7: Explicit padding for alignment
     uint32_t padding[2];         // Bytes 8-15: Ensures 16B alignment for scratch register
-    uint32_t scratch[4];         // Bytes 16-31: TODO: Can be removed if we use a stream register for handshaking.
+    uint32_t scratch[4];         // Bytes 16-31: Information that is sent to the peer
 };
 
 FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(

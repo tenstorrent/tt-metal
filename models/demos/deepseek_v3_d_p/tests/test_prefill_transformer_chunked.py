@@ -191,9 +191,9 @@ KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
 # Per-chunk baseline medians (seconds) for the perf gate, derived from completed Galaxy runs. Keyed by
-# (num_layers, n_chunks, num_iters) so only exact configs with CI numbers are gated; every other combo
+# (num_layers, n_chunks, num_iters) so only exact calibrated configs are gated; every other combo
 # in the sweep stays record-only. Each list has one entry per chunk (index c == chunk c). Recalibrate
-# from completed Galaxy CI runs that exercise the exact configuration, and record the source run.
+# from completed Galaxy runs using the exact CI configuration and flags, and record the source run.
 #
 # Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
 # `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two

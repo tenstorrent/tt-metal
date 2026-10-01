@@ -40,8 +40,7 @@ auto welford_split_work(
     const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input, uint32_t num_work_units) {
     return attrs.sub_core_grids.has_value()
                ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_work_units)
-               : tt::tt_metal::split_work_to_cores(
-                     input.mutable_device().compute_with_storage_grid_size(), num_work_units);
+               : tt::tt_metal::split_work_to_cores(input.device().compute_with_storage_grid_size(), num_work_units);
 }
 
 // Whether the second compute kernel exists. override_runtime_arguments cannot see the built
@@ -128,7 +127,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // sqrt value straddles a bf16 rounding boundary).
     bool narrow_scratch_to_bf16 = !is_std && dst_cb_data_format == tt::DataFormat::Float16_b;
 
-    tt_metal::distributed::MeshDevice& device = input.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = input.device();
 
     // Work division:
     // - W-reduce: Work is split by rows of the tile grid (NC * Ht work units).
