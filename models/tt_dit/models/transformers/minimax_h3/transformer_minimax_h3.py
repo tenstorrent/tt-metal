@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -201,6 +204,8 @@ class MiniMaxH3Transformer3DModel(Module):
         self.ccl_manager = ccl_manager
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
+        self._adaln_cache_enabled = os.environ.get("MINIMAX_H3_ADALN_CACHE") == "1"
+        self._modulation_cache: dict[tuple, list[list[ttnn.Tensor]]] = {}
         self._static_source_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
@@ -350,6 +355,9 @@ class MiniMaxH3Transformer3DModel(Module):
         logical_n: ttnn.Tensor,
         pad_to: int,
         traced: bool = False,
+        timestep_key: tuple | None = None,
+        adaln_tile_map: ttnn.Tensor | None = None,
+        adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -366,6 +374,8 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
         pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
+        timestep_key: hashable timestep vector, keys the adaLN schedule cache (eager path only).
+        adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP (tilerow gather).
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -405,6 +415,7 @@ class MiniMaxH3Transformer3DModel(Module):
         ts_state.update(as_indices(timestep_indices), traced=traced)
         timestep_idx = ts_state.value
 
+        tables = self.modulation_tables(temb, timestep_key) if (not traced and timestep_key is not None) else None
         hidden = self.run_blocks(
             hidden,
             logical_n,
@@ -412,6 +423,9 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_idx,
             rope_cos,
             rope_sin,
+            tables,
+            adaln_tile_map=adaln_tile_map,
+            adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             traced=traced,
             tracer_trace_key=pad_to,
         )
@@ -449,8 +463,13 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        tables: list[list[ttnn.Tensor]] | None = None,
+        adaln_tile_map: ttnn.Tensor | None = None,
+        adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        for block in self.transformer_blocks:
+        onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2])
+        tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2])
+        for i, block in enumerate(self.transformer_blocks):
             hidden = block(
                 hidden,
                 logical_n,
@@ -458,8 +477,36 @@ class MiniMaxH3Transformer3DModel(Module):
                 adaln_indices=adaln_indices,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
+                tables=tables[i] if tables is not None else None,
+                onehot=onehot,
+                tilerow=tilerow,
             )
+        ttnn.deallocate(onehot)
+        if tilerow is not None:
+            ttnn.deallocate(tilerow[1])
         return hidden
+
+    @property
+    def adaln_tilerow(self) -> bool:
+        """Whether forward wants `adaln_tile_map` / `adaln_expanded_indices` (MINIMAX_H3_ADALN_GATHER=tilerow)."""
+        return self.transformer_blocks[0]._adaln_gather == "tilerow"
+
+    def modulation_tables(self, temb: ttnn.Tensor, timestep_key: tuple) -> list[list[ttnn.Tensor]] | None:
+        """Per-block modulation tables for this timestep vector from the cache, building them on a miss.
+        Returns None when the cache is off or device memory ran out (the blocks then project per step)."""
+        if not self._adaln_cache_enabled:
+            return None
+        cached = self._modulation_cache.get(timestep_key)
+        if cached is None:
+            try:
+                cached = [block._modulation_tables(temb) for block in self.transformer_blocks]
+            except RuntimeError as exc:
+                logger.warning(f"adaLN schedule cache disabled: {str(exc)[:120]}")
+                self._adaln_cache_enabled = False
+                self._modulation_cache.clear()
+                return None
+            self._modulation_cache[timestep_key] = cached
+        return cached
 
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
