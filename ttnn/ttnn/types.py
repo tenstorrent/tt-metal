@@ -122,7 +122,6 @@ compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_
 # Metal 2.0 program spec types (the ttnn.generic_op spec overload)
 UnpackMode = ttnn._ttnn.program_spec.UnpackMode
 Precision = ttnn._ttnn.program_spec.Precision
-KernelBuildOptLevel = ttnn._ttnn.program_spec.KernelBuildOptLevel
 DFBEndpointType = ttnn._ttnn.program_spec.DFBEndpointType
 DFBAccessPattern = ttnn._ttnn.program_spec.DFBAccessPattern
 TensorSpecRelaxations = ttnn._ttnn.program_spec.TensorSpecRelaxations
