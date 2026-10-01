@@ -128,6 +128,9 @@ class TtKVCacheRing:
         self.vw = head_dim  # V width on the device (padded)
         self.chunk = None
         self._pending = None
+        # Optional kv_sink(k, v) called with each chunk's K/V [1, nkv, S/4, 192] before they are written here (the
+        # serving contract's migratable copy, tt/runners/kv_contract.py); set per chunk by the runtime, None = off.
+        self.kv_sink = None
         self.k = self._zeros()
         self.v = self._zeros()
         gs = max_seq if gather_seq is None else gather_seq
@@ -325,6 +328,8 @@ class TtFullAttention:
         return q, k, v
 
     def _write_cache(self, cache: TtKVCacheRing, k, v, start: int) -> None:
+        if getattr(cache, "kv_sink", None) is not None:
+            cache.kv_sink(k, v)
         for c_t, t in ((cache.k, k), (cache.v, v)):
             if t.dtype != c_t.dtype:
                 tc = ttnn.typecast(t, c_t.dtype)

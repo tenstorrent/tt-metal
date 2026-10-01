@@ -418,3 +418,21 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - The orchestrator's earlier run (on the hybrid) died writing the junit xml with "No space left on device", because the 32 GB cp4 expert cache was being written. The cache is now complete and 26 GB is free (known issue proposed).
 - Not run here: final norm and logits (the layer 0-5 subset does not end at the last layer). They follow the prior.
 - Re-run: `PYTHONPATH=$PWD BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py` (`BRINGUP_HYBRID=1` for the hybrid).
+
+## K.1 contract.1
+- Added `tt/runners/` (`adapter.py`, `kv_contract.py`). Registered `mimo_v2_6_d_p_cp4` in `common/prefill/adapter.py:ADAPTER_PATHS`. This is a port of the 1x4 TP prior's runners to CP=4.
+- Migratable KV layout (`MiMoContractKVCP`):
+  - Per chip, one K slab and one V slab: bf8 [users * layers, 1, max_seq/4, 1536], DRAM NdShard [1, 1, 32, 1536] ROUND_ROBIN_1D.
+  - All KV heads sit side by side (nlp_concat_heads order). Full layers hold 4 heads followed by 768 zero columns; V heads keep the attention's zero pad at columns 128..191.
+  - Positions are chunk-major across the chips, the same as the attention's ring cache. It is written with `update_padded_kv_cache(cluster_axis=1, kv_actual_global=start)`.
+  - Address table: config 0 = K, config 1 = V. Position p lives on chip (p % C) // (C/4) through a one-chip device group at MeshCoordinate(0, chip).
+- Why a separate slab: the ring cache is DRAM interleaved with no slot dim, so a table entry cannot address it (known issue proposed). A 1536-wide slab means one write per K/V per layer instead of one per head.
+- Hook: `TtKVCacheRing.kv_sink` (default None, so the ladder and hybrid paths are unchanged). `TtFullAttention._write_cache` calls it before the ring write; the sliding layers use the same method. The runtime sets the sink per (layer, chunk, slot) and clears it afterwards.
+- KV caches: `allocate_kv_cache` builds per-slot `TtKVCacheRing`s bound to the served chunk. Their ring-gather buffers come from the adapter's own `RingCCL`; the model's `RingCCL` supplies the semaphores.
+- Engine input: the whole chunk arrives replicated on every chip as [1, 1, chunk]. `ttnn.mesh_partition(dim=-1, cluster_axis=1)` gives each chip its CP slice, then `ttnn.minimum` (in TILE) clamps the 0xFFFFFFFF pad to V-1. The expert dispatch buffers are sized for the worst case, so pad rows cannot displace real tokens.
+- Acks: an event sync, then `sink(global layer, request_id)` after each block.
+- Gate (s4096, chunk 2048, layers 0-5, slot 1): PASS.
+  - contract_checks_failed 0, acks_early 0 (48 blocks checked).
+  - pcc_producer_kv_k 0.99996, pcc_producer_kv_v 0.99990.
+  - Test time 78 s.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`

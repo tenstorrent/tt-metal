@@ -327,6 +327,8 @@ ADAPTER_PATHS = {
     "mimo_v2_6_d_p": "models.demos.mimo_v2_6_d_p.tt.runners.adapter:MiMoPrefillAdapter",
     # MiMo-V2.6-Flash-RL on a 2x2 BH mesh (TP 4 over the flattened mesh, EP over 2 dispatch groups).
     "mimo_v2_6_d_p_2x2": "models.demos.mimo_v2_6_d_p_2x2.tt.runners.adapter:MiMo2x2PrefillAdapter",
+    # MiMo-V2.6-Flash-RL on a 1x4 BH mesh with context parallelism CP=4 (TP 1, EP 4, chunk-major CP KV slabs).
+    "mimo_v2_6_d_p_cp4": "models.demos.mimo_v2_6_d_p_cp4.tt.runners.adapter:MiMoCPPrefillAdapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
