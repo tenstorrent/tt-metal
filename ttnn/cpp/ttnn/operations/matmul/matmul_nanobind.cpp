@@ -166,7 +166,8 @@ void py_module(nb::module_& mod) {
            bool fuse_swiglu,
            bool glu_last_block,
            bool glu_sfpu_on_pack,
-           bool in0_single_buffer) {
+           bool in0_single_buffer,
+           bool in1_dual_sender) {
             std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
             std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
@@ -186,7 +187,8 @@ void py_module(nb::module_& mod) {
                 fuse_swiglu,
                 glu_last_block,
                 glu_sfpu_on_pack,
-                in0_single_buffer};
+                in0_single_buffer,
+                in1_dual_sender};
         },
         nb::kw_only(),
         nb::arg("compute_with_storage_grid_size"),
@@ -204,7 +206,8 @@ void py_module(nb::module_& mod) {
         nb::arg("fuse_swiglu").noconvert() = false,
         nb::arg("glu_last_block").noconvert() = false,
         nb::arg("glu_sfpu_on_pack").noconvert() = false,
-        nb::arg("in0_single_buffer").noconvert() = false);
+        nb::arg("in0_single_buffer").noconvert() = false,
+        nb::arg("in1_dual_sender").noconvert() = false);
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "compute_with_storage_grid_size",
@@ -342,13 +345,23 @@ void py_module(nb::module_& mod) {
         "in0_single_buffer", &MatmulMultiCoreReuseMultiCastProgramConfig::in0_single_buffer, R"doc(
         Size the in0 CB for one K block instead of two (saves L1; the in0 multicast can stall). Defaults to false.
     )doc");
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "in1_dual_sender", &MatmulMultiCoreReuseMultiCastProgramConfig::in1_dual_sender, R"doc(
+        Two in1 senders per column. Defaults to false.
+
+        Each in1 K block is split in two halves of in0_block_w / 2 K rows: the top-row core of a column reads and
+        multicasts half A, the bottom-row core half B (both over NOC_0), and every core of the column waits for
+        both halves. Shortens the in1 read/multicast chain per block; the result is bit-identical to the single
+        sender. Requires interleaved in0 / in1 / output, no bias, transpose_mcast=False, an even in0_block_w and
+        at least 3 core rows with no padding along M.
+    )doc");
     matmul_multi_core_reuse_multicast_program_config.def(
         "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_subblock_h={}, out_subblock_w={}, out_block_h={}, out_block_w={}, per_core_M={}, "
                 "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={}, "
-                "allowed_worker_cores={}{}{}{}{})",
+                "allowed_worker_cores={}{}{}{}{}{})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_subblock_h,
@@ -366,7 +379,8 @@ void py_module(nb::module_& mod) {
                 config.fuse_swiglu ? ", fuse_swiglu=True" : "",
                 config.glu_last_block ? ", glu_last_block=True" : "",
                 config.glu_sfpu_on_pack ? ", glu_sfpu_on_pack=True" : "",
-                config.in0_single_buffer ? ", in0_single_buffer=True" : "");
+                config.in0_single_buffer ? ", in0_single_buffer=True" : "",
+                config.in1_dual_sender ? ", in1_dual_sender=True" : "");
         });
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =

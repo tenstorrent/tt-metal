@@ -84,7 +84,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     bool fuse_swiglu = false,
     bool glu_last_block = false,
     bool glu_sfpu_on_pack = false,
-    bool in0_single_buffer = false) {
+    bool in0_single_buffer = false,
+    bool in1_dual_sender = false) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -360,11 +361,82 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
+    // Core ranges of the "other NOC" in1 / in0 receiver kernels (the right half of the grid). Both are the same
+    // range, except with in1_dual_sender (below).
+    CoreRangeSet in1_receiver_other_ranges;
+    CoreRangeSet in0_receiver_other_ranges;
+    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+        in1_receiver_other_ranges = CoreRangeSet(in0_receiver_in1_receiver_interleaved_other_cores.value());
+        in0_receiver_other_ranges = CoreRangeSet(in0_receiver_in1_receiver_interleaved_other_cores.value());
+    }
+
+    // in1_dual_sender: two in1 senders per column. The top-row core and the bottom-row core (both BRISC, NOC_0: the
+    // NoC the DRAM read responses come back on without sharing links with the in0 multicast, which runs on NOC_1; a
+    // second sender on NOC_1 reads DRAM 4x slower) each read and multicast half of the K rows of every in1 block to
+    // the other cores of the column. The bottom sender's multicast goes to the rows above it, i.e. wraps around the
+    // NoC torus in NOC_0's direction. The bottom row is therefore no in1 receiver; its NCRISC in0 kernels run on
+    // NOC_1 like those of the left half (NOC_0 is taken by its BRISC), also in the right half of the grid.
+    const std::size_t last_row_y = (std::size_t)start_core_y + num_cores_with_work_r - 1;
+    std::optional<CoreRange> in1_sender_bottom;
+    if (in1_dual_sender) {
+        TT_FATAL(!transpose_mcast, "in1_dual_sender does not support transpose_mcast");
+        TT_FATAL(!bias_mesh.has_value(), "in1_dual_sender does not support bias");
+        TT_FATAL(!fuse_op, "in1_dual_sender does not support fused ops");
+        TT_FATAL(
+            !in0_is_sharded && !in1_is_sharded && !output_is_sharded,
+            "in1_dual_sender requires interleaved in0, in1 and output");
+        TT_FATAL(
+            in0_block_w >= 2 && in0_block_w % 2 == 0,
+            "in1_dual_sender requires an even in0_block_w, got {}",
+            in0_block_w);
+        TT_FATAL(
+            num_cores_with_work_r >= 3,
+            "in1_dual_sender needs at least 3 core rows (per_core_M {} over M {} gives {})",
+            per_core_M,
+            M,
+            num_cores_with_work_r);
+        TT_FATAL(
+            M % per_core_M == 0 && per_core_M % out_block_h == 0,
+            "in1_dual_sender does not support padding along M (M {}, per_core_M {}, out_block_h {})",
+            M,
+            per_core_M,
+            out_block_h);
+        const std::size_t last_receiver_y = last_row_y - 1;
+        in1_sender_bottom = CoreRange(
+            {(std::size_t)start_core_x, last_row_y},
+            {(std::size_t)start_core_x + num_cores_with_work_c - 1, last_row_y});
+        // in1 receivers: rows 1 .. R-2 of the left column and of the left half; rows 1 .. R-2 of the right half.
+        in1_receiver_set.clear();
+        in1_receiver_set.insert(CoreRange(
+            {(std::size_t)start_core_x, (std::size_t)start_core_y + 1}, {(std::size_t)start_core_x, last_receiver_y}));
+        if (num_cores_with_work_c > 1) {
+            in1_receiver_set.insert(CoreRange(
+                {(std::size_t)start_core_x + 1, (std::size_t)start_core_y + 1},
+                {(std::size_t)start_core_x + half_core, last_receiver_y}));
+        }
+        if (split_half) {
+            in1_receiver_other_ranges = CoreRangeSet(CoreRange(
+                {(std::size_t)start_core_x + half_core + 1, (std::size_t)start_core_y + 1},
+                {(std::size_t)start_core_x + num_cores_with_work_c - 1, last_receiver_y}));
+        }
+        in1_receiver = CoreRangeSet(in1_receiver_set);
+        // in0 receivers: the right half's bottom row moves from the NOC_0 kernel to the NOC_1 one.
+        if (split_half) {
+            in0_receiver_interleaved_set.insert(CoreRange(
+                {(std::size_t)start_core_x + half_core + 1, last_row_y},
+                {(std::size_t)start_core_x + num_cores_with_work_c - 1, last_row_y}));
+            in0_receiver_interleaved = CoreRangeSet(in0_receiver_interleaved_set);
+            in0_receiver_other_ranges = in1_receiver_other_ranges;
+        }
+    }
+
     // Mcast args — semaphore IDs assigned sequentially (0, 1, 2, 3)
     uint32_t in0_mcast_sender_semaphore_id = 0;
     uint32_t in0_mcast_receiver_semaphore_id = 1;
     uint32_t in1_mcast_sender_semaphore_id = 2;
     uint32_t in1_mcast_receiver_semaphore_id = 3;
+    // in1_dual_sender: the "half 1 arrived" flag (in1_mcast_receiver_semaphore_id is the "half 0 arrived" flag)
+    uint32_t in1_mcast_receiver_semaphore_b_id = 4;
 
     bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
 
@@ -683,6 +755,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     if (in1_receiver.num_cores() == 0) {
         mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
     }
+    if (in1_dual_sender) {
+        mm_kernel_in1_sender_writer_defines["IN1_DUAL_SENDER"] = "1";
+        mm_kernel_in1_receiver_writer_defines["IN1_DUAL_SENDER"] = "1";
+        mm_kernel_in1_receiver_writer_other_noc_setup_defines["IN1_DUAL_SENDER"] = "1";
+    }
     if (in1_is_sharded) {
         if (in1_is_dram) {
             if (in1_is_width_sharded) {
@@ -784,6 +861,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     KernelDescriptor in0_mcast_no_work_kernel_desc;
     bool has_in0_mcast_no_work_kernel = false;
     KernelDescriptor in1_sender_writer_kernel_desc;
+    KernelDescriptor in1_sender_writer_bottom_kernel_desc;  // in1_dual_sender only
     KernelDescriptor in1_receiver_writer_kernel_desc;
     bool has_in1_receiver_writer_kernel = false;
     KernelDescriptor in0_receiver_kernel_desc;
@@ -868,6 +946,20 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     };
     in1_sender_writer_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+    if (in1_dual_sender) {
+        // Top sender: half 0 (its own flag is the semaphore of the receivers, the peer's is the "b" one). Bottom
+        // sender: half 1, with the two flags swapped, so that "receiver semaphore" is always the flag a sender
+        // multicasts.
+        in1_sender_writer_bottom_kernel_desc = in1_sender_writer_kernel_desc;
+        in1_sender_writer_bottom_kernel_desc.core_ranges = CoreRangeSet(in1_sender_bottom.value());
+        in1_sender_writer_bottom_kernel_desc.compile_time_args[11] = in1_mcast_receiver_semaphore_b_id;
+        in1_sender_writer_bottom_kernel_desc.named_compile_time_args.push_back({"in1_dual_half", 1});
+        in1_sender_writer_bottom_kernel_desc.named_compile_time_args.push_back(
+            {"in1_dual_peer_flag_sem", in1_mcast_receiver_semaphore_id});
+        in1_sender_writer_kernel_desc.named_compile_time_args.push_back({"in1_dual_half", 0});
+        in1_sender_writer_kernel_desc.named_compile_time_args.push_back(
+            {"in1_dual_peer_flag_sem", in1_mcast_receiver_semaphore_b_id});
+    }
 
     if (in1_receiver.num_cores() > 0) {
         has_in1_receiver_writer_kernel = true;
@@ -883,6 +975,10 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             {"cb_bias", tt::CBIndex::c_3},
             {"cb_out", tt::CBIndex::c_4},
         };
+        if (in1_dual_sender) {
+            in1_receiver_writer_kernel_desc.named_compile_time_args.push_back(
+                {"in1_dual_peer_flag_sem", in1_mcast_receiver_semaphore_b_id});
+        }
         in1_receiver_writer_kernel_desc.config =
             DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
     }
@@ -901,14 +997,13 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
     }
 
-    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+    if (in1_receiver_other_ranges.num_cores() > 0) {
         has_in1_receiver_writer_other_kernel = true;
         in1_receiver_writer_other_kernel_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
             "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp";
         in1_receiver_writer_other_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        in1_receiver_writer_other_kernel_desc.core_ranges =
-            CoreRangeSet(in0_receiver_in1_receiver_interleaved_other_cores.value());
+        in1_receiver_writer_other_kernel_desc.core_ranges = in1_receiver_other_ranges;
         in1_receiver_writer_other_kernel_desc.compile_time_args = in1_receiver_writer_compile_time_args;
         in1_receiver_writer_other_kernel_desc.defines =
             map_to_defines(mm_kernel_in1_receiver_writer_other_noc_setup_defines);
@@ -917,15 +1012,19 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             {"cb_bias", tt::CBIndex::c_3},
             {"cb_out", tt::CBIndex::c_4},
         };
+        if (in1_dual_sender) {
+            in1_receiver_writer_other_kernel_desc.named_compile_time_args.push_back(
+                {"in1_dual_peer_flag_sem", in1_mcast_receiver_semaphore_b_id});
+        }
         in1_receiver_writer_other_kernel_desc.config =
             DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_split_noc};
-
+    }
+    if (in0_receiver_other_ranges.num_cores() > 0) {
         has_in0_receiver_other_kernel = true;
         in0_receiver_other_kernel_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp";
         in0_receiver_other_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        in0_receiver_other_kernel_desc.core_ranges =
-            CoreRangeSet(in0_receiver_in1_receiver_interleaved_other_cores.value());
+        in0_receiver_other_kernel_desc.core_ranges = in0_receiver_other_ranges;
         in0_receiver_other_kernel_desc.compile_time_args = in0_receiver_compile_time_args;
         in0_receiver_other_kernel_desc.named_compile_time_args = {
             {"cb_in0", tt::CBIndex::c_0},
@@ -1212,6 +1311,10 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         .id = in1_mcast_sender_semaphore_id, .core_ranges = CoreRangeSet(all_cores), .initial_value = INVALID});
     desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
         .id = in1_mcast_receiver_semaphore_id, .core_ranges = CoreRangeSet(all_cores), .initial_value = INVALID});
+    if (in1_dual_sender) {
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = in1_mcast_receiver_semaphore_b_id, .core_ranges = CoreRangeSet(all_cores), .initial_value = INVALID});
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop)
@@ -1281,6 +1384,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         uint32_t in0_idx = core.y - start_core_y;
         uint32_t in1_idx = core.x - start_core_x;
 
+        // in1_dual_sender: the bottom row holds the second in1 sender
+        const bool dual_bottom_row = in1_dual_sender && core.y == last_row_y;
+
         auto in0_mcast_sender = left_core_physical;
         auto in1_mcast_sender = top_core_physical;
 
@@ -1296,6 +1402,16 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         auto in1_mcast_end = top_core_plus_one_physical;
         if (in1_noc == tt::tt_metal::NOC::NOC_0) {
             std::swap(in1_mcast_start, in1_mcast_end);
+        }
+        if (dual_bottom_row) {
+            // Second in1 sender: multicasts to the rows above it (rows 0 .. R-2 of the column, the top sender
+            // included), in the corner order of in1_noc (NOC_1: larger y first, NOC_0: smaller y first).
+            auto above_core_physical = device->worker_core_from_logical_core({core.x, last_row_y - 1});
+            in1_mcast_start = above_core_physical;
+            in1_mcast_end = top_core_physical;
+            if (in1_noc == tt::tt_metal::NOC::NOC_0) {
+                std::swap(in1_mcast_start, in1_mcast_end);
+            }
         }
 
         if (transpose_mcast) {
@@ -1372,8 +1488,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 (std::uint32_t)in0_mcast_sender.x,  // in0_mcast_sender_noc_x
                 (std::uint32_t)in0_mcast_sender.y   // in0_mcast_sender_noc_y
             };
-            // left half
-            if ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y)) {
+            // left half (with in1_dual_sender the bottom row's receivers all run on the left half's NOC)
+            if (dual_bottom_row || (core.x - start_core_x) <= half_core ||
+                (!transpose_mcast and core.y == start_core_y)) {
                 in0_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_receiver_args);
             }
             // right half
@@ -1384,12 +1501,16 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender
-            if (in0_idx == 0) {
+            if (in0_idx == 0 || dual_bottom_row) {
+                // The second in1 sender (in1_dual_sender) reads the second half of the K rows of every block.
+                const std::uint32_t in1_dual_half_row_offset =
+                    dual_bottom_row ? (std::uint32_t)(in0_block_w / 2) * in1_tensor_stride_h : 0u;
                 std::vector<uint32_t> mm_in1_sender_writer_args = {
                     // READER
                     // in1 tensor args
                     (std::uint32_t)in1_tensor.address(),
-                    (std::uint32_t)in1_tensor_start_tile_id_stride * in1_idx,  // in1_tensor_start_tile_id
+                    (std::uint32_t)in1_tensor_start_tile_id_stride * in1_idx +
+                        in1_dual_half_row_offset,  // in1_tensor_start_tile_id
                     // in1 mcast args
                     (std::uint32_t)in1_mcast_start.x,  // in1_mcast_dest_noc_start_x
                     (std::uint32_t)in1_mcast_start.y,  // in1_mcast_dest_noc_start_y
@@ -1525,6 +1646,12 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                         TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
                     }
                 }
+                if (in1_dual_sender) {
+                    // NoC coordinates of the other in1 sender of this column
+                    const auto peer_physical = dual_bottom_row ? top_core_physical : bottom_core_physical;
+                    mm_in1_sender_writer_args.push_back(peer_physical.x);
+                    mm_in1_sender_writer_args.push_back(peer_physical.y);
+                }
                 {
                     std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>>
                         in1_sender_variant(mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
@@ -1533,7 +1660,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     if (bias_mesh.has_value()) {
                         in1_sender_variant[18] = *bias_mesh;
                     }
-                    in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
+                    if (dual_bottom_row) {
+                        in1_sender_writer_bottom_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
+                    } else {
+                        in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
+                    }
                 }
 
                 // in1 receiver
@@ -1616,6 +1747,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 if (fuse_op && fused_op_signaler->is_reduce_scatter()) {
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_receiver_writer_args, in0_idx, in1_idx);
                 }
+                if (in1_dual_sender) {
+                    // NoC coordinates of the bottom-row (second) in1 sender of this column
+                    mm_in1_receiver_writer_args.push_back(bottom_core_physical.x);
+                    mm_in1_receiver_writer_args.push_back(bottom_core_physical.y);
+                }
 
                 {
                     std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>>
@@ -1643,6 +1779,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         desc.kernels.push_back(std::move(in0_mcast_no_work_kernel_desc));
     }
     desc.kernels.push_back(std::move(in1_sender_writer_kernel_desc));
+    if (in1_dual_sender) {
+        desc.kernels.push_back(std::move(in1_sender_writer_bottom_kernel_desc));
+    }
     if (has_in1_receiver_writer_kernel) {
         desc.kernels.push_back(std::move(in1_receiver_writer_kernel_desc));
     }
@@ -3263,8 +3402,8 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
         operation_attributes.program_config.value());
     TT_FATAL(
-        !program_config.fuse_swiglu && !program_config.in0_single_buffer,
-        "fuse_swiglu / in0_single_buffer are implemented only in the descriptor path "
+        !program_config.fuse_swiglu && !program_config.in0_single_buffer && !program_config.in1_dual_sender,
+        "fuse_swiglu / in0_single_buffer / in1_dual_sender are implemented only in the descriptor path "
         "(MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor), not in the legacy / CCL-fused 2D mcast "
         "builder");
 
@@ -3634,7 +3773,8 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
         program_config.fuse_swiglu,
         program_config.glu_last_block,
         program_config.glu_sfpu_on_pack,
-        program_config.in0_single_buffer);
+        program_config.in0_single_buffer,
+        program_config.in1_dual_sender);
 }
 
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>

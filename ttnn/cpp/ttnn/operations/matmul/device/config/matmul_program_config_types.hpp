@@ -48,6 +48,14 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     // in0 CB holds one K block instead of two (saves out_block_h * in0_block_w in0 tiles of L1 per core; the in0
     // multicast of block k+1 then waits for compute to release block k). Opt-in.
     bool in0_single_buffer = false;
+    // Two in1 senders per column (opt-in). Every in1 K block is split in two halves of in0_block_w / 2 K rows. The
+    // top-row core of each column reads and multicasts half A over NOC_0 (as the single sender does today), the
+    // bottom-row core reads half B and multicasts it to the rows above it (also NOC_0, wrapping around the NoC
+    // torus); every core of the column waits for both halves before it computes on the block. Same blocks, same K
+    // order, same CB layout: bit-exact vs a single sender. Needs the interleaved no-bias path, !transpose_mcast, an
+    // even in0_block_w and at least 3 core rows with no M padding. Last member so the struct stays a positional
+    // aggregate.
+    bool in1_dual_sender = false;
 };
 
 // 1D mcast matmul program config.

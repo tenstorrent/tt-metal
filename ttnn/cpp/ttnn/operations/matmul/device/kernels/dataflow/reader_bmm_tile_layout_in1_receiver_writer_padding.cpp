@@ -39,6 +39,12 @@ void kernel_main() {
     const uint32_t last_num_blocks_h_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 #endif
+#ifdef IN1_DUAL_SENDER
+    // Dual in1 sender (program config in1_dual_sender): NoC coordinates of the bottom-row sender of this column (the
+    // arguments above name the top-row sender).
+    const uint32_t in1_dual_sender2_noc_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in1_dual_sender2_noc_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+#endif
 
     // COMPILE TIME ARGS
     // READER
@@ -95,6 +101,21 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb_id_out0);
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+#ifdef IN1_DUAL_SENDER
+    // receiver_sem is the flag the top sender multicasts (half 0 of the in1 block), peer_flag_sem the bottom sender's.
+    Semaphore<> peer_flag_sem(get_named_compile_time_arg_val("in1_dual_peer_flag_sem"));
+    auto in1_dual_recv_block = [&]() {
+        dfb_in1.reserve_back(in1_block_num_tiles);
+        receiver_sem.set(INVALID);
+        peer_flag_sem.set(INVALID);
+        // Both senders multicast their half once they have an ack from every other core of the column.
+        sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
+        sender_sem.up(noc, in1_dual_sender2_noc_x, in1_dual_sender2_noc_y, 1);
+        receiver_sem.wait(VALID);
+        peer_flag_sem.wait(VALID);
+        dfb_in1.push_back(in1_block_num_tiles);
+    };
+#endif
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
@@ -125,6 +146,9 @@ void kernel_main() {
                 }
 #endif
                 for (uint32_t block = in1_first_block; block < num_blocks_inner_dim; ++block) {
+#ifdef IN1_DUAL_SENDER
+                    in1_dual_recv_block();
+#else
                     // Operand 1
                     dfb_in1.reserve_back(in1_block_num_tiles);
 
@@ -138,6 +162,7 @@ void kernel_main() {
                     receiver_sem.wait(VALID);
 
                     dfb_in1.push_back(in1_block_num_tiles);
+#endif  // IN1_DUAL_SENDER
                 }
 
 #ifdef FUSE_BIAS
@@ -164,11 +189,15 @@ void kernel_main() {
                 // the write phase of this out block. Matches the in1 sender kernel.
                 if constexpr (num_blocks_w_dim > 1) {
                     if (bw + 1 < num_blocks_w_dim) {
+#ifdef IN1_DUAL_SENDER
+                        in1_dual_recv_block();
+#else
                         dfb_in1.reserve_back(in1_block_num_tiles);
                         receiver_sem.set(INVALID);
                         sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
                         receiver_sem.wait(VALID);
                         dfb_in1.push_back(in1_block_num_tiles);
+#endif  // IN1_DUAL_SENDER
                         in1_first_prefetched = true;
                     }
                 }

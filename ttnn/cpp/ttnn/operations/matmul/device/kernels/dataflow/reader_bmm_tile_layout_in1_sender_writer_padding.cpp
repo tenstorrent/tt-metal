@@ -137,6 +137,12 @@ void kernel_main() {
 #ifndef OUT_SHARDED
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 #endif  // OUT_SHARDED
+#ifdef IN1_DUAL_SENDER
+    // Dual in1 sender (program config in1_dual_sender; interleaved, no bias, no fused op): NoC coordinates of the other
+    // sender of this column (the bottom-row core for the top sender, the top-row core for the bottom sender).
+    const uint32_t in1_dual_peer_noc_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in1_dual_peer_noc_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+#endif  // IN1_DUAL_SENDER
 
     constexpr bool fuse_op_all_gather = static_cast<bool>(get_compile_time_arg_val(30));
     constexpr bool fuse_op_reduce_scatter = static_cast<bool>(get_compile_time_arg_val(31));
@@ -253,6 +259,85 @@ void kernel_main() {
     uint64_t in1_start_address = dfb_in1.get_write_ptr();
 #endif  // IN1_SHARDED
 #endif  // SKIP_MCAST
+
+#ifdef IN1_DUAL_SENDER
+    // Two in1 senders per column. Every in1 K block (in1_block_h rows x in1_block_w tiles, row-major in the CB) is
+    // split in two halves of in1_block_h / 2 rows. Half 0 is read and multicast by the top-row core, half 1 by the
+    // bottom-row core; each half sits at its fixed offset of the block, so the CB layout, and therefore the compute
+    // kernel, is the same as with one sender. Each sender multicasts to the other cores of its column (the other sender
+    // included), whose "half flags" are the two semaphores receiver_sem (half 0) / peer_flag_sem (half 1) on the top
+    // sender and the receivers, swapped on the bottom sender (compile time args), so that `receiver_sem` is always the
+    // flag this core multicasts and `peer_flag_sem` the one the peer multicasts to it.
+    constexpr uint32_t in1_dual_half = get_named_compile_time_arg_val("in1_dual_half");
+    Semaphore<> peer_flag_sem(get_named_compile_time_arg_val("in1_dual_peer_flag_sem"));
+    constexpr uint32_t in1_dual_half_h = in1_block_h / 2;
+    constexpr uint32_t in1_dual_half_bytes = in1_dual_half_h * in1_block_w * in1_aligned_tile_size_bytes;
+    constexpr uint32_t in1_dual_half_offset = in1_dual_half * in1_dual_half_bytes;
+
+    // Read and multicast this core's half of one in1 block, wait for the other half, publish the block to compute.
+    // tile_id_start: first tile of this core's half (the row offset of half 1 is part of in1_tensor_start_tile_id);
+    // w_limit: tiles of a block row that exist (last_block_w for the last out block along N, else in1_block_w).
+    auto in1_dual_send_block = [&](uint32_t tile_id_start, uint32_t w_limit) {
+        dfb_in1.reserve_back(in1_block_num_tiles);
+        const uint32_t block_start_address = static_cast<uint32_t>(dfb_in1.get_write_ptr());
+        // This core receives the other half: invalidate its flag, then tell the peer this core's slot is free.
+        peer_flag_sem.set(INVALID);
+        sender_sem.up(noc, in1_dual_peer_noc_x, in1_dual_peer_noc_y, 1);
+
+        uint32_t in1_write_offset = in1_dual_half_offset;
+        uint32_t in1_tensor_row_start_tile_id = tile_id_start;
+        for (uint32_t h = 0; h < in1_dual_half_h; ++h) {
+            uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
+            for (uint32_t w = 0; w < in1_block_w; ++w) {
+                if (w < w_limit) {
+                    noc.async_read(
+                        s1,
+                        dfb_in1,
+                        in1_single_tile_size_bytes,
+                        {.page_id = in1_tensor_tile_id},
+                        {.offset_bytes = in1_write_offset});
+                }
+                in1_write_offset += in1_aligned_tile_size_bytes;
+                in1_tensor_tile_id += in1_tensor_stride_w;
+            }
+            in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+        }
+        noc.async_read_barrier();
+
+        // All in1_mcast_num_dests other cores of the column (receivers and the peer sender) have a free slot.
+        sender_sem.wait(in1_mcast_num_dests);
+        sender_sem.set(0);
+
+        const MulticastEndpoint mcast_dst;
+        const uint32_t half_address = block_start_address + in1_dual_half_offset;
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(half_address),
+            mcast_dst,
+            in1_dual_half_bytes,
+            in1_mcast_num_cores,
+            {},
+            {.noc_x_start = in1_mcast_dest_noc_start_x,
+             .noc_y_start = in1_mcast_dest_noc_start_y,
+             .noc_x_end = in1_mcast_dest_noc_end_x,
+             .noc_y_end = in1_mcast_dest_noc_end_y,
+             .addr = half_address},
+            true);
+#ifdef ARCH_BLACKHOLE
+        noc.async_writes_flushed();  // as in the single-sender path: the flag must not overtake the data
+#endif                               // ARCH_BLACKHOLE
+        receiver_sem.set_multicast(
+            noc,
+            in1_mcast_dest_noc_start_x,
+            in1_mcast_dest_noc_start_y,
+            in1_mcast_dest_noc_end_x,
+            in1_mcast_dest_noc_end_y,
+            in1_mcast_num_cores);
+
+        // The other half arrives by the peer's multicast.
+        peer_flag_sem.wait(VALID);
+        dfb_in1.push_back(in1_block_num_tiles);
+    };
+#endif  // IN1_DUAL_SENDER
 
     uint32_t l1_write_addr_sparsity = 0;
     if constexpr (batchB > 0) {
@@ -445,6 +530,12 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
+#elif defined(IN1_DUAL_SENDER)
+                        // Operand 1 - interleaved, two senders per column: read + multicast half the K rows (below)
+                        in1_dual_send_block(
+                            in1_tensor_current_inner_dim_block_start_tile_id,
+                            bw < num_blocks_w_dim - 1 ? in1_block_w : last_block_w);
+                        in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
                         dfb_in1.reserve_back(in1_block_num_tiles);
@@ -476,6 +567,7 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
+#ifndef IN1_DUAL_SENDER  // (in1_dual_send_block does the multicast and the push)
 #ifndef SKIP_MCAST
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
@@ -523,6 +615,7 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                         dfb_in1.push_back(in1_block_num_tiles);
 #endif  // IN1_SHARDED
+#endif  // IN1_DUAL_SENDER
 #ifdef ENABLE_GLOBAL_CB
                         if (block >= 1) {
                             while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
@@ -678,6 +771,12 @@ void kernel_main() {
                             const uint32_t bw_next = bw + 1;
                             uint32_t in1_la_inner_start_tile_id =
                                 in1_tensor_current_w_dim_block_tile_id + in1_tensor_next_w_dim_block_stride;
+#ifdef IN1_DUAL_SENDER
+                            in1_dual_send_block(
+                                in1_la_inner_start_tile_id,
+                                bw_next < num_blocks_w_dim - 1 ? in1_block_w : last_block_w);
+                            in1_first_prefetched = true;
+#else
                             // Operand 1 - interleaved
                             dfb_in1.reserve_back(in1_block_num_tiles);
                             uint32_t in1_write_offset = 0;
@@ -754,6 +853,7 @@ void kernel_main() {
                             dfb_in1.push_back(in1_block_num_tiles);
 #endif  // IN1_SHARDED
                             in1_first_prefetched = true;
+#endif  // IN1_DUAL_SENDER
                         }
                     }
 #endif  // MM_IN1_LOOKAHEAD

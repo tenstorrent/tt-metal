@@ -1522,6 +1522,38 @@ void validate_matmul_mcast2d_glu(
     TT_FATAL(!fp32_dest_acc_en, "{}: fuse_swiglu does not support fp32_dest_acc_en", config_name);
 }
 
+// Mcast2D two-in1-sender mode (in1_dual_sender): the top and bottom core of every column each read and multicast half
+// of the K rows of every in1 block. Only the interleaved, bias-free, non-transposed path is implemented. The
+// geometry checks that need the per-core shapes (>= 3 core rows, no padding along M) are in the program factory.
+void validate_matmul_mcast2d_in1_dual_sender(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& optional_bias,
+    const MatmulParams& attributes,
+    const operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& program_config) {
+    if (!program_config.in1_dual_sender) {
+        return;
+    }
+    const auto config_name = ttsl::get_type_name(program_config);
+    TT_FATAL(!optional_bias.has_value(), "{}: in1_dual_sender does not support bias", config_name);
+    TT_FATAL(!program_config.transpose_mcast, "{}: in1_dual_sender does not support transpose_mcast", config_name);
+    TT_FATAL(
+        program_config.in0_block_w >= 2 && program_config.in0_block_w % 2 == 0,
+        "{}: in1_dual_sender requires an even in0_block_w, got {}",
+        config_name,
+        program_config.in0_block_w);
+    TT_FATAL(
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+            input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "{}: in1_dual_sender requires interleaved input tensors",
+        config_name);
+    TT_FATAL(
+        attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "{}: in1_dual_sender requires an interleaved output, got: {}",
+        config_name,
+        attributes.output_mem_config.memory_layout());
+}
+
 // Mcast2D config: block-sharded 2D multicast. Validates that sharded input A, input B,
 // and the output have layouts, grids, and orientations consistent with a 2D multicast.
 void validate_matmul_mcast2d_config(
@@ -2459,6 +2491,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     in0_tile,
                     in1_tile,
                     program_config);
+                validate_matmul_mcast2d_in1_dual_sender(
+                    input_tensor_a, input_tensor_b, optional_bias, attributes, program_config);
                 validate_matmul_mcast2d_config(
                     input_tensor_a,
                     input_tensor_b,

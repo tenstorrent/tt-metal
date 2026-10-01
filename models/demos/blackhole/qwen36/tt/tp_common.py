@@ -425,7 +425,7 @@ def p300_prefill_mm(kind, device, M, K, N, in1_dtype=None, ckc=None, fp32_acc=No
         desc, mem = f"minimal_matmul(fuse_swiglu) 11x{rows} mb{mb} kb4 nb18 sb1x6", ttnn.L1_MEMORY_CONFIG
     else:
         bw, pcm, pcn, sh, sw = _P300_MCAST[kind]
-        _, pcm, sh = _p300_m_layout(M, _P300_GRID[1], sh)
+        rows, pcm, sh = _p300_m_layout(M, _P300_GRID[1], sh)
         if p300_enabled("SB13") and (kind in ("D1", "D2") or (kind == "D3" and out_dtype == ttnn.bfloat16)):
             bw, sh, sw = 16, 1, 3  # QWEN36_P300_SB13: same bw16 K blocking, 1x3 subblock (pcN 6 / 9 divisible by 3)
         cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -438,8 +438,11 @@ def p300_prefill_mm(kind, device, M, K, N, in1_dtype=None, ckc=None, fp32_acc=No
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=True,
+            in1_dual_sender=_dual_in1(rows, int(M) // 32, pcm),  # QWEN36_MM_DUAL_IN1 (default off)
         )
-        desc = f"2D mcast 11x10 bw{bw} pcM{pcm} pcN{pcn} sb{sh}x{sw} fuse_batch=True"
+        desc = f"2D mcast 11x10 bw{bw} pcM{pcm} pcN{pcn} sb{sh}x{sw} fuse_batch=True" + (
+            " in1_dual_sender" if cfg.in1_dual_sender else ""
+        )
         if kind == "B":
             mem = ttnn.L1_MEMORY_CONFIG
         elif kind == "C":
@@ -910,8 +913,9 @@ def r5_glu_sp_progcfg(x, w_gate_up, grid, compute_kernel_config):
         return None
     if getattr(compute_kernel_config, "fp32_dest_acc_en", True):
         return None
+    glu_rows = R5_GLU_SP_T // 32 // 4
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(_P300_GRID[0], R5_GLU_SP_T // 32 // 4),
+        compute_with_storage_grid_size=(_P300_GRID[0], glu_rows),
         in0_block_w=16,
         out_subblock_h=1,
         out_subblock_w=6,
@@ -926,6 +930,7 @@ def r5_glu_sp_progcfg(x, w_gate_up, grid, compute_kernel_config):
         glu_last_block=True,
         glu_sfpu_on_pack=True,
         in0_single_buffer=False,
+        in1_dual_sender=_dual_in1(glu_rows, R5_GLU_SP_T // 32, 4),  # QWEN36_MM_DUAL_IN1 (default off)
     )
 
 
@@ -940,7 +945,12 @@ def r5_glu_sp_progcfg(x, w_gate_up, grid, compute_kernel_config):
 #         each case: fewer bf16 L1-acc roundings in the K loop, not bit-exact). Deliberately excludes
 #         M1 S3 (GDN q|k|v in-proj, K2048 N6144): bw16 there overflows a kernel-config limit (TT_THROW
 #         in program.cpp), confirmed by P3_MMSWEEP.
-MM_FLAG_DEFAULTS = {"BW16": "0"}
+#   DUAL_IN1  QWEN36_MM_DUAL_IN1=1: the P300 prefill 2D-mcast configs (p300_prefill_mm kinds B, C, D1, D2, D3 and
+#         the R5 GLU_SP gate|up config) set in1_dual_sender=True: two in1 senders per column (the top and the bottom
+#         core row each read + multicast half of the K rows of every in1 block, over NOC_0 / NOC_1), which halves
+#         the in1 chain per K block and mostly shortens the pipeline fill. Same blocks, same K order, same CB layout:
+#         bit-exact vs a single sender. Only when the call has at least 3 core rows and no M padding.
+MM_FLAG_DEFAULTS = {"BW16": "0", "DUAL_IN1": "0"}
 
 
 def mm_value(item):
@@ -951,6 +961,12 @@ def mm_value(item):
 def mm_enabled(item):
     """True if the MM item is enabled: env QWEN36_MM_<item> != "0"."""
     return mm_value(item) != "0"
+
+
+def _dual_in1(rows, mt, per_core_m):
+    """QWEN36_MM_DUAL_IN1 for a 2D-mcast config on `rows` core rows (mt = M in tiles): True if the flag is on and the
+    in1_dual_sender preconditions on the geometry hold (>= 3 rows, no padding along M)."""
+    return mm_enabled("DUAL_IN1") and rows >= 3 and int(mt) % int(per_core_m) == 0
 
 
 # --- I-3 integration flags (2026-09-25; single device, single-user decode; plan_0925 task I-3) ------
