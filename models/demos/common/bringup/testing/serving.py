@@ -107,6 +107,26 @@ def check(spec, repo: Path) -> list[str]:
     return errs
 
 
+def run_tests(spec, repo: Path, gate: str = "all", runner=None) -> list[str]:
+    """Run the contract tests for one gate (or all of them) with the safe runner; the ones that failed. For a model
+    whose steps were built before its serving contract existed: one contract step runs them all."""
+    import subprocess
+
+    def default(cmd):
+        return subprocess.run(cmd, cwd=repo, shell=True).returncode
+
+    runner = runner or default
+    failed = []
+    for t in tests(spec):
+        if gate != "all" and t.get("gates") != gate:
+            continue
+        rc = runner(f"scripts/run_safe_pytest.sh --no-precompile --run-all {t['test']}")
+        print(f"{'PASS' if rc == 0 else 'FAIL'} {t['test']} ({t.get('checks', '')})", flush=True)
+        if rc != 0:
+            failed.append(t["test"])
+    return failed
+
+
 def main(argv=None) -> int:
     import argparse
 
@@ -115,7 +135,14 @@ def main(argv=None) -> int:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec")
-    spec = load_spec(ap.parse_args(argv).spec)
+    ap.add_argument("--run", metavar="GATE", help="run the contract tests of GATE (a step name, adapter, or all)")
+    a = ap.parse_args(argv)
+    spec = load_spec(a.spec)
+    if a.run:
+        failed = run_tests(spec, Path(spec.repo), a.run)
+        metrics.record("contract_tests_run", len([t for t in tests(spec) if a.run == "all" or t.get("gates") == a.run]))
+        metrics.record("contract_tests_failed", len(failed))
+        return 0 if not failed else 1
     errs = check(spec, Path(spec.repo))
     for e in errs:
         print(f"FAIL {e}")
