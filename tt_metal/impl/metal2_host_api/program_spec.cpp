@@ -3165,9 +3165,16 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         if (const auto& borrowed_from = dfb_by_name.at(dfb_binding.dfb_spec_name)->borrowed_from) {
             handle.borrowed_dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
             handle.borrowed_tensor_parameter_name = borrowed_from->get();
-            handle.is_producer = dfb_binding.endpoint_type == DFBEndpointType::PRODUCER;
+            handle.produces = dfb_binding.endpoint_type == DFBEndpointType::PRODUCER;
+            handle.consumes = !handle.produces;
         }
-        out.emplace(dfb_binding.accessor_name, handle);
+        // A self-loop pair may bind one DFB as PRODUCER and as CONSUMER under the same accessor name; that is one
+        // handle, on both sides.
+        auto [it, inserted] = out.try_emplace(dfb_binding.accessor_name, handle);
+        if (!inserted) {
+            it->second.produces |= handle.produces;
+            it->second.consumes |= handle.consumes;
+        }
     }
     return out;
 }

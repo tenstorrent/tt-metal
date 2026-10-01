@@ -519,8 +519,8 @@ ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device, const detail::Progra
     resolve_all(raw.reads, out.reads);
     resolve_all(raw.writes, out.writes);
     // A borrowed-memory DFB is the tensor's memory, but the kernel reaches it only as a DFB, so its device code can't
-    // note the tensor. The program says which tensor each DFB borrows and the binding says which side this kernel is
-    // on: the producer fills the entries (writes the tensor), the consumer drains them (reads it).
+    // note the tensor. The program says which tensor each DFB borrows and the binding says which side(s) this kernel
+    // is on: producing fills the entries (writes the tensor), consuming drains them (reads it).
     for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
         if (!handle.borrowed_dfb_id.has_value()) {
             continue;
@@ -530,7 +530,12 @@ ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device, const detail::Progra
             dfb != nullptr, "Borrowed-memory DFB {} bound as '{}' not found", *handle.borrowed_dfb_id, accessor_name);
         ResolvedBufRw::Access access{
             .param_name = handle.borrowed_tensor_parameter_name, .address = dfb->borrowed_addr_};
-        (handle.is_producer ? out.writes : out.reads).push_back(access);
+        if (handle.produces) {
+            out.writes.push_back(access);
+        }
+        if (handle.consumes) {
+            out.reads.push_back(access);
+        }
     }
     return out;
 }
