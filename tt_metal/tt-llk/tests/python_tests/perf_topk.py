@@ -35,7 +35,9 @@ PIPELINE_ROWS = [
     (4096, 32, DESC, "stable"),
     (4096, 32, DESC, "fused"),
 ]
-PIPELINE_IDS = [f"w{w}-k{k}-{'desc' if d == DESC else 'asc'}-{m}" for w, k, d, m in PIPELINE_ROWS]
+PIPELINE_IDS = [
+    f"w{w}-k{k}-{'desc' if d == DESC else 'asc'}-{m}" for w, k, d, m in PIPELINE_ROWS
+]
 
 
 @pytest.mark.perf
@@ -50,7 +52,12 @@ def test_perf_topk_pipeline(perf_report, row):
     PerfConfig(
         "sources/topk_perf.cpp",
         formats,
-        run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE, PerfRunType.MATH_ISOLATE, PerfRunType.PACK_ISOLATE],
+        run_types=[
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+        ],
         templates=[
             DEST_SYNC(),
             TOPK(
@@ -80,5 +87,7 @@ def test_perf_topk_pipeline(perf_report, row):
         ),
         unpack_to_dest=False,
         # Fused and rank-stamped keys are 32-bit words.
-        dest_acc=DestAccumulation.Yes if (fused or rank_stamped) else DestAccumulation.No,
+        dest_acc=(
+            DestAccumulation.Yes if (fused or rank_stamped) else DestAccumulation.No
+        ),
     ).run(perf_report)

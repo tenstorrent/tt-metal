@@ -27,14 +27,32 @@ RING_TILES = 16
 
 # (W, K, direction, sort mode, phase, drop_copy, tile0_sorted)
 PHASE_ROWS = (
-    [(4096, 32, DESC, "unstable", ph, True, False) for ph in ("full", "sort", "merge", "rebuild", "copy")]
+    [
+        (4096, 32, DESC, "unstable", ph, True, False)
+        for ph in ("full", "sort", "merge", "rebuild", "copy")
+    ]
     + [(4096, 32, DESC, "unstable", ph, False, False) for ph in ("full", "copy")]
-    + [(4096, 64, DESC, "unstable", ph, True, False) for ph in ("full", "sort", "merge", "rebuild")]
-    + [(4096, 32, DESC, "stable", ph, True, False) for ph in ("sort", "merge", "rebuild")]
-    + [(4096, 32, DESC, "fused", ph, True, False) for ph in ("sort", "merge", "rebuild", "fuse")]
-    + [(4096, 32, DESC, "rank_stamped", ph, True, False) for ph in ("sort", "merge", "rebuild")]
+    + [
+        (4096, 64, DESC, "unstable", ph, True, False)
+        for ph in ("full", "sort", "merge", "rebuild")
+    ]
+    + [
+        (4096, 32, DESC, "stable", ph, True, False)
+        for ph in ("sort", "merge", "rebuild")
+    ]
+    + [
+        (4096, 32, DESC, "fused", ph, True, False)
+        for ph in ("sort", "merge", "rebuild", "fuse")
+    ]
+    + [
+        (4096, 32, DESC, "rank_stamped", ph, True, False)
+        for ph in ("sort", "merge", "rebuild")
+    ]
     + [(4096, 64, DESC, m, "sort", True, False) for m in ("stable", "rank_stamped")]
-    + [(4096, 64, DESC, m, "sort", True, True) for m in ("unstable", "stable", "rank_stamped")]
+    + [
+        (4096, 64, DESC, m, "sort", True, True)
+        for m in ("unstable", "stable", "rank_stamped")
+    ]
 )
 PHASE_IDS = [
     f"w{w}-k{k}-{m}-{ph}{'-nocopy' if drop else ''}{'-tile0sorted' if t0 else ''}"
@@ -65,7 +83,11 @@ def test_perf_topk_phase(perf_report, row):
                 topk_fused_stable=fused,
                 topk_rank_stamped=rank_stamped,
             ),
-            TOPK_PERF(topk_phase=phase, topk_drop_copy=drop_copy, topk_tile0_sorted=tile0_sorted),
+            TOPK_PERF(
+                topk_phase=phase,
+                topk_drop_copy=drop_copy,
+                topk_tile0_sorted=tile0_sorted,
+            ),
         ],
         runtimes=[
             INPUT_DIMENSIONS(1, 2 * wt),
@@ -83,5 +105,7 @@ def test_perf_topk_phase(perf_report, row):
             tile_count_res=RING_TILES,
         ),
         unpack_to_dest=False,
-        dest_acc=DestAccumulation.Yes if (fused or rank_stamped) else DestAccumulation.No,
+        dest_acc=(
+            DestAccumulation.Yes if (fused or rank_stamped) else DestAccumulation.No
+        ),
     ).run(perf_report)

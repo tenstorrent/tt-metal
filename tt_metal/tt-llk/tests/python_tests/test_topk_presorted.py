@@ -7,7 +7,6 @@ the skipping build sort the same slab and are compared bit for bit, the full one
 
 from dataclasses import dataclass
 
-import pytest
 import torch
 from conftest import skip_for_quasar
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -25,7 +24,6 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
 )
 from test_topk import (
-    NUM_STAGES,
     prepare_input_tensor_for_topk,
     transform_result_tensor_to_right_form,
 )
@@ -64,15 +62,23 @@ def _row_values(stimuli_class, row):
     if stimuli_class == "all_equal":
         return torch.full((W_VALUES,), 1.0, dtype=torch.bfloat16)
     if stimuli_class == "few_levels":
-        levels = torch.tensor([0.5, -1.0, 2.0, -0.25] * (W_VALUES // 4), dtype=torch.bfloat16)
+        levels = torch.tensor(
+            [0.5, -1.0, 2.0, -0.25] * (W_VALUES // 4), dtype=torch.bfloat16
+        )
     elif stimuli_class == "neg_ties":
-        levels = torch.tensor([-0.5, -1.0, -1.5, -2.0] * (W_VALUES // 4), dtype=torch.bfloat16)
+        levels = torch.tensor(
+            [-0.5, -1.0, -1.5, -2.0] * (W_VALUES // 4), dtype=torch.bfloat16
+        )
     elif stimuli_class == "signed_zero":
-        levels = torch.tensor([0.0, -0.0, 1.0, -1.0] * (W_VALUES // 4), dtype=torch.bfloat16)
+        levels = torch.tensor(
+            [0.0, -0.0, 1.0, -1.0] * (W_VALUES // 4), dtype=torch.bfloat16
+        )
     elif stimuli_class == "ascending":
         return torch.arange(0, W_VALUES, dtype=torch.float32).to(torch.bfloat16)
     elif stimuli_class == "descending":
-        return torch.arange(W_VALUES - 1, -1, -1, dtype=torch.float32).to(torch.bfloat16)
+        return torch.arange(W_VALUES - 1, -1, -1, dtype=torch.float32).to(
+            torch.bfloat16
+        )
     else:
         raise ValueError(f"unknown stimuli class {stimuli_class}")
     perm = torch.randperm(W_VALUES, generator=generator)
@@ -89,7 +95,9 @@ def _canonical(values):
 def _stable_order(values, tie_keys, descending):
     """Positions ordered by the value in the sort direction, equal values by tie_keys ascending."""
     by_key = torch.argsort(tie_keys.to(torch.int64), stable=True)
-    by_value = torch.argsort(values[by_key].to(torch.float32), descending=descending, stable=True)
+    by_value = torch.argsort(
+        values[by_key].to(torch.float32), descending=descending, stable=True
+    )
     return by_key[by_value]
 
 
@@ -98,16 +106,29 @@ def _golden_second_sort(row_values, descending, tie_by_position):
     Stable ties by the index tile, rank-stamped ties by slab position."""
     values = _canonical(row_values)
     indices = torch.arange(W_VALUES)
-    order = _stable_order(values, indices, descending)  # first sort: the positions are the indices
+    order = _stable_order(
+        values, indices, descending
+    )  # first sort: the positions are the indices
     top_values = values[order][:32]
     top_indices = indices[order][:32]
     values2 = torch.cat([top_values, values[32:]])
     indices2 = torch.cat([top_indices, indices[32:]])
-    order2 = _stable_order(values2, torch.arange(W_VALUES) if tie_by_position else indices2, descending)
+    order2 = _stable_order(
+        values2, torch.arange(W_VALUES) if tie_by_position else indices2, descending
+    )
     return values2[order2], indices2[order2]
 
 
-def _config(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, tile0_sorted):
+def _config(
+    formats,
+    sort_direction,
+    sort_mode,
+    src_A,
+    tile_cnt_A,
+    src_B,
+    tile_cnt_B,
+    tile0_sorted,
+):
     return TestConfig(
         test_name="sources/topk_presorted_test.cpp",
         formats=formats,
@@ -124,7 +145,9 @@ def _config(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_c
             TOPK_PRESORTED(tile0_sorted=tile0_sorted),
         ],
         runtimes=[
-            INPUT_DIMENSIONS(INPUT_DIMENSIONS_SLAB[0] // 32, INPUT_DIMENSIONS_SLAB[1] // 32),
+            INPUT_DIMENSIONS(
+                INPUT_DIMENSIONS_SLAB[0] // 32, INPUT_DIMENSIONS_SLAB[1] // 32
+            ),
             TILE_COUNT(tile_cnt_A),
         ],
         variant_stimuli=StimuliConfig(
@@ -137,16 +160,22 @@ def _config(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_c
             tile_count_B=tile_cnt_B,
             tile_count_res=SLAB_TILES,
         ),
-        dest_acc=DestAccumulation.Yes if sort_mode == "rank_stamped" else DestAccumulation.No,
+        dest_acc=(
+            DestAccumulation.Yes if sort_mode == "rank_stamped" else DestAccumulation.No
+        ),
         unpack_to_dest=False,
     )
 
 
 def _run(configuration, formats):
-    res = torch.tensor(configuration.run().result, dtype=format_dict[formats.output_format])
+    res = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    )
     res = transform_result_tensor_to_right_form(res, formats, 64, INPUT_DIMENSIONS_SLAB)
     untilizer = get_golden_generator(UntilizeGolden)
-    rows = untilizer(res, formats.output_format, [INPUT_DIMENSIONS_SLAB[0], 2 * W_VALUES]).reshape(INPUT_DIMENSIONS_SLAB[0], 2 * W_VALUES)
+    rows = untilizer(
+        res, formats.output_format, [INPUT_DIMENSIONS_SLAB[0], 2 * W_VALUES]
+    ).reshape(INPUT_DIMENSIONS_SLAB[0], 2 * W_VALUES)
     values = rows[:, :W_VALUES].contiguous()
     indices = rows[:, W_VALUES:].contiguous().view(torch.uint16).to(torch.int64)
     return values, indices
@@ -157,7 +186,9 @@ def _run(configuration, formats):
     sort_mode=["unstable", "stable", "rank_stamped"],
     stimuli_class=STIMULI_CLASSES,
 )
-def test_topk_presorted(sort_direction: TopKSortDirection, sort_mode: str, stimuli_class: str):
+def test_topk_presorted(
+    sort_direction: TopKSortDirection, sort_mode: str, stimuli_class: str
+):
     formats: InputOutputFormat = input_output_formats([DataFormat.Float16_b])[0]
     descending = sort_direction == TopKSortDirection.Descending
     torch.manual_seed(0)
@@ -171,37 +202,57 @@ def test_topk_presorted(sort_direction: TopKSortDirection, sort_mode: str, stimu
         spec_A=StimuliSpec.uniform(low=0.0, high=1.0),
         spec_B=StimuliSpec.uniform(low=0.0, high=1.0),
     )
-    row_values = torch.stack([_row_values(stimuli_class, row) for row in range(num_rows)])
+    row_values = torch.stack(
+        [_row_values(stimuli_class, row) for row in range(num_rows)]
+    )
     src_A = src_A.clone().view(num_rows, num_cols)
     src_A[:, :W_VALUES] = row_values.to(src_A.dtype)
     src_A = src_A.flatten()
     src_A = prepare_input_tensor_for_topk(src_A, formats, INPUT_DIMENSIONS_SLAB)
 
     # Both builds are prepared before either runs: the compile-producer pass ends the test at the first run().
-    full = _config(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, False)
-    skip = _config(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, True)
+    full = _config(
+        formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, False
+    )
+    skip = _config(
+        formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, True
+    )
     full.prepare()
     skip.prepare()
     full_values, full_indices = _run(full, formats)
     skip_values, skip_indices = _run(skip, formats)
 
     # The two builds against each other, bit for bit.
-    assert torch.equal(full_values.view(torch.int16), skip_values.view(torch.int16)), "the values of the two sorts differ"
+    assert torch.equal(
+        full_values.view(torch.int16), skip_values.view(torch.int16)
+    ), "the values of the two sorts differ"
     if sort_mode in ("stable", "rank_stamped"):
-        assert torch.equal(full_indices, skip_indices), "the indices of the two stable sorts differ"
+        assert torch.equal(
+            full_indices, skip_indices
+        ), "the indices of the two stable sorts differ"
     else:
         for row in range(num_rows):
             distinct = torch.unique(_canonical(row_values[row])).numel() == W_VALUES
             if distinct:
-                assert torch.equal(full_indices[row], skip_indices[row]), f"row {row} without equal values: the indices differ"
+                assert torch.equal(
+                    full_indices[row], skip_indices[row]
+                ), f"row {row} without equal values: the indices differ"
 
     # The full sort against its golden.
     for row in range(num_rows):
-        expected_values, expected_indices = _golden_second_sort(row_values[row], descending, sort_mode == "rank_stamped")
+        expected_values, expected_indices = _golden_second_sort(
+            row_values[row], descending, sort_mode == "rank_stamped"
+        )
         got_values = full_values[row].to(torch.float32)
-        assert torch.equal(got_values, expected_values), f"row {row}: values differ from the golden"
+        assert torch.equal(
+            got_values, expected_values
+        ), f"row {row}: values differ from the golden"
         if sort_mode in ("stable", "rank_stamped"):
-            assert torch.equal(full_indices[row], expected_indices), f"row {row}: indices differ from the stable golden"
+            assert torch.equal(
+                full_indices[row], expected_indices
+            ), f"row {row}: indices differ from the stable golden"
         else:
             source = _canonical(row_values[row])
-            assert torch.equal(source[full_indices[row]], got_values), f"row {row}: an index does not name its value"
+            assert torch.equal(
+                source[full_indices[row]], got_values
+            ), f"row {row}: an index does not name its value"
