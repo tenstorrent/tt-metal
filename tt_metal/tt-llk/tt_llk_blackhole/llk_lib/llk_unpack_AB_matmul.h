@@ -18,13 +18,6 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-// RISC-side mirror of the streamed tile stride held in SCRATCH_SEC0_val (16-byte words), the value the CFGSHIFTMASK of
-// the replay adds to the streamed operand's base address after every tile. 0xFFFFFFFF marks an unknown value:
-// _llk_unpack_AB_matmul_init_ resets it (another op may have written the register in between) and the next call
-// reloads the register from the tile size GPRs.
-constexpr std::uint32_t MATMUL_UNP_UNKNOWN    = 0xFFFFFFFF;
-static std::uint32_t matmul_unp_stream_stride = MATMUL_UNP_UNKNOWN;
-
 /**
  * @brief Set the SrcA address step used to stream matmul in1 columns.
  *
@@ -39,16 +32,14 @@ inline void _llk_unpack_AB_matmul_set_in1_column_stride_(const std::uint32_t til
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size * stride_tiles), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
 }
 
+// RISC-side copy of the streamed tile stride in SCRATCH_SEC0_val (16-byte words); MATMUL_UNP_UNKNOWN after an init, since another op
+// may have written the register.
+constexpr std::uint32_t MATMUL_UNP_UNKNOWN    = 0xFFFFFFFF;
+static std::uint32_t matmul_unp_stream_stride = MATMUL_UNP_UNKNOWN;
+
 /**
- * @brief Record the replay body for one streamed tile of a matmul row.
- *
- * The body is the UNPACR group that moves one tile into SRC (one full-tile UNPACR, or a zero-source NOP,
- * two face UNPACRs and a Z counter reset for a partial face), then the L1 base address advance of that
- * unpacker, then the NOP that covers the two cycles of the config write before the next UNPACR reads the
- * base address. The advance is a single CFGSHIFTMASK that adds SCRATCH_SEC0_val to CFG_REG (the base
- * address register of one config context); @ref _llk_unpack_AB_matmul_ keeps the scratch register loaded
- * with the streamed operand's tile stride. Under kernel broadcast the advance is a NOP so the same tile is
- * re-read.
+ * @brief Record the replay body for one streamed tile of a matmul row: the UNPACR group, the base address advance of that unpacker
+ *        (CFGSHIFTMASK adding SCRATCH_SEC0_val to CFG_REG; a NOP under kernel broadcast) and the NOP that covers the config write.
  *
  * @tparam SRC: SrcA or SrcB, the source register (and unpacker) of the streamed operand.
  * @tparam CFG_REG: Base address register of the streamed operand's unpacker in the config context this copy serves.
@@ -72,9 +63,7 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face)
 
     if constexpr (ADVANCE)
     {
-        // CFG_REG = CFG_REG + SCRATCH_SEC0_val (operation 0b011 is add, the mask covers all 32 bits, scratch_sel 0 is
-        // SCRATCH_SEC0). One two-cycle instruction instead of RDCFG, ADDDMAREG, STALLWAIT and WRCFG, whose wait
-        // for the THCON add held the thread for about 16 cycles per streamed tile, twice the data time of an 8-bit tile.
+        // CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask, scratch_sel 0)
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, CFG_REG);
     }
     else
@@ -108,8 +97,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
     // in1/inB - loaded to SrcA
 
     const bool reuse_a = ct_dim >= rt_dim;
-    // Two copies of the streamed tile body, one per config context: the UNPACR group (1 or 4 instructions), the
-    // base address advance and the NOP.
+    // two copies of the streamed tile body, one per config context (6 instructions each for a partial face, 3 otherwise)
     const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 12 : ((!reuse_a && unpB_partial_face) ? 12 : 6);
     const std::uint32_t replay_buf_run_len  = replay_buf_prog_len / 2;
 
@@ -160,9 +148,8 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @brief Initialize the unpacker for a matmul (A x B) operation.
  *
  * Re-enables within-face transpose if needed, programs per-unpacker datum counts (full-tile or
- * face-by-face for partial faces), stashes kt_dim into a GPR for tile-size scaling, forgets the
- * streamed tile stride the last matmul call programmed (the first call reloads it), and programs
- * the matmul MOP.
+ * face-by-face for partial faces), stashes kt_dim into a GPR for tile-size scaling, resets the recorded
+ * streamed tile stride, and programs the matmul MOP.
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
@@ -234,7 +221,6 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
-    // Another op may have written the scratch register since the last matmul call.
     matmul_unp_stream_stride = MATMUL_UNP_UNKNOWN;
 
     _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
@@ -280,15 +266,8 @@ inline void _llk_unpack_AB_matmul_held_tile_(const bool partial_face)
  *
  * Iterates over the reused dimension, computing per-tile L1 addresses (with optional kernel-
  * broadcast wraparound and kt_dim striding), and unpacks operand A to SrcB / operand B to SrcA
- * for each row while streaming the other operand through the MOP.
- *
- * Every row follows the protocol of the other unpack operations: wait until at most one earlier row is still being
- * unpacked (the UNPACK_SYNC semaphore counts them), write the row's two base addresses into the free config context
- * from the RISC, post the token, hold the UNPACRs until the writes have landed, unpack the held tile, stream the other
- * operand through the MOP, take the token back and switch context.
- * The streamed tile stride (SCRATCH_SEC0), which the replay's CFGSHIFTMASK adds after every tile, is copied from the
- * tile size GPRs when it differs from the one programmed, so a data format reconfig between calls is honoured
- * without a re-init.
+ * for each row while streaming the other operand through the MOP. The streamed tile stride (SCRATCH_SEC0) is reloaded
+ * from the tile size GPRs when it differs from the programmed one.
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
@@ -333,10 +312,8 @@ inline void _llk_unpack_AB_matmul_(
     // Tile stride of the streamed operand in 16-byte words: in1 tiles are consecutive, in0 rows are kt_dim tiles apart.
     const std::uint32_t stream_stride = reuse_a ? tile_size_b : (tile_size_a * kt_dim);
 
-    // The replay's CFGSHIFTMASK adds SCRATCH_SEC0_val to the streamed base address after every tile. Reload it from
-    // the tile size GPRs (TILE_SIZE_A is the in1 tile size, TILE_SIZE_B the in0 tile size) when the stride differs
-    // from the one programmed: a Configuration Unit write ordered after the previous call's CFGSHIFTMASKs and before
-    // this call's, which are Configuration Unit instructions as well, so no NOP is needed after it.
+    // Reload SCRATCH_SEC0_val (TILE_SIZE_A is the in1 tile size, TILE_SIZE_B the in0 one) when the stride changed; the WRCFG is
+    // ordered against the replay's CFGSHIFTMASKs in the Configuration Unit, so no NOP is needed after it.
     if (matmul_unp_stream_stride != stream_stride)
     {
         if (reuse_a)
@@ -370,10 +347,7 @@ inline void _llk_unpack_AB_matmul_(
         const std::uint32_t address_a = base_address_a + offset_address_a;
         const std::uint32_t address_b = base_address_b + offset_address_b;
 
-        // Wait for a free context: at most one earlier row may still be unpacking, so the context written next has
-        // been consumed. (Reading the semaphore before the address arithmetic, to overlap the read's latency, saved
-        // 1.4 cycles per tile on k loops of one tile rows but cost 1.5 on kt 1 rows, where a stale busy reading
-        // costs one more read; the plain wait is kept.)
+        // Wait for free context
         wait_for_next_context(2);
 
         // Validate and configure addresses (note: address_b goes to SEC0, address_a to SEC1 for matmul)
@@ -393,10 +367,7 @@ inline void _llk_unpack_AB_matmul_(
             _llk_unpack_AB_matmul_held_tile_<SrcA>(held_partial_face);
         }
 
-        // Stream the other operand; a set zmask bit selects the replay copy of context 1. The mask covers the 16
-        // iterations a full-sync block can have. (An immediate MOP for one tile rows, selected by a branch on the
-        // context, laid the row out with two taken branches and a spill and cost about four cycles per row; the
-        // runtime word, as in the base, is one store.)
+        // Stream the other operand; a set zmask bit selects the context 1 replay copy, one bit per streamed tile (up to 16 in a full-sync block)
         TT_MOP(0, rut_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
 
         // T6::SEMGET for context release

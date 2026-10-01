@@ -181,9 +181,8 @@ def test_matmul(
     ), "Assert against golden failed"
 
 
-# Blocks that fill a full-sync DEST (16 tiles) with a row of more than 8 streamed tiles. The unpack MOP selects the
-# replay copy of the active config context through the zmask, one bit per streamed tile; kt_dim >= 2 runs the block in
-# both contexts, so a mask shorter than the row shows up as a wrong result here.
+# Full-sync DEST blocks with rows of more than 8 streamed tiles, run in both config contexts (kt_dim 2): the unpack
+# MOP's zmask must cover the whole row.
 FULL_SYNC_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Bfp8_b], same=True)
 FULL_SYNC_BLOCKS = [
     ((rt * 32, kt * 32), (kt * 32, ct * 32))
