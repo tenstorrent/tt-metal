@@ -83,8 +83,17 @@ def reference_msa_block_cyclic(
     ids=["prior1_cap2_slot0", "prior1_cap4_slot3", "prior3_cap6_slot1"],
 )
 @pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16cache", "bf8cache"])
+@pytest.mark.parametrize("index_k_tp_shard", [False, True], ids=["ik_tp_replicated", "ik_tp_dedup"])
 def test_msa_sp_cache_read_high_bw_pcc(
-    mesh_device, device_params, chunk_local, n_prior, capacity_chunks, slot, cache_dtype, reset_seeds
+    mesh_device,
+    device_params,
+    chunk_local,
+    n_prior,
+    capacity_chunks,
+    slot,
+    cache_dtype,
+    index_k_tp_shard,
+    reset_seeds,
 ):
     """``msa_sp_attention_cache_read`` (high_bw_all_gather straight from the cache slot) vs the reference
     block-cyclic read, exact-PCC, over the SAME real multi-slot ND-sharded cache.
@@ -97,6 +106,8 @@ def test_msa_sp_cache_read_high_bw_pcc(
     The layouts pin what is new in the deployed path: capacity > written prefix (fixed-slot stride is
     seq_local, not n_rows), a non-zero slot in a multi-slot cache (in-op slot select), and a 4-chunk prefix.
     ``bf8cache`` feeds the deployed bf8 cache to the consumers natively (the reference typecasts to bf16).
+    ``ik_tp_dedup`` stripes index_k across the TP cols (M3_INDEX_K_TP_SHARD): the deployed read then rebuilds it
+    with the TP + SP gathers and the indexer's TP-sharded key remap, against the same replicated reference.
     """
     from models.common.utility_functions import comp_pcc
     from models.demos.minimax_m3.tt.attention.kv_cache import allocate_kv_caches, write_index_k_chunk, write_kv_chunk
@@ -170,6 +181,7 @@ def test_msa_sp_cache_read_high_bw_pcc(
         sp_axis=sp_axis,
         head_dim=HEAD_DIM,
         cache_dtype=cache_dtype,
+        index_k_tp_shard=index_k_tp_shard,
     )
     # Poison the OTHER slots so a wrong slot select / stride shows up as a PCC failure, not a lucky zero.
     for other in range(num_layers - 1):
@@ -213,6 +225,11 @@ def test_msa_sp_cache_read_high_bw_pcc(
         n_rows = n_chunks * chunk_local
         ints = [ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in (kv.k, kv.v, kv.index_k)]
         ref_in = tuple(ttnn.slice(t, (slot, 0, 0, 0), (slot + 1, 1, n_rows, HEAD_DIM)) for t in ints)
+        if index_k_tp_shard:
+            # The deduped cache holds stripes, not the replicated slab, so it can't be sliced out. The write
+            # quantized on device (typecast per token row), so the same typecast of the contiguous block-cyclic
+            # shard reproduces the cached values exactly.
+            ref_in = (ref_in[0], ref_in[1], ttnn.typecast(shard_bc(ik, False), ttnn.bfloat8_b))
     out_ref = collect(
         reference_msa_block_cyclic(
             shard(q, True), ref_in[0], ref_in[1], shard(iq, True), ref_in[2], chunk_local=chunk_local, **common
