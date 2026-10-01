@@ -86,6 +86,14 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
 }  // namespace
 namespace tt {
 
+std::unordered_set<ChipId> Cluster::simulator_target_devices(const std::filesystem::path& simulator_dir) {
+    std::error_code error;  // An unreadable directory counts as no layout, rather than throwing.
+    if (std::filesystem::exists(simulator_dir / "ip_layout.yaml", error)) {
+        return {};
+    }
+    return {0};
+}
+
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
     std::unique_ptr<umd::ClusterDescriptor> temp_cluster_desc = nullptr;
@@ -445,14 +453,10 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
         } else {
-            // A partitioned build (ip_layout.yaml) states its own devices: open all of them, or the ones
-            // TT_VISIBLE_DEVICES selects. Other builds are a single chip.
-            const bool partitioned =
-                std::filesystem::exists(std::filesystem::path(rtoptions_.get_simulator_path()) / "ip_layout.yaml");
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
-                .target_devices = partitioned ? std::unordered_set<ChipId>{} : std::unordered_set<ChipId>{0},
+                .target_devices = simulator_target_devices(rtoptions_.get_simulator_path()),
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
         }
