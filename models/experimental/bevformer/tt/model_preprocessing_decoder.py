@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import torch
 
+from models.experimental.bevformer.config.decoder_config import REG_XY, REG_Z
 from models.experimental.bevformer.tt.model_preprocessing import (
     DEFAULT_DTYPE,
     preprocess_layer_norm_parameters,
@@ -81,12 +82,22 @@ def create_decoder_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
 
 
 def create_reg_branch_parameters(reg_branches, device, dtype=DEFAULT_DTYPE):
-    """Each branch is ``Linear-ReLU-Linear-ReLU-Linear``; returns its three Linears per branch."""
-    return [
-        [
-            _linear_params(module.weight, module.bias, device, dtype)
-            for module in branch
-            if isinstance(module, torch.nn.Linear)
-        ]
-        for branch in reg_branches
-    ]
+    """The three Linears of each ``Linear-ReLU-Linear-ReLU-Linear`` branch, for the decoder's
+    reference-point refinement.
+
+    The last Linear keeps only the box-code rows the refinement reads, (x, y, z) in that
+    order (``REG_XY``, ``REG_Z``), so the decoder adds its output to the points' logits as is.
+    """
+    code_size = reg_branches[0][-1].out_features
+    rows = list(range(code_size))[REG_XY] + list(range(code_size))[REG_Z]
+    branches = []
+    for branch in reg_branches:
+        first, second, last = (module for module in branch if isinstance(module, torch.nn.Linear))
+        branches.append(
+            [
+                _linear_params(first.weight, first.bias, device, dtype),
+                _linear_params(second.weight, second.bias, device, dtype),
+                _linear_params(last.weight[rows], last.bias[rows], device, dtype),
+            ]
+        )
+    return branches
