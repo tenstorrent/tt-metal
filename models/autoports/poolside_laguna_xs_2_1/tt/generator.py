@@ -42,6 +42,21 @@ except ImportError:  # loaded via importlib.spec_from_file_location
     from models.autoports.poolside_laguna_xs_2_1.tt.model import MODEL_ID, LagunaModel
 
 BLOCK_SIZE = 32
+# The standalone KV cache length must be a whole number of SDPA K chunks, not just of BLOCK_SIZE: decode
+# reads the cache in k_chunk_size blocks (64; prefill and the verify option use 128), and a final chunk
+# that runs past the last page-table entry reads unrelated memory as K/V. Found on Laguna-S: a 336-token
+# request gave 11 blocks (352 slots = 5.5 chunks of 64); decode at position 320 produced 2.9e35 in layer 0
+# and every later token was garbage. 128 is a multiple of BLOCK_SIZE and of every k_chunk_size in use.
+KV_SEQ_ALIGN = 128
+
+
+def kv_cache_seq_len(seq_needed: int, max_seq_len: int) -> int:
+    """Cache length for a request needing ``seq_needed`` positions: rounded up to ``KV_SEQ_ALIGN``,
+    capped at the (aligned) ``max_seq_len``."""
+    if max_seq_len % KV_SEQ_ALIGN:
+        raise ValueError(f"max_seq_len {max_seq_len} must be a multiple of {KV_SEQ_ALIGN} (SDPA K chunk alignment)")
+    aligned = -(-int(seq_needed) // KV_SEQ_ALIGN) * KV_SEQ_ALIGN
+    return min(aligned, int(max_seq_len))
 
 
 def _replicate(mesh):
@@ -53,6 +68,8 @@ class LagunaGenerator(ReadinessGenerator):
         self.mesh_device = mesh_device
         self.model = model
         self.tokenizer = tokenizer
+        if max_seq_len % KV_SEQ_ALIGN:
+            raise ValueError(f"max_seq_len {max_seq_len} must be a multiple of {KV_SEQ_ALIGN} (SDPA K chunk alignment)")
         self.max_seq_len = max_seq_len
         self.host_sampling = host_sampling
         self.vocab = model.cfg.vocab
@@ -128,7 +145,7 @@ class LagunaGenerator(ReadinessGenerator):
 
     # ---- KV cache / page table (owned by generate) ------------------------- #
     def _ensure_cache(self, users, seq_needed):
-        seq_needed = min(seq_needed, self.max_seq_len)
+        seq_needed = kv_cache_seq_len(seq_needed, self.max_seq_len)
         if self._kv_cache is not None and users <= self._kv_users and seq_needed <= self._kv_seq:
             return
         # (Re)allocate for the larger requirement.

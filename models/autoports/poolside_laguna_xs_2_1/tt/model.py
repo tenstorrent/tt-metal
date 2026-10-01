@@ -64,11 +64,10 @@ def load_selected_precision_policy(path=None):
 # Checkpoint helpers (top-level tensors: embed_tokens, norm, lm_head)
 # --------------------------------------------------------------------------- #
 def _snapshot_and_index():
-    from huggingface_hub import snapshot_download
+    # One cached, local-first resolution shared with the per-layer loader (no per-call HF metadata request).
+    from models.autoports.poolside_laguna_xs_2_1.tests import laguna_weights as W
 
-    d = snapshot_download(MODEL_ID, allow_patterns=["*.json", "*.py"])
-    with open(os.path.join(d, "model.safetensors.index.json")) as f:
-        return d, json.load(f)["weight_map"]
+    return W._index()
 
 
 def _resolve_shard(snap_dir, shard_name):

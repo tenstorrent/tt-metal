@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Real / synthetic weight loading for poolside/Laguna-XS-2.1 decoder layers.
+"""Real / synthetic weight loading for Laguna (S-2.1 / XS-2.1, see tt/model_spec.py) decoder layers.
 
 Provides:
   * ``load_layer_tensors``  – pull one decoder layer's tensors from the sharded
@@ -18,6 +18,7 @@ module are fed from the same source of truth.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 
@@ -26,16 +27,31 @@ import torch
 from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MODEL_ID  # noqa: E402
 
 
+@functools.lru_cache(maxsize=None)
 def _snapshot_dir():
+    """Local snapshot directory of the selected checkpoint, resolved once per process.
+
+    The local HF cache is tried first: ``snapshot_download`` otherwise makes an HTTPS metadata call
+    on every use, and one stalled TLS handshake (seen 2026-10-01 at layer 9 of a full S load) hung
+    the whole model build with no timeout. The network is used only when the files are absent."""
     from huggingface_hub import snapshot_download
 
-    return snapshot_download(MODEL_ID, allow_patterns=["*.json", "*.py"])
+    patterns = ["*.json", "*.py"]
+    try:
+        return snapshot_download(MODEL_ID, allow_patterns=patterns, local_files_only=True)
+    except Exception:  # not cached yet (LocalEntryNotFoundError and friends): fetch once
+        return snapshot_download(MODEL_ID, allow_patterns=patterns)
+
+
+@functools.lru_cache(maxsize=None)
+def _weight_map():
+    d = _snapshot_dir()
+    with open(os.path.join(d, "model.safetensors.index.json")) as f:
+        return json.load(f)["weight_map"]
 
 
 def _index():
-    d = _snapshot_dir()
-    with open(os.path.join(d, "model.safetensors.index.json")) as f:
-        return d, json.load(f)["weight_map"]
+    return _snapshot_dir(), _weight_map()
 
 
 def _resolve_shard(snap_dir, shard_name):
