@@ -276,9 +276,12 @@ class MoeAgBlock:
         return sum_blocks_tiled(g_tp, n_rows=self.S, n_blocks=self.cols)
 
     def _ag(self, x, out, axis):
-        return ttnn.experimental.high_bw_all_gather(
-            x, dim=2, output_tensor=out, cluster_axis=axis, num_links=self.links
+        op = (
+            ttnn.experimental.fabric_all_gather
+            if self.options.moe_ag_gather_op == "fabric"
+            else ttnn.experimental.high_bw_all_gather
         )
+        return op(x, dim=2, output_tensor=out, cluster_axis=axis, num_links=self.links)
 
     def to_rm(self, x):
         """x [1, 1, S, H] bf16 TILE -> the row-major layout the gather takes ([1, 1, S xppr, H / xppr])."""

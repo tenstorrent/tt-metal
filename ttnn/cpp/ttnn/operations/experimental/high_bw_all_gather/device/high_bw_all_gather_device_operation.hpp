@@ -35,6 +35,26 @@ struct HighBwAllGatherDeviceOperation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 };
 
+// Resolves the public arguments (mesh, fabric, sub-device, core grid) into the operation's parameters. Shared with
+// fabric_all_gather, which has the same contract.
+std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_build_operation_args(
+    const Tensor& input_tensor,
+    const ttnn::Tensor& output_tensor,
+    int32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    std::optional<uint32_t> num_links,
+    std::optional<uint32_t> input_batch_index,
+    std::optional<uint32_t> gathered_dim_size,
+    const std::optional<Tensor>& input_batch_index_tensor,
+    uint32_t batch_slot_num_layers,
+    uint32_t batch_slot_layer_idx,
+    const std::optional<Tensor>& gathered_prefix_tensor,
+    uint32_t gathered_slab_global,
+    const std::optional<GlobalSemaphore>& ready_semaphore,
+    const std::optional<GlobalSemaphore>& data_valid_semaphore);
+
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 
 namespace ttnn::prim {

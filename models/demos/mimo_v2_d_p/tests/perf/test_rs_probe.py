@@ -47,6 +47,32 @@ def test_rs_probe(mesh_device, device_params):
         ]
         + [dict(num_links=1), dict(num_links=2)]
     )
+    if os.environ.get("MIMO_RS_ONLY_DS"):
+        cases = []
+    # DeepSeek's MoE reduce-scatter: a list of the per-destination slices
+    S_ = T // rows
+    for mc_name, mc in (("dram", ttnn.DRAM_MEMORY_CONFIG), ("l1", ttnn.L1_MEMORY_CONFIG)):
+        name = f"ds_moe_rs_{mc_name}"
+        try:
+            slices = ttnn.split(x, S_, dim=2)
+            f = lambda: ttnn.experimental.deepseek_moe_reduce_scatter(
+                slices, output_memory_config=mc, dim=2, cluster_axis=0, topology=sp_topo
+            )
+            o = f()
+            ttnn.synchronize_device(mesh_device)
+            err = 0.0
+            for d, t in enumerate(ttnn.get_device_tensors(o)):
+                r, c = divmod(d, cols)
+                err = max(err, (ttnn.to_torch(t).float()[0, 0] - ref[c, r * S_ : (r + 1) * S_]).abs().max().item())
+            o.deallocate(True)
+            for _ in range(ITERS):
+                signpost(f"{name}_start")
+                f().deallocate(True)
+                ttnn.synchronize_device(mesh_device)
+                signpost(f"{name}_end")
+            print(f"RS_OK {name}: max abs err {err:.3g}")
+        except Exception as e:  # noqa: BLE001
+            print(f"RS_FAIL {name}: {str(e).splitlines()[0][:300]}")
     for kw in cases:
         name = "rs_" + ("_".join(f"{k.replace('num_', '')}{v}" for k, v in kw.items()) or "default")
         f = lambda: ttnn.reduce_scatter(
