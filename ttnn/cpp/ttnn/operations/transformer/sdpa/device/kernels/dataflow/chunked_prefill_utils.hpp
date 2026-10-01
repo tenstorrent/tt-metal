@@ -196,6 +196,45 @@ inline bool kv_chunk_starts_before_logical_end(
     }
 }
 
+// One past the last global tile of this device's Q rows in the current chunk. A K chunk starting at or past it is
+// fully masked for all of them. KV-pad rotation maps the Q slab through pre-/post-wrap segments.
+template <bool kv_pad_rotation_enabled, uint32_t q_local_padded_Nt>
+inline uint32_t chunked_q_global_end_tile(
+    uint32_t logical_nt,
+    uint32_t ring_index,
+    uint32_t ring_size,
+    uint32_t q_pre_wrap_start_tile,
+    uint32_t q_pre_wrap_tile_count,
+    uint32_t q_post_wrap_start_tile,
+    uint32_t q_valid_tile_count) {
+    if constexpr (kv_pad_rotation_enabled) {
+        if (q_valid_tile_count > q_pre_wrap_tile_count) {
+            return q_post_wrap_start_tile + (q_valid_tile_count - q_pre_wrap_tile_count);
+        }
+        return q_pre_wrap_start_tile + q_pre_wrap_tile_count;
+    } else {
+        return logical_nt - q_local_padded_Nt * ring_size + (ring_index + 1) * q_local_padded_Nt;
+    }
+}
+
+// Whether a dense chunked K chunk has any visible key for this device's Q rows. The causal skip never drops chunk 0,
+// so every ring iteration processes a chunk and the last one still normalizes.
+template <
+    bool kv_pad_rotation_enabled,
+    bool chunked_enabled,
+    uint32_t kv_local_padded_Nt,
+    uint32_t chunk_size_t,
+    uint32_t q_local_padded_Nt>
+inline bool chunked_kv_chunk_is_live(
+    uint32_t ring_id, uint32_t k_chunk, uint32_t k_chunk_tiles, uint32_t logical_nt, uint32_t causal_end_nt) {
+    return kv_chunk_starts_before_logical_end<
+        kv_pad_rotation_enabled,
+        chunked_enabled,
+        kv_local_padded_Nt,
+        chunk_size_t,
+        q_local_padded_Nt>(ring_id, k_chunk * k_chunk_tiles, k_chunk == 0 ? logical_nt : causal_end_nt);
+}
+
 constexpr uint32_t KV_PAD_ROTATION_INVALID_TILE = 0xFFFFFFFFu;
 
 // Map a Q row used by the mask path to its absolute sequence tile. KV-pad rotation

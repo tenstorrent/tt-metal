@@ -18,6 +18,9 @@ struct SDPAProgramConfig {
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
+    // Ring joint chunked prefill only: up to this many cores may share one (head, Q chunk) unit along K when the
+    // units leave the grid idle. 1 disables the split.
+    uint32_t max_k_splits = 1;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and
