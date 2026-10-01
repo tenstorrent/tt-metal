@@ -126,7 +126,10 @@ ttnn::Tensor attention(
     bool fp32_output_accumulator,
     const std::vector<ttnn::Tensor>& offsets,
     bool packed_gqa,
-    const std::string& packed_writer_path) {
+    const std::string& packed_writer_path,
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t math_fidelity) {
     if (packed_gqa && (offsets.size() < 2 || q.dtype() != DataType::BFLOAT16 || k.logical_shape()[1] != 2 ||
                        v.logical_shape()[1] != 2 || q_chunk != 32 || k_chunk != 128 || packed_writer_path.empty())) {
         throw std::runtime_error("Packed GQA requires BF16 Q, two KV heads, B>=2 raw tensor positions and Q32/K128");
@@ -138,10 +141,14 @@ ttnn::Tensor attention(
         (scalar_offset || !offset || offset->buffer() != offsets.front().buffer() || !fp32_output_accumulator)) {
         throw std::runtime_error("Batched accurate attention requires its first tensor offset and FP32 recurrence");
     }
+    // Per-request offset binding is pinned to the 64-core grid; single-offset calls may use any grid.
+    if (!offsets.empty() && (grid_x != 8 || grid_y != 8)) {
+        throw std::runtime_error("Batched accurate attention requires the 8x8 grid");
+    }
     ttnn::prim::SDPAParams attrs{};
     attrs.output_mem_config = q.memory_config();
     attrs.program_config = ttnn::operations::transformer::SDPAProgramConfig{
-        .compute_with_storage_grid_size = {8, 8},
+        .compute_with_storage_grid_size = {grid_x, grid_y},
         .q_chunk_size = q_chunk,
         .k_chunk_size = k_chunk,
         .exp_approx_mode = false};
@@ -149,7 +156,7 @@ ttnn::Tensor attention(
     attrs.chunk_start_idx = scalar_offset;
     attrs.chunk_start_idx_tensor = offset;
     attrs.compute_kernel_config = ttnn::ComputeKernelConfig{
-        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .math_fidelity = static_cast<tt::tt_metal::MathFidelity>(math_fidelity),
         .math_approx_mode = false,
         .fp32_dest_acc_en = true,
         .packer_l1_acc = true};
@@ -432,7 +439,10 @@ NB_MODULE(_k2_accurate_attention, m) {
         nb::arg("fp32_output_accumulator") = true,
         nb::arg("offsets") = std::vector<ttnn::Tensor>{},
         nb::arg("packed_gqa") = false,
-        nb::arg("packed_writer_path") = std::string{});
+        nb::arg("packed_writer_path") = std::string{},
+        nb::arg("grid_x") = 8,
+        nb::arg("grid_y") = 8,
+        nb::arg("math_fidelity") = static_cast<uint32_t>(tt::tt_metal::MathFidelity::HiFi4));
     m.def(
         "flash_decode",
         &flash_decode,
