@@ -891,7 +891,7 @@ class SpeculativeDecoder:
 
         # Seed: consume `first` at position T -> (L_T, H_T); anchor p=T.
         # MUST stay BEFORE capture_verify_trace. The seed is an EAGER verify at T=1, and under the
-        # full-batch GDN verify none of its programs (conv1d over K-1+1 rows, the [1,1,*] slice /
+        # full-batch GDN verify none of its programs (the KDA conv's T=1 pad and row slices, the [1,1,*] slice /
         # reshape chain) appear in the T=K+1 trace, so running it after capture compiles them while
         # the trace is parked: their kernel-binary buffers land in memory the replayed trace writes
         # over, and the NEXT generate's seed (program-cache hit) dispatches corrupted binaries and
