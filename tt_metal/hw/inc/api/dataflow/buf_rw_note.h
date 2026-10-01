@@ -22,9 +22,8 @@ inline constexpr uint32_t OPAQUE = 0;
 inline constexpr uint32_t READ = 1;
 inline constexpr uint32_t WRITE = 2;
 
-// Emit one (slot, kind) record. Compiler-engineer's .pushsection pattern: the flags string ("") makes the
-// section non-alloc, @note sets SHT_NOTE, and the two .4byte fields are the record. Slot/kind are
-// compile-time immediates ("n"), so this contributes only section data -- no instructions.
+// Emit one (slot, kind) record into the non-allocated .tt.BUF_RW note section. Both are compile-time
+// immediates, so this adds section data only -- no instructions.
 template <uint32_t Slot, uint32_t Kind>
 inline void note() {
     __asm__ volatile(
