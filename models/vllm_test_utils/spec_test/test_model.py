@@ -650,7 +650,10 @@ class DummySpecDecodeModel(DummyNoOpModel):
         drafted = tokens[:, 1:].to(torch.int64)
         columns = torch.arange(num_drafts, dtype=torch.int64)
         diverge = columns.unsqueeze(0) >= cap.unsqueeze(1)
-        verified = torch.empty((rows, width), dtype=torch.int64)
+        # Zeros rather than uninitialized memory: a row with fewer than K valid
+        # drafts never writes the last column, and an answer must not depend on
+        # what the allocator returned.
+        verified = torch.zeros((rows, width), dtype=torch.int64)
         verified[:, :num_drafts] = torch.where(diverge, (drafted + 1) % self.vocab_size, drafted)
 
         # The bonus, at each row's own count. Arithmetic on the row's last

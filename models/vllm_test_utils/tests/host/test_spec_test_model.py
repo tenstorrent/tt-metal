@@ -887,3 +887,27 @@ def test_the_depth_target_prefill_is_untouched(monkeypatch):
     logits = model.prefill_forward(tokens=prompt, prompt_lens=torch.tensor([4]), start_pos=torch.tensor([0]))
 
     assert int(logits.reshape(1, -1).argmax(dim=-1)) == 0
+
+
+def test_a_short_row_s_unwritten_verify_column_is_zero(monkeypatch):
+    """The column past a short row's bonus holds 0, whatever the allocator returns.
+
+    A row with fewer than K valid drafts writes no answer to the last column.
+    An uninitialized allocation left it holding whatever memory it got, which
+    made the answer depend on the allocator and made a logits verify index the
+    vocabulary with it. `torch.empty` is made to return garbage here, so the
+    check does not depend on what this machine's allocator happens to hand out.
+    """
+    real_empty = torch.empty
+
+    def garbage(*args, **kwargs):
+        return real_empty(*args, **kwargs).fill_(-123456)
+
+    model = _model(monkeypatch)
+    tokens = _block(2)
+    monkeypatch.setattr(torch, "empty", garbage)
+
+    ids = model._verified_ids(tokens, torch.tensor([3, 1], dtype=torch.int32))
+
+    assert int(ids[1, 3]) == 0
+    assert ids[1, :2].tolist() == [int(tokens[1, 1]), _bonus_for(tokens, 1, 1)]
