@@ -17,9 +17,9 @@ namespace sfpu {
 // sigmoid(x) = 1 / (1 + exp(-x)) with the exp's constants supplied by the caller. Each is a float (materialised
 // by SFPLOADI where used, exactly as a literal is), an sfpi::vFloat built once before a row loop, or a
 // vConstFloatPrgmN: one_ln2 is read by both exp arms, (c0, c1, c2) by the bf16 exp_21f arm and
-// (neg_ln2_hi, p0, p1) by the fp32 Juffa arm. Hoisting matters because sfpi 7.83.0 never lifts a literal
-// out of a loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row. The two
-// _sfpu_sigmoid_ overloads below are thin wrappers over this one body.
+// (neg_ln2_hi, p0, p1) by the fp32 Juffa arm. Hoisting matters because sfpi (through 7.84.0) never lifts a
+// literal out of a loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row.
+// _sfpu_sigmoid_prgm_ and _sfpu_sigmoid_ below are thin wrappers over this one body.
 template <
     bool is_fp32_acc_to_dest_mode,
     typename K,
@@ -35,27 +35,27 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_core_(
     // If fp32 then use higher accuracy exp function
     // Otherwise, use exp_21f (~1 ULP on bfloat16)
     if constexpr (is_fp32_acc_to_dest_mode) {
-        exp_neg_x = _sfpu_exp_fp32_accurate_</*unsafe=*/false>(-x, one_ln2, neg_ln2_hi, p0, p1);
+        exp_neg_x = _sfpu_exp_fp32_accurate_<false /*unsafe*/>(-x, one_ln2, neg_ln2_hi, p0, p1);
     } else {
-        exp_neg_x = _sfpu_exp_21f_bf16_</*is_fp32_dest_acc_en=*/true>(-x, one_ln2, c0, c1, c2);
+        exp_neg_x = _sfpu_exp_21f_bf16_<true /*is_fp32_dest_acc_en*/>(-x, one_ln2, c0, c1, c2);
     }
 
     sfpi::vFloat denominator = 1.0f + exp_neg_x;
 
     sfpi::vFloat result;
     if constexpr (is_fp32_acc_to_dest_mode) {
-        result = sfpu_reciprocal_iter</*max_iter=*/2>(denominator);
+        result = sfpu_reciprocal_iter<2 /*max_iter*/>(denominator);
     } else {
-        result = sfpu_reciprocal_iter</*max_iter=*/1>(denominator);
+        result = sfpu_reciprocal_iter<1 /*max_iter*/>(denominator);
     }
 
     return result;
 }
 
-// Row-loop form: 1/ln2 from vConstFloatPrgm1 (programmed by sigmoid_init<false>), the other exp constants
-// from the caller (see _sfpu_sigmoid_core_).
+// Row-loop form: 1/ln2 from vConstFloatPrgm1 (programmed by sigmoid_init<false>, which the caller's init
+// must have run), the other exp constants from the caller (see _sfpu_sigmoid_core_).
 template <bool is_fp32_acc_to_dest_mode, typename C0, typename C1, typename C2, typename H, typename P0, typename P1>
-sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x, C0 c0, C1 c1, C2 c2, H neg_ln2_hi, P0 p0, P1 p1) {
+sfpi_inline sfpi::vFloat _sfpu_sigmoid_prgm_(sfpi::vFloat x, C0 c0, C1 c1, C2 c2, H neg_ln2_hi, P0 p0, P1 p1) {
     return _sfpu_sigmoid_core_<is_fp32_acc_to_dest_mode>(x, sfpi::vConstFloatPrgm1, c0, c1, c2, neg_ln2_hi, p0, p1);
 }
 
@@ -78,7 +78,7 @@ inline void calculate_sigmoid() {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val, c0, c1, c2, neg_ln2_hi, p0, p1);
+            sfpi::vFloat result = _sfpu_sigmoid_prgm_<is_fp32_dest_acc_en>(val, c0, c1, c2, neg_ln2_hi, p0, p1);
             if constexpr (!is_fp32_dest_acc_en) {
                 result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
             }

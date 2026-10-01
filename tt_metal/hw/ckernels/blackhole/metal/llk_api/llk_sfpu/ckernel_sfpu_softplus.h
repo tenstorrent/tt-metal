@@ -113,10 +113,11 @@ inline void softplus_init() {
 }
 
 // One row. The scalars and the polynomial's three lowest coefficients are supplied by the caller: for
-// calculate_softplus the scalars are sfpi::vFloats built once before its loop (a runtime float used per row
-// otherwise costs RISC-built SFPLOADIs on every row) and the coefficients are vConstFloatPrgm0/1/2 from
+// calculate_softplus, beta and threshold (and beta_reciprocal unless INP_FLOAT32, see there) are sfpi::vFloats
+// built once before its loop (a runtime float used per row otherwise costs RISC-built SFPLOADIs on every row)
+// and the coefficients are vConstFloatPrgm0/1/2 from
 // softplus_init; the SDPA fused kernel passes plain floats and literals and is unchanged. Identical
-// arithmetic either way (sfpi 7.83.0 never hoists a loop-invariant literal by itself).
+// arithmetic either way (sfpi (through 7.84.0) never hoists a loop-invariant literal by itself).
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,

@@ -27,7 +27,7 @@ inline void calculate_selu(uint32_t scale, uint32_t alpha) {
     const sfpi::vFloat scale_val = Converter::as_float(scale);
     const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
     // expm1's top Horner coefficient, loaded once and held in an LReg for the whole loop (the three
-    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi 7.83.0 never hoists a literal out
+    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi (through 7.84.0) never hoists a literal out
     // of a loop by itself). With scale_val live as well there is no LReg for the second one, so it
     // stays a per-row literal.
     sfpi::vFloat h_top1 = CW_EXPM1_H_TOP1;

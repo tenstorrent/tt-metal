@@ -39,7 +39,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_mish() {
     constexpr float SAT_HI = 8.0f;
 
-    // The exp's constants, loaded once and kept in LRegs across the loop (sfpi 7.83.0 never hoists a literal
+    // The exp's constants, loaded once and kept in LRegs across the loop (sfpi (through 7.84.0) never hoists a literal
     // out of a loop by itself); 1/ln2 is vConstFloatPrgm1 from mish_init. Only the exact fp32 arm runs the
     // Juffa exp, and with x and u live it has LRegs for two of its three constants (p1 stays a per-row
     // literal); the other three arms run exp_21f.
@@ -58,7 +58,7 @@ inline void calculate_mish() {
         v_if(x < SAT_HI) {
             sfpi::vFloat u;
             if constexpr (juffa_exp) {
-                u = _sfpu_exp_fp32_accurate_prgm_<false>(x, neg_ln2_hi, p0, p1);
+                u = _sfpu_exp_fp32_accurate_prgm_<false /*unsafe*/>(x, neg_ln2_hi, p0, p1);
             } else {
                 u = _sfpu_exp_21f_bf16_prgm_<is_fp32_dest_acc_en>(x, c0, c1, c2);
             }

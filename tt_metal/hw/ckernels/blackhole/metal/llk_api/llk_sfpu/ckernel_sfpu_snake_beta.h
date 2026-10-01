@@ -41,7 +41,7 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
 
     // Loop-invariant constants: 1/π and π are in vConstFloatPrgm1/2 from snake_beta_init (Prgm0 is the
     // reciprocal's 2.0f), the highest sine coefficient is loaded once here and kept in the one free LReg.
-    // sfpi 7.83.0 never hoists a literal out of a loop by itself: each costs an SFPLOADI pair per row.
+    // sfpi (through 7.84.0) never hoists a literal out of a loop by itself: each costs an SFPLOADI pair per row.
     sfpi::vFloat c_top = is_fp32_dest_acc_en ? fp32_C3 : bf16_C2;
 
 #pragma GCC unroll 8
