@@ -1893,7 +1893,14 @@ static void sdpa_inner_loop_step(
             MATH(pa_ident = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
             PACK(pa_ident = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
         }
+#if defined(SDPA_PA_SAFE_DBG) && (SDPA_PA_SAFE_DBG & 1)
+        auto pa_is_ident = [&](uint32_t g) -> bool { return !is_first_iter; };  // debug: force identity
+#else
         auto pa_is_ident = [&](uint32_t g) -> bool { return !is_first_iter && ((pa_ident >> g) & 1u); };
+#endif
+#if defined(SDPA_PA_SAFE_DBG) && (SDPA_PA_SAFE_DBG & 2)
+        // debug: report how many groups are identity this chunk via the overflow word
+#endif
         // Changed groups put this chunk's PV in plane 1 and fold it below; others accumulate in plane 0.
         auto pa_pv_offset = [&](uint32_t g) -> uint32_t { return (is_first_iter || pa_is_ident(g)) ? 0 : vDHt; };
         auto pa_pv_acc = [&](uint32_t g) -> bool { return pa_is_ident(g); };
