@@ -112,7 +112,8 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
         return std::nullopt;
     }
 
-    const bool is_ring = full_mesh || topology == tt::tt_fabric::Topology::Ring;
+    // The caller picks closure: Ring to prove a wrap edge, Linear for an open path that has none.
+    const bool is_ring = topology == tt::tt_fabric::Topology::Ring;
     auto hash =
         ttsl::hash::hash_objects_with_default_seed(cluster_axis, full_mesh, orientation, num_links, shape, topology);
     const uint32_t group_count = full_mesh ? 1 : shape[1 - *cluster_axis];
@@ -194,13 +195,14 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
     return hash;
 }
 
-std::optional<MeshRingPlan> resolve_mesh_ring_plan(
+std::optional<ResolvedMeshRoute> resolve_mesh_ring_plan(
     const ttnn::Tensor& tensor,
     std::optional<uint32_t> cluster_axis,
     uint32_t num_links,
     const std::array<tt::tt_fabric::Topology, 2>& axis_topology,
     bool log_rejection,
-    std::string_view operation_name) {
+    std::string_view operation_name,
+    bool allow_open_path) {
     auto* mesh_device = tensor.device();
     if (mesh_device == nullptr || num_links == 0) {
         return std::nullopt;
@@ -237,21 +239,23 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
         if (!route_hash.has_value()) {
             return std::nullopt;
         }
-        return MeshRingPlan{
-            .cluster_axis = cluster_axis,
-            .full_mesh = false,
-            .orientation = ttnn::ccl::snake_ring::Orientation::Row,
-            .mesh_rows = shape[0],
-            .mesh_cols = shape[1],
-            .ring_size = shape[*cluster_axis],
-            .num_links = num_links,
-            .topology = topology,
-            .fabric_config = fabric_config,
-            .axis_topology = axis_topology,
-            .route_plan_hash = ttsl::hash::hash_objects(*route_hash, fabric_config, axis_topology)};
+        return ResolvedMeshRoute{
+            .plan =
+                MeshRingPlan{
+                    .cluster_axis = cluster_axis,
+                    .full_mesh = false,
+                    .orientation = ttnn::ccl::snake_ring::Orientation::Row,
+                    .mesh_rows = shape[0],
+                    .mesh_cols = shape[1],
+                    .ring_size = shape[*cluster_axis],
+                    .route_plan_hash = ttsl::hash::hash_objects(*route_hash, fabric_config, axis_topology)},
+            .topology = topology};
     }
 
-    if (shape[0] < 2 || shape[1] < 2 || (shape[0] % 2 != 0 && shape[1] % 2 != 0)) {
+    // A cycle needs an even lane count and >2 devices; 1xN can still close on a torus, so the edge proof decides.
+    const bool cycle_possible = shape.mesh_size() > 2 && (shape[0] % 2 == 0 || shape[1] % 2 == 0);
+    const bool path_possible = allow_open_path && shape.mesh_size() >= 2;
+    if (!cycle_possible && !path_possible) {
         if (log_rejection) {
             log_warning(
                 tt::LogOp,
@@ -273,45 +277,67 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
         }
         return std::nullopt;
     }
-    for (const auto orientation :
-         {ttnn::ccl::snake_ring::Orientation::Row, ttnn::ccl::snake_ring::Orientation::Column}) {
-        const uint32_t lane_count = orientation == ttnn::ccl::snake_ring::Orientation::Row ? shape[0] : shape[1];
-        if (lane_count % 2 != 0) {
-            continue;
+    const auto build = [&](ttnn::ccl::snake_ring::Orientation orientation,
+                           tt::tt_fabric::Topology route_topology,
+                           uint64_t route_hash) {
+        return ResolvedMeshRoute{
+            .plan =
+                MeshRingPlan{
+                    .cluster_axis = std::nullopt,
+                    .full_mesh = true,
+                    .orientation = orientation,
+                    .mesh_rows = shape[0],
+                    .mesh_cols = shape[1],
+                    .ring_size = static_cast<uint32_t>(shape.mesh_size()),
+                    .route_plan_hash = ttsl::hash::hash_objects(route_hash, fabric_config, axis_topology)},
+            .topology = route_topology};
+    };
+
+    if (cycle_possible) {
+        for (const auto orientation :
+             {ttnn::ccl::snake_ring::Orientation::Row, ttnn::ccl::snake_ring::Orientation::Column}) {
+            const uint32_t lane_count = orientation == ttnn::ccl::snake_ring::Orientation::Row ? shape[0] : shape[1];
+            if (lane_count % 2 != 0) {
+                continue;
+            }
+            const auto route_hash = resolve_direct_neighbor_route_hash(
+                tensor, std::nullopt, num_links, tt::tt_fabric::Topology::Ring, orientation, false, operation_name);
+            if (route_hash.has_value()) {
+                return build(orientation, tt::tt_fabric::Topology::Ring, *route_hash);
+            }
         }
-        const uint32_t closing_axis = orientation == ttnn::ccl::snake_ring::Orientation::Row ? 0 : 1;
-        const auto route_hash = resolve_direct_neighbor_route_hash(
-            tensor, std::nullopt, num_links, axis_topology[closing_axis], orientation, false, operation_name);
-        if (route_hash.has_value()) {
-            return MeshRingPlan{
-                .cluster_axis = std::nullopt,
-                .full_mesh = true,
-                .orientation = orientation,
-                .mesh_rows = shape[0],
-                .mesh_cols = shape[1],
-                .ring_size = static_cast<uint32_t>(shape.mesh_size()),
-                .num_links = num_links,
-                .topology = tt::tt_fabric::Topology::Ring,
-                .fabric_config = fabric_config,
-                .axis_topology = axis_topology,
-                .route_plan_hash = ttsl::hash::hash_objects(*route_hash, fabric_config, axis_topology)};
+    }
+
+    // No cycle closed. The same walk as an open path has no wrap edge to prove, so it resolves on any wired mesh.
+    if (path_possible) {
+        for (const auto orientation :
+             {ttnn::ccl::snake_ring::Orientation::Row, ttnn::ccl::snake_ring::Orientation::Column}) {
+            const auto route_hash = resolve_direct_neighbor_route_hash(
+                tensor, std::nullopt, num_links, tt::tt_fabric::Topology::Linear, orientation, false, operation_name);
+            if (route_hash.has_value()) {
+                return build(orientation, tt::tt_fabric::Topology::Linear, *route_hash);
+            }
         }
     }
 
     if (log_rejection) {
         // Repeat the deterministic fallback orientation with logging enabled
         // so the caller gets the exact edge/link that made the mesh ineligible.
+        // Log against the weakest candidate -- an edge the open path cannot prove is the real obstacle.
         const auto fallback =
             shape[0] % 2 == 0 ? ttnn::ccl::snake_ring::Orientation::Row : ttnn::ccl::snake_ring::Orientation::Column;
-        const uint32_t closing_axis = fallback == ttnn::ccl::snake_ring::Orientation::Row ? 0 : 1;
+        const auto fallback_topology = path_possible ? tt::tt_fabric::Topology::Linear : tt::tt_fabric::Topology::Ring;
         (void)resolve_direct_neighbor_route_hash(
-            tensor, std::nullopt, num_links, axis_topology[closing_axis], fallback, true, operation_name);
+            tensor, std::nullopt, num_links, fallback_topology, fallback, true, operation_name);
     }
     return std::nullopt;
 }
 
 MeshRingPosition get_mesh_ring_position(
-    const ttnn::Tensor& tensor, const ttnn::MeshCoordinate& coordinate, const MeshRingPlan& plan) {
+    const ttnn::Tensor& tensor,
+    const ttnn::MeshCoordinate& coordinate,
+    const MeshRingPlan& plan,
+    tt::tt_fabric::Topology topology) {
     if (plan.full_mesh) {
         TT_FATAL(
             tensor.device() != nullptr && tensor.device()->shape().dims() == 2 && coordinate.dims() == 2,
@@ -331,13 +357,23 @@ MeshRingPosition get_mesh_ring_position(
         const tt::tt_metal::distributed::MeshShape plan_shape(plan.mesh_rows, plan.mesh_cols);
         const uint32_t transport_rank = ttnn::ccl::snake_ring::index_from_coordinate(
             coordinate[0], coordinate[1], plan.mesh_rows, plan.mesh_cols, plan.orientation);
+        // Open path: the end ranks have no neighbor one way, which is how an axis line signals a dead direction.
+        const bool closed = topology == tt::tt_fabric::Topology::Ring;
+        std::optional<ttnn::MeshCoordinate> forward_coord;
+        std::optional<ttnn::MeshCoordinate> backward_coord;
+        if (closed || transport_rank + 1 < plan.ring_size) {
+            forward_coord = snake_ring_coordinate((transport_rank + 1) % plan.ring_size, plan_shape, plan.orientation);
+        }
+        if (closed || transport_rank > 0) {
+            backward_coord = snake_ring_coordinate(
+                (transport_rank + plan.ring_size - 1) % plan.ring_size, plan_shape, plan.orientation);
+        }
         return MeshRingPosition{
             .transport_rank = transport_rank,
             .tensor_rank = ttnn::ccl::snake_ring::row_major_index(
                 transport_rank, plan.mesh_rows, plan.mesh_cols, plan.orientation),
-            .forward_coord = snake_ring_coordinate((transport_rank + 1) % plan.ring_size, plan_shape, plan.orientation),
-            .backward_coord = snake_ring_coordinate(
-                (transport_rank + plan.ring_size - 1) % plan.ring_size, plan_shape, plan.orientation)};
+            .forward_coord = forward_coord,
+            .backward_coord = backward_coord};
     }
 
     TT_FATAL(plan.cluster_axis.has_value(), "axis mesh-ring plan is missing cluster_axis");
@@ -347,9 +383,9 @@ MeshRingPosition get_mesh_ring_position(
         .transport_rank = transport_rank,
         .tensor_rank = transport_rank,
         .forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            tensor, coordinate, 1, plan.topology, plan.cluster_axis),
+            tensor, coordinate, 1, topology, plan.cluster_axis),
         .backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            tensor, coordinate, -1, plan.topology, plan.cluster_axis)};
+            tensor, coordinate, -1, topology, plan.cluster_axis)};
 }
 
 }  // namespace ttnn::operations::ccl::common

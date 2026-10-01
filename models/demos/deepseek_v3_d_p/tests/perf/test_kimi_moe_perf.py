@@ -98,12 +98,17 @@ class _MoEPerfCase:
 #
 # Previous history: re-centred 2026-09-02 to 6,260,834 from 6,574,780 (run 33194039175).
 #
+# Re-centred 2026-09-28 to 5,077,713 ns (job 108828333457), one sample, when the routed expert moved
+# onto ND-sharded weight placement. Same 24-program count as main, whose last three runs read
+# 5,331,206 / 5,438,128 / 5,344,249 ns (jobs 108833542648, 108591989836, 108483307703), so this is a
+# 5.0% speedup against their median, not a short record window.
+#
 # K2.7-Code is architecturally identical to K2.6 (61 layers, 384 routed experts, same dims), so the
 # MoE shapes are unchanged; only the label moved.
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=5_413_674,
+    expected_ns=5_077_713,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not -- five samples on the previous shape spanned
     # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
@@ -121,14 +126,31 @@ _K2_7 = _MoEPerfCase(
 # so issuing dispatch ahead of the shared expert moves it. A midpoint that goes stale downward is
 # fixed by lowering it, never by widening the margin.
 #
-# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33642820055: 8,369,824 ns
-# over the same 35 programs -- that count is what separates a real drop from a record window closing
-# early and under-reporting the sum. ONE sample, against the four-sample 0.44% spread that set the
-# margin below.
+# Re-centred 2026-09-16: device time came in at 6,867,644 ns, 15.4% below the old band's lower edge
+# (previous midpoint 8,369,824, run 33642820055). Per the rule above that is fixed by lowering the
+# midpoint, never by widening the margin. ONE sample, from the failing gate run itself, and the old
+# midpoint it replaces was itself a single sample.
+#
+# A 17.9% drop is far too large to be drift on a shape whose four-sample spread was 0.44%, so it is
+# a real change in the work -- this branch moves the routed expert onto ND-sharded weight placement,
+# which is exactly the kind of change that moves this number, and it is a SPEEDUP. What this sample
+# does NOT carry is the program count: 35 programs on both this branch and main is what separates a
+# real drop from a record window closing early and under-reporting the sum, so if a later run does
+# not reproduce ~6.87 ms, check the logged program count before re-cutting again and take the median
+# of several runs rather than re-lowering off one sample.
+#
+# Re-centred 2026-09-24 to the median of three runs at the new 34-program count (35 -> 34 landed on
+# main between efb4db0 and c87cf14): 6,435,718 (job 107502461878), 6,565,418 (job 107682321819),
+# 6,412,515 ns (job 107749492327); 2.4% spread. The previous midpoint had dropped below the band on all three.
+#
+# Re-centred 2026-09-28 to 6,026,883 ns (job 108828333457), one sample, when the routed expert moved
+# onto ND-sharded weight placement. Still 34 programs, and main's last three runs read 6,448,580 /
+# 6,404,459 / 6,425,097 ns (jobs 108833542648, 108591989836, 108483307703), so this is a 6.2% speedup
+# against their median.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=8_369_824,
+    expected_ns=6_026_883,
     # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
     # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
     # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.

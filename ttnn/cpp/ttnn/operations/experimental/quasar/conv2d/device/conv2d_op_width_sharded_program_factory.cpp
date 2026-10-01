@@ -122,7 +122,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     const auto enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;
     const auto config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
@@ -615,7 +615,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"tilized_cb_second_reader_offset", 0u},
                 {"split_reader_cb_shared", 0u},
             },
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(compute_kernel_config),
     };
 
     // ---- Activation reader kernel ----
@@ -626,9 +626,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         // QSR: this width-sharded activation reader fills the ACT_ROW_MAJOR/ACT DFB via per-window "stick"
         // sub-tile NOC reads; that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
         // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
-        act_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        act_hw = m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
+        act_hw = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = act_noc,
+                },
+        };
     }
     m2::KernelSpec act_kernel{
         .unique_id = KERNEL_ACT,
@@ -733,10 +744,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         // implicit-sync ISR bumps the same 16-bit tile counter as the explicit push -> overflow ->
         // TILE_COUNTERS fault on the compute unpack consuming WEIGHTS. Opt out so explicit credits are
         // authoritative.
-        weights_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        weights_hw = m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        weights_hw =
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};
+        weights_hw = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = weights_noc,
+                },
+        };
     }
     m2::KernelSpec weights_kernel{
         .unique_id = KERNEL_WEIGHTS,
@@ -781,12 +802,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     spec.kernels.push_back(std::move(compute_kernel));
 
     // ---- Work units ----
-    // Compute + readers run on all_cores.  (Width-sharded uses one homogeneous topology; the weights
-    // reader is gated per-core by the is_active RTA rather than by node placement, mirroring legacy.)
+    // Placement must follow the legacy split, NOT the bounding box (#51270 item 3). On a non-rectangular
+    // width-sharded grid (e.g. 12 cores whose bbox is 16) the extra bbox nodes have no activation producer
+    // and no weights RTAs, so running compute/weights there hangs (compute blocks in wait_front) or fails
+    // to build (missing weights RTAs). Only the activation reader may cover the bbox — it early-returns on
+    // this_core_id >= num_mcast_cores. So: ACT on the bbox, WEIGHTS + COMPUTE on the real shard grid.
     spec.work_units.push_back(m2::WorkUnitSpec{
-        .name = "wu",
-        .kernels = {KERNEL_ACT, KERNEL_WEIGHTS, KERNEL_COMPUTE},
+        .name = "wu_act",
+        .kernels = {KERNEL_ACT},
         .target_nodes = all_reader_cores_set,
+    });
+    spec.work_units.push_back(m2::WorkUnitSpec{
+        .name = "wu_compute",
+        .kernels = {KERNEL_WEIGHTS, KERNEL_COMPUTE},
+        .target_nodes = all_cores,
     });
 
     // ============================================================================

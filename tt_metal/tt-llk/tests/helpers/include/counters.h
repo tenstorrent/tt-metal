@@ -122,6 +122,7 @@ constexpr std::uint32_t l1_group_size(std::uint8_t mux)
            : mux == 2 ? l1_2_counters.size()
            : mux == 3 ? l1_3_counters.size()
            : mux == 4 ? l1_4_counters.size()
+           : mux == 5 ? l1_5_counters.size()
                       : 0u;
 }
 
@@ -169,10 +170,14 @@ constexpr std::array<std::uint32_t, builtin_counter_count()> build_builtin_confi
     {
         emit(l1_4_counters, counter_bank::l1, 4);
     }
+    else if constexpr (L1_MUX_GROUP == 5)
+    {
+        emit(l1_5_counters, counter_bank::l1, 5);
+    }
     return cfg;
 }
 
-static_assert(L1_MUX_GROUP <= 4, "LLK_PERF_L1_MUX_GROUP has no emitter in build_builtin_config()");
+static_assert(L1_MUX_GROUP <= 5, "LLK_PERF_L1_MUX_GROUP has no emitter in build_builtin_config()");
 
 constexpr auto BUILTIN_COUNTER_CONFIG         = build_builtin_config();
 constexpr std::uint32_t BUILTIN_COUNTER_COUNT = BUILTIN_COUNTER_CONFIG.size();
@@ -366,8 +371,8 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
         std::uint32_t out_l;
     };
 
-    // Per-bank readout pair: mode_reg drives counter_sel; out_l is the bank's
-    // OUT_L (shared cycles); OUT_H sits at out_l + 4 and is sampled per slot.
+    // Per-bank readout pair: mode_reg drives counter_sel; out_l is the bank's reference count, OUT_H (at out_l + 4)
+    // the selected counter.
     static constexpr bank_regs banks[5] = {
         {RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD},
         {RISCV_DEBUG_REG_PERF_CNT_FPU1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU},
@@ -379,12 +384,10 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
     std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
     volatile std::uint32_t* bank_cycles    = reinterpret_cast<volatile std::uint32_t*>(cycles_base);
     volatile std::uint32_t* counter_counts = bank_cycles + PERF_COUNTERS_BANK_CYCLES_WORDS;
-    std::uint32_t shared_cycles            = ckernel::reg_read(banks[0].out_l);
-    bank_cycles[0]                         = shared_cycles;
-    bank_cycles[1]                         = shared_cycles;
-    bank_cycles[2]                         = shared_cycles;
-    bank_cycles[3]                         = shared_cycles;
-    bank_cycles[4]                         = shared_cycles;
+    for (std::uint32_t b = 0; b < 5; ++b)
+    {
+        bank_cycles[b] = ckernel::reg_read(banks[b].out_l);
+    }
 
     const volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
     std::uint32_t out_idx             = 0;

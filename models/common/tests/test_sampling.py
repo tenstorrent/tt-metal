@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 import torch.nn.functional as F
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.sampling import (
@@ -21,19 +22,59 @@ from models.common.sampling import (
 from models.common.sampling._utils import topk_would_route_to_large_indices
 from models.common.sampling.generator import (
     MAX_UINT32,
+    _acknowledge_trace_buffers_corruptible,
     _hash_request_seed_to_device_seed,
-    _mark_trace_buffers_corruptible,
 )
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc, is_blackhole
 
 
+@pytest.mark.parametrize("all_configs", [False, True])
+def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all_configs):
+    """Compiling an in-place penalty path must not penalize the next real replay."""
+    logits = torch.tensor([1.0, 2.0, 3.0])
+    original = logits.clone()
+    monkeypatch.setattr(ttnn, "clone", torch.clone)
+    log_probs = SimpleNamespace(logprobs_enabled=[False], num_logprobs=[0], enable_log_probs=False)
+
+    def set_log_probs_mode(enabled, num_logprobs):
+        log_probs.logprobs_enabled = enabled if isinstance(enabled, list) else [enabled]
+        log_probs.num_logprobs = num_logprobs if isinstance(num_logprobs, list) else [num_logprobs]
+        log_probs.enable_log_probs = any(log_probs.logprobs_enabled)
+
+    log_probs.set_log_probs_mode = set_log_probs_mode
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling.sub_core_grids = None
+    sampling._penalties_active = True
+    sampling._trace_states = {}
+    sampling.tt_sampling = SimpleNamespace(
+        log_probs_calculator=log_probs, _force_argmax_sampling=True, _allow_force_argmax_sampling=True
+    )
+    compiled = []
+
+    def run_sampling(scratch, *, penalties_on, tt_out_tok, count_tokens):
+        assert not count_tokens, "Warmup must not add dummy samples to request history"
+        if penalties_on:
+            scratch.sub_(2.0)
+        compiled.append(penalties_on)
+
+    sampling._run_sampling = run_sampling
+    sampling.precompile(logits, all_configs=all_configs)
+
+    assert compiled
+    torch.testing.assert_close(logits, original, rtol=0, atol=0)
+    assert sampling._penalties_active is True
+    assert sampling.tt_sampling._force_argmax_sampling is True
+    assert log_probs.logprobs_enabled == [False]
+    assert log_probs.num_logprobs == [0]
+
+
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
     marked = []
-    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
+    monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
 
-    _mark_trace_buffers_corruptible(None, ["default"])
-    _mark_trace_buffers_corruptible(1, ["input", None, ("output",)])
+    _acknowledge_trace_buffers_corruptible(None, ["default"])
+    _acknowledge_trace_buffers_corruptible(1, ["input", None, ("output",)])
 
     assert marked == ["input", "output"]
 
@@ -352,6 +393,78 @@ def test_prefill_admission_into_same_slot_fully_resets_seed_state():
     assert seed_manager.seed_counters[1] == 0
 
 
+def test_finished_requests_release_seeds_before_permuted_prefill():
+    """A unique seed must replay from prefill, before decode can reconcile slots."""
+    manager = _make_host_only_seed_manager(max_batch_size=32)
+    slots = [0, 10, 20, 31]
+    seeds = [100, 101, 102, 103]
+    first = {}
+    for slot, seed in zip(slots, seeds):
+        manager.reset_seed([seed], [slot])
+        first[seed] = [manager._next_device_seed_for_slot(slot) for _ in range(4)]
+    for slot in slots:
+        manager.release_slot(slot)
+    for slot, seed in zip(reversed(slots), seeds):
+        manager.reset_seed([seed], [slot])
+        assert manager.seed_salts[slot] == 0
+        assert [manager._next_device_seed_for_slot(slot) for _ in range(4)] == first[seed]
+
+
+def test_release_keeps_surviving_duplicate_stream_and_frees_only_finished_salt():
+    manager = _make_host_only_seed_manager()
+    manager.reset_seed([55, 55], [0, 1])
+    manager._next_device_seed_for_slot(1)
+    survivor_rng = manager.rngs[1].getstate()
+    manager.release_slot(0)
+    manager.release_slot(0)  # Idempotent; a live sibling still owns salt 1.
+    assert manager.seed_salts[1] == 1
+    assert manager.seed_counters[1] == 1
+    assert manager.rngs[1].getstate() == survivor_rng
+    assert manager._next_device_seed_for_slot(1) == _hash_request_seed_to_device_seed(55, 1, 1)
+    manager.reset_seed([55], [3])
+    assert manager.seed_salts[3] == 0
+    assert manager.seed_salts[1] == 1
+
+
+def test_releasing_last_seeded_request_rearms_unseeded_sampling():
+    manager = _RecordingSeedManager(4)
+    manager.reset_seed([42], [3])
+    manager.get_new_values([3])
+    manager.release_slot(3)
+    assert not manager._seed_active
+    assert manager._reseted
+    first = manager.get_new_values([0])
+    assert all(0 < seed < MAX_UINT32 for seed in first)
+    assert manager.get_new_values([0]) == (MAX_UINT32,) * 4
+    assert manager.get_new_values([0]) is None
+
+
+@pytest.mark.parametrize("capacity,replicas,slot", [(32, 1, 31), (32, 2, 63), (128, 1, 127)])
+def test_generator_release_request_routes_global_state_slot(capacity, replicas, slot):
+    from models.tt_transformers.tt.generator import Generator
+
+    managers = [_make_host_only_seed_manager(capacity) for _ in range(replicas)]
+    for manager in managers:
+        manager.reset_seed([17, 17], [0, capacity - 1])
+    generator = SimpleNamespace(
+        model_args=[SimpleNamespace(max_batch_size=capacity)],
+        data_parallel=replicas,
+        model=[SimpleNamespace(sampling=SimpleNamespace(seed_manager=m)) for m in managers],
+        _slots_prefilled_since_decode={0, slot},
+    )
+    Generator.release_request(generator, slot)
+    rank, local_slot = divmod(slot, capacity)
+    assert managers[rank].seeds[local_slot] is None
+    assert managers[rank].seeds[0] == 17
+    assert generator._slots_prefilled_since_decode == {0}
+    for other_rank, manager in enumerate(managers):
+        if other_rank != rank:
+            assert manager.seeds[-1] == 17
+    for invalid_slot in (-1, capacity * replicas):
+        with pytest.raises(ValueError, match="outside"):  # allow-pytest.raises: host-only bounds regression
+            Generator.release_request(generator, invalid_slot)
+
+
 def test_broadcast_sampling_params_preserves_none_list_fields():
     params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
 
@@ -425,6 +538,8 @@ def _decode_sampling_step(generator, seeds, positions, reload_inputs, max_batch_
         [None],
         sampling_params=params,
         start_pos=[torch.tensor(positions, dtype=torch.int32)],
+        reload_sampling_params=True,
+        reset_sampling_state=False,
         reload_inputs=reload_inputs,
     )
     return generator.model[0].sampling.seed_manager.pushed[-1]
@@ -1126,10 +1241,26 @@ def test_num_single_device_vocab_splits(padded_vocab_size, expected_splits):
         (151936, 4),  # Qwen3
         (256000, 4),  # Gemma-2
         (262144, 4),  # 4*TOPK_MAX_WIDTH exactly
+        (262208, 5),  # Gemma-3: 8194 tiles has no even tile-aligned cut in 5..10 -> minimum count, uneven
     ],
 )
 def test_untilize_chunk_count(width, expected):
     assert TTSampling._untilize_chunk_count(width) == expected
+
+
+@pytest.mark.parametrize(
+    "width, num_chunks, expected_split, expected_last",
+    [
+        (151936, 4, 37984, 37984),  # even cut: split size is the exact chunk width
+        (262208, 5, 52448, 52416),  # uneven cut: tile-aligned split, shorter tile-aligned remainder
+    ],
+)
+def test_untilize_chunk_width(width, num_chunks, expected_split, expected_last):
+    split = TTSampling._untilize_chunk_width(width, num_chunks)
+    assert split == expected_split
+    assert split % 32 == 0
+    assert -(-width // split) == num_chunks
+    assert width - split * (num_chunks - 1) == expected_last
 
 
 @pytest.mark.parametrize(
@@ -1161,6 +1292,15 @@ def test_ttsampling_force_argmax_matches_row_max_on_wide_vocab(vocab_size, mesh_
     assert sampler.force_argmax_sampling, "greedy params must take the argmax fast path"
 
     logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    # Exercise both sides of every chunk boundary, including the last element.
+    # Negative logits make accidental zero padding observable as a wrong argmax.
+    logits_host = -logits_host.abs() - 2
+    split = TTSampling._untilize_chunk_width(vocab_size, TTSampling._untilize_chunk_count(vocab_size))
+    boundary_indices = [0, vocab_size - 1]
+    for boundary in range(split, vocab_size, split):
+        boundary_indices.extend((boundary - 1, boundary))
+    for user in range(batch_size):
+        logits_host[0, 0, user, boundary_indices[user % len(boundary_indices)]] = -1
     logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
     logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
 
@@ -1175,6 +1315,47 @@ def test_ttsampling_force_argmax_matches_row_max_on_wide_vocab(vocab_size, mesh_
             f"user {user}: token {token} has logit {logits_bf16[user, token].item():.6f}, "
             f"but the row maximum is {row_max[user].item():.6f}"
         )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 2_000_000}], indirect=True)
+def test_uneven_untilize_preserves_logits_and_argmax_under_trace(mesh_device):
+    # Isolate the argmax conversion: the single-device constructor also validates
+    # a top-k split, which deliberately does not support this padded width.
+    sampler = TTSampling.__new__(TTSampling)
+    sampler._force_argmax_sub_core_grids = None
+    width = 262208
+    split = sampler._untilize_chunk_width(width, sampler._untilize_chunk_count(width))
+    boundaries = [0, width - 1]
+    for boundary in range(split, width, split):
+        boundaries.extend((boundary - 1, boundary))
+    expected = torch.tensor([boundaries[row % len(boundaries)] for row in range(32)])
+    logits = torch.full((1, 1, 32, width), -2.0, dtype=torch.bfloat16)
+    logits[0, 0, torch.arange(32), expected] = -1.0
+    device_logits = ttnn.from_torch(logits, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    untilized = sampler._untilize_for_argmax(device_logits)
+    assert torch.equal(ttnn.to_torch(untilized), logits)
+    tokens = ttnn.argmax(untilized, dim=-1, keepdim=False)
+    assert torch.equal(ttnn.to_torch(tokens).flatten().long(), expected)
+    ttnn.deallocate(tokens)
+    ttnn.deallocate(untilized)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    untilized = sampler._untilize_for_argmax(device_logits)
+    tokens = ttnn.argmax(untilized, dim=-1, keepdim=False)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        # Reuse the capture with different maxima to detect stale inputs/outputs.
+        for expected in (expected.flip(0), expected):
+            logits.fill_(-2)
+            logits[0, 0, torch.arange(32), expected] = -1
+            host_logits = ttnn.from_torch(logits, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.copy_host_to_device_tensor(host_logits, device_logits)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            assert torch.equal(ttnn.to_torch(tokens).flatten().long(), expected)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
 
 
 def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batch_size=32):

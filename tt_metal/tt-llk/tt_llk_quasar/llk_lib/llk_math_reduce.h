@@ -71,7 +71,9 @@ inline void _reduce_row_transpose_fpu_()
     _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
     _reduce_row_transpose_alu_cfg_enter_();
 
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
+    // MATH drains the preceding math instructions so their source-bank release has landed before
+    // SRCB_VLD tests the bank that MOVD2B will write.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
 
     // Step 1: Read lo16 from dest into SrcB rows 16-31 and transpose.
     TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, 0);
@@ -94,8 +96,11 @@ inline void _reduce_row_transpose_fpu_()
     TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 12);
 
     // Step 5: Write cached lo16 from SrcA back to dest lo16 address space.
-    TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, 0);
-    TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, 8);
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<FACE_R_DIM>())
+    {
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, row, ADDR_MOD_0, FPU_MOV_ROWS, row);
+    }
 
     _reduce_row_transpose_alu_cfg_exit_();
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, true /* EN_32BIT_DEST */>(DataFormat::Int8, DataFormat::Int8);
@@ -264,9 +269,15 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
         replay_buf_len += NUM_FIDELITY_PHASES + 1U;
     }
 
-    if (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS)
+    // Each ELWADDDI accumulates ELTWISE_MATH_ROWS rows (8 on Quasar, 4 on 4row_arch's 4-row FPU), so a face of
+    // face_r_dim rows needs face_r_dim / ELTWISE_MATH_ROWS of them; the base count above already includes the
+    // first, so add the rest. Tiny tiles (face_r_dim <= ELTWISE_MATH_ROWS) add none — only the first
+    // densely-packed rows matter. Must stay in lockstep with the ELWADDDI loop in the replay body below.
+    static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "reduce row supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
+    const std::uint32_t num_face_elwadddi = tensor_shape.face_r_dim / ELTWISE_MATH_ROWS;
+    if (num_face_elwadddi > 1U)
     {
-        replay_buf_len++;
+        replay_buf_len += (num_face_elwadddi - 1U);
     }
 
     const std::uint32_t tail_len = 1U + (tensor_shape.total_num_faces() == NUM_FACES ? 1U : 0U);
@@ -314,12 +325,18 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
             // on row not column
             TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, 0);
 
-            // Copy transposed rows in SrcB from [32 - 47] to dest rows [0 - 16]
+            // Copy transposed rows in SrcB from [32 - 47] to dest rows [0 - 16].
+            // Each ELWADDDI accumulates ELTWISE_MATH_ROWS rows (ADDR_MOD_1 steps dest/srcb by that),
+            // so 16 / ELTWISE_MATH_ROWS are needed: 2 on Quasar (8-row), 4 on 4row_arch (4-row FPU).
             TTI_ZEROSRC(0, 0, 0, 0, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_A);
             TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0, ADDR_MOD_1, 0x0);
 
-            // For tiny-tiles, only the first 8 rows matter as they are the densely packed ones. We can skip the second copy in this case.
-            if (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS)
+            // Accumulate the remaining rows of the face: ELTWISE_MATH_ROWS per ELWADDDI, face_r_dim / ELTWISE_MATH_ROWS
+            // total (the first was emitted above). For tiny tiles (face_r_dim <= ELTWISE_MATH_ROWS) this is zero — only
+            // the first densely-packed rows matter. 4row_arch's 4-row FPU emits more ELWADDDIs than Quasar's 8-row.
+            // Count MUST match num_face_elwadddi used for replay_buf_len above.
+            const std::uint32_t num_face_elwadddi = tensor_shape.face_r_dim / ELTWISE_MATH_ROWS;
+            for (std::uint32_t i = 1U; i < num_face_elwadddi; i++)
             {
                 TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0, ADDR_MOD_1, 0x0);
             }
@@ -355,17 +372,19 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
  * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
  * <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam EN_32BIT_DEST: Use the active destination addressing mode when clearing the scratch row.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
-template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_32BIT_DEST>
 inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
 {
     constexpr std::uint32_t MOP_OUTER_LOOP      = 1;
     constexpr std::uint32_t MOP_INNER_LOOP      = 1;
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
-    constexpr bool RUN_FID_LOOPS = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
-    const std::uint32_t replay_buf_len =
-        6 + tensor_shape.total_num_faces() - 1 + (RUN_FID_LOOPS ? ((tensor_shape.total_num_faces() - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES) : 0);
+    constexpr bool RUN_FID_LOOPS       = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
+    constexpr std::uint32_t b2a_moves  = FACE_R_DIM / ELTWISE_MATH_ROWS;
+    const std::uint32_t replay_buf_len = 4 + b2a_moves + tensor_shape.total_num_faces() - 1 +
+                                         (RUN_FID_LOOPS ? ((tensor_shape.total_num_faces() - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES) : 0);
 
     load_replay_buf(
         0,
@@ -375,9 +394,9 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
         0,
         [tensor_shape]
         {
-            // Set up a dest addr to output temp results into, has to be less than 64 (to not write into next tile)
+            // Set up a dest addr to output temp results into, has to be less than 16 (to not write into next tile)
             // but also has to be greater than 0 (where results are expected)
-            constexpr std::uint32_t scratch_dst_addr = 16;
+            constexpr std::uint32_t scratch_dst_addr = 8;
 
             // Pool all faces together (default 4 faces), this will generate 1x16 row of result at dst index scratch_dst_addr
             // No src/dest counters are incremented
@@ -407,12 +426,14 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
             // Following will move 1x16 pool result to SrcB to be transposed into 16 rows
             TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1, scratch_dst_addr);
 
-            // copy over all 16 rows from B to A
-            TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
-            TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
+#pragma GCC unroll 4
+            for (const auto row : fpu_row_offsets<FACE_R_DIM>())
+            {
+                TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + row, ADDR_MOD_0, FPU_MOV_ROWS, p_movb2a::SRCB_ROW32_OFFSET + row);
+            }
 
             // zero out scratch in dest
-            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, scratch_dst_addr);
+            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, EN_32BIT_DEST, 0, ADDR_MOD_0, scratch_dst_addr);
 
             if constexpr (RUN_FID_LOOPS)
             {
@@ -451,7 +472,7 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
         if (tensor_shape.face_r_dim < (FACE_R_DIM >> 1))
         {
             // For face_r_dim < 8, dest will be sparse with faces placed every 8 rows.
-            addr_mod_0_dest_incr = static_cast<std::uint16_t>(ELTWISE_MATH_ROWS);
+            addr_mod_0_dest_incr = static_cast<std::uint16_t>(MAX_FPU_ROWS);
         }
         else
         {
@@ -488,16 +509,27 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
  *
  * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam EN_32BIT_DEST: Set to true when destination registers use 32-bit addressing.
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
  * <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam is_int_fpu_en: When true for REDUCE_ROW, skip MOP programming (runtime int FPU path).
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ * @note PoolType::MIN is rejected here. Nothing reduces without this init, so that closes the whole
+ *       FPU path to it.
  */
-template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
+template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_init_(const TensorShape tensor_shape)
 {
+    // There is no min-pool instruction - the FPU has GMPOOL (max) and GAPOOL (average/sum) - so MIN
+    // would not fail here, it would quietly average, and the unpacker would pad with zero where a
+    // min reduce needs +inf. PoolType::MIN exists for the SFPU reduce, which implements it.
+    static_assert(
+        POOL_TYPE != PoolType::MIN,
+        "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
+        "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     _llk_math_reduce_addrmod_<REDUCE_DIMENSION, MATH_FIDELITY_TYPE>(tensor_shape);
 
@@ -514,7 +546,7 @@ inline void _llk_math_reduce_init_(const TensorShape tensor_shape)
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
     {
-        _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
+        _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE, EN_32BIT_DEST>(tensor_shape);
     }
 
     // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
