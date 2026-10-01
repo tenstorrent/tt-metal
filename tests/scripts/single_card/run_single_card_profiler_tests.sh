@@ -51,7 +51,7 @@ run_mid_run_data_dump() {
     remove_default_log_locations
     echo "Smoke test, checking mid-run device data dump for hangs"
     mkdir -p $PROFILER_ARTIFACTS_DIR
-    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
+    python -m tracy --no-web-server -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
     python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
 }
 
@@ -75,7 +75,7 @@ run_accumulate_profiler_test() {
     echo "Sanity test: L1-accumulate device profiling coexists with dispatch-core profiling, accumulates worker zones, and skips the perf report"
     mkdir -p $PROFILER_ARTIFACTS_DIR
     # 1000-matmul workload exercises the full accumulate path and accumulate<->dispatch-core coexistence (no marker mismatch).
-    python -m tracy -p --enable-accumulate-profiling --profile-dispatch-cores -m pytest tests/ttnn/tracy/test_dispatch_profiler.py::test_with_ops -k WORKER
+    python -m tracy --no-web-server -p --enable-accumulate-profiling --profile-dispatch-cores -m pytest tests/ttnn/tracy/test_dispatch_profiler.py::test_with_ops -k WORKER
     python $PROFILER_TEST_SCRIPTS_ROOT/verify_accumulate_profiler.py
 }
 

@@ -17,7 +17,7 @@ else
 fi
 
 # Base tracy command parts
-TRACY_BASE="$PYTHON_CMD -m tracy -v -r -p"
+TRACY_BASE="$PYTHON_CMD -m tracy --no-web-server -v -r -p"
 PYTEST_CMD="-m pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]"
 BASE_DIR="test_runtime_analysis_outputs"
 

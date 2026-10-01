@@ -90,7 +90,7 @@ def _build_profiler_cmd(
     cmd_call = "" if is_command_binary_exe else "-m"
     # Quote the embedded command so that arguments like `-k "expr with spaces"` survive through the outer shell
     quoted_command = command if is_command_binary_exe else shlex.quote(command)
-    return f"python3 -m tracy -p {python_post_process_opt} -o {output_profiler_dir} {check_return_code} {device_analysis_opt} {sum_profiling_opt} {op_support_count_opt} {capture_perf_counters_opt} -t 5000 {cmd_call} {quoted_command}"
+    return f"python3 -m tracy --no-web-server -p {python_post_process_opt} -o {output_profiler_dir} {check_return_code} {device_analysis_opt} {sum_profiling_opt} {op_support_count_opt} {capture_perf_counters_opt} -t 5000 {cmd_call} {quoted_command}"
 
 
 def merge_pass_csv(pass1_csv_path, pass2_csv_path):

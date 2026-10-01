@@ -33,7 +33,7 @@ def profile_command(test_command, output_folder, name_append, collect_noc_traces
     if perf_counter_groups:
         options += f" --profiler-capture-perf-counters={perf_counter_groups}"
 
-    opProfilerTestCommand = f"python3 -m tracy -v -r -p {options} -m '{test_command}'"
+    opProfilerTestCommand = f"python3 -m tracy --no-web-server -v -r -p {options} -m '{test_command}'"
     subprocess.run([opProfilerTestCommand], shell=True, check=False, env=currentEnvs)
 
 

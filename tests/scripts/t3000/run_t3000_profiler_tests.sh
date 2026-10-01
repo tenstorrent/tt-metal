@@ -10,7 +10,7 @@ run_mid_run_data_dump() {
     remove_default_log_locations
     echo "Smoke test, checking mid-run device data dump for hangs"
     mkdir -p $PROFILER_ARTIFACTS_DIR
-    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
+    python -m tracy --no-web-server -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
     runDate=$(ls $PROFILER_OUTPUT_DIR/)
     cat $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
     python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
@@ -20,7 +20,7 @@ run_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    python -m tracy -v -r -p -m "pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-sd35_prompt-check-mesh_device0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+    python -m tracy --no-web-server -v -r -p -m "pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-sd35_prompt-check-mesh_device0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
 
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
@@ -59,7 +59,7 @@ run_multi_host_tracy_smoke() {
     tt-run --bare \
         --mpi-args "--allow-run-as-root" \
         --rank-binding tests/ttnn/distributed/config/t3k_tracy_smoke_rank_bindings.yaml \
-        --tracy "-r" \
+        --tracy "--no-web-server -r" \
         pytest tests/ttnn/distributed/test_tracy_multi_host_smoke.py | tee $PROFILER_ARTIFACTS_DIR/test_out.log
     tt_run_status=${PIPESTATUS[0]}
     set -e
