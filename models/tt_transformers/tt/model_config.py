@@ -1841,8 +1841,17 @@ class ModelArgs:
                     k=self.dim,
                     n=self.qkv_size // self.num_devices,
                     num_cores=self.attn_input_grid.num_cores,
-                    num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(
-                        TensorGroup.WQKV, self.qkv_size // self.num_devices
+                    num_workers_per_dram_bank=(
+                        2
+                        if self.device_name == "P150"
+                        and math.ceil(
+                            (self.qkv_size // self.num_devices) / (ttnn.TILE_SIZE * self.dram_grid_size.x)
+                        )
+                        % 2
+                        == 0
+                        else self.get_dram_sharded_matmul_num_workers(
+                            TensorGroup.WQKV, self.qkv_size // self.num_devices
+                        )
                     ),
                 )
         elif mode == Mode.PREFILL:
