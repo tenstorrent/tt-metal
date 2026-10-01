@@ -22,14 +22,16 @@ void bind_experimental_fabric_all_gather_operation(nb::module_& mod) {
 
             Per chip, per ring direction and per link one link worker core reads (its own shard from
             the input, relayed shards from the output) and sends each chunk one fabric hop into the same
-            pages of the neighbour's output; one copy core per link writes the chip's own shard. Link
-            workers sit as close as the core grid allows to their link's Ethernet core. Chunks are runs
-            of pages consecutive in one DRAM bank, one per packet; relays wait on an arrival counter
-            incremented by every 8th packet; calls are fenced (no chip writes into a neighbour's output
-            before the neighbour has started the same call). Even rings are balanced (the opposite shard
-            travels half each way). With ``cluster_axis=None`` on a torus whose sides are both at least
-            3, the mesh is covered by two edge-disjoint Hamiltonian cycles, so every chip uses all four
-            neighbours; otherwise by a snake ring. The output is always in row-major chip order.
+            pages of the neighbour's output; copy cores write the chip's own shard (and convert an
+            ND-sharded input). Link workers sit as close as the core grid allows to their link's Ethernet
+            core. Chunks are runs of pages consecutive in one DRAM bank, one packet each; the last packet
+            of every shard a link worker sends increments the neighbour's arrival counter, and the
+            neighbour relays that shard once it has arrived. Calls are fenced (no chip writes into a
+            neighbour's output before the neighbour has started the same call). Even rings are balanced
+            (the opposite shard travels half each way). With ``cluster_axis=None`` on a torus whose
+            sides are both at least 3, the mesh is covered by two edge-disjoint Hamiltonian cycles, so
+            every chip uses all four neighbours; otherwise by a snake ring. The output is always in
+            row-major chip order.
 
             Args:
                 input_tensor: Row-major or tile-layout device tensor in DRAM.
