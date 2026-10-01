@@ -212,3 +212,24 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Verified: reference passes (pcc 0.999997, rel 0.0024, worst row 0.0047). Stub fails (pcc 0). The device gate already passes with the existing TtRMSNorm registration: pcc 0.999996, rel 0.0029, ratio [0.9962, 1.0038], worst row 0.0061, slices 0.0027-0.0030, x0.1 rel 0.0024 / worst row 0.0045.
 - The first `FAIL pcc=0` line comes from the precompile collect pass. Ignore it.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_ffn_norm.py`
+
+## C.sliding_moe.router.test.1
+- Replaced the rendered test with the prior bring-up's frozen test (`models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_router.py`): same golden (rung s4096, chunk 2048, layer 1 [2048, 256]), same reference, so its limits still apply.
+- Added the guards `run_component_test` has: in device mode the test fails if the step is deferred to op-gen or if `device_component` returns a CPU bridge.
+- Checks: PCC >= 0.99 (gated), exactly 8 nonzeros per row, weights >= 0, mean selection overlap >= 0.985, matched-row weight rel L2 <= 0.005, row sums 1 +- 0.01.
+- Reference: PCC 0.999328, overlap 0.99878, matched 2028/2048, rel L2 0.00159, row sums 1.0. Stub: PCC 0, fails.
+- Device gate: currently fails with NotImplementedError (no router module yet; that is the implement step).
+- Implementer: compute the logits in fp32, and do the top-k selection on fp32 (or bias-recentred) sigmoid + bias. Rounding the bias or the choice score to bf16 fails the gate. The weights are the unbiased sigmoid, renormalized. Under CP=4 the output must be the full [S, 256], with the 4 slices in order.
+- Re-run: `BRINGUP_IMPL=reference|stub scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_router.py` (PYTHONPATH=$PWD).
+
+## C.sliding_moe.router.implement.1
+- Copied the prior `mimo_v2_6_d_p/tt/router.py:TtRouter` into `tt/router.py`. The math is unchanged: fp32 weight, HiFi4 + fp32 acc linear with fp32 output, SFPU sigmoid, fp32 bias add, `ttnn.topk(8)`, gather of the unbiased sigmoid, sum/div, and a bf16 `ttnn.scatter` into a zeros table to get the dense boundary.
+- CP=4 changes: the weight and bias are replicated, and each chip routes only its own S/4 rows. There is no CCL. The zeros (and the bias in fused mode) are built once at load for max_rows = max chunk / 4 (1280) and sliced on the device for each chunk.
+- `MIMO_ROUTER_MODE=fused` (moe_grouped_topk, TF32 keys) can still be selected for comparison.
+- hooks changes:
+  - Added `_max_chunk`, `_router_module` and `_router_host_fn`. The host fn takes the CP slices in and concatenates the per-chip [S/4, 256] outputs.
+  - Added `device_component` "router".
+  - Added "router" to `DEVICE_STEPS["sliding_moe"]` and to the hybrid overrides.
+  - full_moe is not touched; its router is not gated yet.
+- Gate: PASS. pcc_router_L01 0.999129, nnz 8/row, selection overlap 0.99841, matched 2022/2048, matched rel L2 0.00102, row sums [0.9976, 1.0020]. The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_router.py`

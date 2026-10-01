@@ -145,6 +145,52 @@ def _attention_host_fn(mesh, module, cache_of):
     return fn
 
 
+def _max_chunk(spec):
+    """Largest chunk any rung or the target runs."""
+    chunks = [int(r.get("chunk", 0)) for r in spec.data.get("ladder", [])]
+    chunks.append(int((spec.data.get("target") or {}).get("chunk", 0)))
+    return max(chunks)
+
+
+def _router_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtRouter (replicated weight, each chip routes its own S/4 CP rows, fp32 logits, fp32 sigmoid + bias choice,
+    ttnn.topk). Zero/bias tables are built once for the largest per-chip slice (max chunk / 4).
+    MIMO_ROUTER_MODE=fused selects moe_grouped_topk (TF32 keys) for comparison."""
+    import os
+
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig
+    from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
+    from models.demos.mimo_v2_6_d_p_cp4.tt.router import TtRouter
+
+    loader = loader or WeightLoader(hf_path(spec))
+    cfg = cfg or MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
+    assert cfg.n_group == 1 and cfg.scoring_func == "sigmoid" and cfg.norm_topk_prob
+    p = f"model.layers.{layer}.mlp.gate."
+    w = loader.get(p + "weight").float()
+    b = loader.get(p + "e_score_correction_bias").float()
+    rs = cfg.routed_scaling_factor if cfg.routed_scaling_factor is not None else 1.0
+    rows = -(-_max_chunk(spec) // mesh.get_num_devices())
+    mode = os.environ.get("MIMO_ROUTER_MODE", "fp32")
+    return TtRouter(mesh, w, b, rows, top_k=cfg.num_experts_per_tok, route_scale=rs, mode=mode)
+
+
+def _router_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> dense routing host [S, E]: CP slices in, the 4 per-chip [S/4, E] results concatenated."""
+    import ttnn
+    from models.demos.mimo_v2_6_d_p_cp4.tt.rms_norm import cp_to_host, to_device_cp
+
+    def fn(ctx, x):
+        xd = to_device_cp(mesh, x)
+        dense, idx, wts = module(xd)
+        y = cp_to_host(mesh, dense)
+        for t in (xd, dense, idx, wts):
+            ttnn.deallocate(t)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def device_component(mesh, spec, layer, step):
     if step in _NORM_WEIGHTS:
         return _cp_host_fn(mesh, _norm_module(mesh, spec, layer, step))
@@ -152,6 +198,8 @@ def device_component(mesh, spec, layer, step):
         return _residual_host_fn(mesh)
     if step == "mlp":
         return _cp_host_fn(mesh, _mlp_module(mesh, spec, layer))
+    if step == "router":
+        return _router_host_fn(mesh, _router_module(mesh, spec, layer))
     if step == "attention":
         from models.demos.mimo_v2_6_d_p_cp4.tt.ccl import RingCCL
 
@@ -179,7 +227,7 @@ def device_component(mesh, spec, layer, step):
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
-    "sliding_moe": {"attn_norm", "attention"},
+    "sliding_moe": {"attn_norm", "attention", "router"},
     "full_moe": set(),
 }
 
@@ -228,6 +276,8 @@ class HybridDeviceModel:
             ov.update({s: _residual_host_fn(mesh) for s in steps if s in _RESIDUAL_STEPS})
             if "mlp" in steps:
                 ov["mlp"] = _cp_host_fn(mesh, _mlp_module(mesh, spec, i, loader))
+            if "router" in steps:
+                ov["router"] = _router_host_fn(mesh, _router_module(mesh, spec, i, loader, self.cfg))
             if "attention" in steps:
                 from models.demos.mimo_v2_6_d_p_cp4.tt.ccl import RingCCL
 
