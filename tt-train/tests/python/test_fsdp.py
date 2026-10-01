@@ -397,6 +397,26 @@ class TestFullyShardLinear:
         with expect_error(RuntimeError, "already wrapped with fully_shard"):
             ttml.fsdp.fully_shard(linear)
 
+    def test_replicate_patterns_keep_params_replicated(self):
+        """Params matching ``replicate`` are left unsharded."""
+        linear = LinearLayer(64, 48, has_bias=True)
+        ttml.fsdp.fully_shard(linear, replicate=["bias"])
+
+        assert linear.bias.tensor.shape() == [1, 1, 1, 48]
+        assert not ttml.fsdp.is_fsdp_managed(linear.bias.tensor)
+        assert ttml.fsdp.is_fsdp_managed(linear.weight.tensor)
+        assert ttml.fsdp.replicated_parameters(linear) == {"bias": ["bias"]}
+
+    def test_replicate_rejects_a_bare_string(self, expect_error):
+        linear = LinearLayer(64, 48, has_bias=True)
+        with expect_error(TypeError, "replicate must be a list of regex patterns"):
+            ttml.fsdp.fully_shard(linear, replicate="bias")
+
+    def test_replicate_rejects_an_invalid_regex(self, expect_error):
+        linear = LinearLayer(64, 48, has_bias=True)
+        with expect_error(ValueError, "invalid replicate pattern"):
+            ttml.fsdp.fully_shard(linear, replicate=["bias("])
+
     def test_invalid_axis_raises(self, expect_error):
         """Sharding on an axis the mesh doesn't have raises before any state change."""
         linear = LinearLayer(64, 128, has_bias=False)
@@ -467,7 +487,8 @@ class TestFSDPEquivalence:
         rng = np.random.default_rng(seed)
         return rng.standard_normal((batch_size, 1, seq_len, features)).astype(np.float32) * 0.1
 
-    def test_forward_matches_reference(self):
+    @pytest.mark.parametrize("replicate", [(), ("fc1.bias",)], ids=["sharded", "bias_replicated"])
+    def test_forward_matches_reference(self, replicate):
         """FSDP forward output ≈ replicated-reference forward output."""
         in_features, hidden, out_features = 64, 128, 64
         batch_size, seq_len = 2, 32
@@ -485,7 +506,7 @@ class TestFSDPEquivalence:
         # ---- FSDP: same initial weights, fully_shard, same input.
         fsdp_model = _build_block_with_known_weights(in_features, hidden, out_features, seed=42)
         fsdp_model.eval()
-        ttml.fsdp.fully_shard(fsdp_model)
+        ttml.fsdp.fully_shard(fsdp_model, replicate=replicate)
         x_fsdp = ttml.autograd.Tensor.from_numpy(input_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         out_fsdp = fsdp_model(x_fsdp)
         out_fsdp_np = _read_replicated_to_numpy(out_fsdp, self.mesh)
@@ -494,7 +515,8 @@ class TestFSDPEquivalence:
         assert out_fsdp_np.shape == out_ref_np.shape
         np.testing.assert_array_equal(out_fsdp_np, out_ref_np)
 
-    def test_backward_matches_reference(self):
+    @pytest.mark.parametrize("replicate", [(), ("fc1.bias",)], ids=["sharded", "bias_replicated"])
+    def test_backward_matches_reference(self, replicate):
         """FSDP gathered gradients ≈ replicated-reference gradients."""
         in_features, hidden, out_features = 64, 128, 64
         batch_size, seq_len = 2, 32
@@ -522,7 +544,7 @@ class TestFSDPEquivalence:
         # ---- FSDP backward
         fsdp_model = _build_block_with_known_weights(in_features, hidden, out_features, seed=42)
         fsdp_model.train()
-        ttml.fsdp.fully_shard(fsdp_model)
+        ttml.fsdp.fully_shard(fsdp_model, replicate=replicate)
         x_fsdp = ttml.autograd.Tensor.from_numpy(input_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         out_fsdp = fsdp_model(x_fsdp)
         loss_fsdp = ttml.ops.unary.mean(out_fsdp)
@@ -533,8 +555,11 @@ class TestFSDPEquivalence:
             if not t.is_grad_initialized():
                 continue
             grad_t = t.get_grad_tensor()
-            shard_dim = int(t._fsdp_shard_dim)
-            fsdp_grads[name] = _read_fsdp_sharded_to_numpy(grad_t, self.mesh, shard_dim)
+            if ttml.fsdp.is_fsdp_managed(t):
+                fsdp_grads[name] = _read_fsdp_sharded_to_numpy(grad_t, self.mesh, int(t._fsdp_shard_dim))
+            else:
+                # Replicated: every rank got the same input, so the grads already match.
+                fsdp_grads[name] = _read_replicated_to_numpy(grad_t, self.mesh)
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
         assert set(fsdp_grads.keys()) == set(

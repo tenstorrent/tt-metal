@@ -93,6 +93,7 @@ def fully_shard(
     shard_dim: Union[int, Literal["auto"]] = "auto",
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
+    replicate: Sequence[str] = (),
 ) -> AbstractModuleBase
 ```
 
@@ -114,6 +115,7 @@ Wraps `module` in place and returns it. After the call:
 | `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto picks `rank-2` (the typical "first matmul weight dim" for `[1, 1, O, I]` weights), falls back to `rank-1` if `rank-2` is already taken by another mesh axis (e.g. TP) or has size 1. Parameters whose chosen dim is not divisible by the FSDP axis size are skipped with a warning. |
 | `mesh_axis` | `"fsdp"` | Name of the mesh axis to shard across. Must exist on the mesh and have size > 1. Kept distinct from `"dp"` so a 2D mesh `("fsdp", "dp")` cleanly supports hybrid sharded data parallel later. |
 | `reshard_after_forward` | `True` | If `True`, weights are resharded between forward and backward to keep peak memory low; the backward-pre callback re-gathers just in time. If `False`, weights stay gathered between forward and backward — cheaper in CCL but uses more memory. |
+| `replicate` | `()` | Regex patterns of parameters to keep replicated instead of sharding, searched for (`re.search`) in each parameter's dotted name relative to `module`. See [Keeping parameters replicated](#keeping-parameters-replicated). |
 
 ### Recommended usage pattern (FSDP2-style root)
 
@@ -131,6 +133,42 @@ is what gives the canonical "one block gathered at a time" memory profile.
 
 You can wrap any other granularity (e.g. only every other block, or just
 the root), but per-block wrapping is the granularity we test against.
+
+### Keeping parameters replicated
+
+Some parameters are too small to shard into whole 32×32 tiles. Their
+`all_gather` and `reduce_scatter` then take ttnn's slow composite path on
+every step. Keeping them replicated skips those CCLs; their gradients are
+just all-reduced once per step.
+
+List them with `replicate=[...]`, or in `device_config` for the
+[training example](/tt-train/sources/examples/train/train.py) and the
+[GRPO Qwen3 completer](/tt-train/sources/examples/grpo/utils/qwen3_completer.py):
+
+```yaml
+device_config:
+  enable_fsdp: true
+  mesh_shape: [32, 1]
+  fsdp_replicate_params: ["q_norm.weight", "k_norm.weight"]
+```
+
+The run logs how many parameters were kept replicated and warns about
+patterns that matched nothing. `ttml.fsdp.replicated_parameters(model)`
+lists them.
+
+On Qwen3-0.6B at FSDP 8, replicating the q/k norms cut step time by 9%
+(278.6 → 253.3 ms).
+
+**Cost.** Every device holds the full parameter, its gradient and its
+optimizer state. For small parameters that's negligible: Qwen3-32B's 128
+q/k norms take ~4 MiB per device instead of ~1 MiB. Don't replicate large
+matrices or embeddings.
+
+**Gradient sync.** Each FSDP rank sees different data, so the training loop
+must average replicated gradients over the FSDP axis with
+`ttml.sync_gradients(model.parameters(), axis_names=("fsdp",))` (or
+`("dp", "fsdp")` under HSDP). It skips sharded parameters, so one call
+covers the whole model. `SFTTrainer` and `GRPOTrainer` already do this.
 
 ---
 
@@ -233,8 +271,10 @@ host-roundtrip:
 
 `ttml.sync_gradients(model.parameters(), axis_names=("dp",))` continues to
 work exactly like in DDP. For pure-FSDP runs (no `"dp"` axis on the mesh)
-it is a no-op: gradients have already been reduce-scattered in
-`backward_post`. For a hybrid mesh (`"fsdp"` and `"dp"`), each parameter
+it is a no-op for sharded parameters, whose gradients were already
+reduce-scattered in `backward_post`. Replicated parameters (from `replicate=`,
+or ones that couldn't be sharded) still need an all-reduce over `"fsdp"`, so
+the trainers pass `axis_names=("dp", "fsdp")`. For a hybrid mesh (`"fsdp"` and `"dp"`), each parameter
 is filtered per-axis: FSDP-sharded params skip the `"fsdp"` axis (already
 reduce-scattered) but still all-reduce on the `"dp"` axis (replicated
 across DP groups). The same call covers both cases, no rewrites needed.

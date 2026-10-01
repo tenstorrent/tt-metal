@@ -174,6 +174,17 @@ class CausalLMDataset:
         }
 
 
+def _report_fsdp_replicated(model: Any, patterns: list[str]) -> None:
+    """Print how many params `fsdp_replicate_params` kept replicated, and any pattern that matched nothing."""
+    replicated = ttml.fsdp.replicated_parameters(model)
+    if replicated:
+        print(f"FSDP: {len(replicated)} parameter(s) kept replicated", flush=True)
+    matched = {p for ps in replicated.values() for p in ps}
+    unmatched = [p for p in patterns if p not in matched]
+    if unmatched:
+        print(f"WARNING: fsdp_replicate_params: no parameter matches {unmatched}", flush=True)
+
+
 def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[CausalLMDataset, CharTokenizer | None]:
     """Build (dataset, tokenizer). `.yaml`/`.yml` paths = pre-tokenized; otherwise plain text + char tokenizer."""
     is_pretokenized = data_path.endswith((".yaml", ".yml"))
@@ -472,9 +483,11 @@ def run_training(
     # owns sharding, not the trainer).
     if device_cfg.enable_fsdp:
         print("Sharding model...", flush=True)
+        replicate = device_cfg.fsdp_replicate_params
         for block in model.blocks:
-            ttml.fsdp.fully_shard(block)
-        ttml.fsdp.fully_shard(model)
+            ttml.fsdp.fully_shard(block, replicate=replicate)
+        ttml.fsdp.fully_shard(model, replicate=replicate)
+        _report_fsdp_replicated(model, replicate)
 
     # Materialize after fully_shard rewrote the mappers, so weights allocate already-sharded.
     if lazy_init:
