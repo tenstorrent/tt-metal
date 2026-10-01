@@ -1,5 +1,21 @@
 # #81 LTX_SDPA_EXP_APPROX A/B — status
 
+## RESULT (job 040, blx03, full mesh -> create_submesh(2,4), exit 0, no drop during the job)
+Rejected: approximate exp gives no speedup. Default stays 0; not for the eval pack.
+
+| block (traced AV, Linear 2x4) | flag 0 ms | flag 1 ms | delta | PCC video/audio (1 vs 0) |
+|---|---|---|---|---|
+| S1 F,H,W=19,17,30 | 13.990 | 14.009 | +0.13% | 0.999980 / 0.999990 |
+| S2 F,H,W=19,34,60 | 60.295 | 60.514 | +0.36% | 0.999990 / 0.999997 |
+
+Torch reference (video-only block, S1): PCC 0.999881 (flag 0) vs 0.999885 (flag 1).
+Projected e2e change at 4x8: (8*0.019+3*0.219)/4*48 = +0.01 s (noise, not a gain).
+Outputs differ between arms, so the flag does reach the kernels; SDPA here is not limited by exp.
+Logs: tmp/t81/run81.log.gz, tmp/t81/t81_results.txt. blx03 scratch dir removed.
+The tray-1 drop on blx03 at 17:19 UTC came during ltx-host job 051, 2.5 h after job 040 ended.
+
+## History
+
 Code: commit 8db2db59115 on ttp/t81-ltx-ring-sdpa-exp-approx-mode-a-b-ltx-sd (pushed). Env LTX_SDPA_EXP_APPROX
 (default 0) sets exp_approx_mode on all 5 SDPA configs in attention_ltx.py. CPU test
 test_sdpa_exp_approx_env_reaches_every_sdpa_config passes.
