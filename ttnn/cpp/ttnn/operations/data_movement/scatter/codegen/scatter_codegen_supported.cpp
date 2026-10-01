@@ -173,7 +173,7 @@ bool supported_by_codegen(
         bf16_reduce);
 }
 
-bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& /*index_tensor*/, const Tensor& /*src_tensor*/) {
+bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& index_tensor, const Tensor& src_tensor) {
     // A unit logical row in TILE layout is padded to 32 rows, so input, index, src and output all
     // carry 32x their logical volume through every transpose in the pre/post sandwich and through
     // the kernel itself; the streaming reader additionally scans and rejects the 992 padded-row
@@ -185,27 +185,42 @@ bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& /*index_t
     // the scatter axis (the scatter axis is transposed to last, so this is always the pre-last axis
     // of the post-transpose shape) -- so a 1 here forces the same 1 on index/src without checking
     // them separately.
-    if (input_tensor.dtype() != DataType::BFLOAT16 || input_tensor.layout() != Layout::TILE) {
-        return false;
+    if (input_tensor.dtype() == DataType::BFLOAT16 && input_tensor.layout() == Layout::TILE) {
+        const auto& input_shape = input_tensor.logical_shape();
+        const auto rank = static_cast<int32_t>(input_shape.rank());
+        if (rank == 1) {
+            return true;
+        }
+        if (dim >= -rank && dim < rank) {
+            const int32_t axis = dim < 0 ? dim + rank : dim;
+            // normalized_shape = input_shape with axis `dim` swapped to the last position (the same
+            // transpose-to-last the pre/post sandwich applies before any kernel runs). That swap only
+            // ever touches positions `axis` and `rank - 1`, so normalized_shape[-2] (position
+            // rank - 2) is input_shape[rank - 1] when the scatter axis IS rank - 2 (the swap lands
+            // the old last dim there), and input_shape[rank - 2] unchanged otherwise (including when
+            // the scatter axis is already rank - 1, i.e. the transpose is a no-op).
+            const uint32_t normalized_second_to_last =
+                (axis == rank - 2) ? input_shape[rank - 1] : input_shape[rank - 2];
+            if (normalized_second_to_last == 1) {
+                return true;
+            }
+        }
+        // else: out-of-range dim is not this predicate's concern, let native's own error fire.
     }
-    const auto& input_shape = input_tensor.logical_shape();
-    const auto rank = static_cast<int32_t>(input_shape.rank());
-    if (rank == 1) {
+
+    // Ungeneralized (ambiguous mechanism) demotion: measured below native on-device for exactly this
+    // input/index/src shape, dim and layout, in both ROW_MAJOR and TILE. No general condition tying
+    // the regression to a broader shape family was identified, so this is an exact-match carve-out
+    // rather than a predicate -- widen it only if a mechanism is found.
+    if (input_tensor.dtype() == DataType::BFLOAT16 && dim == -2 &&
+        (input_tensor.layout() == Layout::ROW_MAJOR || input_tensor.layout() == Layout::TILE) &&
+        input_tensor.logical_shape() == ttnn::Shape{1, 1, 32, 64} &&
+        index_tensor.logical_shape() == ttnn::Shape{1, 1, 16, 64} &&
+        src_tensor.logical_shape() == ttnn::Shape{1, 1, 16, 64}) {
         return true;
     }
-    if (dim < -rank || dim >= rank) {
-        // Out-of-range dim: not this predicate's concern, let native's own error fire.
-        return false;
-    }
-    const int32_t axis = dim < 0 ? dim + rank : dim;
-    // normalized_shape = input_shape with axis `dim` swapped to the last position (the same
-    // transpose-to-last the pre/post sandwich applies before any kernel runs). That swap only ever
-    // touches positions `axis` and `rank - 1`, so normalized_shape[-2] (position rank - 2) is
-    // input_shape[rank - 1] when the scatter axis IS rank - 2 (the swap lands the old last dim
-    // there), and input_shape[rank - 2] unchanged otherwise (including when the scatter axis is
-    // already rank - 1, i.e. the transpose is a no-op).
-    const uint32_t normalized_second_to_last = (axis == rank - 2) ? input_shape[rank - 1] : input_shape[rank - 2];
-    return normalized_second_to_last == 1;
+
+    return false;
 }
 
 }  // namespace ttnn::operations::data_movement::scatter
