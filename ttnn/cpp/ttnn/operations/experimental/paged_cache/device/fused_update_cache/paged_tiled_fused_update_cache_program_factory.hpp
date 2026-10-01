@@ -7,8 +7,9 @@
 #include "paged_fused_update_cache_device_operation_types.hpp"
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include "ttnn/metal_v2_artifacts.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -26,21 +27,20 @@ struct PagedTiledFusedUpdateCacheProgramFactory {
         uint32_t tile_update_offset_B = 0;
     };
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const PagedFusedUpdateCacheParams& operation_attributes,
         const PagedFusedUpdateCacheInputs& tensor_args,
         PagedFusedUpdateCacheResult& tensor_return_value);
 
     // Single source of truth for the cache_start_id / tile_update_offset_B formulas (shared by
-    // create_descriptor on a cache miss and override_runtime_arguments on a cache hit). Returns empty in
-    // index-tensor mode (positions read on-device).
+    // create_program_artifacts on a cache miss and override_runtime_arguments on a cache hit). Returns
+    // empty in index-tensor mode (positions read on-device).
     static std::vector<PerIndexOffsets> compute_tiled_fused_offsets(
         const PagedFusedUpdateCacheParams& operation_attributes, const PagedFusedUpdateCacheInputs& tensor_args);
 
-    // Cache-hit hook: patches the cached program's per-dispatch state in place (every buffer address
-    // plus the hash-excluded cache_start_id / tile_update_offset_B). No descriptor rebuild.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
+    // Cache-hit hook: re-applies every tensor binding plus the hash-excluded cache_start_id /
+    // tile_update_offset_B.
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
         const PagedFusedUpdateCacheParams& operation_attributes,
         const PagedFusedUpdateCacheInputs& tensor_args,
         PagedFusedUpdateCacheResult& tensor_return_value,
@@ -48,23 +48,22 @@ struct PagedTiledFusedUpdateCacheProgramFactory {
 };
 
 struct PagedTiledFusedUpdateCacheMeshWorkloadFactory {
-    // Per-coord program build.  Coordinates outside operation_attributes.mesh_coords
-    // (when provided) get an empty program — the legacy mesh path skipped them
-    // entirely; with the descriptor framework we still must hand back a descriptor
-    // for every dispatched coord, so we return an empty one for excluded coords.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // Per-coord program build. Coordinates outside operation_attributes.mesh_coords (when provided)
+    // get no program at all, which is what the ported-from path expressed by handing back an empty
+    // ProgramDescriptor for them.
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const PagedFusedUpdateCacheParams& operation_attributes,
         const PagedFusedUpdateCacheInputs& tensor_args,
         PagedFusedUpdateCacheResult& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
-    // Same program layout as the single-device factory, so it reuses that patch.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
+    // Same program layout as the single-device factory, so it reuses that patch. Only included
+    // coordinates have a program, so every range reaching this hook is an included one.
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
         const PagedFusedUpdateCacheParams& operation_attributes,
         const PagedFusedUpdateCacheInputs& tensor_args,
         PagedFusedUpdateCacheResult& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+        const ttnn::MeshCoordinateRange& range);
 };
 
 }  // namespace ttnn::experimental::prim

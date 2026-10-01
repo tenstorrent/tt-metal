@@ -17,6 +17,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 template <uint32_t in0_cb, uint32_t out_cb>
 ALWI void UNTILIZE_ONE_TILE() {
@@ -44,6 +46,7 @@ ALWI void TILIZE_ONE_TILE(uint32_t sync_cb) {
 }
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
     constexpr uint32_t onetile = 1;
 
     constexpr uint32_t in_cb = get_compile_time_arg_val(0);
@@ -59,12 +62,6 @@ void kernel_main() {
     CircularBuffer cb_in(in_cb);
     CircularBuffer cb_trans_mat(trans_mat_cb);
     CircularBuffer cb_rotated_in_interm(rotated_in_interm_cb);
-    CircularBuffer cb_cos_interm(cos_interm_cb);
-    CircularBuffer cb_sin_interm(sin_interm_cb);
-    CircularBuffer cb_out(out_cb);
-
-    uint32_t updated_cos_cb = cos_cb;
-    uint32_t updated_sin_cb = sin_cb;
 
 #ifdef DECODE_MODE
     constexpr uint32_t untilized_cos_cb = get_compile_time_arg_val(9);
@@ -81,13 +78,19 @@ void kernel_main() {
     pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
     TILIZE_ONE_TILE<untilized_sin_cb, retilized_sin_cb>(untilized_sin_sync_cb);
     TILIZE_ONE_TILE<untilized_cos_cb, retilized_cos_cb>(untilized_cos_sync_cb);
-    updated_cos_cb = retilized_cos_cb;
-    updated_sin_cb = retilized_sin_cb;
+    constexpr uint32_t updated_cos_cb = retilized_cos_cb;
+    constexpr uint32_t updated_sin_cb = retilized_sin_cb;
+    constexpr auto trig_bcast = BroadcastDim::Row;
+    constexpr auto trig_pop = PopPolicy::None;
+#else
+    constexpr uint32_t updated_cos_cb = cos_cb;
+    constexpr uint32_t updated_sin_cb = sin_cb;
+    constexpr auto trig_bcast = BroadcastDim::None;
+    constexpr auto trig_pop = PopPolicy::PerTile;
 #endif
 
     cb_trans_mat.wait_front(onetile);
     compute_kernel_hw_startup(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
-
     for (uint32_t i = 0; i < num_rows; ++i) {
         // rotated = in @ trans_mat  (HF rotate_half on a single 32x32 tile)
         cb_in.wait_front(onetile);
@@ -107,85 +110,17 @@ void kernel_main() {
 
         cb_rotated_in_interm.push_back(onetile);
 
-        // sin_interim = rotated * sin
-        CircularBuffer cb_updated_sin(updated_sin_cb);
-        cb_rotated_in_interm.wait_front(onetile);
-        cb_updated_sin.wait_front(onetile);
-        reconfig_data_format(rotated_in_interm_cb, updated_sin_cb);
-        pack_reconfig_data_format(sin_interm_cb);
-
-        tile_regs_acquire();
-#ifdef DECODE_MODE
-        mul_bcast_rows_init(rotated_in_interm_cb, updated_sin_cb);
-        mul_tiles_bcast_rows(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
-#else
-        mul_init(rotated_in_interm_cb, updated_sin_cb);
-        mul_tiles(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
-#endif
-        tile_regs_commit();
-
-        cb_rotated_in_interm.pop_front(onetile);
-#ifndef DECODE_MODE
-        cb_updated_sin.pop_front(onetile);
-#endif
-
-        cb_sin_interm.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile(0, sin_interm_cb);
-        tile_regs_release();
-
-        cb_sin_interm.push_back(onetile);
+        // sin_interim = rotated * sin  (chain waits+pops rotated_in_interm_cb; sin held/streamed per mode)
+        mul<input(rotated_in_interm_cb),
+            input(updated_sin_cb, trig_bcast, WaitPolicy::PerTile, trig_pop),
+            output(sin_interm_cb)>(IterationShape::tiles(onetile));
 
         // cos_interim = in * cos
-        CircularBuffer cb_updated_cos(updated_cos_cb);
-        cb_updated_cos.wait_front(onetile);
-        reconfig_data_format(in_cb, updated_cos_cb);
-        pack_reconfig_data_format(cos_interm_cb);
-
-        tile_regs_acquire();
-#ifdef DECODE_MODE
-        mul_bcast_rows_init(in_cb, updated_cos_cb);
-        mul_tiles_bcast_rows(in_cb, updated_cos_cb, 0, 0, 0);
-#else
-        mul_init(in_cb, updated_cos_cb);
-        mul_tiles(in_cb, updated_cos_cb, 0, 0, 0);
-#endif
-        tile_regs_commit();
-
-        cb_in.pop_front(onetile);
-#ifndef DECODE_MODE
-        cb_updated_cos.pop_front(onetile);
-#endif
-
-        cb_cos_interm.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile(0, cos_interm_cb);
-        tile_regs_release();
-
-        cb_cos_interm.push_back(onetile);
+        mul<input(in_cb, WaitPolicy::None, PopPolicy::PerTile),
+            input(updated_cos_cb, trig_bcast, WaitPolicy::PerTile, trig_pop),
+            output(cos_interm_cb)>(IterationShape::tiles(onetile));
 
         // out = cos_interim + sin_interim
-        cb_cos_interm.wait_front(onetile);
-        cb_sin_interm.wait_front(onetile);
-        reconfig_data_format(cos_interm_cb, sin_interm_cb);
-        pack_reconfig_data_format(out_cb);
-        add_init(cos_interm_cb, sin_interm_cb);
-
-        tile_regs_acquire();
-        add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
-        tile_regs_commit();
-
-        cb_cos_interm.pop_front(onetile);
-        cb_sin_interm.pop_front(onetile);
-
-        cb_out.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile(0, out_cb);
-        tile_regs_release();
-
-        cb_out.push_back(onetile);
+        add<input(cos_interm_cb), input(sin_interm_cb), output(out_cb)>(IterationShape::tiles(onetile));
     }
 }

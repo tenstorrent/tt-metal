@@ -209,6 +209,10 @@ unit_tests_legacy:
     config: 2x3_DISPATCH
     back2back: true
 
+  - filter: "*QuasarTraceMultipleReplaysAcrossCQs"
+    config: 2x3_DISPATCH
+    back2back: true
+
   - filter: "*QuasarFdsFixture*:-*DispatchEngineConcurrentEngines*"
     config: 2x3_DISPATCH
     back2back: true
@@ -495,7 +499,7 @@ unit_tests_data_movement:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_device:
-  - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
+  - filter: "*SimulatorFixture*QuasarIoWindowReadWrite*"
     config: 1x3
     back2back: true
     env:

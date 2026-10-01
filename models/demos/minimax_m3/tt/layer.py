@@ -252,7 +252,7 @@ class DecoderLayer:
                 hidden_states = (
                     self.mlp(hidden_states_post_norm)
                     if self.is_dense
-                    else self.mlp(hidden_states_post_norm, actual_isl=actual_isl)
+                    else self.mlp(hidden_states_post_norm, actual_isl=actual_isl, actual_start=cached_len)
                 )
             hidden_states_post_norm.deallocate(True)
 

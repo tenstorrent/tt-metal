@@ -39,7 +39,6 @@
 
 namespace tt::tt_metal {
 class Allocator;
-class MetalEnv;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -74,13 +73,10 @@ using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
     friend class MeshDeviceImpl;
-    friend class tt::tt_metal::MetalEnv;
 
 private:
-    MeshDevice() = default;
-    // [[Experimental]] Creates a MeshDevice that uses the given MetalEnv instance.
-    // This is used by MetalEnv::create_mesh_device and MetalEnv::create_unit_mesh_device.
-    explicit MeshDevice(MetalEnv& metal_env);
+    // Adopts a fully-constructed impl, so pimpl_ is never null.
+    explicit MeshDevice(std::unique_ptr<MeshDeviceImpl> impl);
 
     std::unique_ptr<MeshDeviceImpl> pimpl_;
 
@@ -123,7 +119,7 @@ public:
     [[deprecated(
         "Returns only the reference device's assignment, which is incorrect on heterogeneously-harvested "
         "meshes. Use get_optimal_dram_bank_to_logical_worker_assignment(noc, coord) instead.")]]
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const override;
 
     // Returns the optimal DRAM-bank-to-logical-worker assignment for the device at `coord` as a map from
     // DRAM bank id to the logical worker core that should service it. The assignment is a device-local
@@ -132,10 +128,11 @@ public:
     // arbitrary local device's assignment (best-effort, exact only on homogeneous meshes); it throws only
     // when the mesh has no local device to fall back to.
     std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
-        NOC noc, const MeshCoordinate& coord);
+        NOC noc, const MeshCoordinate& coord) const;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;

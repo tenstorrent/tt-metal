@@ -39,6 +39,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
+#include "tt_metal/impl/dispatch/host_device_transfer.hpp"
 
 namespace tt::tt_metal::tt_dispatch_tests::Common {
 
@@ -262,8 +263,8 @@ inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* devic
         }
 
         // Write to device once per bank (appropriate core and offset)
-        tt::tt_metal::detail::WriteToDeviceDRAMChannel(
-            device, bank_id, this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)], data.data);
+        tt::tt_metal::slow_dispatch::WriteToDeviceDRAMChannel(
+            *device, bank_id, this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)], data.data);
 
         this->base_result_data_addr[static_cast<int>(tt::CoreType::DRAM)] =
             this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)] + data.data.size() * sizeof(uint32_t);
@@ -437,7 +438,7 @@ inline bool DeviceData::validate_one_core(
     // Read results from device and compare to expected for this core.
     std::vector<uint32_t> results;
     if (core_type == tt::CoreType::DRAM) {
-        tt::tt_metal::detail::ReadFromDeviceDRAMChannel(device, bank_id, result_addr, size_bytes, results);
+        tt::tt_metal::slow_dispatch::ReadFromDeviceDRAMChannel(*device, bank_id, result_addr, size_bytes, results);
     } else {
         result_addr += bank_offset;
         results = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -968,29 +969,6 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
-inline CoreCoord sd_prefetch_core(const tt_metal::IDevice* device) {
-    return tt::tt_metal::detail::sd_cq_prefetch_core(device);
-}
-
-inline CoreCoord sd_spoof_prefetch_core(const tt_metal::IDevice* device) { return sd_prefetch_core(device); }
-
-inline CoreCoord sd_dispatch_core(const tt_metal::IDevice* device) {
-    return tt::tt_metal::detail::sd_cq_dispatch_core(device);
-}
-
-inline CoreCoord dispatch_core(const tt_metal::IDevice* device) { return sd_dispatch_core(device); }
-
-inline CoreCoord sd_virtual_core(const tt_metal::IDevice* device, const CoreCoord& logical_core) {
-    return tt::tt_metal::detail::sd_cq_virtual_core(device, logical_core);
-}
-
-inline tt::CoreType sd_cq_kernel_core_type(const tt_metal::IDevice* device) {
-    return tt::tt_metal::detail::resolve_sd_cq_kernel_core_type(device);
-}
-
-inline tt_metal::DataMovementProcessor prefetch_dm() { return tt::tt_metal::detail::prefetch_dm_processor(); }
-
-inline tt_metal::DataMovementProcessor dispatch_dm() { return tt::tt_metal::detail::dispatch_dm_processor(); }
 
 inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map() {
     return tt_metal::MetalContext::instance().dispatch_mem_map();
@@ -998,13 +976,13 @@ inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map() {
 
 inline tt_metal::KernelHandle create_sd_cq_kernel(
     tt_metal::Program& program,
-    tt_metal::IDevice* device,
+    const distributed::MeshDevice& mesh_device,
     const std::string& kernel_path,
     const CoreCoord& logical_core,
     [[maybe_unused]] tt_metal::DataMovementProcessor dm_processor,
     const std::map<std::string, std::string>& defines,
     const std::vector<uint32_t>& compile_args = {}) {
-    const tt::CoreType core_type = sd_cq_kernel_core_type(device);
+    const tt::CoreType core_type = detail::resolve_sd_cq_kernel_core_type(mesh_device);
     if (core_type == tt::CoreType::DISPATCH) {
         // Auto-assign free DMs by creation order (prefetch first -> DM0, dispatch -> DM1), matching
         // the Quasar Tensix interim path. dm_processor is not used here.
@@ -1018,7 +996,7 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
                 .defines = defines,
                 .is_legacy_kernel = true});
     }
-    if (device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         // Quasar interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1): CreateKernel skips
         // reserved DM0/DM1 and auto-assigns free user DMs (prefetch first -> DM2, …).
         // dm_processor is not used here.
@@ -1552,7 +1530,6 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_size,
     uint32_t prefetch_q_rd_ptr_addr,
-    uint32_t prefetch_q_pcie_rd_ptr_addr,
     uint32_t cmddat_q_base,
     uint32_t cmddat_q_pages,
     uint32_t scratch_db_base,
@@ -1597,7 +1574,6 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"PREFETCH_Q_BASE", std::to_string(prefetch_q_base)},
         {"PREFETCH_Q_SIZE", std::to_string(prefetch_q_size)},
         {"PREFETCH_Q_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr)},
-        {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(prefetch_q_pcie_rd_ptr_addr)},
         {"CMDDAT_Q_BASE", std::to_string(cmddat_q_base)},
         {"CMDDAT_Q_SIZE", std::to_string(cmddat_q_pages * SD_PREFETCH_CMDDAT_PAGE_SIZE)},
         {"SCRATCH_DB_BASE", std::to_string(scratch_db_base)},

@@ -139,18 +139,34 @@ ShardSpec generate_transpose_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     TensorMemoryLayout memory_layout,
-    std::optional<ShardOrientation> orientation_hint) {
+    std::optional<ShardOrientation> orientation_hint,
+    OutputTiling output_tiling) {
     auto* device = input_tensor.device();
+    const auto compute_grid_size = device->compute_with_storage_grid_size();
+    const auto input_orientation = input_tensor.shard_spec().has_value()
+                                       ? std::optional{input_tensor.shard_spec()->orientation}
+                                       : std::nullopt;
+    // Default preserves pre-existing tile-aligned synth; only RowMajor unlocks RM synth.
+    const bool is_tile = output_tiling != OutputTiling::RowMajor;
     auto spec = common::synthesize_output_shard_spec(
-        device->compute_with_storage_grid_size(),
+        compute_grid_size,
         padded_out_shape,
         memory_layout,
-        {.is_tile = true,
+        {.is_tile = is_tile,
          .orientation_hint = orientation_hint,
-         .input_orientation = input_tensor.shard_spec().has_value()
-                                  ? std::optional{input_tensor.shard_spec()->orientation}
-                                  : std::nullopt,
+         .input_orientation = input_orientation,
          .caller_tag = "Transpose"});
+    // Shrink only when we actually produced an RM synth; Default/Tile keep the pre-existing geometry.
+    if (!is_tile) {
+        spec = *common::shrink_shard_for_rm_page_alignment(
+            spec,
+            input_tensor.layout(),
+            input_tensor.element_size(),
+            static_cast<uint64_t>(padded_out_shape[-1]),
+            compute_grid_size,
+            memory_layout,
+            common::RmPageAlignmentMode::Lenient);
+    }
     log_debug(
         tt::LogOp,
         "Transpose: generated shard spec ({}, {}) over {} populated cores",

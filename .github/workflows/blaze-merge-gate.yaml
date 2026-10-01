@@ -21,6 +21,10 @@ name: Blaze Merge Gate
 # same commit, so JIT-compiled kernels and the linked libraries come from one
 # tt-metal rather than two.
 #
+# `dev-image` is the dev container this run built for the same commit. tt-blaze
+# JIT-compiles kernels with the SFPI in the container it runs in (not the tarball
+# or wheel), so the gate must run in this commit's image, not vars.DEV_IMAGE.
+#
 # The release build is tracy=false, so tt-blaze runs against the plain variant
 # (its pin-driven runs are profiler-only). The gate-tier tests that touch tracy at
 # all today do so defensively (an `import tracy` in a try/except, a
@@ -54,6 +58,12 @@ on:
           tt-metal submodule out here. Must be a commit fetchable from
           tenstorrent/tt-metal for as long as the blaze run lasts.
         required: true
+        type: string
+      dev-image:
+        description: >-
+          Dev image for `metal-ref` (`build-artifact`'s `dev-docker-image` output,
+          full ghcr ref). Empty = tt-blaze's repo-variable DEV_IMAGE.
+        required: false
         type: string
       blaze-ref:
         description: "tt-blaze branch/tag/SHA to run the gate from."
@@ -101,6 +111,7 @@ jobs:
           METAL_RUN_ID: ${{ inputs.metal-run-id }}
           METAL_REF: ${{ inputs.metal-ref }}
           BLAZE_REF: ${{ inputs.blaze-ref }}
+          DEV_IMAGE: ${{ inputs.dev-image }}
           TIMEOUT_MINUTES: ${{ inputs.wait-timeout-minutes }}
         shell: bash
         run: |
@@ -173,7 +184,8 @@ jobs:
             --ref "$BLAZE_REF" \
             -f metal-run-id="$METAL_RUN_ID" \
             -f metal-ref="$METAL_REF" \
-            -f dispatch-id="$DISPATCH_ID"; then
+            -f dispatch-id="$DISPATCH_ID" \
+            -f dev-image="$DEV_IMAGE"; then
             echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The token can read the workflow (checked above), so the usual causes are: no actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ci.yaml does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
             echo "- ❌ tt-blaze — dispatch rejected" >> "$GITHUB_STEP_SUMMARY"
             exit 1

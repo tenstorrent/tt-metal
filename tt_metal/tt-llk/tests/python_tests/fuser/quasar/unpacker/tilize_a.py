@@ -2,22 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.tilize_a import tilize_a_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.operand import BfdResource, bfd_current
-from fuser.tile_loop import LoopBlockRow, TileLoop
 from helpers.llk_params import DestAccumulation
 
 
 class UnpackerTilizeA(Unpacker):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
     per_block_init = True
+
+    golden_fn = staticmethod(tilize_a_golden)
 
     def perf_set_valid(
         self,
@@ -27,7 +29,7 @@ class UnpackerTilizeA(Unpacker):
         block: BlockData,
     ) -> str:
         set_b = "true" if config.dest_acc == DestAccumulation.Yes else "false"
-        return f"_perf_unpack_loop_set_valid<true, {set_b}>({block.block_tiles_x});\n"
+        return f"_perf_unpack_loop_set_valid<true, {set_b}>({block.block_cols});\n"
 
     def perf_clear_valid(
         self,
@@ -37,26 +39,13 @@ class UnpackerTilizeA(Unpacker):
         block: BlockData,
     ) -> str:
         clear_b = "true" if config.dest_acc == DestAccumulation.Yes else "false"
-        return f"_perf_math_loop_clear_valid<true, {clear_b}>({block.block_tiles_x});\n"
+        return f"_perf_math_loop_clear_valid<true, {clear_b}>({block.block_cols});\n"
 
     def get_headers(self) -> List[str]:
         return [
             "llk_unpack_common.h",
             "llk_unpack_tilize.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return (
-            self.tilize_golden(tensor_a, config, operation, compute_unit),
-            None,
-        )
 
     def init(
         self,
@@ -69,7 +58,7 @@ class UnpackerTilizeA(Unpacker):
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
         full_ct_dim = compute_unit.src_a.tile_count_x
-        block_ct_dim = block.block_tiles_x
+        block_ct_dim = block.block_cols
 
         return (
             bfd_program + f"_llk_unpack_tilize_init_<p_unpacr::UNP_A, {en_32bit_dest}>"
@@ -86,7 +75,7 @@ class UnpackerTilizeA(Unpacker):
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         num_faces_r_dim = compute_unit.src_a.tile_shape.num_faces_r_dim
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        l1_row_idx = f"{block.tile_id_global} * {num_faces_r_dim} * {face_r_dim}"
+        l1_row_idx = f"{block.tile_id_src_a} * {num_faces_r_dim} * {face_r_dim}"
 
         return (
             f"_llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>"
