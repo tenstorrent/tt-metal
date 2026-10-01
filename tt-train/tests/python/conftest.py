@@ -88,8 +88,8 @@ _MGD_ENV = "TT_MESH_GRAPH_DESC_PATH"
 _TTML_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _MGD_DIR = os.path.join(_TTML_ROOT, "configs", "mgd")
 _BUNDLED_MGD = {
-    ("blackhole", (1, 2)): "bh_galaxy_1_2_line_line.textproto",
-    ("blackhole", (2, 2)): "bh_galaxy_2_2_line_line.textproto",
+    ("blackhole", (1, 2)): "bh_1_2_line_line.textproto",
+    ("blackhole", (2, 2)): "bh_2_2_line_line.textproto",
     # The galaxy fabric is a torus in X; a LINE/LINE descriptor faults with SIGBUS.
     ("blackhole", (8, 4)): "bh_galaxy_8_4_torus_x.textproto",
 }
