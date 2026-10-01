@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -108,6 +109,12 @@ def _add_audio_stream(container, audio: Audio | None):
 
 def _mux_audio(container, audio_stream, audio: Audio) -> None:
     """Encode + mux the decoded waveform into ``audio_stream`` (created by ``_add_audio_stream``)."""
+    for packet in _encode_audio(audio_stream, audio):
+        container.mux(packet)
+
+
+def _encode_audio(audio_stream, audio: Audio) -> list:
+    """Encode the decoded waveform into ``audio_stream``'s AAC packets without muxing them."""
     import av
 
     samples = audio.waveform
@@ -136,19 +143,38 @@ def _mux_audio(container, audio_stream, audio: Audio) -> None:
         layout=cc.layout or "stereo",
         rate=cc.sample_rate or audio.sampling_rate,
     )
+    packets = []
     for resampled in resampler.resample(frame_in):
-        for packet in audio_stream.encode(resampled):
-            container.mux(packet)
-    for packet in audio_stream.encode():
-        container.mux(packet)
+        packets.extend(audio_stream.encode(resampled))
+    packets.extend(audio_stream.encode())
+    return packets
+
+
+_audio_pool: ThreadPoolExecutor | None = None
+
+
+def _encode_audio_async(audio_stream, audio: Audio | None) -> Future | None:
+    global _audio_pool
+    if audio is None or audio_stream is None:
+        return None
+    if _audio_pool is None:
+        _audio_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mp4-audio")
+    return _audio_pool.submit(_encode_audio, audio_stream, audio)
 
 
 def _x264_options() -> dict[str, str]:
     """libx264 options for the exports. ``LTX_EXPORT_LOSSLESS=1`` (parity/testing only) encodes losslessly so the
-    decoded frames equal the pre-encode frames bit for bit and a comparison measures the pipeline, not the codec."""
+    decoded frames equal the pre-encode frames bit for bit and a comparison measures the pipeline, not the codec.
+
+    The export is on the request's critical path. On a 1080p 145-frame clip, ultrafast at crf 20 encodes in about
+    0.15 s against 0.65 s for veryfast at crf 23, and lands closer to the source frames (Y PSNR 47.9 dB vs 45.6 dB);
+    the cost is a ~3.5x larger file. ``LTX_EXPORT_PRESET`` / ``LTX_EXPORT_CRF`` trade that back."""
     if os.environ.get("LTX_EXPORT_LOSSLESS", "0") != "0":
         return {"preset": "veryfast", "qp": "0"}
-    return {"preset": "veryfast", "crf": "23"}
+    return {
+        "preset": os.environ.get("LTX_EXPORT_PRESET", "ultrafast"),
+        "crf": os.environ.get("LTX_EXPORT_CRF", "20"),
+    }
 
 
 def _dump_audio_sidecar(output_path: str, audio: "Audio | None") -> None:
@@ -176,6 +202,7 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
         audio: decoded ``Audio``, or None
     """
     import av
+    import numpy as np
 
     t, h32, width = yuv_planar.shape
     height = h32 * 2 // 3
@@ -189,16 +216,24 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
     stream.thread_type = "AUTO"
 
     audio_stream = _add_audio_stream(container, audio)
+    # The AAC encode (~0.15 s for 6 s of audio) runs beside the video encode instead of after it. Only its
+    # codec context is touched off-thread: every stream is opened and the header written here, and all
+    # muxing stays on this thread.
+    container.start_encoding()
+    audio_packets = _encode_audio_async(audio_stream, audio)
 
+    # Wrap each frame in place: a copy per frame (~0.45 GB per clip) is as slow as the ultrafast encode itself.
+    # The encoder is flushed before return, so no frame outlives ``yuv_planar``.
     for frame_array in yuv_planar:
-        frame = av.VideoFrame.from_ndarray(frame_array, format="yuv420p")
+        frame = av.VideoFrame.from_numpy_buffer(np.ascontiguousarray(frame_array), format="yuv420p")
         for packet in stream.encode(frame):
             container.mux(packet)
     for packet in stream.encode():
         container.mux(packet)
 
-    if audio is not None and audio_stream is not None:
-        _mux_audio(container, audio_stream, audio)
+    if audio_packets is not None:
+        for packet in audio_packets.result():
+            container.mux(packet)
 
     container.close()
     _dump_audio_sidecar(output_path, audio)
@@ -238,8 +273,6 @@ def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 
     stream.width = width
     stream.height = height
     stream.pix_fmt = "yuv420p"
-    # "veryfast" preset + multi-threaded encode is ~5-8x faster than libx264's
-    # default "medium" single-threaded path, while crf 23 keeps the quality higher.
     stream.options = _x264_options()
     stream.thread_type = "AUTO"
 
