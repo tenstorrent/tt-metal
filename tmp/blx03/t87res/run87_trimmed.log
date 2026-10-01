@@ -1,0 +1,404 @@
+[t87] build=a613d669ee src=7d877a1e498 clock: hostfmax chip 31: exit=0 arb_max=1350 MHz (arbiter 7) aiclk=800
+2026-10-01 17:57:56.811 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/smarton/.cache/ttnn,model_cache_path=/home/smarton/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-01 17:57:57.684 | INFO     | models.tt_dit.tests.conftest:<module>:192 - Setting torch num_threads to 64
+2026-10-01 17:57:57.698 | INFO     | models.tt_dit.utils.host_affinity:reexec_pinned_before_torch:106 - host affinity: LTX tests (pytest_cmdline_main): re-exec pinned to 32 cores [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31] (was 64 CPUs); torch/ttnn will inherit this mask (LTX_PIN_CORES=0 disables)
+2026-10-01 17:58:00.139 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/smarton/.cache/ttnn,model_cache_path=/home/smarton/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-01 17:58:00.966 | INFO     | models.tt_dit.tests.conftest:<module>:192 - Setting torch num_threads to 64
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /home/smarton/fasth3/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /var/tmp/fasth3/t87/src
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, benchmark-5.2.3, timeout-2.4.0, anyio-4.15.1, dash-2.15.0
+timeout: 860.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0] 2026-10-01 17:58:01.195 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-10-01 17:58:01.195 | info     |             UMD | Cluster constructor started. (cluster.cpp:405)
+2026-10-01 17:58:01.209 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-01 17:58:01.209 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-01 17:58:01.341 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:654)
+2026-10-01 17:58:01.345 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-01 17:58:01.401 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:172)
+2026-10-01 17:58:01.401 | info     |             UMD | IOMMU: disabled (cluster.cpp:146)
+2026-10-01 17:58:01.401 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:149)
+2026-10-01 17:58:01.402 | info     |             UMD | Cluster constructor completed. (cluster.cpp:719)
+2026-10-01 17:58:01.422 | info     |             UMD | Starting devices in cluster (cluster.cpp:1305)
+2026-10-01 17:58:07.856 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1314)
+2026-10-01 17:58:07.935 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:439)
+2026-10-01 17:58:07.935 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:501)
+2026-10-01 17:58:07.954 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3190)
+2026-10-01 17:58:07.954 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3198)
+2026-10-01 17:58:07.956 | INFO     | conftest:mesh_device:638 - Keeping trace_region_size=500000000 from device_params (already set)
+2026-10-01 17:58:07.957 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:335)
+2026-10-01 17:58:07.957 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:439)
+2026-10-01 17:58:07.957 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:501)
+2026-10-01 17:58:07.970 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3190)
+2026-10-01 17:58:07.970 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3198)
+2026-10-01 17:58:08.569 | warning  |           Metal | Failed to create shared memory /tt_device_6898423274646070636_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.569 | warning  |           Metal | Failed to create shared memory /tt_device_4948279223759195036_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.569 | warning  |           Metal | Failed to create shared memory /tt_device_718521759540170522_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.570 | warning  |           Metal | Failed to create shared memory /tt_device_7263315574096971837_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.570 | warning  |           Metal | Failed to create shared memory /tt_device_2815251777217867177_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.570 | warning  |           Metal | Failed to create shared memory /tt_device_4384976856915881079_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.570 | warning  |           Metal | Failed to create shared memory /tt_device_15413520364740198816_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.570 | warning  |           Metal | Failed to create shared memory /tt_device_616135877008316595_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.571 | warning  |           Metal | Failed to create shared memory /tt_device_7598109457067298398_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.571 | warning  |           Metal | Failed to create shared memory /tt_device_7042223796481434835_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.571 | warning  |           Metal | Failed to create shared memory /tt_device_2460078428677784725_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.571 | warning  |           Metal | Failed to create shared memory /tt_device_4542664979921105054_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.571 | warning  |           Metal | Failed to create shared memory /tt_device_17833187522280872786_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.572 | warning  |           Metal | Failed to create shared memory /tt_device_14761127530954652022_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.572 | warning  |           Metal | Failed to create shared memory /tt_device_163459103931854025_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.572 | warning  |           Metal | Failed to create shared memory /tt_device_15153254912429356010_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.572 | warning  |           Metal | Failed to create shared memory /tt_device_3155080127720316465_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.572 | warning  |           Metal | Failed to create shared memory /tt_device_4245648133233881126_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.572 | warning  |           Metal | Failed to create shared memory /tt_device_1556309432690904338_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.573 | warning  |           Metal | Failed to create shared memory /tt_device_8970911958828007852_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.573 | warning  |           Metal | Failed to create shared memory /tt_device_11692727933911004819_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.573 | warning  |           Metal | Failed to create shared memory /tt_device_5947959828024447211_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.574 | warning  |           Metal | Failed to create shared memory /tt_device_16372337465892325073_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.574 | warning  |           Metal | Failed to create shared memory /tt_device_5165525547194267655_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.575 | warning  |           Metal | Failed to create shared memory /tt_device_10824766524365793840_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.575 | warning  |           Metal | Failed to create shared memory /tt_device_3905637836772609181_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.575 | warning  |           Metal | Failed to create shared memory /tt_device_16911889084360629996_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.576 | warning  |           Metal | Failed to create shared memory /tt_device_3748449504587914508_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.576 | warning  |           Metal | Failed to create shared memory /tt_device_3745857022126494719_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.576 | warning  |           Metal | Failed to create shared memory /tt_device_980781543545773439_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.577 | warning  |           Metal | Failed to create shared memory /tt_device_4772547318268112299_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.577 | warning  |           Metal | Failed to create shared memory /tt_device_12093205412074732381_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-01 17:58:08.655 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:320)
+2026-10-01 17:58:08.900 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:467)
+2026-10-01 17:58:08.900 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:337)
+2026-10-01 17:58:09.093 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-10-01 17:58:12.323 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 1024, 4096, (3, 3, 3), 21, 9, 8) -> channel_key=(1024, 4096, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 17:58:12.323 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 17:58:12.323 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 17:58:12.323 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 17:58:12.323 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 512, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 17:58:12.324 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 512, 4096, (3, 3, 3), 39, 17, 15) -> channel_key=(512, 4096, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-01 17:58:12.324 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 17:58:12.324 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 17:58:12.324 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 17:58:12.324 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 17:58:12.324 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 17:58:12.324 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 17:58:12.324 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 17:58:12.325 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 17:58:12.325 | INFO     | models.tt_dit.utils.conv3d:get_conv3d_config:787 - conv3d blocking [T-relaxed] (2, 4, 512, 512, (3, 3, 3), 75, 34, 30) -> reuse swept T=39 -> Cin=64 Cout=256 T=1 H=4 W=8
+2026-10-01 17:58:12.325 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.325 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.325 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.325 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.325 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.325 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.325 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.326 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.326 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.326 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.326 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.326 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 256, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 256, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=2 W=2
+2026-10-01 17:58:12.326 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 256, 512, (3, 3, 3), 147, 34, 30) -> channel_key=(256, 512, (3, 3, 3)) -> Cin=256 Cout=32 T=1 H=4 W=4
+2026-10-01 17:58:12.326 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 17:58:12.326 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 17:58:12.327 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 17:58:12.327 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 17:58:12.327 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 17:58:12.327 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 17:58:12.327 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 17:58:12.327 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 128, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 128, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 17:58:12.327 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:795 - conv3d blocking [fallback] (2, 4, 128, 48, (3, 3, 3), 147, 68, 60) -> channel_key=(128, 48, (3, 3, 3)) -> Cin=128 Cout=32 T=1 H=8 W=8
+2026-10-01 17:58:12.708 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/11964831197604765502/ in 322 ms (build.cpp:1113)
+2026-10-01 17:58:12.725 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/7922926686046823816/ in 340 ms (build.cpp:1113)
+2026-10-01 17:58:13.038 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/4933882341323333151/ in 308 ms (build.cpp:1113)
+2026-10-01 17:58:13.051 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/5566530352718015334/ in 320 ms (build.cpp:1113)
+2026-10-01 17:58:13.808 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/8277675019916890416/ in 323 ms (build.cpp:1113)
+2026-10-01 17:58:13.830 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/2797705841662589026/ in 345 ms (build.cpp:1113)
+2026-10-01 17:58:14.136 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/15016943822882936183/ in 302 ms (build.cpp:1113)
+2026-10-01 17:58:14.148 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/16059622528647500611/ in 314 ms (build.cpp:1113)
+2026-10-01 17:58:14.683 | info     |    BuildKernels | compiled tilize_metal2/8281182403200854539/ in 395 ms (build.cpp:1113)
+2026-10-01 17:58:14.695 | info     |    BuildKernels | compiled tilize_metal2/8281182403200854539/ in 407 ms (build.cpp:1113)
+2026-10-01 17:58:14.703 | info     |    BuildKernels | compiled tilize_metal2/8281182403200854539/ in 414 ms (build.cpp:1113)
+2026-10-01 17:58:18.605 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/8428642312185276797/ in 327 ms (build.cpp:1113)
+2026-10-01 17:58:18.615 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/7418712950237450154/ in 337 ms (build.cpp:1113)
+2026-10-01 17:58:18.918 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/12909257465722733222/ in 300 ms (build.cpp:1113)
+2026-10-01 17:58:18.935 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/12557006578490303714/ in 316 ms (build.cpp:1113)
+2026-10-01 17:58:19.668 | info     |    BuildKernels | compiled reader_unary_stick_layout_split_rows_multicore/13479073940419291002/ in 307 ms (build.cpp:1113)
+2026-10-01 17:58:19.725 | info     |    BuildKernels | compiled tilize_metal2/18034137603147316389/ in 362 ms (build.cpp:1113)
+2026-10-01 17:58:19.736 | info     |    BuildKernels | compiled tilize_metal2/18034137603147316389/ in 374 ms (build.cpp:1113)
+2026-10-01 17:58:19.745 | info     |    BuildKernels | compiled tilize_metal2/18034137603147316389/ in 383 ms (build.cpp:1113)
+2026-10-01 17:58:19.780 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 11/86 tensors (13%), 7s
+2026-10-01 17:58:20.250 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/4418094538508307829/ in 321 ms (build.cpp:1113)
+2026-10-01 17:58:20.276 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/6935444492914840041/ in 348 ms (build.cpp:1113)
+2026-10-01 17:58:20.577 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/7978947576223527770/ in 296 ms (build.cpp:1113)
+2026-10-01 17:58:20.596 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/17083613048053242053/ in 315 ms (build.cpp:1113)
+2026-10-01 17:58:21.008 | info     |    BuildKernels | compiled tilize_metal2/11447551061139900010/ in 366 ms (build.cpp:1113)
+2026-10-01 17:58:21.033 | info     |    BuildKernels | compiled tilize_metal2/11447551061139900010/ in 391 ms (build.cpp:1113)
+2026-10-01 17:58:21.034 | info     |    BuildKernels | compiled tilize_metal2/11447551061139900010/ in 392 ms (build.cpp:1113)
+2026-10-01 17:58:22.729 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/4893634291730887067/ in 332 ms (build.cpp:1113)
+2026-10-01 17:58:22.739 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/17830902877676318869/ in 343 ms (build.cpp:1113)
+2026-10-01 17:58:23.042 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/8166777407285035659/ in 300 ms (build.cpp:1113)
+2026-10-01 17:58:23.060 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/10571001437901034825/ in 319 ms (build.cpp:1113)
+2026-10-01 17:58:23.586 | info     |    BuildKernels | compiled writer_unary_interleaved_start_id_wh/8727641052173898377/ in 289 ms (build.cpp:1113)
+2026-10-01 17:58:23.671 | info     |    BuildKernels | compiled tilize_wh/7088165589817852169/ in 373 ms (build.cpp:1113)
+2026-10-01 17:58:23.672 | info     |    BuildKernels | compiled tilize_wh/17505414982069996400/ in 375 ms (build.cpp:1113)
+2026-10-01 17:58:23.674 | info     |    BuildKernels | compiled tilize_wh/17683707426726043912/ in 375 ms (build.cpp:1113)
+2026-10-01 17:58:23.675 | info     |    BuildKernels | compiled tilize_wh/1116382598624814280/ in 377 ms (build.cpp:1113)
+2026-10-01 17:58:23.679 | info     |    BuildKernels | compiled tilize_wh/17683707426726043912/ in 381 ms (build.cpp:1113)
+2026-10-01 17:58:23.681 | info     |    BuildKernels | compiled tilize_wh/17505414982069996400/ in 383 ms (build.cpp:1113)
+2026-10-01 17:58:23.687 | info     |    BuildKernels | compiled tilize_wh/7088165589817852169/ in 389 ms (build.cpp:1113)
+2026-10-01 17:58:23.688 | info     |    BuildKernels | compiled tilize_wh/1116382598624814280/ in 390 ms (build.cpp:1113)
+2026-10-01 17:58:23.692 | info     |    BuildKernels | compiled tilize_wh/17505414982069996400/ in 394 ms (build.cpp:1113)
+2026-10-01 17:58:23.695 | info     |    BuildKernels | compiled tilize_wh/7088165589817852169/ in 396 ms (build.cpp:1113)
+2026-10-01 17:58:23.697 | info     |    BuildKernels | compiled tilize_wh/17683707426726043912/ in 399 ms (build.cpp:1113)
+2026-10-01 17:58:23.698 | info     |    BuildKernels | compiled tilize_wh/1116382598624814280/ in 401 ms (build.cpp:1113)
+2026-10-01 17:58:23.738 | info     |    BuildKernels | compiled reader_unary_pad_multicore_both_dims/11942166706371319974/ in 440 ms (build.cpp:1113)
+2026-10-01 17:58:23.740 | info     |    BuildKernels | compiled reader_unary_pad_multicore_both_dims/4918629102379020339/ in 443 ms (build.cpp:1113)
+2026-10-01 17:58:24.781 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 33/86 tensors (38%), 12s
+2026-10-01 17:58:25.677 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/11551314111717337641/ in 330 ms (build.cpp:1113)
+2026-10-01 17:58:25.689 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/9965692878015322515/ in 342 ms (build.cpp:1113)
+2026-10-01 17:58:25.991 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/4571548701736395013/ in 300 ms (build.cpp:1113)
+2026-10-01 17:58:26.010 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/18161743833591924869/ in 319 ms (build.cpp:1113)
+2026-10-01 17:58:26.829 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/6784213495737186831/ in 337 ms (build.cpp:1113)
+2026-10-01 17:58:26.833 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/10671265793108535401/ in 340 ms (build.cpp:1113)
+2026-10-01 17:58:27.136 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/1935296347525929284/ in 298 ms (build.cpp:1113)
+2026-10-01 17:58:27.156 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/9051007456426126140/ in 319 ms (build.cpp:1113)
+2026-10-01 17:58:27.508 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/11755092028525740061/ in 324 ms (build.cpp:1113)
+2026-10-01 17:58:27.520 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/1398645709331374015/ in 336 ms (build.cpp:1113)
+2026-10-01 17:58:27.824 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/10825116865411801879/ in 299 ms (build.cpp:1113)
+2026-10-01 17:58:27.841 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/13209221667895442957/ in 316 ms (build.cpp:1113)
+2026-10-01 17:58:28.271 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/11143547811535746502/ in 325 ms (build.cpp:1113)
+2026-10-01 17:58:28.289 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/6714143974284223429/ in 343 ms (build.cpp:1113)
+2026-10-01 17:58:28.600 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/16644695798802851907/ in 309 ms (build.cpp:1113)
+2026-10-01 17:58:28.607 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/11774298524672138109/ in 315 ms (build.cpp:1113)
+2026-10-01 17:58:28.956 | info     |    BuildKernels | compiled reader_unary_pad_dims_split_rows_multicore/14954669268336027508/ in 345 ms (build.cpp:1113)
+2026-10-01 17:58:28.971 | info     |    BuildKernels | compiled tilize_metal2/3741858322551147995/ in 360 ms (build.cpp:1113)
+2026-10-01 17:58:28.997 | info     |    BuildKernels | compiled tilize_metal2/3741858322551147995/ in 387 ms (build.cpp:1113)
+2026-10-01 17:58:29.013 | info     |    BuildKernels | compiled tilize_metal2/3741858322551147995/ in 402 ms (build.cpp:1113)
+2026-10-01 17:58:29.026 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 86/86 tensors (100%), 17s
+2026-10-01 17:58:29.026 | INFO     | models.tt_dit.utils.progress:__exit__:62 - convert LTXVideoDecoder: done in 17s
+2026-10-01 17:58:29.427 | info     |    BuildKernels | compiled tilize_metal2/13420338512764574845/ in 374 ms (build.cpp:1113)
+2026-10-01 17:58:29.430 | info     |    BuildKernels | compiled tilize_metal2/13420338512764574845/ in 377 ms (build.cpp:1113)
+2026-10-01 17:58:29.438 | info     |    BuildKernels | compiled tilize_metal2/13420338512764574845/ in 385 ms (build.cpp:1113)
+2026-10-01 17:58:29.901 | info     |    BuildKernels | compiled eltwise_typecast/16579804457319219992/ in 458 ms (build.cpp:1113)
+2026-10-01 17:58:29.975 | info     |    BuildKernels | compiled eltwise_typecast/16579804457319219992/ in 532 ms (build.cpp:1113)
+2026-10-01 17:58:30.064 | info     |    BuildKernels | compiled eltwise_typecast/16579804457319219992/ in 621 ms (build.cpp:1113)
+2026-10-01 17:58:30.319 | info     |    BuildKernels | compiled reader_unary_interleaved_start_id_metal2/3794182232606160484/ in 249 ms (build.cpp:1113)
+2026-10-01 17:58:30.413 | info     |    BuildKernels | compiled untilize_metal2/15212538924565669169/ in 343 ms (build.cpp:1113)
+2026-10-01 17:58:30.414 | info     |    BuildKernels | compiled untilize_metal2/6457615992546079576/ in 343 ms (build.cpp:1113)
+2026-10-01 17:58:30.424 | info     |    BuildKernels | compiled untilize_metal2/6457615992546079576/ in 353 ms (build.cpp:1113)
+2026-10-01 17:58:30.424 | info     |    BuildKernels | compiled untilize_metal2/15212538924565669169/ in 354 ms (build.cpp:1113)
+2026-10-01 17:58:30.432 | info     |    BuildKernels | compiled writer_unary_stick_layout_split_rows_multicore/5644949136112283699/ in 363 ms (build.cpp:1113)
+2026-10-01 17:58:30.461 | info     |    BuildKernels | compiled untilize_metal2/15212538924565669169/ in 391 ms (build.cpp:1113)
+2026-10-01 17:58:30.462 | info     |    BuildKernels | compiled untilize_metal2/6457615992546079576/ in 391 ms (build.cpp:1113)
+2026-10-01 17:58:30.825 | info     |    BuildKernels | compiled reader_unary_pad_dims_split_rows_multicore/13967260050162676348/ in 358 ms (build.cpp:1113)
+2026-10-01 17:58:30.826 | info     |    BuildKernels | compiled tilize_metal2/1474148106713154127/ in 358 ms (build.cpp:1113)
+2026-10-01 17:58:30.855 | info     |    BuildKernels | compiled tilize_metal2/1474148106713154127/ in 387 ms (build.cpp:1113)
+2026-10-01 17:58:30.861 | info     |    BuildKernels | compiled tilize_metal2/1474148106713154127/ in 393 ms (build.cpp:1113)
+2026-10-01 17:58:31.151 | info     |    BuildKernels | compiled writer_interleaved_no_bcast/3203675215557799560/ in 285 ms (build.cpp:1113)
+2026-10-01 17:58:31.167 | info     |    BuildKernels | compiled eltwise_binary_sfpu_no_bcast/2659880291687769263/ in 301 ms (build.cpp:1113)
+2026-10-01 17:58:31.194 | info     |    BuildKernels | compiled reader_interleaved_row_bcast/13698249562084277828/ in 328 ms (build.cpp:1113)
+2026-10-01 17:58:31.217 | info     |    BuildKernels | compiled eltwise_binary_sfpu_no_bcast/2659880291687769263/ in 350 ms (build.cpp:1113)
+2026-10-01 17:58:31.366 | info     |    BuildKernels | compiled eltwise_binary_sfpu_no_bcast/2659880291687769263/ in 499 ms (build.cpp:1113)
+2026-10-01 17:58:31.669 | info     |    BuildKernels | compiled eltwise_binary_no_bcast/17986637859788320372/ in 297 ms (build.cpp:1113)
+2026-10-01 17:58:31.679 | info     |    BuildKernels | compiled eltwise_binary_no_bcast/17986637859788320372/ in 307 ms (build.cpp:1113)
+2026-10-01 17:58:31.696 | info     |    BuildKernels | compiled eltwise_binary_no_bcast/17986637859788320372/ in 325 ms (build.cpp:1113)
+2026-10-01 17:58:32.006 | info     |    BuildKernels | compiled eltwise_sfpu/3428296004603493267/ in 305 ms (build.cpp:1113)
+2026-10-01 17:58:32.019 | info     |    BuildKernels | compiled eltwise_sfpu/3428296004603493267/ in 319 ms (build.cpp:1113)
+2026-10-01 17:58:32.107 | info     |    BuildKernels | compiled eltwise_sfpu/3428296004603493267/ in 407 ms (build.cpp:1113)
+2026-10-01 17:58:32.370 | info     |    BuildKernels | compiled local_copy_reader/10876209618102334947/ in 250 ms (build.cpp:1113)
+2026-10-01 17:58:32.392 | info     |    BuildKernels | compiled local_copy_writer/11967757436186148097/ in 271 ms (build.cpp:1113)
+2026-10-01 17:58:32.435 | info     |    BuildKernels | compiled minimal_default_reader/4771580964586218318/ in 315 ms (build.cpp:1113)
+2026-10-01 17:58:32.534 | info     |    BuildKernels | compiled phase2_w_reader/16034399884659231816/ in 413 ms (build.cpp:1113)
+2026-10-01 17:58:33.059 | info     |    BuildKernels | compiled minimal_default_writer/17165649491186076392/ in 939 ms (build.cpp:1113)
+2026-10-01 17:58:33.191 | info     |    BuildKernels | compiled minimal_default_writer/12896045797997612388/ in 1070 ms (build.cpp:1113)
+2026-10-01 17:58:33.659 | info     |    BuildKernels | compiled reader_vol2col/14428110609829352887/ in 455 ms (build.cpp:1113)
+2026-10-01 17:58:33.721 | info     |    BuildKernels | compiled writer/2979054281345972599/ in 518 ms (build.cpp:1113)
+2026-10-01 17:58:33.872 | info     |    BuildKernels | compiled compute/15599247704884999861/ in 668 ms (build.cpp:1113)
+2026-10-01 17:58:33.947 | info     |    BuildKernels | compiled compute/15599247704884999861/ in 743 ms (build.cpp:1113)
+2026-10-01 17:58:33.948 | info     |    BuildKernels | compiled compute/15599247704884999861/ in 744 ms (build.cpp:1113)
+2026-10-01 17:58:34.267 | info     |    BuildKernels | compiled writer_unary_interleaved_start_id_blocked_rm_output/10145400602619946627/ in 310 ms (build.cpp:1113)
+2026-10-01 17:58:34.356 | info     |    BuildKernels | compiled reader_unary_interleaved_ln/3014479198628748179/ in 399 ms (build.cpp:1113)
+2026-10-01 17:58:34.798 | info     |    BuildKernels | compiled layernorm/12311580630889266056/ in 839 ms (build.cpp:1113)
+2026-10-01 17:58:34.818 | info     |    BuildKernels | compiled layernorm/12311580630889266056/ in 860 ms (build.cpp:1113)
+2026-10-01 17:58:35.318 | info     |    BuildKernels | compiled layernorm/12311580630889266056/ in 1360 ms (build.cpp:1113)
+2026-10-01 17:58:35.591 | info     |    BuildKernels | compiled reader_unary/7823045989770738919/ in 265 ms (build.cpp:1113)
+2026-10-01 17:58:35.600 | info     |    BuildKernels | compiled writer_unary/2553509055444360190/ in 274 ms (build.cpp:1113)
+2026-10-01 17:58:35.857 | info     |    BuildKernels | compiled local_copy_reader/11652805588064647632/ in 245 ms (build.cpp:1113)
+2026-10-01 17:58:35.904 | info     |    BuildKernels | compiled local_copy_writer/12680911299377649460/ in 292 ms (build.cpp:1113)
+2026-10-01 17:58:35.934 | info     |    BuildKernels | compiled minimal_default_reader/11256838569384765348/ in 323 ms (build.cpp:1113)
+2026-10-01 17:58:36.015 | info     |    BuildKernels | compiled phase2_w_reader/202824129857660732/ in 403 ms (build.cpp:1113)
+2026-10-01 17:58:36.547 | info     |    BuildKernels | compiled minimal_default_writer/4865444935593251917/ in 935 ms (build.cpp:1113)
+2026-10-01 17:58:36.662 | info     |    BuildKernels | compiled minimal_default_writer/10091321720700455680/ in 1050 ms (build.cpp:1113)
+2026-10-01 17:58:37.094 | info     |    BuildKernels | compiled writer/2863065125936708481/ in 420 ms (build.cpp:1113)
+2026-10-01 17:58:37.129 | info     |    BuildKernels | compiled reader_vol2col/12277226368089143475/ in 454 ms (build.cpp:1113)
+2026-10-01 17:58:37.321 | info     |    BuildKernels | compiled compute/16406334485497956858/ in 646 ms (build.cpp:1113)
+2026-10-01 17:58:37.349 | info     |    BuildKernels | compiled compute/16406334485497956858/ in 674 ms (build.cpp:1113)
+2026-10-01 17:58:37.400 | info     |    BuildKernels | compiled compute/16406334485497956858/ in 725 ms (build.cpp:1113)
+2026-10-01 17:58:37.708 | info     |    BuildKernels | compiled writer_interleaved_rm_no_bcast/4616001788969846926/ in 302 ms (build.cpp:1113)
+2026-10-01 17:58:37.750 | info     |    BuildKernels | compiled reader_interleaved_rm_no_bcast/13844507940299084851/ in 344 ms (build.cpp:1113)
+2026-10-01 17:58:38.170 | info     |    BuildKernels | compiled writer/4667434264513714543/ in 414 ms (build.cpp:1113)
+2026-10-01 17:58:38.209 | info     |    BuildKernels | compiled reader_vol2col/12208733095104227622/ in 453 ms (build.cpp:1113)
+2026-10-01 17:58:38.406 | info     |    BuildKernels | compiled compute/12308553426903515265/ in 649 ms (build.cpp:1113)
+2026-10-01 17:58:38.429 | info     |    BuildKernels | compiled compute/12308553426903515265/ in 672 ms (build.cpp:1113)
+2026-10-01 17:58:38.478 | info     |    BuildKernels | compiled compute/12308553426903515265/ in 721 ms (build.cpp:1113)
+2026-10-01 17:58:38.818 | info     |    BuildKernels | compiled rm_reshape_interleaved/13605344243699370853/ in 334 ms (build.cpp:1113)
+2026-10-01 17:58:38.836 | info     |    BuildKernels | compiled rm_reshape_interleaved/8068367334192862403/ in 353 ms (build.cpp:1113)
+2026-10-01 17:58:39.140 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/17885775636497197581/ in 299 ms (build.cpp:1113)
+2026-10-01 17:58:39.165 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/2485689905477559257/ in 325 ms (build.cpp:1113)
+2026-10-01 17:58:39.556 | info     |    BuildKernels | compiled slice_reader_unary_unpad_dims_rm_interleaved_start_id/3063615802310638642/ in 386 ms (build.cpp:1113)
+2026-10-01 17:58:39.871 | info     |    BuildKernels | compiled writer_unary_interleaved_start_id_blocked_rm_output/16440964564882452272/ in 308 ms (build.cpp:1113)
+2026-10-01 17:58:39.967 | info     |    BuildKernels | compiled reader_unary_interleaved_ln/15009512418323007688/ in 405 ms (build.cpp:1113)
+2026-10-01 17:58:40.404 | info     |    BuildKernels | compiled layernorm/9543032387196315155/ in 840 ms (build.cpp:1113)
+2026-10-01 17:58:40.421 | info     |    BuildKernels | compiled layernorm/9543032387196315155/ in 858 ms (build.cpp:1113)
+2026-10-01 17:58:40.914 | info     |    BuildKernels | compiled layernorm/9543032387196315155/ in 1351 ms (build.cpp:1113)
+2026-10-01 17:58:41.174 | info     |    BuildKernels | compiled local_copy_reader/9580712820461322834/ in 239 ms (build.cpp:1113)
+2026-10-01 17:58:41.212 | info     |    BuildKernels | compiled local_copy_writer/6406245348396009098/ in 277 ms (build.cpp:1113)
+2026-10-01 17:58:41.254 | info     |    BuildKernels | compiled minimal_default_reader/6628580533990805988/ in 319 ms (build.cpp:1113)
+2026-10-01 17:58:41.334 | info     |    BuildKernels | compiled phase2_w_reader/3435431858411229181/ in 398 ms (build.cpp:1113)
+2026-10-01 17:58:41.882 | info     |    BuildKernels | compiled minimal_default_writer/6551218030356351169/ in 947 ms (build.cpp:1113)
+2026-10-01 17:58:41.975 | info     |    BuildKernels | compiled minimal_default_writer/6688201153461610687/ in 1040 ms (build.cpp:1113)
+2026-10-01 17:58:42.460 | info     |    BuildKernels | compiled reader_vol2col/3997015153581851608/ in 472 ms (build.cpp:1113)
+2026-10-01 17:58:42.463 | info     |    BuildKernels | compiled writer/9308212519533754459/ in 475 ms (build.cpp:1113)
+2026-10-01 17:58:42.615 | info     |    BuildKernels | compiled compute/6457787030710946197/ in 627 ms (build.cpp:1113)
+2026-10-01 17:58:42.655 | info     |    BuildKernels | compiled compute/6457787030710946197/ in 667 ms (build.cpp:1113)
+2026-10-01 17:58:42.710 | info     |    BuildKernels | compiled compute/6457787030710946197/ in 721 ms (build.cpp:1113)
+2026-10-01 17:58:43.127 | info     |    BuildKernels | compiled writer/15234865194376611546/ in 412 ms (build.cpp:1113)
+2026-10-01 17:58:43.164 | info     |    BuildKernels | compiled reader_vol2col/8848272066957413606/ in 447 ms (build.cpp:1113)
+2026-10-01 17:58:43.352 | info     |    BuildKernels | compiled compute/15142499340656177629/ in 635 ms (build.cpp:1113)
+2026-10-01 17:58:43.388 | info     |    BuildKernels | compiled compute/15142499340656177629/ in 671 ms (build.cpp:1113)
+2026-10-01 17:58:43.437 | info     |    BuildKernels | compiled compute/15142499340656177629/ in 721 ms (build.cpp:1113)
+2026-10-01 17:58:43.746 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/16805028197496773135/ in 302 ms (build.cpp:1113)
+2026-10-01 17:58:43.762 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/16533956604362295594/ in 319 ms (build.cpp:1113)
+2026-10-01 17:58:44.365 | info     |    BuildKernels | compiled reader_vol2col/179677266028820710/ in 450 ms (build.cpp:1113)
+2026-10-01 17:58:44.416 | info     |    BuildKernels | compiled writer/3284252614961577938/ in 503 ms (build.cpp:1113)
+2026-10-01 17:58:44.574 | info     |    BuildKernels | compiled compute/8379218111178219227/ in 660 ms (build.cpp:1113)
+2026-10-01 17:58:44.663 | info     |    BuildKernels | compiled compute/8379218111178219227/ in 748 ms (build.cpp:1113)
+2026-10-01 17:58:44.672 | info     |    BuildKernels | compiled compute/8379218111178219227/ in 757 ms (build.cpp:1113)
+2026-10-01 17:58:45.015 | info     |    BuildKernels | compiled rm_reshape_interleaved/8587886854284310881/ in 334 ms (build.cpp:1113)
+2026-10-01 17:58:45.019 | info     |    BuildKernels | compiled rm_reshape_interleaved/9230274428569500244/ in 338 ms (build.cpp:1113)
+2026-10-01 17:58:45.322 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/12640901624204965205/ in 300 ms (build.cpp:1113)
+2026-10-01 17:58:45.340 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/17577718437884885782/ in 319 ms (build.cpp:1113)
+2026-10-01 17:58:45.733 | info     |    BuildKernels | compiled slice_reader_unary_unpad_dims_rm_interleaved_start_id/15038502172953579204/ in 388 ms (build.cpp:1113)
+2026-10-01 17:58:46.052 | info     |    BuildKernels | compiled writer_unary_interleaved_start_id_blocked_rm_output/9055429907321480466/ in 314 ms (build.cpp:1113)
+2026-10-01 17:58:46.139 | info     |    BuildKernels | compiled reader_unary_interleaved_ln/17866166566645846227/ in 402 ms (build.cpp:1113)
+2026-10-01 17:58:46.573 | info     |    BuildKernels | compiled layernorm/13340293046998069193/ in 836 ms (build.cpp:1113)
+2026-10-01 17:58:46.592 | info     |    BuildKernels | compiled layernorm/13340293046998069193/ in 854 ms (build.cpp:1113)
+2026-10-01 17:58:47.067 | info     |    BuildKernels | compiled layernorm/13340293046998069193/ in 1329 ms (build.cpp:1113)
+2026-10-01 17:58:47.336 | info     |    BuildKernels | compiled local_copy_reader/16197207911717189051/ in 245 ms (build.cpp:1113)
+2026-10-01 17:58:47.359 | info     |    BuildKernels | compiled local_copy_writer/8097738527406793893/ in 267 ms (build.cpp:1113)
+2026-10-01 17:58:47.404 | info     |    BuildKernels | compiled minimal_default_reader/2030383410947582424/ in 313 ms (build.cpp:1113)
+2026-10-01 17:58:47.492 | info     |    BuildKernels | compiled phase2_w_reader/585533962094899101/ in 401 ms (build.cpp:1113)
+2026-10-01 17:58:48.027 | info     |    BuildKernels | compiled minimal_default_writer/18202343236110800930/ in 936 ms (build.cpp:1113)
+2026-10-01 17:58:48.156 | info     |    BuildKernels | compiled minimal_default_writer/8446076303392350693/ in 1064 ms (build.cpp:1113)
+2026-10-01 17:58:48.632 | info     |    BuildKernels | compiled reader_vol2col/9713022693243734861/ in 463 ms (build.cpp:1113)
+2026-10-01 17:58:48.662 | info     |    BuildKernels | compiled writer/6420652764291380501/ in 493 ms (build.cpp:1113)
+2026-10-01 17:58:48.812 | info     |    BuildKernels | compiled compute/2614264421299128203/ in 643 ms (build.cpp:1113)
+2026-10-01 17:58:48.840 | info     |    BuildKernels | compiled compute/2614264421299128203/ in 670 ms (build.cpp:1113)
+2026-10-01 17:58:48.891 | info     |    BuildKernels | compiled compute/2614264421299128203/ in 722 ms (build.cpp:1113)
+2026-10-01 17:58:49.382 | info     |    BuildKernels | compiled writer/16925972908060737170/ in 480 ms (build.cpp:1113)
+2026-10-01 17:58:49.398 | info     |    BuildKernels | compiled reader_vol2col/9490928619440885472/ in 495 ms (build.cpp:1113)
+2026-10-01 17:58:49.510 | info     |    BuildKernels | compiled compute/13819387721887450949/ in 607 ms (build.cpp:1113)
+2026-10-01 17:58:49.568 | info     |    BuildKernels | compiled compute/13819387721887450949/ in 665 ms (build.cpp:1113)
+2026-10-01 17:58:49.614 | info     |    BuildKernels | compiled compute/13819387721887450949/ in 711 ms (build.cpp:1113)
+2026-10-01 17:58:49.952 | info     |    BuildKernels | compiled rm_reshape_interleaved/8414116817813002183/ in 332 ms (build.cpp:1113)
+2026-10-01 17:58:49.955 | info     |    BuildKernels | compiled rm_reshape_interleaved/15908278471367087301/ in 335 ms (build.cpp:1113)
+2026-10-01 17:58:50.266 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_row_invariant/12770554662119517010/ in 307 ms (build.cpp:1113)
+2026-10-01 17:58:50.277 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_row_invariant/593829220239916659/ in 318 ms (build.cpp:1113)
+2026-10-01 17:58:50.591 | info     |    BuildKernels | compiled writer_unary_interleaved_start_id_blocked_rm_output/13616383811312123670/ in 309 ms (build.cpp:1113)
+2026-10-01 17:58:50.688 | info     |    BuildKernels | compiled reader_unary_interleaved_ln/1937066929719215199/ in 407 ms (build.cpp:1113)
+2026-10-01 17:58:51.092 | info     |    BuildKernels | compiled layernorm/5504344753031875716/ in 810 ms (build.cpp:1113)
+2026-10-01 17:58:51.120 | info     |    BuildKernels | compiled layernorm/5504344753031875716/ in 838 ms (build.cpp:1113)
+2026-10-01 17:58:51.620 | info     |    BuildKernels | compiled layernorm/5504344753031875716/ in 1338 ms (build.cpp:1113)
+2026-10-01 17:58:52.133 | info     |    BuildKernels | compiled writer/369640185959667485/ in 490 ms (build.cpp:1113)
+2026-10-01 17:58:52.138 | info     |    BuildKernels | compiled reader_vol2col/15297932503192966681/ in 495 ms (build.cpp:1113)
+2026-10-01 17:58:52.209 | info     |    BuildKernels | compiled compute/4607786309498869061/ in 566 ms (build.cpp:1113)
+2026-10-01 17:58:52.284 | info     |    BuildKernels | compiled compute/4607786309498869061/ in 640 ms (build.cpp:1113)
+2026-10-01 17:58:52.333 | info     |    BuildKernels | compiled compute/4607786309498869061/ in 689 ms (build.cpp:1113)
+2026-10-01 17:58:52.837 | info     |    BuildKernels | compiled writer/7451792491143172487/ in 495 ms (build.cpp:1113)
+2026-10-01 17:58:52.844 | info     |    BuildKernels | compiled reader_vol2col/16992233054689862840/ in 502 ms (build.cpp:1113)
+2026-10-01 17:58:52.895 | info     |    BuildKernels | compiled compute/11065792746559859831/ in 552 ms (build.cpp:1113)
+2026-10-01 17:58:52.990 | info     |    BuildKernels | compiled compute/11065792746559859831/ in 647 ms (build.cpp:1113)
+2026-10-01 17:58:53.025 | info     |    BuildKernels | compiled compute/11065792746559859831/ in 682 ms (build.cpp:1113)
+2026-10-01 17:58:53.448 | info     |    BuildKernels | compiled rm_reshape_interleaved/4286166578126681258/ in 406 ms (build.cpp:1113)
+2026-10-01 17:58:53.783 | info     |    BuildKernels | compiled reader_permute_interleaved_rm_blocked_generic/17519770339821457418/ in 331 ms (build.cpp:1113)
+2026-10-01 17:58:53.808 | info     |    BuildKernels | compiled writer_permute_interleaved_rm_blocked_generic/4395747820771992667/ in 356 ms (build.cpp:1113)
+2026-10-01 17:58:54.072 | info     |    BuildKernels | compiled reader_unary/10717045229341238610/ in 262 ms (build.cpp:1113)
+2026-10-01 17:58:54.077 | info     |    BuildKernels | compiled writer_unary/12202954567856299699/ in 266 ms (build.cpp:1113)
+2026-10-01 17:58:54.117 | info     |    BuildKernels | compiled eltwise_sfpu/4042627609952879973/ in 306 ms (build.cpp:1113)
+2026-10-01 17:58:54.146 | info     |    BuildKernels | compiled eltwise_sfpu/4042627609952879973/ in 336 ms (build.cpp:1113)
+2026-10-01 17:58:54.229 | info     |    BuildKernels | compiled eltwise_sfpu/4042627609952879973/ in 418 ms (build.cpp:1113)
+2026-10-01 17:58:54.549 | info     |    BuildKernels | compiled writer_yuv_planes/4711965357159551318/ in 315 ms (build.cpp:1113)
+2026-10-01 17:58:54.588 | info     |    BuildKernels | compiled reader_yuv_chwt/15337973519917632504/ in 354 ms (build.cpp:1113)
+2026-10-01 17:58:54.995 | info     |    BuildKernels | compiled yuv_compute/7200664205847570507/ in 760 ms (build.cpp:1113)
+2026-10-01 17:58:55.083 | info     |    BuildKernels | compiled yuv_compute/7200664205847570507/ in 848 ms (build.cpp:1113)
+2026-10-01 17:58:55.101 | info     |    BuildKernels | compiled yuv_compute/7200664205847570507/ in 866 ms (build.cpp:1113)
+2026-10-01 17:58:55.145 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:906 - VAE_DECODE_SPLIT traced=0 upload=1426.0ms decode=22574.5ms output=2105.7ms total=26106.1ms
+2026-10-01 17:58:57.203 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:906 - VAE_DECODE_SPLIT traced=0 upload=16.7ms decode=1979.1ms output=61.5ms total=2057.4ms
+2026-10-01 17:58:59.267 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:906 - VAE_DECODE_SPLIT traced=0 upload=19.9ms decode=1978.5ms output=64.9ms total=2063.2ms
+2026-10-01 17:59:01.320 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:906 - VAE_DECODE_SPLIT traced=0 upload=10.5ms decode=1978.5ms output=63.5ms total=2052.5ms
+2026-10-01 17:59:01.620 | info     |    BuildKernels | compiled read_kernel_rm/9307717762259768580/ in 265 ms (build.cpp:1113)
+2026-10-01 17:59:01.621 | info     |    BuildKernels | compiled write_kernel_rm/363642331787749179/ in 266 ms (build.cpp:1113)
+2026-10-01 17:59:01.640 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+2026-10-01 17:59:05.594 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:140)
+2026-10-01 17:59:05.661 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:906 - VAE_DECODE_SPLIT traced=1 upload=18.9ms decode=4242.1ms output=66.6ms total=4327.5ms
+2026-10-01 17:59:05.934 | info     |    BuildKernels | compiled reader_unary_stick_layout_interleaved_start_id/1783692590245485016/ in 248 ms (build.cpp:1113)
+2026-10-01 17:59:05.943 | info     |    BuildKernels | compiled writer_unary_stick_layout_interleaved_start_id/11692054691389533265/ in 257 ms (build.cpp:1113)
+2026-10-01 17:59:07.990 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:906 - VAE_DECODE_SPLIT traced=1 upload=10.3ms decode=2238.8ms output=66.5ms total=2315.6ms
+2026-10-01 17:59:10.045 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:906 - VAE_DECODE_SPLIT traced=1 upload=9.5ms decode=1979.7ms output=64.9ms total=2054.1ms
+2026-10-01 17:59:12.100 | INFO     | models.tt_dit.models.vae.vae_ltx:forward:906 - VAE_DECODE_SPLIT traced=1 upload=10.4ms decode=1979.1ms output=65.2ms total=2054.6ms
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[2mtest_vae_ltx_trace_ab.py[0m  [1mtest_vae_ltx_trace_ab[0m  [2m(blackhole, mesh_device0, device_params0)[0m
+
+AB arm=eager decode_s=2.0579 2.0638 2.0533 min=2.0533
+AB trace_bytes=2490368 (2.5 MB) region=500000000 capture_s=4.3281
+AB arm=traced decode_s=2.3162 2.0547 2.0550 min=2.0547
+AB_CMP capture_vs_eager identical=True max_abs_diff=0 shape=(145, 816, 960) dtype=torch.uint8
+AB_CMP traced_vs_eager identical=True max_abs_diff=0 shape=(145, 816, 960) dtype=torch.uint8
+PASSED
+==========================================================================
+WALL-TIME LEDGER · models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+--------------------------------------------------------------------------
+category             seconds   %wall   count   notes
+untracked               63.7  100.0%
+--------------------------------------------------------------------------
+TOTAL (tracked)          0.0    0.0%
+TOTAL (wall)            63.7  100.0%
+
+ANOMALIES: none
+==========================================================================
+
+
+=============================== warnings summary ===============================
+models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /var/tmp/fasth3/t87/src/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+63.72s call     models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+8.05s setup    models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+0.03s teardown models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/tt_dit/tests/models/ltx/test_vae_ltx_trace_ab.py::test_vae_ltx_trace_ab[blackhole-mesh_device0-device_params0]
+=================== 1 passed, 2 warnings in 71.83s (0:01:11) ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-01 17:59:14.694 | info     |    BuildKernels | JIT cache stats: 194/419 hits (46.3%) [194 cached, 749 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-01 17:59:14.694 | info     |    BuildKernels | JIT telemetry: 36 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-01 17:59:14.930 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-10-01 17:59:14.930 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-10-01 17:59:17.113 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-01 17:59:17.114 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-01 17:59:17.114 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+T87_EXIT=0
