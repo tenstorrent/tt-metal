@@ -5,7 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_recip.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
@@ -69,4 +69,35 @@ ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
         idst,
         vector_mode));
 }
+#ifndef ARCH_QUASAR
+// Pack-thread variants; the caller supplies DST ownership and synchronization.
+template <
+    ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16,
+    ReciprocalApproxMode approximation = ReciprocalApproxMode::Default>
+ALWI void recip_tile_init_pack() {
+    [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
+    PACK(SFPU_UNARY_INIT_FN(
+        reciprocal,
+        sfpu::recip_init,
+        (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate,
+         is_fp32_dest_acc_en)));
+}
+
+template <
+    ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16,
+    ReciprocalApproxMode approximation = ReciprocalApproxMode::Default>
+ALWI void recip_tile_pack(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
+    [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_reciprocal,
+        (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate,
+         is_fp32_dest_acc_en,
+         8 /*ITERATIONS*/),
+        idst,
+        vector_mode));
+}
+#endif
+
 }  // namespace ckernel

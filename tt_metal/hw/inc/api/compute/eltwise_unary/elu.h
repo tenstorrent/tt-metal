@@ -5,7 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 #ifndef ARCH_QUASAR
 #include "ckernel_sfpu_elu.h"
 #endif
@@ -33,11 +33,32 @@ namespace ckernel {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void elu_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_elu, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_elu,
+        (APPROX, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC,
+        param0));
 }
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void elu_tile_init() { MATH(SFPU_UNARY_INIT(elu)); }
+
+// Pack-thread variants; the caller supplies DST ownership and synchronization.
+ALWI void elu_tile_init_pack() { PACK(SFPU_UNARY_INIT(elu)); }
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void elu_tile_pack(uint32_t idst, uint32_t param0) {
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_elu,
+        (APPROX, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC,
+        param0));
+}
 #endif
 }  // namespace ckernel

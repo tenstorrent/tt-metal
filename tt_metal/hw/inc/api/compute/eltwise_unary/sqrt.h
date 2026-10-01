@@ -5,7 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_sqrt.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
@@ -40,5 +40,21 @@ ALWI void sqrt_tile(uint32_t idst) {
         idst,
         VectorMode::RC));
 }
+
+#ifndef ARCH_QUASAR
+// Pack-thread variants; the caller supplies DST ownership and synchronization.
+ALWI void sqrt_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(sqrt, sfpu::sqrt_init, (APPROX))); }
+
+template <bool FAST_APPROX = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sqrt_tile_pack(uint32_t idst) {
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sqrt,
+        (APPROX, 8 /*ITERATIONS*/, is_fp32_dest_acc_en, FAST_APPROX),
+        idst,
+        VectorMode::RC));
+}
+#endif
 
 }  // namespace ckernel

@@ -209,5 +209,12 @@ ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
 }
 
 ALWI void leaky_relu_tile_init() { MATH(SFPU_UNARY_INIT(lrelu)); }
+
+// Pack-thread variants; the caller supplies DST ownership and synchronization.
+ALWI void leaky_relu_tile_init_pack() { PACK(SFPU_UNARY_INIT(lrelu)); }
+
+ALWI void leaky_relu_tile_pack(uint32_t idst, uint32_t slope = 0) {
+    PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX), idst, VectorMode::RC, slope));
+}
 #endif
 }  // namespace ckernel
