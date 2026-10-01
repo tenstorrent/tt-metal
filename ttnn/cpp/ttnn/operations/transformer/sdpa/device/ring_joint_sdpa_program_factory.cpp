@@ -1455,6 +1455,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                            use_streaming_compute && B == 1 && L == 0 && max_q_per_core == 1 &&
                            Sq_chunk_t % writer_out_row_group_h == 0;
     log_debug(tt::LogOp, "ring_joint segmented accumulation: {}", seg_accum);
+    // A core that holds several Q chunks runs them unsegmented, so the bf16 running sums span the whole prefix again
+    // and long-prefix accuracy drops (Gemma4 at chunk 12288 with q 96: 128 Q chunks on 110 cores, RRMSE 0.19 -> 0.25).
+    // The K-split exclusion above is by design; this one is a config the caller can avoid, so refuse it.
+    TT_FATAL(
+        !(args.program_config.has_value() && args.program_config->segmented_accumulation && ksplit_count == 1 &&
+          max_q_per_core > 1),
+        "segmented_accumulation needs one Q chunk per core, but {} Q chunks ({} per head of {} rows) share {} cores. "
+        "Raise q_chunk_size so that ceil(local Q rows / q_chunk_size) x heads <= cores, give the op more cores, or "
+        "turn segmented_accumulation off.",
+        all_heads_num_q_chunks,
+        num_q_chunks,
+        Sq_chunk_t * tt::constants::TILE_HEIGHT,
+        num_cores);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;

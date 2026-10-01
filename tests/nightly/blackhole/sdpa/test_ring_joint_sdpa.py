@@ -7811,6 +7811,28 @@ def test_ring_joint_attention_hifi_matmul_on_lofi_compute_config():
     )
 
 
+def test_ring_joint_attention_segmented_accumulation_rejects_several_q_chunks_per_core(expect_error):
+    """A core holding two Q chunks would run them unsegmented, silently losing the accuracy the caller asked for (Gemma4
+    at chunk 12288 with q 96: 128 Q chunks on 110 cores). The op must refuse instead and name the fix."""
+    q_chunk_size = 64
+    # Enough Q chunks that some core gets two, on any mesh.
+    tokens_per_device = q_chunk_size * (MESH_CONFIG.sdpa_cores // GEMMA4_GLOBAL_CHUNKED_MODEL.nhq + 2)
+    chunk_size = tokens_per_device * MESH_CONFIG.sp_size
+    # run_ring_joint_sdpa_chunked reports a raising op call through pytest.fail, keeping the op's message.
+    with expect_error(pytest.fail.Exception, "segmented_accumulation needs one Q chunk per core"):
+        run_ring_joint_sdpa_chunked(
+            MESH_CONFIG,
+            replace(GEMMA4_GLOBAL_CHUNKED_MODEL, d_k=640),
+            chunk_size=chunk_size,
+            total_seq=chunk_size,
+            qk_configs=[(q_chunk_size, 256)],
+            use_ring_mla=True,
+            matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+            segmented_accumulation=True,
+            do_check=False,
+        )
+
+
 @pytest.mark.timeout(1800)
 def test_ring_joint_attention_gemma4_global_segmented_accuracy():
     """Gemma4's unsplit global attention (chunk 8192, q96, packed K/V, LoFi) over a 64k prefix whose K/V rows share
