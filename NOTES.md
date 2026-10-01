@@ -1,22 +1,27 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# t83 — LTX audio decode on the critical path
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
+Branch ttp/t83-profile-and-cut-ltx-audio-decode-on-the- (based on t48 a613d669eef).
 
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
+## Off-device findings
+Critical path after VAE decode: max(libx264 video encode on worker thread, audio decode + AAC ~0.15 s) + mux
+(YuvVideoExport). So audio decode counts only where it exceeds the (now ultrafast) video encode.
 
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
+Default traced audio path (LTX_AUDIO_DEVICE_CHAIN=0), per decode — 5 uploads, 5 downloads, 2 eager device stages:
+1. host unpatchify + denormalize -> upload bf16 (mel)        2. mel-VAE trace -> download, host crop/permute
+3. host transpose/pad -> upload fp32 (vocoder)               4. vocoder trace -> download, host crop
+5. host pad -> upload -> EAGER mel STFT -> download          6. upload -> BWE trace -> download
+7. upload -> EAGER resampler -> download                     8. host add + clamp + trim
+LTX_AUDIO_DEVICE_CHAIN=1 (exists, default 0) runs 3-8 in one trace: 1 upload + 1 download.
+CPU (torch, 64 threads) reference: mel-VAE 0.32 s, vocoder+BWE ~10 s -> host CPU audio is not viable.
+Device overlap with VAE decode: same chips, one CQ -> no real overlap; audio is already overlapped with the
+video encode thread.
 
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+## Device job
+blx03 job 041 (queued 14:47 behind t81 job 040): `bash ~/fasth3/t83/run83.sh` (copy in tt-project/t83/run83.sh).
+Log: g14blx03:~/fasth3/t83/run83.log. Status: `ssh g14blx03 tt-device-mcp status -j 041`.
+Pass lines: `AUDIO chain=0 replay_ms=...`, `AUDIO split ...`, `AUDIO chain=1 replay_ms=...`,
+`T83_CMP chain0_vs_chain1 identical=...`, `T83_EXIT=0`.
+
+Next: read the log, check broker log for drops during 041 (stop ALL device work if a drop started during it),
+copy log to tt-project/t83/, `rm -rf ~/fasth3/t83 /var/tmp/fasth3/t83` on blx03. If chain is bit-identical and
+faster: report the saving (flag already exists, default 0). If not identical: look at device add/clamp vs host.
