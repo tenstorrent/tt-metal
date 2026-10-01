@@ -270,3 +270,9 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate: PASS. pcc_experts_L01 0.999980, rel L2 0.0063, row norm ratio [0.9928, 1.0064], worst row 0.0152, slice rel L2 0.0063-0.0064. The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Gotcha: fork test files with the same basename in two forks collide under pytest (`tests.unit.<name>`). Name them per fork.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_experts.py`
+
+## C.sliding_moe.ffn_residual.test.1 (test review)
+- Replaced the rendered one-line test with the prior bring-up's frozen test (`models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_ffn_residual.py`), which uses the same golden. Kept its limits: PCC >= 0.99 (spec), rel L2 <= 0.01, per-token norm ratio in [0.99, 1.01], experts term on out - h_mid: coef in [0.97, 1.03], rel <= 0.1. Why: PCC alone passes a dropped experts_out (0.9887), 0.5 x experts_out and 2 x (h_mid + experts_out).
+- Results: reference PCC 0.999997 / rel 0.0024 / ratio [0.9991, 1.0010] / coef 1.0 / rel 0, which passes. Zero stub PCC 0.0, which fails. Device (default impl) PCC 0.999996 / rel 0.0029 / ratio [0.9993, 1.0016] / coef 1.0014 / experts rel 0.0114, which passes.
+- The first `FAIL pcc=0.000000` line in each run comes from the precompile collect pass, not the real pass.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_ffn_residual.py`
