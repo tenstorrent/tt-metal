@@ -4,14 +4,16 @@
 """Create per-cell reports from Tracy operation data."""
 
 import argparse
+import contextlib
 import csv
 import getpass
+import io
 import json
 import os
 import re
 import shutil
-import subprocess
 import sys
+import traceback
 from collections import defaultdict
 from pathlib import Path
 
@@ -93,9 +95,10 @@ def write_cell_ops_csv(fieldnames, rows, start_signpost, stop_signpost, path):
     return True
 
 
-def _tt_perf_report_cmd():
-    exe = shutil.which("tt-perf-report")
-    return [exe] if exe else [sys.executable, "-m", "tt_perf_report.perf_report"]
+def _perf_report():
+    from tt_perf_report import perf_report
+
+    return perf_report
 
 
 def _validate_signpost(signpost, expected_edge):
@@ -110,13 +113,47 @@ def _validate_signpost(signpost, expected_edge):
 def run_tt_perf_report(ops_csv, start_signpost, stop_signpost, out_csv):
     _validate_signpost(start_signpost, "start")
     _validate_signpost(stop_signpost, "stop")
-    base = [*_tt_perf_report_cmd(), "--start-signpost", start_signpost, "--end-signpost", stop_signpost, "--no-color"]
-    text = subprocess.run([*base, str(ops_csv)], capture_output=True, text=True, shell=False)
-    Path(out_csv).with_suffix(".txt").write_text(text.stdout + text.stderr)
-    cmd = [*base, "--csv", str(out_csv), str(ops_csv)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, shell=False)
-    Path(out_csv).with_suffix(".log").write_text(f"$ {' '.join(cmd)}\n{proc.stdout}{proc.stderr}")
-    return text.returncode == 0 and proc.returncode == 0 and Path(out_csv).exists()
+    perf_report = _perf_report()
+    perf_report.set_color_output(False, True)
+
+    # In-process with the CLI's defaults; the library calls sys.exit on unusable input.
+    def report(csv_output_file):
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                perf_report.generate_perf_report(
+                    csv_files=[str(ops_csv)],
+                    start_signpost=start_signpost,
+                    end_signpost=stop_signpost,
+                    ignore_signposts=False,
+                    print_signposts=False,
+                    min_percentage=0.5,
+                    id_range=None,
+                    arch=None,
+                    csv_output_file=csv_output_file,
+                    no_advice=False,
+                    tracing_mode=False,
+                    raw_op_codes=False,
+                    no_host_ops=False,
+                    no_summary=False,
+                    group_by="memory",
+                    classic_colors=False,
+                    summary_file=None,
+                    no_stacked_report=False,
+                    no_stack_by_in0=False,
+                    stacked_csv=None,
+                    no_merge_devices=False,
+                )
+        except (Exception, SystemExit):
+            out.write(traceback.format_exc())
+            return False, out.getvalue()
+        return True, out.getvalue()
+
+    text_ok, text = report(None)
+    Path(out_csv).with_suffix(".txt").write_text(text)
+    csv_ok, log = report(str(out_csv))
+    Path(out_csv).with_suffix(".log").write_text(log)
+    return text_ok and csv_ok and Path(out_csv).exists()
 
 
 def _float(value):
