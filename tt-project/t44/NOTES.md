@@ -49,3 +49,5 @@ To rebuild the overlay: git show origin/ttp/t36-blx03-ltx25:models/tt_dit/models
   07:29:16, completed exit 0: decode_s 2.3360 2.3367 2.3310, min 2.3310; yuv_fold0.pt saved. No drop.
   Arm 1 submitted as blx03 job 008 (log /var/log/tt-device-broker/2026-10-01_073830_008.log).
   Next: check job 008 status + `grep AB44 ~/fasth3/t44/run44_fold1.log`; check for drop; run compare44.py; cleanup.
+- 2026-10-01 09:55 (attempt 2): job 008 (arm 1) exit 0, no drop. fold=1 folded 42 convs, decode_s min 2.2866 vs 2.3310 (-44 ms, ~1.9%).
+  compare44: identical=True max_abs_diff=0. PASS. blx03 t44 dirs deleted.
