@@ -1909,12 +1909,14 @@ static void sdpa_inner_loop_step(
         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 #if defined(SDPA_PA) && defined(SDPA_PA_DENOM)
-        // P-A denominator: l_chunk = P * 1 on the FPU (PV fidelity, so P is rounded as in PV), Float32
+        // P-A denominator: l_chunk = P * 1 on the FPU (at least HiFi2: LoFi truncates P and biases l low), Float32
         // L1-accumulated into the denominator bank. Replaces the per-tile row-sum packs.
         {
+            constexpr MathFidelity pa_denom_fidelity =
+                MATH_FIDELITY == MathFidelity::LoFi ? MathFidelity::HiFi2 : MATH_FIDELITY;
             CircularBuffer(cb_col_identity).wait_front(1);
             matmul_block_init(cb_qkt_im, cb_col_identity, 0, 1, 4, KT_stride);
-            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
+            MATH((llk_math_matmul_init<pa_denom_fidelity, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
             pack_reconfig_data_format(cur.sum);
             configure_single_tile_pack(cur.sum);
             PACK((llk_pack_reconfig_l1_acc(is_first_iter ? 0 : 1)));
@@ -1922,13 +1924,13 @@ static void sdpa_inner_loop_step(
                 const uint32_t rows = Sq_chunk_t - row < 4 ? Sq_chunk_t - row : 4;
                 if (rows != 4) {
                     UNPACK((llk_unpack_AB_matmul_init(cb_qkt_im, cb_col_identity, 0, 1, rows, KT_stride)));
-                    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, rows)));
+                    MATH((llk_math_matmul_init<pa_denom_fidelity, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, rows)));
                 }
                 tile_regs_acquire();
                 for (uint32_t col = 0; col < active_Sk; ++col) {
                     UNPACK((llk_unpack_AB_matmul(
                         cb_qkt_im, cb_col_identity, row * KT_stride + col, 0, 1, rows, KT_stride)));
-                    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(0, 1, rows)));
+                    MATH((llk_math_matmul<pa_denom_fidelity, MM_THROTTLE>(0, 1, rows)));
                 }
                 tile_regs_commit();
                 tile_regs_wait();
