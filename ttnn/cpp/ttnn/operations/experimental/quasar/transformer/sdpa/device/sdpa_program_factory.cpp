@@ -823,15 +823,14 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     }
 
     // ---- Semaphores (KV chain forwarding, non-causal only) ----
-    // sender / receiver default to 0 (INVALID); valid initializes to VALID (non-zero: WH/BH only, a
-    // deprecated capability slated for removal, mirrored here to preserve the legacy op's behavior).
+    // All three start at 0 (INVALID). valid is only ever the source value of the reader's relay writes,
+    // and the reader sets it to VALID on every chain participant before the chain runs, so it needs no
+    // host-side initial value (a non-zero one is unsupported on Quasar).
     Group<SemaphoreSpec> sems;
     if (!is_causal) {
         sems.push_back(SemaphoreSpec{.unique_id = SEM_SENDER, .target_nodes = core_grid});
         sems.push_back(SemaphoreSpec{.unique_id = SEM_RECEIVER, .target_nodes = core_grid});
-        SemaphoreSpec valid_sem{.unique_id = SEM_VALID, .target_nodes = core_grid};
-        valid_sem.advanced_options.initial_value = VALID;
-        sems.push_back(valid_sem);
+        sems.push_back(SemaphoreSpec{.unique_id = SEM_VALID, .target_nodes = core_grid});
     }
 
     uint32_t num_phases = 1;
