@@ -329,6 +329,17 @@ five-task release suite has not been rerun. Resume requires a new user request.
   job 110533086359 on `qb2-120-p01t03`, tests the candidate with the same 900-second
   cap and reused exact image `ad58effd178b...`; no image build or full suite is
   launched. Both runs are monitored. Complete provenance is in the eval report.
+- At 19:30:04 UTC that CI run completes: artifact 11189981342 confirms reward 1
+  and all 104 required/regression tests pass. The paired local selected-policy
+  control scored 0 at the same 900-second cap; both use the identical initial
+  request and seed locally. Candidate CI also times out, with its correct edit
+  made around 13m25s and only 0.679 seconds in tools. No clean-completion speedup
+  is claimed. A replay identifies the local candidate's final submission command
+  printed as text instead of a tool call. A default-off, audited adapter for
+  only that exact final marker passes 140 host tests; a fresh capped trial is
+  running from 19:28:37. This is explicitly a harness-policy intervention,
+  separate from precision. The CI image was reused, and the full five-task suite
+  remains unrun. Approximately 77% of the improved CI request path is now TTFT.
 - Measure their TTFT and TSU.
 - Separate model/device performance from eval-framework overhead.
 - Check whether the same evals can run with more parallelism and finish sooner.
