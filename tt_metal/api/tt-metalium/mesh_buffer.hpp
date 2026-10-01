@@ -84,7 +84,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::distributed::MeshCoordinate& coord);
 tt::tt_metal::DeviceAddr get_uniform_per_core_address(
-    const tt::tt_metal::distributed::MeshBuffer& mesh_buffer, const tt::tt_metal::CoreCoord& core);
+    const tt::tt_metal::distributed::MeshBuffer& mesh_buffer, const tt::tt_metal::CoreRangeSet& cores);
 }  // namespace tt::tt_metal::experimental::per_core_allocation
 
 namespace tt::tt_metal::distributed {
@@ -204,7 +204,7 @@ private:
         tt::tt_metal::distributed::MeshDevice*,
         const tt::tt_metal::distributed::MeshCoordinate&);
     friend tt::tt_metal::DeviceAddr tt::tt_metal::experimental::per_core_allocation::get_uniform_per_core_address(
-        const MeshBuffer&, const tt::tt_metal::CoreCoord&);
+        const MeshBuffer&, const tt::tt_metal::CoreRangeSet&);
 };
 
 class [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-22.")]] AnyBuffer {

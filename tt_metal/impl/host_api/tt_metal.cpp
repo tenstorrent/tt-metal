@@ -1068,10 +1068,7 @@ void UpdateDynamicCircularBufferAddress(
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
-    circular_buffer->set_global_buffer(
-        *tensor.mesh_buffer().get_reference_buffer(),
-        circular_buffer->size(),
-        circular_buffer->config().address_offset());
+    circular_buffer->set_global_buffer(tensor, circular_buffer->size(), circular_buffer->config().address_offset());
 }
 
 void UpdateDynamicCircularBufferAddressAndTotalSize(
@@ -1083,8 +1080,7 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->set_global_buffer(
-        *tensor.mesh_buffer().get_reference_buffer(), total_size, circular_buffer->config().address_offset());
+    circular_buffer->set_global_buffer(tensor, total_size, circular_buffer->config().address_offset());
 }
 
 uint32_t CreateSemaphore(

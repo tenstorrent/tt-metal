@@ -28,14 +28,14 @@ DeviceAddr get_per_core_address(
     return get_per_core_address(*buffer, core);
 }
 
-DeviceAddr get_uniform_per_core_address(const distributed::MeshBuffer& mesh_buffer, const CoreCoord& core) {
+DeviceAddr get_uniform_per_core_address(const distributed::MeshBuffer& mesh_buffer, const CoreRangeSet& cores) {
     std::optional<DeviceAddr> address;
     std::optional<distributed::MeshCoordinate> address_coord;
     for (const auto& [coord, device_buffer] : mesh_buffer.buffers_) {
         if (!device_buffer.is_local()) {
             continue;
         }
-        const DeviceAddr device_address = get_per_core_address(*device_buffer.value(), core);
+        const DeviceAddr device_address = get_uniform_per_core_address(*device_buffer.value(), cores);
         if (!address.has_value()) {
             address = device_address;
             address_coord = coord;
@@ -43,10 +43,10 @@ DeviceAddr get_uniform_per_core_address(const distributed::MeshBuffer& mesh_buff
         }
         TT_FATAL(
             device_address == *address,
-            "Per-core buffer sits at {:#x} on core {} of device {} but {:#x} on device {}; one address "
-            "cannot serve both",
+            "Per-core-allocated buffer sits at {:#x} on cores {} of device {} but {:#x} on device {}; one address "
+            "cannot serve both devices",
             *address,
-            core.str(),
+            cores.str(),
             *address_coord,
             device_address,
             coord);

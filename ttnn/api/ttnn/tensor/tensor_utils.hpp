@@ -9,8 +9,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
-#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 
 // Exports symbols
 #include <tt-metalium/tensor/tensor_apis.hpp>
@@ -86,39 +84,6 @@ tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
  * address is the one on the CB's cores, not Buffer::address() (the first core's); those cores must share
  * one address, and for a tensor-backed descriptor so must every local device, or this TT_FATALs.
  */
-inline uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc) {
-    namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
-    auto addr_offset = desc.address_offset;
-    const tt::tt_metal::Buffer* buffer = desc.buffer;
-    if (buffer == nullptr && desc.tensor != nullptr) {
-        buffer = desc.tensor->mesh_buffer().get_reference_buffer();
-    }
-    if (buffer == nullptr) {
-        return addr_offset;
-    }
-    if (!per_core_allocation::is_per_core_allocation(*buffer) || desc.core_ranges.empty()) {
-        return buffer->address() + addr_offset;
-    }
-    std::optional<tt::tt_metal::DeviceAddr> base;
-    for (const auto& core_range : desc.core_ranges.ranges()) {
-        for (const auto& core : core_range) {
-            const auto address = desc.buffer == nullptr ? per_core_allocation::get_uniform_per_core_address(
-                                                              desc.tensor->mesh_buffer(), core)
-                                                        : per_core_allocation::get_per_core_address(*buffer, core);
-            if (!base.has_value()) {
-                base = address;
-                continue;
-            }
-            TT_FATAL(
-                address == *base,
-                "CB descriptor on cores {} is backed by a per-core-allocated buffer that sits at {:#x} and {:#x} on "
-                "different cores; a circular buffer has one address",
-                desc.core_ranges.str(),
-                *base,
-                address);
-        }
-    }
-    return *base + addr_offset;
-}
+uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc);
 
 }  // namespace ttnn

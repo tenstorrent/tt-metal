@@ -9,6 +9,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 
+// Experimental and subject to change: this header carries no API-stability guarantee.
+
 namespace tt::tt_metal::experimental::per_core_allocation {
 
 // Buffer free functions — friended by Buffer to access private per-core state.
@@ -25,6 +27,10 @@ void copy_per_core_addresses(Buffer& dst, const Buffer& src);
 // the kernel reads, otherwise a relocated core reads/writes at the wrong offset. Falls back to
 // Buffer::address() for ordinary lockstep buffers, so callers need no mode check.
 DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core);
+
+// Address of per-core-allocated ``buffer`` that must be the same on every one of ``cores``, as when one
+// address (e.g. a circular buffer's) is used on all of them. TT_FATALs if the cores disagree.
+DeviceAddr get_uniform_per_core_address(const Buffer& buffer, const CoreRangeSet& cores);
 
 // BufferShardingArgs free functions.
 

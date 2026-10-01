@@ -7,6 +7,7 @@
 #include "impl/buffers/buffer_impl.hpp"
 #include "impl/buffers/buffer_sharding_args_impl.hpp"
 #include <tt_stl/assert.hpp>
+#include <optional>
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 
@@ -30,6 +31,32 @@ DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core) {
         return get_per_core_address(buffer, core);
     }
     return buffer.address();
+}
+
+DeviceAddr get_uniform_per_core_address(const Buffer& buffer, const CoreRangeSet& cores) {
+    std::optional<DeviceAddr> address;
+    CoreCoord address_core;
+    for (const CoreRange& core_range : cores.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            const DeviceAddr core_address = get_per_core_address(buffer, core);
+            if (!address.has_value()) {
+                address = core_address;
+                address_core = core;
+                continue;
+            }
+            TT_FATAL(
+                core_address == *address,
+                "Per-core-allocated buffer sits at {:#x} on core {} but {:#x} on core {}; one address on cores {} "
+                "cannot serve both (a circular buffer has one address, so split it into one per address)",
+                *address,
+                address_core.str(),
+                core_address,
+                core.str(),
+                cores.str());
+        }
+    }
+    TT_FATAL(address.has_value(), "get_uniform_per_core_address: no cores given");
+    return *address;
 }
 
 void copy_per_core_addresses(Buffer& dst, const Buffer& src) {
