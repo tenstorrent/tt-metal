@@ -5,6 +5,23 @@ the current eval bottlenecks, predict the attainable speed, iterate on small
 measured experiments, then run and monitor actual CI. This is ongoing work,
 not a claim that the five-task evaluation has been repaired.
 
+## Latest checkpoint (19:43 UTC)
+
+Experimental configurable-weight BFP8 passes the existing short readiness gate
+and produces a verifier-passing Django patch both locally and in actual QB2 CI.
+The same-seed local selected-policy control fails at the same 900-second cap.
+With a separately declared, default-off submission-marker adapter, a fresh local
+trial finishes cleanly in **585.413 seconds**, reward 1, all 104 tests passing.
+Its warmer cache explains most of the lower wall time; this is **not** a causal
+35% adapter speedup or an 8x full-suite claim. Release precision is unchanged.
+
+CI [36910894168](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36910894168)
+is complete (reward 1, but 900-second agent timeout). Follow-up
+[36916089719](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36916089719)
+tests clean completion with the adapter and a bounded 1,200-second cap. It reuses
+the same image and is actively monitored. No full five-task run has been launched;
+cross-task quality and clean release-topology completion remain unproven.
+
 ## Baseline and timing model
 
 Baseline: [run 36530661132, job 109283453627](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36530661132/job/109283453627).
@@ -763,8 +780,8 @@ hashes are retained in `weight_control/server/launch.json` and
 `weight_control/selected_seeded_server/launch.json` under the untracked artifact
 directory. Never run the readiness process concurrently with a device server.
 
-The candidate's corrected 26,142-token replay exactly reproduces the original
-724-token natural-stop response, including a final plain-text line
+The candidate's corrected 26,142-token replay reproduces the original
+724-token natural-stop/no-tool signature and reveals a final plain-text line
 `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`, but no native tool call. It takes
 32.084 seconds on the restarted server; the prior trial took 41.849 seconds for
 that response. This cache-state timing difference is not a delivered speedup.
@@ -825,3 +842,40 @@ be enabled by a flag. Cold compilation is part of TTFT and must be separated
 from attention compute before claiming a practical caching gain. The verified
 result justifies further bounded cross-task/termination checks; it does not
 establish that all five tasks now finish correctly within two hours.
+
+### Clean local completion and bounded CI follow-up
+
+`local_django_bfp8_submit_seed9472` finishes at 19:38:29 UTC: agent time
+585.412629 seconds, no exception, reward 1, required test plus all 103 regression
+tests pass. Exactly one audited normalization converts the explicit final marker
+to the fixed submission call. All preceding 34 work commands match the earlier
+candidate trial. The first 35 upstream responses also have identical aggregate
+568,688 input / 11,437 output tokens. Their API sum changes from 855.653 to 579.381
+seconds, a **276.273-second cache-state difference**, not a measured intervention
+in device code or an adapter speedup. The adapter avoids the later format-error
+retry tail and proves clean termination on this trajectory. Other trajectories
+may still over-inspect or fail to choose completion at all.
+
+The local trial uses TTI `63bb532c` plus the helper subsequently committed in
+TT-Metal `0a91168f24`; model image and precision overlay are unchanged. Subsequent
+TTI `41b847e6` also rejects constrained/non-auto tool choices for normalization;
+this does not affect the tested auto-tool path. All 140 related host tests pass.
+Owned local servers are stopped at 19:40 UTC; both device files are unowned.
+
+CI follow-up 36916089719 is dispatched at 19:41:02 UTC with TTI
+`215e63753b1c617b1bfede127d68a25ab128377d`, the same `ad58effd...` image,
+`c9ec3469...` TT-Metal and `c9cfebcf...` plugin inputs. It runs one Django trial,
+seed 9472, cap 1,200 seconds, BFP8 overlay and explicit submission normalization.
+The increased diagnostic cap is disclosed; it is not a matched 900-second wall-
+time comparison or the final 7,200-second release recipe. No image rebuild is
+requested. Monitor command:
+
+```bash
+python3 models/autoports/google_gemma_4_26b_a4b_it/tools/monitor_eval_ci.py 36916089719 \
+  --output /home/mvasiljevic/gemma4-eval-speed-evidence/bfp8_submit_ci_live_metrics.jsonl
+```
+
+The monitor records read-only job states and serving counters every 30 seconds,
+handles unassigned runner names, and exits only when the run completes. Its
+completed-run path is checked against run 36910894168. Artifact/verifier review
+is still required after a green workflow result.
