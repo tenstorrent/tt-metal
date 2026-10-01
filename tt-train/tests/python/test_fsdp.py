@@ -272,6 +272,19 @@ class _TinyModel(AbstractModuleBase):
         return self.head(x)
 
 
+class _TiedPair(AbstractModuleBase):
+    """Two linears sharing one weight, the way ``tok_emb``/``fc`` are tied in Llama."""
+
+    def __init__(self, features: int) -> None:
+        super().__init__()
+        self.fc1 = LinearLayer(features, features, has_bias=False)
+        self.fc2 = LinearLayer(features, features, has_bias=False)
+        self.fc2.weight = self.fc1.weight
+
+    def forward(self, x):
+        return self.fc2(self.fc1(x))
+
+
 def _build_block_with_known_weights(in_features: int, hidden: int, out_features: int, *, seed: int = 42) -> _TinyBlock:
     """Build a ``_TinyBlock`` whose parameters are deterministic and replicated.
 
@@ -423,6 +436,37 @@ class TestFullyShardLinear:
         with expect_error(ValueError, "invalid pattern"):
             ttml.fsdp.fully_shard(linear, replicate=["bias("])
         assert not hasattr(linear, "_fsdp_state"), "a rejected pattern must not leave the module half-wrapped"
+
+    def test_replicate_matches_any_alias_of_a_tied_param(self):
+        """A pattern naming the second alias of a tied weight still keeps it replicated."""
+        model = _TiedPair(64)
+        ttml.fsdp.fully_shard(model, replicate=[r"^fc2\.weight$"])
+
+        assert model.fc1.weight is model.fc2.weight
+        assert model.fc1.weight.tensor.shape() == [1, 1, 64, 64]
+        assert not ttml.fsdp.is_fsdp_managed(model.fc1.weight.tensor)
+        assert ttml.fsdp.replicated_parameters(model) == {"fc1.weight": [r"^fc2\.weight$"]}
+
+    def test_outer_wrapper_skips_a_tied_param_an_inner_wrapper_replicated(self):
+        """The root sees the tied weight through ``fc2`` but must not shard what ``fc1``'s wrapper replicated."""
+        model = _TiedPair(64)
+        ttml.fsdp.fully_shard(model.fc1, replicate=["weight"])
+        ttml.fsdp.fully_shard(model)
+
+        assert model.fc2.weight.tensor.shape() == [1, 1, 64, 64]
+        assert not ttml.fsdp.is_fsdp_managed(model.fc2.weight.tensor)
+        assert ttml.fsdp.replicated_parameters(model) == {"fc1.weight": ["weight"]}
+
+    def test_replicate_rejects_a_param_already_sharded_on_the_axis(self, expect_error):
+        """A param already sharded on the FSDP axis can't be reported as replicated."""
+        linear = LinearLayer(64, 128, has_bias=False)
+        data = np.zeros(tuple(linear.weight.tensor.shape()), dtype=np.float32)
+        sharded = ttml.autograd.Tensor.from_numpy(
+            data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self.mesh.axis_mapper("fsdp", tdim=2)
+        )
+        linear.weight.tensor.set_value(sharded.get_value())
+        with expect_error(RuntimeError, "already sharded on mesh axis 'fsdp'"):
+            ttml.fsdp.fully_shard(linear, replicate=["weight"])
 
     def test_invalid_axis_raises(self, expect_error):
         """Sharding on an axis the mesh doesn't have raises before any state change."""

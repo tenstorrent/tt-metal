@@ -141,9 +141,19 @@ Some parameters are too small to shard into whole 32×32 tiles. Their
 every step. Keeping them replicated skips those CCLs; their gradients are
 just all-reduced once per step.
 
-List the patterns with `replicate=[...]` on every `fully_shard` call that
-owns candidate parameters (including each per-block wrapper and the root), or
-set them in `device_config` for the
+Each wrapper only examines the parameters it owns, so pass the same
+patterns to every `fully_shard` call, each per-block wrapper as well as the
+root. Passing them to the root alone can't reach parameters inside wrapped
+blocks:
+
+```python
+replicate = [r"(q|k)_norm\.weight$"]
+for block in model.blocks:
+    ttml.fsdp.fully_shard(block, replicate=replicate)
+ttml.fsdp.fully_shard(model, replicate=replicate)
+```
+
+Or set them in `device_config` for the
 [training example](/tt-train/sources/examples/train/train.py) and the
 [GRPO Qwen3 completer](/tt-train/sources/examples/grpo/utils/qwen3_completer.py):
 
@@ -153,6 +163,11 @@ device_config:
   mesh_shape: [32, 1]
   fsdp_replicate_params: ["q_norm.weight", "k_norm.weight"]
 ```
+
+A tied parameter is kept replicated if a pattern matches any of its names,
+and outer wrappers then leave it alone. A parameter already sharded on the
+FSDP axis (e.g. by a TP-style mapper) can't be kept replicated, so matching
+it raises.
 
 The run logs how many parameters were kept replicated and warns about
 patterns that matched nothing. `ttml.fsdp.replicated_parameters(model)`

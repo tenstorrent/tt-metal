@@ -365,6 +365,13 @@ def _param_shape(parameter: Parameter) -> List[int]:
     return list(inner.shape())
 
 
+def _param_placements(parameter: Parameter) -> Optional[List[Any]]:
+    inner = parameter.peek_tensor()
+    if isinstance(inner, TensorMetadata):
+        return _placements_from_mapper(inner.mapper)
+    return _get_placements(inner)
+
+
 def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int) -> Optional[int]:
     """Pick a shard dim for ``parameter``, or return ``None`` to skip it.
 
@@ -384,12 +391,7 @@ def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int) -> Optional
     case — same logical question, different source depending on whether the
     tensor exists yet.
     """
-    inner = parameter.peek_tensor()
-    if isinstance(inner, TensorMetadata):
-        placements = _placements_from_mapper(inner.mapper)
-    else:
-        placements = _get_placements(inner)
-    already_sharded = _sharded_tensor_dims(placements)
+    already_sharded = _sharded_tensor_dims(_param_placements(parameter))
     return _pick_shard_dim_from_shape(_param_shape(parameter), already_sharded, axis_index)
 
 
@@ -398,8 +400,8 @@ def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int) -> Optional
 # ---------------------------------------------------------------------------
 
 
-def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[str, Parameter]]:
-    """Return ``[(dotted_name, Parameter), ...]`` for every Python
+def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[List[str], Parameter]]:
+    """Return ``[(dotted_names, Parameter), ...]`` for every Python
     :class:`~ttml.modules.parameter.Parameter` owned by ``module`` but NOT by
     any nested ``fully_shard``-wrapped submodule.
 
@@ -412,7 +414,8 @@ def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[str, 
     past materialize time).
 
     Dedup is by ``Parameter`` identity, so weight-tied references (one
-    ``Parameter`` referenced under multiple attribute names) count once.
+    ``Parameter`` referenced under multiple attribute names) count once;
+    ``dotted_names`` lists every such alias visible to ``module``.
     Implicitly assumes every parameter the model owns is exposed via a Python
     ``Parameter`` wrapper — true for every model in ``ttml.models``.
     """
@@ -425,8 +428,8 @@ def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[str, 
             fsdp_modules.add(id(child))
             fsdp_prefixes.append(name + ".")
 
-    seen_ids: set = set()
-    out: List[Tuple[str, Parameter]] = []
+    names_by_id: dict[int, List[str]] = {}
+    out: List[Tuple[List[str], Parameter]] = []
     for prefix, mod in module.named_modules():
         # Skip the wrapped sub-module roots themselves AND any of their
         # descendants. ``fsdp_prefixes`` items end in ".", so descendant paths
@@ -439,11 +442,12 @@ def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[str, 
         for attr_name, val in list(mod.__dict__.items()):
             if not isinstance(val, Parameter):
                 continue
-            if id(val) in seen_ids:
-                continue
-            seen_ids.add(id(val))
             full_name = f"{prefix}.{attr_name}" if prefix else attr_name
-            out.append((full_name, val))
+            if id(val) in names_by_id:
+                names_by_id[id(val)].append(full_name)
+                continue
+            names_by_id[id(val)] = [full_name]
+            out.append((names_by_id[id(val)], val))
     return out
 
 
@@ -705,9 +709,12 @@ def fully_shard(
             # TODO: Try this on the last block
         replicate: Regex patterns of parameters to keep replicated instead of sharding,
             for params too small to shard into whole tiles. Each is searched for
-            (``re.search``) in the parameter's dotted name relative to ``module``.
-            The training loop must average their gradients over ``mesh_axis`` with
-            ``ttml.sync_gradients``; ``SFTTrainer`` and ``GRPOTrainer`` already do.
+            (``re.search``) in the parameter's dotted names relative to ``module``; a
+            tied parameter matches if any of its names does.
+            Raises if a matched parameter is already sharded on
+            ``mesh_axis``. The training loop must average their gradients over
+            ``mesh_axis`` with ``ttml.sync_gradients``; ``SFTTrainer`` and
+            ``GRPOTrainer`` already do.
     Returns:
         ``module`` (modified in place).
     """
@@ -740,14 +747,23 @@ def fully_shard(
     # ``_shard_lazy_param`` (rewrites the mapper so materialize allocates
     # already-sharded — required for ~70B models) or ``_shard_eager_param``
     # (host-roundtrips the materialized tensor).
-    for rel_name, parameter in _collect_root_param_wrappers(module):
-        # Already FSDP-managed somewhere else (e.g. tied weight claimed by
-        # an inner block's FSDPState).
-        if getattr(parameter, "_fsdp_managed", False):
+    for names, parameter in _collect_root_param_wrappers(module):
+        rel_name = names[0]
+        # Already claimed by another wrapper (e.g. tied weight sharded or
+        # kept replicated by an inner block's FSDPState).
+        if getattr(parameter, "_fsdp_managed", False) or getattr(parameter, "_fsdp_replicated", False):
             continue
-        matched = _matching_replicate_patterns(rel_name, replicate_res)
+        # Match every alias of a tied parameter, not just the first-seen one.
+        matched = _matching_replicate_patterns(names, replicate_res)
         if matched:
+            if _already_fsdp_sharded(_param_placements(parameter), axis_index):
+                raise RuntimeError(
+                    f"replicate: parameter {rel_name!r} (matched by {matched}) is already sharded on mesh "
+                    f"axis {mesh_axis!r}, so it cannot be kept replicated on it."
+                )
             state.replicated[rel_name] = matched
+            # Claims the parameter so outer wrappers don't shard it through another alias.
+            parameter._fsdp_replicated = True
             continue
 
         shape = _param_shape(parameter)
@@ -860,9 +876,11 @@ def _compile_replicate_patterns(patterns: Sequence[str], what: str = "replicate"
     return compiled
 
 
-def _matching_replicate_patterns(name: str, patterns: Sequence[re.Pattern]) -> List[str]:
-    """Return the patterns found in ``name`` by ``re.search``."""
-    return [p.pattern for p in patterns if p.search(name)]
+def _matching_replicate_patterns(names: Union[str, Sequence[str]], patterns: Sequence[re.Pattern]) -> List[str]:
+    """Return the patterns found by ``re.search`` in ``names`` (one name, or all aliases of a tied parameter)."""
+    if isinstance(names, str):
+        names = [names]
+    return [p.pattern for p in patterns if any(p.search(n) for n in names)]
 
 
 def replicated_parameters(module: AbstractModuleBase) -> dict[str, List[str]]:

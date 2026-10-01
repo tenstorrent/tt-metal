@@ -41,7 +41,7 @@ class DeviceConfig:
         # Set to false to opt into the eager (full-replicated, then shard) path.
         self.lazy_parameter_init = device_config.get("lazy_parameter_init", True)
         # Regex patterns of parameters FSDP keeps replicated, passed to ``fully_shard(replicate=...)``.
-        # Validated here so a bad pattern fails at config load, not after the model is built.
+        # Validated here so a bad pattern fails at config load.
         replicate = device_config.get("fsdp_replicate_params")
         replicate = [] if replicate is None else replicate
         _compile_replicate_patterns(replicate, what="device_config.fsdp_replicate_params")
