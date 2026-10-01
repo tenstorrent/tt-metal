@@ -275,10 +275,6 @@ def test_pack(
     assert test_passed
 
 
-# The block pack: every dest block packed with one _llk_pack_block_ run (one pack program run per block, the path
-# behind tt-metal's pack_block_mop) instead of one _llk_pack_ per tile. Same formats, dest modes and sync modes as
-# PACK_SWEEP, blocks of 1 to 16 tiles, no relu axis (relu is a packer config bit that the block pack does not touch).
-# Bfp8_b outputs take the per-tile pack inside the kernel, as the API does.
 PACK_BLOCK_SWEEP = dict(
     formats=PACK_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
@@ -291,8 +287,7 @@ PACK_BLOCK_SWEEP = dict(
 )
 
 
-# The perf rows of the block pack (perf_pack.py::test_perf_pack_block): three formats, blocks of 4, 8 and 16 tiles
-# (fp32 dest: 2, 4 and 8), both sync modes, so the cycles per tile read against test_perf_pack's per-tile rows.
+# Used by perf_pack.py::test_perf_pack_block.
 PACK_BLOCK_PERF_SWEEP = dict(
     formats=input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Int32]

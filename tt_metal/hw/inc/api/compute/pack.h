@@ -142,18 +142,8 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
 
 // clang-format off
 /**
- * Copies a block of tiles from the DEST register buffer to a circular buffer like `pack_block`, with the same
- * arguments and the same effect on the CB write pointer, but on Blackhole the block is packed by one run of the
- * packer program instead of one run per tile: the dest tile select, the L1 address programming and the counter
- * reset that `pack_tile` and `pack_block` issue for every tile are issued once per block, which takes a 16-bit
- * output tile from about 25 to 16 + 9 / ntiles pack-thread cycles (17.1 at eight tiles). The block form is used
- * when the output tiles are full 32x32 tiles in a plain 8, 16 or 32 bit format with one tile per CB page;
- * block-float outputs, tiny tiles and other page layouts take the per-tile pack of `pack_block`, so the result is
- * the same in every case. On Wormhole and Quasar this call is `pack_block`.
- *
- * Like `pack_block`, it needs the packer initialised for the default tile layout by an op-specific init (every
- * init except `tilize_init`; pack-untilize has its own calls). The DEST register buffer must be in acquired
- * state and cb_reserve_back(n) must have reserved at least ntiles tiles in the output CB.
+ * Like `pack_block` (same arguments, same effect on the CB write pointer); on Blackhole a block of full 32x32 tiles in a
+ * plain format, one tile per CB page, is one packer program run. Other outputs and architectures take `pack_block`.
  *
  * Return value: None
  *

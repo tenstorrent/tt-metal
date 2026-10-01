@@ -41,8 +41,7 @@ def test_perf_pack(
     )
 
 
-# The block pack (one pack program run per dest block, the path behind pack_block_mop) on the same kernel: the same
-# columns as test_perf_pack, so both write perf_pack.csv, and the block rows read against the per-tile rows above.
+# Same columns as test_perf_pack, so the block rows land in the same perf_pack.csv.
 @pytest.mark.perf
 @parametrize(
     **PACK_BLOCK_PERF_SWEEP,

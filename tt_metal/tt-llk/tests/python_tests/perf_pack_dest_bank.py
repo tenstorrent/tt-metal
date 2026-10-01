@@ -92,7 +92,6 @@ def test_perf_pack_dest_bank(
     num_tiles_in_block,
     loop_factor,
 ):
-    # One MOP per block of num_tiles_in_block tiles: the 1x1 and 1x2 rows give the per-call cost against 1x4 and 1x8.
     if (num_blocks, num_tiles_in_block) not in {(1, 1), (1, 2), (1, 4), (2, 4), (1, 8)}:
         pytest.skip(
             "Local perf sweep only uses 1x1, 1x2, 1x4, 2x4, and 1x8 blocked-pack patterns"

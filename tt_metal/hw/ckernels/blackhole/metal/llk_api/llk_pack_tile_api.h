@@ -159,12 +159,7 @@ inline void llk_matmul_pack(
     }
 }
 
-/**
- * Whether the tiles of an output operand are written back to back by one run of the pack program: a full 32x32
- * tile (four faces of FACE_R_DIM rows, the dest tile slot the pack MOP walks through) in a plain 8, 16 or 32 bit
- * format whose CB page is exactly one packed tile, so tile k of a block lands on page k. Block-float outputs (a
- * per-tile exponent section) and any other page layout keep the per-tile pack.
- */
+// True when one pack program run writes the tiles back to back: plain format, full 32x32 tiles, one tile per CB page.
 inline bool llk_pack_block_is_contiguous(const std::uint32_t output_id) {
     const std::uint32_t dst_format = pack_dst_format[output_id];
     if (IS_BFP_FORMAT(dst_format)) {
@@ -178,15 +173,8 @@ inline bool llk_pack_block_is_contiguous(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size == tile_words;
 }
 
-/**
- * Pack ntiles consecutive dest tiles, from start_tile_index, into the next ntiles pages of the output operand.
- * Same arguments, dest and CB contract as llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>: the
- * running write-tile pointer advances by ntiles pages. When ntiles is at least 2 and the output tiles are
- * contiguous plain-format 32x32 tiles the block is one _llk_pack_block_ run, so the dest tile select, the L1
- * address programming and the counter reset are issued once per block instead of once per tile; otherwise every
- * tile is packed with its own _llk_pack_, as llk_matmul_pack does (a single tile is that call already, and the
- * per-tile form spares the RISC the run-time MOP word).
- */
+// Same arguments and CB contract as llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>; a contiguous block
+// of two or more tiles is one _llk_pack_block_ run, anything else one _llk_pack_ per tile.
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);

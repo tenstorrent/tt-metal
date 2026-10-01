@@ -204,9 +204,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int RELU_CONFIG                  = params.RELU_CONFIG;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
-    // pack_block_en: every dest block is packed with one _llk_pack_block_ run (one pack program run per block) instead
-    // of one _llk_pack_ per tile. Block-float outputs are not written back to back by one run and keep the per-tile pack,
-    // and a one-tile block is the per-tile pack already.
+    // Block-float tiles are not written back to back by one pack run; they and one-tile blocks keep the per-tile pack.
     [[maybe_unused]] const bool block_pack = pack_block_en && NUM_TILES_IN_BLOCK > 1 && !IS_BFP_FORMAT(formats.pack_dst);
     {
         START_PERF_MEASURE("INIT")

@@ -612,27 +612,17 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 }
 
 /**
- * @brief Pack a block of consecutive 32x32 tiles from the destination register to consecutive L1 tiles with one
- *        run of the packer program.
- *
- * The PackMode::Default program of @ref _llk_pack_init_ walks the destination register face by face and writes L1
- * back to back, so with its outer loop lengthened from num_faces to num_faces * num_tiles iterations it packs
- * num_tiles consecutive dest tiles as one contiguous L1 run closed by a single tile-end PACR. The outer loop
- * length is carried in the MOP instruction word, which overrides the programmed length for that run only, so the
- * program stays as the init left it and no MOP reprogram or mop_sync is needed. The dest tile select, the L1
- * address programming and the counter reset (the eight instructions and one held cycle that @ref _llk_pack_ pays
- * per tile) are paid once per block.
+ * @brief Pack num_tiles consecutive 32x32 tiles from the destination register to consecutive L1 tiles with one run of the packer
+ *        program: the PackMode::Default program of @ref _llk_pack_init_ with its outer loop lengthened to num_faces * num_tiles for this run.
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @tparam pack_mode: Packing layout, must be PackMode::Default.
  * @param start_tile_index: Index of the first source tile in the destination register.
- * @param address: L1 destination address of the first tile; tile k of the block is written k packed tile sizes after it.
+ * @param address: L1 destination address of the first tile.
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
- * @note Requires the program of @ref _llk_pack_init_<PackMode::Default> for four-face tiles of FACE_R_DIM rows
- *       (32x32 tiles): the face walk reaches the next dest tile slot only when a tile has four faces. Output formats
- *       with a per-tile exponent section (the BFP formats) are not written back to back by one run and must use
- *       @ref _llk_pack_ per tile. The L1 tiles must be contiguous at the packed tile size (no per-tile header).
+ * @note Requires the program of @ref _llk_pack_init_<PackMode::Default> for four-face tiles of FACE_R_DIM rows; BFP outputs must use
+ *       @ref _llk_pack_ per tile.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
@@ -648,9 +638,7 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 
     program_packer_destination(address);
 
-    // Run the pack MOP with its outer loop length set to num_faces * num_tiles for this run only: bits 19:10 of the
-    // MOP instruction word carry an outer loop length that replaces the programmed one when non-zero, bits 9:0 stay
-    // zero so the inner loop (the PACRs per face) keeps its programmed length.
+    // MOP word bits 19:10: a non-zero outer loop length overrides the programmed one for this run only; bits 9:0 (inner loop) stay programmed.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
     TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
 
