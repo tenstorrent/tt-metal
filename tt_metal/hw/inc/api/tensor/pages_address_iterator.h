@@ -6,7 +6,7 @@
 
 #include <cstddef>
 #include "api/tensor/page.h"
-#include "api/tensor/transfer_noc_addr.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "internal/tensor/helpers.h"
 
 namespace tensor_accessor {
@@ -367,7 +367,7 @@ private:
     mutable AccessorPage<Accessor> current_page{0, 0, nullptr};
 
     void update_current_page() {
-        auto current_noc_addr = transfer_noc_addr(accessor, current_page_id, 0, noc);
+        auto current_noc_addr = detail::transfer_noc_addr(accessor, current_page_id, 0, noc);
         current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor);
     }
 };
