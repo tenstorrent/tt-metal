@@ -88,7 +88,7 @@ def prepare_prefill_mtp_tokens(
 
     Chip ``c`` takes the ids past the LAST POSITION IT CARRIES, so concatenated onto its trunk row
     every MTP level reads the same local slice -- except, on a chunk starting off a per-chip
-    boundary, the seam chip's first run, which ``MTPSeam`` mends on device. Block-cyclic only.
+    boundary, the seam chip's first run, which ``MTPSeamSplice`` mends on device. Block-cyclic only.
     """
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     isl_per_chip = (len(token_ids) - num_mtp_tokens) // sp_factor
@@ -228,10 +228,10 @@ def build_mtp_generation_select(
     return _upload_sp_sharded(select, mesh_device, mesh_shape, sp_axis, dtype)
 
 
-def build_sp_chip_index(mesh_device: ttnn.MeshDevice, sp_factor: int, mesh_shape: tuple, sp_axis: int) -> ttnn.Tensor:
-    """``[1, 1, 1, 1]`` bf16 per chip holding its SP index. Built once; ``MTPSeam`` compares against it."""
-    index = torch.arange(sp_factor, dtype=torch.float32).view(sp_factor, 1, 1, 1)
-    return _upload_sp_sharded(index, mesh_device, mesh_shape, sp_axis, ttnn.bfloat16)
+def build_sp_rank_tensor(mesh_device: ttnn.MeshDevice, sp_factor: int, mesh_shape: tuple, sp_axis: int) -> ttnn.Tensor:
+    """``[1, 1, 1, 1]`` bf16 per chip holding its SP rank. Built once; ``MTPSeamSplice`` compares against it."""
+    ranks = torch.arange(sp_factor, dtype=torch.float32).view(sp_factor, 1, 1, 1)
+    return _upload_sp_sharded(ranks, mesh_device, mesh_shape, sp_axis, ttnn.bfloat16)
 
 
 def _upload_sp_sharded(

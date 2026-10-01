@@ -35,12 +35,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
     MTPDeviceEmbedSource,
     MTPDeviceGeneration,
-    MTPSeam,
+    MTPSeamSplice,
 )
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
     build_mtp_generation_keep_mask,
     build_mtp_generation_select,
-    build_sp_chip_index,
+    build_sp_rank_tensor,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
@@ -394,8 +394,8 @@ class TtPrefillTransformer(LightweightModule):
                 "TtMTPModule's **block_kwargs)"
             )
             assert self.embed is not None, "MTP needs the embedding table on this rank (see --- Embedding ---)"
-        self._mtp_chip_index = (
-            build_sp_chip_index(mesh_device, self.sp_factor, self.mesh_shape, sp_axis)
+        self._mtp_sp_rank = (
+            build_sp_rank_tensor(mesh_device, self.sp_factor, self.mesh_shape, sp_axis)
             if mtp_predictor is not None and self.sp_factor > 1
             else None
         )
@@ -679,11 +679,11 @@ class TtPrefillTransformer(LightweightModule):
         ttnn.deallocate(ids)
         if self.sp_factor == 1:
             return emb
-        gathered = self._mtp_sp_gather(emb)
+        gathered = self._mtp_all_gather_sp(emb)
         ttnn.deallocate(emb)
         return gathered
 
-    def _mtp_sp_gather(self, rows: ttnn.Tensor) -> ttnn.Tensor:
+    def _mtp_all_gather_sp(self, rows: ttnn.Tensor) -> ttnn.Tensor:
         """``[1, 1, 32, H/tp]`` per chip -> ``[1, 1, 32*sp, H/tp]`` on every chip, in SP order."""
         return ttnn.all_gather(
             rows, dim=-2, cluster_axis=self.sp_axis, num_links=self.num_links, topology=self.sp_topology
@@ -750,16 +750,16 @@ class TtPrefillTransformer(LightweightModule):
         assert (
             0 <= provided_levels <= self.num_mtp_levels
         ), f"provided_levels {provided_levels} outside [0, {self.num_mtp_levels}]"
-        seam = MTPSeam.for_chunk(
+        seam_splice = MTPSeamSplice.for_chunk_start(
             fwd_kwargs["actual_start"],
             self.seq_len // self.sp_factor,
             self.sp_factor,
-            self._mtp_chip_index,
-            self._mtp_sp_gather,
+            self._mtp_sp_rank,
+            self._mtp_all_gather_sp,
         )
         generation = None
         try:
-            union.set_seam(seam)
+            union.set_seam_splice(seam_splice)
             if provided_levels < self.num_mtp_levels:
                 generation = self._mtp_build_generation(
                     union,
@@ -778,7 +778,7 @@ class TtPrefillTransformer(LightweightModule):
         finally:
             if generation is not None:
                 generation.deallocate()
-            if seam is not None:
-                union.clear_seam()
-                seam.deallocate()
+            if seam_splice is not None:
+                union.clear_seam_splice()
+                seam_splice.deallocate()
         return out, source.generated_tokens
