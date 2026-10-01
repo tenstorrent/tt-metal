@@ -32,7 +32,12 @@ from pathlib import Path
 
 import numpy as np
 
-TURNS = {0: [3000, 56000], 1: [12345, 20000]}  # slot -> prompt lengths of its turns
+# slot -> prompt lengths of its turns; XING_CONTRACT_TURNS (JSON {"slot": [len, ...]}) replaces them (the runner smoke)
+TURNS = (
+    {int(k): [int(n) for n in v] for k, v in json.loads(os.environ["XING_CONTRACT_TURNS"]).items()}
+    if os.environ.get("XING_CONTRACT_TURNS")
+    else {0: [3000, 56000], 1: [12345, 20000]}
+)
 SNAPSHOTS = {
     "snap_s0_t0": {"after": (0, 0, 3000), "slot": 0, "lo": 0, "hi": 3000},
     "snap_overlap": {"after": (0, 49024, 54144), "slot": 0, "lo": 51200, "hi": 54144},

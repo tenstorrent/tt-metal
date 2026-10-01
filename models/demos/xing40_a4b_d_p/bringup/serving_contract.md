@@ -204,6 +204,7 @@ it (prefill_producer.py:98, prefill_runner.py:640-663). Server config: `layers_p
   migration-enabled path, D2H acks. It runs `tables.read_table` / `layout` on the exported `.pb`, then dumps the KV
   through the table and checks it with `kv_dump_compare` (bytecmp, pcc).
 - `test_adapter_acks.py`: the same table rules on a 2-layer runtime.
+- `test_runner_smoke.py`: the intake smoke prompt through the runner, the KV below `(prompt_len - 1) // 64 * 64` read through the table into the device model as decode's prefix, tail recomputed, greedy answer must contain "Paris".
 
 ## Deployment
 
