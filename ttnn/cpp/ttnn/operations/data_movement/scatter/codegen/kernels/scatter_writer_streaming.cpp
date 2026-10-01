@@ -68,10 +68,11 @@ void kernel_main() {
                 output_tile_bytes,
                 {.offset_bytes = 0},
                 {.page_id = h * Wt_output + current_output_tile_id, .offset_bytes = 0});
-            noc.async_write_barrier();
+            noc.async_writes_flushed();
             out_cb.pop_front(one_tile);
 
             current_output_tile_id += num_cores;
         }  // core_loop
     }  // Ht loop
+    noc.async_write_barrier();
 }

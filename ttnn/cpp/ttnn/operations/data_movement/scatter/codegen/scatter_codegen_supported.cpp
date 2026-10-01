@@ -173,7 +173,7 @@ bool supported_by_codegen(
         bf16_reduce);
 }
 
-bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& index_tensor, const Tensor& src_tensor) {
+bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& /*index_tensor*/, const Tensor& /*src_tensor*/) {
     // A unit logical row in TILE layout is padded to 32 rows, so input, index, src and output all
     // carry 32x their logical volume through every transpose in the pre/post sandwich and through
     // the kernel itself; the streaming reader additionally scans and rejects the 992 padded-row

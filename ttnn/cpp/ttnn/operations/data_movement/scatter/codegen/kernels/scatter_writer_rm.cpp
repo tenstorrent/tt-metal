@@ -50,7 +50,8 @@ void kernel_main() {
         out_cb.wait_front(one_page);
         noc.async_write(
             out_cb, output_accessor, output_page_bytes, {.offset_bytes = 0}, {.page_id = stick_id, .offset_bytes = 0});
-        noc.async_write_barrier();
+        noc.async_writes_flushed();
         out_cb.pop_front(one_page);
     }
+    noc.async_write_barrier();
 }
