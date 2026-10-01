@@ -4,7 +4,12 @@
 """Host-only invariants for experimental context compaction."""
 
 import copy
+import json
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from probe_context_dedup import compact
 
@@ -48,6 +53,42 @@ class CompactionTests(unittest.TestCase):
             {"role": "tool", "tool_call_id": "unknown", "content": "x" * 500},
         ]
         self.assertEqual(compact(messages), (messages, []))
+
+
+class WeightControlTests(unittest.TestCase):
+    def test_only_configurable_weights_change(self):
+        root = Path(__file__).resolve().parents[1]
+        source = root / "doc/datatype_sweep/selected_precision_config.json"
+        original = source.read_bytes()
+        baseline = json.loads(original)
+        with tempfile.TemporaryDirectory(prefix="gemma4-weight-control-test-") as directory:
+            output = Path(directory) / "policy.json"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "tools/prepare_eval_weight_control.py"),
+                    "--source",
+                    str(source),
+                    "--output",
+                    str(output),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            candidate = json.loads(output.read_text())
+            changes = json.loads(output.with_suffix(".manifest.json").read_text())["changes"]
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(len(changes), 93)
+        for change in changes:
+            self.assertNotIn("fixed", change["path"].split("."))
+            self.assertEqual((change["before"], change["after"]), ("bfloat4_b", "bfloat8_b"))
+            node = candidate
+            parts = change["path"].split(".")
+            for part in parts[:-1]:
+                node = node[part]
+            node[parts[-1]] = change["before"]
+        candidate["config_id"] = baseline["config_id"]
+        self.assertEqual(candidate, baseline)
 
 
 if __name__ == "__main__":
