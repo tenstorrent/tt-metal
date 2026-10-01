@@ -59,3 +59,6 @@ Job 027 (prof, TP=4 on create_submesh(2,4)) completed, no drop. Numbers (~/fasth
   marker ~/fasth3/out/t40/DONE_first. Expect request[0].encode ~0.23s, PCC 1.0.
 Next: read first.log (GEMMA4_TIMING capture_trace / request[i].encode, GEMMA4_PCC request), report, done.
 e2e clip still pending full-mesh permission (4x8 banned).
+Job 028 result (no drop): capture_trace 1.07s (after gen #0's export, off the request path);
+request[0..3].encode 0.226-0.237s for new prompts; PCC vs eager 1.000000 video and audio. Raw lines:
+tmp/blx03/t40_results.txt. blx03 ~/fasth3/t40 worktree and ~/fasth3/out/t40 removed.

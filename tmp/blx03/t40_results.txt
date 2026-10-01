@@ -1,0 +1,74 @@
+== prof.log
+GEMMA4_TIMING eager_compile.prep=47.3ms real_tokens=3
+GEMMA4_TIMING eager_compile.device=53537.0ms
+GEMMA4_TIMING eager_compile.readback=21.5ms
+GEMMA4_TIMING eager_compile.total=53605.8ms
+GEMMA4_TIMING eager[0].prep=33.2ms real_tokens=39
+GEMMA4_TIMING eager[0].device=199.1ms
+GEMMA4_TIMING eager[0].readback=14.6ms
+GEMMA4_TIMING eager[0].total=246.9ms
+GEMMA4_TIMING eager[1].prep=10.1ms real_tokens=47
+GEMMA4_TIMING eager[1].device=199.0ms
+GEMMA4_TIMING eager[1].readback=14.3ms
+GEMMA4_TIMING eager[1].total=223.5ms
+GEMMA4_TIMING eager[2].prep=13.9ms real_tokens=42
+GEMMA4_TIMING eager[2].device=203.6ms
+GEMMA4_TIMING eager[2].readback=15.7ms
+GEMMA4_TIMING eager[2].total=233.2ms
+GEMMA4_TIMING eager[3].prep=15.0ms real_tokens=42
+GEMMA4_TIMING eager[3].device=203.0ms
+GEMMA4_TIMING eager[3].readback=18.9ms
+GEMMA4_TIMING eager[3].total=236.9ms
+GEMMA4_TIMING eager_split[0].gemma48=134.2ms
+GEMMA4_TIMING eager_split[0].feature_extractor=18.8ms
+GEMMA4_TIMING eager_split[0].connectors=46.6ms
+GEMMA4_TIMING eager_split[1].gemma48=133.9ms
+GEMMA4_TIMING eager_split[1].feature_extractor=18.8ms
+GEMMA4_TIMING eager_split[1].connectors=46.5ms
+GEMMA4_TIMING traced_capture.prep=11.8ms real_tokens=39
+GEMMA4_TIMING traced_capture.device=796.6ms
+GEMMA4_TIMING traced_capture.readback=12.2ms
+GEMMA4_TIMING traced_capture.total=820.6ms
+GEMMA4_TIMING replay[0].prep=16.9ms real_tokens=39
+GEMMA4_TIMING replay[0].device=714.6ms
+GEMMA4_TIMING replay[0].readback=15.8ms
+GEMMA4_TIMING replay[0].total=747.3ms
+GEMMA4_PCC replay[0] vs eager: video=1.000000 audio=1.000000
+GEMMA4_TIMING replay[1].prep=11.9ms real_tokens=47
+GEMMA4_TIMING replay[1].device=199.0ms
+GEMMA4_TIMING replay[1].readback=13.2ms
+GEMMA4_TIMING replay[1].total=224.1ms
+GEMMA4_PCC replay[1] vs eager: video=1.000000 audio=1.000000
+GEMMA4_TIMING replay[2].prep=12.6ms real_tokens=42
+GEMMA4_TIMING replay[2].device=199.0ms
+GEMMA4_TIMING replay[2].readback=20.4ms
+GEMMA4_TIMING replay[2].total=232.0ms
+GEMMA4_PCC replay[2] vs eager: video=1.000000 audio=1.000000
+GEMMA4_TIMING replay[3].prep=21.9ms real_tokens=42
+GEMMA4_TIMING replay[3].device=199.1ms
+GEMMA4_TIMING replay[3].readback=18.0ms
+GEMMA4_TIMING replay[3].total=239.0ms
+GEMMA4_PCC replay[3] vs eager: video=1.000000 audio=1.000000
+GEMMA4_TIMING gemma48_replay_1024[0]=134.0ms
+GEMMA4_TIMING gemma48_replay_1024[1]=133.9ms
+GEMMA4_TIMING gemma48_replay_1024[2]=133.7ms
+GEMMA4_TIMING gemma48_replay_256[0]=64.7ms
+GEMMA4_TIMING gemma48_replay_256[1]=64.6ms
+GEMMA4_TIMING gemma48_replay_256[2]=65.3ms
+GEMMA4_PCC bucket256 vs 1024 real-token hidden: min=0.998628 final=0.999982 per-layer=[1.0, 0.99996, 0.99994, 0.99996, 0.99992, 0.99983, 0.99978, 0.99965, 0.99939, 0.99966, 0.99957, 0.99863, 0.99975, 0.9999, 0.99995, 0.99993, 0.99995, 0.99996, 0.99993, 0.9999, 0.99988, 0.9999, 0.99984, 0.99973, 0.99978, 0.99981, 0.99982, 0.99983, 0.9998, 0.99978, 0.9998, 0.99985, 0.99988, 0.99992, 0.99988, 0.99981, 0.99979, 0.99982, 0.99985, 0.99989, 0.9999, 0.99991, 0.99992, 0.99992, 0.99993, 0.99995, 0.99996, 0.99998, 0.99995, 0.99998]
+======================== 1 passed in 227.20s (0:03:47) =========================
+== first.log
+GEMMA4_TIMING capture_trace=1065.5ms
+GEMMA4_TIMING request[0].encode=231.3ms
+GEMMA4_PCC request[0] vs eager: video=1.000000 audio=1.000000
+GEMMA4_TIMING request[1].encode=236.9ms
+GEMMA4_PCC request[1] vs eager: video=1.000000 audio=1.000000
+GEMMA4_TIMING request[2].encode=225.9ms
+GEMMA4_PCC request[2] vs eager: video=1.000000 audio=1.000000
+GEMMA4_TIMING request[3].encode=227.6ms
+GEMMA4_PCC request[3] vs eager: video=1.000000 audio=1.000000
+======================= 1 passed, 1 deselected in 15.61s =======================
+09:59:53 prof job 027
+10:03:54 prof job 027: Status:  completed
+10:14:34 first job 028
+10:15:04 first job 028: Status:  completed
