@@ -9,7 +9,7 @@ from diffusers import AutoencoderKL
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_downblock2d import TtDownEncoderBlock2D
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -19,14 +19,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "image_resolution, input_shape, block_id, pcc",
     [
         # 1024x1024 image resolution
-        # Blackhole has lower PCC due to DRAM groupnorm numerical differences
-        ((1024, 1024), (1, 128, 1024, 1024), 0, 0.999 if is_wormhole_b0() else 0.998),
-        ((1024, 1024), (1, 128, 512, 512), 1, 0.998 if is_wormhole_b0() else 0.996),
+        ((1024, 1024), (1, 128, 1024, 1024), 0, 0.999),
+        ((1024, 1024), (1, 128, 512, 512), 1, 0.999),
         ((1024, 1024), (1, 256, 256, 256), 2, 0.999),
         ((1024, 1024), (1, 512, 128, 128), 3, 0.999),
         # 512x512 image resolution
         ((512, 512), (1, 128, 512, 512), 0, 0.999),
-        ((512, 512), (1, 128, 256, 256), 1, 0.998),
+        ((512, 512), (1, 128, 256, 256), 1, 0.999),
         ((512, 512), (1, 256, 128, 128), 2, 0.999),
         ((512, 512), (1, 512, 64, 64), 3, 0.999),
     ],
