@@ -1,22 +1,26 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# #81 LTX_SDPA_EXP_APPROX A/B — status
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
+Code: commit 8db2db59115 on ttp/t81-ltx-ring-sdpa-exp-approx-mode-a-b-ltx-sd (pushed). Env LTX_SDPA_EXP_APPROX
+(default 0) sets exp_approx_mode on all 5 SDPA configs in attention_ltx.py. CPU test
+test_sdpa_exp_approx_env_reaches_every_sdpa_config passes.
 
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
+Device job: blx03 broker job **040** (queued 2026-10-01 14:45 UTC).
+- Script: g14blx03:~/fasth3/t81/run81.sh (copy in tmp/t81/). Build/kernels = ~/fasth3/t48 @a613d669ee
+  (contains #57180, so flag 0 really is accurate exp); models/tt_dit = tmp/t81/src (rev 8db2db59115).
+- Why blx03, not g15blx02: g15blx02's built tree (fasth3-opt, Sep 30) lacks #57180, so it would
+  run approx exp in both arms.
+- Logs: g14blx03:~/fasth3/t81/run81.log and /var/log/tt-device-broker/2026-10-01_144544_040.log
 
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
+Log lines (grep T81_):
+- T81_BLOCK flag=F F,H,W=.. ms_per_block=..  traced AV block 0, real 22B weights, Linear 2x4 sp1/tp0
+- T81_AB S1|S2 off_ms on_ms delta pcc_video pcc_audio  (flag 1 vs flag 0)
+- T81_TORCH flag=F pcc_vs_torch rel_rmse  (video-only diffusers block, S1 grid, scaled random weights)
+- T81_TORCH_AB pcc_flag1_vs_flag0;  T81_FAIL ..;  T81_EXIT=rc
 
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+Projection to 4x8 (sp=8/tp=4 does ~1/4 the per-chip SDPA work of 2x4 sp=4/tp=2):
+  e2e saving ≈ (8·Δ_S1 + 3·Δ_S2)/4 × 48 blocks. Ring SDPA overlaps the CCL, so 2x4 may hide some gain.
+Accept for eval pack if block time drops ≥5% and PCC ≥0.999. Default stays 0 either way.
+
+Next step on resume: check job 040 status; check the broker log for chip drops during our job
+(if any: stop-all procedure); grep T81_; compute numbers; gzip the log back to tmp/t81/;
+rm -rf g14blx03:~/fasth3/t81; write result.json done.
