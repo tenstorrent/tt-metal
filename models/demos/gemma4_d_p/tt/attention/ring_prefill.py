@@ -397,12 +397,12 @@ def _ring_prefill_attention(
     cp = mesh_config.cp_degree
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
 
-    # Rotated SWA can need two predecessor tails; global attention gathers the cache.
+    # Rotated SWA can need two predecessor tails, one per wrapped Q segment, including with a
+    # multi-hop halo; global attention gathers the cache.
     if sliding_window_size:
         k_chunk = program_config.k_chunk_size
         halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
-        halo_slots = 2 if halo_tokens <= tt_q.shape[-2] else 1
-        gather_seq = halo_slots * max(halo_tokens, TILE_HEIGHT)
+        gather_seq = 2 * max(halo_tokens, TILE_HEIGHT)
     else:
         gather_seq = cache_seq * cp
     buffer_k = ccl_manager.get_ring_gather_buffer(

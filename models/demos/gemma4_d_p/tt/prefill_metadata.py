@@ -7,8 +7,6 @@ import torch
 
 import ttnn
 
-GEMMA4_SLIDING_WINDOW_TOKENS = 1024
-
 
 def chunk_positions(actual_start, chunk_size, cp):
     """Absolute positions in the cache writer's CP-rank and local-row order."""
@@ -56,12 +54,6 @@ class PrefillMetadata:
             raise ValueError(f"actual_start must be nonnegative and 32-token aligned, got {actual_start}")
         if not actual_start < actual_end <= min(actual_start + self.chunk_size, self.max_seq_len):
             raise ValueError("require actual_start < actual_end <= min(actual_start + chunk_size, max_seq_len)")
-        local_chunk = self.chunk_size // self.mesh_config.cp_degree
-        if local_chunk < GEMMA4_SLIDING_WINDOW_TOKENS and actual_start % local_chunk:
-            raise ValueError(
-                f"Sliding attention with a {local_chunk}-token CP slab requires starts aligned to {local_chunk}; "
-                "native multi-hop halos do not support wrapped Q"
-            )
         self.slot_idx = self._stage("slot", torch.tensor([slot_idx]).reshape(1, 1, 1, 1))
         self.kv_actual_global = self._stage("start", torch.tensor([actual_start]).reshape(1, 1, 1, 1))
         self.actual_end = self._stage("end", torch.tensor([actual_end]).reshape(1, 1, 1, 1))
