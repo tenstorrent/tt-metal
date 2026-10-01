@@ -1505,7 +1505,7 @@ void log_unretrainable_channels(
         "Unretrainable channels (" + std::to_string(channels.size()) + " endpoints) written to: " + yaml_path.string());
 }
 
-void reset_local_ethernet_links(
+bool reset_local_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
@@ -1562,7 +1562,7 @@ void reset_local_ethernet_links(
     }
 
     // Perform resets on all links in vector
-    send_reset_msg_to_links(links_to_reset);
+    return send_reset_msg_to_links(links_to_reset);
 }
 
 void get_cross_node_ethernet_links_to_reset(
@@ -1644,17 +1644,19 @@ std::vector<ResetLink> build_cross_node_reset_links(
     return reset_links;
 }
 
-void reset_cross_node_ethernet_links(
+bool reset_cross_node_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor,
     const std::vector<EthChannelIdentifier>& cross_node_links_to_reset) {
-    send_reset_msg_to_links(build_cross_node_reset_links(physical_system_descriptor, cross_node_links_to_reset));
+    const bool reset_ok =
+        send_reset_msg_to_links(build_cross_node_reset_links(physical_system_descriptor, cross_node_links_to_reset));
 
     // Final barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     distributed_context.barrier();
+    return reset_ok;
 }
 
-void bring_down_cross_host_ethernet_ports(
+bool bring_down_cross_host_ethernet_ports(
     const fsd::proto::FactorySystemDescriptor& fsd_proto, PhysicalSystemDescriptor& physical_system_descriptor) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     TT_FATAL(cluster.arch() == tt::ARCH::BLACKHOLE, "Cross-host port down is only supported on Blackhole");
@@ -1672,18 +1674,29 @@ void bring_down_cross_host_ethernet_ports(
 
     log_warning(
         tt::LogDistributed, "Bringing down {} local cross-host Ethernet endpoints", local_cross_host_endpoints.size());
-    send_port_down_msg_to_links(build_cross_node_reset_links(physical_system_descriptor, local_cross_host_endpoints));
+    const auto links = build_cross_node_reset_links(physical_system_descriptor, local_cross_host_endpoints);
+    // A killed workload can leave fabric routers on ERISC0, and they never service the port-down message.
+    return_links_to_base_firmware(links);
+    const auto failed_links = send_port_down_msg_to_links(links);
+    if (!failed_links.empty()) {
+        log_error(
+            tt::LogDistributed,
+            "Failed to bring down {} of {} local cross-host Ethernet endpoints",
+            failed_links.size(),
+            links.size());
+    }
 
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     distributed_context.barrier();
-    log_output_rank0("Cross-host Ethernet port down complete on all hosts");
+    log_output_rank0("Cross-host Ethernet port down finished on all hosts");
+    return failed_links.empty();
 }
 
-void reset_ethernet_links(
+bool reset_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     // Reset All Local Ethernet Links, specified in the topology. Ethernet Links on Exit Nodes are reset separately.
-    reset_local_ethernet_links(physical_system_descriptor, asic_topology);
+    const bool local_reset_ok = reset_local_ethernet_links(physical_system_descriptor, asic_topology);
     // Barrier ensures all hosts have completed local link resets before starting cross-node resets.
     // This prevents race conditions where one host might start cross-node reset while another is still
     // resetting local links.
@@ -1692,10 +1705,12 @@ void reset_ethernet_links(
     // Reset All Cross-Node Ethernet Links, specified in the topology.
     std::vector<EthChannelIdentifier> cross_node_links_to_reset;
     get_cross_node_ethernet_links_to_reset(physical_system_descriptor, asic_topology, cross_node_links_to_reset);
-    reset_cross_node_ethernet_links(physical_system_descriptor, cross_node_links_to_reset);
+    const bool cross_node_reset_ok =
+        reset_cross_node_ethernet_links(physical_system_descriptor, cross_node_links_to_reset);
 
     // Give everything 5 more seconds to stabilize after reset completion
     std::this_thread::sleep_for(std::chrono::seconds(5));
+    return local_reset_ok && cross_node_reset_ok;
 }
 
 // ============================================================================
@@ -1905,7 +1920,7 @@ tt::tt_metal::AsicTopology build_reset_topology(
     return asic_topology;
 }
 
-void perform_link_reset(
+bool perform_link_reset(
     const std::string& reset_host,
     uint32_t reset_tray_id,
     uint32_t reset_asic_location,
@@ -1922,9 +1937,13 @@ void perform_link_reset(
     tt::tt_metal::AsicTopology reset_topology =
         build_reset_topology(reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);
 
-    reset_ethernet_links(physical_system_descriptor, reset_topology);
+    if (!reset_ethernet_links(physical_system_descriptor, reset_topology)) {
+        log_error(tt::LogDistributed, "Link reset failed: Ethernet firmware did not process every reset message");
+        return false;
+    }
 
     log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
+    return true;
 }
 
 fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
