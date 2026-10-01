@@ -462,74 +462,98 @@
 
 # ===== Kimi-K3-2.8T ====================================================================================
 
-- name: "(Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4"
+- name: "(Kimi-K3-2.8T) contract gates, KDA 5k, MLA chunked 10k@5k and 55k@5k"
+  # Four legs folded into one. Each ran well under the ~5.5 min "Setup multihost job" cost, so four
+  # galaxy allocations were spending ~22 min of setup to run ~7 min of tests. Measured test-step
+  # times on run 36717057668: 77 / 150 / 114 / 92 s.
+  #
+  # fabric_profile torus_xy is required by [2/4]..[4/4]. [1/4] is host-only -- no mesh device, no
+  # fabric -- and rides along for free rather than paying its own setup. It keeps its mpirun wrapper:
+  # the runner's container hook drives the step through its host-execution path and does not handle
+  # a bare command (it failed 4 runs out of 4, 0 s in, before pytest ran).
   fabric_profile: torus_xy
   cmd: |
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      set -e
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
-    '
-  test_type: k3_kda
-  test_tags: [kimi_k3, kda, determinism]
+    # Sections run in order and the suite stops at the FIRST failure: a failed test can leave the
+    # devices unreset, so the next section must not start (tt-metal#57706, enforced by
+    # .github/scripts/utils/lint_pipeline_cmds.py). That is a real trade against the separate legs
+    # this replaces -- a failure in an early section now masks the later ones.
+    #
+    # Each body is the leg's previous `cmd` verbatim, wrapped in a subshell with its mpirun bounded,
+    # so it can be diffed against the leg it replaces. The subshell is load-bearing, not hygiene:
+    # one of these sections deliberately sets no KIMI_K3_HF_MODEL and test_mla.py flips its `cpu`
+    # reference case to pretrained weights when it sees that variable.
+
+    k3_contracts() (
+      timeout -k 2m 10m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export LOGURU_LEVEL=INFO
+        export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+        export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+        export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+        export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+        python3 -m pytest -vvv --tb=short \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_golden_contract.py \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_layer_schedule.py \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_runtime_contract.py \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
+          models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
+          models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
+      '
+    )
+
+    k3_kda() (
+      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
+      '
+    )
+
+    k3_mla() (
+
+      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and torus-xy-8x4 and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism))" -vvv --tb=short
+      '
+    )
+
+    k3_mla_trace() (
+      export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3
+
+      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and production-50k+5k and trace and torus-xy-8x4 and scalar and no_determinism" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/4] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
+    k3_contracts || exit $?
+    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 ====="
+    k3_kda || exit $?
+    echo "===== [3/4] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
+    k3_mla || exit $?
+    echo "===== [4/4] (Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace ====="
+    k3_mla_trace || exit $?
+    echo "===== all 4 sections passed ====="
+  test_type: k3_accuracy_suite
+  # Per-section tokens retained: `-f test-type=<old token>` still selects this job.
+  test_tags: [kimi_k3, kda, mla, determinism, k3_contracts, k3_kda, k3_mla, k3_mla_trace]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 12
+      # Exactly the sum of the per-section bounds (10 + 12 + 12 + 12),
+      # so the time budget for this bucket is unchanged by the fold.
+      timeout: 46
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
   team: models
   budget_type: demo
   sp_config: sc1
-
-- name: "(Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k"
-  fabric_profile: torus_xy
-  cmd: |
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      set -e
-      export OMP_NUM_THREADS=$(nproc)
-      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and torus-xy-8x4 and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism))" -vvv --tb=short
-    '
-  test_type: k3_mla
-  test_tags: [kimi_k3, mla, determinism]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 12
-      tier: 2
-      release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
-- name: "(Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace"
-  fabric_profile: torus_xy
-  cmd: |
-    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and production-50k+5k and trace and torus-xy-8x4 and scalar and no_determinism" -vvv --tb=short
-    '
-  test_type: k3_mla_trace
-  test_tags: [kimi_k3, mla]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 12
-      tier: 2
-      release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
 
 - name: "(Kimi-K3-2.8T) KDA perf 5k + MLA chunked perf 55k@5k"
   fabric_profile: torus_xy
@@ -578,146 +602,89 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates"
-  # Host-only: no mesh device, no fabric. These are the gates that make every K3 device PCC number
-  # interpretable -- under AttnRes, seal() clears running_sum, so decoder_output_layer_0 carries no
-  # embedding term and reading the trace as a plain residual makes every layer look ~0.45 PCC wrong.
-  # test_golden_contract pins that reading host-only at 0.99999 with a failing control beside each
-  # assertion. Needs /mnt/models for the checkpoint and trace; skips cleanly without them.
-  # Launched through mpirun like every other leg even though it needs one process and no device:
-  # this was the only bare `cmd` in the matrix, and it failed 4 runs out of 4 with
-  # "Executing the custom container implementation failed" 0 s into the step, before pytest ran.
-  # The runner's container hook drives the step through its host-execution path and does not
-  # handle the bare form. --pernode on sc1 is a single process, so the tests are unaffected.
+- name: "(Kimi-K3-2.8T) prefill transformer L12/L24, chunked L5/L24 and traced L24 vs golden trace"
+  # Three legs folded into one. None is short, but each paid its own ~5.5 min "Setup multihost job"
+  # and all three carry identical environments -- same checkpoint, same TTNN cache, same mesh
+  # descriptor -- so three allocations bought nothing. Measured test-step times on run 36717057668:
+  # 479 / 725 / 368 s.
+  #
+  # No fabric_profile, as before: the fabric comes from each test's own device_params, and adding
+  # the key here would swap the mesh descriptor and change nothing else.
+  #
+  # [3/3] is the only K3 PCC gate on the captured-trace path rather than eager, and its
+  # TT_KIMI_K3_PREFILL_TTNN_CACHE export is load-bearing: conftest's `weight_cache_path` fixture
+  # reads `variant.ttnn_cache_env` and nothing else, with no fallback to the share, so without it
+  # the fixture points at the checkpoint dir and the section dies on `TTNN cache incomplete`.
   cmd: |
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      set -e
+    # Sections run in order and the suite stops at the FIRST failure: a failed test can leave the
+    # devices unreset, so the next section must not start (tt-metal#57706, enforced by
+    # .github/scripts/utils/lint_pipeline_cmds.py). That is a real trade against the separate legs
+    # this replaces -- a failure in an early section now masks the later ones.
+    #
+    # Each body is the leg's previous `cmd` verbatim, wrapped in a subshell with its mpirun bounded,
+    # so it can be diffed against the leg it replaces. All three sections here happen to export the
+    # same environment, so the subshell is only keeping them independent -- unlike the accuracy suite
+    # above, where it is load-bearing because one section must NOT see another's KIMI_K3_HF_MODEL.
+    # Repeating the exports per section rather than hoisting them is what keeps each body verbatim.
+
+    k3_transformer_depth() (
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
       export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
       export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-      python3 -m pytest -vvv --tb=short \
-        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_golden_contract.py \
-        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_layer_schedule.py \
-        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
-        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_runtime_contract.py \
-        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
-        models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
-        models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
-    '
-  test_type: k3_contracts
-  test_tags: [kimi_k3]
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      timeout -k 2m 70m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py -k "L12 or L24" -vvv --tb=short
+      '
+    )
+
+    k3_chunked_prefill() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+      export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -vvv --tb=short
+      '
+    )
+
+    k3_transformer_traced() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+      export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      timeout -k 2m 45m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_k3_prefill_transformer_chunked -k "L24 and chunks_eleven and traced and iters1 and no_determinism" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/3] (Kimi-K3-2.8T) prefill transformer accuracy L12, L24 vs golden trace ====="
+    k3_transformer_depth || exit $?
+    echo "===== [2/3] (Kimi-K3-2.8T) chunked prefill accuracy L5, L24 55k@5k vs golden trace ====="
+    k3_chunked_prefill || exit $?
+    echo "===== [3/3] (Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace ====="
+    k3_transformer_traced || exit $?
+    echo "===== all 3 sections passed ====="
+  test_type: k3_transformer_suite
+  # Per-section tokens retained: `-f test-type=<old token>` still selects this job.
+  test_tags: [kimi_k3, transformer, k3_transformer_depth, k3_chunked_prefill, k3_transformer_traced]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 10
-      tier: 2
-      release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
-- name: "(Kimi-K3-2.8T) prefill transformer accuracy L12, L24 vs golden trace"
-  # The fabric comes from the test's own device_params, not from fabric_profile: adding that key
-  # here would swap the mesh descriptor and change nothing else. The depth ladder scores
-  # decoder_output per layer against the 1M trace, which covers layers 0..24 of 93.
-  cmd: |
-    export LOGURU_LEVEL=INFO
-    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
-    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-    export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
-    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py -k "L12 or L24" -vvv --tb=short
-    '
-  test_type: k3_transformer_depth
-  test_tags: [kimi_k3, transformer]
-  test_group: module
-  skus:
-    bh_sc1:
-      # Measured 57 min for the pair on one galaxy (L12 17.5, L24 27.5, plus device open and weight
-      # load), against a 70:36 three-case ladder including L5. Headroom for a cold kernel JIT cache.
-      timeout: 70
-      tier: 2
-      release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
-- name: "(Kimi-K3-2.8T) chunked prefill accuracy L5, L24 55k@5k vs golden trace"
-  # What a single chunk cannot prove: that the KDA recurrent AND convolution carries survive a chunk
-  # boundary. The conv carry is the causal conv's 3-token history, so getting it wrong corrupts only
-  # the first three tokens of a chunk -- invisible to a per-chunk PCC over 5120 tokens.
-  cmd: |
-    export LOGURU_LEVEL=INFO
-    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
-    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-    export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
-    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -vvv --tb=short
-    '
-  test_type: k3_chunked_prefill
-  test_tags: [kimi_k3, transformer]
-  test_group: module
-  skus:
-    bh_sc1:
-      # Measured 74:32 for both cases on one galaxy. Eleven chunks each, so this is mostly real work.
-      timeout: 90
-      tier: 2
-      release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
-- name: "(Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace"
-  # The only K3 PCC gate on the CAPTURED-TRACE path rather than eager. A replay bakes in tensor
-  # addresses, so it can be fast and wrong, and K3 advances the KDA recurrent and convolution carries
-  # inside the captured region: capture costs chunk 0 two extra forwards, which is idempotent for KV
-  # but not for a recurrence, so the branch resets the carry after capture. Exactly the regression a
-  # CI leg should hold.
-  # This leg resolves its tensorbins through conftest's `weight_cache_path` fixture, which reads
-  # `variant.ttnn_cache_env` and nothing else -- it never consults `variant.ttnn_cache_default`, so
-  # unlike `kimi_k3/weights.py`'s `cache_root` it has no fallback to the share. Without the export
-  # below the fixture points at the checkpoint dir, and `check_cache_complete` fails the
-  # `.layer_N.complete` marker check on layer 0: the leg dies on `TTNN cache incomplete` a couple of
-  # minutes in, before it builds anything. Fast and loud, but a false negative on the model.
-  cmd: |
-    export LOGURU_LEVEL=INFO
-    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
-    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-    export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
-    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_k3_prefill_transformer_chunked -k "L24 and chunks_eleven and traced and iters1 and no_determinism" -vvv --tb=short
-    '
-  test_type: k3_transformer_traced
-  test_tags: [kimi_k3, transformer]
-  test_group: module
-  skus:
-    bh_sc1:
-      # 7:39 is the compute; the weight load dominates and is what this has to cover. On run
-      # 35488280449 the L24 load ran ~3m40s per MLA layer and had reached only layer 19 of 24 when
-      # the 20 min cap killed it, before the test body started -- six MLA layers is ~22 min on a
-      # cold TTNN cache. 45 = ~22 load + ~8 compute + device open, with room for a cold kernel JIT
-      # cache. Sized against measurement, not against the warm-cache number.
-      timeout: 45
+      # Exactly the sum of the per-section bounds (70 + 90 + 45),
+      # so the time budget for this bucket is unchanged by the fold.
+      timeout: 205
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
