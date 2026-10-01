@@ -24,7 +24,7 @@
 #include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
-#include "binary_metadata.hpp"  // ll_api::BufRwInfo (op-to-op R/W inference)
+#include "binary_metadata.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
