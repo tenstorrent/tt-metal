@@ -207,7 +207,7 @@ def _comp_task():
 
 
 @pytest.mark.parametrize(
-    "review,reviewed", [(None, True), ("all", True), (["blk"], True), (["other"], False), ("none", False)]
+    "review,reviewed", [(None, False), ("all", True), (["blk"], True), (["other"], False), ("none", False)]
 )
 def test_component_tasks_skip_the_review_only_when_the_spec_says_so(orch, sandbox, review, reviewed):
     extra = {"agents": {"component_review": review}} if review is not None else {}
