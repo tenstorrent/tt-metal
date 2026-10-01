@@ -466,7 +466,10 @@ class TtVoxtralGPT:
             # per-row residual add, because a bias would broadcast row 0 over all B rows.
             o = ttnn.to_memory_config(o, self._rope_mem)
             a = ttnn.experimental.nlp_concat_heads_decode(o, num_heads=N_HEADS)
-            a = ttnn.reshape(ttnn.to_memory_config(a, _L1), [1, B, Q_WIDTH])
+            a = ttnn.to_memory_config(a, _L1)  # [1, 1, 32, 4096]: the op pads the user axis to 32
+            if B < TILE:
+                a = ttnn.slice(a, [0, 0, 0, 0], [1, 1, B, Q_WIDTH])
+            a = ttnn.reshape(a, [1, B, Q_WIDTH])
             x = ttnn.add(
                 x,
                 ttnn.linear(
