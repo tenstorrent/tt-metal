@@ -375,10 +375,9 @@ class TTSpatialCrossAttention:
         # gather per contribution slot rather than a scatter: ttnn.scatter only writes along the
         # last dimension and transposes all three operands to get there.
         #
-        # Zeroing the padded rows first makes the row every unfilled slot points at the neutral
-        # element of the sum. Their values are finite because the plan clamps reference points.
+        # Selecting zero makes padded rows neutral even if attention produces NaN or infinity.
         contribution_rows = ttnn.reshape(
-            ttnn.to_layout(ttnn.multiply(queries_output, rebatch_plan.row_mask), ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.to_layout(ttnn.where(rebatch_plan.row_mask, queries_output, 0.0), ttnn.ROW_MAJOR_LAYOUT),
             (1, 1, bs * self.num_cams * rebatch_len, self.embed_dims),
         )
         slots = None
