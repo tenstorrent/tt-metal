@@ -200,3 +200,72 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
+
+
+def test_generate_reports_blanks_inconsistent_device_kernel_timing(tmp_path):
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True, exist_ok=True)
+
+    def perf_row(op_id, kernel_start, kernel_end, kernel_duration):
+        return {
+            "GLOBAL CALL COUNT": op_id,
+            "DEVICE ID": 0,
+            "DEVICE FW START CYCLE": 0,
+            "DEVICE FW END CYCLE": 1000,
+            "DEVICE FW DURATION [ns]": 1000,
+            "DEVICE KERNEL START CYCLE": kernel_start,
+            "DEVICE KERNEL END CYCLE": kernel_end,
+            "DEVICE KERNEL DURATION [ns]": kernel_duration,
+            "OP TO OP LATENCY [ns]": "",
+        }
+
+    ops = {
+        1: {
+            "global_call_count": 1,
+            "device_id": 0,
+            "op_code": "MatmulDeviceOperation",
+            "host_time": {"ns_since_start": 10, "exec_time_ns": 20},
+            "metal_trace_id": None,
+            "input_tensors": [],
+            "output_tensors": [],
+            "_device_perf_row": perf_row(1, 6923883220, 6923884220, 1000),
+        },
+        2: {
+            "global_call_count": 2,
+            "device_id": 0,
+            "op_code": "LayerNormDeviceOperation",
+            "host_time": {"ns_since_start": 30, "exec_time_ns": 40},
+            "metal_trace_id": None,
+            "input_tensors": [],
+            "output_tensors": [],
+            # Kernel appears to start ~6.9s before the previous op finished: a stale start cycle whose
+            # measured duration and op-to-op gap are not trustworthy.
+            "_device_perf_row": perf_row(2, 1000, 6923884220, 6923883220),
+        },
+    }
+
+    process_ops_logs.generate_reports(
+        ops=ops,
+        deviceOps={},
+        traceOps={},
+        signposts={},
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+    )
+
+    report_csv = Path(report_folder) / "ops_perf_results.csv"
+    assert report_csv.is_file()
+
+    with report_csv.open("r", newline="") as csv_file:
+        rows = {row["OP CODE"]: row for row in csv.DictReader(csv_file)}
+
+    valid_row = rows["MatmulDeviceOperation"]
+    assert valid_row["DEVICE KERNEL DURATION [ns]"] == "1000"
+    assert valid_row["OP TO OP LATENCY [ns]"] == "0"
+
+    invalid_row = rows["LayerNormDeviceOperation"]
+    assert invalid_row["DEVICE KERNEL DURATION [ns]"] == ""
+    assert invalid_row["OP TO OP LATENCY [ns]"] == ""
