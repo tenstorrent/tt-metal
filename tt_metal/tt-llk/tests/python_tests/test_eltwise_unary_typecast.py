@@ -244,7 +244,9 @@ def _edge_spec_uint16() -> StimuliSpec:
     # output word reads back as all ones (which the readback path treats as a timeout).
     def dist(size, dtype, generator):
         values = torch.randint(0, 65535, (size,), generator=generator)
-        fixed = torch.tensor([0, 1, 255, 256, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF, 0, 0xFFFF, 0, 2, 0xFFFF, 0])
+        fixed = torch.tensor(
+            [0, 1, 255, 256, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF, 0, 0xFFFF, 0, 2, 0xFFFF, 0]
+        )
         values[: len(fixed)] = fixed
         values[1::2] = torch.minimum(values[1::2], torch.tensor(0xFFFE))
         return values.to(dtype)
@@ -259,8 +261,26 @@ def _edge_spec_float_to_uint16() -> StimuliSpec:
         values = torch.rand(size, generator=generator) * 70100.0 - 100.0
         fixed = torch.tensor(
             [
-                0.0, -0.0, -1.0, -0.5, 0.5, 1.5, 2.5, 3.5, 254.5, 255.5,
-                65534.0, 65534.5, 65535.0, 0.0, 70000.0, 0.0, 1.0e9, 0.0, -1.0e9, 0.0,
+                0.0,
+                -0.0,
+                -1.0,
+                -0.5,
+                0.5,
+                1.5,
+                2.5,
+                3.5,
+                254.5,
+                255.5,
+                65534.0,
+                65534.5,
+                65535.0,
+                0.0,
+                70000.0,
+                0.0,
+                1.0e9,
+                0.0,
+                -1.0e9,
+                0.0,
             ]
         )
         values[: len(fixed)] = fixed
@@ -273,13 +293,22 @@ def _edge_spec_float_to_uint16() -> StimuliSpec:
 def _edge_spec_float_to_bf16() -> StimuliSpec:
     # Low 16 bits on and around the rounding tie, plus lanes with a random low half.
     def dist(size, dtype, generator):
-        exponent = torch.randint(100, 150, (size,), generator=generator, dtype=torch.int32)
-        mantissa = torch.randint(0, 1 << 23, (size,), generator=generator, dtype=torch.int32)
+        exponent = torch.randint(
+            100, 150, (size,), generator=generator, dtype=torch.int32
+        )
+        mantissa = torch.randint(
+            0, 1 << 23, (size,), generator=generator, dtype=torch.int32
+        )
         sign = torch.randint(0, 2, (size,), generator=generator, dtype=torch.int32)
-        low = torch.tensor([0x8000, 0x7FFF, 0x8001, 0x0000, 0xFFFF, 0x8000, 0x8000, 0x7FFF] * (size // 8 + 1))[:size]
+        low = torch.tensor(
+            [0x8000, 0x7FFF, 0x8001, 0x0000, 0xFFFF, 0x8000, 0x8000, 0x7FFF]
+            * (size // 8 + 1)
+        )[:size]
         mantissa = (mantissa & 0x7F0000) | low.to(torch.int32)
         mask = (torch.arange(size) % 4) == 3
-        mantissa[mask] = torch.randint(0, 1 << 23, (int(mask.sum()),), generator=generator, dtype=torch.int32)
+        mantissa[mask] = torch.randint(
+            0, 1 << 23, (int(mask.sum()),), generator=generator, dtype=torch.int32
+        )
         bits = (sign << 31) | (exponent << 23) | mantissa
         return bits.view(torch.float32).to(dtype)
 
@@ -287,7 +316,11 @@ def _edge_spec_float_to_bf16() -> StimuliSpec:
 
 
 def _as_float_tensor(src) -> torch.Tensor:
-    return src.float() if isinstance(src, torch.Tensor) else torch.tensor(src, dtype=torch.float32)
+    return (
+        src.float()
+        if isinstance(src, torch.Tensor)
+        else torch.tensor(src, dtype=torch.float32)
+    )
 
 
 def _golden_float_to_uint16(src):
@@ -298,7 +331,11 @@ def _golden_float_to_uint16(src):
 
 
 @parametrize(
-    formats=[InputOutputFormat(i, o) for i, o in _MACRO_PAIRS_32B if InputOutputFormat(i, o) in TYPECAST_PAIRS],
+    formats=[
+        InputOutputFormat(i, o)
+        for i, o in _MACRO_PAIRS_32B
+        if InputOutputFormat(i, o) in TYPECAST_PAIRS
+    ],
     dest_acc=_production_dest_acc,
     approx_mode=[ApproximationMode.No],
     input_dimensions=[[32, 64]],
@@ -342,7 +379,9 @@ def _golden_float_to_int32(src):
     out = torch.trunc(values).to(torch.float64)
     out = torch.where(magnitude < 1.0, torch.zeros_like(out), out)
     saturate = torch.isnan(values) | (magnitude >= 2.0**31)
-    out = torch.where(saturate & ~negative, torch.full_like(out, float(_INT32_MAX)), out)
+    out = torch.where(
+        saturate & ~negative, torch.full_like(out, float(_INT32_MAX)), out
+    )
     out = torch.where(saturate & negative, torch.full_like(out, float(_INT32_MIN)), out)
     return out.to(torch.int64).to(torch.int32).flatten()
 
@@ -351,26 +390,52 @@ def _edge_spec_float_to_int32(input_format: DataFormat) -> StimuliSpec:
     # Both signs of zero, denormals, ties, the 2^24 and 2^31 boundaries, inf and NaN, then random.
     def dist(size, dtype, generator):
         fixed_bits = [
-            0x00000000, 0x80000000,  # +0, -0
-            0x00000001, 0x80000001, 0x007FFFFF,  # denormals
-            0x3F7FFFFF, 0xBF7FFFFF,  # 1 - ulp
-            0x3F800000, 0xBF800000,  # 1
-            0x3FC00000, 0xBFC00000,  # 1.5
-            0x40200000, 0xC0200000,  # 2.5
-            0x4B7FFFFF, 0xCB7FFFFF,  # 2^24 - 1
-            0x4B800000, 0xCB800000,  # 2^24
-            0x4EFFFFFF, 0xCEFFFFFF,  # 2^31 - 128 (the largest magnitude below 2^31)
-            0x4F000000, 0xCF000000,  # 2^31
-            0x4F000001, 0xCF000001,  # 2^31 + 256
-            0x501502F9, 0xD01502F9,  # 1e10
-            0x7F7FFFFF, 0xFF7FFFFF,  # max finite
-            0x7F800000, 0xFF800000,  # inf
-            0x7FC00000, 0xFFC00000, 0x7F800001, 0xFF800001, 0x7FFFFFFF, 0xFFFFFFFF,  # NaN payloads
-            0x3E800000, 0xBE800000,  # 0.25
-            0x42F6E979, 0xC2F6E979,  # 123.456
+            0x00000000,
+            0x80000000,  # +0, -0
+            0x00000001,
+            0x80000001,
+            0x007FFFFF,  # denormals
+            0x3F7FFFFF,
+            0xBF7FFFFF,  # 1 - ulp
+            0x3F800000,
+            0xBF800000,  # 1
+            0x3FC00000,
+            0xBFC00000,  # 1.5
+            0x40200000,
+            0xC0200000,  # 2.5
+            0x4B7FFFFF,
+            0xCB7FFFFF,  # 2^24 - 1
+            0x4B800000,
+            0xCB800000,  # 2^24
+            0x4EFFFFFF,
+            0xCEFFFFFF,  # 2^31 - 128 (the largest magnitude below 2^31)
+            0x4F000000,
+            0xCF000000,  # 2^31
+            0x4F000001,
+            0xCF000001,  # 2^31 + 256
+            0x501502F9,
+            0xD01502F9,  # 1e10
+            0x7F7FFFFF,
+            0xFF7FFFFF,  # max finite
+            0x7F800000,
+            0xFF800000,  # inf
+            0x7FC00000,
+            0xFFC00000,
+            0x7F800001,
+            0xFF800001,
+            0x7FFFFFFF,
+            0xFFFFFFFF,  # NaN payloads
+            0x3E800000,
+            0xBE800000,  # 0.25
+            0x42F6E979,
+            0xC2F6E979,  # 123.456
         ]
-        exponent = torch.randint(100, 160, (size,), generator=generator, dtype=torch.int64)
-        mantissa = torch.randint(0, 1 << 23, (size,), generator=generator, dtype=torch.int64)
+        exponent = torch.randint(
+            100, 160, (size,), generator=generator, dtype=torch.int64
+        )
+        mantissa = torch.randint(
+            0, 1 << 23, (size,), generator=generator, dtype=torch.int64
+        )
         sign = torch.randint(0, 2, (size,), generator=generator, dtype=torch.int64)
         bits = (sign << 31) | (exponent << 23) | mantissa
         bits[: len(fixed_bits)] = torch.tensor(fixed_bits, dtype=torch.int64)
