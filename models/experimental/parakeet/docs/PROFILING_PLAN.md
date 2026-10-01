@@ -6,7 +6,7 @@
 Goal: rank synchronized time in (a) subsampling convolutions, (b) attention, (c) TDT decode
 round-trips, then test optimization hypotheses against matched same-precision measurements.
 Protocol for every number: `mel_features_to_tokens_with_sync_excluding_load_preprocessing_progress_v1`,
-warm sync-bounded medians, bringup-suite cases mounted via public_input_stage=bringup (/input).
+warm sync-bounded medians, bringup-suite cases mounted via public_input_stage=bringup.
 
 ## Measured anchors (this porting, current source source hash...)
 
@@ -33,14 +33,14 @@ Recorded context (not a target): CUDA A100 FP32 bringup median case p50 0.0820 s
   `baseline/cpu_fp32_bringup.json` (same case, same suite, same protocol, same host).
 - Optimization deltas: same TT build precision declaration (bf16 weights / fp32 acts+acc),
   before/after on the same cases; never compare across different precisions or suites.
-- Tool: `benchmarks/profile_transcribe.py --input /input --cases <cases> --precision bf16`
+- Tool: `benchmarks/profile_transcribe.py --input $PARAKEET_INPUT --cases <cases> --precision bf16`
   (wraps encode_device/_decoder_step/_joint/_masked with device syncs; adds upload/readback/
-  idle-sync round-trip microbench). Component checks: `tests/diag_layers.py`,
-  `tests/diag_sub_split.py` (`--conv-share` mode for H2), `tests/diag_decode_ab.py`
+  idle-sync round-trip microbench). Component checks: the measured evidence,
+  the measured evidence (`--conv-share` mode for H2), the measured evidence
   (smallest relevant components).
 - Identity: measured on unchanged source (backend.py sha256 8b0d33e9..., re-verified in-job;
   profile script sha256 fad1846c50b94329287395ea76149e19c2a3461c619a6e9875217819aec7c45f;
-  conv-share harness tests/diag_sub_split.py cce61835f64c18b4ac44c6d318e4469f1b3966151b4d01f44efffd501c87bf12).
+  conv-share harness the profiling evidence cce61835f64c18b4ac44c6d318e4469f1b3966151b4d01f44efffd501c87bf12).
 
 ## Hypotheses
 
@@ -55,7 +55,7 @@ Recorded context (not a target): CUDA A100 FP32 bringup median case p50 0.0820 s
 - **H2 — Subsampling conv stack dominates encoder time.**
   Baseline artifact: `baseline/cpu_fp32_bringup.json` per-case `encode_s` arrays
   (e.g. silence median ~0.169 s, tone ~0.193 s).
-  Method: sync-bounded timing of conv-only prefix via `tests/diag_sub_split.py`; share of
+  Method: sync-bounded timing of conv-only prefix via the measured evidence; share of
   `encode_device` p50. Accept if conv prefix > 40% of encoder time.
 - **H3 — Attention/rel-pos cost scales superlinearly with input length on device.**
   Baseline artifact: CPU encode scaling long-vs-short from `baseline/cpu_fp32_*.json`
@@ -77,12 +77,12 @@ Recorded context (not a target): CUDA A100 FP32 bringup median case p50 0.0820 s
 
 | Hypothesis | Artifact (job id) | Verdict | Notes |
 | --- | --- | --- | --- |
-| H1 decode round-trips dominate | f10e82f4f7264a2a9f1a8645f349dcef (92.1s, rc 0, /input bringup, bf16-eff, unchanged source) | REJECTED as stated (accepted only for long outputs) | decode share: long 63.7%, batch 42.9%, short 40.1% — >50% only on long; encoder still dominates short/batch |
-| H2 subsampling conv stack dominates encoder | 67056e998f324de1a1c045193c02bc20 (60.4s, rc 0, /input bringup, bf16-eff, unchanged source 8b0d33e9 verified in-job; harness cce61835) | REJECTED | conv-prefix share of encode_device p50: short 28.0% (11.42/40.85 ms), batch 22.8% (13.91/61.08 ms); conformer blocks hold ~72-77% |
-| H3 attention/rel-pos superlinear length scaling | c202eca71a224033bffcd6d9fba34beb (72.8s, rc 0, /input bringup, bf16, repeats=10, unchanged source 8b0d33e9 verified in-log) | REJECTED | TT encode long/short p50 ratio 2.55x (91.6/35.9 ms) vs CPU 3.19x (0.5701/0.1786 s); pre-registered layout trigger 1.5x CPU = 4.79x not approached (TT/CPU = 0.80x) |
+| H1 decode round-trips dominate | f10e82f4f7264a2a9f1a8645f349dcef (92.1s, rc 0, the bringup suite, bf16-eff, unchanged source) | REJECTED as stated (accepted only for long outputs) | decode share: long 63.7%, batch 42.9%, short 40.1% — >50% only on long; encoder still dominates short/batch |
+| H2 subsampling conv stack dominates encoder | 67056e998f324de1a1c045193c02bc20 (60.4s, rc 0, the bringup suite, bf16-eff, unchanged source 8b0d33e9 verified in-job; harness cce61835) | REJECTED | conv-prefix share of encode_device p50: short 28.0% (11.42/40.85 ms), batch 22.8% (13.91/61.08 ms); conformer blocks hold ~72-77% |
+| H3 attention/rel-pos superlinear length scaling | c202eca71a224033bffcd6d9fba34beb (72.8s, rc 0, the bringup suite, bf16, repeats=10, unchanged source 8b0d33e9 verified in-log) | REJECTED | TT encode long/short p50 ratio 2.55x (91.6/35.9 ms) vs CPU 3.19x (0.5701/0.1786 s); pre-registered layout trigger 1.5x CPU = 4.79x not approached (TT/CPU = 0.80x) |
 | H4 host round-trip floor bounds decode throughput | f10e82f4f7264a2a9f1a8645f349dcef (H1 capture) + c202eca71a224033bffcd6d9fba34beb (H3 side capture); docs-only closure, no dedicated device run | REJECTED | floor 87.7 us/step (42.8+29.0+15.9) = 5.0-7.3% of per-step (H1); 140.3 us/step (82.4+38.9+19.0) = 8.1-13.5% (H3); both far below the >= 80% bar; no sync-batching candidate |
 
-### H1 detail (2026-09-25, `benchmarks/profile_transcribe.py --input /input --cases long,short,batch --precision bf16`, warm sync-bounded medians, repeats=5)
+### H1 detail (2026-09-25, `benchmarks/profile_transcribe.py --input $PARAKEET_INPUT --cases long,short,batch --precision bf16`, warm sync-bounded medians, repeats=5)
 
 TT (p50): long T'=205 steps=89 transcribe 0.2472 s, encode 0.0899 s, decode 0.1574 s,
 1.77 ms/step; short T'=29 steps=19 transcribe 0.0566 s, encode 0.0339 s, decode 0.0227 s,
@@ -109,11 +109,11 @@ inside `_decoder_step`+`_joint`, not host upload/readback.
 
 Resulting H2 (next unit, unchanged method): encoder dominates short/batch end-to-end
 (encode share 59.9% short, 57.1% batch), so keep H2 as defined — measure the subsampling
-conv-only prefix share of `encode_device` p50 via `tests/diag_sub_split.py` on short and
+conv-only prefix share of `encode_device` p50 via the measured evidence on short and
 batch (accept if > 40%); secondary read-out: whether the remaining non-conv encoder time
 concentrates in attention/rel-pos (feeds H3's long-vs-short ratio check).
 
-### H2 detail (2026-09-25, `tests/diag_sub_split.py --conv-share --cases short,batch --repeats 10`, warm sync-bounded medians, default traced encode path)
+### H2 detail (2026-09-25, `the profiling evidence --conv-share --cases short,batch --repeats 10`, warm sync-bounded medians, default traced encode path)
 
 | case | frames | T' | tp | encode_device p50 (ms) | conv-prefix p50 (ms) | conv share |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -124,7 +124,7 @@ Conv prefix = `Backend._subsample` + residual cast, exactly `encode_device`'s pr
 unchanged source (untraced in production; the encoder trace covers only the conformer
 blocks), timed with the same sync-before/sync-after median protocol as
 `benchmarks/profile_transcribe.py`. Identity in-job: backend.py 8b0d33e9...,
-tt/ttnn_parakeet.py fdfba2a2..., harness tests/diag_sub_split.py cce61835... (harness-only
+tt/ttnn_parakeet.py fdfba2a2..., harness the profiling evidence cce61835... (harness-only
 addition; no measured-source edits during the unit).
 
 Sensitivity: H1 (repeats=5, different run) measured encode p50 short 33.9 ms / batch
@@ -140,7 +140,7 @@ quotient is the right next probe. Known caveat: allocating `_subsample` buffers 
 encoder trace is live emits a ttnn allocator warning (harness-induced; no trace execution
 was interleaved with those allocations; job rc 0, numbers sane).
 
-### H3 detail (2026-09-25, `benchmarks/profile_transcribe.py --input /input --cases long,short --precision bf16 --repeats 10`, warm sync-bounded medians, unchanged source)
+### H3 detail (2026-09-25, `benchmarks/profile_transcribe.py --input $PARAKEET_INPUT --cases long,short --precision bf16 --repeats 10`, warm sync-bounded medians, unchanged source)
 
 | path | T' | steps | transcribe p50 (s) | encode p50 (s) | encode instrumented (ms) |
 | --- | --- | --- | --- | --- | --- |

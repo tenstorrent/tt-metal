@@ -71,7 +71,7 @@ long-clip gates.
 
 ```bash
 # Device inference
-python demo/demo.py --checkpoint /weights --device-id 0 --precision bf16 clip.flac
+python demo/demo.py --checkpoint $PARAKEET_WEIGHTS --device-id 0 --precision bf16 clip.flac
 
 # Portable tests (no device required)
 pytest tests/test_parakeet.py -m "not device"
