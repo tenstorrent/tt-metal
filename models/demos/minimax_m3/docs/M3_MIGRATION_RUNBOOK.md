@@ -396,8 +396,8 @@ the prefill host: `tt-llm-engine`'s launch harness, scenario `pd_migration`, con
   resolve everywhere.
 - Checks: CHECK 1 = prefill source vs golden (producer, over UMD); CHECK 2 = `[kv-src]` source vs
   destination, not available for M3 (no source dump); CHECK 3 = `[kv-golden]` destination vs golden,
-  K/V only. `index_k` reports `SKIP` there: its `load_golden` is `None`, and `longbook_10240` carries
-  no `index_k` tensors anyway.
+  K/V and, on sparse layers, `index_k` (the golden's `index_k_cache_layer_<L>`); `index_k` reports `SKIP`
+  on the dense layer, which has no indexer cache.
 - The decode driver's wait for the sentinel has no timeout.
 - Last passing run: 2026-09-08, b08u08 → b08u02, PCC 0.999 on every K/V head of layers 0 and 3.
 
@@ -446,7 +446,8 @@ Logs: `/data/philei/disagg_runs/<timestamp>/<step>.log`, plus the generated
 [pd-migration] CHECK 2 (prefill src == decode dst), transport fidelity:   (none)        <- expected for M3
 [pd-migration] CHECK 3 (decode dst == golden), KV correctness:
   [kv-golden] mesh1/layer0 k_h0 slot0: PASS (pcc=0.99...)
-  [kv-golden] mesh2/layer3 index_k: SKIP (no host_tensor/load_golden hook)            <- expected, see 3.1
+  [kv-golden] mesh2/layer3 index_k slot0 layer3 head0 [0,10239): PASS (pcc=0.99...)
+  [kv-golden] mesh1/layer0 index_k: SKIP (no golden for this layer)                    <- dense layer, expected
 [pd-migration] stage verdicts (4/4 stages reported): ...
 [pd-migration] PASS: all 4 decode stages validated
 ```
