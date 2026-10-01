@@ -307,7 +307,6 @@ from ttnn.types import (
     compute_program_descriptor_hash,
     UnpackMode,
     Precision,
-    KernelBuildOptLevel,
     DFBEndpointType,
     DFBAccessPattern,
     TensorSpecRelaxations,
