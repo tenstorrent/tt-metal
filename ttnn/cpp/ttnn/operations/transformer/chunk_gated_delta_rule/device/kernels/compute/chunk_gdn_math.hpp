@@ -206,7 +206,9 @@ template <VectorMode Mode = VectorMode::RC>
 // window holds g_sum).
 // ColExp: exp faces 0 and 2 only; every reader of decay_exp and decayfac broadcasts column 0 (bcast_cols_mul*,
 // dl_tile), so faces 1 and 3 of o_exp / o_fac are never read.
-template <bool ColExp = false>
+// EarlyPush: publish o_decay right after its pack instead of after the release; Ct == 1 only (one tile is the
+// whole block).
+template <bool ColExp = false, bool EarlyPush = false>
 inline void decay_all(
     uint32_t tril, uint32_t ones, uint32_t g, uint32_t o_decay, uint32_t o_exp, uint32_t o_fac, uint32_t Ct) {
     CircularBuffer(o_decay).reserve_back(Ct);
@@ -235,6 +237,9 @@ inline void decay_all(
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o_decay, i);
+        if constexpr (EarlyPush) {
+            CircularBuffer(o_decay).push_back(Ct);
+        }
         pack_tile(3, o_exp, i);
         pack_tile(1, o_fac, i);
         if (i + 1 == Ct) {
@@ -244,7 +249,9 @@ inline void decay_all(
         }
         tile_regs_release();
     }
-    CircularBuffer(o_decay).push_back(Ct);
+    if constexpr (!EarlyPush) {
+        CircularBuffer(o_decay).push_back(Ct);
+    }
     CircularBuffer(o_exp).push_back(Ct);
     CircularBuffer(o_fac).push_back(Ct + 1);
 }
@@ -751,6 +758,9 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     // and produces normalized q->cb.supd, k->cb.stmp (both free in Ct==1). The rest of the chunk
     // then reads Q/Kk instead of cb.q/cb.k. scr1/scr2/scr3 are free here (used only later). ----
     uint32_t Q = cb.q, Kk = cb.k;
+    // The solve build waits for the normalized q/k at their first readers (Kk at k_beta, Q at intra); the Horner
+    // build drains them here, at its size limit.
+    constexpr bool kLateNormWaits = qk_norm && kGdnTinvSfpu;
     {
         GDN_ZONE("pp_norm");
         if constexpr (qk_norm) {
@@ -759,14 +769,18 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
             inv_rms_diag(cb.q, cb.eye, cb.scr3, ct, Kt, eps_bits, scale_bits, /*do_scale=*/true);
             WAIT(cb.scr3, Ct);
             mm_diag(cb.scr3, cb.q, cb.supd, ct, Kt);
-            WAIT(cb.supd, ck);
-            POP(cb.scr3, Ct);
+            if constexpr (!kLateNormWaits) {
+                WAIT(cb.supd, ck);
+            }
+            POP(cb.scr3, Ct);  // the pops are ordered after this thread's in-flight unpacks by the CB protocol
             POP(cb.q, ck);
             // k: same, no scale -> k_normed (cb.stmp)
             inv_rms_diag(cb.k, cb.eye, cb.scr3, ct, Kt, eps_bits, scale_bits, /*do_scale=*/false);
             WAIT(cb.scr3, Ct);
             mm_diag(cb.scr3, cb.k, cb.stmp, ct, Kt);
-            WAIT(cb.stmp, ck);
+            if constexpr (!kLateNormWaits) {
+                WAIT(cb.stmp, ck);
+            }
             POP(cb.scr3, Ct);
             POP(cb.k, ck);
             Q = cb.supd;
@@ -782,6 +796,9 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // the same rule -- a WAIT right after a producing block drains the unpack->math->pack pipeline (~0.2-0.3 us
         // on a one-tile block), so it is placed only where the next block reads the result.
         bcast_cols_mul(cb.v, cb.beta, cb.vbeta, ct, Vt);
+        if constexpr (kLateNormWaits) {
+            WAIT(Kk, ck);  // the normalized k's first reader
+        }
         bcast_cols_mul(Kk, cb.beta, cb.kbeta, ct, Kt);
         POP(cb.beta, Ct);
         POP(cb.v, cv);
@@ -791,7 +808,8 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         GDN_ZONE("pp_decay");
         // ---- P2: decay = tril@g, decay_exp, decayfac = exp(g_sum - decay), dl = exp(g_sum): one DST pass;
         // then decay_row ----
-        decay_all<kGdnTinvSfpu && Ct == 1>(cb.tril, cb.ones, cb.g, cb.decay, cb.decay_exp, cb.decayfac, ct);
+        constexpr bool kCt1Sfpu = kGdnTinvSfpu && Ct == 1;
+        decay_all<kCt1Sfpu, kCt1Sfpu>(cb.tril, cb.ones, cb.g, cb.decay, cb.decay_exp, cb.decayfac, ct);
         WAIT(cb.decay, Ct);  // decay_exp / decayfac are waited for at pp_kd / pp_kdec
         POP(cb.g, Ct);
         transpose_col(cb.decay, cb.scr1, ct);  // decay_row in scr1
@@ -916,6 +934,9 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     {
         GDN_ZONE("pp_intra");
         // ---- intra = (q@k^T) * L_mask ; q_decay = q*decay_exp ; k_dec_t ----
+        if constexpr (kLateNormWaits) {
+            WAIT(Q, ck);  // the normalized q's first reader
+        }
         intra_fused(Q, Kk, cb.lmask, cb.intra, ct, Kt);  // intra = (q @ k^T) * L_mask, one DST pass per tile
         POP(cb.lmask, cc);
     }
