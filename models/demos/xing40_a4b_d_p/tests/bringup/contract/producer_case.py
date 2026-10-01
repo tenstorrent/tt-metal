@@ -10,7 +10,8 @@ channel, shutdown sentinel) is the producer's own code:
   - schedule: the server's chunk plan and round-robin slot interleave (server_rules.interleave) instead of run_schedule
     (whose follow-up turns start at a 32-aligned end and whose last chunk is never pulled back)
   - payload: PAD_ID past actual_end and ring_sdpa_reshuffle by actual_start (server_rules.server_payload) instead of
-    real tokens past the end in natural order
+    the producer's own padding and rotation (its _h2d_rows is made to hand over the natural-order tokens, so the
+    server's payload is built from the prompt slice alone)
   - acks: counted here, 40 per chunk (layers_per_chunk), and waited for before each snapshot
   - verify: off here (the parent test reads the dumps with the server's own comparer)
 
@@ -79,6 +80,12 @@ def main(out: str) -> int:
 
     P.ttnn = TT()
 
+    def natural_rows(tokens, actual_start=0):  # the producer's rotation is replaced by the server's in Service
+        assert len(tokens) == R.CHUNK, f"expected {R.CHUNK} tokens, got {len(tokens)}"
+        return np.asarray(tokens, dtype=np.int64).astype(np.uint32).reshape(R.SP, 1, R.W)
+
+    P._h2d_rows = natural_rows
+
     connect = P._connect_layer_ack_channel
 
     def connect_acks(timeout_s):
@@ -116,7 +123,10 @@ def main(out: str) -> int:
         reader = None
         push_ms, ends = [], {}
         for k, p in enumerate(plan):
-            push_ms.append(push_fn(p.slot, p.chunk_idx, p.start, p.end))
+            # actual_isl: the request's whole prompt length (prefill_producer.py _Slot.actual_isl = prefix + new tokens);
+            # the producer pads its token slice past it. The server payload pads past actual_end, the same place on a
+            # last chunk and nothing on the others.
+            push_ms.append(push_fn(p.slot, p.chunk_idx, p.start, p.end, TURNS[p.slot][p.turn]))
             ends[p.slot] = p.end
             for name, sn in SNAPSHOTS.items():
                 if sn["after"] != (p.slot, p.start, p.end):
