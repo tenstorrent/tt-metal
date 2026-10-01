@@ -789,3 +789,39 @@ same-seed Django 900-second local trial starts with only this additional adapter
 using `--normalize-submission-marker` and output
 `/home/mvasiljevic/gemma4-eval-speed-evidence/local_django_bfp8_submit_seed9472`.
 The separate CI run remains unchanged and has no submission adapter enabled.
+
+### Monitored QB2 CI result
+
+Run 36910894168 / job 110533086359 completes successfully at 19:30:04 UTC.
+Artifact **11189981342**, downloaded under
+`/home/mvasiljevic/gemma4-eval-speed-evidence/bfp8_probe_36910894168`, confirms
+**reward 1 / resolved true**, with the required test and all 103 regression tests
+passing. Agent duration is 900.012785 seconds with `AgentTimeoutError`: correct
+patch, still no clean submission. The exact overlay hash is logged at 19:02:42;
+async scheduling is active and APC disabled. This is an actual monitored CI
+quality result, not an inference from the workflow's green status.
+
+This trajectory has 46 saved native tool responses, zero repetition stops,
+615,491 prompt tokens and 10,056 output tokens. Tool time totals only 0.679
+seconds. The successful source edit occurs about 804.6 seconds into the trial;
+the reproduction then passes before the cap. The agent continues inspecting
+the correct patch rather than producing a final text marker. Thus the optional
+submission adapter cannot be assumed to shorten this distinct trajectory.
+One final saved response arrives 9.457 seconds after the nominal agent deadline;
+the fixed patch predates that tail. The local and CI initial prompts differ in
+the runner's kernel/version string (1,696 versus 1,697 tokens), so these are two
+distinct same-seed trajectories, not identical replay replications.
+
+Server counters through the last completed response give approximately 698.50
+seconds TTFT and 206.87 seconds post-first-token time after subtracting the
+4K/4 warmup (98.323 seconds). They include the small post-deadline response tail;
+they are not exact within-budget utilization. About 77% of this response path
+is now TTFT, and 23% decoding. On this **fixed action/output workload**, a further
+5% decode-rate gain saves only about 10 seconds; doubling prompt-processing
+speed would reduce approximately 905 seconds to 556 seconds, while an impossible
+zero-TTFT ceiling is about 207 seconds (4.4x response-path speedup). These are
+conditional Amdahl bounds, not forecasts of solver completion, and APC cannot
+be enabled by a flag. Cold compilation is part of TTFT and must be separated
+from attention compute before claiming a practical caching gain. The verified
+result justifies further bounded cross-task/termination checks; it does not
+establish that all five tasks now finish correctly within two hours.
