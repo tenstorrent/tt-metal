@@ -1661,6 +1661,18 @@ static void sdpa_inner_loop_step(
 #endif
 #if defined(SDPA_PA) && defined(SDPA_PA_SAFE) && defined(SDPA_PA_DIRECT_SUM)
                     if (kt_subblock == 0) {
+                        // Scan and hand over the flag before this group's first exp, so PACK never waits on
+                        // UNPACK's QK issue.
+                        if (!is_first_iter) {
+                            CircularBuffer(cur.max).wait_front((prev_q_subblock + 1) * qkt_subblock_h);
+                        }
+                        UNPACK({
+                            if (!is_first_iter) {
+                                sdpa_identity_flags[prev_q_subblock] =
+                                    sdpa_scan_identity_maxima(prev.max, cur.max, prev_q_subblock, qkt_subblock_h);
+                                mailbox_write(ckernel::ThreadId::PackThreadId, sdpa_identity_flags[prev_q_subblock] ? 1u : 0u);
+                            }
+                        })
                         PACK({
                             if (!is_first_iter) {
                                 const uint32_t f = mailbox_read(ckernel::ThreadId::UnpackThreadId);
@@ -1732,10 +1744,9 @@ static void sdpa_inner_loop_step(
 #ifndef SDPA_RECIPE_FP32
                     UNPACK({
                         if (!is_first_iter && q_subblock > 0 && kt_subblock == 0) {
+#if !(defined(SDPA_PA) && defined(SDPA_PA_SAFE) && defined(SDPA_PA_DIRECT_SUM))
                             sdpa_identity_flags[q_subblock - 1] =
                                 sdpa_scan_identity_maxima(prev.max, cur.max, q_subblock - 1, qkt_subblock_h);
-#if defined(SDPA_PA) && defined(SDPA_PA_SAFE) && defined(SDPA_PA_DIRECT_SUM)
-                            mailbox_write(ckernel::ThreadId::PackThreadId, sdpa_identity_flags[q_subblock - 1] ? 1u : 0u);
 #endif
                         }
                     })
