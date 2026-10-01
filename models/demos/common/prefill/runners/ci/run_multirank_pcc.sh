@@ -44,7 +44,8 @@ PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
 PP_RANKS=0
-PP_EVIDENCE_DIR=""
+# PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
+EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${MODEL}"
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 SC1_MAX_SEQ_LEN=""
 SC1_NUM_LAYERS=""
@@ -93,7 +94,6 @@ case "${MODEL}" in
     # Pre-generated 4-rank binding on one host, not tt-run discovery. Everything below keys off
     # PP_RANKS, so the next pipeline-parallel model sets only that.
     PP_RANKS=4
-    PP_EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/mistral4_pp4"
     # Validates the entire 36-layer golden, including positions >8192.
     MAX_SEQ_LEN=${GOLDEN_LEN}
     # sc1 is the only config, so the sc1 window below must not widen it to the 256k default.
@@ -191,12 +191,10 @@ cleanup() {
     [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
     echo "$(basename "$f"): $(cat "$f")"
   done
-  if [ -n "${PP_EVIDENCE_DIR}" ]; then
-    mkdir -p "${PP_EVIDENCE_DIR}"
-    for path in "${PCC_DIR}" "${RANKLOGS}" "${BINDING:-}"; do
-      [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${PP_EVIDENCE_DIR}/" || true
-    done
-  fi
+  mkdir -p "${EVIDENCE_DIR}"
+  for path in "${PCC_DIR}" "${RANKLOGS}" "${BINDING:-}"; do
+    [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${EVIDENCE_DIR}/" || true
+  done
   if [ -d "${RANKLOGS}" ]; then
     echo "==================== ranklog tails ===================="
     find "${RANKLOGS}" -type f | sort | while read -r f; do
