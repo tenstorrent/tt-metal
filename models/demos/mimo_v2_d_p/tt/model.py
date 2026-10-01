@@ -24,6 +24,7 @@ from models.demos.mimo_v2_d_p.tt.attention.attention import cache_v_dim, kv_head
 from models.demos.mimo_v2_d_p.tt.attention.kv_cache import allocate_kv_cache
 from models.demos.mimo_v2_d_p.tt.ccl import CCLManager, resolve_num_links
 from models.demos.mimo_v2_d_p.tt.decoder import TtDecoderLayer
+from models.demos.mimo_v2_d_p.tt.lm_head import TtLMHead
 from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import build_indexed_rope, build_transformation_mat
 
@@ -59,10 +60,12 @@ class TtMiMoModel:
         num_users: int = 1,
         allocate_kv: bool = True,
         embed: bool = True,
+        lm_head: bool = False,
         options: MiMoRuntimeOptions | None = None,
     ):
         """``layer_state(i) -> {HF name: tensor}``; ``global_state() -> {embed_tokens.weight, norm.weight}``;
         ``options``: runtime knobs (links, expert dtype / implementation, MoE block, weight cache; default production).
+        ``lm_head``: final norm + lm_head on device (``next_token_logits``); the last pipeline rank only.
         """
         self.mesh_device = mesh_device
         self.options = options = options or MiMoRuntimeOptions()
@@ -91,6 +94,12 @@ class TtMiMoModel:
                 dtype=ttnn.bfloat16,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        self.lm_head = None
+        if lm_head:
+            g = global_state(("model.embed_tokens.weight", "model.norm.weight", "lm_head.weight"))
+            self.lm_head = TtLMHead(
+                mesh_device, g["norm.weight"], g["lm_head.weight"], cfg.layernorm_epsilon, options=options
             )
         self.rope = {
             t: build_indexed_rope(mesh_device, cfg.attn_spec(t), max_seq_len=max_seq_len, chunk_size=chunk_size)
@@ -193,6 +202,12 @@ class TtMiMoModel:
         idx = block_cyclic_index(kv_actual, self.sp, self.chunk_local) - kv_actual
         x = self.embed_device(self.tokens_to_device(ids_chunk[idx]))
         return self.forward_device(x, kv_actual, user=user, capture=capture, valid_end=valid_end)
+
+    def next_token_logits(self, x, kv_actual: int, pos: int) -> torch.Tensor:
+        """Host [V] fp32 logits after global position ``pos`` (in this chunk) of the final hidden ``x`` (block-cyclic)."""
+        idx = block_cyclic_index(kv_actual, self.sp, self.chunk_local)
+        sp_row, local_row = divmod(int((idx == pos).nonzero()[0, 0]), self.chunk_local)
+        return self.lm_head.logits(x, sp_row, local_row)
 
     def gather_hidden(self, x, kv_actual):
         """Device hidden [1,1,S_local,H] (block-cyclic) -> host [chunk_size, H] in natural order."""

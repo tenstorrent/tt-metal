@@ -109,13 +109,15 @@ def layer_state(i: int, cfg: MiMoTextConfig | None = None, *, experts: bool = Tr
 
 
 def global_state(names=("model.embed_tokens.weight", "model.norm.weight")) -> dict:
+    """{name without ``model.``: bf16 tensor} for the non-layer tensors; ``lm_head.weight`` on request. Names missing
+    from the cached file are fetched and added to it."""
     path = CACHE / "global.safetensors"
-    if path.exists():
-        return load_file(str(path))
-    out = {
-        k[len("model.") :] if k.startswith("model.") else k: v.bfloat16().contiguous()
-        for k, v in fetch(list(names)).items()
-    }
+    key = lambda n: n[len("model.") :] if n.startswith("model.") else n
+    out = load_file(str(path)) if path.exists() else {}
+    missing = [n for n in names if key(n) not in out]
+    if not missing:
+        return out
+    out.update({key(k): v.bfloat16().contiguous() for k, v in fetch(missing).items()})
     CACHE.mkdir(parents=True, exist_ok=True)
     save_file(out, str(path))
     return out
