@@ -28,3 +28,12 @@ Next: grep -E "LTX_TIME|decode|E2E" run.log for gen#1; compare mp4 vs conv145_t2
 frames). Faster + identical -> keep, fix comments with measured numbers. Slower -> revert 9a02249fdfb.
 Cleanup after: ssh g14blx03 'cd ~/fasth3/tt-metal && git worktree remove --force ~/fasth3/t17'.
 Compare: ssh g14blx03 bash -s < tmp/t17/compare.sh
+
+## 2026-10-01 rescope (no full-mesh runs on blx03)
+drive17.sh died with the ~23:33 blx03 reboot before submitting (no drive17.log, queue empty). The conv145 4x8 A/B is
+barred now. Replaced by a single-chip (1x1) microbench: tmp/t17/test_blk_ab.py times the 5 changed sites with old vs
+new blocking (trace-based, HiFi2, per-device 4x8 input shapes) and checks old/new outputs are identical.
+Job: blx03 broker 987, wrapper tmp/t17/run_ab.sh, log blx03:~/fasth3/out/t17_ab.log (AB_ROW / AB_TOTAL / T17AB_EXIT).
+Check: ssh g14blx03 tt-device-mcp status 1 | grep -w 987
+Next: new faster at every site + identical -> keep 9a02249fdfb, put measured us in the table comments.
+Any site slower -> revert that row. Chip drop -> stop, report job/chips/time.
