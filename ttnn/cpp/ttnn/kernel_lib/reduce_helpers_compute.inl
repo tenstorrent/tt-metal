@@ -339,7 +339,7 @@ ALWI void reduce_accumulate_via_add(
     PACK(ASSERT(is_valid_dfb_tile_page_size(output_dfb_id, (DataFormat)pack_dst_format[output_dfb_id])));
 #endif
     if constexpr (no_wait_p) {  // no wait/reserve to self-assert capacity: caller must have the block resident
-        ASSERT(get_dfb_num_pages(input_dfb_id) >= in_tiles);
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb_id) >= in_tiles));
     }
 
     // The auxiliary CB is never popped here. The layout is [mask, zero] for a
