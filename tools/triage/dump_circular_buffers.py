@@ -8,7 +8,7 @@ Usage:
     dump_circular_buffers [--dump-cb-content]
 
 Options:
-    --dump-cb-content   Read each CB's whole FIFO into the Content column, as hex.
+    --dump-cb-content   Read each CB's whole FIFO into the Content column, as hex. Only shown on -vv.
 
 Description:
     Circular buffer state of every running Tensix core, one row per CB of the current program.
