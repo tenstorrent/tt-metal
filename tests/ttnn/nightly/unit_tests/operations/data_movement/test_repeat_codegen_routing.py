@@ -529,9 +529,44 @@ _DEMOTED = [
         ),
     ),
     (
+        [1, 2, 128, 64],
+        {
+            "repeat_dims": ttnn.Shape([1, 1, 1, 2]),
+            "memory_config": ttnn.create_sharded_memory_config(
+                shape=(1, 2, 128, 128),
+                core_grid=ttnn.CoreGrid(x=4, y=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            ),
+        },
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.create_sharded_memory_config(
+            shape=(1, 2, 128, 64),
+            core_grid=ttnn.CoreGrid(x=4, y=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=False,
+        ),
+    ),
+    (
         [1, 2, 256, 128],
         {"repeat_dims": ttnn.Shape([2, 1, 1, 1]), "memory_config": ttnn.L1_MEMORY_CONFIG},
         ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.create_sharded_memory_config(
+            shape=(1, 2, 256, 128),
+            core_grid=ttnn.CoreGrid(x=8, y=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=False,
+        ),
+    ),
+    (
+        [1, 2, 256, 128],
+        {"repeat_dims": ttnn.Shape([2, 1, 1, 1]), "memory_config": ttnn.L1_MEMORY_CONFIG},
+        ttnn.bfloat16,
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.create_sharded_memory_config(
             shape=(1, 2, 256, 128),
@@ -640,7 +675,9 @@ _DEMOTED = [
 ]
 _DEMOTED_IDS = [
     "[1, 2, 128, 64]@HEIGHT/4x1/ROW_MAJOR/input+output|repeat_dims=[1, 1, 1, 2]|float32|row_major",
+    "[1, 2, 128, 64]@HEIGHT/4x1/ROW_MAJOR/input+output|repeat_dims=[1, 1, 1, 2]|bfloat16|row_major",
     "[1, 2, 256, 128]@HEIGHT/8x1/ROW_MAJOR/input|memory_config=BufferType.L1&repeat_dims=[2, 1, 1, 1]|float32|row_major",
+    "[1, 2, 256, 128]@HEIGHT/8x1/ROW_MAJOR/input|memory_config=BufferType.L1&repeat_dims=[2, 1, 1, 1]|bfloat16|row_major",
     "[1, 2, 64, 128]@WIDTH/4x1/ROW_MAJOR/input|memory_config=BufferType.DRAM&repeat_dims=[2, 1, 1, 1]|bfloat16|row_major",
     "[1, 2, 64, 128]@WIDTH/4x1/ROW_MAJOR/input|memory_config=BufferType.DRAM&repeat_dims=[2, 1, 1, 1]|float32|row_major",
     "[1, 2, 64, 128]@WIDTH/4x1/ROW_MAJOR/input|memory_config=BufferType.L1&repeat_dims=[2, 1, 1, 1]|bfloat16|row_major",
@@ -669,14 +706,14 @@ def test_repeat_codegen_demotion(device, shape, kwargs, dtype, layout, placement
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 @pytest.mark.parametrize(
-    "shape,shard_grid,out_mc,native_grid_rows",
+    "shape,shard_grid,out_mc,expect_codegen",
     [
-        ([1, 2, 256, 128], ttnn.CoreGrid(y=8, x=1), ttnn.L1_MEMORY_CONFIG, ()),
-        ([1, 2, 256, 128], ttnn.CoreGrid(y=1, x=8), ttnn.L1_MEMORY_CONFIG, (10,)),
-        ([1, 5, 256, 128], ttnn.CoreGrid(y=1, x=8), ttnn.L1_MEMORY_CONFIG, (8,)),
-        ([1, 1, 256, 128], ttnn.CoreGrid(y=1, x=4), ttnn.L1_MEMORY_CONFIG, ()),
-        ([1, 2, 256, 128], ttnn.CoreGrid(y=1, x=8), ttnn.DRAM_MEMORY_CONFIG, (10,)),
-        ([1, 2, 256, 128], ttnn.CoreGrid(y=1, x=4), ttnn.DRAM_MEMORY_CONFIG, ()),
+        ([1, 2, 256, 128], ttnn.CoreGrid(y=8, x=1), ttnn.L1_MEMORY_CONFIG, True),
+        ([1, 2, 256, 128], ttnn.CoreGrid(y=1, x=8), ttnn.L1_MEMORY_CONFIG, False),
+        ([1, 5, 256, 128], ttnn.CoreGrid(y=1, x=8), ttnn.L1_MEMORY_CONFIG, False),
+        ([1, 1, 256, 128], ttnn.CoreGrid(y=1, x=4), ttnn.L1_MEMORY_CONFIG, True),
+        ([1, 2, 256, 128], ttnn.CoreGrid(y=1, x=8), ttnn.DRAM_MEMORY_CONFIG, False),
+        ([1, 2, 256, 128], ttnn.CoreGrid(y=1, x=4), ttnn.DRAM_MEMORY_CONFIG, True),
     ],
     ids=[
         "[1,2]-CoreGrid(y=8,x=1)-l1",
@@ -687,15 +724,9 @@ def test_repeat_codegen_demotion(device, shape, kwargs, dtype, layout, placement
         "[1,2]-CoreGrid(y=1,x=4)-dram",
     ],
 )
-def test_repeat_codegen_shard_row_read_hotspot(device, shape, shard_grid, out_mc, native_grid_rows, dtype):
+def test_repeat_codegen_shard_row_read_hotspot(device, shape, shard_grid, out_mc, expect_codegen, dtype):
+    # A single shard row of 8+ cores demotes on any arch and either output; shorter rows and columns stay.
     repeat_dims = ttnn.Shape([2, 1, 1, 1])
-    grid = device.compute_with_storage_grid_size()
-    if (grid.x, grid.y) != (8, 8) and not (grid.y == 10 and grid.x >= 11):
-        pytest.skip(f"expectation derived for 8x8 and 10-row (11+ wide) worker grids, got {grid.x}x{grid.y}")
-    # Share of reads that wrap the shard row's ring, 8 rows / 10 rows. L1 output (direct kernel, cut 0.33 / 0.53):
-    # [1,2] 1x8 0 / 0.69, [1,5] 1x8 0.40 / 0, [1,1] 1x4 0 / 0.375. DRAM output (sequenced pair, never / cut 0.27):
-    # [1,2] 1x8 0.44 / 0.44, [1,2] 1x4 0 / 0.08. A shard column wraps none.
-    expect_codegen = grid.y not in native_grid_rows
     x = _make_input(shape, dtype)
     placement = ttnn.create_sharded_memory_config(
         shape=tuple(shape),
@@ -876,17 +907,6 @@ _CODEGEN_WINS = [
         for h, w in [(4, 4), (6, 12), (8, 16), (10, 20), (12, 24), (14, 28), (16, 32), (18, 36), (20, 40), (22, 44)]
     ],
     ([1, 1, 1, 1], [1, 2, 1, 1], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, None),
-    *[
-        (
-            [1, 2, 256, 128],
-            [2, 1, 1, 1],
-            dtype,
-            ttnn.TILE_LAYOUT,
-            _sharded([1, 2, 256, 128], 8, 1, _H),
-            _sharded([2, 2, 256, 128], 8, 1, _H),
-        )
-        for dtype in (ttnn.bfloat16, ttnn.float32)
-    ],
     (
         [1, 2, 64, 128],
         [2, 2, 1, 1],
@@ -894,14 +914,6 @@ _CODEGEN_WINS = [
         ttnn.ROW_MAJOR_LAYOUT,
         _sharded([1, 2, 64, 128], 4, 1, _W),
         _sharded([2, 4, 64, 128], 4, 1, _W),
-    ),
-    (
-        [1, 2, 128, 64],
-        [1, 1, 1, 2],
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        _sharded([1, 2, 128, 64], 4, 1, _H),
-        _sharded([1, 2, 128, 128], 4, 1, _H),
     ),
 ]
 
