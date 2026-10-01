@@ -94,6 +94,29 @@ def test_prefill_profile_tp2(mesh_device, isl, layers, repeats):
         f"grid={device.compute_with_storage_grid_size()} tuning={model.args.prefill_tuning}"
     )
 
+    # PROFILE_EXTRA_OPS=<k> (lane L, per-op overhead probe): after every layer's forward append k tiny device copies
+    # (a [1,1,32,5120] bf16 tile row into a scratch) -- trace-safe, numerically inert; the wall delta per added op vs
+    # k=0 is the in-trace cost of one small op (compare with its tracy duration).
+    _extra = int(os.environ.get("PROFILE_EXTRA_OPS", "0"))
+    if _extra:
+        _rep = ttnn.ReplicateTensorToMesh(device)
+        _src = ttnn.from_torch(
+            torch.zeros(1, 1, 32, 5120), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=_rep
+        )
+        _dst = ttnn.from_torch(
+            torch.zeros(1, 1, 32, 5120), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=_rep
+        )
+        for _layer in model.layers:
+            _fwd = _layer.forward
+
+            def _wrapped(*a, _fwd=_fwd, **k):
+                out = _fwd(*a, **k)
+                if k.get("mode") == "prefill":
+                    for _ in range(_extra):
+                        ttnn.copy(_src, _dst)
+                return out
+
+            _layer.forward = _wrapped
     kv_cache_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat8_b, batch_size=1)
     page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
