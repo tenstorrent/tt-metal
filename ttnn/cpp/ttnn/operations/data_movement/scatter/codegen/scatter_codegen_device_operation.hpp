@@ -74,7 +74,7 @@ struct ScatterCodegenDeviceOperation {
 };
 
 Tensor scatter_codegen(
-    ScatterCodegenParams params,
+    const ScatterCodegenParams& params,
     const Tensor& input_tensor,
     const Tensor& index_tensor,
     const Tensor& src_tensor,
