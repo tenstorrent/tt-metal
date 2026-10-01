@@ -15,11 +15,15 @@ to one stream makes each harder to read, so this splits them:
 * the **log**, timestamped, with the time in a narrow left column and the message on the
   right, scrolling under the status.
 
-Keys, while it runs: up/down (or ``k``/``j``) and page-up/page-down scroll the log back
-through what the pane holds, home jumps to the oldest line and end returns to following
-the newest; ``d`` toggles debug lines, ``p`` pauses scrolling (the status keeps updating),
-``c`` clears the log, ``q`` quits the server. The live view owns the alternate screen, so
-these keys, rather than the terminal's own scrollback, are how to read back.
+Keys, while it runs: the mouse wheel, up/down (or ``k``/``j``) and page-up/page-down
+scroll the log back through what the pane holds, home jumps to the oldest line and end
+returns to following the newest; ``d`` toggles debug lines, ``p`` pauses scrolling (the
+status keeps updating), ``v`` switches logged prompts between full text and a 200-character snippet (for requests
+logged after the switch), ``c`` clears the log, ``q`` quits the server. Shift-drag still
+selects text. The live view owns the alternate screen, so these, rather than the
+terminal's own scrollback, are how to read back. A scroll paints on the key itself,
+not on the status refresh, so holding a key tracks the repeat instead of sitting still
+and then jumping by every key that arrived in the gap.
 
 The view follows the window it is drawn in: a resize repaints immediately (on
 ``SIGWINCH``, not at the next frame), refolds the log to the new width around the line
@@ -51,12 +55,24 @@ _LEVEL_STYLE = {
     "CRITICAL": "bold white on red",
 }
 # Square brackets are rich markup, so the key hints spell the keys out instead.
-_HELP = "keys: up/down pgup/pgdn scroll · end follow · d debug · p pause · c clear · q quit"
+_HELP = (
+    "keys: wheel/up/down scroll · pgup/pgdn · end follow · d debug · v prompt full/snippet · p pause · c clear · q quit"
+)
 
 # Log lines below which the status pane gives up its per-slot table: a short window
 # would otherwise spend every row on the status and leave the log nothing, or overflow
 # the frame and scroll the status off the top.
 _MIN_LOG_LINES = 3
+
+# How fast the log may be repainted while a key or the wheel is arriving. The status
+# numbers stay on the slower ``fps`` clock. New log lines refresh a little faster than
+# that, but not at the key rate: a busy server would otherwise redraw the whole screen
+# once per line and the terminal would fall behind, which is the same lag-then-jump.
+_INTERACTIVE_FPS = 30.0
+_LOG_FPS = 12.0
+# Lines one wheel notch moves. Arrow keys move one; a notch is the usual three, and
+# because it paints on the event it tracks the wheel instead of batching a flick.
+_WHEEL_LINES = 3
 
 # Escape sequences for the navigation keys, in both the normal and the application cursor
 # modes a terminal may be in ("\x1b[A" and "\x1bOA" are both Up).
@@ -74,6 +90,70 @@ _KEY_SEQUENCES = {
     "OF": "end",
     "[4~": "end",
 }
+
+
+def _wheel_from_button(btn: int) -> str | None:
+    """An xterm button code to a wheel key. Clicks, drags and releases are ``None``."""
+    if not btn & 64:
+        return None
+    low = btn & 3
+    if low == 0:
+        return "wheelup"
+    if low == 1:
+        return "wheeldown"
+    return None
+
+
+def _parse_sgr_wheel(seq: bytes) -> str | None:
+    """``<64;1;1M`` is a wheel press. The trailing ``m`` of a release is not a scroll."""
+    if not seq.endswith(b"M"):
+        return None
+    try:
+        btn = int(seq[1:-1].split(b";", 1)[0])
+    except ValueError:
+        return None
+    return _wheel_from_button(btn)
+
+
+def _parse_input(buf: bytes) -> tuple[str | None, bytes]:
+    """Take one key off the front of ``buf``.
+
+    ``(None, buf)`` means ``buf`` opens a sequence that is still missing the bytes
+    that would finish it. Anything finished but not a key we use is consumed as
+    ``"escape"`` or ``"mouse"``, so a paste or a click cannot be replayed as commands.
+    """
+    if not buf:
+        return None, buf
+    if buf[0] != 0x1B:
+        return chr(buf[0]).lower(), buf[1:]
+    if len(buf) == 1:
+        return None, buf
+    if buf[1] == ord("O"):
+        if len(buf) < 3:
+            return None, buf
+        return _KEY_SEQUENCES.get("O" + chr(buf[2]), "escape"), buf[3:]
+    if buf[1] != ord("["):
+        return "escape", buf[1:]
+    if len(buf) < 3:
+        return None, buf
+    # Legacy mouse tracking: ESC [ M then three payload bytes, which are not part of
+    # the CSI (they can be anything, so they must not be scanned for a final byte).
+    if buf[2] == ord("M"):
+        if len(buf) < 6:
+            return None, buf
+        return _wheel_from_button(buf[3] - 32) or "mouse", buf[6:]
+    for index in range(2, len(buf)):
+        final = buf[index]
+        if 0x40 <= final <= 0x7E:
+            seq = buf[2 : index + 1]
+            rest = buf[index + 1 :]
+            if seq[:1] == b"<":
+                return _parse_sgr_wheel(seq) or "mouse", rest
+            text = seq.decode("ascii", "replace")
+            return _KEY_SEQUENCES.get("[" + text, "escape"), rest
+    if len(buf) > 48:
+        return "escape", buf[1:]
+    return None, buf
 
 
 def available() -> tuple[bool, str]:
@@ -95,10 +175,23 @@ class ServerConsole:
     HTTP thread and, more importantly, no decode step ever blocks on the terminal.
     """
 
-    def __init__(self, stats, on_quit=None, max_lines: int = 2000, fps: float = 6.0, debug: bool = False):
+    def __init__(
+        self,
+        stats,
+        on_quit=None,
+        max_lines: int = 2000,
+        fps: float = 6.0,
+        debug: bool = False,
+        on_toggle_prompt=None,
+        full_prompt: bool = True,
+    ):
         from rich.console import Console
 
         self.stats = stats
+        # Flips how the server logs prompts and returns whether they are now full. None
+        # (the demo) leaves the key inert.
+        self.on_toggle_prompt = on_toggle_prompt
+        self.full_prompt = full_prompt
         self.on_quit = on_quit
         self.debug = debug
         self.fps = fps
@@ -118,12 +211,27 @@ class ServerConsole:
         self._lock = threading.Lock()
         self.paused = False
         # How many lines back from the newest the log is scrolled; 0 follows the tail.
+        # The key thread and the painter both update it, so every read-modify-write goes
+        # through the lock: a clamp on the painter must not put back a value from before
+        # a key that landed mid-frame, or that key would simply vanish.
         self._scroll = 0
+        self._scroll_lock = threading.Lock()
         self._log_height = 20  # what the last frame had room for, so a page key can match it
+        # (width, rows, flags, monotonic time, status renderable, rows it occupies).
+        # Reused between scrolls so a key does not rebuild and remeasure the header.
+        self._status_cache = None
         self._stop = threading.Event()
-        # Set by the SIGWINCH handler; wakes the painter out of its frame wait so a
-        # resize lands at once rather than up to a frame later.
+        # ``_wake`` ends the idle wait: a key, the wheel, a log line or a resize.
+        # ``_input`` is the ones that should paint at once (keys, wheel, resize, quit).
+        # A log line sets only ``_wake``, so a busy server does not redraw on every line.
+        self._wake = threading.Event()
+        self._input = threading.Event()
+        # Set by the SIGWINCH handler; the painter also clears the screen when it sees it.
         self._resized = threading.Event()
+        self._inbuf = b""
+        self._tty_lock = threading.Lock()
+        self._tty_fd = None
+        self._tty_saved = None
         self._prev_winch = None
         self._winch_installed = False
         self._painter = threading.Thread(target=self._paint_loop, name="tui-painter", daemon=True)
@@ -138,6 +246,10 @@ class ServerConsole:
             record = message.record
             stamp = record["time"].strftime("%H:%M:%S.%f")[:-3]
             self._incoming.put_nowait((stamp, record["level"].name, record["message"]))
+            # While the log is paused the lines wait in the queue; waking would only
+            # redraw the same frame. Unpausing wakes on its own key.
+            if not self.paused:
+                self._wake.set()
         except Exception:  # noqa: BLE001 - logging must never take the server down
             self._dropped += 1
 
@@ -186,15 +298,19 @@ class ServerConsole:
             for i, piece in enumerate(self._fold(text, width)):
                 self._display.append((seq, stamp if i == 0 else "", level, piece))
         if anchor is not None:
-            self._scroll = self._offset_of(anchor)
+            offset = self._offset_of(anchor)
+            with self._scroll_lock:
+                self._scroll = offset
 
     def _anchor_seq(self) -> int | None:
         """The record at the bottom of the window, or ``None`` when the log is following
         the tail -- which needs no anchor, the tail being wherever the log now ends."""
-        if not self._scroll:
+        with self._scroll_lock:
+            scroll = self._scroll
+        if not scroll:
             return None
         lines = list(self._display)
-        index = len(lines) - self._scroll - 1
+        index = len(lines) - scroll - 1
         return lines[index][0] if 0 <= index < len(lines) else None
 
     def _offset_of(self, seq: int) -> int:
@@ -228,8 +344,11 @@ class ServerConsole:
 
     def stop(self) -> None:
         self._stop.set()
-        self._resized.set()  # cut the painter's frame wait short
+        self._input.set()
+        self._wake.set()  # cut the painter's frame wait short
+        self._resized.set()
         self._painter.join(timeout=2)
+        self._restore_tty()
         self._remove_resize_hook()
 
     def _install_resize_hook(self) -> None:
@@ -248,6 +367,8 @@ class ServerConsole:
 
         def on_winch(signum, frame) -> None:
             self._resized.set()  # the painter does the work; a handler must stay trivial
+            self._input.set()
+            self._wake.set()
             if callable(self._prev_winch):
                 self._prev_winch(signum, frame)
 
@@ -331,7 +452,7 @@ class ServerConsole:
             elif turn["phase"] == "prefill":
                 phase = "prefill"
                 progress = f"{turn['prefilled']}/{turn['prompt_tokens']}"
-                rate = ""
+                rate = f"{turn.get('prefill_rate', 0.0):.1f}" if turn.get("prefill_rate") else ""
                 style = "yellow"
             else:
                 phase = "decode" + (" (gone)" if turn["cancelled"] else "")
@@ -356,13 +477,55 @@ class ServerConsole:
             flags.append("[cyan]debug[/cyan]")
         if self.paused:
             flags.append("[yellow]paused[/yellow]")
-        if self._scroll:
-            flags.append(f"[yellow]scrolled back {self._scroll} lines, end to follow[/yellow]")
         if self._dropped:
             flags.append(f"[red]{self._dropped} log lines dropped[/red]")
         subtitle = "  ".join(flags + [f"[dim]{_HELP}[/dim]"])
         body = head if compact else Group(head, table)
         return Panel(body, title="DeepSeek-V4-Flash server", subtitle=subtitle, border_style="cyan")
+
+    def _scroll_bar(self):
+        """One fixed line under the status telling where the log window is.
+
+        It is always one row, following or not, so the first scroll does not grow the
+        status subtitle and shove the log. ``no_wrap`` keeps a narrow window from
+        folding it into a second row, which would overflow the frame the same way.
+        """
+        from rich.text import Text
+
+        with self._scroll_lock:
+            scroll = self._scroll
+        if scroll:
+            text = f"{scroll} lines above the latest  ·  end follows again"
+            style = "yellow"
+        else:
+            text = "following the latest log  ·  wheel or up/down scrolls back"
+            style = "dim"
+        return Text(text, style=style, no_wrap=True, overflow="ellipsis")
+
+    def _status_block(self, rows: int):
+        """The status pane and how many rows it occupies.
+
+        A scroll used to rebuild this, and measuring it renders it, so most of the
+        frame was the header. The numbers move on the idle clock; the scroll position
+        lives in :meth:`_scroll_bar` and does not invalidate the cache.
+        """
+        size = (self.console.size.width, rows)
+        flags = (self.debug, self.paused, self._dropped)
+        now = time.monotonic()
+        cached = self._status_cache
+        ttl = 1.0 / max(self.fps, 1.0)
+        if cached is not None and cached[0] == size and cached[1] == flags and now - cached[2] < ttl:
+            return cached[3], cached[4]
+        stats = self.stats()
+        status = self._status_panel(stats)
+        used = self._measure(status)
+        # The scroll line and one spare row sit under the status. A window that cannot
+        # also give the log its minimum drops the per-slot table first.
+        if rows - used - 2 < _MIN_LOG_LINES:
+            status = self._status_panel(stats, compact=True)
+            used = self._measure(status)
+        self._status_cache = (size, flags, now, status, used)
+        return status, used
 
     def _log_lines(self, height: int):
         """A window of the log, as ``time | message`` rows sized to what is left of the
@@ -387,8 +550,16 @@ class ServerConsole:
         lines = list(self._display)
         # Clamped here rather than on the key press: the limit moves with the log's length
         # and the terminal's height, both of which change under the key thread's feet.
-        self._scroll = max(0, min(self._scroll, max(len(lines) - height, 0)))
-        end = len(lines) - self._scroll
+        # The copy of the offset is what this frame draws, so a key that lands after the
+        # lock is released is painted next frame instead of being written back over.
+        limit = max(len(lines) - height, 0)
+        with self._scroll_lock:
+            if self._scroll > limit:
+                self._scroll = limit
+            elif self._scroll < 0:
+                self._scroll = 0
+            scroll = self._scroll
+        end = len(lines) - scroll
         for _seq, stamp, level, text in lines[max(end - height, 0) : end]:
             table.add_row(stamp, text, style=_LEVEL_STYLE.get(level, ""))
         return table
@@ -401,22 +572,21 @@ class ServerConsole:
         # Budgeting from the wrong one overflows the frame and scrolls the status away.
         rows = self.console.size.height
         # One stats() call for the frame, however many times the status is laid out below.
-        stats = self.stats()
-        # Measure the status so the log fills exactly the rest of the screen.
-        status = self._status_panel(stats)
-        used = self._measure(status)
-        # A window shrunk to fewer rows than the status needs leaves the log nothing and
-        # pushes the status itself out of the frame; a header-only status keeps both.
-        if rows - used - 1 < _MIN_LOG_LINES:
-            status = self._status_panel(stats, compact=True)
-            used = self._measure(status)
-        # Below about six rows even that does not fit, its border and subtitle alone
-        # filling the window. The log is the pane with something to say at that size, so
-        # it takes the whole frame rather than the status overflowing and scrolling it
-        # away -- and the status returns as soon as there is room for it.
-        if rows - used - 1 < 1:
-            return self._log_lines(rows)
-        return Group(status, self._log_lines(rows - used - 1))
+        # Between scrolls the header is the cached one; rebuilding it is most of a frame.
+        status, used = self._status_block(rows)
+        # Below about six rows even a header-only status does not fit, its border and
+        # subtitle alone filling the window. The log is the pane with something to say
+        # at that size, so it takes the whole frame rather than the status overflowing
+        # and scrolling it away -- and the status returns as soon as there is room.
+        log_rows = rows - used - 2  # the scroll line, and one spare row
+        if log_rows < 1:
+            if rows - used - 1 < 1:
+                return self._log_lines(max(rows, 1))
+            return Group(status, self._log_lines(max(rows - used - 1, 1)))
+        # Clamped inside _log_lines before the scroll line is built, so the line and
+        # the window show the same offset.
+        log = self._log_lines(log_rows)
+        return Group(status, self._scroll_bar(), log)
 
     def _measure(self, renderable) -> int:
         """Screen lines ``renderable`` occupies at the console's *current* size."""
@@ -425,37 +595,81 @@ class ServerConsole:
     def _paint_loop(self) -> None:
         from rich.live import Live
 
-        interval = 1.0 / max(self.fps, 1.0)
+        idle = 1.0 / max(self.fps, 1.0)
+        fastest = 1.0 / _INTERACTIVE_FPS
+        log_interval = 1.0 / _LOG_FPS
         try:
+            # Live's own refresh thread paints on a fixed period, and update() does not
+            # paint unless asked, so a key used to wait out both clocks and then the
+            # screen jumped by every press that had landed in the gap. This thread draws
+            # the frame the key just asked for; the idle wait is only for the status.
             with Live(
                 self._frame(),
                 console=self.console,
-                refresh_per_second=self.fps,
+                auto_refresh=False,
+                refresh_per_second=max(self.fps, 1.0),
                 screen=True,
                 transient=False,
+                vertical_overflow="crop",
             ) as live:
-                while not self._stop.is_set():
-                    if not self.paused:
-                        added = self._drain()
-                        if added and self._scroll:
-                            # Keep the window on the lines being read: without this the
-                            # arrivals push them off the top while the eye is on them.
-                            self._scroll += added
-                    if self._resized.is_set():
-                        self._resized.clear()
-                        # Growing the window leaves the cells it gained holding whatever
-                        # the terminal had there before the frame moved into them. The
-                        # alternate screen is ours, so wiping it is safe.
-                        with contextlib.suppress(Exception):
-                            self.console.clear()
-                    with contextlib.suppress(Exception):  # a resize mid-render, etc.
-                        live.update(self._frame())
-                    # Waits like a sleep, except SIGWINCH cuts it short, so a resize is
-                    # repainted as it happens rather than up to a frame later.
-                    self._resized.wait(interval)
+                self._set_mouse(True)
+                try:
+                    while not self._stop.is_set():
+                        started = time.monotonic()
+                        if not self.paused:
+                            added = self._drain()
+                            if added:
+                                with self._scroll_lock:
+                                    # Keep the window on the lines being read: without
+                                    # this the arrivals push them off the top.
+                                    if self._scroll:
+                                        self._scroll += added
+                        if self._resized.is_set():
+                            self._resized.clear()
+                            self._status_cache = None
+                            # Growing the window leaves the cells it gained holding
+                            # whatever the terminal had there before the frame moved
+                            # into them. The alternate screen is ours, so wiping it is safe.
+                            with contextlib.suppress(Exception):
+                                self.console.clear()
+                        with contextlib.suppress(Exception):  # a resize mid-render, etc.
+                            live.update(self._frame(), refresh=True)
+                        elapsed = time.monotonic() - started
+                        # Block until the next status tick, unless a key, a wheel notch
+                        # or a log line arrives. A key then waits only out the interactive
+                        # gap, so a repeat is one line (or one notch) per frame instead of
+                        # every press since the last status tick. A log burst waits a
+                        # little longer, and a key cuts that short.
+                        self._wake.wait(max(idle - elapsed, 0.0))
+                        if self._input.is_set():
+                            remain = fastest - elapsed
+                            if remain > 0:
+                                time.sleep(remain)
+                        elif self._wake.is_set():
+                            remain = log_interval - elapsed
+                            if remain > 0:
+                                self._input.wait(remain)
+                        self._wake.clear()
+                        self._input.clear()
+                finally:
+                    self._set_mouse(False)
         except Exception as e:  # noqa: BLE001 - the server keeps running without the view
             self._stop.set()
             print(f"[console stopped: {e}]", file=sys.stderr, flush=True)
+
+    def _set_mouse(self, enable: bool) -> None:
+        """Report the wheel as SGR mouse events, or stop reporting.
+
+        Mode 1000 is button presses (a notch is one) and 1006 is the encoding that
+        does not overflow past column 223. Shift-click is left to the terminal, which
+        is how text is still selected. Writing the real stream, not ``sys.stdout``:
+        the live view has replaced that with its own proxy, which would print the
+        sequence as text.
+        """
+        code = "\x1b[?1000h\x1b[?1006h" if enable else "\x1b[?1000l\x1b[?1006l"
+        with contextlib.suppress(Exception):
+            self.console.file.write(code)
+            self.console.file.flush()
 
     # -- keys ------------------------------------------------------------------- #
     def _key_loop(self) -> None:
@@ -474,6 +688,9 @@ class ServerConsole:
         saved = termios.tcgetattr(fd)
         try:
             tty.setcbreak(fd)
+            with self._tty_lock:
+                self._tty_fd = fd
+                self._tty_saved = saved
             while not self._stop.is_set():
                 key = self._read_key(fd)
                 if key is None:
@@ -482,33 +699,61 @@ class ServerConsole:
         except Exception:  # noqa: BLE001 - losing the keys is not worth a crash
             return
         finally:
-            with contextlib.suppress(Exception):
-                termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+            self._restore_tty()
 
-    @staticmethod
-    def _read_key(fd) -> str | None:
-        """One keypress: a character, or a name like ``"pageup"`` for the arrow and
-        navigation keys, which a terminal sends as multi-character escape sequences.
+    def _restore_tty(self) -> None:
+        """Put the terminal back, from whichever thread notices the view has stopped.
 
-        ``None`` means stdin closed. A bare Escape reads as ``"escape"`` after a short
-        wait, which is the standard way to tell it from the start of a sequence."""
+        The key thread blocks in a read, so ``stop`` cannot wait for its ``finally``;
+        restoring here as well means quitting does not leave the shell without echo.
+        """
+        with self._tty_lock:
+            saved, fd = self._tty_saved, self._tty_fd
+            if saved is None or fd is None:
+                return
+            self._tty_saved = None
+        with contextlib.suppress(Exception):
+            import termios
+
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+    def _read_key(self, fd) -> str | None:
+        """One keypress: a character, or a name like ``"up"`` or ``"wheelup"``.
+
+        ``None`` means stdin closed. Bytes are read with ``os.read`` rather than
+        ``sys.stdin.read``: the text wrapper would pull a whole sequence into its own
+        buffer, ``select`` would then wait on an empty kernel buffer, and an arrow key
+        would sit for the escape timeout before being thrown away as a bare Escape.
+
+        A bare Escape reads as ``"escape"`` after a short wait, which is how it is
+        told apart from the start of a sequence.
+        """
+        import os
         import select
 
-        key = sys.stdin.read(1)
-        if not key:
-            return None
-        if key != "\x1b":
-            return key.lower()
-        sequence = ""
-        for _ in range(4):
-            if not select.select([fd], [], [], 0.05)[0]:
-                break
-            sequence += sys.stdin.read(1)
-            if sequence in _KEY_SEQUENCES:
-                return _KEY_SEQUENCES[sequence]
-        return "escape"
+        while not self._stop.is_set():
+            key, self._inbuf = _parse_input(self._inbuf)
+            if key is not None:
+                return key
+            timeout = 0.02 if self._inbuf else None
+            if not select.select([fd], [], [], timeout)[0]:
+                if self._inbuf == b"\x1b":
+                    self._inbuf = b""
+                    return "escape"
+                self._inbuf = b""
+                continue
+            try:
+                chunk = os.read(fd, 64)
+            except OSError:
+                return None
+            if not chunk:
+                return None
+            self._inbuf += chunk
+        return None
 
     def _on_key(self, key: str) -> None:
+        if key in ("escape", "mouse"):
+            return
         page = max(self._log_height - 1, 1)  # a line of overlap, so nothing is skipped
         if key == "q":
             self._stop.set()
@@ -517,6 +762,9 @@ class ServerConsole:
         elif key == "d":
             self.debug = not self.debug
             self._note(f"debug lines {'on' if self.debug else 'off'}")
+        elif key == "v" and self.on_toggle_prompt is not None:
+            self.full_prompt = bool(self.on_toggle_prompt())
+            self._note(f"prompts logged {'in full' if self.full_prompt else 'as 200-character snippets'} from now on")
         elif key == "p":
             self.paused = not self.paused
             self._note(f"log {'paused' if self.paused else 'resumed'}")
@@ -524,28 +772,49 @@ class ServerConsole:
             self._lines.clear()
             self._display.clear()
             self._dropped = 0
-            self._scroll = 0
-        elif key in ("up", "k"):
-            self._scroll += 1
-        elif key in ("down", "j"):
-            self._scroll = max(self._scroll - 1, 0)
+            with self._scroll_lock:
+                self._scroll = 0
+        elif key in ("up", "k", "wheelup"):
+            with self._scroll_lock:
+                self._scroll += 1 if key != "wheelup" else _WHEEL_LINES
+        elif key in ("down", "j", "wheeldown"):
+            step = 1 if key != "wheeldown" else _WHEEL_LINES
+            with self._scroll_lock:
+                self._scroll = max(self._scroll - step, 0)
         elif key in ("pageup", "b"):
-            self._scroll += page
+            with self._scroll_lock:
+                self._scroll += page
         elif key in ("pagedown", " "):
-            self._scroll = max(self._scroll - page, 0)
+            with self._scroll_lock:
+                self._scroll = max(self._scroll - page, 0)
         elif key in ("home", "g"):
-            self._scroll = len(self._display)  # clamped to the oldest line when it renders
+            with self._scroll_lock:
+                self._scroll = len(self._display)  # clamped to the oldest line when it renders
         elif key in ("end", "f"):  # keys are folded to lower case, so follow is 'f', not 'G'
-            self._scroll = 0
+            with self._scroll_lock:
+                self._scroll = 0
+        else:
+            return
+        self._input.set()
+        self._wake.set()
 
     def _note(self, text: str) -> None:
         added = self._append(datetime.now().strftime("%H:%M:%S.%f")[:-3], "SUCCESS", f"[console] {text}")
-        if self._scroll:
-            self._scroll += added  # as with an arriving log line, hold the window still
+        with self._scroll_lock:
+            if self._scroll:
+                self._scroll += added  # as with an arriving log line, hold the window still
 
 
 @contextlib.contextmanager
-def console(logger, stats, on_quit=None, enabled: bool = True, debug: bool = False):
+def console(
+    logger,
+    stats,
+    on_quit=None,
+    enabled: bool = True,
+    debug: bool = False,
+    on_toggle_prompt=None,
+    full_prompt: bool = True,
+):
     """Route ``logger`` into a live :class:`ServerConsole` for the duration of the block.
 
     Yields the console, or ``None`` when one cannot be drawn (no ``rich``, not a
@@ -559,7 +828,9 @@ def console(logger, stats, on_quit=None, enabled: bool = True, debug: bool = Fal
         yield None
         return
 
-    view = ServerConsole(stats, on_quit=on_quit, debug=debug)
+    view = ServerConsole(
+        stats, on_quit=on_quit, debug=debug, on_toggle_prompt=on_toggle_prompt, full_prompt=full_prompt
+    )
     logger.remove()
     # Every level reaches the sink; the ``d`` key filters DEBUG at display time, so
     # toggling it shows the lines logged while it was off.
