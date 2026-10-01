@@ -25,6 +25,8 @@ server's own code (tt-d-gen tools/launch_harness/tables.py, kv_manager/tools/kv_
   - slot 0 after turn 1 (snapshot at its acks) vs the golden, and its reused prefix [0, 2944) byte-identical at the
     end (bytecmp), its last block [2944, 3000) PCC >= 0.99 (the harness's source / destination rule)
   - the pulled-back chunk: layer-0 rows [51200, 54144) byte-identical to what the previous chunk's acks shipped
+Fail fast (run_child): the run is killed ~3 s after the producer exits non-zero, after 60 s without progress once it
+exits 0, when nothing grows for 240 s, or after 900 s (XING_CONTRACT_AFTER_PRODUCER_S / _STALL_S / _RUN_S).
 """
 
 import json
@@ -44,7 +46,12 @@ from models.demos.xing40_a4b_d_p.tests.bringup.contract import server_rules as R
 S = spec()
 pytestmark = device_timeout(S)
 NUM_USERS = 2
-CHILD_TIMEOUT_S = int(S.get("box.test_timeout_s", 3600)) - 300
+# Bounds (env overrides): a passing run takes ~200 s with its longest log silence ~100 s (compile).
+CHILD_TIMEOUT_S = min(int(S.get("box.test_timeout_s", 3600)) - 300, int(os.environ.get("XING_CONTRACT_RUN_S", "900")))
+STALL_S = float(os.environ.get("XING_CONTRACT_STALL_S", "240"))  # no growth in runner.log / producer.log
+# Once the producer is done the runner only reads the KV back (~95k record files into <out>/final in 60-90 s): no
+# progress (logs or final/) for this long then = stuck.
+AFTER_PRODUCER_S = float(os.environ.get("XING_CONTRACT_AFTER_PRODUCER_S", "60"))
 
 
 def runner_env(out: Path, golden_dir: Path) -> dict:
@@ -78,9 +85,70 @@ def runner_env(out: Path, golden_dir: Path) -> dict:
     )
     env.setdefault("OMP_NUM_THREADS", "16")
     # The runner blocks on its H2D socket between chunks (producer start-up, snapshot reads, ack waits): that wait is
-    # not a hang, so the safe runner's 5 s dispatch timeout would kill it. Above the producer's ack timeout (300 s).
-    env["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "600"
+    # not a hang, so the safe runner's 5 s dispatch timeout would kill it. Above the producer's ack timeout (120 s).
+    env["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "180"
     return env
+
+
+def run_child(out: Path, env: dict, log: Path) -> tuple[int, str]:
+    """Run runner_case in its own process group with bounded waits: stop at once when the producer exits non-zero
+    (<out>/producer.rc, written by runner_case's sh wrapper), after it exits 0 when the runner makes no progress (logs,
+    <out>/final) for AFTER_PRODUCER_S, when nothing grows for STALL_S, or after CHILD_TIMEOUT_S. Stopping kills the group (runner and producer;
+    SIGKILL, since the runner's request loop holds the GIL and never runs a SIGTERM handler). Returns (exit code,
+    reason the run was stopped or "")."""
+    import signal
+    import time
+
+    logs = (log, out / "producer.log")
+    with log.open("w") as f:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "models.demos.xing40_a4b_d_p.tests.bringup.contract.runner_case", str(out)],
+            env=env,
+            stdout=f,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        t0 = last = time.monotonic()
+        sizes, prod_done = None, None
+        why = ""
+        rc_file = out / "producer.rc"
+        while proc.poll() is None:
+            time.sleep(1.0)
+            now = time.monotonic()
+            fin = out / "final"
+            cur = tuple(p.stat().st_size if p.exists() else -1 for p in logs) + (
+                sum(1 for _ in os.scandir(fin)) if fin.is_dir() else 0,
+            )
+            if cur != sizes:
+                sizes, last = cur, now
+            if prod_done is None and rc_file.exists() and rc_file.read_text().strip():
+                prod_rc, prod_done = rc_file.read_text().strip(), now
+                if prod_rc != "0":
+                    time.sleep(3.0)  # let the runner finish if it is already on its way out
+                    if proc.poll() is not None:
+                        break
+                    why = f"producer exited {prod_rc} while the runner waits for chunks"
+            if why:
+                pass
+            elif prod_done is not None and now - max(last, prod_done) > AFTER_PRODUCER_S:
+                why = f"producer exited 0, then no runner progress (logs, final/) for {AFTER_PRODUCER_S:.0f} s"
+            elif now - t0 > CHILD_TIMEOUT_S:
+                why = f"runner timed out after {CHILD_TIMEOUT_S} s"
+            elif now - last > STALL_S:
+                why = f"no progress: runner.log and producer.log unchanged for {STALL_S:.0f} s"
+            if why:
+                for sig, wait_s in ((signal.SIGTERM, 3), (signal.SIGKILL, 30)):
+                    try:
+                        os.killpg(proc.pid, sig)
+                        proc.wait(timeout=wait_s)
+                        break
+                    except (ProcessLookupError, subprocess.TimeoutExpired):
+                        continue
+                break
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    return proc.returncode, why
 
 
 def tail(p: Path, n: int = 40) -> str:
@@ -95,24 +163,18 @@ def test_runner_contract(tmp_path):
     g = R.golden()
     out = tmp_path
     log = out / "runner.log"
-    with log.open("w") as f:
-        try:
-            proc = subprocess.run(
-                [sys.executable, "-m", "models.demos.xing40_a4b_d_p.tests.bringup.contract.runner_case", str(out)],
-                env=runner_env(out, g.dir),
-                stdout=f,
-                stderr=subprocess.STDOUT,
-                timeout=CHILD_TIMEOUT_S,
-            )
-        except subprocess.TimeoutExpired:
-            pytest.fail(f"runner timed out after {CHILD_TIMEOUT_S} s; see {log}\n{tail(log)}", pytrace=False)
+    rc, why = run_child(out, runner_env(out, g.dir), log)
+    if why:
+        pytest.fail(
+            f"{why}; see {log} and {out / 'producer.log'}\n{tail(out / 'producer.log', 20)}\n{tail(log)}", pytrace=False
+        )
     if (out / "not_built.txt").exists():
         pytest.fail(f"not built: {(out / 'not_built.txt').read_text()}", pytrace=False)
     res = json.loads((out / "result.json").read_text()) if (out / "result.json").exists() else {}
     pj = json.loads((out / "producer.json").read_text()) if (out / "producer.json").exists() else {}
-    if proc.returncode != 0 or res.get("errors") or pj.get("errors"):
+    if rc != 0 or res.get("errors") or pj.get("errors"):
         pytest.fail(
-            f"runner exit {proc.returncode}; runner errors {res.get('errors')}; producer errors {pj.get('errors')}\n"
+            f"runner exit {rc}; runner errors {res.get('errors')}; producer errors {pj.get('errors')}\n"
             f"see {log} and {out / 'producer.log'}\n{res.get('traceback', '')}\n{tail(log)}",
             pytrace=False,
         )
