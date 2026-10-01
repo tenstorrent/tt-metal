@@ -211,3 +211,20 @@ def test_env_overrides_are_validated_once_per_process():
     result = run_python("import ttnn", {"TTNN_CONFIG_OVERRIDES": '{"enable_logging": true}'})
     assert result.returncode == 0, result.stderr
     assert result.stdout.count("Logging cannot be enabled in fast runtime mode") == 1
+
+
+def test_report_path_follows_root_report_path_with_a_fixed_report_name(tmp_path):
+    """`report_path` is derived from `root_report_path` and `report_name` and cached per `report_name`. Negative
+    control: before `Config::validate` invalidated that cache, changing `root_report_path` while `report_name` stayed
+    fixed kept returning the directory computed under the OLD root (and the fixture's in-place restore of
+    `root_report_path` left that stale path behind for later tests)."""
+    with ttnn.manage_config("report_name", "config root test"):
+        before = pathlib.Path(ttnn.CONFIG.report_path)
+        with ttnn.manage_config("root_report_path", tmp_path):
+            under_new_root = pathlib.Path(ttnn.CONFIG.report_path)
+            assert under_new_root.is_relative_to(
+                tmp_path
+            ), f"report_path did not follow root_report_path: {under_new_root}"
+        after = pathlib.Path(ttnn.CONFIG.report_path)
+        assert not after.is_relative_to(tmp_path), f"report_path still under the test's root after restore: {after}"
+        assert after.parent == before.parent
