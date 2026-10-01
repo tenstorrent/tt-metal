@@ -107,10 +107,10 @@ jobs:
     container:
       # github_hosted_cpu runs on GitHub-hosted runners with no Harbor access, so it
       # needs the canonical (publicly pullable) cpu-docker-image ref instead of the
-      # Harbor-prefixed one (same reason dedicated-merge-gate uses the raw ref).
+      # Harbor-prefixed one.
       # A prebuilt image already carries the packages, and is a canonical ghcr
       # ref so it needs no Harbor prefix on any SKU.
-      image: ${{ inputs.prebuilt-image || (matrix.test-group.sku == 'github_hosted_cpu' && (inputs.cpu-docker-image || inputs.docker-image)) || (inputs.docker-image && (contains(join(matrix.test-group.runs_on, ','), 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
+      image: ${{ inputs.prebuilt-image || (matrix.test-group.sku == 'github_hosted_cpu' && (inputs.cpu-docker-image || inputs.docker-image)) || (inputs.docker-image && format('{0}{1}', inputs.harbor-prefix, inputs.docker-image)) || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
