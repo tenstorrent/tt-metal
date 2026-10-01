@@ -111,7 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape_A, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape_A, 1 /*num_tiles_per_pack*/);
-    _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_ROW>(tensor_shape_A);
+    _llk_pack_reduce_mask_config_<PoolType::MAX, ReduceDim::REDUCE_ROW>(formats.pack_dst, tensor_shape_A);
 
     // Block reduce produces a single result tile.
     _llk_pack_(0 /* start_math_dest_tile_idx */, 0 /* start_l1_tile_idx */, tensor_shape_A);

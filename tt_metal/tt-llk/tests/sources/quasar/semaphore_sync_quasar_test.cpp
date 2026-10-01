@@ -93,7 +93,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
-    _llk_pack_reduce_mask_config_<REDUCE_DIM>(ckernel::DEFAULT_TENSOR_SHAPE);
+    _llk_pack_reduce_mask_config_<POOL_TYPE, REDUCE_DIM>(formats.pack_dst, ckernel::DEFAULT_TENSOR_SHAPE);
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_packer_wait_for_math_done_();
