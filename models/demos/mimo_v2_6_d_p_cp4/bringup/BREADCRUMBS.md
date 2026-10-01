@@ -276,3 +276,23 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Results: reference PCC 0.999997 / rel 0.0024 / ratio [0.9991, 1.0010] / coef 1.0 / rel 0, which passes. Zero stub PCC 0.0, which fails. Device (default impl) PCC 0.999996 / rel 0.0029 / ratio [0.9993, 1.0016] / coef 1.0014 / experts rel 0.0114, which passes.
 - The first `FAIL pcc=0.000000` line in each run comes from the precompile collect pass, not the real pass.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_ffn_residual.py`
+
+## C.full_moe.attn_norm.test.1 (test review)
+- Replaced the rendered one-liner with the frozen cp4 `test_c_sliding_moe_attn_norm.py` checks, set to layer 5. The step is the same RMSNorm (plain `w`, eps 1e-6), and the golden is the prior's: in [2048, 4096] -> attn_norm.
+- Limits are unchanged from the sibling test:
+  - PCC >= 0.99 (gated), plus finite output.
+  - rel L2 <= 0.03.
+  - Per-token norm ratio in [0.97, 1.03].
+  - Worst row rel L2 <= 0.015.
+  - rel L2 per CP slice <= 0.01.
+  - eps check: the module on input x0.1 vs the CPU step, rel <= 0.02 and worst row <= 0.04.
+- CPU measurements (script /tmp/cp4fan/m.py, not kept; numbers are in the test docstring):
+  - The smallest row mean square is 7.5e-4 (750x eps), so a wrong eps passes on the golden itself.
+  - On the x0.1 input, eps 0 / 1e-7 / 2e-6 score rel 0.031 / 0.028 / 0.028 and fail. bf16 math scores rel 0.0023.
+  - Sum instead of mean: rel 0.98. `1 + w`: PCC 0.41. Last 32 rows zeroed: worst row 1.0. CP slices 1/2 swapped: PCC 0.65.
+- Results:
+  - Reference: PASS (pcc 0.999997, rel 0.0024, worst row 0.0045).
+  - Stub: FAIL (pcc 0).
+  - Device gate (the existing TtRMSNorm registration): PASS. pcc 0.999996, rel 0.0028, ratio [0.9969, 1.0027], worst row 0.0050, slices 0.0028-0.0029, x0.1 rel 0.0023 / worst row 0.0038.
+- The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_attn_norm.py`
