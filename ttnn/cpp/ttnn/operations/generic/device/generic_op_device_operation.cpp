@@ -249,10 +249,6 @@ size_t hash_dataflow_buffer(const m2::DataflowBufferSpec& dfb) {
         dfb.data_format_metadata,
         dfb.tile_format_metadata,
         dfb.advanced_options.allow_instance_multi_binding);
-    ttsl::hash::hash_combine(hash, dfb.unpack_face_geometry_metadata.has_value());
-    if (dfb.unpack_face_geometry_metadata.has_value()) {
-        ttsl::hash::hash_combine(hash, *dfb.unpack_face_geometry_metadata);
-    }
     ttsl::hash::hash_combine(hash, dfb.borrowed_from.has_value());
     if (dfb.borrowed_from.has_value()) {
         ttsl::hash::hash_combine(hash, **dfb.borrowed_from);
