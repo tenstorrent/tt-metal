@@ -5,7 +5,7 @@
 // Included by RV32 kernels, so <stdint.h> and constexpr only.
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 
 // For kMaxHosts: the credit array, not the selector, is the tighter bound on host count.
 #include "hostdevcommon/uva_layout.h"
