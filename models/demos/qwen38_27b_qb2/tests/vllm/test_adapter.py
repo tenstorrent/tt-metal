@@ -59,13 +59,18 @@ class FakeGenerator:
         self.events.append("sampling")
         self.sampling = kwargs
 
+    def reset_batch_sampling_seeds(self, seed):
+        self.events.append("seeds")
+        self.sampling_seed = list(seed)
+
     def remap_recurrent_slots(self, remap):
         self.events.append("remap")
         self.remap = list(remap)
 
     def decode_forward(self, **kwargs):
         self.calls.append(kwargs)
-        self._refresh_table(kwargs["page_table"])
+        if kwargs["reload_page_table"]:
+            self._refresh_table(kwargs["page_table"])
         if kwargs["tokens"] is not None:
             self._copy(kwargs["tokens"], self.tokens, "token_refreshes")
         if kwargs["start_pos"] is not None:
@@ -83,9 +88,12 @@ class AdapterHostTests(unittest.TestCase):
         self.adapter = Qwen38ForCausalLM(self.gen, 2, 128)
         self.adapter.cache = self.gen.cache
         self.params = SimpleNamespace(temperature=[0.0, 0.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[3, 5])
-        # Enter steady decode without constructing hardware or staging host inputs.
-        self.adapter._decode_bound = True
-        self.adapter._sampling(self.params)
+        self.adapter._sampling(
+            self.params,
+            reload_sampling_params=True,
+            reset_sampling_state=True,
+            output_positions=[0, 0],
+        )
         self.gen.events.clear()
         self.table = torch.tensor([[4, 7, 0, 0], [11, 13, 17, 0]], dtype=torch.int32)
         self.gen._refresh_table(self.table)
@@ -99,8 +107,11 @@ class AdapterHostTests(unittest.TestCase):
             page_table=self.table,
             kv_cache=self.gen.cache,
             sampling_params=self.params,
-            reset_batch=False,
             read_from_device=False,
+            reload_inputs=False,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         args.update(kwargs)
         return self.adapter.decode_forward(**args)
@@ -111,7 +122,7 @@ class AdapterHostTests(unittest.TestCase):
         token_before, position_before = self.gen.tokens.clone(), self.gen.positions.clone()
         device_table = self.gen.page_table
 
-        self.assertIs(self.decode(page_table=grown), self.gen.output)
+        self.assertIs(self.decode(page_table=grown, reload_page_table=True), self.gen.output)
 
         self.assertIs(self.gen.page_table, device_table)
         self.assertTrue(torch.equal(self.gen.page_table, grown))
@@ -123,16 +134,20 @@ class AdapterHostTests(unittest.TestCase):
         self.assertEqual(self.gen.counters, {"page_table_refreshes": 1})
         self.assertEqual(self.gen.events, ["page_table_refreshes", "decode"])
 
-    def test_value_identical_tables_do_not_refresh_each_decode(self):
-        for _ in range(3):
-            self.decode(page_table=self.table.clone())
+    def test_page_table_reload_follows_the_explicit_command(self):
+        self.decode(page_table=self.table.clone())
         self.assertEqual(self.gen.counters, {})
-        self.assertEqual(self.gen.events, ["decode"] * 3)
+        self.decode(page_table=self.table.clone(), reload_page_table=True)
+        self.assertEqual(self.gen.counters, {"page_table_refreshes": 1})
+        self.assertEqual(self.gen.events, ["decode", "page_table_refreshes", "decode"])
 
     def test_narrow_table_is_padded_without_false_growth(self):
         self.gen._refresh_table(torch.tensor([[4, 7, 0, 0], [11, 13, 0, 0]], dtype=torch.int32))
         self.gen.counters.clear()
-        self.decode(page_table=torch.tensor([[4, 7], [11, 13]], dtype=torch.int32))
+        self.decode(
+            page_table=torch.tensor([[4, 7], [11, 13]], dtype=torch.int32),
+            reload_page_table=True,
+        )
         self.assertEqual(self.gen.counters, {})
         self.assertEqual(tuple(self.gen.calls[-1]["page_table"].shape), (2, 4))
 
@@ -141,32 +156,53 @@ class AdapterHostTests(unittest.TestCase):
         self.decode(page_table=incoming)
         incoming[0, 2] = 29
         self.assertEqual(self.gen.page_host[0, 2].item(), 0)
-        self.decode(page_table=incoming)
+        self.decode(page_table=incoming, reload_page_table=True)
         self.assertEqual(self.gen.page_host[0, 2].item(), 29)
         self.assertEqual(self.gen.counters, {"page_table_refreshes": 1})
 
-    def test_first_decode_binds_authoritative_inputs_even_without_reset_flag(self):
-        self.adapter._decode_bound = False
+    def test_first_decode_does_not_infer_an_input_reload(self):
         self.decode()
-        self.assertTrue(torch.equal(self.gen.tokens, torch.tensor([[601], [602]], dtype=torch.int32)))
-        self.assertTrue(torch.equal(self.gen.positions, torch.tensor([63, 95], dtype=torch.int32)))
-        self.assertEqual(self.gen.calls[-1]["active_slots"], [0, 1])
-        self.assertEqual(self.gen.counters, {"token_refreshes": 1, "position_refreshes": 1})
-        self.assertTrue(self.adapter._decode_bound)
+        self.assertTrue(torch.equal(self.gen.tokens, torch.tensor([[701], [702]], dtype=torch.int32)))
+        self.assertTrue(torch.equal(self.gen.positions, torch.tensor([64, 96], dtype=torch.int32)))
+        self.assertIsNone(self.gen.calls[-1]["active_slots"])
+        self.assertEqual(self.gen.counters, {})
 
     def test_real_reset_reloads_host_inputs_and_recomputes_active_slots(self):
         fresh_tokens = torch.tensor([[801], [0]], dtype=torch.int32)
         fresh_positions = torch.tensor([65, -1], dtype=torch.int32)
-        self.decode(reset_batch=True, tokens=fresh_tokens, start_pos=fresh_positions)
+        self.decode(
+            reload_inputs=True,
+            reload_sampling_params=True,
+            reset_sampling_state=True,
+            tokens=fresh_tokens,
+            start_pos=fresh_positions,
+        )
         self.assertTrue(torch.equal(self.gen.tokens, fresh_tokens))
         self.assertTrue(torch.equal(self.gen.positions, fresh_positions))
         self.assertEqual(self.gen.calls[-1]["active_slots"], [0])
-        self.assertEqual(self.gen.counters, {"token_refreshes": 1, "position_refreshes": 1})
-        self.assertEqual(self.gen.events, ["sampling", "token_refreshes", "position_refreshes", "decode"])
+        self.assertEqual(
+            self.gen.counters,
+            {"page_table_refreshes": 1, "token_refreshes": 1, "position_refreshes": 1},
+        )
+        self.assertEqual(
+            self.gen.events,
+            ["sampling", "page_table_refreshes", "token_refreshes", "position_refreshes", "decode"],
+        )
+
+    def test_sampling_state_reset_does_not_reload_sampling_parameters(self):
+        self.decode(
+            reload_inputs=True,
+            reload_sampling_params=False,
+            reset_sampling_state=True,
+        )
+        self.assertEqual(
+            self.gen.events,
+            ["seeds", "page_table_refreshes", "token_refreshes", "position_refreshes", "decode"],
+        )
 
     def test_wrong_cache_is_rejected_before_remap_or_sampling(self):
         with self.assertRaisesRegex(ValueError, "exact vLLM allocated cache"):
-            self.decode(kv_cache=SimpleNamespace(**vars(self.gen.cache)), reset_batch=True, slot_remap=[1, 0])
+            self.decode(kv_cache=SimpleNamespace(**vars(self.gen.cache)), reload_inputs=True, slot_remap=[1, 0])
         self.assertEqual(self.gen.events, [])
         self.assertEqual(self.gen.calls, [])
 
@@ -174,7 +210,7 @@ class AdapterHostTests(unittest.TestCase):
         bound_cache = self.adapter.cache
         self.gen.cache = SimpleNamespace(**vars(bound_cache))
         with self.assertRaisesRegex(ValueError, "exact vLLM allocated cache"):
-            self.decode(kv_cache=bound_cache, reset_batch=True, slot_remap=[1, 0])
+            self.decode(kv_cache=bound_cache, reload_inputs=True, slot_remap=[1, 0])
         self.assertEqual(self.gen.events, [])
 
     def test_slot_remap_precedes_reset_inputs_and_decode(self):
@@ -183,7 +219,9 @@ class AdapterHostTests(unittest.TestCase):
         new_positions = torch.tensor([97, 65], dtype=torch.int32)
         self.decode(
             slot_remap=[1, 0],
-            reset_batch=True,
+            reload_inputs=True,
+            reload_sampling_params=True,
+            reset_sampling_state=True,
             tokens=new_tokens,
             start_pos=new_positions,
             page_table=remapped_table,
@@ -201,9 +239,14 @@ class AdapterHostTests(unittest.TestCase):
         grown = self.table.clone()
         grown[0, 2] = self.gen.cache.num_pages
         with self.assertRaisesRegex(ValueError, "outside the bound physical cache"):
-            self.decode(page_table=grown)
+            self.decode(page_table=grown, reload_page_table=True)
         self.assertEqual(self.gen.counters, {})
         self.assertNotIn("decode", self.gen.events)
+
+    def test_legacy_reset_batch_is_rejected(self):
+        with self.assertRaisesRegex(TypeError, "explicit reload commands"):
+            self.decode(reset_batch=True)
+        self.assertEqual(self.gen.calls, [])
 
     def test_raw_device_tokens_read_one_replica_before_host_conversion(self):
         raw_device, host = object(), object()

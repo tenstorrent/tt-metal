@@ -29,6 +29,7 @@ class Qwen38ForCausalLM:
         "max_device_top_k": 32,
         "supports_device_penalties": False,
     }
+    decode_input_update_contract = 1
 
     @classmethod
     def initialize_vllm_model(
@@ -55,8 +56,6 @@ class Qwen38ForCausalLM:
         self.host_compatibility = os.environ.get("QWEN_VLLM_HOST_COMPATIBILITY") in ("1", "all")
         self.cache = None
         self._sampling_key = None
-        self._decode_bound = False
-        self._last_device_sampling = None
         self.prefill_startup_warmup = os.getenv("QWEN_PREFILL_STARTUP_WARMUP", "0") == "1"
 
     # vLLM inspects this protocol before selecting the TT loader. Execution is
@@ -154,8 +153,17 @@ class Qwen38ForCausalLM:
         target[rows, : source.shape[1]] = source
         return target
 
-    def _sampling(self, params, *, reset=False, output_positions=None):
+    def _sampling(
+        self,
+        params,
+        *,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        output_positions=None,
+    ):
         if params is None:
+            if reload_sampling_params or reset_sampling_state:
+                raise ValueError("Sampling update commands require device sampling")
             if not self.host_compatibility:
                 raise ValueError("Host sampling requires explicit QWEN_VLLM_HOST_COMPATIBILITY=1")
             return False
@@ -166,20 +174,23 @@ class Qwen38ForCausalLM:
         ts = [1.0 if t == 0 else float(t) for t in temps]
         seeds = [int(s) if s is not None else None for s in params.seed]
         key = (tuple(ks), tuple(ps), tuple(ts), tuple(seeds))
-        if reset or key != self._sampling_key:
-            bound_seeds = None
-            if reset or self._sampling_key is None:
-                positions = [0] * n if output_positions is None else list(output_positions)
-                if len(positions) != n or any(p < 0 or p > self._MAX_CONTEXT for p in positions):
-                    raise ValueError("Sampling positions must match rows and lie inside the supported context")
-                bound_seeds = [
-                    (s % self._SEED_MODULUS if s is not None else secrets.randbelow(self._SEED_MODULUS)) + int(p)
-                    for s, p in zip(seeds, positions)
-                ] + [1] * (32 - n)
-            elif key[3] != self._sampling_key[3]:
-                raise ValueError("Changing request seeds requires an authoritative batch reset")
+        if not reload_sampling_params and key != self._sampling_key:
+            raise ValueError("Changed sampling parameters require reload_sampling_params=True")
+        bound_seeds = None
+        if reset_sampling_state:
+            positions = [0] * n if output_positions is None else list(output_positions)
+            if len(positions) != n or any(p < 0 or p > self._MAX_CONTEXT for p in positions):
+                raise ValueError("Sampling positions must match rows and lie inside the supported context")
+            bound_seeds = [
+                (s % self._SEED_MODULUS if s is not None else secrets.randbelow(self._SEED_MODULUS)) + int(p)
+                for s, p in zip(seeds, positions)
+            ] + [1] * (32 - n)
+        if reload_sampling_params:
+            if not reset_sampling_state and (self._sampling_key is None or key[3] != self._sampling_key[3]):
+                raise ValueError("Changing request seeds requires reset_sampling_state=True")
             # A parameter-only update can arrive with lagging async host positions.
-            # Preserve advancing device seeds; only a real reset reanchors them.
+            # Preserve advancing device seeds; only an explicit state reset
+            # reanchors them.
             self.generator.set_batch_sampling_params(
                 top_k=ks + [1] * (32 - n),
                 top_p=ps + [0.0] * (32 - n),
@@ -187,6 +198,8 @@ class Qwen38ForCausalLM:
                 seed=bound_seeds,
             )
             self._sampling_key = key
+        elif reset_sampling_state:
+            self.generator.reset_batch_sampling_seeds(bound_seeds)
         return True
 
     def prefill_forward(
@@ -208,7 +221,12 @@ class Qwen38ForCausalLM:
         fresh = [slot for slot, start in zip(slots, starts) if start == 0]
         if fresh:
             self.generator.reset_recurrent_slots(fresh)
-        device_sampling = self._sampling(sampling_params, reset=True, output_positions=ends)
+        device_sampling = self._sampling(
+            sampling_params,
+            reload_sampling_params=sampling_params is not None,
+            reset_sampling_state=sampling_params is not None,
+            output_positions=ends,
+        )
         if device_sampling:
             tokens_out = self.generator.serving_prefill_tokens(
                 tokens,
@@ -233,7 +251,6 @@ class Qwen38ForCausalLM:
                     )
                 )
             result = torch.cat([self.generator._host_logits(x).reshape(1, 1, -1) for x in outputs], dim=0)
-        self._decode_bound = False
         # HF declares M-RoPE; text-only positions have zero spatial offset.
         return result, torch.zeros(len(ends), dtype=torch.int64)
 
@@ -246,38 +263,45 @@ class Qwen38ForCausalLM:
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
-        reset_batch=True,
         slot_remap=None,
+        *,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
         **kwargs,
     ):
+        if "reset_batch" in kwargs:
+            raise TypeError("decode_input_update_contract=1 requires explicit reload commands")
+        if reload_inputs and reload_page_table:
+            raise ValueError("reload_page_table must be false when reload_inputs is true")
+        if reset_sampling_state and not reload_inputs:
+            raise ValueError("Resetting sampling state requires current tokens and positions")
         self._cache(kv_cache)
         if slot_remap is not None:
             self.generator.remap_recurrent_slots(slot_remap)
-        refresh = (
-            reset_batch
-            or not self._decode_bound
-            or (sampling_params is not None and self._last_device_sampling is False)
-        )
-        positions = torch.as_tensor(start_pos).reshape(-1)
+        positions = torch.as_tensor(start_pos).reshape(-1) if reload_inputs else None
         device_sampling = self._sampling(
-            sampling_params, reset=refresh, output_positions=(positions + 1).tolist() if refresh else None
+            sampling_params,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+            output_positions=(positions + 1).tolist() if reset_sampling_state else None,
         )
-        active = (positions >= 0).nonzero().reshape(-1).tolist() if refresh else None
-        # Page growth is independent of reset_batch. The generator compares tables
-        # and copies only changes, preserving pending device tokens and positions.
-        table = self._table(page_table)
+        if not device_sampling and not reload_inputs:
+            raise ValueError("Host sampling requires authoritative token and position inputs")
+        active = (positions >= 0).nonzero().reshape(-1).tolist() if reload_inputs else None
+        table = self._table(page_table) if reload_inputs or reload_page_table else None
         result = self.generator.decode_forward(
-            tokens=tokens if refresh or not device_sampling else None,
-            start_pos=positions if refresh or not device_sampling else None,
+            tokens=tokens if reload_inputs else None,
+            start_pos=positions if reload_inputs else None,
             page_table=table,
             kv_cache=kv_cache,
             enable_trace=enable_trace,
             read_from_device=False,
             active_slots=active,
             host_sampling=not device_sampling,
+            reload_page_table=reload_inputs or reload_page_table,
         )
-        self._decode_bound = True
-        self._last_device_sampling = device_sampling
         if not device_sampling:
             return result.reshape(self.batch_size, 1, -1)
         if read_from_device:
@@ -346,7 +370,6 @@ class Qwen38ForCausalLM:
             self.generator._release_traces()
             self.generator.reset()
             self.generator._refresh_table(original_table)
-            self._decode_bound = False
         self._prefill_startup_warmed = True
         logger.info(
             "Qwen3.8 prefill startup warmup: {}",

@@ -488,7 +488,6 @@ class ServingPrefillAdapterTests(unittest.TestCase):
             _cache=check,
             _table=lambda table, slots: self.table,
             _sampling=sample,
-            _decode_bound=True,
             read_decode_output=lambda output: output,
             process_decode_output_host=lambda output, **kwargs: output,
         )
@@ -510,7 +509,14 @@ class ServingPrefillAdapterTests(unittest.TestCase):
         tokens, deltas = self.request()
         self.assertEqual([event[0] for event in self.events], ["cache", "reset", "params", "serving"])
         self.assertEqual(self.events[1][1], [3])
-        self.assertEqual(self.events[2][1], {"reset": True, "output_positions": [3, 35]})
+        self.assertEqual(
+            self.events[2][1],
+            {
+                "reload_sampling_params": True,
+                "reset_sampling_state": True,
+                "output_positions": [3, 35],
+            },
+        )
         self.assertTrue(torch.equal(self.events[3][1], torch.arange(80).reshape(2, 40)))
         kwargs = self.events[3][2]
         self.assertEqual(kwargs["prompt_lens"], [3, 35])
@@ -521,7 +527,6 @@ class ServingPrefillAdapterTests(unittest.TestCase):
         self.assertEqual(tokens.tolist(), [[0], [1]])
         self.assertEqual(deltas.tolist(), [0, 0])
         self.assertEqual(deltas.dtype, torch.int64)
-        self.assertFalse(self.adapter._decode_bound)
 
     def test_host_branch_keeps_public_slicing_and_skips_token_helper(self):
         self.device_sampling = False
@@ -532,7 +537,6 @@ class ServingPrefillAdapterTests(unittest.TestCase):
         self.assertEqual(tuple(logits.shape), (2, 1, 5))
         self.assertEqual(logits[:, 0, 0].tolist(), [2, 74])
         self.assertEqual(deltas.tolist(), [0, 0])
-        self.assertFalse(self.adapter._decode_bound)
 
 
 if __name__ == "__main__":

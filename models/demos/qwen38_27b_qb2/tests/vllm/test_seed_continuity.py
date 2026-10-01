@@ -16,6 +16,7 @@ from models.demos.qwen38_27b_qb2.tt.generator_vllm import Qwen38ForCausalLM as A
 
 class FakeGenerator:
     set_batch_sampling_params = Qwen38Generator.set_batch_sampling_params
+    reset_batch_sampling_seeds = Qwen38Generator.reset_batch_sampling_seeds
 
     def __init__(self):
         self.cache = object()
@@ -75,7 +76,13 @@ class SamplingModeTests(unittest.TestCase):
             self.assertTrue(adapter.host_compatibility)
             for decode in (False, True):
                 self.assertFalse(Adapter.supports_device_sampling(None, is_decode=decode))
-            self.assertFalse(adapter._sampling(None))
+            self.assertFalse(
+                adapter._sampling(
+                    None,
+                    reload_sampling_params=False,
+                    reset_sampling_state=False,
+                )
+            )
 
     def test_native_and_fallback_modes_keep_supported_requests_on_device(self):
         policy = SimpleNamespace(
@@ -110,16 +117,30 @@ class SeedContinuityTests(unittest.TestCase):
         adapter.process_decode_output_host = lambda output, **kwargs: output
         return adapter
 
-    def decode(self, adapter, *, positions=(4, 8), reset=False, sampling=None, remap=None, host=False):
+    def decode(
+        self,
+        adapter,
+        *,
+        positions=(4, 8),
+        reset=False,
+        reload_params=False,
+        sampling=None,
+        remap=None,
+        host=False,
+    ):
+        reset = bool(reset or (not host and adapter._sampling_key is None))
         adapter.decode_forward(
             tokens=torch.tensor([[3], [7]]),
             start_pos=torch.tensor(positions),
             page_table=torch.zeros(2, 4, dtype=torch.int32),
             kv_cache=adapter.cache,
             sampling_params=None if host else sampling or params(),
-            reset_batch=reset,
             slot_remap=remap,
             read_from_device=False,
+            reload_inputs=reset or host,
+            reload_page_table=False,
+            reload_sampling_params=reset or reload_params,
+            reset_sampling_state=reset,
         )
         return adapter.generator.draws[-1] if adapter.generator.draws else None
 
@@ -158,7 +179,7 @@ class SeedContinuityTests(unittest.TestCase):
                 self.decode(adapter)
         before = changed.generator.counters["seed_refreshes"]
         expected = self.decode(control)
-        actual = self.decode(changed, sampling=params(top_k=(5, 2)))
+        actual = self.decode(changed, sampling=params(top_k=(5, 2)), reload_params=True)
         self.assertTrue(torch.equal(actual, expected))
         self.assertEqual(changed.generator.counters["seed_refreshes"], before)
         self.assertEqual(changed.generator.parameter_updates[-1][0][:2], [5, 2])
@@ -183,8 +204,8 @@ class SeedContinuityTests(unittest.TestCase):
         self.decode(adapter)
         before = adapter.generator.sampler.seeds_tt_tensor.clone()
         updates = len(adapter.generator.parameter_updates)
-        with self.assertRaisesRegex(ValueError, "authoritative batch reset"):
-            self.decode(adapter, sampling=params((123, 99)))
+        with self.assertRaisesRegex(ValueError, "reset_sampling_state=True"):
+            self.decode(adapter, sampling=params((123, 99)), reload_params=True)
         self.assertTrue(torch.equal(adapter.generator.sampler.seeds_tt_tensor, before))
         self.assertEqual(len(adapter.generator.parameter_updates), updates)
         actual = self.decode(adapter, sampling=params((123, 99)), positions=(5, 9), reset=True)
@@ -207,7 +228,7 @@ class SeedContinuityTests(unittest.TestCase):
         self.decode(changed, positions=(5, 9), host=True)
         self.decode(control)
         expected = self.decode(control)
-        actual = self.decode(changed, positions=(6, 10))
+        actual = self.decode(changed, positions=(6, 10), reset=True)
         self.assertTrue(torch.equal(actual[:2], expected[:2]))
 
     def test_large_seeds_do_not_wrap_across_authoritative_refresh(self):

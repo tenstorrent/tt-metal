@@ -22,7 +22,6 @@ class StartupWarmupTests(unittest.TestCase):
         adapter.generator.cache = adapter.cache
         adapter.generator.batched_prefill = True
         adapter.generator.page_host = torch.zeros(batch, 4, dtype=torch.int32)
-        adapter._decode_bound = True
         return adapter
 
     def test_default_off_and_b1_do_not_change_state(self):
@@ -44,7 +43,6 @@ class StartupWarmupTests(unittest.TestCase):
             self.assertIs(call.kwargs["kv_cache"], adapter.cache)
         adapter.generator.reset.assert_called_once()
         self.assertTrue(torch.equal(adapter.generator._refresh_table.call_args.args[0], table))
-        self.assertFalse(adapter._decode_bound)
         self.assertTrue(adapter._prefill_startup_warmed)
         adapter.warmup_model_prefill(kv_cache=adapter.cache)
         self.assertEqual(adapter.generator.prefill_forward.call_count, 4)

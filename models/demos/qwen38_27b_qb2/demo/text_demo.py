@@ -92,7 +92,13 @@ try:
         ttnn.ReadDeviceProfiler(mesh)
         gen._reset_history()
         tracy.signpost("PERF_TOKEN_OUT")
-        gen.decode_forward(page_table=gen.page_table, kv_cache=gen.cache, read_from_device=False, record_history=True)
+        gen.decode_forward(
+            page_table=gen.page_table,
+            kv_cache=gen.cache,
+            read_from_device=False,
+            record_history=True,
+            reload_page_table=False,
+        )
         ttnn.synchronize_device(mesh)
         tracy.signpost("PERF_TOKEN_OUT_END")
         ttnn.ReadDeviceProfiler(mesh)

@@ -335,8 +335,6 @@ class Qwen38Generator:
         table = torch.as_tensor(table, dtype=torch.int32)
         if (table < 0).any() or (table >= self.cache.num_pages).any():
             raise ValueError("Page IDs lie outside the bound physical cache")
-        if self.page_host is not None and torch.equal(table, self.page_host):
-            return
         if tuple(table.shape) != tuple(self.page_table.shape):
             raise ValueError("Page-table geometry changes require a new cache binding")
         self._copy(table, self.page_table, "page_table_refreshes")
@@ -578,7 +576,13 @@ class Qwen38Generator:
             raise ValueError("Device sampling requires k1..32 and positive temperature")
         self.sampler.reset_params(top_k, top_p, [1.0 / t for t in temperature])
         if seed is not None:
-            self._copy(torch.tensor(seed, dtype=torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+            self.reset_batch_sampling_seeds(seed)
+
+    def reset_batch_sampling_seeds(self, seed):
+        """Reset only mutable RNG state, without uploading sampling parameters."""
+        if len(seed) != 32:
+            raise ValueError("Sampling seeds must cover all 32 physical rows")
+        self._copy(torch.tensor(seed, dtype=torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
 
     def _capture(self, *, record_history=False):
         """Warm both graphs before capture; restore only mutable request state."""
@@ -680,6 +684,7 @@ class Qwen38Generator:
         record_history=False,
         host_sampling=None,
         active_slots=None,
+        reload_page_table: bool,
         **kwargs,
     ):
         if kv_cache is not self.cache:
@@ -722,7 +727,8 @@ class Qwen38Generator:
                 )
         if not enable_trace:
             raise ValueError("Optimized decode requires tracing")
-        self._refresh_table(page_table)
+        if reload_page_table:
+            self._refresh_table(page_table)
         if tokens is not None:
             supplied = torch.as_tensor(tokens).reshape(-1)
             if (
@@ -918,6 +924,7 @@ class Qwen38Generator:
                 host_sampling=compat,
                 read_from_device=not deferred,
                 record_history=deferred,
+                reload_page_table=False,
             )
             if deferred:
                 continue

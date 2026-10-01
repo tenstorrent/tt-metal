@@ -241,6 +241,16 @@ class LlamaGenerator:
         self.sampler._force_argmax_sampling = force_argmax
         self.sampling_mode = "argmax" if force_argmax else "split"
 
+    def reset_sampling_seed(self, seed):
+        """Reset only mutable RNG state, without uploading sampling parameters."""
+        values = torch.as_tensor(seed, dtype=torch.int64).flatten()
+        if values.numel() == 1:
+            values = values.repeat(32)
+        if values.numel() not in (self.max_batch_size, 32):
+            raise ValueError("Sampling seeds must be scalar or per fixed slot")
+        values = torch.nn.functional.pad(values, (0, 32 - values.numel()), value=values[0].item())
+        self._copy(values.to(torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+
     def _model_step(self, cache, execution_batch=None):
         batch = self.decode_execution_batch if execution_batch is None else execution_batch
         positions, rotary, table = self.decode_family_states[batch]
@@ -696,14 +706,16 @@ class LlamaGenerator:
         page_table,
         kv_cache,
         sample_on_device=True,
-        reset_batch=True,
-        reload_page_table=False,
+        reload_inputs: bool,
+        reload_page_table: bool,
         read_from_device=True,
         **kwargs,
     ):
         # Resident decode owns tokens and positions. Page growth updates only
         # the mapping, preserving device feedback from queued decode steps.
-        if reset_batch or not sample_on_device:
+        if not sample_on_device and not reload_inputs:
+            raise ValueError("Host sampling requires authoritative token and position inputs")
+        if reload_inputs:
             self.refresh_decode_inputs(tokens, start_pos, page_table=page_table)
         elif reload_page_table:
             self.refresh_page_table(page_table)

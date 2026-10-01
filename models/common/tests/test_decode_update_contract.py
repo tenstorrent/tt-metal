@@ -479,6 +479,12 @@ def test_migrated_vllm_adapters_advertise_decode_update_contract_v1():
         Path("models/demos/blackhole/paddleocr_vl/tt/generator_vllm.py"): {
             "PaddleOCRVLForConditionalGeneration",
         },
+        Path("models/demos/llama31_8b_qb2/tt/generator_vllm.py"): {
+            "LlamaForCausalLM",
+        },
+        Path("models/demos/qwen38_27b_qb2/tt/generator_vllm.py"): {
+            "Qwen38ForCausalLM",
+        },
         Path("models/experimental/ops/quasar/qwen3_vl/tt/generator_vllm.py"): {
             "Qwen3VLForConditionalGeneration",
         },
@@ -503,6 +509,73 @@ def test_migrated_vllm_adapters_advertise_decode_update_contract_v1():
             )
             assert marker is not None, (source_path, class_name)
             assert isinstance(marker.value, ast.Constant) and marker.value.value == 1, (source_path, class_name)
+
+
+def test_diffusion_gemma_explicitly_remains_on_the_block_session_contract():
+    source_path = Path("models/experimental/diffusion_gemma/tt/generator_vllm.py")
+    source_text = source_path.read_text()
+    tree = ast.parse(source_text)
+    adapter = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "DiffusionGemmaForCausalLM"
+    )
+    assignments = {
+        target.id: node.value
+        for node in adapter.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+
+    marker = assignments["decode_input_update_contract"]
+    assert isinstance(marker, ast.Constant) and marker.value == 0
+    capabilities = assignments["model_capabilities"]
+    assert isinstance(capabilities, ast.Dict)
+    values = {
+        key.value: value.value
+        for key, value in zip(capabilities.keys, capabilities.values)
+        if isinstance(key, ast.Constant) and isinstance(value, ast.Constant)
+    }
+    assert values["supports_async_decode"] is False
+    assert values["output_tokens_per_step"] == 256
+
+
+def test_custom_qb2_adapters_require_every_decode_update_command():
+    adapters = {
+        Path("models/demos/llama31_8b_qb2/tt/generator_vllm.py"): "LlamaForCausalLM",
+        Path("models/demos/qwen38_27b_qb2/tt/generator_vllm.py"): "Qwen38ForCausalLM",
+    }
+    required = {
+        "reload_inputs",
+        "reload_page_table",
+        "reload_sampling_params",
+        "reset_sampling_state",
+    }
+
+    for source_path, class_name in adapters.items():
+        tree = ast.parse(source_path.read_text())
+        adapter = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
+        decode = next(
+            node for node in adapter.body if isinstance(node, ast.FunctionDef) and node.name == "decode_forward"
+        )
+        defaults = {arg.arg: default for arg, default in zip(decode.args.kwonlyargs, decode.args.kw_defaults)}
+        assert required <= defaults.keys(), source_path
+        assert all(defaults[name] is None for name in required), source_path
+
+
+def test_exaone_hybrid_page_table_reload_uses_the_explicit_commands():
+    source_path = Path("models/tt_transformers/tt/generator_vllm.py")
+    source_text = source_path.read_text()
+    tree = ast.parse(source_text)
+    adapter = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Exaone4_5_ForConditionalGeneration"
+    )
+    decode = next(node for node in adapter.body if isinstance(node, ast.FunctionDef) and node.name == "decode_forward")
+    decode_source = ast.get_source_segment(source_text, decode)
+
+    assert decode_source is not None
+    assert "self._reload_per_layer_page_tables(kwargs)" in decode_source
 
 
 def test_migrated_qwen_vl_adapters_route_slot_remap_to_rope_and_sampling_state():
