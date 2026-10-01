@@ -69,7 +69,8 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     if (args.logical_w > 0) {
         // The kernels treat a row's sticks as W columns, which holds only for a fused 2D pad on [H, W].
         TT_FATAL(
-            args.pad_dim2.has_value() && args.dim == input_rank - 3 && args.pad_dim2.value() == input_rank - 2,
+            args.pad_dim2.has_value() && args.dim >= 1 && args.dim == input_rank - 3 &&
+                args.pad_dim2.value() == input_rank - 2,
             "logical_w needs a fused 2D pad on dims [{}, {}], got dim={} pad_dim2={}",
             input_rank - 3,
             input_rank - 2,

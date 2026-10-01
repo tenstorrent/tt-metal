@@ -554,6 +554,7 @@ def test_ltx_conv3d_fold_w_mask(mesh_device, device_params, monkeypatch, in_c, o
         assert tt_model.fold_w_mask == (fold == "1")
         tt_model.load_torch_state_dict(torch_model.state_dict())
         tt_out = tt_model(x_tt, causal=False, logical_h=H, logical_w=W)
+        assert bool(tt_model._w_mask_cache) == (fold == "0")  # the mask multiply ran only without the fold
         out = ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, :H, :W, :out_c]
         outs[fold] = out.permute(0, 4, 1, 2, 3)
 

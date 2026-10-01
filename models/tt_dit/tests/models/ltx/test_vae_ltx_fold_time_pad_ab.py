@@ -113,6 +113,10 @@ def test_vae_ltx_fold_time_pad_ab(mesh_device, device_params):
 
     lat = _latent()
     out = dec(lat, output_type="yuv")  # warmup: kernel compile + program cache
+    # A conv that ran the W mask multiply has a cached mask; one that folded it into neighbor_pad does not.
+    n_mul = sum(1 for m in walk(dec) if getattr(m, "_w_mask_cache", None))
+    print(f"AB arm={arm} convs_with_w_mask_mul={n_mul}")
+    assert (n_mul == 0) == (wmask == "1")
     times = []
     for _ in range(TIMED_DECODES):
         ttnn.synchronize_device(mesh_device)
