@@ -706,8 +706,11 @@ inline void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
     cb_push_back(o, Ct);
 }
 
-// CB map for prep_chunk — one field per CB the body touches. dl/mask are the prep kernel's
-// aliases (cb_dl = the vnew slot, cb_mask = the u slot); the map carries the resolved ids.
+// CB map for prep_chunk — one field per CB the body touches. dl/mask/kdec are the prep kernel's
+// aliases (cb_dl = the vnew slot, cb_mask = the u slot, cb_kdec = the out slot); the map carries the resolved ids.
+// The packer and unpacker address a block as the CB pointer plus the tile offset and wrap only between blocks, so
+// every CB pushed by this kernel receives blocks of one size and its capacity is a multiple of that size:
+// scr1 = decay_row (Ct), kdec = k_dec (ck), scr2 / ointer = single tiles, scr3 = cc (Ct at the qk-norm, Ct <= cc).
 struct GdnPrepCbs {
     uint32_t q, k, v, g, beta;
     uint32_t eye, tril, ones, S;
@@ -716,6 +719,7 @@ struct GdnPrepCbs {
     uint32_t scr1, scr2, scr3, s3;
     uint32_t dl;    // alias of the vnew slot in prep (1 tile used)
     uint32_t mask;  // alias of the u slot in prep (3 quadrant-mask tiles)
+    uint32_t kdec;  // alias of the out slot in prep (ck tiles: k_dec before its transpose)
 };
 
 // CB map for scan_step — one field per CB the body touches (the state CBs S/s2/s3/final are
@@ -842,7 +846,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // invert_block's private scratch A..D = cb.S/cb.final_s/cb.s2/cb.s3 — all fp32 and NOT drained
         // by the prep writer (unlike the output CBs cb.w/cb.qdecay/cb.intra, whose scratch pushes the
         // writer would wrongly consume). None alias src (cb.scr3), out, or the Ct==2 persistents
-        // (cb.supd/cb.stmp).
+        // (cb.supd/cb.stmp). tmpN = cb.ointer and tmpT = cb.scr2 are single-tile CBs.
         if constexpr (Ct == 1) {
 #if defined(GDN_TINV_SFPU)
             // One SFPU forward-substitution solve on negN in place.
@@ -850,7 +854,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
             POP(cb.scr3, cc);
 #else
             // Single 32x32 block: T_inv is just its inverse.
-            invert_block(cb.scr3, 0, cb.Tinv, cb.scr1, cb.scr2, cb.eye, cb.mask, cb.S, cb.final_s, cb.s2, cb.s3);
+            invert_block(cb.scr3, 0, cb.Tinv, cb.ointer, cb.scr2, cb.eye, cb.mask, cb.S, cb.final_s, cb.s2, cb.s3);
             WAIT(cb.Tinv, cc);
             POP(cb.scr3, cc);
 #endif
@@ -873,7 +877,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
                         cb.scr3,
                         neg_tile[i],
                         inv_out[i],
-                        cb.scr1,
+                        cb.ointer,
                         cb.scr2,
                         cb.eye,
                         cb.mask,
@@ -883,11 +887,11 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
                         cb.s3);
                 }
             }
-            cpy_t(cb.scr3, 2, cb.scr1);  // negN21 -> cb.scr1[0]
-            WAIT(cb.scr1, 1);
-            mm(cb.scr1, cb.supd, cb.scr2, 1, 1, 1, false);  // tmp = negN21 @ Mi11
+            cpy_t(cb.scr3, 2, cb.ointer);  // negN21 -> cb.ointer[0]
+            WAIT(cb.ointer, 1);
+            mm(cb.ointer, cb.supd, cb.scr2, 1, 1, 1, false);  // tmp = negN21 @ Mi11
             WAIT(cb.scr2, 1);
-            POP(cb.scr1, 1);
+            POP(cb.ointer, 1);
             mm(cb.stmp, cb.scr2, cb.ointer, 1, 1, 1, false);  // Mi21 = Mi22 @ tmp
             WAIT(cb.ointer, 1);
             POP(cb.scr2, 1);
@@ -899,16 +903,17 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
             POP(cb.stmp, 1);
             POP(cb.ointer, 1);
         } else {
-            // Fallback (C>64, currently xfail): full-matrix Horner.
+            // Fallback (C>64, currently xfail): full-matrix Horner; its cc-tile scratch blocks must tile cb.kdec.
+            static_assert(ck % cc == 0, "the Ct > 2 fallback needs cb.kdec's ck tiles to be a multiple of cc");
             ew(cb.eye, cb.scr3, cb.Tinv, cc, EwOp::Add);
             WAIT(cb.Tinv, cc);
             for (uint32_t m = 2; m < C; m++) {
-                mm(cb.scr3, cb.Tinv, cb.scr1, Ct, Ct, Ct, false);
-                WAIT(cb.scr1, cc);
+                mm(cb.scr3, cb.Tinv, cb.kdec, Ct, Ct, Ct, false);
+                WAIT(cb.kdec, cc);
                 POP(cb.Tinv, cc);
-                ew(cb.eye, cb.scr1, cb.Tinv, cc, EwOp::Add);
+                ew(cb.eye, cb.kdec, cb.Tinv, cc, EwOp::Add);
                 WAIT(cb.Tinv, cc);
-                POP(cb.scr1, cc);
+                POP(cb.kdec, cc);
             }
             POP(cb.scr3, cc);
         }
@@ -945,19 +950,19 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     {
         GDN_ZONE("pp_kdec");
         WAIT(cb.decayfac, Ct + 1);
-        bcast_cols_mul(Kk, cb.decayfac, cb.scr1, ct, Kt);  // k * exp(decay_last-decay)
-        WAIT(cb.scr1, ck);
+        bcast_cols_mul(Kk, cb.decayfac, cb.kdec, ct, Kt);  // k * exp(decay_last-decay)
+        WAIT(cb.kdec, ck);
         POP(Kk, ck);
         // decayfac[Ct] (dl) is read at pp_dl.
         // k_dec_t = transpose(k_dec) [K,C]: transpose each [Ct,Kt] tile block into [Kt,Ct].
         cb_reserve_back(cb.kdec_t, Kt * Ct);
         pack_reconfig_data_format(cb.kdec_t);
-        reconfig_data_format_srca(cb.scr1);  // unary: in->srcA
-        transpose_init(cb.scr1);
+        reconfig_data_format_srca(cb.kdec);  // unary: in->srcA
+        transpose_init(cb.kdec);
         for (uint32_t ki = 0; ki < Kt; ki++) {
             for (uint32_t ci = 0; ci < Ct; ci++) {
                 tile_regs_acquire();
-                transpose_tile(cb.scr1, ci * Kt + ki, 0);
+                transpose_tile(cb.kdec, ci * Kt + ki, 0);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(0, cb.kdec_t, ki * Ct + ci);
@@ -965,7 +970,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
             }
         }
         cb_push_back(cb.kdec_t, Kt * Ct);
-        POP(cb.scr1, ck);
+        POP(cb.kdec, ck);
     }
 
     {
