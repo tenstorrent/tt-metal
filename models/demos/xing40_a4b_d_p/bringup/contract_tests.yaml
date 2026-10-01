@@ -16,3 +16,7 @@ tests:
   checks: real runner + producer, 40 layers, 2 interleaved slots, follow-ups, pulled-back chunk, D2H acks, mock migration; KV through the table vs golden with tables.py and kv_dump_compare
   section: Adapter and table
   gates: adapter
+- test: models/demos/xing40_a4b_d_p/tests/bringup/contract/test_runner_smoke.py
+  checks: real runner prefills the smoke prompt; the KV below the migration boundary read through the table is decode's prefix on the device model; tail recompute + greedy answer contains "Paris"
+  section: Adapter and table
+  gates: adapter
