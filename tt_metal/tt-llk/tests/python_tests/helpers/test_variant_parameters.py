@@ -1839,8 +1839,7 @@ class EMA_ALPHA_BETA(TemplateParameter):
 @dataclass
 class EMA_INTERLEAVED_INIT(TemplateParameter):
     """Whether sfpu_ema_test.cpp issues an eltwise binary init between the datacopy and
-    ``ema_tile`` in every DEST section, the way a fused kernel would. The EMA body must not
-    depend on the FPU address-mode records that init programs."""
+    ``ema_tile`` in every DEST section, as a fused kernel would."""
 
     binary_init_before_ema: bool = False
 
@@ -1850,10 +1849,8 @@ class EMA_INTERLEAVED_INIT(TemplateParameter):
 
 @dataclass
 class WELFORD_RECIP_SIZE(TemplateParameter):
-    """Size of the reciprocal table the Welford kernel is given: N > 0 entries of 1 / (i + 1)
-    built on the math RISC before the tile loop (the layernorm form, whose table the host
-    builds), 0 for the no-table form in which the kernel computes the reciprocal per row (the
-    ttnn.var / ttnn.std form)."""
+    """Size of the Welford reciprocal table (N entries of 1 / (i + 1) built on the math RISC);
+    0 selects the no-table form, which computes the reciprocal per row."""
 
     welford_recip_size: int = 256
 

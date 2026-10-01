@@ -1,17 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf for the Welford SFPU kernel (sfpu/ckernel_sfpu_welfords.h).
-
-Drives sources/sfpu_welford_perf.cpp: one full-tile `welford_update` per input tile with the running
-mean and M2 kept in the SFPU registers across tiles, the shape of the layernorm, group norm, var and
-std kernels' inner loop. The rows sweep the reciprocal form (a 256-entry table, the layernorm form, or
-no table, the ttnn.var / ttnn.std form), the DEST width, and a Float32 input through unpack to DEST.
-
-MATH_ISOLATE includes the datacopy that feeds DEST, as for every unary SFPU op measured this way, so
-mean(MATH_ISOLATE) is the update plus that fixed carrier.
-
-cycles/tile lands in the TILE_LOOP row of the .post.csv as mean(MATH_ISOLATE).
+"""Perf for the Welford SFPU kernel (sfpu/ckernel_sfpu_welfords.h): one full-tile `welford_update`
+per input tile with the running mean and M2 kept in the SFPU registers. The rows sweep the
+reciprocal form (a 256-entry table or none), the DEST width and a Float32 input through unpack to DEST.
 """
 
 import pytest

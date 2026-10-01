@@ -150,8 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else
                     {
-                        // The plain unpack_A MOP publishes a SrcB valid next to every SrcA valid (UNPACR_NOP SrcB SET_DVALID in its replay),
-                        // so both must be retired here; clearing A alone deadlocks unpack (waits SRCB_CLR) and math (08:38 UTC hang).
+                        // unpack_A publishes a SrcB valid with every SrcA valid, so both are retired here.
                         _perf_math_loop_clear_valid</* clear A */ true, /* clear B */ true>(num_faces);
                     }
                 }

@@ -1,19 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Functional coverage for the Welford SFPU kernel.
-
-Two tests:
-
-- `test_sfpu_welford` drives `sources/sfpu_welford_test.cpp`: the mean and the population variance of
-  T tiles of 32 samples for 32 columns against a float64 reference, with a 256-entry reciprocal table
-  (the form the layernorm kernels run, with a host-built table) and without one (the form ttnn.var and
-  ttnn.std run), on bf16 and fp32 inputs and both DEST widths.
-- `test_sfpu_welford_reciprocal` drives `sources/sfpu_welford_recip_test.cpp`: the reciprocal the
-  kernel computes for the running count when it has no table, against the host's fp32 division for
-  every count from 1 to 16384 and for windows around 2^16 (where the count no longer fits one
-  immediate load) and 2^20. The bound is one ulp (the multiply-add truncates its product, so the
-  last Newton step cannot always decide the rounding); the number of counts that differ is printed.
+"""Functional coverage for the Welford SFPU kernel: the mean and the population variance of T tiles
+against a float64 reference, with and without a reciprocal table, and the no-table reciprocal against
+the host's fp32 division for every count from 1 to 16384 and around 2^16 and 2^20, within one ulp.
 """
 
 import numpy as np
@@ -34,8 +24,7 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-# The layernorm kernels pass a table with one entry per sample of the reduced dimension; 256 covers
-# the 4 x 32 samples of the largest case here with room to spare. 0 is the no-table form.
+# 256 entries cover the 4 x 32 samples of the largest case; 0 is the no-table form.
 RECIPROCAL_TABLE_SIZES = [256, 0]
 
 
@@ -102,14 +91,12 @@ def test_sfpu_welford(formats, dest_acc, num_tiles, recip_size):
 _RECIP_TILES = 128
 _RECIP_PER_RUN = 32 * _RECIP_TILES
 
-# The four slabs of a 4-row group, in the order the kernel stores them: even and odd columns of the
-# left face, even and odd columns of the right face.
+# Slab column starts in store order: even and odd columns of the left face, then of the right face.
 _SLAB_COLUMN_START = (0, 1, 16, 17)
 
 
 @parametrize(
-    # 1..16384 exhaustively, then the window in which the count stops fitting one 16-bit immediate
-    # load and a window around 2^20.
+    # 1..16384 exhaustively, then windows around 2^16 and 2^20.
     base=[0, 4096, 8192, 12288, 2**16 - 2048, 2**20 - 2048],
 )
 def test_sfpu_welford_reciprocal(base):
@@ -163,9 +150,8 @@ def test_sfpu_welford_reciprocal(base):
             if got[0, 0] != want:
                 mismatches.append((int(counts[tile * 32 + slab]), int(want), int(got[0, 0])))
 
-    # The Blackhole multiply-add keeps its product at fp32 plus four bits and truncates, so the last Newton
-    # step cannot always decide the rounding: the result is the correctly rounded reciprocal or its upper
-    # neighbour. Both are positive normal floats, so an ulp is one step of the bit pattern.
+    # The multiply-add truncates its product, so the result is the correctly rounded reciprocal or its
+    # upper neighbour; both are positive normals, so one ulp is one step of the bit pattern.
     beyond_one_ulp = [(c, w, g) for c, w, g in mismatches if abs(g - w) != 1]
     print(
         f"WELFORD_RECIP base={base}: {_RECIP_PER_RUN} counts, {len(mismatches)} differ from the host's fp32 "

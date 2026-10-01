@@ -415,11 +415,8 @@ def _cumsum_dest_acc(formats):
     return [DestAccumulation.No, DestAccumulation.Yes]
 
 
-# The column-wise cumulative sum is a whole-tile op (RC_custom, one call per tile) that keeps
-# its carry in the SFPU registers; the harness calls it with `first` true, so every tile starts
-# a new scan, the form the compute API's cumsum_tile defaults to. It is not in the registry the
-# main sweep reads (its stimulus has to be a real tilized tile), so it gets its own slice here;
-# test_sfpu_cumsum.py holds its functional coverage.
+# The column-wise cumulative sum is a whole-tile op (one call per tile, `first` true) that needs
+# a tilized stimulus, so it is not in the registry the main sweep reads and gets its own slice.
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),

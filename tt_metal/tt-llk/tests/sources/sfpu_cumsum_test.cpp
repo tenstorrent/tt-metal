@@ -2,13 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional driver for the column-wise cumulative sum (llk_sfpu/ckernel_sfpu_cumsum.h through the
-// SfpuType::cumsum branch of the harness dispatch). It is eltwise_unary_sfpu_test.cpp with the `first`
-// flag of the cumsum call under test control: with CUMSUM_CHAIN false every tile starts a new scan
-// down its 32 rows (the default of the dispatch and of the compute API); with CUMSUM_CHAIN true only
-// the first tile of a DEST block starts a scan and the later tiles continue it from the carry the
-// kernel keeps in its registers, so a block of NUM_TILES_IN_BLOCK tiles is one scan of
-// NUM_TILES_IN_BLOCK * 32 rows.
+// Functional driver for the column-wise cumulative sum (SfpuType::cumsum through the harness dispatch). With
+// CUMSUM_CHAIN every tile after the first of a DEST block continues the scan of the tile before (`first` false).
 
 #include <algorithm>
 #include <cstdint>
@@ -92,7 +87,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 block_tile, formats.math, formats.math);
 
-            // A chained block continues the scan from the tile before; otherwise every tile starts one.
             const bool first = CUMSUM_CHAIN ? (block_tile == 0) : true;
             test_utils::call_unary_sfpu_operation<DST_SYNC, is_fp32_dest_acc_en, SfpuType::cumsum, APPROX_MODE, is_fp32_dest_acc_en, iterations, false /* FAST_MODE */>(
                 block_tile, formats.math, 5.0f, VectorMode::RC_custom, first);

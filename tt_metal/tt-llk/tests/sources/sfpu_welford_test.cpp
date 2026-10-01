@@ -2,20 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional driver for the Welford SFPU kernel (sfpu/ckernel_sfpu_welfords.h through
-// llk_math_welfords_sfpu.h and llk_math_welfords_sfpu_params.h).
-//
-// The input is [TILE_CNT * 32, 32]: TILE_CNT tiles of 32 samples for 32 parallel columns. Per tile
-// the input is copied into DEST tile 0 (or unpacked straight into it for a 32-bit input) and folded
-// into the running mean and M2 that the kernel keeps in LREG4 and LREG5; the sample count passed to
-// the kernel advances by 32 per tile. A final DEST section converts M2 to the population variance
-// (scale index TILE_CNT * 32 - 1, that is 1 / (TILE_CNT * 32)) and writes the mean and the variance
-// into row 0 of DEST tiles 2 and 3, which the pack thread packs as result tiles 0 and 1.
-//
-// WELFORD_RECIP_SIZE selects the reciprocal form the kernel runs with: N > 0 builds an N-entry table
-// of 1 / (i + 1) on the math RISC before the tile loop and hands it to the kernel (the form the
-// layernorm kernels use, with a host-built table); 0 hands the kernel an empty table and it computes
-// every reciprocal itself (the form ttnn.var and ttnn.std use).
+// Functional driver for the Welford SFPU kernel: TILE_CNT tiles of 32 samples for 32 columns are folded into the
+// running mean and M2, then the mean and the population variance are written into row 0 of DEST tiles 2 and 3 and
+// packed as result tiles 0 and 1. WELFORD_RECIP_SIZE: N > 0 an N-entry table of 1 / (i + 1), 0 the no-table form.
 
 #include <array>
 #include <cstdint>
@@ -95,8 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    // Welford init: program the SFPU, the address mode and the replay buffer, clear the running
-    // mean and M2.
+    // Welford init: the SFPU configuration, the address mode, the replay buffer; clear the running mean and M2.
     _llk_math_welfords_sfpu_init_();
     ckernel::sfpu::_clear_previous_mean_and_m2_();
 
@@ -115,8 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }
 
-    // Finalize: the mean and the population variance (scale index TILE_CNT * 32 - 1, i.e. 1 / (TILE_CNT * 32))
-    // into row 0 of dst tiles 2 and 3.
+    // Finalize: the mean and the population variance into row 0 of dst tiles 2 and 3.
     _llk_math_wait_for_dest_available_<DST_SYNC>();
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_store_mean_var_to_dst_row_<WELFORD_RECIP_SIZE>, WELFORD_MEAN_DST_INDEX, params.TILE_CNT * 32 - 1, reciprocal_lut);

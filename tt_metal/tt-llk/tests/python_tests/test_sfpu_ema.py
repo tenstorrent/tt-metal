@@ -108,8 +108,7 @@ def _run_ema_on_device(
     column = parallel channel, for both.
 
     With ``binary_init_before_ema`` the kernel issues an eltwise binary init between
-    the datacopy and ``ema_tile`` in every DEST section, the way a fused kernel would;
-    the EMA result must not depend on the FPU address-mode records that init programs.
+    the datacopy and ``ema_tile`` in every DEST section, as a fused kernel would.
     """
     torch.manual_seed(0)
 
@@ -184,11 +183,7 @@ def test_sfpu_ema(dest_acc, num_time_tiles):
     ), "EMA result does not match golden"
 
 
-# The EMA body addresses DEST through the address-mode record its own init programs, so another
-# math init in the same DEST section must not change its result. The Blackhole body used to read
-# and write DEST through a record the FPU inits own (the datacopy init leaves it with a zero DEST
-# increment, the eltwise binary init with an 8-row one), which every caller happened to leave at
-# zero; with an eltwise binary init in between, 86 percent of the outputs were wrong.
+# Another math init in the same DEST section must not change the EMA result.
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     num_time_tiles=[2],

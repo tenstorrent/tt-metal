@@ -2,14 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Exactness check of the reciprocal the Welford SFPU kernel computes when it is given no table
-// (_load_recip_of_idx_<0> in sfpu/ckernel_sfpu_welfords.h). For every idx in
-// [WELFORD_RECIP_BASE, WELFORD_RECIP_BASE + 32 * TILE_CNT) the math thread runs that load, which
-// leaves the lane-uniform fp32 reciprocal 1 / (idx + 1) in LREG7, and stores the vector into one
-// 4-row by 8-column slab of DEST tile 0: slab s of result tile t holds 1 / (WELFORD_RECIP_BASE + 32 t + s + 1)
-// in all 32 of its elements. The pack thread packs each tile as Float32 out of a 32-bit DEST, so the
-// host can compare the bit pattern with its own fp32 division (test_sfpu_welford.py). The run needs
-// dest_acc Yes and a Float32 output; no input tile is unpacked.
+// Exactness check of the no-table Welford reciprocal (_load_recip_of_idx_<0>): slab s of result tile t holds
+// 1 / (WELFORD_RECIP_BASE + 32 t + s + 1) in all 32 elements, packed as Float32 for the host to compare bit for bit.
 
 #include <array>
 #include <cstdint>
@@ -36,8 +30,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Nothing is unpacked: the SFPU writes DEST directly. The configuration keeps the thread's state
-    // consistent with the other two.
+    // Nothing is unpacked; the configuration keeps the thread consistent with the other two.
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
 }
@@ -54,8 +47,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// The four slabs of a 4-row group: even columns of the left face, odd columns of the left face, even and odd
-// columns of the right face (the offsets the Welford and EMA bodies use for one block).
+// Slab offsets of a 4-row group: even and odd columns of the left face, then of the right face.
 static constexpr std::uint32_t SLAB_OFFSET[4] = {0, 2, 16, 18};
 
 static const std::array<std::uint32_t, 0> no_lut {};
@@ -76,8 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_wait_for_dest_available_<DST_SYNC>();
         _llk_math_eltwise_sfpu_start_(RECIP_DST_INDEX);
-        // Even slabs take the form that reloads the count into LREG7 before each Newton step (row 0 of a
-        // block), odd slabs the form that keeps it in LREG0 (rows 1 to 3); both must give the host's value.
+        // Even slabs take the reload form of the reciprocal (lreg0_free false), odd slabs the LREG0 form.
         for (std::uint32_t slab = 0; slab < 32; slab += 2)
         {
             // Slab s: face pair s / 16, 4-row group (s / 4) % 4, column half and face s % 4.

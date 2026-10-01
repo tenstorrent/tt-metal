@@ -19,9 +19,7 @@ absolute number as the kernel alone.
 cycles/tile lands in the TILE_LOOP row of the .post.csv as mean(MATH_ISOLATE).
 
 The kernel's loads and stores take the element format from the configured DEST, so both
-DEST widths are swept: the 16-bit DEST of the functional default and the 32-bit DEST
-ttnn.ema runs with. The Float32 row is the fp32 form through unpack to DEST, in which the
-unpacker writes DEST and the math thread runs no datacopy.
+DEST widths are swept; the Float32 row is the fp32 form through unpack to DEST.
 """
 
 import struct

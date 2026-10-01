@@ -1,15 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Functional coverage for the column-wise cumulative sum (llk_sfpu/ckernel_sfpu_cumsum.h).
-
-Drives `sources/sfpu_cumsum_test.cpp` over a [64, 32] input, two tiles in one DEST block, against a
-torch cumulative sum down the columns: with `chain` off every tile is its own 32-row scan (the default
-of the compute API's `cumsum_tile`), with `chain` on the second tile continues the first tile's scan
-through the carry the kernel keeps in its registers (`first = false`), so the golden is one 64-row scan.
-
-Set LLK_CUMSUM_DUMP=<path> to also append the raw output bits per variant; running that on two kernels
-and diffing the files is how bit-exactness between two implementations is established.
+"""Functional coverage for the column-wise cumulative sum (llk_sfpu/ckernel_sfpu_cumsum.h) over two
+tiles in one DEST block: with `chain` off every tile is its own 32-row scan, with `chain` on the second
+tile continues the first (`first = false`). LLK_CUMSUM_DUMP=<path> appends the raw output bits.
 """
 
 import os
@@ -37,7 +31,7 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-# Two tiles down one column of tiles: one DEST block of two tiles, so the chained variant scans 64 rows.
+# Two tiles down one column, one DEST block, so the chained variant scans 64 rows.
 INPUT_DIMENSIONS = [2 * TILE_DIM, TILE_DIM]
 TILE_CNT = 2
 
@@ -57,7 +51,7 @@ def test_sfpu_cumsum(formats, dest_acc, chain):
     torch.manual_seed(0)
     torch_format = format_dict[formats.input_format]
 
-    # A column total chains up to 64 adds, so |x| <= 1 keeps every partial sum well inside the formats.
+    # Up to 64 adds per column; |x| <= 1 keeps every partial sum inside the formats.
     src_A = torch.empty((TILE_CNT * ELEMENTS_PER_TILE,), dtype=torch.float32).uniform_(-1.0, 1.0).to(torch_format)
     src_B = torch.zeros_like(src_A)
     x = src_A.view(INPUT_DIMENSIONS[0], INPUT_DIMENSIONS[1]).to(torch.float32)

@@ -733,8 +733,7 @@ void call_unary_sfpu_operation_init()
  * @tparam ITERATIONS Number of SFPU iterations (typically 32 for full tile)
  * @param dst_index Destination tile index in the destination register
  * @param math_format Optional math format for operations that need format-specific behavior
- * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
- *        reads it. Defaults to true so each tile is independent.
+ * @param first Whether this tile starts a new accumulation chain (cumsum only)
  */
 template <
     DstSync DST_SYNC_MODE,
@@ -1619,9 +1618,7 @@ void call_unary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
-        // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
-        // boundary, so it runs once per tile (RC_custom), not once per face. `first` clears the
-        // carry; false continues the scan of the tile before it.
+        // Whole-tile op, one call per tile (RC_custom); `first` clears the carry, false continues the scan.
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, first);
     }
     else if constexpr (OPERATION == SfpuType::typecast)

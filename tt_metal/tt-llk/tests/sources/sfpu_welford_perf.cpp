@@ -2,23 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf driver for the Welford SFPU kernel (sfpu/ckernel_sfpu_welfords.h through
-// llk_math_welfords_sfpu.h and llk_math_welfords_sfpu_params.h). Modelled on sfpu_ema_perf.cpp: the
-// tile loop is wrapped in the perf markers and repeated LOOP_FACTOR times.
-//
-// Per tile the math thread copies the input tile into DEST tile 0 (or lets the unpacker write it
-// when unpack_to_dest is set) and runs one full-tile Welford update on it; the running mean and M2
-// stay in LREG4 and LREG5 across tiles and the sample count advances by 32 per tile, wrapping every
-// 8 tiles so that every entry of a 256-entry reciprocal table is used. Nothing is finalized: the
-// update is the cost the layernorm, group norm, var and std kernels pay per input tile, and the
-// finalize is once per row of tiles.
-//
-// MATH_ISOLATE includes the datacopy that feeds DEST, as for every unary SFPU op measured this way;
-// it is a fixed cost that cancels in a before/after comparison of the kernel.
-//
-// WELFORD_RECIP_SIZE selects the reciprocal form: N > 0 is an N-entry table of 1 / (i + 1) built on
-// the math RISC before the INIT marker (the layernorm form); 0 makes the kernel compute every
-// reciprocal itself (the ttnn.var / ttnn.std form).
+// Perf driver for the Welford SFPU kernel (sfpu/ckernel_sfpu_welfords.h), modelled on sfpu_ema_perf.cpp: one
+// full-tile Welford update per input tile, the running mean and M2 kept in LREG4 and LREG5, the count wrapping
+// every 8 tiles. WELFORD_RECIP_SIZE: N > 0 an N-entry table of 1 / (i + 1), 0 the no-table form.
 
 #include <array>
 #include <cstdint>
@@ -66,8 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Only the hardware valid-bit handshake is driven: one valid per face, which the datacopy on
-            // the math side retires. When the unpacker writes DEST there is no datacopy and no valid.
+            // One valid per face for the math datacopy; none when the unpacker writes DEST itself.
             if constexpr (!unpack_to_dest)
             {
                 _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR);
@@ -166,8 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else
                     {
-                        // The unpack_A program publishes a SrcB valid next to every SrcA valid, once per face,
-                        // so both are retired here.
+                        // unpack_A publishes a SrcB valid with every SrcA valid, so both are retired here.
                         _perf_math_loop_clear_valid</* clear A */ true, /* clear B */ true>(num_faces);
                     }
                 }
@@ -221,8 +205,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        // The update produces no output tile; the pack thread packs the input tile of each section so the
-        // L1_TO_L1 pipeline has the shape of the consumers (one pack per DEST section).
+        // The update has no output tile; the input tile is packed so L1_TO_L1 has one pack per section.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
