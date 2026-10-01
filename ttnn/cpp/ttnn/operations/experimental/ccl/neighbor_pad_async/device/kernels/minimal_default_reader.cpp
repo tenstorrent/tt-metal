@@ -52,6 +52,8 @@ void kernel_main() {
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
+    // Sticks at index >= num_valid_sticks within a row are read as zeros (logical_w masking).
+    const uint32_t num_valid_sticks = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address);
@@ -75,7 +77,11 @@ void kernel_main() {
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
                     cb_output.reserve_back(1);
 
-                    noc_obj.async_read(src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {});
+                    if (iter < num_valid_sticks) {
+                        noc_obj.async_read(src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {});
+                    } else {
+                        zeroPad<stick_size>(noc_obj, cb_output);
+                    }
 
                     src_stick_id++;
 
@@ -103,7 +109,11 @@ void kernel_main() {
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
                     cb_output.reserve_back(1);
 
-                    noc_obj.async_read(src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {});
+                    if (iter < num_valid_sticks) {
+                        noc_obj.async_read(src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {});
+                    } else {
+                        zeroPad<stick_size>(noc_obj, cb_output);
+                    }
 
                     src_stick_id++;
 
