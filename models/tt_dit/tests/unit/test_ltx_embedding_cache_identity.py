@@ -25,7 +25,7 @@ from types import MethodType, SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
-ENCODER = ROOT / "encoders" / "gemma" / "encoder_pair.py"
+ENCODER = ROOT / "encoders" / "gemma3" / "encoder_pair.py"
 PIPELINE = ROOT / "pipelines" / "ltx" / "pipeline_ltx.py"
 
 

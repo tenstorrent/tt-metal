@@ -160,8 +160,11 @@ def load(fake):
         for i in range(first, len(loop.body))
         if isinstance(loop.body[i], ast.If)
         and isinstance(loop.body[i].test, ast.Name)
-        and loop.body[i].test.id == "trace_euler"
+        and loop.body[i].test.id == "ancestral"
         and loop.body[i].orelse
+        and isinstance(loop.body[i].orelse[0], ast.If)
+        and isinstance(loop.body[i].orelse[0].test, ast.Name)
+        and loop.body[i].orelse[0].test.id == "trace_euler"
     )
     block = compile(ast.Module(body=loop.body[first : last + 1], type_ignores=[]), str(PIPELINE), "exec")
     return ns, block
@@ -200,6 +203,7 @@ class EulerTraceContract(unittest.TestCase):
             a_out=velocities[1],
             sigma=sigma,
             sigma_next=sigma_next,
+            ancestral=False,
             image_cond=image_cond,
             traced=traced,
             trace_key="stage",
