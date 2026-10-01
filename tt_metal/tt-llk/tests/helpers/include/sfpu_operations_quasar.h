@@ -111,7 +111,9 @@
 #include "llk_sfpu/ckernel_sfpu_mask.h"             // calculate_mask / calculate_mask_posinf / calculate_int_mask
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/ckernel_sfpu_situ_glu.h"         // calculate_situ_glu (softcapped gate * sigmoid(gate) * softcapped up)
+#include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
 #include "sfpu/ckernel_sfpu_mul_int32.h"   // _mul_int32_ (int mul)
 
@@ -1604,6 +1606,60 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     else
     {
         static_assert(unhandled_op<OP>, "call_binary_sfpu_operation_quasar: unhandled Quasar binary SFPU operation");
+    }
+}
+
+/**
+ * @brief Initialize shared SFPU state and the selected Quasar ternary operation.
+ *
+ * @tparam OPERATION Ternary SFPU operation to initialize.
+ * @tparam is_fp32_dest_acc_en Dest accumulation mode, matching the calculate step.
+ * @tparam APPROX Approximation mode, matching the calculate step.
+ * @note Pair with @ref call_ternary_sfpu_operation_quasar for the calculate step.
+ */
+template <SfpuType OPERATION, bool is_fp32_dest_acc_en, bool APPROX = false>
+void init_ternary_sfpu_operation_quasar()
+{
+    if constexpr (OPERATION == SfpuType::where)
+    {
+        _llk_math_eltwise_ternary_sfpu_init_<OPERATION>();
+    }
+    else
+    {
+        static_assert(unhandled_op<OPERATION>, "init_ternary_sfpu_operation_quasar: unhandled Quasar ternary SFPU operation");
+    }
+}
+
+/**
+ * @brief Apply a Quasar ternary SFPU op over three Dest operands into a result tile.
+ *
+ * @tparam OPERATION Ternary SFPU operation to execute.
+ * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
+ * @tparam APPROX Whether to use the operation's approximate path.
+ * @tparam ITERATIONS Number of SFPU row-pair iterations per face.
+ * @param src0_tile First operand tile index; the condition for where.
+ * @param src1_tile Second operand tile index; the true value for where.
+ * @param src2_tile Third operand tile index; the false value for where.
+ * @param dst_tile Result tile index, which may alias an input.
+ * @param vector_mode Faces to process; defaults to the whole tile.
+ * @note Call @ref init_ternary_sfpu_operation_quasar for the same op before this function.
+ */
+template <SfpuType OPERATION, DstSync DST_SYNC, bool is_fp32_dest_acc_en, bool APPROX = false, int ITERATIONS = SFPU_ITERATIONS>
+void call_ternary_sfpu_operation_quasar(
+    const std::uint32_t src0_tile,
+    const std::uint32_t src1_tile,
+    const std::uint32_t src2_tile,
+    const std::uint32_t dst_tile,
+    VectorMode vector_mode = VectorMode::RC)
+{
+    if constexpr (OPERATION == SfpuType::where)
+    {
+        SFPU_TERNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_where, (APPROX, ITERATIONS), src0_tile, src1_tile, src2_tile, dst_tile, vector_mode);
+    }
+    else
+    {
+        static_assert(unhandled_op<OPERATION>, "call_ternary_sfpu_operation_quasar: unhandled Quasar ternary SFPU operation");
     }
 }
 

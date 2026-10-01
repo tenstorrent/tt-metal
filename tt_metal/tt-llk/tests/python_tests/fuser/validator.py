@@ -65,7 +65,7 @@ SFPU_TILE_SIZES = {
     (32, 32),
 }
 
-INDEX_SLOT_NAMES = frozenset({"in0", "in1", "dest", "out", "src0", "src1"})
+INDEX_SLOT_NAMES = frozenset({"in0", "in1", "dest", "out", "src0", "src1", "src2"})
 
 
 class IndexSlotSpec(BaseModel):
@@ -99,6 +99,7 @@ class IndexesSchema(BaseModel):
     out: Optional[IndexSlot] = None
     src0: Optional[IndexSlot] = None
     src1: Optional[IndexSlot] = None
+    src2: Optional[IndexSlot] = None
 
     @field_validator(*INDEX_SLOT_NAMES, mode="after")
     @classmethod
@@ -111,7 +112,7 @@ class IndexesSchema(BaseModel):
     def validate_lists(self) -> "IndexesSchema":
         template = {
             s: len(getattr(self, s))
-            for s in ("dest", "src0", "src1")
+            for s in ("dest", "src0", "src1", "src2")
             if isinstance(getattr(self, s), list)
         }
         walked = {
@@ -442,6 +443,18 @@ class BinarySfpuMathSchema(BaseModel):
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
+
+
+class TernarySfpuMathSchema(BinarySfpuMathSchema):
+    """Base schema for ternary SFPU math nodes (type="TernarySfpu")."""
+
+    type: Literal["TernarySfpu"]
+    iterations: Literal[8] = 8
+
+    @field_validator("operation", mode="before")
+    @classmethod
+    def parse_operation(cls, v):
+        return parse_sfpu_operation(v, cls._sfpu_ops, "ternary")
 
 
 class FpuMathSchemaBase(BaseModel):
