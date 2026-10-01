@@ -442,6 +442,7 @@ def golden_grid_sample(
         or (N, H_out, total_W // K, C*K) if batch_output_channels=True,
         where total_W = W_out * K_grid (total sample points per row).
     """
+    import torch
     from tests.sweep_framework.sweep_utils.pool2d_common import prepare_grid_batching_expected_output
 
     N, H_grid, W_grid, last_dim = grid.shape

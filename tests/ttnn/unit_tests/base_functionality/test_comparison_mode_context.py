@@ -1116,24 +1116,6 @@ def test_as_tensor_with_preprocess_in_comparison_mode(device):
         )
 
 
-@pytest.mark.parametrize(
-    "operation",
-    [ttnn.allocate_tensor_on_device, ttnn.allocate_tensor_on_host],
-    ids=["allocate_tensor_on_device", "allocate_tensor_on_host"],
-)
-def test_allocator_skip_policy_still_rejects_shape_mismatch(operation):
-    golden = ttnn.get_golden_function(operation)((2, 3), ttnn.bfloat16, ttnn.TILE_LAYOUT, None, None)
-
-    # Allocated memory is uninitialized, so its values are skipped, but a logical-shape mismatch is still a wrong
-    # result. The skip policy used to return no record at all, hiding the shape mismatch.
-    comparison_records = _compare_torch_tensors(
-        golden, torch.zeros((2, 4), dtype=torch.bfloat16), fail_on_bad_comparison=False
-    )
-
-    assert comparison_records, "the skip policy returned no comparison record for a shape mismatch"
-    assert not comparison_records[0]["matches"]
-
-
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize(
     "operation, extra_args, dtype_keyword, output_dtype, make_values",

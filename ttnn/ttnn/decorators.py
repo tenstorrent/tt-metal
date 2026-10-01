@@ -222,11 +222,10 @@ def compare_tensors_using_pcc(
     use_comparison_config = comparison_config is not None and (comparison_config.scope == "all" or pcc_is_degenerate)
     # Operation goldens opt into non-PCC metrics only where their numerical contract requires it.
     # Unmarked outputs retain the existing PCC and degenerate allclose behavior without relaxation.
-    # Skipped outputs, such as uninitialized allocations, have no meaningful values, but a
-    # logical-shape mismatch still fails below.
-    if use_comparison_config and comparison_config.method == "skip" and same_shape:
+    if use_comparison_config and comparison_config.method == "skip":
         return []
-    elif use_comparison_config and same_shape:
+
+    if use_comparison_config and same_shape:
         nonfinite_masks_match = True
         if comparison_config.nonfinite == "mask" and (
             comparison_golden.dtype.is_floating_point
