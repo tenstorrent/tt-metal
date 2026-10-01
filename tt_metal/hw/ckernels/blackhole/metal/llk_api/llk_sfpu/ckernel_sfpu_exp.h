@@ -104,7 +104,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
 
 // exp_21f constants. The one-argument _sfpu_exp_21f_bf16_(val) materialises them per call; callers that
 // evaluate exp inside a row loop pass them in through the five-argument overload instead, built once before
-// the loop (sfpi 7.83.0 never hoists an SFPLOADI literal out of a loop on its own, so each fp32 literal
+// the loop (sfpi (through 7.84.0) never hoists an SFPLOADI literal out of a loop on its own, so each fp32 literal
 // otherwise costs an SFPLOADI pair per row). Same values either way: the two forms are bit-identical.
 constexpr float EXP_21F_ONE_LN2 = 1.4426950216293334961f;  // 0x3FB8AA3B
 constexpr float EXP_21F_C0 = EXP_21F_BF16_C0;
@@ -116,7 +116,7 @@ constexpr float EXP_21F_C2 = EXP_21F_BF16_C2;
 // so the arm that never reads one pays nothing: a float is folded away, an sfpi::vFloat is an SFPLOADI pair
 // per call. sfpi cannot spill, so each kernel hoists only what fits beside its live data -- one LReg too
 // many is a compile error ("too few lregs"), never a slowdown. Declare these non-const: a const vFloat
-// that lives across a partially unrolled loop makes sfpi 7.83.0 try to spill it ("cannot write SFPU
+// that lives across a partially unrolled loop makes sfpi (through 7.84.0) try to spill it ("cannot write SFPU
 // object to memory").
 template <bool COND>
 using HoistedIf = std::conditional_t<COND, sfpi::vFloat, float>;
@@ -141,7 +141,8 @@ inline void _init_exp_hoisted_prgm_consts_() { sfpi::vConstFloatPrgm1 = EXP_21F_
  * vConstFloatPrgmN the caller holds across its row loop. The arithmetic is identical either way; only the
  * source of the constants differs. The constants are template-typed rather than plain sfpi::vFloat on
  * purpose: a vFloat parameter is built before the call and stays live through the body, which reorders
- * the SFPLOADIs of the non-hoisting callers and pushed tanhshrink's fp32 path past the eight LRegs.
+ * the SFPLOADIs of the non-hoisting callers (their codegen would no longer be identical) and costs an
+ * LReg per constant for the whole body.
  *
  * @param val     The input value (sfpi::vFloat vector), can be any floating point number
  * @param one_ln2 1/ln(2) (EXP_21F_ONE_LN2)
@@ -424,8 +425,11 @@ constexpr float EXP_FP32_P1 = 8.37312452e-3f;  // 0x1.125edcp-7
 //
 // This overload takes log2(e), -ln2_hi and the two leading polynomial coefficients from the caller, each
 // either a float (materialised where used, as a literal is) or a vFloat / vConstFloatPrgmN held across a
-// row loop; see _sfpu_exp_21f_bf16_ for why the constants are template-typed. _sfpu_exp_fp32_accurate_(a)
-// below passes the literals and is what everything not hoisting reads.
+// row loop. They are template-typed rather than plain sfpi::vFloat for the reason given at
+// _sfpu_exp_21f_bf16_, and here it bit: vFloat parameters stay live through the body, which pushed
+// tanhshrink's fp32 path (this exp inside its large-|x| branch, with x, |x| and the result live) past the
+// eight LRegs ("too few lregs"). _sfpu_exp_fp32_accurate_(a) below passes the literals and is what
+// everything not hoisting reads.
 template <bool unsafe = false, typename K, typename H, typename P0, typename P1>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a, K log2e, H neg_ln2_hi, P0 p0, P1 p1) {
     sfpi::vInt i, e;

@@ -26,7 +26,7 @@ inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
     sfpi::vFloat alpha = Converter::as_float(param0);
     sfpi::vFloat alpha_recip = Converter::as_float(param1);
     // expm1's top Horner coefficient, loaded once and held in an LReg for the whole loop (the three
-    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi 7.83.0 never hoists a literal out
+    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi (through 7.84.0) never hoists a literal out
     // of a loop by itself). With alpha_recip live as well there is no LReg for the second one, so it
     // stays a per-row literal.
     sfpi::vFloat h_top1 = CW_EXPM1_H_TOP1;
