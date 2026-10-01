@@ -665,3 +665,31 @@ run. The explicit request seed and other previously disclosed differences
 prevent attributing all improvement to precision. The next gates are the existing
 100-token traced readiness reference and a same-host selected-policy seeded
 trial, followed by scoped CI validation. The full five-task run remains gated.
+
+The candidate subsequently passes the existing100-token readiness reference:
+prefill top1=96%, decode top1=98%, top5/top100=100% in both phases. Traced
+teacher-forcing counters verify99 model/sampling replays, with50.336 warmed
+teacher-forcing tokens/s. This short161-token-input reference is not long-context
+SWE accuracy or a serving-throughput headline. Its hash is
+9b792e83314a35e9619e58434f11f4d3c4b1e1edb9f18d14f1799495ff7c4e69.
+The full262144 serving allocation had already succeeded separately. The model
+default remains unchanged while a selected-policy seeded comparison is pending.
+
+TTI530d9b17 adds an inactive dev-only`autoport_precision_config` metadata hook:
+an explicit read-only policy mount, source restricted to`reference_config`,
+target derived from one autoport implementation, and SHA256 logged. Symlink
+escapes, non-dev use, absolute/out-of-tree paths and invalid policy headers are
+rejected. The relevant113-test suite passes. This permits an honest explicit
+runtime-policy override while reusing an immutable CI image; it is not a hidden
+rebuild or a claim that the image's original selected policy has changed.
+
+Scoped CI[36910894168](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36910894168)
+is dispatched at18:58:56 UTC: one Django900-second trial, request seed9472,
+guard1024 and explicit unselected BFP8 configurable-weight overlay. It reuses
+the exact local image digest`sha256:ad58effd178b9d8c7689a392159532d30aea0c1fe24bec82c06dbc0d3ebf4bbd`,
+TT-Metal`c9ec3469f1b875e7e5e505660c4421e5126e8dad`, transport/plugin input
+`c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42` and TTI
+`3546715680015285dcf8e7fb136df7f8c9d581e0`. No image build is requested.
+The same-host selected-policy900-second seeded control starts separately after
+server readiness, under`local_django_selected_seed9472`. Independent servers
+are used; there is never more than one live trial per inference server.
