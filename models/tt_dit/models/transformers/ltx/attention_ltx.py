@@ -35,6 +35,19 @@ LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "t
 # it. A green gate that has never been shown to go red proves nothing.
 LTX_DEDUP_GATE_MUTANT = os.environ.get("LTX_DEDUP_GATE_MUTANT", "0") in ("1", "true", "True")
 
+# Route the A2V to_out (K = audio_dim 2048, N = video_dim/TP 1024 at TP=4) through the strided
+# fabric AGMM with the K=4096 to_out blocking. Untuned for K=2048 and not bit-exact against the
+# all_gather_minimal_matmul fallback, so it stays opt-in until measured on a 4x8 Ring.
+LTX_AGMM_K2048 = os.environ.get("LTX_AGMM_K2048", "0") in ("1", "true", "True")
+
+
+def _to_out_fabric_agmm_config(M: int, K: int, N: int, full_grid):
+    cfg = get_fabric_agmm_config(M, K, N, 1, full_grid)
+    if cfg is None and LTX_AGMM_K2048 and (K, N) == (2048, 1024):
+        cfg = get_fabric_agmm_config(M, 4096, 1024, 1, full_grid)
+    return cfg
+
+
 # Fold the gate into Q/QKV after load, on device, from the unfused cache's shards. Device d's fused
 # weight is [qkv_d | gate_d zero-padded to a tile], the exact layout the LTX_FUSE_GATE cache holds,
 # so the fused model runs without a second ~37 GB weight cache.
@@ -544,7 +557,7 @@ class LTXAttention(Module):
             fabric_cfg = (
                 None
                 if os.environ.get("LTX_ATTN_FABRIC_AGMM", "1") == "0"
-                else get_fabric_agmm_config(M, K, N_out, 1, full_grid)
+                else _to_out_fabric_agmm_config(M, K, N_out, full_grid)
             )
             if fabric_cfg is not None:
                 tp_axis = parallel_config.tensor_parallel.mesh_axis
