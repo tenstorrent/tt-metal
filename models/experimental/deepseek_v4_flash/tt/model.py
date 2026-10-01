@@ -4484,8 +4484,10 @@ class TracedPrefill:
         They were allocated while the traces exist, so they must be gone before the next replay.
         """
         for li, state in enumerate(states):
-            persistent = {id(t) for t in vars(self.buffers[li]).values() if t is not None}
+            # By buffer, not by object: a slice spanning a whole FIFO (the longest prepared prompt, chunk-aligned) is
+            # a no-op that returns a new tensor object on the persistent buffer.
+            persistent = {t.buffer_address() for t in vars(self.buffers[li]).values() if isinstance(t, ttnn.Tensor)}
             for name, tensor in vars(state).items():
-                if isinstance(tensor, ttnn.Tensor) and id(tensor) not in persistent:
+                if isinstance(tensor, ttnn.Tensor) and tensor.buffer_address() not in persistent:
                     ttnn.deallocate(tensor)
                     setattr(state, name, None)

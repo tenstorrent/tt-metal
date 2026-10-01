@@ -9,8 +9,9 @@ ring / compressed KV / CSA overlap window / paged HCA pool that decode fills its
 (``len % 128`` tokens) is fed through ``decode_traced`` one token at a time, and generation continues with
 ``decode_traced`` exactly like ``tests/decode/test_full_model_decode_demo.py``.
 
-* ``test_prefill_decode_demo``: a single ``length == "short"`` LongBench question (seeded random pick, or the
-  first of ``DEEPSEEK_V4_LONGBENCH_INDICES``), indexer on; its generated letter is logged against ``answer``.
+* ``test_prefill_decode_demo``: the first ``DEEPSEEK_V4_DEMO_COUNT`` (20) ``length == "short"`` LongBench
+  questions in file order (or exactly ``DEEPSEEK_V4_LONGBENCH_INDICES``), back to back, indexer on; each one's
+  verdict and a running tally are printed as it finishes, and a correctness table at the end.
 * ``test_prefill_decode_longbench``: ``DEEPSEEK_V4_LONGBENCH_COUNT`` (8) questions picked at random (seeded) from
   the ``length == "short"`` multiple-choice items of ``~/smanoj/data.json``, every one answered by the same two
   models, each loaded once. It reports each question's generated letter against ``answer`` and the accuracy. The
@@ -176,26 +177,26 @@ class _Result:
 
 @pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
 @pytest.mark.skipif(not _LONGBENCH_FILE.is_file(), reason=f"LongBench file not found at {_LONGBENCH_FILE}")
-@pytest.mark.timeout(14400)
+@pytest.mark.timeout(86400)  # 20 long passages, prefill + decode each
 @torch.no_grad()
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"], ids=["fabric_2d"])
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["galaxy_8x4"])
 def test_prefill_decode_demo(mesh_device, reset_seeds) -> None:
-    """One random (seeded) ``length == "short"`` question of ``data.json``, answered once."""
+    """The first ``DEEPSEEK_V4_DEMO_COUNT`` (20) ``length == "short"`` questions of ``data.json``, in file order,
+    answered back to back by the two models (each loaded and captured once)."""
     from transformers import AutoTokenizer
 
-    seed = _env_int("DEEPSEEK_V4_LONGBENCH_SEED", 0)
+    count = _env_int("DEEPSEEK_V4_DEMO_COUNT", 20)
     max_tokens = _env_int("DEEPSEEK_V4_LONGBENCH_MAX_TOKENS", 65536)
     indices = os.environ.get("DEEPSEEK_V4_LONGBENCH_INDICES")
 
     def make_prompts(tokenizer, max_new: int) -> list[_Prompt]:
-        chosen = [int(indices.split(",")[0])] if indices else None
-        return _pick_longbench(tokenizer, _LONGBENCH_FILE, 1, seed, max_tokens - max_new, chosen)
+        chosen = [int(i) for i in indices.split(",")] if indices else None
+        return _pick_longbench(tokenizer, _LONGBENCH_FILE, count, None, max_tokens - max_new, chosen)
 
     results = _run_with_progress(mesh_device, AutoTokenizer, make_prompts, lightning_indexer=True)
-    assert len(results) == 1 and results[0].generated
-    result = results[0]
-    logger.info(f"{result.name}: expected {result.expected}, model {result.choice}")
+    assert all(r.generated for r in results)
+    _print_correctness(results)
 
 
 @pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
@@ -219,8 +220,8 @@ def test_prefill_decode_longbench(mesh_device, reset_seeds) -> None:
         return _pick_longbench(tokenizer, _LONGBENCH_FILE, count, seed, max_tokens - max_new, chosen)
 
     results = _run_with_progress(mesh_device, AutoTokenizer, make_prompts, lightning_indexer=True)
-    correct = sum(r.choice == r.expected for r in results)
-    logger.info(f"longbench: {correct}/{len(results)} correct ({correct / len(results):.0%}), seed {seed}")
+    correct = _print_correctness(results)
+    logger.info(f"longbench: seed {seed}")
     assert all(r.generated for r in results)
     assert correct >= min_correct, f"{correct}/{len(results)} correct < DEEPSEEK_V4_LONGBENCH_MIN_CORRECT={min_correct}"
 
@@ -255,16 +256,23 @@ def _longbench_prompt(entry: dict) -> str:
 
 
 def _pick_longbench(
-    tokenizer, path: Path, count: int, seed: int, max_prompt_tokens: int, indices: Optional[list[int]] = None
+    tokenizer,
+    path: Path,
+    count: int,
+    seed: Optional[int],
+    max_prompt_tokens: int,
+    indices: Optional[list[int]] = None,
 ) -> list[_Prompt]:
-    """``count`` short questions of ``path`` drawn at random with ``seed`` (or exactly ``indices``), as prompts.
+    """``count`` short questions of ``path`` drawn at random with ``seed`` (in file order when ``seed`` is None, or
+    exactly ``indices``), as prompts.
 
     A drawn question whose prompt is longer than ``max_prompt_tokens`` is skipped and the next one drawn.
     """
     data = json.loads(path.read_text())
     if indices is None:
         pool = [i for i, entry in enumerate(data) if entry.get("length") == "short"]
-        random.Random(seed).shuffle(pool)
+        if seed is not None:
+            random.Random(seed).shuffle(pool)
     else:
         for i in indices:
             if not 0 <= i < len(data):
@@ -274,7 +282,13 @@ def _pick_longbench(
         pool, count = list(indices), len(indices)
     logger.info(
         f"{path.name}: {len(data)} questions; drawing {count} of {len(pool)} "
-        + (f"short ones with seed {seed}" if indices is None else f"given: {indices}")
+        + (
+            f"given: {indices}"
+            if indices is not None
+            else "short ones in file order"
+            if seed is None
+            else f"short ones with seed {seed}"
+        )
     )
     prompts = []
     for i in pool:
@@ -559,6 +573,15 @@ def _run(
             max_new,
         )
         assert all(0 <= t < config.vocab_size for t in result.generated)
+        if result.expected is not None:
+            graded = [r for r in results[: k + 1] if r.expected is not None]
+            correct = sum(r.choice == r.expected for r in graded)
+            verdict = "correct" if result.choice == result.expected else "WRONG"
+            print(
+                f"\n[{k + 1}/{len(prompts)}] {result.name}: expected {result.expected}, model {result.choice or '?'} "
+                f"-> {verdict}  (running: {correct}/{len(graded)} correct)",
+                flush=True,
+            )
     logger.info(f"pool usage: {decode.session_usage()}")
     _summary(results, prepare_seconds)
     progress.step("done")
@@ -709,6 +732,20 @@ def _decode_one(
         result.choice = _extract_choice(result.text)
         verdict = "correct" if result.choice == prompt.expected else "WRONG"
         logger.info(f"{prompt.name}: expected {prompt.expected}, model {result.choice} -> {verdict}")
+
+
+def _print_correctness(results: list[_Result]) -> int:
+    """Print each graded question's verdict and the accuracy; returns the number correct."""
+    graded = [r for r in results if r.expected is not None]
+    correct = sum(r.choice == r.expected for r in graded)
+    lines = ["", f"=== correctness ({len(graded)} question(s)) ==="]
+    for i, r in enumerate(graded, 1):
+        verdict = "correct" if r.choice == r.expected else "WRONG"
+        lines.append(f"{i:>3}. {r.name:<18} expected {r.expected}  model {r.choice or '?'}  {verdict}")
+    if graded:
+        lines.append(f"accuracy: {correct}/{len(graded)} ({correct / len(graded):.0%})")
+    print("\n".join(lines), flush=True)
+    return correct
 
 
 def _summary(results: list[_Result], prepare_seconds: float) -> None:
