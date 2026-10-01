@@ -183,7 +183,9 @@ def test_matmul(
 
 # Full-sync DEST blocks with rows of more than 8 streamed tiles, run in both config contexts (kt_dim 2): the unpack
 # MOP's zmask must cover the whole row.
-FULL_SYNC_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Bfp8_b], same=True)
+FULL_SYNC_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Bfp8_b], same=True
+)
 FULL_SYNC_BLOCKS = [
     ((rt * 32, kt * 32), (kt * 32, ct * 32))
     for rt, ct, kt in [(1, 16, 2), (16, 1, 2), (2, 8, 2), (8, 2, 2), (4, 4, 2)]

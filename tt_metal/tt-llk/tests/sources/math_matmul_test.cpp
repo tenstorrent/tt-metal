@@ -72,10 +72,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             KT_DIM,
             in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
             in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
-            num_faces_B,     // in1
-            num_faces_A,     // in0
-            PARTIAL_FACE_B,  // in1
+            num_faces_B,    // in1
+            num_faces_A,    // in0
+            PARTIAL_FACE_B, // in1
+#ifdef ARCH_BLACKHOLE
+            PARTIAL_FACE_A,       // in0
+            formats.unpack_A_src, // the operand formats pick the streamed operand's address advance
+            formats.unpack_B_src);
+#else
             PARTIAL_FACE_A); // in0
+#endif
         PROFILER_SYNC();
     }
     {

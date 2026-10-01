@@ -61,7 +61,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
+#ifdef ARCH_BLACKHOLE
+        // the operand formats pick the streamed operand's address advance (8-bit formats stream at their data rate)
+        _llk_unpack_AB_matmul_init_<>(
+            UNPACK_TRANSPOSE_FACES,
+            CT_DIM,
+            RT_DIM,
+            KT_DIM,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            num_faces_A,
+            num_faces_B,
+            false,
+            false,
+            formats.unpack_A_src,
+            formats.unpack_B_src);
+#else
         _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, FACE_R_DIM, FACE_R_DIM, num_faces_A, num_faces_B, false, false);
+#endif
         PROFILER_SYNC();
     }
     {
