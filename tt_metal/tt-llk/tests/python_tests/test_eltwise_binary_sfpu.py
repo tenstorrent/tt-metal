@@ -1580,6 +1580,20 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
     # and pass at dest_acc=No on Wormhole; the old is_32_bit() guard withheld them.
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    if (
+        formats.input_format.is_integer()
+        and dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        # Measured on Wormhole only. The first Blackhole PR-gate run with these two cells
+        # enabled hit the job's 20-minute limit mid-run (actions run 36869592740,
+        # llk_smoke_blackhole group 1/2) and they are the only device cells this change
+        # adds there, so they stay off on Blackhole until someone with a Blackhole
+        # confirms them -- a kernel hang is the one outcome a skip must not hide.
+        pytest.skip(
+            "Int32/UInt32 at dest_acc=No is verified on Wormhole only; unconfirmed "
+            "on Blackhole (first enabled run hung, actions run 36869592740)"
+        )
 
     input_dimensions = [64, 32]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(

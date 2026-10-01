@@ -5,7 +5,7 @@
 from typing import List
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.data_format_inference import is_format_combination_outlier
+from helpers.data_format_inference import promote_dest_accumulation
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
@@ -80,15 +80,12 @@ def effective_dest_accumulation(formats, dest_acc):
     TestConfig promotes an outlier format combination (expB non-fp32 input to a Float16
     output at dest_acc=No) to dest_acc=Yes. A golden computed from the requested value
     would then model a 16-bit Dest the hardware is not using, so drivers resolve the
-    effective value here before calling their golden.
+    effective value here before calling their golden. The rule itself lives in
+    data_format_inference.promote_dest_accumulation, the same function TestConfig calls.
     """
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        return dest_acc
-    if is_format_combination_outlier(
-        formats.input_format, formats.output_format, dest_acc
-    ):
-        return DestAccumulation.Yes
-    return dest_acc
+    return promote_dest_accumulation(
+        formats.input_format, formats.output_format, dest_acc, get_chip_architecture()
+    )
 
 
 def distinct_dest_accumulation_modes(formats, modes):
@@ -100,17 +97,14 @@ def distinct_dest_accumulation_modes(formats, modes):
     (sweep-params, marker) key: one kernel, measured twice. Keep only the modes
     that stay distinct after that promotion.
     """
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        return list(modes)
-    if (
-        DestAccumulation.No in modes
-        and DestAccumulation.Yes in modes
-        and is_format_combination_outlier(
-            formats.input_format, formats.output_format, DestAccumulation.No
-        )
-    ):
-        return [DestAccumulation.Yes]
-    return list(modes)
+    modes = list(modes)
+    # Keep a mode unless the shared rule promotes it onto another mode in the request.
+    return [
+        mode
+        for mode in modes
+        if (promoted := effective_dest_accumulation(formats, mode)) == mode
+        or promoted not in modes
+    ]
 
 
 def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
