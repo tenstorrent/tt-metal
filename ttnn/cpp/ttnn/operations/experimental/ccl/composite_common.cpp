@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/all_broadcast/all_broadcast.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -350,7 +351,8 @@ ttnn::Tensor composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    bool require_contiguous_gather) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -358,6 +360,14 @@ ttnn::Tensor composite_all_gather(
     auto input_shape = input_tensor.logical_shape();  // copied, not referenced (input_tensor is reassigned below)
     const int32_t rank = static_cast<int32_t>(input_shape.rank());
     const int32_t gather_dim = static_cast<int32_t>(input_shape.get_normalized_index(dim));
+
+    // Label of the result: every device on `cluster_axis` ends up with every piece along `gather_dim`. Decided from
+    // the caller's tensor up front so a gather the helper refuses (a 1-D-mapped Shard gathered along an outer mesh
+    // axis interleaves the pieces) fails before any device work under strict mode; applied to the tensor returned
+    // at the bottom (nullopt, already warned about, leaves the tail's union label in place).
+    const std::optional<tt::tt_metal::TensorTopology> output_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(
+            input_tensor, cluster_axis, gather_dim, require_contiguous_gather);
 
     // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
     // and after re-tilizing.
@@ -410,6 +420,11 @@ ttnn::Tensor composite_all_gather(
         all_gather_output_tensor = ttnn::to_memory_config(all_gather_output_tensor, output_memory_config);
     }
 
+    // The concat / typecast / to_memory_config tail takes the union label of its inputs, which is the all_broadcast
+    // label for an N-D input but not for a collapsed one; relabel what the caller receives.
+    if (output_topology.has_value()) {
+        all_gather_output_tensor.update_tensor_topology(*output_topology);
+    }
     return all_gather_output_tensor;
 }
 
