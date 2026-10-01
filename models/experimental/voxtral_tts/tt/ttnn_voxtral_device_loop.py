@@ -21,7 +21,7 @@ Integer-valued quantities live in fp32 (exact below 2^24) because the elementwis
 there; they are typecast to uint32/int32 only at the consumers (argmax output, embedding indices,
 cache index, the backbone's position tensors). The next input embedding is sum_k table[code_k +
 offset_k]: three bf16 lookups (the fp32 table split into exact bf16 pieces) and one matmul with a 0/1 selection
-matrix [B, B*37] do the gather-and-sum with fp32 accumulation (three bf16 pieces reproduce the fp32
+matrix [B, B*64] (each row a tile-aligned block) do the gather-and-sum with fp32 accumulation (three bf16 pieces reproduce the fp32
 table exactly).
 
 The host reads the stopped mask every `check_every` frames (one tiny readback) to end the batch early,
@@ -83,12 +83,16 @@ class DeviceFrameLoop:
         self.mask = dv(semantic_mask.reshape(1, 1, -1).float(), F32)  # [1,1,vocab]
         self.offs = dv(codebook_offsets().float().reshape(1, 1, NUM_CODEBOOKS), F32)  # [1,1,37]
         self.tabs = [dv(t, BF16, RM) for t in split_bf16(audio_embeddings, 3)]  # [V,3072] row-major bf16 pieces
-        self.N = B * NUM_CODEBOOKS
-        self.Npad = -(-self.N // TILE) * TILE
-        sel = torch.zeros(1, B, self.Npad)
+        # Each row's 37 codes get their own tile-aligned block of K_ROW columns. Packed at stride 37,
+        # a row's terms straddle tile boundaries at a row-dependent offset, the fp32 partial sums group
+        # differently, and identical codes in two rows give embeddings that differ in the last bit
+        # (only rows b = 0 mod 8 agree), so the same request decodes differently in different slots.
+        self.K_ROW = -(-NUM_CODEBOOKS // TILE) * TILE  # 64
+        self.N = B * self.K_ROW
+        sel = torch.zeros(1, B, self.N)
         for b in range(B):
-            sel[0, b, b * NUM_CODEBOOKS : (b + 1) * NUM_CODEBOOKS] = 1.0
-        self.sel = dv(sel, BF16)  # [1,B,Npad] 0/1 (exact in bf16)
+            sel[0, b, b * self.K_ROW : b * self.K_ROW + NUM_CODEBOOKS] = 1.0
+        self.sel = dv(sel, BF16)  # [1,B,B*K_ROW] 0/1 (exact in bf16)
         self.zeros_pad_rm = dv(torch.zeros(1, B, CODES_W - NUM_CODEBOOKS - 1), F32, RM)
         self.cache_in_cfg = ttnn.create_sharded_memory_config(
             shape=(TILE, CODES_W),
@@ -187,12 +191,13 @@ class DeviceFrameLoop:
         )
         # --- next input embedding: sum_k table[code_k + offset_k] ---
         idx = ttnn.add(ttnn.to_layout(ttnn.concat([sem_f_rm, ac_codes_rm], dim=-1), TL), self.offs)  # [1,B,37] f32
-        idx = ttnn.reshape(ttnn.to_layout(ttnn.typecast(idx, U32), RM), [1, self.N])
-        if self.Npad > self.N:
-            idx = ttnn.pad(idx, [(0, 0), (0, self.Npad - self.N)], 0)
+        idx = ttnn.pad(
+            ttnn.to_layout(ttnn.typecast(idx, U32), RM), [(0, 0), (0, 0), (0, self.K_ROW - NUM_CODEBOOKS)], 0
+        )
+        idx = ttnn.reshape(idx, [1, self.N])  # row b's codes at b*K_ROW.., index 0 in the pad (sel is 0 there)
         x_new = None
         for tab in self.tabs:
-            e = ttnn.embedding(idx, tab, layout=TL)  # [1,Npad,3072] bf16
+            e = ttnn.embedding(idx, tab, layout=TL)  # [1,B*K_ROW,3072] bf16
             part = ttnn.matmul(self.sel, e, dtype=F32, compute_kernel_config=_HIFI4)  # [1,B,3072] f32
             x_new = part if x_new is None else ttnn.add(x_new, part)
         ttnn.copy(ttnn.typecast(x_new, self.xin_dtype), buf["xin"])
