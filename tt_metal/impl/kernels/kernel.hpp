@@ -111,11 +111,13 @@ struct DataflowBufferBindingHandle {
     uint8_t prefetcher_pipe_id = 0xFF;
     std::optional<LLKMetadata> llk_metadata;
     // Borrowed-memory DFB (DataflowBufferSpec::borrowed_from): the program-wide DFB id and the TensorParameter
-    // whose memory the DFB is, and whether this kernel produces into it. Op-to-op R/W inference
-    // (Kernel::resolve_buf_rw) records a producer as writing that tensor and a consumer as reading it.
+    // whose memory the DFB is, and which sides of it this kernel is on -- both, for a self-loop pair bound under one
+    // accessor name. Op-to-op R/W inference (Kernel::resolve_buf_rw) records producing as writing that tensor and
+    // consuming as reading it.
     std::optional<uint32_t> borrowed_dfb_id;
     std::string borrowed_tensor_parameter_name;
-    bool is_producer = false;
+    bool produces = false;
+    bool consumes = false;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 

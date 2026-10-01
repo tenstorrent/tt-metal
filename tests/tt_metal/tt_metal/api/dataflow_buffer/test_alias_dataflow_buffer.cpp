@@ -1009,5 +1009,69 @@ TEST_F(UnitMeshFixture, BorrowedMemoryDFBBufRw) {
     EXPECT_EQ(addresses_of(crw.reads, "ring_tensor"), ring_address);
 }
 
+// A self-loop pair binds one borrowed-memory DFB as PRODUCER and as CONSUMER under the same accessor name. The
+// kernel is then on both sides of the DFB, so it both writes and reads the tensor behind it -- neither role may be
+// lost when the two bindings collapse into one accessor. Self-loops are compute-only on Gen2, so this is an (empty)
+// compute kernel: the records come from the program, not the device.
+TEST_F(UnitMeshFixture, BorrowedMemorySelfLoopDFBBufRw) {
+    const NodeCoord node{0, 0};
+    constexpr uint32_t kEntrySize = 512;
+    constexpr uint32_t kNumEntries = 2;
+    MeshTensor ring =
+        MeshTensor::allocate_on_device(this->device(), make_alias_l1_tensor_spec(kEntrySize, kNumEntries));
+
+    KernelSpec loop{
+        .unique_id = experimental::KernelSpecName{"loop"},
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
+        .num_threads = 1,
+        .dfb_bindings =
+            {
+                {.dfb_spec_name = experimental::DFBSpecName{"dfb_loop"},
+                 .accessor_name = "lp",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED},
+                {.dfb_spec_name = experimental::DFBSpecName{"dfb_loop"},
+                 .accessor_name = "lp",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED},
+            },
+        .tensor_bindings =
+            {{.tensor_parameter_name = experimental::TensorParamName{"ring_tensor"}, .accessor_name = "ring"}},
+        .hw_config = ComputeHardwareConfig{},
+    };
+    ProgramSpec spec{
+        .name = "borrowed_self_loop",
+        .kernels = {loop},
+        .dataflow_buffers = {DataflowBufferSpec{
+            .unique_id = experimental::DFBSpecName{"dfb_loop"},
+            .entry_size = kEntrySize,
+            .num_entries = kNumEntries,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+            .borrowed_from = experimental::TensorParamName{"ring_tensor"},
+        }},
+        .tensor_parameters = {{.unique_id = experimental::TensorParamName{"ring_tensor"}, .spec = ring.tensor_spec()}},
+        .work_units = {WorkUnitSpec{
+            .name = "wu", .kernels = {experimental::KernelSpecName{"loop"}}, .target_nodes = node}},
+    };
+    Program program = MakeProgramFromSpec(this->device(), spec);
+    ProgramRunArgs run_params;
+    run_params.tensor_args = {{experimental::TensorParamName{"ring_tensor"}, TensorArgument{ring}}};
+    SetProgramRunArgs(program, run_params);
+    distributed::MeshWorkload wl = LaunchProgram(this->device(), std::move(program));
+
+    const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(this->device().shape())].impl();
+    auto kernel = program_impl.get_kernel_by_spec_name("loop");
+    ASSERT_NE(kernel, nullptr);
+    const ResolvedBufRw rw = kernel->resolve_buf_rw(*this->device().get_devices()[0], program_impl);
+    const uint32_t ring_address = static_cast<uint32_t>(ring.address());
+    EXPECT_FALSE(rw.opaque);
+    ASSERT_EQ(rw.writes.size(), 1u) << "producing into the borrowed DFB writes ring_tensor";
+    EXPECT_EQ(rw.writes[0].param_name, "ring_tensor");
+    EXPECT_EQ(rw.writes[0].address, ring_address);
+    ASSERT_EQ(rw.reads.size(), 1u) << "consuming from the borrowed DFB reads ring_tensor";
+    EXPECT_EQ(rw.reads[0].param_name, "ring_tensor");
+    EXPECT_EQ(rw.reads[0].address, ring_address);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal
