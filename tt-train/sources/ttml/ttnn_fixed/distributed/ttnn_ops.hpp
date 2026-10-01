@@ -7,9 +7,18 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
+// All-gather `tensor` along `dim` across `cluster_axis`. With `persistent_output` (a pre-allocated
+// full-shape tensor) the result is written there and returned; otherwise a fresh tensor is allocated.
+// Issued on the second command queue, the collective runs on the CCL sub-device.
 ttnn::Tensor all_gather(
-    const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
+    const ttnn::Tensor& tensor,
+    const int dim,
+    const std::optional<uint32_t> cluster_axis = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_output = std::nullopt);
 ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis = std::nullopt);
+// Reduce-scatter `tensor` along `dim` across `cluster_axis` into a fresh shard-shaped tensor. The op's
+// staging buffers are persistent (CCLResources) whenever the configuration has a contiguous ring
+// layout; on the second command queue that is required, and the collective runs on the CCL sub-device.
 ttnn::Tensor reduce_scatter(
     const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 

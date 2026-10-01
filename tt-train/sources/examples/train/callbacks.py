@@ -27,18 +27,24 @@ class ThroughputCallback(TrainerCallback):
         self._log_interval = max(1, int(log_interval))
         self._step_start: float | None = None
         self._tokens_in_step: int = 0
-        self._dp_size: int = 1
+        self._data_parallel_size: int = 1
 
     def on_train_begin(self, trainer: SFTTrainer) -> None:
+        # The batch is sharded across every data-parallel axis (``dp`` for DDP, ``fsdp`` for FSDP,
+        # both for HSDP), so the global token count is the per-rank count times their product.
+        # TP axes replicate the batch and must not be counted.
         mesh = ttml.mesh()
-        self._dp_size = mesh.axis_size("dp") if mesh.has_axis("dp") else 1
+        self._data_parallel_size = 1
+        for axis in ("dp", "fsdp"):
+            if mesh.has_axis(axis):
+                self._data_parallel_size *= mesh.axis_size(axis)
         self._step_start = time.time()
         self._tokens_in_step = 0
 
     def on_after_forward(self, trainer: SFTTrainer, batch: Batch, loss: float) -> None:
         shape = batch.input_ids.shape()
-        # Per-rank micro-shard tokens × dp_size = global tokens processed this step.
-        self._tokens_in_step += int(shape[0]) * int(shape[-1]) * self._dp_size
+        # Per-rank micro-shard tokens × (product of data-parallel axis sizes) = global tokens this step.
+        self._tokens_in_step += int(shape[0]) * int(shape[-1]) * self._data_parallel_size
 
     def on_step_end(self, trainer: SFTTrainer, step: int, step_loss: float = 0.0, *args: Any, **kwargs: Any) -> None:
         if step % self._log_interval != 0 or self._step_start is None:

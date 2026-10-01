@@ -96,6 +96,32 @@ public:
 
     [[nodiscard]] GradMode get_gradient_mode() const;
 
+    // Backward-pass bookkeeping. Tensor::backward() brackets its node loop with
+    // enter/exit; the depth counter (not a flag) is needed because a grad function
+    // may itself run a nested backward (gradient checkpointing recomputes a block
+    // forward and calls backward on it). Lets module-level hooks (e.g. FSDP) tell a
+    // recompute-forward, which is immediately followed by that block's backward,
+    // apart from a regular forward.
+    void enter_backward();
+    void exit_backward();
+    [[nodiscard]] bool is_backward_in_progress() const;
+
+    // CCL sub-device. Splits every chip's Tensix grid into a compute sub-device (id 0) and a CCL
+    // sub-device (id 1: the rightmost `num_columns` columns or the bottom `num_rows` rows; exactly
+    // one of the two is non-zero). Programs on different sub-devices run concurrently, so
+    // collectives issued on the CCL sub-device from the second command queue overlap with compute
+    // on the first. The device reports the compute rectangle as its compute grid from then on, so
+    // every op that sizes itself from compute_with_storage_grid_size() stays off the CCL cores.
+    // Requires the device to have been opened with two command queues. Ordering between the two
+    // queues is the caller's job (see ttml.fsdp and docs/FSDP.md).
+    void enable_ccl_sub_device(uint32_t num_columns, uint32_t num_rows);
+    [[nodiscard]] bool has_ccl_sub_device() const;
+    [[nodiscard]] std::optional<tt::tt_metal::SubDeviceId> ccl_sub_device_id() const;
+    [[nodiscard]] tt::tt_metal::SubDeviceId compute_sub_device_id() const;
+    // The chip's whole compute grid, ignoring any CCL sub-device (peak-FLOPS accounting, and
+    // resources such as global semaphores that CCL kernels on the reserved cores must find too).
+    [[nodiscard]] tt::tt_metal::CoreCoord full_compute_grid_size();
+
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
     [[nodiscard]] ttnn::distributed::MeshDevice& get_device();
@@ -103,9 +129,13 @@ public:
 
     [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
 
+    // num_command_queues: 1 (default) or 2. The second hardware queue is for collectives (see
+    // enable_ccl_sub_device): launched on their own queue, they never stall compute launches.
     void open_device(
         const tt::tt_metal::distributed::MeshShape& mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1),
-        const std::vector<int>& device_ids = std::vector<int>{});
+        const std::vector<int>& device_ids = std::vector<int>{},
+        size_t num_command_queues = 1);
+    [[nodiscard]] size_t num_command_queues() const;
 
     void close_device();
 
@@ -134,6 +164,10 @@ private:
     std::mt19937 m_generator;
 
     GradMode m_grads_mode = GradMode::ENABLED;
+    uint32_t m_backward_depth = 0U;
+    size_t m_num_command_queues = 1;
+    std::optional<tt::tt_metal::CoreCoord> m_full_compute_grid;  // set when the CCL sub-device narrows the grid
+    std::optional<tt::tt_metal::SubDeviceId> m_ccl_sub_device_id;
 
     Graph m_graph;
     tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
