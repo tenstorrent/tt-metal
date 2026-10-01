@@ -26,7 +26,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void i1_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i1, (APPROX), idst, VectorMode::RC));
+#ifndef ARCH_QUASAR
+    if constexpr (!DST_ACCUM_MODE && !APPROX) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i1, (APPROX, 32, DST_ACCUM_MODE), idst, VectorMode::None));
+        return;
+    }
+#endif
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i1, (APPROX, 8, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**
