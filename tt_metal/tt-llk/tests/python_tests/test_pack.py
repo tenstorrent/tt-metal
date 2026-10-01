@@ -12,6 +12,7 @@ Tests the LLK pack kernel with:
 
 import pytest
 import torch
+from conftest import skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
@@ -299,6 +300,8 @@ PACK_BLOCK_PERF_SWEEP = dict(
     dest_index=[0],
 )
 
+
+@skip_for_wormhole
 @parametrize(**PACK_BLOCK_SWEEP)
 def test_pack_block(
     formats,

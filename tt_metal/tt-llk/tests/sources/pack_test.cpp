@@ -204,8 +204,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int RELU_CONFIG                  = params.RELU_CONFIG;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
+#if defined(ARCH_BLACKHOLE)
     // Block-float tiles are not written back to back by one pack run; they and one-tile blocks keep the per-tile pack.
     [[maybe_unused]] const bool block_pack = pack_block_en && NUM_TILES_IN_BLOCK > 1 && !IS_BFP_FORMAT(formats.pack_dst);
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
@@ -233,6 +235,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(NUM_BLOCKS); ++block)
                 {
+#if defined(ARCH_BLACKHOLE)
                     if constexpr (pack_block_en)
                     {
                         if (block_pack)
@@ -245,6 +248,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             continue;
                         }
                     }
+#endif
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
                         std::uint32_t res_tile_idx = block * NUM_TILES_IN_BLOCK + tile;
@@ -263,6 +267,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(NUM_BLOCKS); ++block)
                 {
                     _llk_packer_wait_for_math_done_();
+#if defined(ARCH_BLACKHOLE)
                     if constexpr (pack_block_en)
                     {
                         if (block_pack)
@@ -276,6 +281,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             continue;
                         }
                     }
+#endif
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
                         std::uint32_t res_tile_idx = block * NUM_TILES_IN_BLOCK + tile;

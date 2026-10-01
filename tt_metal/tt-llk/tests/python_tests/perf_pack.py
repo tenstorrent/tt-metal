@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from conftest import skip_for_wormhole
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_pack import PACK_BLOCK_PERF_SWEEP, PACK_SWEEP
@@ -43,6 +44,7 @@ def test_perf_pack(
 
 # Same columns as test_perf_pack, so the block rows land in the same perf_pack.csv.
 @pytest.mark.perf
+@skip_for_wormhole
 @parametrize(
     **PACK_BLOCK_PERF_SWEEP,
     run_types=[ALL_PERF_RUN_TYPES],
