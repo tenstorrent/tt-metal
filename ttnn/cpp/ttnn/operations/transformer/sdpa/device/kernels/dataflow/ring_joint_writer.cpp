@@ -8,6 +8,8 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
@@ -17,6 +19,7 @@
 #include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -358,6 +361,7 @@ public:
     void wait(uint32_t ordinal) const {
         WAYPOINT("RQHW");
         while (!ready(ordinal)) {
+            invalidate_l1_cache();
         }
         WAYPOINT("RQHD");
     }
@@ -594,6 +598,15 @@ void kernel_main() {
         rotated_sem_id = get_arg_val<uint32_t>(argidx++);
         rotated_args_base = argidx;
     }
+    // K split (ring_joint_ksplit.hpp) runtime args, in the rotated block's slot: [band], then for a core with a unit
+    // the physical (x, y) of its reducer (a sender) or of its senders in band order (the reducer).
+    constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
+    constexpr bool ksplit_enabled = ksplit_count > 1;
+    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window && use_streaming_compute));
+    static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
+    const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
+    const uint32_t ksplit_band = ksplit_enabled ? get_arg_val<uint32_t>(argidx) : 0;
+    const uint32_t ksplit_peer_args = argidx + 1;
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
@@ -610,6 +623,13 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
+    // A K-split sender leaves its state in accumulator half A. Those CBs hold one entry and sit at the same L1 offset
+    // on every core, so the reducer reads a sender's state at its own CB bases. cb_sum_in exists only on the streaming
+    // path; alias a live CB so the other modes still compile.
+    constexpr uint32_t cb_out_im_A = get_compile_time_arg_val(cb_arg_offset + 16);
+    constexpr uint32_t cb_max_A = get_compile_time_arg_val(cb_arg_offset + 18);
+    constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
+    constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
 
     Noc noc;
 
@@ -1130,7 +1150,7 @@ void kernel_main() {
                     cb_sig.pop_front(1);
                 }
 
-                if (is_last_ring_iter) {
+                if (is_last_ring_iter && !ksplit_active) {
                     // Last-iter writes carry default trid (caller never set a non-zero trid here);
                     // pass 0 so the per-group flush waits exactly for these writes.
                     const auto& gen = [&]() -> const auto& {
@@ -1242,6 +1262,68 @@ void kernel_main() {
                     stats_tile_bytes);
             }
             noc.async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
+        }
+    }
+    if constexpr (ksplit_enabled) {
+        RotatedQHandoff ready(get_named_compile_time_arg_val("ksplit_sem_id"));
+        if (ksplit_active && ksplit_band + 1 < ksplit_count) {
+            // Sender: compute signals once its state sits in half A, where it stays until the program ends.
+            CircularBuffer staged(cb_signal);
+            staged.wait_front(1);
+            ready.signal(
+                noc,
+                get_arg_val<uint32_t>(ksplit_peer_args),
+                get_arg_val<uint32_t>(ksplit_peer_args + 1),
+                ksplit_band + 1);
+            noc.async_atomic_barrier();
+            staged.pop_front(1);
+        } else if (ksplit_active) {
+            // Reducer: land each sender's state in the restore CBs, one at a time (they hold one entry each).
+            constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+            static_assert(
+                !ksplit_enabled || get_tile_size(cb_out_im_A) == get_tile_size(cb_prev_out),
+                "K split copies out tiles raw");
+            UnicastEndpoint sender_l1;
+            for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
+                const uint32_t x = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender);
+                const uint32_t y = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender + 1);
+                ready.wait(sender + 1);
+                auto pull = [&](CircularBuffer& cb, uint32_t source_cb, uint32_t tiles) {
+                    cb.reserve_back(tiles);
+                    noc.async_read(
+                        sender_l1,
+                        CoreLocalMem<uint32_t>(cb.get_write_ptr()),
+                        tiles * get_tile_size(source_cb),
+                        {.noc_x = x, .noc_y = y, .addr = CircularBuffer(source_cb).get_read_ptr()},
+                        {});
+                };
+                CircularBuffer in_max(cb_max_in);
+                CircularBuffer in_sum(ksplit_cb_sum_in);
+                CircularBuffer in_out(cb_prev_out);
+                pull(in_max, cb_max_A, Sq_chunk_t);
+                pull(in_sum, cb_sum_A, Sq_chunk_t);
+                pull(in_out, cb_out_im_A, out_tiles);
+                noc.async_read_barrier();
+                in_max.push_back(Sq_chunk_t);
+                in_sum.push_back(Sq_chunk_t);
+                in_out.push_back(out_tiles);
+            }
+            ready.reset_after_run();
+
+            const auto decoded_q = decompose_global_q_index(global_q_start, num_q_chunks, NH, use_zigzag_balancing);
+            const auto qi = get_q_chunk_info<has_joint_q>(
+                decoded_q.q_chunk,
+                decoded_q.nb,
+                decoded_q.nq,
+                num_local_q_chunks,
+                Sq_chunk_t,
+                vDHt,
+                Lt,
+                q_local_padded_Nt);
+            const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_size - 1, Lt, q_local_padded_Nt);
+            write_block_row_grouped_trid<output_has_no_padding>(
+                noc, out_generator, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
+            noc.async_write_barrier();
         }
     }
     if constexpr (rotated_q_split_enabled) {

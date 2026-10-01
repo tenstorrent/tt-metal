@@ -630,7 +630,7 @@ void calculate_acos_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {
-    if constexpr (!is_fp32_dest_acc_en) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         calculate_acos_bf16<ITERATIONS>();
         return;
     }

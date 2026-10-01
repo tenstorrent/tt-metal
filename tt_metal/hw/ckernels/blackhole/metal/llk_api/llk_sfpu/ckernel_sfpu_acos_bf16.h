@@ -8,7 +8,7 @@ namespace ckernel::sfpu {
 struct AcosBf16Config {
     static constexpr uint32_t kDegree = 5u;
     static constexpr bool kSafeInput = false;
-    // Fit: minimax degree-5 polynomial on [0, 1], 1 segment, BF16 max ULP 1.02.
+    // Fit: minimax degree-5 polynomial on [0, 1], 1 segment, max pure (continuous) ULP 1.02.
     static constexpr uint32_t kCoefficientBits[] = {
         0x3fc90fd2u, 0xbe5ba9b0u, 0x3db4017au, 0xbd386186u, 0x3c9f23c6u, 0xbb8f523eu};
     inline sfpi::vFloat operator[](uint32_t index) const {

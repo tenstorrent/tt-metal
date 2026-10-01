@@ -1262,6 +1262,9 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    # #58835: since #52893 the read-only pinned upload of ttnn.load_tensor mmaps makes the per-call
+    # weight swaps 2.7x slower on QB2 (34 s -> 94 s per 12 cached loads); keep the copy path like the Wan2.2 legs.
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
     pytest --timeout 1200 models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py
     pytest --timeout 720 models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py
   model: qwenimage
