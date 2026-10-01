@@ -290,12 +290,16 @@ class LTXAttention(Module):
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
+        # Approximate exp in the softmax trades a little accuracy for SDPA speed; accurate exp is
+        # the default. Read per instance so one process can build both arms of an A/B.
+        self.sdpa_exp_approx = os.environ.get("LTX_SDPA_EXP_APPROX", "0") in ("1", "true", "True")
+
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=full_grid,
             q_chunk_size=256,
             k_chunk_size=256,
-            exp_approx_mode=False,
+            exp_approx_mode=self.sdpa_exp_approx,
         )
 
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
@@ -311,14 +315,14 @@ class LTXAttention(Module):
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=ring_sdpa_chunk_size[0],
             k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,
+            exp_approx_mode=self.sdpa_exp_approx,
         )
         self._ring_pc_by_n = {
             n: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.sdpa_worker_grid,
                 q_chunk_size=chunk[0],
                 k_chunk_size=chunk[1],
-                exp_approx_mode=False,
+                exp_approx_mode=self.sdpa_exp_approx,
             )
             for n, chunk in ring_chunks_by_n.items()
         }
@@ -327,7 +331,7 @@ class LTXAttention(Module):
                 compute_with_storage_grid_size=full_grid,
                 q_chunk_size=chunk[0],
                 k_chunk_size=chunk[1],
-                exp_approx_mode=False,
+                exp_approx_mode=self.sdpa_exp_approx,
             )
             for (b, q, kv), chunk in self.sdpa_chunk_by_shape.items()
             if b == mesh_key[0]
@@ -340,7 +344,7 @@ class LTXAttention(Module):
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=cross_ring_q_chunk,
             k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,
+            exp_approx_mode=self.sdpa_exp_approx,
         )
 
         # All SDPA (ring + cross) runs HiFi2, matching the Wan attention config.
