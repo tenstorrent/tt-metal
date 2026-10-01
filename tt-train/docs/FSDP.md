@@ -141,7 +141,9 @@ Some parameters are too small to shard into whole 32×32 tiles. Their
 every step. Keeping them replicated skips those CCLs; their gradients are
 just all-reduced once per step.
 
-List them with `replicate=[...]`, or in `device_config` for the
+List the patterns with `replicate=[...]` on every `fully_shard` call that
+owns candidate parameters (including each per-block wrapper and the root), or
+set them in `device_config` for the
 [training example](/tt-train/sources/examples/train/train.py) and the
 [GRPO Qwen3 completer](/tt-train/sources/examples/grpo/utils/qwen3_completer.py):
 
