@@ -135,7 +135,7 @@ ttnn:
     bh_p100a_civ2_viommu: 8
     bh_p150b_civ2_viommu: 8
   demo:
-    bh_sc1_high_power: 20
+    bh_sc1_high_power: 60
   sweep:
     wh_galaxy: 640
     wh_n150_civ2: 1100

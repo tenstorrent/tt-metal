@@ -1946,6 +1946,33 @@
   sp_config: sc1
 
 
+- name: "Ring MLA split-KV fused full-mesh gather accuracy + perf"
+  fabric_profile: torus_xy
+  # Q sharded over SP (mesh axis 0), latent KV block-cyclic over all 32 chips (SP x TP),
+  # gathered inside ring_mla over the full-mesh snake. The perf check holds split-KV to the
+  # classic SP-ring utilization band for the same per-device 50k+5k work.
+  cmd: |
+    export MESH_DEVICE=TG
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py -k "not perf" -q || exit $?
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py::test_ring_mla_split_kv_perf_check -svv || exit $?
+    '
+  test_type: ring_mla_split_kv
+  test_tags: [kimi_k2_7, kimi_k3, sdpa, mla, ccl]
+  test_group: sdpa_perf
+  skus:
+    bh_sc1_high_power:
+      timeout: 40
+      tier: 2
+      release_ready: false
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: demo
+  sp_config: sc1
+
+
 - name: "high_bw_all_gather CCL perf + accuracy"
   # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. Runs the 8-rank axis ring at
   # 55K and 512K global rows, then the 32-rank snake ring: exact-output accuracy plus
