@@ -165,13 +165,15 @@ def test_out_subblock_w_is_the_largest_legal_one():
 
 
 def test_residual_rides_in_as_bias_on_the_decode_path_only():
-    """Residual-as-bias is valid only at one row, so decode takes it and prefill must not."""
+    """Residual-as-bias is valid only at ONE row, so the batch-1 decode path takes it and both
+    prefill and batched decode (max_batch > 1, one row per user) must use a real add."""
     import inspect
 
     step = inspect.getsource(gpt.TtVoxtralGPT._layer_step)
     assert "bias=" in step, "wo's residual is back to a separate add"
+    assert "if B == 1:" in step and "ttnn.add(" in step, "wo must add the residual per row when B > 1"
     mlp = inspect.getsource(gpt.TtVoxtralGPT._mlp)
-    assert "if prg:" in mlp and "bias=" in mlp, "w2's residual bias is gone"
+    assert "if prg and self.max_batch == 1:" in mlp and "bias=" in mlp, "w2's residual bias is gone"
     assert _flat('ttnn.add_(x, ttnn.linear(u, w["w2"]') in _flat(
         mlp
     ), "the prefill fallback add is gone; prefill must NOT take the bias path"
