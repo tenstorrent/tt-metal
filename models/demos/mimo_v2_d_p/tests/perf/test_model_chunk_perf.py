@@ -23,6 +23,11 @@ from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS, mesh_id
 from models.demos.mimo_v2_d_p.tt.model import TtMiMoModel, block_cyclic_index
 from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
+try:
+    from tracy import signpost
+except ImportError:  # pragma: no cover
+    signpost = lambda *a, **k: None
+
 N_LAYERS = int(os.environ.get("MIMO_PERF_N_LAYERS", "6"))
 CHUNK = int(os.environ.get("MIMO_PERF_CHUNK", "4096"))
 CTX = int(os.environ.get("MIMO_PERF_CTX", "57344"))
@@ -59,11 +64,15 @@ def test_model_chunk_perf(mesh_device, device_params):
     host, wall = [], []
     for it in range(1 + ITERS):  # the first call compiles
         ttnn.synchronize_device(mesh_device)
+        if it:
+            signpost(f"chunk_L{N_LAYERS}_start")
         t0 = time.perf_counter()
         out = model.prefill_chunk(ids, KV_ACTUAL)
         host.append((time.perf_counter() - t0) * 1e3)
         ttnn.synchronize_device(mesh_device)
         wall.append((time.perf_counter() - t0) * 1e3)
+        if it:
+            signpost(f"chunk_L{N_LAYERS}_end")
         out.deallocate(True)
     h, w = sorted(host[1:]), sorted(wall[1:])
     _report(
