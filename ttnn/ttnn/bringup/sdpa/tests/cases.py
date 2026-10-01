@@ -186,4 +186,54 @@ CASES = [
         "rel": 0.008,
         "ratio": [0.98, 1.02],
     },
+    {
+        # Xing4.0 dense causal MLA (tt/attention.py:_ring_attend) on the 4x2 SP x TP mesh: ring_mla over axis 0 (the 4
+        # SP rows), 16 of 32 heads per mesh column, latent K 576 / V 512 (head_dim_v), the last chunk of the ladder
+        # rung last: queries [51200, 56320) (1280 per row), keys [0, 56320). Captured per device: q [1, 16, 1280, 576]
+        # bf16 TILE DRAM interleaved; the latent cache [1, 1, 14080, 576] bf16 TILE, ND-sharded over the DRAM banks
+        # (32-row shards, round robin), block-cyclic over the SP rows with period = the chunk, TP-replicated; the
+        # gather scratch [1, 1, 56320, 576] replicated. HiFi2 (owner exception for the SDPA) + fp32 dest (the
+        # fork's streaming path), q64 / k256 on a 10x10 grid, CCL cores from column 10, 2 links, Linear.
+        "id": "xing40_a4b_d_p-4x2-ring-mla-q16x1280-isl51200-n56320-k576-v512-hifi2-fp32-q64k256",
+        "model": "xing40_a4b_d_p",
+        "task": "O.1",
+        "sig": "708f59f1b6",
+        "op": "ring_mla",
+        "mesh": [4, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "q": [1, 16, 1280, 576],
+        "kv": [1, 1, 14080, 576],
+        "kv_memory": "ND_SHARDED_DRAM_BANKS_32ROWS",
+        "persistent_output_buffer_kv": [1, 1, 56320, 576],
+        "head_dim_v": 512,
+        "chunk": 5120,
+        "logical_n": 56320,
+        "kv_actual_isl": 51200,
+        "kv_cache_batch_idx": 0,
+        "scale": 0.14467962086200714,
+        "dim": 2,
+        "cluster_axis": 0,
+        "num_links": 2,
+        "topology": "Linear",
+        "ccl_core_grid_offset": [10, 0],
+        "use_column_major_ccl": True,
+        "is_balanced": False,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi2",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "program_config": {"grid": [10, 10], "q_chunk_size": 64, "k_chunk_size": 256, "exp_approx_mode": False},
+        # q * q_scale: score std ~ 3 x 0.145 x sqrt(576) ~ 10 (a sharp softmax, as Xing's attention)
+        "q_scale": 3.0,
+        "seed": 0,
+        # vs the float32 reference on the same bf16 inputs, both columns. Measured (seeds 0-2): pcc 0.99943, rel L2
+        # 0.0339-0.0341, worst row 0.168-0.198 (HiFi2 operand truncation; the fork's HiFi4 unit test measured rel 0.019
+        # / row 0.157 on sharp scores). Limits ~1.25x / 1.4x; one output row zeroed fails (checked by hand).
+        "pcc": 0.999,
+        "rel": 0.042,
+        "row": 0.28,
+    },
 ]

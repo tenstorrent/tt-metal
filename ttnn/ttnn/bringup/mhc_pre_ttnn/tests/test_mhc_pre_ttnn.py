@@ -24,7 +24,7 @@ def _load(name):
 
 
 ref = _load("reference")
-CASES = _load("cases").CASES
+CASES = [c for c in _load("cases").CASES if "op" not in c]  # mhc_pre only; the Xing entries: test_mhc_pre_xing.py
 _DTYPE = {"BFLOAT16": (ttnn.bfloat16, torch.bfloat16), "FLOAT32": (ttnn.float32, torch.float32)}
 
 
