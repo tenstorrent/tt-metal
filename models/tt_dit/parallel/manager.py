@@ -579,6 +579,7 @@ class CCLManager:
         input_pad_h: int = 0,
         input_pad_w: int = 0,
         padded_output: ttnn.Tensor = None,
+        topology: ttnn.Topology = None,
     ) -> ttnn.Tensor:
         """Fill and return the compact [H-top|H-bot|W-left|W-right] halo buffer via the standalone
         neighbor_pad_halo op. Pair with ttnn.experimental.conv3d(halo_buffer=...) for the two-dispatch
@@ -616,7 +617,7 @@ class CCLManager:
             np_padding_w=pw,
             np_cluster_axis=axes[0],
             np_num_links=num_links[0],
-            np_topology=self.topology,
+            np_topology=topology if topology is not None else self.topology,
             h_neighbor_semaphore=neighbor_sems[0],
             barrier_semaphore=barrier_sem,
             w_neighbor_semaphore=w_sem,
