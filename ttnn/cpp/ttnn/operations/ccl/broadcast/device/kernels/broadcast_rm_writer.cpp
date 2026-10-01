@@ -220,7 +220,7 @@ void kernel_main() {
         close_connections(fabric_connection);
 
         noc_async_write_barrier();
-        // The write barrier does not cover atomics; drain the out_ready increment before exit.
+        // Drain the local out_ready increment; the write barrier does not wait for atomics.
         noc_async_atomic_barrier();
     } else {
         if (wait_output_semaphore) {

@@ -49,8 +49,8 @@ void zero_buffer_barrier() {
 
 using namespace ttnn::operations::ccl::common;
 
-// One completion credit to every device on both arcs. The antipode gets one per arc, so each receiver counts
-// dispatch_devices. A template so non-Ring builds never instantiate the multicast, which needs a 1D axis.
+// Sends one completion credit to every device over both arcs; the antipode gets one per arc.
+// A template so non-Ring builds never instantiate the multicast, which static_asserts a 1D axis.
 template <
     bool Enable,
     uint32_t LinearizedMeshCoord,
@@ -289,9 +289,9 @@ void kernel_main() {
     // with a semaphore
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
 
-    // Ring: the antipode is a routing tie, so payloads to it alternate arcs, and a credit on the metadata packet
-    // could arrive before a payload on the other arc. So metadata carries no credit; a completion credit goes out
-    // on both arcs after all payloads, behind every payload on each arc.
+    // Ring: payloads to the antipode alternate arcs (routing tie), so a credit on the metadata packet could
+    // overtake a payload on the other arc. There metadata carries no credit; a completion credit is sent on
+    // both arcs after all payloads instead.
     constexpr bool ring_completion =
         is_1d_topology<topology>() && topology == tt::tt_fabric::Topology::Ring && axis != ReplicateGroup::NONE;
     constexpr uint32_t metadata_increment = ring_completion ? 0 : 1;
