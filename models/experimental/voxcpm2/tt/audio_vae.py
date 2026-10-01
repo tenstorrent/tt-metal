@@ -163,7 +163,7 @@ class TtCausalConv1d:
             batch_size=batch,
             groups=spec.groups,
             dtype=self.dtype,
-            conv_config=ttnn.Conv2dConfig(weights_dtype=self.dtype),
+            conv_config=ttnn.Conv2dConfig(weights_dtype=self.dtype, act_block_h_override=32),
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,

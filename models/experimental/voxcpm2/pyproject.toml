@@ -3,7 +3,7 @@ name = "tt-metal-voxcpm2"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.5,<3",
+    "torch==2.8.0",
     "numpy>=1.26,<3",
     "loguru>=0.7,<1",
     "safetensors>=0.4,<1",
@@ -13,6 +13,19 @@ dependencies = [
 reference = [
     "voxcpm @ git+https://github.com/OpenBMB/VoxCPM.git@f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629",
     "soundfile>=0.12,<1",
+    "torchaudio==2.8.0",
+]
+
+tt-runtime = [
+    "graphviz>=0.20",
+    "pandas>=2,<3",
+    "click>=8,<9",
+    "seaborn>=0.13,<1",
+    "matplotlib>=3.8,<4",
+    "pyyaml>=6,<7",
+    "packaging>=24",
+    "psutil>=6",
+    "tqdm>=4.66",
 ]
 
 [tool.uv]

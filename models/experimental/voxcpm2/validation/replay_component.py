@@ -5,6 +5,8 @@
 import argparse
 from copy import deepcopy
 import json
+import importlib.metadata
+import os
 from pathlib import Path
 import time
 
@@ -93,7 +95,8 @@ def replay(args):
     import ttnn
     from ..tt.ops import upload
     dtype = {'bfloat16': ttnn.bfloat16, 'float32': ttnn.float32}[args.dtype]
-    device = ttnn.open_device(device_id=args.device_id)
+    device = ttnn.open_device(device_id=args.device_id,
+                              l1_small_size=getattr(args, 'l1_small_size', 262144))
     try:
         component = build_component(args.component, config, state, device, dtype)
         def transfer(value):
@@ -144,11 +147,17 @@ def replay(args):
         actual = ttnn.to_torch(actual)
         if codec:
             actual = actual.squeeze(1).transpose(1, 2).contiguous()
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(actual, args.output.with_suffix('.pt'))
         result = compare_tensors(expected, actual, min_pcc=args.min_pcc,
                                  max_relative_rms=args.max_relative_rms, max_abs=args.max_abs)
         report = {'mode': 'component_replay', 'component': args.component, 'event': event['key'],
                   'checkpoint': manifest['checkpoint'], 'dtype': args.dtype,
                   'device_id': args.device_id, 'arch': str(device.arch()),
+                  'visible_devices': os.environ.get('TT_VISIBLE_DEVICES'),
+                  'l1_small_size': getattr(args, 'l1_small_size', 262144),
+                  'ttnn_version': importlib.metadata.version('ttnn'),
+                  'torch_version': torch.__version__,
                   'math_fidelity': 'HiFi4', 'fp32_dest_acc': True,
                   'cold_launch_seconds': elapsed, 'metrics': result.to_dict(),
                   'limitations': ['Compilation may be included; not steady-state performance',
@@ -169,6 +178,7 @@ def main(argv=None):
     parser.add_argument('--component', choices=COMPONENTS, required=True)
     parser.add_argument('--event-index', type=int, default=0)
     parser.add_argument('--device-id', type=int, required=True)
+    parser.add_argument('--l1-small-size', type=int, default=262144)
     parser.add_argument('--dtype', choices=('bfloat16', 'float32'), default='bfloat16')
     parser.add_argument('--min-pcc', type=float, default=0.99)
     parser.add_argument('--max-relative-rms', type=float)
