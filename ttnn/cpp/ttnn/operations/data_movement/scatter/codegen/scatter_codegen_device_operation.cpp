@@ -108,6 +108,17 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
     const auto& index_tensor = tensor_args.index_tensor;
     const auto& src_tensor = tensor_args.src_tensor;
 
+    // operation_attributes_t.page_map is a public field any caller of ttnn::prim::scatter_codegen()
+    // can set directly, bypassing build_scatter_codegen_params()'s own bounds-checked construction.
+    // Its rank prefix indexes a fixed kScatterMaxPageRank-wide block of device-side runtime args
+    // (scatter_common.hpp's map_scatter_input_page), so an out-of-range rank is rejected here rather
+    // than left to overrun that block on the device.
+    TT_FATAL(
+        attributes.page_map[0] >= 1 && attributes.page_map[0] <= kScatterMaxPageRank,
+        "scatter_codegen: operation_attributes_t.page_map rank ({}) must be between 1 and {}.",
+        attributes.page_map[0],
+        kScatterMaxPageRank);
+
     // The prim only ever holds an already-normalized tensor (transpose-to-last-dim already applied),
     // so the scatter axis here is always the last dim; -1 says that without re-deriving rank.
     TT_FATAL(
