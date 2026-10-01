@@ -333,6 +333,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 kd.bindings.scratch.push_back(
                     ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk) : ""});
             });
+            k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
+                kd.bindings.pipe.push_back(PipeBinding{name, prefetcher_pipe_id});
+            });
             for (const auto& r : k.core_range_set().ranges()) {
                 kd.core_ranges.push_back(
                     {static_cast<uint32_t>(r.start_coord.x),
