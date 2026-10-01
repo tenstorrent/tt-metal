@@ -2119,11 +2119,17 @@ class LagunaForCausalLM:
         self._spec.page_tables_per_layer = page_tables_per_layer
         cur = int(torch.as_tensor(tokens).reshape(-1)[0])
         p0 = int(pos.reshape(-1)[0])
-        # NEW-REQUEST detection by position CONTINUITY, not reset_batch. reset_batch fires every decode
-        # step here (per-step full refresh, see laguna-batched-decode-corruption), so it cannot flag a new
-        # request. Within a request the plugin advances pos by exactly 1 each call; a mismatch (or the very
-        # first call) means a fresh request → reseed history from the stashed prompt + reset guard/adaptive.
-        if self._spec_next_pos is None or p0 != self._spec_next_pos or not self._spec_hist:
+        # NEW-REQUEST detection. With async scheduling the plugin overlaps steady decode steps
+        # (vllm_tt_plugin async_decode steady_decode_*), so the host position/token of a steady step can lag
+        # by one: trusting them re-seeded the history and returned the same position's token twice ("a a",
+        # "hashhash"). With --max-num-seqs 1 a new request always changes the batch layout, so the plugin
+        # sets reset_batch; a steady step (no reset) continues from the adapter's own position and history.
+        continuing = bool(self._spec_hist) and self._spec_next_pos is not None and (
+            not reset_batch or p0 == self._spec_next_pos
+        )
+        if continuing:
+            p0, cur = self._spec_next_pos, int(self._spec_hist[-1])
+        else:
             self._spec.serve_reset()
             self._spec_buf = []
             # Seed from the prompt stashed at prefill (greedy path gets no history via kwargs). History must
