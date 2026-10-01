@@ -264,7 +264,7 @@ def test_the_split_is_parsed_and_pinned_beside_the_item_count():
     assert "_ledger().KIND_STAGE_SPLIT, stage_split" in src
 
 
-def _roofs(summary, monkeypatch, pinned):
+def _roofs(summary, monkeypatch, pinned, tp=8):
     monkeypatch.setattr(summary, "_model_facts", lambda: {})
     monkeypatch.setattr(summary, "_pinned_peak_flops", lambda *a, **k: 64e12)
     monkeypatch.setattr(summary, "_peak_for_stage", lambda *a, **k: (64e12, "hifi4"))
@@ -277,7 +277,7 @@ def _roofs(summary, monkeypatch, pinned):
     base.update(pinned)
     pinned.clear()
     pinned.update(base)
-    return summary._stage_roofs(10e9, 288.0, 8, "inference", None, {"alpha": 1.0}, model="m", task="t")
+    return summary._stage_roofs(10e9, 288.0, tp, "inference", None, {"alpha": 1.0}, model="m", task="t")
 
 
 def test_the_compute_roof_is_what_one_chip_does(summary, monkeypatch):
@@ -285,3 +285,69 @@ def test_the_compute_roof_is_what_one_chip_does(summary, monkeypatch):
     four = _roofs(summary, monkeypatch, {("stage_split", "alpha"): 4})
     assert one["alpha"]["flops"] == pytest.approx(2 * 1e9 * 1000 / 8), "unsplit: TP alone, as before"
     assert four["alpha"]["flops"] == pytest.approx(one["alpha"]["flops"] / 4), "split over 4 groups"
+
+
+# -- the roof itself is pinned -------------------------------------------------------------------------
+
+
+def test_a_pinned_roof_does_not_move_when_the_formula_does(summary, monkeypatch):
+    """Qwen-Image-Edit 2026-10-01: older code priced denoise for one chip (31-41 s band) from the same
+    pinned inputs that had given 1.0-1.3 s. Once pinned, the roof is what every reader gets."""
+    unpinned_tp8 = _roofs(summary, monkeypatch, {}, tp=8)["alpha"]
+    unpinned_tp1 = _roofs(summary, monkeypatch, {}, tp=1)["alpha"]
+    assert unpinned_tp1["compute_ms"] == pytest.approx(8 * unpinned_tp8["compute_ms"]), "control: tp moves it"
+    pins = {
+        ("stage_roof_compute_ms", "alpha"): unpinned_tp8["compute_ms"],
+        ("stage_roof_memory_ms", "alpha"): unpinned_tp8["memory_ms"],
+        ("stage_roof_flops", "alpha"): unpinned_tp8["flops"],
+    }
+    pinned_tp1 = _roofs(summary, monkeypatch, pins, tp=1)["alpha"]
+    for field in ("compute_ms", "memory_ms", "flops"):
+        assert pinned_tp1[field] == pytest.approx(unpinned_tp8[field]), field
+
+
+def test_the_gate_pins_each_stages_roof_once(pm, monkeypatch):
+    pm, led = pm
+    import cc_optimize.measurements as M
+
+    monkeypatch.setattr(led, "STAGE_ROOF_KINDS", M.STAGE_ROOF_KINDS, raising=False)
+    pm._pin_stage_roofs({"alpha": {"compute_ms": 775.08, "memory_ms": 12.0, "flops": 4.96e16}})
+    pm._pin_stage_roofs({"alpha": {"compute_ms": 24802.5, "memory_ms": 96.0, "flops": 1.6e18}})
+    # The ledger's anchor is write-once; the fake keeps every write, and anchor_value reads the first.
+    assert led.anchor_value("stage_roof_compute_ms", depth="alpha") == 775.08
+    assert led.anchor_value("stage_roof_memory_ms", depth="alpha") == 12.0
+    assert led.anchor_value("stage_roof_flops", depth="alpha") == 4.96e16
+
+
+def test_every_per_stage_reader_goes_through_the_pinned_path():
+    src = (_PA / "cc_optimize" / "summary.py").read_text()
+    i = src.index("def _stage_roofs(")
+    body = src[i : src.index("\ndef ", i + 1)]
+    assert "_pinned_stage_roof(name, model, task)" in body
+    mcp = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
+    assert "_pin_stage_roofs(_roofs)" in mcp
+
+
+def test_the_headline_ceiling_is_pinned_once(pm, monkeypatch):
+    """Against the real, write-once ledger (the fake keeps every write)."""
+    pm, _led = pm
+    import cc_optimize.measurements as M
+    from agent.perf_target import PerfTarget
+    import dataclasses
+
+    monkeypatch.setattr(pm, "_ledger", lambda: M)
+    monkeypatch.setattr(pm, "_model_key", lambda: "m")
+    fields = {f.name: None for f in dataclasses.fields(PerfTarget)}
+    first = PerfTarget(**dict(fields, theoretical_rate=1.0, band=(0.6, 0.8), unit="inference"))
+    later = dataclasses.replace(first, theoretical_rate=0.03, band=(0.018, 0.024))
+    assert pm._pinned_target(first).theoretical_rate == 1.0
+    got = pm._pinned_target(later)
+    assert (got.theoretical_rate, got.band) == (1.0, (0.6, 0.8)), "the second computation does not win"
+    assert pm._pinned_target(dataclasses.replace(first, unit="")).theoretical_rate == 1.0, "no unit: unchanged"
+
+
+def test_the_gate_and_the_report_read_the_pinned_headline():
+    mcp = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
+    assert "_pinned_target(perf_target.compute_target(" in mcp
+    src = (_PA / "cc_optimize" / "summary.py").read_text()
+    assert "_pinned_ceiling_input(k, _anchor_depth, model, task) for k in _led.CEILING_KINDS" in src
