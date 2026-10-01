@@ -34,3 +34,8 @@
   experts < 150 ms). X.3 now depends on P.2. Perf approved on the owner's word.
   Context: the 1x4 run's sliding layers passed before F49 existed (54134a87d07, 09-29) and its full attention ended at
   preset A (HiFi2, approx exp); its experts at HiFi4 after HiFi2 failed the ratio check.
+- 2026-10-01, run complete (61/61). P.1 attention 297.7 -> 260.8 ms (fp32 head split via nlp_create_q_heads_split,
+  ring SDPA chunks 64/512; no precision change). P.2 experts 158.2 -> 117.3 ms (2 fabric links for dispatch/combine/
+  offset_cumsum; no precision change). X.3: 50k->55k chunk 386 ms device (1x4: 223 ms), full 0->55k prefill 3.42 s
+  (1x4: 2.21 s). O.1: 6 fork calls covered, 5 forks' full suites pass. Open: layer-5 V cache PCC 0.989 at s56320
+  (passes 0.97; 1x4 worst 0.996); producer read-back in K.1 is 0.9999.
