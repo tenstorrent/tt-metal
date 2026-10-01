@@ -31,14 +31,21 @@ From the e2e-vs-roofline analysis on the device-profile artifact (https://claude
 
 ## Where we stopped (2026-09-30)
 
-- **Profile artifact, not yet edited.** Plan: give the two GenericOp rows measured floors the way the SDPA section
-  does (tag "compute + DM", hover shows both floors): heads op compute-only 115.6 / 210.7 / 117.0 µs (bs8 / 16 / bs32
-  chunk), DM-only 109.2 / 223.9 / 110.9; add+norm compute-only 62.5 / 88.7 / 150.0, DM-only 79.6 / 118.3 / 253.2
-  (§67 tables; the DM-only floors include the copy compute, so they are upper bounds). Only roof / bound fields
-  change, no new profile needed, but the profiled times predate the cos / sin change (~2% stale on the heads rows).
-  Waiting on the user: edit now, or after a fresh profile. The artifact's current tags: heads "L1 / compute" (fine),
-  add+norm "L1 / compute" at bs8 / 16 (wrong: DM-bound) and "DRAM" at bs32 (right). Generator scripts are still not
-  in the repo (see memory: profile-artifact).
+- **Profile artifact: re-profiled and updated (2026-10-01, version 21).** All four batch sizes profiled at cdb9143 on
+  chip 0 after a full board reset (reports `2026_10_01_15_34_46` / `15_38_45` / `15_43_17` / `15_48_29`; tt-smi held
+  chip 0 at 1350 MHz through every replay). E2e (3 rounds, chips 4 / 1 / 2 / 0): bs1 15.6 / 15.7, bs8 76.7 / 99.1,
+  bs16 143.3 / 193.1, bs32 291.7 / 377.6 ms cold / sustained; AICLK 1056 / 1000 / 993. Roofline changes: DRAM at the
+  attainable 450 GB/s (best stock streaming op, bf16 add; 512 is the datasheet); the heads op / add+norm get measured
+  device-time floors like SDPA (`device_kernel_us.py`; wall-clock bench floors include the trace's dispatch gap and
+  read 3-8% high). Replay roofline vs device: bs1 38%, bs8 78%, bs16 80%, bs32 83%. The generator is now
+  `perf_tools/profile_page.py` (PERF_GUIDE §5). Not modelled yet: the all-L1 vector ops (bs1 ~3.3 ms of 15.3 have a
+  zero bound: SwiGLU mul, residual adds, LayerNorm, heads op).
+- **bs1 focus (2026-10-01).** Gap table at cdb9143 (device µs per call vs floor): matmuls 10.2 ms (67%; FF1 / FF3 /
+  FF2 70 µs vs 48 on their 96 cores, 38 on 120), SwiGLU product 1.88 ms, heads op 1.02, SDPA 0.98 (floor 9 µs
+  compute), residual adds + LayerNorm 1.1 (142 calls of 7-8 µs). Landed: SwiGLU product via `silu_mul` mode 3,
+  15.6 -> 14.8 ms cold (NEGATIVE_RESULTS §68). Next candidates: a 6-segment `lut2` sigmoid (<= 10 µs / layer if it
+  holds accuracy), then the matmuls (M = 16 tile rows does not split over 10 grid rows: a different decomposition to
+  use all 120 cores), heads op, SDPA.
 - **Add+norm leads, if revisited.** What is exposed is each wave's read / write latency (no reads: −15 / −15 / −42 µs;
   no writes: −4 / −4 / −58 µs). Options not tried: software-pipeline the compute (next wave's add / square / partial
   before this wave's normalise) with CB 8 turned into a ring of 2-3 waves to free L1 (it holds every wave now: 147 KB

@@ -66,10 +66,14 @@ def _wrap_silu_mul(original_mul, min_rows):
     """Route the stock ``ttnn.mul(a, b, input_tensor_a_activations=[SILU])`` (the SwiGLU product
     on the unfused path) to ``custom_ops.silu_mul`` for large M. Standalone at the bs32 shape
     (``[1,32,512,9728]`` bfp8): 1591 -> 1373 us (-13.7%) and closer to torch (PCC 0.99941 vs
-    0.99897). At bs1 the generic op is slower (62 vs 59 us), hence the row threshold."""
+    0.99897). Below ``min_rows`` (bs1, [1,1,512,9728] in L1) the op runs mode 3, minimal_matmul's single-pass SwiGLU
+    with its bfp8-sized sigmoid: 52.1 -> 30.2 us device per call and closer to an fp32 SwiGLU (rel. RMSE 0.0113 vs
+    the stock 0.0176; perf_tools/bench_bs1_swiglu.py). The product is SFPU-bound there, so the block-sharded path on
+    FF1 / FF3's 96 cores is slower (33.6) than 120 cores reading interleaved tiles. QWEN_SILU_MUL_BS1=0: stock mul."""
 
     def wrapper(a, b, *args, **kwargs):
         acts = kwargs.get("input_tensor_a_activations")
+        rows = None
         if (
             not args
             and acts is not None
@@ -79,9 +83,18 @@ def _wrap_silu_mul(original_mul, min_rows):
             and kwargs.get("activations") is None
             and hasattr(a, "padded_shape")
             and _silu_mul_supported(a, b)
-            and int(a.padded_shape[-2]) * int(a.padded_shape[-3]) * int(a.padded_shape[0]) >= min_rows
         ):
-            out = silu_mul(a, b, out_dtype=kwargs.get("dtype"), memory_config=kwargs.get("memory_config"))
+            rows = int(a.padded_shape[-2]) * int(a.padded_shape[-3]) * int(a.padded_shape[0])
+            if rows < min_rows and os.getenv("QWEN_SILU_MUL_BS1", "1") != "1":
+                rows = None
+        if rows is not None:
+            out = silu_mul(
+                a,
+                b,
+                out_dtype=kwargs.get("dtype"),
+                memory_config=kwargs.get("memory_config"),
+                mode=None if rows >= min_rows else 3,
+            )
             if os.getenv("QWEN_SILU_MUL_VERIFY", "0") == "1":
                 import torch
 

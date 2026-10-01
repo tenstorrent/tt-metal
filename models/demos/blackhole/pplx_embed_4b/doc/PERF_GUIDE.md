@@ -103,6 +103,13 @@ TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPOR
   `EmbeddingsDeviceOperation` row (the Generator warm-up shapes precede it). Kernel durations are cycles
   converted at the nominal 1.35 GHz, so they read ~20% optimistic for sustained batched runs.
 - `tt-perf-report <ops_perf_results.csv>` gives the per-op table used for the `ttperfreport_*.txt` files.
+- The per-op profile page (claude.ai artifact `EyeLiogdyYu3soMry6akYn`): read the artifact (saves its HTML), write a
+  `runs.json` with the new report timestamps and e2e numbers, then `python3 $M/perf_tools/profile_page.py <page.html>
+  runs.json <out.html>` (keeps the page's Baseline level, rebuilds Optimized, adds the roofline fields) and republish.
+  Its measured floors (`MEASURED_FLOORS`) are device kernel time: run a floor bench under
+  `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR=<dir>` and read it with `$M/perf_tools/device_kernel_us.py <dir>`
+  (wall-clock µs per call include the trace's op-to-op gap, 3-8 µs here). Profile on a cool chip and check tt-smi
+  holds 1350 MHz during the replay, or the DRAM floors do not compare with the durations.
 - Per-op L1/DRAM buffer placement: `$PY $M/tests/perf/gen_mem_report.py --batch 8 --seq 512 --out /tmp/mem_bs8.csv` (turns off ttnn's fast runtime mode, without which the op hooks never fire); addresses and fragmentation: `$PY $M/perf_tools/l1_map_first_layer.py 16`.
 
 Raw profiles and reports are on the host under `/home/ttuser/ashai/pplx-embedding-models/perf_csv/`
@@ -158,6 +165,7 @@ tensors). End-of-model hidden-state cosines are not an equivalence test on this 
 | `bench_swiglu_variants.py <batch> [xscale …]` (`MM_BLOCKS=`, `SW_ONLY=`, `SW_REPEAT=3`) | pack-thread SwiGLU SFPU pass variants (`swiglu_sfpu.hpp` patched) timed at the model's blocks, with their error vs an fp32 SwiGLU of the device's own pre-activations; `SW_REPEAT=3` exposes a pass's cost |
 | `test_qkv_chunks.py` | bit-identity of the chunked bs32 path's ops: add+norm half-batch output pair, heads op per half batch at a batch offset |
 | `test_heads_qsplit.py`, `test_sdpa_concat_out.py` | bit-identity + timing of the fused-heads Q split and the concat-free SDPA output |
+| `bench_bs1_swiglu.py` | bs1 FF1 + FF3 + SwiGLU product at the model's call: stock mul vs `silu_mul` mode 3 on interleaved and on block-sharded FF1 / FF3 outputs, with each arm's error vs an fp32 SwiGLU (device times via `device_kernel_us.py`) |
 | `parse_smi2.py <dev> <log>` | aligns tt-smi clock/power samples (`/tmp/smi_samples/*.json`) with iteration timestamps |
 
 ## 8. Records
