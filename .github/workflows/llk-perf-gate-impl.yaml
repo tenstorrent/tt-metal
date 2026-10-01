@@ -408,7 +408,7 @@ jobs:
           echo "should_post=false" >> $GITHUB_OUTPUT
 
       - name: Notify Slack
-        if: always() && steps.slack.outputs.should_post == 'true'
+        if: false  # trial: no Slack post
         env:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
         run: |

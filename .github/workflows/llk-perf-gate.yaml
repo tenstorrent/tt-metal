@@ -38,6 +38,11 @@ on:
         description: "PR to name in the report (labelling only; nothing is posted to it)"
         required: false
         type: string
+      wh_threshold:
+        description: "Trial: one fixed Wormhole threshold for every module and run type"
+        required: false
+        default: "0.02"
+        type: string
 permissions:
   actions: read
   contents: read
@@ -144,7 +149,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.08"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.02"}]' || '[{"arch":"blackhole","threshold":"0.02"},{"arch":"wormhole","threshold":"0.08"}]') }}
+        include: ${{ fromJSON(inputs.arch == 'wormhole' && format('[{{"arch":"wormhole","threshold":"{0}"}}]', inputs.wh_threshold || '0.02') || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.02"}]' || '[{"arch":"blackhole","threshold":"0.02"},{"arch":"wormhole","threshold":"0.08"}]') }}
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
