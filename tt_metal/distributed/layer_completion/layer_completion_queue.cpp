@@ -26,10 +26,6 @@ bool shm_path_exists(const std::string& shm_name) {
     return ::stat(("/dev/shm" + shm_name).c_str(), &st) == 0;
 }
 
-// The cells region must land cache-line-aligned in every attached process.
-// mmap is page-aligned so this cannot fail today; the check converts
-// "impossible" into "loudly impossible" if the mapping behaviour or the
-// layout math ever changes (v2 cells are one cache line each).
 template <typename MsgT>
 void check_mapping_alignment(const void* base, const std::string& shm_name, const char* op) {
     const auto addr = reinterpret_cast<std::uintptr_t>(base);
@@ -109,8 +105,7 @@ std::unique_ptr<LayerCompletionQueueT<MsgT>> LayerCompletionQueueT<MsgT>::connec
             hdr->magic,
             hdr->capacity));
     }
-    return std::unique_ptr<LayerCompletionQueueT>(
-        new LayerCompletionQueueT(std::move(shm), shm_name, Role::Connector));
+    return std::unique_ptr<LayerCompletionQueueT>(new LayerCompletionQueueT(std::move(shm), shm_name, Role::Connector));
 }
 
 template <typename MsgT>
@@ -173,7 +168,6 @@ void LayerCompletionQueueT<MsgT>::shutdown() {
     shm_->close();
 }
 
-// The only two instantiations (extern template declarations in the public header).
 template class LayerCompletionQueueT<LayerCompletionMessage>;
 template class LayerCompletionQueueT<LayerCompletionMessageV2>;
 

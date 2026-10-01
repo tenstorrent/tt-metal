@@ -1534,8 +1534,6 @@ def main() -> None:
 
     kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
 
-    # If we're not performing golden trace PCC-validation, then don't consume these and allow loopback
-    # migration test in prefill_runner.py to consume acks and perform the testing of loopback migration
     completion_channel = connect_layer_completion_channel(timeout_s) if cfg.verify else None
     if cfg.verify and completion_channel is None:
         logger.error(

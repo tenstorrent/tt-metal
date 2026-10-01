@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// LayerCompletionQueueT — POSIX-SHM-backed bounded MPSC ring carrying
-// layer-completion messages. Dual role, modelled on
+// LayerCompletionQueue — POSIX-SHM-backed bounded MPSC ring carrying
+// LayerCompletionMessages. Dual role, modelled on
 // InterProcessCounterChannel:
 //   * create(name)  → owner. Creates /dev/shm/<name>, initialises the
 //                     ring, owns its lifetime, unlinks on shutdown.
@@ -11,18 +11,8 @@
 //                     segment by name (polls until present or timeout).
 //
 // The ring itself is symmetric (any attached process may push and/or
-// pop). In the prefill topology the router owns the host-local ring and
-// is the sole consumer; the prefill runner(s) connect and push. The v2
-// scheduler-facing ring inverts the roles: the master router owns and
-// pushes, the scheduler connects and pops.
-//
-// Templated on the message version (see layer_completion_message.hpp):
-//   LayerCompletionQueue   — v1 (24B messages, magic 'LCQ1'), the frozen
-//                            count-protocol format.
-//   LayerCompletionQueueV2 — v2 (48B self-describing messages, magic
-//                            'LCQ2'), the structured protocol.
-// Only these two instantiations exist (extern template below); the magic
-// check in connect() rejects a cross-version attach.
+// pop). In the prefill topology the router owns it and is the sole
+// consumer; the prefill runner(s) connect and push.
 
 #pragma once
 
@@ -41,14 +31,10 @@ namespace tt::tt_metal::internal {
 
 using tt::tt_metal::distributed::NamedShm;  // tt_metal/distributed/named_shm.hpp
 
-struct LayerCompletionRingHeader;           // fwd — defined in layer_completion_ring_layout.hpp
+struct LayerCompletionRingHeader;
 template <typename MsgT>
-struct LayerCompletionCellT;                // fwd — defined in layer_completion_ring_layout.hpp
+struct LayerCompletionCellT;
 
-// Protocol-agnostic base for the two typed rings below, so an owner that is
-// protocol-polymorphic (the router) holds EITHER message version through one
-// member. Only the protocol-neutral ops are virtual; typed use is recovered by
-// static_cast at sites where the protocol (hence the dynamic type) is known.
 class LayerCompletionQueueBase {
 public:
     virtual ~LayerCompletionQueueBase() = default;
@@ -101,10 +87,9 @@ private:
     std::atomic<bool> shutdown_called_{false};
 };
 
-using LayerCompletionQueue = LayerCompletionQueueT<LayerCompletionMessage>;      // v1
-using LayerCompletionQueueV2 = LayerCompletionQueueT<LayerCompletionMessageV2>;  // v2
+using LayerCompletionQueue = LayerCompletionQueueT<LayerCompletionMessage>;
+using LayerCompletionQueueV2 = LayerCompletionQueueT<LayerCompletionMessageV2>;
 
-// The only two instantiations — defined in layer_completion_queue.cpp.
 extern template class LayerCompletionQueueT<LayerCompletionMessage>;
 extern template class LayerCompletionQueueT<LayerCompletionMessageV2>;
 

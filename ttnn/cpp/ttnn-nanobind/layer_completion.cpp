@@ -39,6 +39,7 @@ namespace ttnn::layer_completion {
 namespace nb = nanobind;
 
 void bind_layer_completion_api(nb::module_& mod) {
+    using tt::tt_metal::internal::layer_completion_host_ts_ns;
     using tt::tt_metal::internal::LayerCompletionMessage;
     using tt::tt_metal::internal::LayerCompletionMessageV2;
     using tt::tt_metal::internal::LayerCompletionProtocol;
@@ -47,18 +48,11 @@ void bind_layer_completion_api(nb::module_& mod) {
     using tt::tt_metal::internal::LayerCompletionQueueV2;
     using tt::tt_metal::internal::LayerCompletionRouter;
     using tt::tt_metal::internal::LayerCompletionRouterConfig;
-    using tt::tt_metal::internal::layer_completion_host_ts_ns;
 
     mod.doc() = "Pipelined-prefill layer-completion ring/router/consumer.";
 
-    // Protocol-neutral surface, shared by both ring versions. Everything a constructed ring
-    // supports regardless of message version lives here; the versioned classes below add only
-    // their create/connect factories and their message-typed try_push/try_pop.
     nb::class_<LayerCompletionQueueBase>(mod, "LayerCompletionQueueBase")
-        .def(
-            "shutdown",
-            &LayerCompletionQueueBase::shutdown,
-            "Idempotent teardown. Owner unlinks; connector unmaps.")
+        .def("shutdown", &LayerCompletionQueueBase::shutdown, "Idempotent teardown. Owner unlinks; connector unmaps.")
         .def_prop_ro("shm_name", &LayerCompletionQueueBase::shm_name)
         .def_prop_ro_static("capacity", [](nb::handle) { return LayerCompletionQueue::capacity(); });
 
@@ -149,9 +143,16 @@ void bind_layer_completion_api(nb::module_& mod) {
             "Returns False (no write) when the ring is full.")
         .def(
             "try_pop",
-            [](LayerCompletionQueueV2& self)
-                -> std::optional<
-                    std::tuple<uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t>> {
+            [](LayerCompletionQueueV2& self) -> std::optional<std::tuple<
+                                                 uint64_t,
+                                                 uint32_t,
+                                                 uint32_t,
+                                                 uint32_t,
+                                                 uint32_t,
+                                                 uint32_t,
+                                                 uint32_t,
+                                                 uint32_t,
+                                                 uint64_t>> {
                 LayerCompletionMessageV2 m{};
                 if (!self.try_pop(m)) {
                     return std::nullopt;
@@ -206,7 +207,6 @@ void bind_layer_completion_api(nb::module_& mod) {
             nb::arg("scheduler_shm_name") = std::string{},
             nb::arg("poll_idle_us") = 100,
             nb::arg("teardown_timeout_ms") = 5000,
-            // Appended (after every pre-existing arg) so positional callers are unaffected.
             nb::arg("protocol") = 1,
             "Create the host's router: owns the local ring, spawns the listener thread, and on the master "
             "rank owns the scheduler-facing segment at scheduler_shm_name (one name for both protocols). "
