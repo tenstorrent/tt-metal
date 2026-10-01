@@ -757,7 +757,7 @@ void sub_exp_block_bcast_cols(
             pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
         }
 #endif
-#if !defined(SDPA_RECIPE_FP32) && !defined(SDPA_KO_SUMPACK)
+#if !defined(SDPA_RECIPE_FP32) && !defined(SDPA_KO_SUMPACK) && !defined(SDPA_PA_DENOM)
 #if defined(SDPA_PA) && !(SDPA_PA_DBG & 16)
         pack_reconfig_data_format(reduce_cb);
 #endif
@@ -1879,6 +1879,41 @@ static void sdpa_inner_loop_step(
         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+#if defined(SDPA_PA) && defined(SDPA_PA_DENOM)
+        // P-A denominator: l_chunk = P * 1 on the FPU (PV fidelity, so P is rounded as in PV), Float32
+        // L1-accumulated into the denominator bank. Replaces the per-tile row-sum packs.
+        {
+            CircularBuffer(cb_col_identity).wait_front(1);
+            matmul_block_init(cb_qkt_im, cb_col_identity, 0, 1, 4, KT_stride);
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
+            pack_reconfig_data_format(cur.sum);
+            configure_single_tile_pack(cur.sum);
+            PACK((llk_pack_reconfig_l1_acc(is_first_iter ? 0 : 1)));
+            for (uint32_t row = 0; row < Sq_chunk_t; row += 4) {
+                const uint32_t rows = Sq_chunk_t - row < 4 ? Sq_chunk_t - row : 4;
+                if (rows != 4) {
+                    UNPACK((llk_unpack_AB_matmul_init(cb_qkt_im, cb_col_identity, 0, 1, rows, KT_stride)));
+                    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, rows)));
+                }
+                tile_regs_acquire();
+                for (uint32_t col = 0; col < active_Sk; ++col) {
+                    UNPACK((llk_unpack_AB_matmul(
+                        cb_qkt_im, cb_col_identity, row * KT_stride + col, 0, 1, rows, KT_stride)));
+                    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(0, 1, rows)));
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t r = 0; r < rows; ++r) {
+                    pack_tile<true>(r, cur.sum, (row + r) * sdpa_sum_stride);
+                }
+                tile_regs_release();
+            }
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            pack_reconfig_data_format(cb_qkt_im);
+            MATH((llk_math_matmul_init_no_mop<MATH_FIDELITY, MM_THROTTLE>(
+                cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h)));
+        }
+#endif
 
 #ifdef SDPA_RECIPE_FP32
         // All P rows are committed by the drain barrier above. Use exactly the
