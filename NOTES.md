@@ -16,12 +16,16 @@ CPU (torch, 64 threads) reference: mel-VAE 0.32 s, vocoder+BWE ~10 s -> host CPU
 Device overlap with VAE decode: same chips, one CQ -> no real overlap; audio is already overlapped with the
 video encode thread.
 
-## Device job
-blx03 job 041 (queued 14:47 behind t81 job 040): `bash ~/fasth3/t83/run83.sh` (copy in tt-project/t83/run83.sh).
-Log: g14blx03:~/fasth3/t83/run83.log. Status: `ssh g14blx03 tt-device-mcp status -j 041`.
-Pass lines: `AUDIO chain=0 replay_ms=...`, `AUDIO split ...`, `AUDIO chain=1 replay_ms=...`,
-`T83_CMP chain0_vs_chain1 identical=...`, `T83_EXIT=0`.
+## Device jobs
+blx03 job 041 (both arms, one job): chain=0 replay 550.4 ms/decode min (first replay 1080.6), eager_vs_replay 0.
+Failed on the split probe's own assert (split differs from decode_audio ~1e-4), so chain=1 never ran. No drop during 041;
+the 10:17 PDT blx03 drop was during ltx-host job 051 (not ours). chain0 wave kept at blx03:/var/tmp/fasth3/t83/wave_chain0.pt.
+Fix 54771db51fb: split prints drift instead of asserting. run83.sh now takes ARMS=0|1|01 (hook caps -t at 600 s).
+blx03 job 062: `ARMS=1 bash ~/fasth3/t83/run83.sh` (-w /home/smarton -t 590), chain=1 arm + T83_CMP vs saved chain0 wave.
+Log: g14blx03:~/fasth3/t83/run83.log. Copies: tt-project/t83/.
 
-Next: read the log, check broker log for drops during 041 (stop ALL device work if a drop started during it),
-copy log to tt-project/t83/, `rm -rf ~/fasth3/t83 /var/tmp/fasth3/t83` on blx03. If chain is bit-identical and
-faster: report the saving (flag already exists, default 0). If not identical: look at device add/clamp vs host.
+Next: read run83.log for `AUDIO chain=1 replay_ms`, `T83_CMP`, `T83_EXIT`; check for drops during 062 (stop ALL device
+work if one started during it). Then submit `ARMS=0` (job ~2 min, warm cache) for the split timings.
+If chain=1 is bit-identical and faster: report the saving (flag exists, default 0). If not identical: STFT device_framing
+(set only for the chain) is the likely source; compare device vs host framing.
+After: copy logs to tt-project/t83/, `rm -rf ~/fasth3/t83 /var/tmp/fasth3/t83` on blx03.
