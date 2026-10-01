@@ -37,6 +37,21 @@ pid_t extract_pid_from_manifest_name(const std::string& filename) {
     }
 }
 
+// The manifest's first line is "start <ticks>" (see flush_manifest). Older
+// manifests have no such line and are judged by pid alone.
+uint64_t read_manifest_start_time(const std::string& manifest_path) {
+    std::ifstream ifs(manifest_path);
+    std::string line;
+    if (!std::getline(ifs, line) || !line.starts_with("start ")) {
+        return 0;
+    }
+    try {
+        return std::stoull(line.substr(6));
+    } catch (...) {
+        return 0;
+    }
+}
+
 struct sigaction prev_sigint, prev_sigterm;
 
 void invoke_previous_handler(int sig, const struct sigaction& prev) {
@@ -146,7 +161,8 @@ bool ShmResourceTracker::is_process_alive(pid_t pid, uint64_t start_time) {
     return current == 0 || current == start_time;
 }
 
-ShmResourceTracker::ShmResourceTracker() : manifest_path_(manifest_path_for_pid(getpid())) {
+ShmResourceTracker::ShmResourceTracker() :
+    manifest_path_(manifest_path_for_pid(getpid())), start_time_(process_start_time(getpid())) {
     cleanup_stale_resources();
 
     struct sigaction sa{};
@@ -208,6 +224,7 @@ void ShmResourceTracker::flush_manifest() {
     if (!ofs) {
         return;
     }
+    ofs << "start " << start_time_ << "\n";
     for (const auto& name : shm_names_) {
         ofs << "shm " << name << "\n";
     }
@@ -273,18 +290,41 @@ void ShmResourceTracker::cleanup_stale_resources() {
         return;
     }
 
-    std::vector<std::string> stale_manifests;
+    struct StaleManifest {
+        std::string path;
+        bool pid_reused;
+    };
+    std::vector<StaleManifest> stale_manifests;
     std::vector<std::string> stale_shm_names;
 
-    pid_t my_pid = getpid();
+    const pid_t my_pid = getpid();
+    const uint64_t my_start = process_start_time(my_pid);
     struct dirent* entry;
     while ((entry = readdir(dir)) != nullptr) {
         std::string name(entry->d_name);
 
-        // Check for manifest files from dead processes
+        // Check for manifest files from dead processes. A live pid is not
+        // enough: the owner may have died and its pid been handed to an
+        // unrelated process, which the start time recorded in the manifest
+        // tells apart.
         pid_t manifest_pid = extract_pid_from_manifest_name(name);
-        if (manifest_pid > 0 && manifest_pid != my_pid && !is_pid_alive(manifest_pid)) {
-            stale_manifests.push_back("/dev/shm/" + name);
+        if (manifest_pid > 0) {
+            const std::string path = "/dev/shm/" + name;
+            if (manifest_pid == my_pid) {
+                // A manifest at our own path is a predecessor's if it was
+                // written by a process with a different start time: we were
+                // handed its pid. Without a start line it cannot be told
+                // apart from our own and is left alone.
+                const uint64_t recorded = read_manifest_start_time(path);
+                if (recorded != 0 && my_start != 0 && recorded != my_start) {
+                    stale_manifests.push_back({path, true});
+                }
+                continue;
+            }
+            const bool pid_alive = is_pid_alive(manifest_pid);
+            if (!pid_alive || !is_process_alive(manifest_pid, read_manifest_start_time(path))) {
+                stale_manifests.push_back({path, pid_alive});
+            }
             continue;
         }
 
@@ -298,7 +338,7 @@ void ShmResourceTracker::cleanup_stale_resources() {
     closedir(dir);
 
     // Clean up resources listed in stale manifests
-    for (const auto& manifest : stale_manifests) {
+    for (const auto& [manifest, pid_reused] : stale_manifests) {
         std::ifstream ifs(manifest);
         std::string line;
         while (std::getline(ifs, line)) {
@@ -315,7 +355,14 @@ void ShmResourceTracker::cleanup_stale_resources() {
             }
         }
         std::remove(manifest.c_str());
-        log_info(LogMetal, "ShmResourceTracker: removed stale manifest '{}'", manifest);
+        if (pid_reused) {
+            log_info(
+                LogMetal,
+                "ShmResourceTracker: removed stale manifest '{}' (its pid now belongs to another process)",
+                manifest);
+        } else {
+            log_info(LogMetal, "ShmResourceTracker: removed stale manifest '{}'", manifest);
+        }
     }
 
     // Clean up orphaned shm objects not covered by any manifest
