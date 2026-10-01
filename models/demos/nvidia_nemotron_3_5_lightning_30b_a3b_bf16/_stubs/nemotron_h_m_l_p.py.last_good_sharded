@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+# >>> MACHINE-GENERATED stub (ADAPT — canonical-wrapper path) <<<
+"""Pure-TTNN NemotronH MLP for `nemotron_h_m_l_p` (`mixer.shared_experts`, a
+`NemotronHMLP`: un-gated `down_proj(relu2(up_proj(x)))`, no bias).
+
+The canonical `MLP` (models/tt_transformers/tt/mlp.py) is structurally
+inapplicable: its construction path goes through `ModelArgs(mesh_device=...)`,
+which cannot build a config for this repo's custom NemotronH checkpoint (same
+`ModelArgs` failure documented on the graduated `nemotron_h_attention`
+sibling), and the canonical MLP is gated (`up * silu(gate)`) while
+NemotronHMLP has no `gate_proj` at all. So this stub computes the forward
+with native `ttnn.*` ops. The canonical import is retained per the ADAPT
+requirement.
+
+Tensor-parallel (TP=2): standard column/row-parallel MLP -- up_proj is
+column-parallel (split its output/intermediate features across chips,
+relu2 is elementwise so it stays local), down_proj is row-parallel (split
+its input by the same halves, then all_reduce the partial sums).
+"""
+from __future__ import annotations
+import torch
+import ttnn
+
+from models.tt_transformers.tt.mlp import MLP  # kept per ADAPT requirement
+
+
+class TtNemotronHMLP:
+    def __init__(self, device, torch_module) -> None:
+        self.device = device
+
+        Wup = torch_module.up_proj.weight.detach().float().t().contiguous()  # (hidden, inter)
+        Wdown = torch_module.down_proj.weight.detach().float().t().contiguous()  # (inter, hidden)
+
+        # ---- tensor-parallel config -----------------------------------
+        import os as _os
+
+        dev = self.device
+        try:
+            _is_mesh = isinstance(dev, ttnn.MeshDevice)
+        except AttributeError:
+            _is_mesh = False
+        _mesh_shape = list(dev.shape) if _is_mesh else [1, 1]
+        shard = bool(_os.environ.get("TT_HW_PLANNER_SHARD_RUN")) and _is_mesh
+        TP = _mesh_shape[-1] if shard else 1
+        inter = Wup.shape[1]
+        shard = shard and TP > 1 and (inter % TP == 0)
+        self._shard = shard
+        self._TP = TP
+        self._tp_axis = len(_mesh_shape) - 1
+        self._mesh_shape = _mesh_shape
+
+        if shard:
+            self._w_up = self._shd(Wup, 1)
+            self._w_down = self._shd(Wdown, 0)
+        else:
+            self._w_up = self._dev(Wup)
+            self._w_down = self._dev(Wdown)
+
+        self.ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    # ------------------------------------------------------------------ #
+    @classmethod
+    def build(cls, device, torch_module):
+        return cls(device, torch_module)
+
+    # ----------------------------- helpers ---------------------------- #
+    def _is_mesh(self):
+        try:
+            if isinstance(self.device, ttnn.MeshDevice):
+                return True
+        except AttributeError:
+            pass
+        return hasattr(self.device, "get_device_ids") or hasattr(self.device, "get_devices")
+
+    def _dev(self, torch_tensor, layout=ttnn.TILE_LAYOUT):
+        if self._is_mesh():
+            try:
+                return ttnn.from_torch(
+                    torch_tensor, dtype=ttnn.float32, layout=layout, device=self.device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                )
+            except Exception:
+                pass
+        return ttnn.from_torch(torch_tensor, dtype=ttnn.float32, layout=layout, device=self.device)
+
+    def _shd(self, torch_tensor, dim, layout=ttnn.TILE_LAYOUT):
+        return ttnn.from_torch(
+            torch_tensor, dtype=ttnn.float32, layout=layout, device=self.device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.device, mesh_shape=self._mesh_shape, dims=(None, dim)),
+        )
+
+    def _fp32(self, t):
+        if isinstance(t, ttnn.Tensor):
+            if t.dtype != ttnn.float32:
+                return ttnn.typecast(t, ttnn.float32)
+            return t
+        return self._dev(t.float())
+
+    # ----------------------------- forward ---------------------------- #
+    def __call__(self, hidden_states, **kwargs):
+        hs = self._fp32(hidden_states)
+        if hs.layout != ttnn.TILE_LAYOUT:
+            hs = ttnn.to_layout(hs, ttnn.TILE_LAYOUT)
+
+        up = ttnn.matmul(hs, self._w_up, compute_kernel_config=self.ckc)  # (.,.,inter) local
+        ttnn.deallocate(hs)
+        act = ttnn.relu(up)
+        ttnn.deallocate(up)
+        act = ttnn.multiply(act, act)  # relu2
+
+        out = ttnn.matmul(act, self._w_down, compute_kernel_config=self.ckc)  # (.,.,hidden) partial if sharded
+        ttnn.deallocate(act)
+        if self._shard:
+            out = ttnn.all_reduce(out, cluster_axis=self._tp_axis, topology=ttnn.Topology.Linear)
+        return ttnn.typecast(out, ttnn.bfloat16)
+
+
+# Module-level `build` — primary test entry point.
+def build(device, torch_module=None):
+    return TtNemotronHMLP.build(device, torch_module)
+
+
+# Backward-compatible slug shim.
+def nemotron_h_m_l_p(device, torch_module=None):
+    return TtNemotronHMLP.build(device, torch_module)

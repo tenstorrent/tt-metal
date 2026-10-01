@@ -1,0 +1,26 @@
+diff --git a/public/tracy/TracyTTDevice.hpp b/public/tracy/TracyTTDevice.hpp
+index 9640cfae..5c3016bb 100644
+--- a/public/tracy/TracyTTDevice.hpp
++++ b/public/tracy/TracyTTDevice.hpp
+@@ -165,14 +165,13 @@ namespace tracy {
+         }
+ 
+         std::string getRunIdString(const TTDeviceMarker& marker) {
+-            // TODO(MO) Until #14847 avoid attaching opID as the zone function name except for B and E FW
+-            // This is to avoid generating 5 to 10 times more source locations which is capped at 32K
+-            if (!marker.marker_name_keyword_flags[static_cast<uint16_t>(MarkerDetails::MarkerNameKeyword::BRISC_FW)] &&
+-                !marker.marker_name_keyword_flags[static_cast<uint16_t>(MarkerDetails::MarkerNameKeyword::ERISC_FW)]) {
+-                return "";
+-            }
+-            const std::string id_string = marker.risc == RiscType::TENSIX_RISC_AGG ? "TRACE ID:" : "OP ID:";
+-            return marker.runtime_host_id > 0 ? id_string + std::to_string(marker.runtime_host_id) : "";
++            // Never attach opID as the zone function name (#14847): it made every op instance of a
++            // B/E FW marker register as a distinct Tracy source location, blowing past the 32K cap on
++            // real MoE runs. run_host_id is still recorded on the marker itself and reaches
++            // process_device_log.py via its own numeric CSV column, so device-side op timing
++            // attribution (which never parsed this string) is unaffected -- this string is only ever
++            // a human-readable label in the Tracy desktop GUI.
++            return "";
+         }
+ 
+         tracy::Color::ColorType getMarkerColor(const TTDeviceMarker& marker) {
