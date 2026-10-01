@@ -2276,11 +2276,13 @@ def run_chunked_transformer_updated(
         # dense path's filename stays byte-identical, keeping the cross-run perf-trend history continuous.
         kv_suffix = "_tpkv" if tp_shard_kv else ""
         kv_label = ", TP-sharded KV" if tp_shard_kv else ""
+        trace_suffix = "_traced" if use_trace else ""
+        trace_label = ", traced" if use_trace else ", no-trace"
         emit_summary(
             "perf",
-            f"{variant.name}_L{num_layers}_c{n_chunks}_i{num_iters}_p{preload_isl}{kv_suffix}",
+            f"{variant.name}_L{num_layers}_c{n_chunks}_i{num_iters}_p{preload_isl}{kv_suffix}{trace_suffix}",
             f"Chunk timing — {variant.name} (L{num_layers}, {n_chunks} chunks, {num_iters} iters, "
-            f"preload {preload_isl}{kv_label})",
+            f"preload {preload_isl}{kv_label}{trace_label})",
             perf_table_lines + ["", "phase timings:"] + timing_lines,
         )
     for line in timing_lines:
