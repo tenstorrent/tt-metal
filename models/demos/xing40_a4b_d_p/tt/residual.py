@@ -25,11 +25,10 @@ XING_RESIDUAL_MIX selects the path:
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 import ttnn
+from models.demos.xing40_a4b_d_p.tt.settings import settings
 
 from .layout import HC
 
@@ -38,7 +37,7 @@ MIX_MODES = ("fused", "addcmul", "matmul")
 
 
 def residual_mix_mode() -> str:
-    mode = os.environ.get("XING_RESIDUAL_MIX", "fused")
+    mode = settings.get("RESIDUAL_MIX")
     assert mode in MIX_MODES, f"XING_RESIDUAL_MIX={mode!r}, want one of {MIX_MODES}"
     return mode
 
@@ -72,7 +71,7 @@ class TtHcResidual:
             self.sel = put(sel.reshape(1, 1, self.k_hc, n * w))
             self.diag = put(torch.eye(TILE).repeat(1, n * (n + 1)).reshape(1, 1, TILE, n * w))
             self.ckc = ttnn.types.BlackholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY")),
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,

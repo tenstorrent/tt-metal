@@ -32,11 +32,10 @@ XING_HC_IMPL selects what runs after the all_reduce (and tt/collapse.py's collap
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 import ttnn
+from models.demos.xing40_a4b_d_p.tt.settings import settings
 
 from .layout import HC, streams_cols_to_chip_major
 
@@ -48,7 +47,7 @@ HC_IMPLS = ("fused", "composed")
 
 
 def hc_impl() -> str:
-    mode = os.environ.get("XING_HC_IMPL", "fused")
+    mode = settings.get("HC_IMPL")
     assert mode in HC_IMPLS, f"XING_HC_IMPL={mode!r}, want one of {HC_IMPLS}"
     return mode
 
@@ -56,7 +55,7 @@ def hc_impl() -> str:
 def hifi4(mesh):
     return ttnn.init_device_compute_kernel_config(
         mesh.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY")),
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,

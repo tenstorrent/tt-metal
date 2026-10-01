@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Optional
 
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
+from models.demos.xing40_a4b_d_p.tt.settings import settings
 
 MODEL_NAME = "xing40_a4b_d_p"
 MESH_SHAPE = (4, 2)
@@ -68,7 +69,7 @@ def bringup_spec():
     """The bring-up spec: BRINGUP_SPEC when it is this model's, else this model's own spec.yaml."""
     from models.demos.common.bringup.reference.golden import load_spec
 
-    if os.environ.get("BRINGUP_SPEC"):
+    if settings.get("BRINGUP_SPEC_SET"):
         s = load_spec()
         if s.model == MODEL_NAME:
             return s
@@ -77,7 +78,7 @@ def bringup_spec():
 
 def resolve_model_path() -> str:
     """PREFILL_HF_MODEL, else the bring-up spec's checkpoint (paths.hf)."""
-    env = os.environ.get("PREFILL_HF_MODEL")
+    env = settings.get("HF_MODEL")
     if env:
         return env
     from models.demos.common.bringup.reference.golden import hf_path
@@ -89,7 +90,7 @@ def served_layers(first_layer_idx: int, num_layers: int) -> list[int]:
     """Global indices of the layers this rank builds and acks (see module docstring)."""
     from models.demos.common.bringup.core.spec import parse_layers
 
-    env = os.environ.get("PREFILL_XING_LAYERS")
+    env = settings.get("LAYERS")
     layers = parse_layers(env, Xing40Config.NUM_LAYERS) if env else range(Xing40Config.NUM_LAYERS)
     layers = [i for i in layers if first_layer_idx <= i < first_layer_idx + num_layers]
     assert (
@@ -283,7 +284,7 @@ class XingPrefillAdapter(PrefillModelAdapter):
         return XingConfig.from_json(os.path.join(resolve_model_path(), "config.json"))
 
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
-        env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
+        env_cache = self.ttnn_cache_default if settings.get("TTNN_CACHE") == "@default" else settings.get("TTNN_CACHE")
         if not env_cache:
             return None
         sp, tp = mesh_shape

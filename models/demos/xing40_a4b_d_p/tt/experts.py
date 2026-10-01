@@ -29,7 +29,6 @@ No host work in __call__: the dispatch / combine modules (sizes only) are built 
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import torch
@@ -39,6 +38,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, comp
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.xing40_a4b_d_p.tt.settings import settings
 
 REPO = Path(__file__).resolve().parents[4]
 CACHE_ROOT = REPO / "generated/xing40_a4b_d_p/tt_cache"
@@ -53,7 +53,7 @@ _SEQ_MODULES = {}
 def experts_fidelity():
     """Routed-expert matmul fidelity: HiFi2 by owner decision (2026-10-01, after P.3's A/B: experts 256.6 -> 242.4 ms,
     s56320 top5 1.0, final hidden 0.99803 with the bfp8 KV cache); XING_EXPERTS_FIDELITY=hifi4 for the previous path."""
-    f = os.environ.get("XING_EXPERTS_FIDELITY", "hifi2").lower()
+    f = settings.get("EXPERTS_FIDELITY")
     assert f in ("hifi2", "hifi4"), f"XING_EXPERTS_FIDELITY={f!r}, expected hifi2 or hifi4"
     return ttnn.MathFidelity.HiFi2 if f == "hifi2" else ttnn.MathFidelity.HiFi4
 
@@ -372,5 +372,5 @@ def build_experts(mesh, loader, cfg, layer: int, max_chunk: int) -> TtExperts:
         hidden_dim=cfg.moe_intermediate_size,
         top_k=cfg.num_experts_per_tok,
         max_seq_len=max_chunk,
-        mode=os.environ.get("XING_EXPERTS_MODE", "unified"),
+        mode=settings.get("EXPERTS_MODE"),
     )
