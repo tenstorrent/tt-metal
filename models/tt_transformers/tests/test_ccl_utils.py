@@ -78,12 +78,12 @@ def test_get_num_links_single_device_has_no_links(native_get_num_links, ccl_modu
 
 
 @pytest.mark.parametrize("ccl_module", [tt_transformers_ccl, common_tt_ccl])
-def test_get_num_links_rejects_invalid_cluster_axis(native_get_num_links, ccl_module):
+def test_get_num_links_rejects_invalid_cluster_axis(native_get_num_links, ccl_module, expect_error):
     """
     Validates that the CCL get_num_links function rejects invalid cluster axis.
     """
     mesh_device = FakeMeshDevice(num_devices=8)
 
-    with pytest.raises(ValueError, match="Unsupported cluster_axis: 2"):
+    with expect_error(ValueError, "Unsupported cluster_axis: 2"):
         ccl_module.get_num_links(mesh_device, cluster_axis=2)
     assert native_get_num_links == []
