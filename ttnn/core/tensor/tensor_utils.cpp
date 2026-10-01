@@ -17,7 +17,6 @@ using tt::tt_metal::CBFormatDescriptor;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::datatype_to_dataformat_converter;
-using tt::tt_metal::FaceGeometry;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MeshTensor;
 using tt::tt_metal::NOC;
@@ -73,7 +72,7 @@ DataflowBufferSpec dfb_spec_from_sharded_tensor(
     uint32_t num_entries,
     const std::optional<TensorParamName>& borrowed_from,
     bool page_as_tile,
-    const std::optional<FaceGeometry>& unpack_face_geometry,
+    const std::optional<Tile>& tile_format_override,
     DFBAdvancedOptions advanced_options) {
     TT_FATAL(
         tensor.is_sharded(),
@@ -128,7 +127,7 @@ DataflowBufferSpec dfb_spec_from_sharded_tensor(
         // Row-major memory read as tiles. Mirrors set_cb_page_size_for_tile() in the deepseek gate
         // ProgramDescriptor builders, including its sub-tile fallback: when the shard does not hold a
         // whole number of tiles it becomes a single partial-tile entry, which the compute engine can
-        // only unpack correctly with a matching unpack_face_geometry.
+        // only unpack correctly with a matching tile_format override.
         const uint32_t tile_bytes = tile.get_tile_size(data_format);
         TT_FATAL(tile_bytes > 0, "DFB '{}': the tensor's tile has a zero size.", unique_id);
         if (shard_bytes % tile_bytes == 0) {
@@ -167,8 +166,7 @@ DataflowBufferSpec dfb_spec_from_sharded_tensor(
         .entry_size = entry_size,
         .num_entries = effective_entries,
         .data_format_metadata = data_format,
-        .tile_format_metadata = tile_format,
-        .unpack_face_geometry_metadata = unpack_face_geometry,
+        .tile_format_metadata = tile_format_override.has_value() ? tile_format_override : tile_format,
         .borrowed_from = borrowed_from,
         .advanced_options = std::move(advanced_options)};
 }
