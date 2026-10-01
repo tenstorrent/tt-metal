@@ -94,8 +94,6 @@ def _detect_arch() -> Optional[str]:
         return None
     if "blackhole" in name:
         return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
     return None
 
 
