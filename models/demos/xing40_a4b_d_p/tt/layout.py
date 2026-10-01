@@ -106,3 +106,16 @@ def col_split_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tenso
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=_mapper(mesh, (2, 3)),
     )
+
+
+def server_order(start: int, chunk: int, sp: int) -> torch.Tensor:
+    """The order in which the prefill server lays a chunk's tokens on the SP rows (tt-d-gen ring_sdpa_reshuffle by
+    kv_offset = actual_start): out[k] = index into the natural-order chunk of the k-th token of the device-major
+    [sp, chunk / sp] payload. Absolute position g goes to row (g // (chunk / sp)) % sp, rising within a row; for a
+    start that is a multiple of the chunk this is the identity. Harness boundary only (hooks embed)."""
+    w = chunk // sp
+    rows = [[] for _ in range(sp)]
+    for i in range(chunk):
+        rows[((start + i) // w) % sp].append(i)
+    assert all(len(r) == w for r in rows), (start, chunk, sp)
+    return torch.tensor([i for r in rows for i in r], dtype=torch.long)
