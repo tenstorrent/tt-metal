@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       architecture:
-        description: "Architecture to run: wormhole or blackhole"
+        description: "Architecture to run: blackhole"
         required: true
         type: string
       docker-image:
@@ -45,7 +45,6 @@ jobs:
         run: |
           set -euo pipefail
           case "$ARCHITECTURE" in
-            wormhole) ENABLED_SKUS="wh_n150_civ2" ;;
             blackhole) ENABLED_SKUS="bh_p150b_civ2" ;;
             *)
               echo "::error::Unsupported architecture '$ARCHITECTURE'"

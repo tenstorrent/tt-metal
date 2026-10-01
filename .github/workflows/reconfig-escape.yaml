@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - wormhole
           - blackhole
   schedule:
     - cron: "17 4 * * 0" # 04:17 UTC
@@ -31,18 +30,6 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
 
-  wormhole:
-    name: "Wormhole"
-    if: >-
-      github.event_name == 'schedule' ||
-      inputs.architecture == 'all' ||
-      inputs.architecture == 'wormhole'
-    needs: build-images
-    uses: ./.github/workflows/reconfig-escape-impl.yaml
-    with:
-      architecture: wormhole
-      docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
-
   blackhole:
     name: "Blackhole"
     if: >-
@@ -59,7 +46,7 @@ jobs:
     name: "Report status"
     runs-on: ubuntu-slim
     if: always()
-    needs: [wormhole, blackhole]
+    needs: [blackhole]
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -69,11 +56,10 @@ jobs:
       - name: Resolve overall status
         id: overall
         env:
-          WORMHOLE: ${{ needs.wormhole.result }}
           BLACKHOLE: ${{ needs.blackhole.result }}
         run: |
           status=success
-          for r in "$WORMHOLE" "$BLACKHOLE"; do
+          for r in "$BLACKHOLE"; do
             [[ "$r" == "failure" || "$r" == "cancelled" ]] && status=failure
           done
           echo "status=$status" >> "$GITHUB_OUTPUT"

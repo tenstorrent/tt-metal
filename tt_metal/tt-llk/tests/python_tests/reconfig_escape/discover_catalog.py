@@ -74,7 +74,7 @@ PASS, FAIL, ENVERR = "PASS", "FAIL", "ENVERR"
 # build_addrmod_restore_entries (only the two functions and constants this pipeline actually calls
 # -- the rest of that file is a standalone single-kernel field-bisection CLI, unrelated to
 # discovery/pair-sweep, so importing the whole module bought nothing but extra diff surface).
-_CFG_STATE_SIZE = {"blackhole": 56, "wormhole": 47}
+_CFG_STATE_SIZE = {"blackhole": 56}
 _ADDR_MOD_ADDR32 = {
     "blackhole": sorted(
         set(range(12, 20))
@@ -83,7 +83,7 @@ _ADDR_MOD_ADDR32 = {
         | set(range(47, 55))
     ),
 }
-_BOOT_OWNED = {"blackhole": set(), "wormhole": {158, 159, 160, 161}}
+_BOOT_OWNED = {"blackhole": set()}
 # addr32 0 bit 0 = CFG_STATE_ID (thread-private, preserved); addr32 2 bits 22-31 = firmware
 # DISABLE_RISC_BP (over-reach). Both are skipped by restore so we never write firmware-owned bits.
 _RESTORE_MASK_OVERRIDE = {2: 0x003FFFFF}
@@ -349,8 +349,12 @@ def capture_pristine(worktree, arch, test_file, test_id, port, timeout, out_path
 
 def pytest_env(worktree, plugin_dir=None):
     env = dict(os.environ)
-    reconfig_escape_dir = os.path.join(worktree, "tests", "python_tests", "reconfig_escape")
-    path_parts = [plugin_dir, reconfig_escape_dir] if plugin_dir else [reconfig_escape_dir]
+    reconfig_escape_dir = os.path.join(
+        worktree, "tests", "python_tests", "reconfig_escape"
+    )
+    path_parts = (
+        [plugin_dir, reconfig_escape_dir] if plugin_dir else [reconfig_escape_dir]
+    )
     env["PYTHONPATH"] = (
         os.pathsep.join(path_parts) + os.pathsep + env.get("PYTHONPATH", "")
     )
@@ -422,7 +426,11 @@ def compile_all(worktree, arch, nodeids, jobs, timeout):
     session compile-producer mode already assumes, with no OS argv-length exposure at all.
     """
     nodeids_path = os.path.join(
-        worktree, "tests", "python_tests", "reconfig_escape", "_compile_all_nodeids.json"
+        worktree,
+        "tests",
+        "python_tests",
+        "reconfig_escape",
+        "_compile_all_nodeids.json",
     )
     with open(nodeids_path, "w") as f:
         json.dump(nodeids, f)
@@ -565,7 +573,7 @@ def _sanitize(nodeid):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--worktree", required=True)
-    p.add_argument("--arch", required=True, choices=["blackhole", "wormhole"])
+    p.add_argument("--arch", required=True, choices=["blackhole"])
     p.add_argument("--out-dir", required=True)
     p.add_argument("--manifest", required=True)
     p.add_argument(

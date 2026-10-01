@@ -46,7 +46,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$ARCH" ]]; then
-    echo "reconfig_escape/ci.sh: --arch blackhole|wormhole is required" >&2
+    echo "reconfig_escape/ci.sh: --arch blackhole is required" >&2
     exit 4
 fi
 

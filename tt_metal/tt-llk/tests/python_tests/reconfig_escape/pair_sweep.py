@@ -78,7 +78,9 @@ def reset():
 
 def pytest_env(worktree):
     env = dict(os.environ)
-    reconfig_escape_dir = os.path.join(worktree, "tests", "python_tests", "reconfig_escape")
+    reconfig_escape_dir = os.path.join(
+        worktree, "tests", "python_tests", "reconfig_escape"
+    )
     env["PYTHONPATH"] = reconfig_escape_dir + os.pathsep + env.get("PYTHONPATH", "")
     return env
 
@@ -204,7 +206,7 @@ def verify_ground_truth(
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--worktree", required=True)
-    p.add_argument("--arch", required=True, choices=["blackhole", "wormhole"])
+    p.add_argument("--arch", required=True, choices=["blackhole"])
     p.add_argument("--manifest", required=True)
     p.add_argument("--out", required=True, help="JSONL: every trial result")
     p.add_argument("--self-pairs", action="store_true")
