@@ -26,7 +26,9 @@ import ttnn
 _RAGGED_FULL_CUT = (
     os.environ.get("PREFILL_RAGGED_FULL_CUT", "1") == "1"
 )  # DS4F-0300: full-width cut on a ragged chunk (default on: bit-exact, v3)
-_TRACED_CHUNK0 = os.environ.get("PREFILL_TRACED_CHUNK0", "0") == "1"  # DS4F-0300: chunk 0 on a captured A2 island
+_TRACED_CHUNK0 = (
+    os.environ.get("PREFILL_TRACED_CHUNK0", "1") == "1"
+)  # DS4F-0300: chunk 0 on a captured A2 island (default on)
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import (
     SharedScalar,
     TtHCA,

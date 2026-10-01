@@ -29,7 +29,9 @@ _TRACED_RAGGED = os.environ.get("PREFILL_TRACED_RAGGED", "0") == "1"  # DS4F-026
 _TRACED_RAGGED0 = os.environ.get("PREFILL_TRACED_CHUNK0_RAGGED", "1") == "1"  # default on: bit-exact (DS4F-0300 v1)
 # DS4F-0300: chunk 0's attention on a second captured A2 island per slot (the modules' forward_attn(chunk0=True): CSA repacks
 # its index rows, HCA / SWA mask the carry columns) instead of the eager path (trace_ready is False at kv_actual 0).
-_TRACED_CHUNK0 = os.environ.get("PREFILL_TRACED_CHUNK0", "0") == "1"
+_TRACED_CHUNK0 = (
+    os.environ.get("PREFILL_TRACED_CHUNK0", "1") == "1"
+)  # default on (DS4F-0300: closer to the torch reference)
 # DS4F-0300 measurement only (PREFILL_ISLAND_TIMING=1): synchronize after every island / glue step of a traced layer and add the
 # wall time to ISLAND_TIMES[(kind, step)]; the runtime logs and clears it per chunk. Serialises host and device -- timing runs only.
 _ISLAND_TIMING = os.environ.get("PREFILL_ISLAND_TIMING", "0") == "1"
