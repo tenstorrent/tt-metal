@@ -273,6 +273,13 @@ uint64_t scatter_output_aligned_page_size(
     return tt::align(input_tensor.buffer()->page_size(), alignment);
 }
 
+uint64_t scatter_rm_stick_page_bytes(const Tensor& tensor, uint32_t stick_elems) {
+    auto* device = tensor.device();
+    const uint64_t raw_bytes = static_cast<uint64_t>(stick_elems) * tensor.element_size();
+    const uint64_t alignment = device->allocator()->get_alignment(tensor.memory_config().buffer_type());
+    return tt::align(raw_bytes, alignment);
+}
+
 uint64_t scatter_static_l1(const Tensor& input_tensor) {
     auto* device = input_tensor.device();
     const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -570,10 +577,13 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     const uint32_t src_elem_size = src_t.element_size();
     const uint32_t output_elem_size = output_tensor.element_size();
     // TensorAccessor's explicit page_size argument is the stride Buffer addressing uses to find a
-    // page's bank offset, which is the buffer's ALIGNED page size (Buffer::aligned_page_size()), not
-    // the raw stick byte width -- passing the raw width addresses every page past the first at the
-    // wrong offset whenever the stick isn't already a multiple of the device's alignment.
-    const uint32_t input_page_bytes = static_cast<uint32_t>(in_t.buffer()->aligned_page_size());
+    // page's bank offset, which is the buffer's ALIGNED page size, not the raw stick byte width --
+    // passing the raw width addresses every page past the first at the wrong offset whenever the
+    // stick isn't already a multiple of the device's alignment. Computed through
+    // scatter_rm_stick_page_bytes() (not in_t.buffer()->aligned_page_size() directly) so this can
+    // never drift from supported_by_codegen()'s own feasibility arithmetic over the same stick.
+    const uint32_t input_page_bytes =
+        static_cast<uint32_t>(scatter_rm_stick_page_bytes(in_t, attributes.input_stick_elems));
     const uint32_t output_page_bytes = static_cast<uint32_t>(
         scatter_output_aligned_page_size(in_t, attributes.output_mem_config, tensor_args.output_tensor));
     const uint32_t index_page_bytes = static_cast<uint32_t>(index_t.buffer()->aligned_page_size());
@@ -668,8 +678,10 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     const uint32_t index_elem_size = index_t.element_size();
     const uint32_t src_elem_size = src_t.element_size();
     // See ScatterCodegenProgramFactoryRowMajor::create_descriptor: TensorAccessor's page_size argument
-    // must be each buffer's ALIGNED page size, not the raw stick byte width.
-    const uint32_t input_page_bytes = static_cast<uint32_t>(in_t.buffer()->aligned_page_size());
+    // must be each buffer's ALIGNED page size, not the raw stick byte width, via the same
+    // scatter_rm_stick_page_bytes() helper the feasibility gate uses.
+    const uint32_t input_page_bytes =
+        static_cast<uint32_t>(scatter_rm_stick_page_bytes(in_t, attributes.input_stick_elems));
     const uint32_t output_page_bytes = static_cast<uint32_t>(
         scatter_output_aligned_page_size(in_t, attributes.output_mem_config, tensor_args.output_tensor));
     const uint32_t index_page_bytes = static_cast<uint32_t>(index_t.buffer()->aligned_page_size());
