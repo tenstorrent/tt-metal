@@ -51,6 +51,10 @@ WARM = 3
 MAX_SEQ = 1024  # sdpa_decode wants a multiple of its 512 k-chunk
 DEVICE_ID = int(os.environ.get("VOXTRAL_DEVICE_ID", "0"))
 PCC_MIN = float(os.environ.get("SPIKE_PCC_MIN", "0.999"))
+# Against the fp32 reference (the arbiter): Luka's horizon gate, and the batched path may not sit
+# further from the reference than the batch-1 path by more than this.
+PCC_REF_MIN = float(os.environ.get("SPIKE_PCC_REF_MIN", "0.997"))
+PCC_REF_SLACK = float(os.environ.get("SPIKE_PCC_REF_SLACK", "0.001"))
 RATIO_MAX = float(os.environ.get("SPIKE_RATIO_MAX", "1.3"))
 RESULTS_PATH = os.environ.get("SPIKE_RESULTS", "")
 
@@ -190,16 +194,52 @@ def test_distinct_prompts_and_positions_per_row(dev, w, g1, gB):
     for b in range(B):
         gB.prefill(prompts[b], last_only=True, user=b)
     worst, worst_at = 1.0, None
+    outB = torch.zeros(K, B, DIM)
     for t in range(K):
         e = _frame_embed(w, frames[t]).expand(1, B, DIM).contiguous()
         hB = gB.step_batched(e, lens + t)
+        outB[t] = hB[0]
         for b in range(B):
             p = pcc(hB[0, b], ref[t, b])
             if p < worst:
                 worst, worst_at = p, (t, b)
-    _record(distinct_worst_pcc=worst, distinct_worst_at=worst_at, distinct_lens=lens.tolist())
     print(f"\n[spike] distinct-prompt worst per-row PCC vs own batch-1 run: {worst:.6f} at (step, row)={worst_at}")
-    assert worst >= PCC_MIN, f"row diverged with per-user positions: PCC {worst:.5f} at {worst_at}"
+
+    # The arbiter is the fp32 reference (Luka's decode gate: 0.999, 0.997 over a horizon), not the
+    # batch-1 device path: sdpa_decode reduces in a different order per batch size and grid, so the
+    # two device paths may legitimately differ a little. Check the worst row, row 0, and the
+    # shortest and longest prompts against the reference, for BOTH device paths.
+    rows = sorted({worst_at[1], 0, int(lens.argmin()), int(lens.argmax())})
+    ref_pcc = {}
+    worst_ref_B, worst_ref_1 = 1.0, 1.0
+    for b in rows:
+        inc = bref.IncrementalBackbone(w, n_layers=LAYERS)
+        inc.prefill(prompts[b])
+        pB, p1 = [], []
+        for t in range(K):
+            h_ref = inc.step(_frame_embed(w, frames[t]))[0, 0]
+            pB.append(pcc(outB[t, b], h_ref))
+            p1.append(pcc(ref[t, b], h_ref))
+        ref_pcc[b] = {"len": int(lens[b]), "b32_vs_ref": pB, "b1_vs_ref": p1}
+        worst_ref_B, worst_ref_1 = min(worst_ref_B, min(pB)), min(worst_ref_1, min(p1))
+        print(
+            f"[spike] row {b:2d} len {int(lens[b]):3d}: B={B} vs fp32 ref min {min(pB):.6f}   "
+            f"B=1 vs fp32 ref min {min(p1):.6f}"
+        )
+    _record(
+        distinct_worst_pcc=worst,
+        distinct_worst_at=worst_at,
+        distinct_lens=lens.tolist(),
+        distinct_ref_rows=ref_pcc,
+        distinct_worst_b32_vs_ref=worst_ref_B,
+        distinct_worst_b1_vs_ref=worst_ref_1,
+    )
+    print(f"[spike] distinct-prompt vs fp32 reference: B={B} worst {worst_ref_B:.6f}, B=1 worst {worst_ref_1:.6f}")
+    assert worst_ref_B >= PCC_REF_MIN, f"batched row diverged from the fp32 reference: {worst_ref_B:.5f}"
+    assert worst_ref_B >= worst_ref_1 - PCC_REF_SLACK, (
+        f"batched path is further from the reference than batch-1 by more than {PCC_REF_SLACK}: "
+        f"{worst_ref_B:.5f} vs {worst_ref_1:.5f}"
+    )
 
 
 def _traced_ms(dev, g, B_rows, pos):
