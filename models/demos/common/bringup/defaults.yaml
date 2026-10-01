@@ -1,0 +1,57 @@
+# The bring-up framework's switches and their defaults: the one place they are set.
+# A model's spec.yaml overrides any of them under the same key (e.g. agents.component_review: all).
+# Framework code reads them through Spec.get / core.defaults, never from a constant of its own
+# (selftest/test_defaults.py enforces it). Change a default here, with a one-line reason.
+
+agents:
+  component_review: none   # all | none | [block types]: test-role review of component tests (F56; none since 2026-10-01)
+  swap_review: none        # all | none | [block types]: test-role review of swap tests (F49)
+  timeout_s: 14400         # one agent attempt, seconds
+  policy:                  # per role: attempts, escalate (debugger | stop), debugger_attempts
+    implement: {attempts: 3, escalate: debugger, debugger_attempts: 3, defer_after_debugger: true}
+    fix: {attempts: 3, escalate: debugger, debugger_attempts: 3}
+    reference: {attempts: 3, escalate: stop}
+    plan: {attempts: 3, escalate: stop}
+    contract: {attempts: 3, escalate: stop}
+    test: {attempts: 3, escalate: stop}
+    perf: {attempts: 3, escalate: debugger, debugger_attempts: 3}
+    assemble: {attempts: 3, escalate: debugger, debugger_attempts: 3}
+    optests: {attempts: 3, escalate: stop}
+    serving: {attempts: 2, escalate: stop}
+
+thresholds:                # accuracy gates (PCC lower limits unless named otherwise)
+  component: 0.99
+  block: 0.98
+  layer: 0.97
+  state: 0.97
+  final_hidden: 0.97
+  top5: 0.9
+  swap_step_rel: 0.02      # swapped step vs the CPU step on the same inputs: rel L2 (upper limit)
+  swap_step_row: 0.05      # worst row rel L2
+  swap_step_ratio: 0.02    # every row's norm ratio within 1 +- this
+  swap_step_bias: 0.01     # median row norm ratio within 1 +- this (a systematic scale)
+  swap_step_calib: 2.0     # rel L2 limit = this x the step's own component-gate error, when known ...
+  swap_step_floor: 0.005   # ... but never below this
+  swap_step_reselect: 0.02 # selection outputs: fraction of rows whose selected support moved
+  swap_out_rel: 0.01       # block out with the last swapped step vs with the CPU step's output: rel L2
+
+tests:
+  low_precision_kinds: [moe]  # step kinds with a looser precision factor (bfp8 expert weights, F56)
+  contract_tail_pad: 32       # the contract test's last chunk ends this many tokens early
+
+box:
+  test_timeout_s: 3600     # one device test, seconds (hang guard)
+  chip_dram_gb: 32         # per-chip DRAM for the plan's memory check
+
+contract:
+  num_users: 2             # slots the contract test allocates (the serving contract may ask for more)
+  slot: 1                  # the slot it prefills
+  num_links: 1
+  pad_token: 4294967295    # 0xFFFFFFFF, what the engine sends past actual_end
+
+perf:
+  op_profile: false        # per-op breakdown (representative layers only)
+  full_prefill: false      # the full-target warm prefill in the profile
+
+intake:
+  accuracy_tokens: 2048    # tokens the HF sanity scores for its accuracy floor

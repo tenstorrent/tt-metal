@@ -60,7 +60,7 @@ def engine_env(s) -> dict:
         "PREFILL_CHUNK_SIZE": str(rung["chunk"]),
         "PREFILL_MAX_SEQ_LEN": str(rung["seq"]),
         "PREFILL_NUM_LAYERS": str(served_layers(s)[1]),
-        "PREFILL_NUM_USERS": str(s.get("contract.num_users", 2)),
+        "PREFILL_NUM_USERS": str(s.get("contract.num_users")),
     }
     os.environ.update(env)
     return env
@@ -108,8 +108,8 @@ def run_contract_test(s, mesh) -> list[str]:
     g = Golden.for_rung(s, rung["name"])
     seq, chunk = rung["seq"], rung["chunk"]
     n_chunks, sp = seq // chunk, s.mesh[0]
-    slot = int(s.get("contract.slot", 1))
-    tail = int(s.get("tests.contract_tail_pad", BLOCK))
+    slot = int(s.get("contract.slot"))
+    tail = int(s.get("tests.contract_tail_pad"))
     actual_len = seq - tail
     first, L = served_layers(s)
     failed = []
@@ -126,7 +126,7 @@ def run_contract_test(s, mesh) -> list[str]:
         chunk_size=chunk,
         num_users=int(os.environ["PREFILL_NUM_USERS"]),
         capacity_factor=1,
-        num_links=int(s.get("contract.num_links", 1)),
+        num_links=int(s.get("contract.num_links")),
         gate_mode_name=adapter.default_gate_mode,
         kv_only_last_layer=False,
         weight_cache_path=adapter.weight_cache_path(tuple(s.mesh)),
@@ -162,7 +162,7 @@ def run_contract_test(s, mesh) -> list[str]:
     for c in range(n_chunks):
         a, b = c * chunk, min((c + 1) * chunk, actual_len)
         cur.update(chunk=c, start=a, end=b)
-        inp = engine_input(mesh, tokens[a:b], chunk, sp, int(s.get("contract.pad_token", PAD)))
+        inp = engine_input(mesh, tokens[a:b], chunk, sp, int(s.get("contract.pad_token")))
         rt.prefill_chunk(inp, kv, slot_id=slot, actual_start=a, actual_end=b, request_id=c)
     ttnn.synchronize_device(mesh)
 

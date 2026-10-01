@@ -37,7 +37,7 @@ import math
 
 import torch
 
-from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.core import defaults, metrics
 from models.demos.common.bringup.reference.interface import run_block
 from models.demos.common.bringup.testing import accuracy_guard
 from models.demos.common.bringup.testing.harness import (
@@ -173,16 +173,7 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     return not ex.evaluate(outs) and ok
 
 
-SWAP_STEP_DEFAULTS = {
-    "swap_step_rel": 0.02,  # the step vs the CPU step on the same inputs: rel L2 (upper limit)
-    "swap_step_row": 0.05,  # worst row rel L2
-    "swap_step_ratio": 0.02,  # every row's norm ratio within 1 +- this
-    "swap_step_bias": 0.01,  # median row norm ratio within 1 +- this (a systematic scale)
-    "swap_step_calib": 2.0,  # rel L2 limit = this x the step's own component-gate error, when that is known ...
-    "swap_step_floor": 0.005,  # ... but never below this
-    "swap_step_reselect": 0.02,  # selection outputs: fraction of rows whose selected support moved
-    "swap_out_rel": 0.01,  # block out with the last swapped step vs with the CPU step's output: rel L2
-}
+SWAP_STEP_DEFAULTS = {k: v for k, v in defaults.get("thresholds").items() if k.startswith("swap_")}  # defaults.yaml
 SPARSE_ZEROS = 0.75  # a float output with at least this fraction of exact zeros is a selection (router weights)
 
 

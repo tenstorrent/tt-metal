@@ -55,7 +55,7 @@ import weakref
 import torch
 from torch.overrides import TorchFunctionMode
 
-from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.core import defaults, metrics
 from models.demos.common.bringup.reference.interface import Ctx
 from models.demos.common.bringup.testing import mutate as MU
 from models.demos.common.bringup.testing.harness import compare, default_mode, reference_ctx
@@ -80,7 +80,7 @@ COMPONENT_DEFAULTS = {
     "component_second_row": 0.15,  # ... worst row at least this (GLM KDA attention x 1e-3: 0.09; hard cases >= 0.34)
     "component_second_ratio": 0.1,  # ... row norm ratio within 1 +- at least this (GLM: 0.056; hard cases >= 0.13)
 }
-LOW_PRECISION_KINDS = ("moe",)
+LOW_PRECISION_KINDS = tuple(defaults.get("tests.low_precision_kinds"))
 SPARSE_ZEROS = 0.75
 COL_FLOOR = 1e-6  # a column is measured against at least this fraction of the mean column norm (as rows are)
 PAD_SENTINEL = 0xFFFFFFFF
