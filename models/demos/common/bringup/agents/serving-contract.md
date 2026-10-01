@@ -54,7 +54,11 @@ build, the server rule behind it (one line, file:line), the example numbers for 
 the test that checks it.
 
 - **Input**: the header, the token buffer, padding, how tokens are spread over the SP chips for any start.
-- **KV cache**: layout per chip, dtype and storage, one region per slot, slot count and memory. The model keeps one
+- **KV cache**: layout per chip, dtype and storage, one region per slot, slot count and memory. State the record
+  rule the KV Manager depends on: one table entry is one address and a size in ONE DRAM bank, so each 32-token
+  record (32 rows x the cache width, `chunk_n_tokens`) must be contiguous in one bank: an ND-sharded DRAM cache with
+  shard `[1, 1, 32, width]`, ROUND_ROBIN_1D over all DRAM banks (as DeepSeek's `init_kvpe_cache`), never DRAM
+  interleaved. Cite the KV Manager's address split and the table schema. The model keeps one
   cache format: the accuracy ladder runs with the same dtype and storage the server is given, so the accuracy gates
   measure what is served. Say so in the section.
 - **Attention and cache writes**: any start the server sends, chunks that cross a cache block, pad positions,
@@ -74,6 +78,9 @@ Two kinds, both run with `scripts/run_safe_pytest.sh` on the box's mesh (FABRIC_
   interface (`hooks.py`: `device_model`, `new_state`, `layer`; see `models/demos/common/bringup/README.md`): e.g. the
   KV cache written at the starts the server sends (chunk-aligned, block-aligned only, crossing a cache block, the
   pulled-back last chunk), compared with the golden KV; pad rows; the same bytes on a rewrite.
+- **A layout test** (CPU-side, from the allocated cache and the exported table): the cache's memory config is the
+  ND shard spec above; every table entry's offset is 64-byte aligned, its range stays inside its bank's allocation,
+  and no two entries in the same bank and device group overlap.
 - **One runner test**, through the adapter only, modelled on Gemma's: the real runner and producer, mock migration,
   device-to-host acks, at least two slots interleaved, multi-turn and mid-chunk ends on, one prompt near max seq; KV
   read back through the table the model exports and compared with the golden; the table checked with the server's
