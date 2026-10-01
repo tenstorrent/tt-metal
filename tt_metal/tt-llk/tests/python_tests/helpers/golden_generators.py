@@ -371,6 +371,57 @@ def cast_to_dest_dtype(values: torch.Tensor, dtype) -> torch.Tensor:
     return torch.where(nan, top_half, out.view(torch.int16)).view(torch.bfloat16)
 
 
+def round_to_format(value: float, data_format: DataFormat) -> float:
+    """*value* rounded once, to nearest even, onto *data_format*'s grid, subnormals included.
+
+    torch casts float64 to bfloat16 through float32, which can round twice: 1 + 2**-8 +
+    2**-30 lands on the tie at 1 + 2**-8 and then goes to 1.0 instead of 1 + 2**-7.
+    """
+    if not math.isfinite(value) or value == 0.0:
+        return value
+    info = torch.finfo(format_dict[data_format])
+    digits = 1 - round(math.log2(info.eps))
+    min_exponent = round(math.log2(info.smallest_normal))
+    quantum = max(math.frexp(value)[1], min_exponent + 1) - digits
+    rounded = math.ldexp(round(math.ldexp(value, -quantum)), quantum)
+    return rounded if abs(rounded) <= info.max else math.copysign(math.inf, value)
+
+
+# Bernoulli numbers B2..B14 of the trigamma asymptotic series.
+_TRIGAMMA_BERNOULLI = (1 / 6, -1 / 30, 1 / 42, -1 / 30, 5 / 66, -691 / 2730, 7 / 6)
+
+
+def trigamma(x: float) -> float:
+    """psi_1(x) in float64, with no cancellation anywhere.
+
+    Every non-positive integer is a double pole approached from +inf on both sides, so it
+    returns +inf. For x < 0 the reflection psi_1(x) = pi^2 / sin^2(pi x) - psi_1(1 - x)
+    subtracts at most pi^2 / 6 from at least pi^2. For x > 0 the recurrence and the
+    asymptotic series add positive terms to a leading 1/x that the alternating
+    Bernoulli terms never approach; the first omitted term, B16 / x^17, is 2.4e-20 at x = 16.
+    """
+    if math.isnan(x) or x == -math.inf:
+        return math.nan
+    if x == math.inf:
+        return 0.0
+    if x <= 0.0 and x == math.floor(x):
+        return math.inf
+    if x < 0.0:
+        # x - round(x) is exact, so sin() never sees a large argument.
+        sine = math.sin(math.pi * (x - round(x)))
+        return (math.pi / sine) ** 2 - trigamma(1.0 - x)
+    head = 0.0
+    while x < 16.0:
+        head += 1.0 / (x * x)
+        x += 1.0
+    inverse = 1.0 / x
+    inverse_square = inverse * inverse
+    series = 0.0
+    for bernoulli in reversed(_TRIGAMMA_BERNOULLI):
+        series = series * inverse_square + bernoulli
+    return head + inverse + inverse_square * (0.5 + inverse * series)
+
+
 def convert_inf_to_value(operand, inf_value: float):
     """Replace every +inf with *inf_value*, preserving the input type.
 
@@ -3282,7 +3333,13 @@ class UnarySFPUGolden:
         return sfpu_min(x, self._UNARY_MAX_MIN_VALUE)
 
     def _polygamma(self, x):
-        return self._torch_unary(x, lambda t: torch.polygamma(self._POLYGAMMA_ORDER, t))
+        # Not torch.polygamma: its fp32 reflection uses an fp32 pi, so sin(pi * x) misses
+        # zero and psi_1(-1) comes back as 1.29e15 instead of the pole.
+        assert self._POLYGAMMA_ORDER == 1
+        result = round_to_format(trigamma(x), self.dst_format)
+        if math.isinf(result) and not self.data_format.is_exponent_B():
+            return math.nan
+        return result
 
     def _xielu(self, x):
         # Mirrors calculate_xielu: beta = 0.5, alpha_p/alpha_n learnable params.
