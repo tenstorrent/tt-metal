@@ -134,7 +134,7 @@ def test_runtime_compile_and_replay_stage_all_slot_bounds(monkeypatch):
         metadata.mesh_config = runtime.mesh_config
         metadata.chunk_size = config.chunk_size
         metadata.max_seq_len = config.max_seq_len
-        metadata.num_users = kwargs["max_batch_size"]
+        metadata.num_users = kwargs["num_kv_slots"]
         metadata._stage = lambda name, values, seq_dim=None: values
         return None, SimpleNamespace(prefill_metadata=metadata), None, None
 
@@ -149,7 +149,7 @@ def test_runtime_compile_and_replay_stage_all_slot_bounds(monkeypatch):
     monkeypatch.setattr(runtime_module.ttnn, "execute_trace", replay)
     cache = object()
     runtime.compile(cache)
-    assert created[0]["max_batch_size"] == config.num_users
+    assert created[0]["num_kv_slots"] == config.num_users
     assert runtime.model._prefill_metadata_external
     runtime.trace_id = 1
     runtime.slot_ends[5] = 8192

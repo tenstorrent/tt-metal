@@ -151,7 +151,7 @@ class Gemma4Model:
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         max_seq_len=262144,
-        max_local_batch_size=1,
+        num_kv_slots=1,
         num_layers=None,
         ring_kv_caches=None,
     ):
@@ -187,7 +187,7 @@ class Gemma4Model:
             )
 
         # When True the caller refreshes the ring metadata itself, outside any trace.
-        self.prefill_metadata = PrefillMetadata(mesh_config, prefill_chunk_size, max_seq_len, max_local_batch_size)
+        self.prefill_metadata = PrefillMetadata(mesh_config, prefill_chunk_size, max_seq_len, num_kv_slots)
         self._rope_prefill_positions = self.prefill_metadata.positions
         self._prefill_metadata_external = False
         self._prefill_trace_controller = None
@@ -258,7 +258,7 @@ class Gemma4Model:
                 attention_dtype=attention_dtype,
                 tensor_cache_path=tensor_cache_path,
                 max_seq_len=self.ring_cache_max_seq_len,
-                max_local_batch_size=max_local_batch_size,
+                num_kv_slots=num_kv_slots,
                 ring_kv_cache=ring_kv_caches[i] if ring_kv_caches is not None else None,
             )
             self.layers.append(layer)

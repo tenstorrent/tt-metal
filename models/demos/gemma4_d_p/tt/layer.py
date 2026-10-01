@@ -23,7 +23,7 @@ class Gemma4DecoderLayer:
         dtype,
         tensor_cache_path,
         max_seq_len,
-        max_local_batch_size,
+        num_kv_slots,
         mlp_dtype=None,
         attention_dtype=None,
         ring_kv_cache=None,
@@ -78,7 +78,7 @@ class Gemma4DecoderLayer:
             ring_layer_idx=ring_layer_idx,
             ring_num_layers=ring_num_layers,
             max_seq_len=max_seq_len,
-            max_batch_size=max_local_batch_size,
+            num_kv_slots=num_kv_slots,
         )
 
         # Dense MLP (HF key: "mlp")

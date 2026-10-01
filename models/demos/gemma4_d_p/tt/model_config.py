@@ -188,8 +188,7 @@ class Gemma4ModelArgs:
         """Load HuggingFace config."""
         return AutoConfig.from_pretrained(hf_model_id, trust_remote_code=True)
 
-    # ── Generator compatibility properties ─────────────────────────────────
-    # The tt_transformers Generator expects these attribute names.
+    # Model dimensions and runtime limits.
 
     @property
     def dim(self):
@@ -200,12 +199,12 @@ class Gemma4ModelArgs:
         return self.num_hidden_layers
 
     @property
-    def max_batch_size(self):
-        return getattr(self, "_max_batch_size", 1)
+    def num_kv_slots(self):
+        return getattr(self, "_num_kv_slots", 1)
 
-    @max_batch_size.setter
-    def max_batch_size(self, value):
-        self._max_batch_size = value
+    @num_kv_slots.setter
+    def num_kv_slots(self, value):
+        self._num_kv_slots = value
 
     @property
     def max_seq_len(self):

@@ -41,7 +41,7 @@ def weight_cache_identity(hf_model_id, num_layers, mesh_shape, precision):
 def create_tt_model(
     mesh_config,
     prefill_chunk_size,
-    max_batch_size=1,
+    num_kv_slots=1,
     max_seq_len=8192,
     dtype=ttnn.bfloat16,
     state_dict=None,
@@ -109,7 +109,7 @@ def create_tt_model(
         dtype=dtype,
         tensor_cache_path=tensor_cache_path,
         max_seq_len=max_seq_len,
-        max_local_batch_size=max_batch_size,
+        num_kv_slots=num_kv_slots,
         num_layers=num_layers,
         ring_kv_caches=ring_kv_caches,
     )

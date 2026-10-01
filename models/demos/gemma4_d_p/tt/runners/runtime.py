@@ -47,7 +47,7 @@ class Gemma4PrefillRuntime:
             hf_model_id=self.hf_model_id,
             prefill_chunk_size=self.config.chunk_size,
             max_seq_len=self.config.max_seq_len,
-            max_batch_size=self.config.num_users,
+            num_kv_slots=self.config.num_users,
             ring_kv_caches=kv_cache,
             tt_cache_path=self.tt_cache_path,
         )
