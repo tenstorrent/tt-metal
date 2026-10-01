@@ -16,7 +16,7 @@
 #include <tracy/TracyTTDevice.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 
-#include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/capture_context.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 

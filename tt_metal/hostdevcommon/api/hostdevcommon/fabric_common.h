@@ -9,7 +9,7 @@
 #include <array>  // Routing2DCodec::fwd_dirs
 #include <type_traits>
 
-#include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 
 namespace tt::tt_fabric {
 

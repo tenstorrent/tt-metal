@@ -34,7 +34,7 @@
 #include "noc_overlay_parameters.h"
 #include "api/alignment.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
-#include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 #ifdef FABRIC_2D
 // The router re-encodes an intermesh packet's route when it lands, via
 // fabric_set_2d_intermesh_landing_route(). Include its declaration directly and only for the 2D call site.

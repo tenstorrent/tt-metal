@@ -26,7 +26,7 @@
 
 #include <tt_stl/tt_pause.hpp>
 
-#include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/capture_context.hpp"
 
 namespace tt::llrt {
 class RunTimeOptions;

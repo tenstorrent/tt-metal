@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/streaming_profiler/streaming_profiler_device.hpp"
+#include "impl/streaming_profiler/device_programs.hpp"
 
 #include <algorithm>
 #include <array>
@@ -516,7 +516,7 @@ bool Devices::launch_relay(
         }
         auto relay_id = CreateKernel(
             *program,
-            "tt_metal/tools/profiler/kernels/streaming_profiler_relay.cpp",
+            "tt_metal/impl/streaming_profiler/kernels/drisc_relay.cpp",
             relay.logical,
             // NOC 1 egress runs ~2x the service interval of NOC 0, so a relay parked there takes essentially every
             // profiler stall.
