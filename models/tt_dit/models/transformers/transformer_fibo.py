@@ -170,6 +170,7 @@ class FiboTransformer(Module):
                 mesh_device=mesh_device,
                 attention_k_chunk_size=k_chunk_size,
                 attention_q_chunk_size=q_chunk_size,
+                attention_exp_approx_mode=True,
             )
             for _ in range(num_layers)
         )
@@ -185,6 +186,7 @@ class FiboTransformer(Module):
                 mesh_device=mesh_device,
                 attention_k_chunk_size=k_chunk_size,
                 attention_q_chunk_size=q_chunk_size,
+                attention_exp_approx_mode=True,
             )
             for _ in range(num_single_layers)
         )
