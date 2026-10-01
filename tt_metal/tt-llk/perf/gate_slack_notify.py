@@ -26,6 +26,7 @@ def _escape(value):
 MODULE_KEY = "test_module"
 
 _NOT_CONFIG = {
+    "point_id",
     "marker",
     MODULE_KEY,
     "run_type",
@@ -184,6 +185,45 @@ def _subject(ctx):
     )
 
 
+def _approver_mentions(approvers):
+    """Slack mentions where a member ID is known, else the GitHub login."""
+    return ", ".join(
+        f"<@{sid}>" if sid else f"`{_escape(login)}`"
+        for login, sid in sorted((approvers or {}).items())
+    )
+
+
+def _acceptance_lines(status, ctx):
+    """What the PR's REGRESSION ACCEPTANCE table means for this verdict."""
+    acc = ctx.get("acceptance") or {}
+    state = acc.get("state")
+    approver = _escape(acc.get("approver") or "?")
+    if status == "clean" and acc.get("accepted"):
+        return [
+            f"{acc['accepted']} regressed point(s) accepted by `{approver}` (REGRESSION ACCEPTANCE)."
+        ]
+    if status != "regressed" or not state or state == "none":
+        return []
+    if state == "waiting":
+        return [
+            ":memo: The REGRESSION ACCEPTANCE table covers every regressed point. "
+            f"Perf approvers: {_approver_mentions(ctx.get('approvers'))}, please review it and "
+            "comment `/accept-regression` on the PR.",
+        ]
+    if state == "incomplete":
+        return [
+            f"The REGRESSION ACCEPTANCE table does not cover {len(acc.get('missing') or [])} point(s) yet."
+        ]
+    if state == "invalid":
+        first = _escape((acc.get("errors") or ["?"])[0])
+        return [f"The REGRESSION ACCEPTANCE table does not parse: {first}"]
+    if state == "approved" and acc.get("accepted"):
+        return [
+            f"{acc['accepted']} point(s) accepted by `{approver}`; the points above are not covered."
+        ]
+    return []
+
+
 def build_text(status, rows, ctx):
     """The Slack message for one verdict. Plain text; Slack renders the links."""
     subject, byline, where = _subject(ctx)
@@ -209,6 +249,7 @@ def build_text(status, rows, ctx):
                 f"{byline}  ·  {where}",
                 "",
                 f"No point regressed. {run_link}",
+                *_acceptance_lines(status, ctx),
             ]
         )
 
@@ -228,6 +269,9 @@ def build_text(status, rows, ctx):
         lines += [_describe_finding(g, varying) for g in worst]
     if len(findings) > _TOP_N:
         lines.append(f"_… and {len(findings) - _TOP_N} more finding(s)._")
+    accept = _acceptance_lines(status, ctx)
+    if accept:
+        lines += ["", *accept]
     lines += [
         "",
         f"The full table is in the report attached to the {run_link}.",
@@ -236,6 +280,16 @@ def build_text(status, rows, ctx):
         f"```{_repro_command(rows, ctx.get('arch'), ctx.get('baseline_sha'))}```",
     ]
     return "\n".join(lines)
+
+
+def _load_json(path):
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except ValueError:
+        return None
 
 
 def _emit_outputs(**values):
@@ -266,6 +320,10 @@ def main(argv=None):
     ap.add_argument("--baseline-sha", default="")
     ap.add_argument("--commit", default="")
     ap.add_argument("--mode", default="")
+    ap.add_argument("--acceptance", help="the comparer's .acceptance.json, if any")
+    ap.add_argument(
+        "--approvers", help="regression_approvers.json: GitHub login -> Slack ID"
+    )
     ap.add_argument("--out", default="slack_payload.json")
     a = ap.parse_args(argv)
 
@@ -298,6 +356,8 @@ def main(argv=None):
         "run_url": a.run_url,
         "baseline_sha": a.baseline_sha,
         "reason": reason,
+        "acceptance": _load_json(a.acceptance),
+        "approvers": _load_json(a.approvers),
     }
     text = build_text(status, rows, ctx)
 

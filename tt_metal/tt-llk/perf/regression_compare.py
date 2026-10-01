@@ -13,8 +13,10 @@ import glob
 import json
 import os
 import re
+from collections import Counter
 
 import pandas as pd
+import regression_accept
 
 # 5 runs of one commit on Blackhole moved at most 1.9% and 25 cycles (#53752).
 DEFAULT_THRESHOLD = 0.02
@@ -177,12 +179,14 @@ def compare_runs(
     for (key, mean_col), cval in cur.items():
         marker, config = key
         run_type = _run_type_of(mean_col)
+        module = dict(config).get(MODULE_COL, "")
         point = {
             "marker": marker,
             "run_type": run_type,
             "config": config,
             "current": cval,
-            MODULE_COL: dict(config).get(MODULE_COL, ""),
+            MODULE_COL: module,
+            "point_id": regression_accept.point_id(module, marker, run_type, config),
         }
         bval = base.get((key, mean_col))
         if bval is None:
@@ -280,6 +284,7 @@ def render_report(
     baseline_label=None,
     current_label=None,
     module_thresholds=None,
+    acceptance=None,
 ):
     """Markdown: the verdict, the worst findings each way, and the new points."""
     regs = sorted(result["regressions"], key=lambda r: -r["delta"])
@@ -320,6 +325,8 @@ def render_report(
             "jitter looks like a large percentage."
         )
     lines.append("")
+    if acceptance is not None:
+        lines += _acceptance_lines(result, acceptance)
     for groups, what, where, companion in (
         (reg_groups, "regression", "slower", ".regressions.csv"),
         (imp_groups, "improvement", "faster", ".points.csv"),
@@ -344,11 +351,74 @@ def render_report(
     return "\n".join(lines)
 
 
+_ACCEPT_STATE = {
+    "none": "no `## REGRESSION ACCEPTANCE` section in the PR description.",
+    "invalid": "the `## REGRESSION ACCEPTANCE` section does not parse, so nothing is accepted.",
+    "waiting": "the table covers every regressed point. It waits for a perf approver to comment `/accept-regression`.",
+    "incomplete": "the table does not cover every regressed point, so the perf approvers are not asked yet.",
+    "approved": "approved by @{approver}.",
+    "not needed": "the table is present, but no point regressed.",
+}
+
+
+def _acceptance_lines(result, acc):
+    """The acceptance state, the accepted points, and the table to paste."""
+    lines = [
+        "## Regression acceptance",
+        "",
+        "- "
+        + _ACCEPT_STATE.get(acc["state"], acc["state"]).format(
+            approver=acc.get("approver")
+        ),
+    ]
+    lines += [f"- ❌ {e}" for e in acc.get("errors") or []]
+    if acc.get("missing"):
+        ids = ", ".join(f"`{i}`" for i in acc["missing"][:20])
+        more = (
+            f" and {len(acc['missing']) - 20} more" if len(acc["missing"]) > 20 else ""
+        )
+        lines.append(
+            f"- Not covered: {ids}{more}. A row also stops covering a point that is slower than its max delta."
+        )
+    accepted = result.get("accepted") or []
+    if accepted:
+        lines += [
+            "",
+            f"### Accepted regressions ({len(accepted)}), not counted",
+            "",
+            "| point | test | marker | run type | Δ | max delta | reason |",
+            "|---|---|---|---|--:|--:|---|",
+        ]
+        for r in sorted(accepted, key=lambda x: -x["delta"]):
+            reason = r["reason"].replace("<", "&lt;")
+            lines.append(
+                f"| `{r['point_id']}` | {r.get(MODULE_COL) or '?'} | {r['marker']} | "
+                f"{r['run_type']} | {r['delta'] * 100:+.1f}% | +{r['max_pct']:g}% | {reason} |"
+            )
+    if result["regressions"]:
+        lines += [
+            "",
+            "<details><summary>To accept these regressions on purpose, paste this into the PR description "
+            "and write a reason in each row (#57871)</summary>",
+            "",
+            "```markdown",
+            *regression_accept.paste_table(result["regressions"]),
+            "```",
+            "",
+            "A row can also name a filter instead of an ID, for example `mathop=MathOperation.Square`. "
+            "Then a perf approver comments `/accept-regression`.",
+            "</details>",
+        ]
+    lines.append("")
+    return lines
+
+
 def _write_points_csv(records, path):
     """Stream records to CSV, worst delta first. One row is held at a time."""
     if not records:
         return False
     fixed = [
+        "point_id",
         "marker",
         "run_type",
         "current",
@@ -365,6 +435,7 @@ def _write_points_csv(records, path):
         writer.writeheader()
         for r in sorted(records, key=lambda x: -x["delta"]):
             row = {
+                "point_id": r.get("point_id", ""),
                 "marker": r["marker"],
                 "run_type": r["run_type"],
                 "current": r["current"],
@@ -418,6 +489,10 @@ def main(argv=None):
         help="what the baseline side is, e.g. 'branch point on main' or the ref as typed",
     )
     ap.add_argument("--current-label", help="what the current side is")
+    ap.add_argument(
+        "--accept",
+        help="the PR's acceptance (regression_accept.py read); approved rows are not counted",
+    )
     a = ap.parse_args(argv)
 
     current = sorted(glob.glob(a.current, recursive=True))
@@ -449,6 +524,14 @@ def main(argv=None):
         )
         raise SystemExit(1)
 
+    acceptance = None
+    if a.accept:
+        with open(a.accept) as fh:
+            ids = Counter(
+                p["point_id"] for p in result["records"] + result["new_points"]
+            )
+            acceptance = regression_accept.apply(result, json.load(fh), ids)
+
     report = render_report(
         result,
         threshold=a.threshold,
@@ -461,6 +544,7 @@ def main(argv=None):
         baseline_label=a.baseline_label,
         current_label=a.current_label,
         module_thresholds=_module_thresholds(a.module_threshold),
+        acceptance=acceptance,
     )
     with open(a.report, "w") as f:
         f.write(report + "\n")
@@ -471,6 +555,10 @@ def main(argv=None):
         written.append(f"{stem}.points.csv")
     if _write_points_csv(result["regressions"], f"{stem}.regressions.csv"):
         written.append(f"{stem}.regressions.csv")
+    if acceptance is not None:
+        with open(f"{stem}.acceptance.json", "w") as fh:
+            json.dump(acceptance, fh, indent=1)
+        written.append(f"{stem}.acceptance.json")
 
     print(report)
     print("\n(wrote " + " + ".join(written) + ")")
@@ -480,6 +568,7 @@ def main(argv=None):
             {
                 "status": "regressed" if result["regressions"] else "clean",
                 "regressions": len(result["regressions"]),
+                "accepted": len(result.get("accepted") or []),
                 "points": len(result["records"]),
             },
             fh,
