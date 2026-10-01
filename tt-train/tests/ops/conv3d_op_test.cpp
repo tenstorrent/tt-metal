@@ -613,6 +613,51 @@ TEST_F(Conv3dOpTest, PreparedWeightsMatchOnTheFlyPreparation) {
     expect_close(ttml::core::to_vector(input->get_grad()), ref_dx, 0.F, 1e-6F, "forward-only prepared grad_input");
 }
 
+// The op reads the autograd weight at bf16, so a prepared weight built from fp32 storage must match that view.
+TEST_F(Conv3dOpTest, PreparedWeightsFromFloat32Storage) {
+    const Conv3dCase c{.padding = {1, 1, 1}};
+    const auto [D, H, W] = c.in_size;
+    const auto [kD, kH, kW] = c.kernel;
+    const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
+    const ttnn::Shape weight_shape({c.C_out, c.C_in, kD, kH, kW});
+    const ttnn::Shape output_shape({c.N, 4U, 5U, 6U, c.C_out});
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = ttml::autograd::create_tensor(
+        make_device_tensor(uniform_vector(input_shape.volume(), -1.F, 1.F, 61), input_shape, c.layout), true);
+    auto weight = ttml::autograd::create_tensor(
+        ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(
+            uniform_vector(weight_shape.volume(), -0.5F, 0.5F, 62), weight_shape, device, c.layout),
+        true);
+    auto grad_output = make_device_tensor(uniform_vector(output_shape.volume(), -1.F, 1.F, 63), output_shape, c.layout);
+    ASSERT_EQ(weight->get_value(ttml::autograd::PreferredPrecision::FULL).dtype(), ttnn::DataType::FLOAT32);
+    ASSERT_EQ(weight->get_value().dtype(), ttnn::DataType::BFLOAT16);
+
+    auto reference = ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding);
+    reference->set_grad(grad_output);
+    reference->backward();
+    const auto ref_out = ttml::core::to_vector(reference->get_value());
+    const auto ref_dx = ttml::core::to_vector(input->get_grad());
+    const auto ref_dw = ttml::core::to_vector(weight->get_grad());
+    input->set_grad(ttnn::Tensor());
+    weight->set_grad(ttnn::Tensor());
+    ttml::autograd::ctx().reset_graph();
+
+    const auto prepared =
+        ttml::ops::prepare_conv3d_weight(weight->get_value(ttml::autograd::PreferredPrecision::FULL), c.groups);
+    ASSERT_EQ(prepared.forward.size(), 1U);
+    ASSERT_EQ(prepared.transposed.size(), 1U);
+    EXPECT_EQ(prepared.forward[0].dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(prepared.transposed[0].dtype(), ttnn::DataType::BFLOAT16);
+
+    auto result = ttml::ops::conv3d(input, weight, nullptr, prepared, c.stride, c.padding);
+    result->set_grad(grad_output);
+    result->backward();
+    expect_close(ttml::core::to_vector(result->get_value()), ref_out, 0.F, 1e-6F, "fp32-storage prepared forward");
+    expect_close(ttml::core::to_vector(input->get_grad()), ref_dx, 0.F, 1e-6F, "fp32-storage prepared grad_input");
+    expect_close(ttml::core::to_vector(weight->get_grad()), ref_dw, 0.F, 1e-6F, "fp32-storage prepared grad_weight");
+}
+
 // Every training step must hit the program cache: a miss in any of the composed ttnn ops would recompile per step.
 // A prepared weight is a snapshot: after the parameter's value changes it computes with the old values.
 TEST_F(Conv3dOpTest, PreparedWeightsAreASnapshotOfTheWeight) {

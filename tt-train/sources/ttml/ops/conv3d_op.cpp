@@ -15,6 +15,7 @@
 #include <string>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <ttnn/operations/copy/typecast/typecast.hpp>
 #include <ttnn/operations/core/to_layout/to_layout_op.hpp>
 #include <ttnn/operations/data_movement/concat/concat.hpp>
 #include <ttnn/operations/data_movement/pad/pad.hpp>
@@ -795,7 +796,9 @@ Conv3dPreparedWeight prepare_conv3d_weight(const ttnn::Tensor& weight, uint32_t 
     geometry.groups = groups;
     geometry.kernel = {shape[2], shape[3], shape[4]};
 
-    auto weight_row_major = to_row_major(weight);
+    // conv3d reads the autograd weight at bf16, so fp32 storage is cast the same way the autocast view is.
+    auto weight_row_major = to_row_major(
+        weight.dtype() == ttnn::DataType::FLOAT32 ? ttnn::typecast(weight, ttnn::DataType::BFLOAT16) : weight);
     Conv3dPreparedWeight prepared;
     prepared.weight_shape = shape;
     prepared.groups = groups;

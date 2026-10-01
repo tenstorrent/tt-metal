@@ -35,6 +35,7 @@ struct Conv3dPreparedWeight {
 };
 
 // with_transposed=false skips the input-gradient form (only the forward pass and dW/db use the forward form).
+// The forms are bfloat16, the precision conv3d reads the autograd weight at; a float32 weight is cast first.
 Conv3dPreparedWeight prepare_conv3d_weight(
     const ttnn::Tensor& weight, uint32_t groups = 1, bool with_transposed = true);
 
