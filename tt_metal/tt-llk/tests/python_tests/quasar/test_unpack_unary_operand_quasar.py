@@ -117,6 +117,17 @@ def generate_unpack_unary_operand_combinations(
                 # Skip if input format is not 32-bit and output format is 32-bit and dest_acc is No
                 # This combination is not supported in the Quasar Packer format conversions
                 continue
+            # Int8<->UInt8 conversion requires dest_acc enabled. Int4/UInt4 are unpacked as Int8/UInt8.
+            src_reg_fmt = {
+                DataFormat.Int4: DataFormat.Int8,
+                DataFormat.UInt4: DataFormat.UInt8,
+            }.get(in_fmt, in_fmt)
+            if (
+                dest_acc == DestAccumulation.No
+                and src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8)
+                and src_reg_fmt != fmt.output_format
+            ):
+                continue
             for dest_sync in dest_sync_modes:
                 for transpose_en in transpose_modes:
                     # transpose is not supported for tiny-tiles
@@ -180,13 +191,11 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ]
 )
-# Int4/UInt4 are L1 input-only formats: pair each with its unpacked register format
-# (UInt4 unpacks to UInt8) and with Int32.
+# Int4/UInt4 are L1 input-only formats: pair each with the 8-bit integer formats and Int32.
 UNPACK_4BIT_INPUT_FORMATS = [
-    InputOutputFormat(DataFormat.Int4, DataFormat.Int8),
-    InputOutputFormat(DataFormat.Int4, DataFormat.Int32),
-    InputOutputFormat(DataFormat.UInt4, DataFormat.UInt8),
-    InputOutputFormat(DataFormat.UInt4, DataFormat.Int32),
+    InputOutputFormat(input_format, output_format)
+    for input_format in (DataFormat.Int4, DataFormat.UInt4)
+    for output_format in (DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32)
 ]
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
     UNPACK_FORMATS + UNPACK_4BIT_INPUT_FORMATS

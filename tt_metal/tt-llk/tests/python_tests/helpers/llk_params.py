@@ -706,8 +706,8 @@ format_tile_sizes = {
     DataFormat.UInt16: 2048,
     DataFormat.Int8: 1024,  # 1 byte * 1024 elements
     DataFormat.UInt8: 1024,  # 1 byte * 1024 elements
-    DataFormat.Int4: 512,  # 0.5 byte * 1024 elements, no exponent section
-    DataFormat.UInt4: 512,  # 0.5 byte * 1024 elements, no exponent section
+    DataFormat.Int4: 512,  # 0.5 byte * 1024 elements
+    DataFormat.UInt4: 512,  # 0.5 byte * 1024 elements
     # MX formats: 1 byte per element + 1 scale (8 bits) per 32 elements
     # 1024 elements = 32 blocks × (1 scale + 32 elements) = 1056 bytes
     DataFormat.MxFp8R: 1056,

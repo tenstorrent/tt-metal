@@ -160,6 +160,8 @@ def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.T
     Hardware saturates (clamps) values instead of wrapping on overflow.
     This handles downsizing (Int32->Int8), signed/unsigned conversions (UInt8->Int8),
     and any case where source values might exceed destination range.
+
+    For a UInt8 destination, the packer drops the sign and keeps the magnitude.
     """
     iinfo = torch.iinfo(torch_format)
     is_unsigned = str(data_format).startswith("U")
@@ -175,6 +177,8 @@ def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.T
         torch.int64 if result.dtype in (torch.uint32, torch.int64) else torch.int32
     )
     result = result.to(intermediate_type)
+    if data_format == DataFormat.UInt8:
+        result = torch.abs(result)
     result = torch.clamp(result, min_val, max_val)
     return result.to(torch_format)
 
@@ -2208,21 +2212,6 @@ class PackGolden:
                 )
                 # Clamp between 0 and threshold
                 return torch.clamp(result, min=0.0, max=threshold)
-
-    @staticmethod
-    def convert_signed_integer_to_uint8(result: torch.Tensor) -> torch.Tensor:
-        """
-        Model the Quasar packer's Int8/Int32 to UInt8 conversion.
-
-        The packer clears the sign bit and saturates the magnitude to 255, so a negative
-        value packs to its magnitude, not to 0. Apply it after ReLU, which runs before
-        the packer format conversion.
-        Args:
-            result: Signed integer tensor in the pack_src format
-        Returns:
-            UInt8 tensor
-        """
-        return torch.clamp(torch.abs(result.to(torch.int32)), max=255).to(torch.uint8)
 
     @staticmethod
     def accumulate_l1(

@@ -5,13 +5,15 @@ from typing import List
 
 import pytest
 import torch
-from helpers.data_format_inference import infer_data_formats, infer_unpack_out
-from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
+from helpers.constraints import is_valid_data_format_conversion
+from helpers.data_format_inference import infer_data_formats
+from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
     PackGolden,
     get_golden_generator,
     quantize_mx_tensor_chunked,
+    saturate_integer,
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
@@ -78,16 +80,6 @@ def generate_qsr_pack_combinations(
         tile_dimensions) tuples.
     """
 
-    def is_supported_format_conversion(in_fmt, out_fmt):
-        """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
-        # Skip if mixing integer and non-integer formats
-        if in_fmt.is_integer() ^ out_fmt.is_integer():
-            return False
-        # If input format is Int16, output format must also be Int16, and vice versa
-        if (in_fmt == DataFormat.Int16) ^ (out_fmt == DataFormat.Int16):
-            return False
-        return True
-
     def get_dest_acc_modes(in_fmt):
         """Determine valid dest register modes depending on the input format."""
         # Having Int16 in src registers and Int32 in the dest register is not supported
@@ -106,9 +98,11 @@ def generate_qsr_pack_combinations(
             and dest_acc == DestAccumulation.No
         ):
             return False
-        # Int8<->UInt8 conversion requires dest_acc enabled. Int4/UInt4 inputs reach
-        # the packer as their Int8/UInt8 register format.
-        src_reg_fmt = infer_unpack_out(in_fmt, out_fmt, dest_acc)
+        # Int8<->UInt8 conversion requires dest_acc enabled. Int4/UInt4 are unpacked as Int8/UInt8.
+        src_reg_fmt = {
+            DataFormat.Int4: DataFormat.Int8,
+            DataFormat.UInt4: DataFormat.UInt8,
+        }.get(in_fmt, in_fmt)
         if (
             dest_acc == DestAccumulation.No
             and src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8)
@@ -130,7 +124,7 @@ def generate_qsr_pack_combinations(
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
 
-        if not is_supported_format_conversion(in_fmt, out_fmt):
+        if not is_valid_data_format_conversion(fmt):
             continue
 
         # Threshold ReLU modes are not supported for integer pack_src formats
@@ -184,31 +178,26 @@ def generate_qsr_pack_combinations(
     return combinations
 
 
-PACK_DATA_FORMATS = [
-    DataFormat.Float16_b,
-    DataFormat.Float16,
-    DataFormat.Float32,
-    DataFormat.Int32,
-    DataFormat.Int8,
-    DataFormat.UInt8,
-    DataFormat.Int16,
-    DataFormat.MxFp8R,
-    DataFormat.MxFp8P,
-    DataFormat.MxFp4,
-    DataFormat.MxInt8,
-    DataFormat.MxInt4,
-    DataFormat.MxInt2,
-]
-PACK_FORMATS = input_output_formats(PACK_DATA_FORMATS)
-# Int4/UInt4 are L1 input-only formats: the packer cannot output them.
-PACK_4BIT_INPUT_FORMATS = [
-    InputOutputFormat(input_format, output_format)
-    for input_format in (DataFormat.Int4, DataFormat.UInt4)
-    for output_format in PACK_DATA_FORMATS
-]
-ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(
-    PACK_FORMATS + PACK_4BIT_INPUT_FORMATS
+PACK_FORMATS = input_output_formats(
+    [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        DataFormat.Int32,
+        DataFormat.Int8,
+        DataFormat.UInt8,
+        DataFormat.Int16,
+        DataFormat.Int4,
+        DataFormat.UInt4,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    ]
 )
+ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
 PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=True)
 
 
@@ -284,7 +273,8 @@ def test_pack_quasar(
         # MxFp4 -> MxInt4 + MaxThresholdRelu). For MX outputs we route through
         # pack_src instead and apply the single output MX quantization ourselves
         # after relu. Signed integer -> UInt8 outputs also route through pack_src and
-        # apply the packer's sign-clearing UInt8 conversion after relu. Other outputs
+        # apply the UInt8 conversion after relu, which runs before the packer format
+        # conversion. Other outputs
         # keep the existing path (saturate_integer etc.).
 
         generate_golden = get_golden_generator(DataCopyGolden)
@@ -327,7 +317,9 @@ def test_pack_quasar(
         )
 
         if signed_integer_to_uint8:
-            golden_tensor = PackGolden.convert_signed_integer_to_uint8(golden_tensor)
+            golden_tensor = saturate_integer(
+                golden_tensor, DataFormat.UInt8, format_dict[DataFormat.UInt8]
+            )
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
