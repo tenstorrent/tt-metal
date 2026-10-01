@@ -750,7 +750,9 @@ class PER_FACE_HANDOFF(TemplateParameter):
     per_face_handoff: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool per_face_handoff = {str(self.per_face_handoff).lower()};"
+        return (
+            f"constexpr bool per_face_handoff = {str(self.per_face_handoff).lower()};"
+        )
 
 
 @dataclass

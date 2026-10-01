@@ -18,9 +18,15 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
+#if defined(ARCH_BLACKHOLE)
 // Both threads hand each operand tile over as one source bank (SrcDvalid::PerTile), except for a transposed SrcA and the
 // per_face_handoff variant, which use SrcDvalid::PerFace; broadcasts and partial faces fall back inside the LLK for either value.
 #define ELTWISE_BINARY_PER_FACE_DVALID(params) (per_face_handoff || (params).UNPACK_TRANSPOSE_FACES || (params).UNPACK_TRANSPOSE_WITHIN_FACE)
+#define SRC_DVALID_ARG , src_dvalid
+#else
+// The other architectures publish per face and have no hand-off argument.
+#define SRC_DVALID_ARG
+#endif
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -29,7 +35,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
+#if defined(ARCH_BLACKHOLE)
 template <SrcDvalid src_dvalid>
+#endif
 void run_unpack(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -62,7 +70,7 @@ void run_unpack(RUNTIME_PARAMETERS params)
     // bits programmed here are overwritten by configure_unpack_AB().
     _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
 
-#ifdef EN_DEST_REUSE
+#if defined(EN_DEST_REUSE) && defined(ARCH_BLACKHOLE)
     // Mirrors the math thread: the first tiles of each block are the two-operand seed, the rest the single-operand dest-reuse unpack.
     const std::uint32_t tiles_in_block          = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t num_tiles_accumulations = params.INPUT_NUM_TILES_IN_BLOCK / tiles_in_block;
@@ -72,13 +80,13 @@ void run_unpack(RUNTIME_PARAMETERS params)
     {
         const std::uint32_t block_base = block * params.INPUT_NUM_TILES_IN_BLOCK;
 
-        _llk_unpack_AB_init_<BROADCAST_TYPE, src_dvalid>(tensor_shape, transpose);
+        _llk_unpack_AB_init_<BROADCAST_TYPE SRC_DVALID_ARG>(tensor_shape, transpose);
         for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
         {
             _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(params.buffer_A[block_base + tile]), L1_ADDRESS(params.buffer_B[block_base + tile]));
         }
 
-        _llk_unpack_A_init_<BroadcastType::NONE, true /* acc_to_dest */, REUSE_DEST_TYPE, false /* unpack_to_dest */, src_dvalid>(
+        _llk_unpack_A_init_<BroadcastType::NONE, true /* acc_to_dest */, REUSE_DEST_TYPE, false /* unpack_to_dest */ SRC_DVALID_ARG>(
             0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
         for (std::uint32_t n = 1; n < num_tiles_accumulations; n++)
         {
@@ -97,9 +105,13 @@ void run_unpack(RUNTIME_PARAMETERS params)
         }
     }
 #else
-    _llk_unpack_AB_init_<BROADCAST_TYPE, src_dvalid>(tensor_shape, transpose);
+    _llk_unpack_AB_init_<BROADCAST_TYPE SRC_DVALID_ARG>(tensor_shape, transpose);
 
+#ifdef EN_DEST_REUSE
+    const std::uint32_t num_total_tiles = params.INPUT_NUM_TILES_IN_BLOCK * params.INPUT_NUM_BLOCKS;
+#else
     const std::uint32_t num_total_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
+#endif
 
     for (std::uint32_t i = 0; i < num_total_tiles; ++i)
     {
@@ -110,6 +122,7 @@ void run_unpack(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+#if defined(ARCH_BLACKHOLE)
     if (ELTWISE_BINARY_PER_FACE_DVALID(params))
     {
         run_unpack<SrcDvalid::PerFace>(params);
@@ -118,6 +131,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         run_unpack<SrcDvalid::PerTile>(params);
     }
+#else
+    run_unpack(params);
+#endif
 }
 
 #endif
@@ -130,7 +146,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
+#if defined(ARCH_BLACKHOLE)
 template <SrcDvalid src_dvalid>
+#endif
 void run_math(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -161,7 +179,7 @@ void run_math(RUNTIME_PARAMETERS params)
     {
         _llk_math_wait_for_dest_available_<dest_sync>();
 
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, src_dvalid>(
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE SRC_DVALID_ARG>(
             tensor_shape, ACC_TO_DEST);
         for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
         {
@@ -174,11 +192,10 @@ void run_math(RUNTIME_PARAMETERS params)
                 dest_sync,
                 is_fp32_dest_acc_en,
                 MATH_FIDELITY,
-                EltwiseBinaryReuseDestType::NONE,
-                src_dvalid>(tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
+                EltwiseBinaryReuseDestType::NONE SRC_DVALID_ARG>(tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
         }
 
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE, src_dvalid>(tensor_shape, ACC_TO_DEST);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE SRC_DVALID_ARG>(tensor_shape, ACC_TO_DEST);
         for (std::uint32_t n = 1; n < num_tiles_accumulations; n++)
         {
             for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
@@ -186,7 +203,7 @@ void run_math(RUNTIME_PARAMETERS params)
                 LLK_ASSERT(
                     (static_cast<std::uint32_t>(tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                     "Block tile index exceeds maximum destination tiles");
-                _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE, src_dvalid>(
+                _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE SRC_DVALID_ARG>(
                     tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
             }
         }
@@ -197,7 +214,7 @@ void run_math(RUNTIME_PARAMETERS params)
     const std::uint32_t num_blocks     = params.NUM_BLOCKS;
     constexpr auto REUSE_DEST_TYPE     = ckernel::EltwiseBinaryReuseDestType::NONE;
 
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE, src_dvalid>(tensor_shape, ACC_TO_DEST);
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE SRC_DVALID_ARG>(tensor_shape, ACC_TO_DEST);
 
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
@@ -207,7 +224,7 @@ void run_math(RUNTIME_PARAMETERS params)
             LLK_ASSERT(
                 (static_cast<std::uint32_t>(tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
-            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE, src_dvalid>(
+            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE SRC_DVALID_ARG>(
                 tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
@@ -217,6 +234,7 @@ void run_math(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+#if defined(ARCH_BLACKHOLE)
     if (ELTWISE_BINARY_PER_FACE_DVALID(params))
     {
         run_math<SrcDvalid::PerFace>(params);
@@ -225,6 +243,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         run_math<SrcDvalid::PerTile>(params);
     }
+#else
+    run_math(params);
+#endif
 }
 
 #endif

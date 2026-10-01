@@ -24,9 +24,16 @@ using namespace ckernel;
 
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
+#if defined(ARCH_BLACKHOLE)
 // One source bank (one data valid) per operand per tile; the isolate mocks publish and clear at that rate.
 static constexpr SrcDvalid SRC_DVALID          = SrcDvalid::PerTile;
 static constexpr std::uint32_t DVALIDS_PER_TILE = 1;
+#define SRC_DVALID_ARG , SRC_DVALID
+#else
+// The other architectures publish per face and have no hand-off argument.
+static constexpr std::uint32_t DVALIDS_PER_TILE = TILE_NUM_FACES;
+#define SRC_DVALID_ARG
+#endif
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -55,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             /* num_faces */ 4,
             /* num_faces */ 4);
-        _llk_unpack_AB_init_<BroadcastType::NONE, SRC_DVALID>(DEFAULT_TENSOR_SHAPE);
+        _llk_unpack_AB_init_<BroadcastType::NONE SRC_DVALID_ARG>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {
@@ -105,7 +112,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, SRC_DVALID>(
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE SRC_DVALID_ARG>(
             DEFAULT_TENSOR_SHAPE, 0 /* acc_to_dest */);
         PROFILER_SYNC();
     }
@@ -136,8 +143,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             DstSync::SyncHalf,
                             is_fp32_dest_acc_en,
                             MATH_FIDELITY,
-                            EltwiseBinaryReuseDestType::NONE,
-                            SRC_DVALID>(DEFAULT_TENSOR_SHAPE, block_tile, false);
+                            EltwiseBinaryReuseDestType::NONE SRC_DVALID_ARG>(DEFAULT_TENSOR_SHAPE, block_tile, false);
                     }
                 }
             }
@@ -159,8 +165,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             DstSync::SyncHalf,
                             is_fp32_dest_acc_en,
                             MATH_FIDELITY,
-                            EltwiseBinaryReuseDestType::NONE,
-                            SRC_DVALID>(DEFAULT_TENSOR_SHAPE, block_tile, false);
+                            EltwiseBinaryReuseDestType::NONE SRC_DVALID_ARG>(DEFAULT_TENSOR_SHAPE, block_tile, false);
                     }
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }

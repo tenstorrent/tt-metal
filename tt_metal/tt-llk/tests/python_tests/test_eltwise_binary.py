@@ -39,9 +39,9 @@ from helpers.test_variant_parameters import (
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
+    PER_FACE_HANDOFF,
     REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
-    PER_FACE_HANDOFF,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
