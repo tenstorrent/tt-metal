@@ -7,6 +7,8 @@ import torch
 import ttnn
 from ttnn.tools import trace_allocation_tracker
 
+from models.common.utility_functions import skip_for_slow_dispatch
+
 
 def run_global_circular_buffer(device):
     sender_cores = [ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2)]
@@ -41,6 +43,7 @@ def test_global_circular_buffer_mesh(mesh_device):
     run_global_circular_buffer(mesh_device)
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.skipif(
     not trace_allocation_tracker.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup"
 )
