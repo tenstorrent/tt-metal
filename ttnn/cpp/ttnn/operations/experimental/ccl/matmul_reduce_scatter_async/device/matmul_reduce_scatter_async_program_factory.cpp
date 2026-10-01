@@ -131,7 +131,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
 
     return cached_program_t{
         std::move(matmul_cached_program.program),
-        {.reduce_scatter_artifacts = std::move(reduce_scatter_artifacts),
+        {.reduce_scatter_artifacts = reduce_scatter_artifacts,
          .matmul_shared_variables = std::move(matmul_cached_program.shared_variables)}};
 }
 
@@ -140,6 +140,13 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
     const MatmulReduceScatterAsyncParams& args,
     const MatmulReduceScatterAsyncInputs& tensor_args,
     MatmulReduceScatterAsyncResult& output_tensors) {
+    const auto ccl_args = ReduceScatterProgramArtifacts::collect_runtime_args(
+        true,
+        args.reduce_scatter_params.barrier_semaphore,
+        args.reduce_scatter_params.semaphore,
+        output_tensors.mm,
+        tensor_args.persistent_intermediate,
+        output_tensors.reduce_scatter);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
@@ -154,23 +161,7 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             matmul_output_tensors);
 
         // Call reduce scatter runtime arguments override directly using artifacts
-        ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
-            program,
-            shared_vars.reduce_scatter_artifacts.reader_kernel_id,
-            shared_vars.reduce_scatter_artifacts.writer_kernel_id,
-            shared_vars.reduce_scatter_artifacts.all_cores,
-            args.reduce_scatter_params.num_links,
-            shared_vars.reduce_scatter_artifacts.num_directions_per_link,
-            shared_vars.reduce_scatter_artifacts.num_workers_per_direction,
-            shared_vars.reduce_scatter_artifacts.num_mux_cores_per_direction_per_link,
-            shared_vars.reduce_scatter_artifacts.num_cores_per_link,
-            shared_vars.reduce_scatter_artifacts.normalized_dim,
-            args.reduce_scatter_params.barrier_semaphore,
-            args.reduce_scatter_params.semaphore,
-            output_tensors.mm,
-            tensor_args.persistent_intermediate,
-            output_tensors.reduce_scatter,
-            /*penult_intermediate=*/std::nullopt);
+        shared_vars.reduce_scatter_artifacts.override_runtime_arguments(ccl_args);
     }
 }
 
