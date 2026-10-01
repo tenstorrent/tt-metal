@@ -197,10 +197,20 @@ template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_
 inline void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (SDPA_EXP_APPROX_MODE) {
+        // bf16 arm: exp_21f's four fp32 constants, loaded once and kept in LRegs across the loop (sfpi 7.83.0
+        // never hoists a literal out of a loop by itself, so each costs an SFPLOADI pair per row otherwise).
+        // The fp32 arm keeps _ckernel_sfpu_exp_accurate_ as is, so these fold to unused floats there.
+        HoistedIf<!is_fp32_dest_acc_en> one_ln2 = EXP_21F_ONE_LN2, c0 = EXP_21F_C0, c1 = EXP_21F_C1, c2 = EXP_21F_C2;
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result =
-                ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(val, scale_bf16);
+            sfpi::vFloat result;
+            if constexpr (is_fp32_dest_acc_en) {
+                result =
+                    ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(val, scale_bf16);
+            } else {
+                // _ckernel_sfpu_exp_accurate_<true, false> with the constants from the caller: same operations.
+                result = _sfpu_exp_21f_bf16_<false>(val * sfpi::sFloat16b(scale_bf16), one_ln2, c0, c1, c2);
+            }
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg += 2;
         }
@@ -228,6 +238,11 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     static_assert(!reuse_cur_max_tile || is_fp32_dest_acc_en);
     constexpr std::uint32_t worker_sum_base_idx = reuse_cur_max_tile ? cur_max_base_idx : 128;
 
+    // bf16 arm: two of exp_21f's four fp32 constants kept in LRegs across the loop (see
+    // calculate_exponential_first_column). With the four inputs and both exps live, c0 and c1 are all that
+    // fit: a third constant is a "too few lregs" compile error. The fp32 arm folds these to unused floats.
+    HoistedIf<!is_fp32_dest_acc_en> c0 = EXP_21F_C0, c1 = EXP_21F_C1;
+    constexpr float one_ln2 = EXP_21F_ONE_LN2, c2 = EXP_21F_C2;
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         sfpi::vFloat prev_max_vec = sfpi::dst_reg[prev_max_base_idx];
         sfpi::vFloat worker_max_vec = sfpi::dst_reg[worker_max_base_idx];
@@ -241,10 +256,17 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_prev = prev_max_vec - cur_max;
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
-        sfpi::vFloat exp_prev =
-            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(diff_prev, scale_bf16);
-        sfpi::vFloat exp_worker =
-            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(diff_worker, scale_bf16);
+        sfpi::vFloat exp_prev, exp_worker;
+        if constexpr (is_fp32_dest_acc_en) {
+            exp_prev = ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(
+                diff_prev, scale_bf16);
+            exp_worker = ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(
+                diff_worker, scale_bf16);
+        } else {
+            // _ckernel_sfpu_exp_accurate_<true, false> with the hoisted constants: same operations.
+            exp_prev = _sfpu_exp_21f_bf16_<false>(diff_prev * sfpi::sFloat16b(scale_bf16), one_ln2, c0, c1, c2);
+            exp_worker = _sfpu_exp_21f_bf16_<false>(diff_worker * sfpi::sFloat16b(scale_bf16), one_ln2, c0, c1, c2);
+        }
 
         sfpi::dst_reg[prev_max_base_idx] = exp_prev;
         sfpi::dst_reg[worker_max_base_idx] = exp_worker;
