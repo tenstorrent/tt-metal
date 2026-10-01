@@ -10,8 +10,9 @@ so there is no copy and nothing to sync but the layer itself.
     (kv_a_layernorm(latent 512) | RoPE(k_pe 64), interleaved RoPE in checkpoint order, as the golden kv_latent);
     batch = slot * L + layer row (L = served layers). bfp8_b TILE is the one 576-wide format both ring_mla (TILE
     only) and the server's KV tools (tools/launch_harness/tables.py keys the geometry on the record size: 19584 B =
-    bfp8 TILE, 36864 B = bf16 row-major) read, and DeepSeek's (MlaKvCacheFormat.BFP8_TILE). XING_KV_CACHE_DTYPE=bf16
-    keeps the K.1 bf16 TILE cache (the harness misreads it as row-major).
+    bfp8 TILE, 36864 B = bf16 row-major) read, and DeepSeek's (MlaKvCacheFormat.BFP8_TILE). It is the model's one
+    KV format (tt/attention.py:kv_cache_dtype): the accuracy ladder runs on it as well;
+    XING_KV_CACHE_DTYPE=bf16 switches both to the K.1 bf16 TILE cache.
 
 It is an ``init_kvpe_cache(tp_axis=None)`` cache, the layout of the attention's own geometry cache: DRAM NdShard
 [1, 1, 32, 576] ROUND_ROBIN_1D over the DRAM banks, block-cyclic over the 4 mesh rows with the model's chunk as the
@@ -27,7 +28,6 @@ host tag come from it, as DeepSeek's populate_kv_chunk_address_table_block_cycli
 
 from __future__ import annotations
 
-import os
 import socket
 
 import torch
@@ -40,10 +40,11 @@ KV_WIDTH = 576
 
 
 def cache_dtype():
-    """XING_KV_CACHE_DTYPE: ``bfp8`` (default, the serving contract's format) or ``bf16`` (the K.1 cache)."""
-    v = os.environ.get("XING_KV_CACHE_DTYPE", "bfp8")
-    assert v in ("bfp8", "bf16"), f"XING_KV_CACHE_DTYPE must be bfp8 or bf16, got {v}"
-    return ttnn.bfloat8_b if v == "bfp8" else ttnn.bfloat16
+    """The model's one KV cache format (tt/attention.py:kv_cache_dtype; bfp8_b, XING_KV_CACHE_DTYPE=bf16 = K.1):
+    the ladder's geometry cache uses the same one."""
+    from models.demos.xing40_a4b_d_p.tt.attention import kv_cache_dtype
+
+    return kv_cache_dtype()
 
 
 def chip_of(pos: int, chunk: int) -> tuple[int, int]:
