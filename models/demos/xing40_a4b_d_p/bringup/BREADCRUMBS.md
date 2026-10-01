@@ -493,3 +493,19 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate: rc 0 (serving --run all 4/4, ladder s56320 PASS, test_contract PASS).
 - Re-run: the brief's gate command; one test: `scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/xing40_a4b_d_p/tests/bringup/contract/test_runner_contract.py` (3.5 min).
+
+## K.3 contract (run1, attempt 1): one KV cache format
+- tt/attention.py: `kv_cache_dtype()` is the model's one KV format (default bfp8_b TILE; `XING_KV_CACHE_DTYPE=bf16`
+  switches the ladder and the engine cache together back to the K.1 bf16 TILE cache). `_Geometry` builds its latent
+  cache and the ring_mla gather scratch in it (scratch key now carries the dtype); `_Geometry.load` writes the
+  golden prefix in the cache's dtype. tt/runners/kv_contract.py:`cache_dtype()` delegates to it, so the runtime's
+  geometry cache and the engine cache match (prepare_cache returns early; drop_own_cache still frees the geometry's).
+- hooks.py: `_DeviceState.formats()` -> `{"kv_latent": <geometry cache dtype>}` (ladder metric state_bits_kv_latent).
+  The hybrid state has no formats() (not the gate's model).
+- s56320 ladder, bfp8 cache vs the K.2 bf16 cache: min layer pcc 0.99106 vs 0.99205 (both L26), final hidden
+  0.998193 vs 0.998407, logits tail 0.998535 vs 0.998788, top1 0.9514 vs 0.9714, top5 1.0 vs 1.0, worst state pcc
+  0.99576, host transfers per layer 0, prefill 66.2 s. state_bits_kv_latent 8.
+- Contract tests: 4/4 pass unchanged (cache_starts, pulled_back_chunk, adapter_acks, runner_contract).
+- Gotcha: with BRINGUP_TASK set but BRINGUP_RESULTS_DIR unset, metrics land in generated/bringup_adhoc/K.3.json, not
+  bringup/results/ (the orchestrator copies them).
+- Re-run: the brief's gate command; `XING_KV_CACHE_DTYPE=bf16` for the bf16 comparison.

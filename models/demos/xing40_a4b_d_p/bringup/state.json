@@ -2437,66 +2437,133 @@
   "waiting": null
  },
  "K.3": {
-  "attempts": 0,
-  "duration_s": 397.9,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "795f35ab46b316b21eed14ee8a622f8a0b09f7e0",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "b8790cb560cd9ad661a5b2c925c338d77365b97d",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "08754f09-dca6-4b7b-a02c-ba482141a9da"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/K.3.contract.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "795f35ab46b316b21eed14ee8a622f8a0b09f7e0",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "b8790cb560cd9ad661a5b2c925c338d77365b97d",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/K.3.contract.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "contract",
+    "seconds": 524.4,
+    "session_id": "08754f09-dca6-4b7b-a02c-ba482141a9da",
+    "t": "2026-10-01T09:47:54"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 2,
+  "duration_s": 398.0,
   "history": [
    {
     "status": "PASS",
     "t": "2026-10-01T09:22:33"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-10-01T09:24:44"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T09:32:07"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T09:39:10"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-01T09:54:43"
    }
   ],
-  "last_run": "2026-10-01T09:22:33",
+  "last_run": "2026-10-01T09:54:43",
   "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/K.3.log",
   "metrics": {
    "contract_tests_failed": 0,
    "contract_tests_run": 4,
-   "pcc_final_hidden": 0.9984073433228765,
-   "pcc_layer_L00": 0.9999882654831568,
-   "pcc_layer_L01": 0.999979086756004,
-   "pcc_layer_L02": 0.9999644429906385,
-   "pcc_layer_L03": 0.9999474731132828,
-   "pcc_layer_L04": 0.9999304033236518,
-   "pcc_layer_L05": 0.9999048606533544,
-   "pcc_layer_L06": 0.9998800023208548,
-   "pcc_layer_L07": 0.9998287133191971,
-   "pcc_layer_L08": 0.9997515819684591,
-   "pcc_layer_L09": 0.9997709858730005,
-   "pcc_layer_L10": 0.9998010870828877,
-   "pcc_layer_L11": 0.9997869467589497,
-   "pcc_layer_L12": 0.9997477268629331,
-   "pcc_layer_L13": 0.9997157535719429,
-   "pcc_layer_L14": 0.9996711429651449,
-   "pcc_layer_L15": 0.9995624461253935,
-   "pcc_layer_L16": 0.9994635475323372,
-   "pcc_layer_L17": 0.9992865715573506,
-   "pcc_layer_L18": 0.9990024825102383,
-   "pcc_layer_L19": 0.998089597223824,
-   "pcc_layer_L20": 0.9972715217595023,
-   "pcc_layer_L21": 0.996192061513801,
-   "pcc_layer_L22": 0.9956474215956912,
-   "pcc_layer_L23": 0.9942980136095391,
-   "pcc_layer_L24": 0.9935639402287363,
-   "pcc_layer_L25": 0.992332627764283,
-   "pcc_layer_L26": 0.9920468959481173,
-   "pcc_layer_L27": 0.9938583200374483,
-   "pcc_layer_L28": 0.9954587078368968,
-   "pcc_layer_L29": 0.9958992227296412,
-   "pcc_layer_L30": 0.9966657449237027,
-   "pcc_layer_L31": 0.9968552812291724,
-   "pcc_layer_L32": 0.997087766181562,
-   "pcc_layer_L33": 0.997459636151039,
-   "pcc_layer_L34": 0.9979171426422225,
-   "pcc_layer_L35": 0.9979472655068127,
-   "pcc_layer_L36": 0.99789485725362,
-   "pcc_layer_L37": 0.9979894895399292,
-   "pcc_layer_L38": 0.998343646020092,
-   "pcc_layer_L39": 0.9989801751660424,
+   "pcc_final_hidden": 0.9981927787857136,
+   "pcc_layer_L00": 0.9999885731961017,
+   "pcc_layer_L01": 0.9999783393797849,
+   "pcc_layer_L02": 0.999957518512864,
+   "pcc_layer_L03": 0.9999325137391155,
+   "pcc_layer_L04": 0.9999070394841791,
+   "pcc_layer_L05": 0.9998776777651713,
+   "pcc_layer_L06": 0.9998493139896719,
+   "pcc_layer_L07": 0.9997831975167549,
+   "pcc_layer_L08": 0.999666145188989,
+   "pcc_layer_L09": 0.9997074426599861,
+   "pcc_layer_L10": 0.9997561372647571,
+   "pcc_layer_L11": 0.9997315821704136,
+   "pcc_layer_L12": 0.9996706907282885,
+   "pcc_layer_L13": 0.9996243223679689,
+   "pcc_layer_L14": 0.9995652326395243,
+   "pcc_layer_L15": 0.9994252601231458,
+   "pcc_layer_L16": 0.9992900475698968,
+   "pcc_layer_L17": 0.9990552270218226,
+   "pcc_layer_L18": 0.9987670206450169,
+   "pcc_layer_L19": 0.997793832837807,
+   "pcc_layer_L20": 0.9968357935879214,
+   "pcc_layer_L21": 0.9957017623093973,
+   "pcc_layer_L22": 0.9952242028900768,
+   "pcc_layer_L23": 0.9937689298765717,
+   "pcc_layer_L24": 0.9930102672702247,
+   "pcc_layer_L25": 0.9912956809553828,
+   "pcc_layer_L26": 0.9910553724282204,
+   "pcc_layer_L27": 0.9930509829528859,
+   "pcc_layer_L28": 0.994776067532585,
+   "pcc_layer_L29": 0.9952986184948918,
+   "pcc_layer_L30": 0.9961270497811013,
+   "pcc_layer_L31": 0.9963518153616719,
+   "pcc_layer_L32": 0.996625405207114,
+   "pcc_layer_L33": 0.9970461099888288,
+   "pcc_layer_L34": 0.9975655272337183,
+   "pcc_layer_L35": 0.997608758551001,
+   "pcc_layer_L36": 0.9975432780464496,
+   "pcc_layer_L37": 0.9976527553906606,
+   "pcc_layer_L38": 0.9980886318209722,
+   "pcc_layer_L39": 0.9988280613183586,
+   "state_bits_kv_latent": 8,
    "top5_overlap": 1.0
   },
   "rc": 0,
   "reason": [],
-  "started": "2026-10-01T09:15:55",
-  "status": "PASS"
+  "role": "contract",
+  "started": "2026-10-01T09:48:05",
+  "status": "PASS",
+  "waiting": null
  },
  "L.last": {
   "attempts": 0,
