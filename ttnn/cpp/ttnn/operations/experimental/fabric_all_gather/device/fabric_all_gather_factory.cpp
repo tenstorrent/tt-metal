@@ -413,7 +413,7 @@ GatherPlan build_gather_plan(
     const uint32_t L = num_links;
 
     // Placement: every link worker with a fabric connection as close as the grid allows (NoC1 hops, the sender's NoC)
-    // to its link's Ethernet core, then the receive-only link workers and one copy core per link on free cores.
+    // to its link's Ethernet core, then the receive-only link workers and the copy cores on free cores.
     const auto allowed_cores = cores_in_row_major_order(allowed_core_ranges);
     for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
         const Coord chip(chip_index / mesh_cols, chip_index % mesh_cols);
