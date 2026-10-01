@@ -35,6 +35,16 @@ Read the code at its latest commit, every time.
   `tools/launch_harness/{models,tables,goldens,validation,loopback,config,topology}.py`,
   `kv_manager/tools/kv_dump_compare.py`, `kv_dram_poke`. These say what a model must provide to be launched and how
   the server validates KV end to end; the bring-up's contract gate should reuse their checks.
+- **Verified LoudBox disaggregated deployments** (evidence of what works on hardware, not the contract):
+  `github.com/AleksKnezevic/disagg_lb` (clone it next to the server repo; record its sha). Mistral Small 4 (MLA)
+  prefill on one LoudBox (2x4, SP=2 TP=4, chunk 5120) -> real KV Managers over Mooncake -> tt-blaze decode on a
+  second LoudBox, validated end to end. Read `docs/ARCHITECTURE.md`, `mistrall 4/docs/{SERVING,MODEL_RUNNERS,
+  VALIDATION_AND_RECOVERY,VALIDATION}.md`, `mistrall 4/configs/prefill/*.yaml`, `mistrall 4/scripts/render_configs.py`
+  and `disagg_smoke.py`. It pins its own tt-metal / tt-d-gen / tt-blaze commits: read the server at ITS pin as well
+  (`git -C <server> show <pin>:<path>`) and diff the pin against the server's main for every rule you report (e.g.
+  the pinned branch adds `chunk_aligned_start`, which makes the server align chunk starts to the chunk size; main
+  does not have it). Use it for LoudBox geometry and settings (mesh descriptor, fabric, pinned-memory limit, decode
+  compute grid), the MLA decode's KV format, and the migration pass checks.
 - **Reference model already served**: `models/demos/deepseek_v3_d_p` (tt/mla/mla.py, tt/kv_ack.py,
   utils/kv_cache_utils.py, tt/runners/). Use it to show how a requirement is met with existing ops.
 
