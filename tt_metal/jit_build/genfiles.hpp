@@ -27,7 +27,4 @@ void jit_build_genfiles_triscs_src(
 
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOptions& options);
 
-// Writes the device-side `::binding_details::LLKMetadata{...}` initializer a binding token carries.
-void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata);
-
 }  // namespace tt::tt_metal

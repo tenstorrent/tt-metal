@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <string>
+
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
@@ -15,5 +17,8 @@ struct LLKMetadata {
     DataFormat format;
     Tile tile;
 };
+
+// The device-side `::binding_details::LLKMetadata{...}` initializer a binding token is baked with.
+std::string serialize_llk_metadata(const LLKMetadata& metadata);
 
 }  // namespace tt::tt_metal
