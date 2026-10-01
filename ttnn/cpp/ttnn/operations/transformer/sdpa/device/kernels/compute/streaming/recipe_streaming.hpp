@@ -1146,6 +1146,27 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 
     configure_single_tile_pack(scratch_cb);
     for (uint32_t s = 0; s < sbh; s++) {
+#if defined(SDPA_PA) && defined(SDPA_PA_DENOM)
+        // P-A matmul denominator: l is already a column (P * ones column) in column 0 of the Float32 tile;
+        // its other columns are not row sums, so no cross-column reduce. 1/l straight from column 0.
+        {
+            CircularBuffer(cur_sum_cb).wait_front(sdpa_sum_stride);
+            reconfig_data_format_srca(cur_sum_cb);
+            copy_init(cur_sum_cb);
+            CircularBuffer(scratch_cb).reserve_back(1);
+            tile_regs_acquire();
+            copy_tile(cur_sum_cb, 0, 0);
+            recip_tile_init();
+            MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
+            tile_regs_commit();
+            tile_regs_wait();
+            configure_single_tile_pack(scratch_cb);
+            pack_tile(0, scratch_cb);
+            tile_regs_release();
+            CircularBuffer(scratch_cb).push_back(1);
+            CircularBuffer(cur_sum_cb).pop_front(sdpa_sum_stride);
+        }
+#else
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
@@ -1205,6 +1226,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 #endif
             CircularBuffer(cur_sum_cb).pop_front(sdpa_sum_stride);
         }
+#endif
 
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
         // Process in batches of up to dst_size tiles (DST capacity).
