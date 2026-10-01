@@ -67,7 +67,7 @@ Both clear the serving floor (10% free, 128 MiB contiguous per bank). Uniform KV
 token per chip for S's 48 layers, so 131,072 tokens (3.4 GB) does not fit: that boot ran out of memory
 while allocating the pool. Hybrid KV lets the 36 sliding-window layers share block slots with the 12
 full-attention layers (pool = 12 layer-equivalents), so 131,072 tokens costs about 980 MiB. The hybrid
-margin is thin (about 92 MiB above the floor); a larger context needs a smaller precision footprint or
+margin is thin (10.44% vs the 10% floor of 21,151 MiB: about 93 MiB above it); a larger context needs a smaller precision footprint or
 fewer warm buffers, not just a flag.
 
 ## Long context
@@ -127,7 +127,9 @@ sequences, monolithic prefill at the time of measurement) decodes at 66-69 ms
 3. A per-layer `snapshot_download` metadata call hung a full model load on a stalled TLS handshake;
    checkpoint resolution is now local-first and once per process.
 4. Device sampling received T instead of 1/T, so temperature 2.0 sampled like 0.5.
-5. The plugin's `-1` "no seed" sentinel was used as a literal seed (unseeded requests were identical).
+5. Defensive: the adapter now treats the plugin's `-1` "no seed" sentinel as no seed. The installed plugin
+   (c127c17) already converts `-1` to `None` before calling the model (`model_runner.py:1814`,
+   `async_decode.py:517`), so this guard does not change behaviour with that plugin.
 6. Repetition/presence/frequency penalties were silently ignored; penalized decode steps now sample
    on host with vLLM's penalty semantics (`tt/host_sampling.py`).
 7. A logprobs request on a hybrid-KV server killed the engine; hybrid host-sampling decode is now
