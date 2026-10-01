@@ -169,17 +169,6 @@ bool emu_server_configured() {
     return emu || jtag;
 }
 
-bool sival_bringup() {
-    if (std::getenv("TT_METAL_GRENDEL_JTAG_SERVER") != nullptr) {
-        return true;
-    }
-    const char* bringup = std::getenv("TT_METAL_EMU_BRINGUP");
-    return bringup != nullptr && std::string_view(bringup) == "sival";
-}
-
-constexpr std::string_view kSivalSramOnly =
-    "TT_METAL_EMU_BRINGUP=sival supports one-Mimir CCE SRAM access only; use umd_server for this test.";
-
 CoreCoord translated_dram_core(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
     const auto core = soc_desc.translate_coord_to(
         tt::umd::CoreCoord(
@@ -205,9 +194,6 @@ TEST_P(CceSramRoundTripThroughMetalCluster, RoundTrip) {
     const uint32_t cce_index = GetParam();
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
     const uint32_t num_cces = num_cces_from_soc(soc_desc);
-    if (sival_bringup() && num_cces > 2) {
-        GTEST_SKIP() << "TT_METAL_EMU_BRINGUP=sival requires the single-Mimir mimir_1x1.yaml descriptor.";
-    }
     if (cce_index >= num_cces) {
         GTEST_SKIP() << "Configured descriptor exposes only " << num_cces << " CCEs.";
     }
@@ -236,9 +222,6 @@ TEST(MimirEmu, CceSramChannelsDoNotAliasThroughMetalCluster) {
     constexpr ChipId chip_id = 0;
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
     const uint32_t num_cces = num_cces_from_soc(soc_desc);
-    if (sival_bringup() && num_cces > 2) {
-        GTEST_SKIP() << "TT_METAL_EMU_BRINGUP=sival requires the single-Mimir mimir_1x1.yaml descriptor.";
-    }
     ASSERT_GE(num_cces, 2u);
 
     // Every channel is written before any is read: an aliasing window only shows up once a later
@@ -268,10 +251,6 @@ TEST_P(CceSramRoundTripThroughMinimalDevice, RoundTrip) {
 
     const uint32_t cce_index = GetParam();
     const uint32_t num_cces = num_cces_on(device.get());
-    if (sival_bringup() && num_cces > 2) {
-        device.reset();
-        GTEST_SKIP() << "TT_METAL_EMU_BRINGUP=sival requires the single-Mimir mimir_1x1.yaml descriptor.";
-    }
     if (cce_index >= num_cces) {
         device.reset();
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
@@ -296,11 +275,6 @@ TEST(MimirEmu, RuntimeFirmwareInitializesThroughPublicDeviceApi) {
     ASSERT_NO_THROW(device = CreateDevice(0));
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
-    const uint32_t num_cces = num_cces_on(device);
-    if (sival_bringup() && num_cces > 2) {
-        EXPECT_TRUE(CloseDevice(device));
-        GTEST_SKIP() << "TT_METAL_EMU_BRINGUP=sival requires the single-Mimir mimir_1x1.yaml descriptor.";
-    }
     EXPECT_TRUE(CloseDevice(device));
 }
 
@@ -317,10 +291,6 @@ TEST_P(HartZeroRunsDramKernel, WritesMagic) {
 
     const uint32_t cce_index = GetParam();
     const uint32_t num_cces = num_cces_on(device);
-    if (sival_bringup() && num_cces > 2) {
-        EXPECT_TRUE(CloseDevice(device));
-        GTEST_SKIP() << "TT_METAL_EMU_BRINGUP=sival requires the single-Mimir mimir_1x1.yaml descriptor.";
-    }
     if (cce_index >= num_cces) {
         EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
@@ -363,10 +333,6 @@ TEST_P(AllHartsRunDramKernel, WritesMagic) {
 
     const uint32_t cce_index = GetParam();
     const uint32_t num_cces = num_cces_on(device);
-    if (sival_bringup() && num_cces > 2) {
-        EXPECT_TRUE(CloseDevice(device));
-        GTEST_SKIP() << "TT_METAL_EMU_BRINGUP=sival requires the single-Mimir mimir_1x1.yaml descriptor.";
-    }
     if (cce_index >= num_cces) {
         EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
@@ -401,6 +367,15 @@ TEST_P(AllHartsRunDramKernel, WritesMagic) {
     const CoreCoord virtual_dram_core = device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
     MetalContext::instance().get_cluster().read_core(
         result.data(), result.size() * sizeof(uint32_t), {device->id(), virtual_dram_core}, result_noc_base);
+    // Host/chippy AXI window: CCE n SRAM at 0x40000000 + n * 4MiB. UNRESERVED is the same
+    // offset Metal used on the NOC-tagged path (result_noc_base - MEM_CCE_L1_NOC_OFFSET).
+    const uint64_t unreserved = result_noc_base - MEM_CCE_L1_NOC_OFFSET;
+    constexpr uint64_t kCceSramAxiBase = 0x40000000ull;
+    for (uint32_t hart = 0; hart < num_harts; hart++) {
+        const uint64_t axi =
+            kCceSramAxiBase + static_cast<uint64_t>(cce_index) * MEM_CCE_L1_SIZE + unreserved + hart * sizeof(uint32_t);
+        fmt::print("Read `0x{:08X}` from `0x{:X}`\n", result[hart], axi);
+    }
     EXPECT_EQ(result, expected);
     EXPECT_TRUE(CloseDevice(device));
 }
@@ -411,10 +386,6 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
-
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
@@ -499,10 +470,6 @@ TEST_P(CopiesGddrThroughAllocatedBuffer, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
-
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
@@ -580,10 +547,6 @@ TEST_P(CopiesAllocatedBufferWithRuntimeArgs, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
-
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
@@ -663,10 +626,6 @@ TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
-
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
@@ -716,10 +675,6 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
-
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
@@ -777,10 +732,6 @@ TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
-
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
@@ -860,10 +811,6 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
-
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
@@ -930,9 +877,6 @@ TEST_P(WritesCrossMimirCceSram, WritesMagic) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
 
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
@@ -995,10 +939,6 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
-
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
@@ -1074,10 +1014,6 @@ TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
-
     IDevice* device = CreateDevice(0);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
@@ -1222,15 +1158,15 @@ TEST_P(DramChannelsDoNotAliasThroughPublicDeviceApi, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
-    if (sival_bringup()) {
-        GTEST_SKIP() << kSivalSramOnly;
-    }
-
     std::unique_ptr<IDevice> device(CreateDeviceMinimal(0));
     ASSERT_NE(device, nullptr);
 
     const uint32_t dram_partition = GetParam();
     const uint32_t num_partitions = device->num_dram_channels();
+    if (num_partitions < 2) {
+        device.reset();
+        GTEST_SKIP() << "Alias check needs at least two DRAM channels; descriptor exposes " << num_partitions << ".";
+    }
     if (dram_partition >= num_partitions) {
         device.reset();
         GTEST_SKIP() << "Configured descriptor does not expose partition " << dram_partition << ".";
