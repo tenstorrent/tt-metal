@@ -205,3 +205,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Results: reference PASS (rel 0.0024, attn rel 0). Stub FAIL (pcc 0). Gate on device PASS: pcc 0.999996, rel 0.0029, ratio [0.9990, 1.0015], coef 1.020, attn rel 0.155, per-slice attn rel 0.142-0.171.
 - The first `FAIL pcc=0` line in each run comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_attn_residual.py`
+
+## C.sliding_moe.ffn_norm.test.1 (test review)
+- Replaced the rendered one-liner with the checks from the cp4 `test_c_full_dense_ffn_norm.py`, set to layer 1. The golden is the same as the prior's: s4096 chunk 1, h_mid [2048, 4096] -> ffn_norm, w in [-0.012, 2.33]. Checks: PCC >= 0.99 (gated), finite, rel L2 <= 0.03, per-token norm ratio [0.97, 1.03], worst row rel <= 0.015, rel L2 per CP slice <= 0.01, and the eps check (module on input x0.1 vs the CPU step: rel <= 0.02, worst row <= 0.04). The limits are unchanged from the earlier cp4 norm tests.
+- CPU measurements (script /tmp/cp4fn1/m.py, not kept). The smallest row mean square is 4.5e-4 (450x eps). Eps 0 / 1e-7 / 2e-6 pass on the golden (rel 0.0025). On x0.1 they score rel 0.069 / 0.061 / 0.056, so they are caught. Other cases: sum instead of mean rel 0.98; eps 1e-3 rel 0.35; `1 + w` PCC 0.61; no weight PCC 0.44; CP slices 1/2 swapped PCC 0.95 / rel 0.31; last 32 rows zeroed worst row 1.0; bf16 math rel 0.0028 / worst row 0.0061.
+- Verified: reference passes (pcc 0.999997, rel 0.0024, worst row 0.0047). Stub fails (pcc 0). The device gate already passes with the existing TtRMSNorm registration: pcc 0.999996, rel 0.0029, ratio [0.9962, 1.0038], worst row 0.0061, slices 0.0027-0.0030, x0.1 rel 0.0024 / worst row 0.0045.
+- The first `FAIL pcc=0` line comes from the precompile collect pass. Ignore it.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_ffn_norm.py`
