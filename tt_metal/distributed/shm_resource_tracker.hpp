@@ -17,11 +17,13 @@ namespace tt::tt_metal::distributed {
  * Ensures that /dev/shm resources created by H2D/D2H sockets are cleaned up even
  * when the process exits abnormally. Two complementary mechanisms:
  *
- *  1. destructor / signal handler – cleans up resources on normal exit,
- *     std::exit(), SIGINT, SIGTERM.
+ *  1. destructor – cleans up resources on normal exit / std::exit().
  *
  *  2. Stale-PID cleanup – on first use, scans /dev/shm for resources whose owning
- *     PID is no longer alive (handles SIGKILL, hard crashes, power loss).
+ *     PID is no longer alive (handles SIGINT, SIGTERM, SIGKILL, hard crashes,
+ *     power loss). This is the reclamation path for any abnormal termination: the
+ *     SIGINT/SIGTERM handler intentionally does no cleanup itself because that would
+ *     require async-signal-unsafe work; it only chains to the previous handler.
  *
  * A manifest file /dev/shm/tt_socket_manifest_<pid> is maintained so that the
  * stale cleanup can discover descriptor files (whose names don't embed a PID).
@@ -42,7 +44,6 @@ public:
     void untrack_file(const std::string& file_path);
 
     void cleanup_all();
-    void cleanup_from_signal();
 
     static void cleanup_stale_resources();
 
