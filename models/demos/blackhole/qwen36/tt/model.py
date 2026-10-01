@@ -3456,8 +3456,11 @@ class Qwen36Model:
         #     read back); the step's last user writes device clones of its taps, earlier users upload their rows.
         # The final batched state (rec_state, conv_states, conv_hist_packed) is bit-identical to the host path's
         # (tests/test_gdn_slot_write_fast_tp2_scratch.py, incl. batched decode steps between admissions). =0 restores
-        # the host round trip byte-for-byte. Validated on a (1,2) mesh only, so the default is scoped to TP=2 (the
-        # trace-replay aliasing hazard of the tap clones depends on the trace intermediates' memory layout).
+        # the host round trip byte-for-byte. Validated bit-exact on a (1,2) mesh and on the (1,4) TP=4 mesh (same test,
+        # SLOT_FAST_MESH=1x4, B=32, 64 layers, decode between admissions: profiles/p300x2_consolidation/PLAIN_VALIDATE.md;
+        # hand-off ~210 -> ~80 ms per admission). The code default stays scoped to TP=2 (the trace-replay aliasing hazard of
+        # the tap clones depends on the trace intermediates' memory layout, and a TP=4 DFlash class's warmup prefills
+        # come through here too); the P300x2 manifest's `plain` profile turns it on with QWEN36_PLAIN_GDN_SLOT_FAST=1.
         # Not atomic across users: user u's recurrent row is written into the live decode buffer inside the prefill
         # loop (fill_cache), its conv taps + packed history only after unbind. An exception between the two leaves
         # slot u with a new recurrent row and stale taps. The exception propagates to the caller; the slot must not be

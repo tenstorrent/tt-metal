@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""SCRATCH bit-exactness + timing check of the plain served slot write (prefill_paged_slots) on a (1,2) mesh.
+"""SCRATCH bit-exactness + timing check of the plain served slot write (prefill_paged_slots) on a (1,2) mesh
+(SLOT_FAST_MESH=1x4: the (1,4) TP=4 mesh of a P300x2 / P150x4).
 
 QWEN36_PLAIN_GDN_SLOT_FAST=0 is the host round trip (snapshot the B=1 scratch GDN state to host, re-upload it and
 write it into the decode row); =1 (default) writes the fp32 recurrent state with ttnn.fill_cache on device and feeds
@@ -37,6 +38,7 @@ from loguru import logger
 
 import ttnn
 
+_MESH = os.environ.get("SLOT_FAST_MESH", "1x2")
 BLOCK = 64
 BPU = 80  # blocks per slot region (5120 tokens)
 # (slots, prompt lengths) per admission step: fresh slots, an overwrite of a live slot, a 2-user step, the last slot,
@@ -90,7 +92,11 @@ def _state_digests(model, comp, rows=None):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 24576, "trace_region_size": 1073741824}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2")], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param(tuple(int(x) for x in _MESH.split("x")), id=_MESH)],
+    indirect=True,
+)
 def test_gdn_slot_write_fast_tp2(mesh_device, reset_seeds, ensure_gc):
     from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 

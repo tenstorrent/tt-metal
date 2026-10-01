@@ -87,6 +87,9 @@ serve_profiles:
       # beat it; the raw arch is kept for the plain lookup path (same string as the p150x2 tp2 profile, boot-verified there).
       TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM,Qwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
       QWEN36_MTP: "0"                 # explicit: the plain class must not load the MTP drafter head / its paged KV cache
+      QWEN36_PLAIN_GDN_SLOT_FAST: "1" # fast bit-exact GDN slot hand-off at admission (code default: TP=2 only). Bit-exact at
+                                      # TP=4 (slot test 1x4, B=32, decode between admissions); ~130 ms less per admitted
+                                      # request. Set here, not as a TP=4 code default, so the DFlash2 profiles are unchanged
                                       # (since 1bec7b836a8 QWEN36_DRAFTER=mtp alone would build it)
       QWEN36_DRAFTER: mtp             # carried over from batch32; the plain class never speculates. Kept as a backstop: if the
                                       # override ever failed to apply, the DFlash class would serve plain (speculation OFF)
