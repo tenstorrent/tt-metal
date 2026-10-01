@@ -11,3 +11,5 @@ in `../doc/PERF_GUIDE.md`. Shell scripts locate the tt-metal checkout from their
 - `sustained_run.sh <bs> <chip> <iters> <tag> "<ENV>"` — one run with tt-smi sampling: cold best, sustained median (last half of iterations), AICLK / power / current / temp over that window, J/inference (sustained power × sustained time / bs). bs1 runs are too short to catch a sample in the window (n/a).
 - `bench_*.py`, `test_*.py` — standalone op benches and bit-identity tests (see the guide's table).
 - `bench_common_traced.py` — shared trace-timing helper (`make_traced(device)`).
+- `profile_page.py <page.html> <runs.json> <out.html>` — data + roofline for the per-op profile artifact (PERF_GUIDE §5).
+- `device_kernel_us.py <profiler dir> [labels]` — device kernel µs per call per trace of a bench run under the device profiler.

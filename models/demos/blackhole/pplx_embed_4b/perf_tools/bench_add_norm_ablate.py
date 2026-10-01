@@ -3,7 +3,7 @@
 # the sum / normalised writes, or the partial exchange (no peer writes, no semaphore wait: the compute sums whatever
 # sits in CB 8), or replace the compute with tile copies that keep every CB handshake (data movement only); traced us
 # per call.
-# Usage: bench_add_norm_ablate.py [batch ...]   (default 8 16 32)
+# Usage: bench_add_norm_ablate.py [batch ...]   (default 8 16 32; AN_A_L1=1 puts a in L1)
 import os
 import re
 import statistics
@@ -121,7 +121,8 @@ def main():
         for bs in batches:
             M, R = bs * 512, R_BY_BS[bs]
             smc = DR if bs == 32 else L1
-            a = ttnn.from_torch(torch.randn(1, 1, M, W), dtype=B8, layout=ttnn.TILE_LAYOUT, device=D, memory_config=DR)
+            amc = L1 if os.getenv("AN_A_L1") == "1" else DR  # the post-MLP call at bs8 / 16 reads a from L1
+            a = ttnn.from_torch(torch.randn(1, 1, M, W), dtype=B8, layout=ttnn.TILE_LAYOUT, device=D, memory_config=amc)
             b = ttnn.from_torch(
                 torch.randn(1, 1, M, W) * 0.3, dtype=B8, layout=ttnn.TILE_LAYOUT, device=D, memory_config=L1
             )
@@ -146,7 +147,10 @@ def main():
                     ts.append((time.perf_counter() - t0) / n * 1e6)
                 ttnn.release_trace(D, tid)
                 [ttnn.deallocate(t) for t in outs]
-                print(f"RES addnorm bs{bs} R={R} {vname:22s} {statistics.median(ts):7.1f} us/call", flush=True)
+                print(
+                    f"RES addnorm bs{bs} R={R} a={'L1' if amc is L1 else 'DRAM'} {vname:22s} {statistics.median(ts):7.1f} us/call",
+                    flush=True,
+                )
             for t in (a, b, o):
                 ttnn.deallocate(t)
     finally:
