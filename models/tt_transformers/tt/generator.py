@@ -3061,7 +3061,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         return host_outputs, read_events
 
     # Note: This function is called by vLLM
-    def process_decode_output_host(self, tt_out, is_tokens=False):
+    def process_decode_output_host(self, tt_out, is_tokens=False, sample_rows=None):
         """
         Converts the input ttnn host tensors to torch tensors.
         The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
@@ -3070,6 +3070,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
            * New path (LogProbsResult): the LogProbsResult is converted into a
             tuple of torch tensors (topk_lp, topk_idx), where each has shape [batch, top_k].
          Returns:
+           * Host logits without model-provided logprobs: (logits, None).
            * If using the old path: (logits, log_probs) where both are torch tensors
              concatenated across data-parallel ranks.
            * If any rank uses the new path: (logits, (topk_lp, topk_idx)), where
@@ -3079,6 +3080,62 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         from models.common.sampling.tt_log_probs import LogProbsResult
 
         max_batch_size_per_model = self.model_args[0].max_batch_size
+
+        if sample_rows is not None:
+            capacity = max_batch_size_per_model * self.data_parallel
+            if (
+                is_tokens
+                or not sample_rows
+                or len(set(sample_rows)) != len(sample_rows)
+                or any(row < 0 or row >= capacity for row in sample_rows)
+            ):
+                raise ValueError(f"Invalid compact host rows {sample_rows} for capacity {capacity}")
+            pieces = []
+            output_order = []
+            for rank, output in enumerate(tt_out):
+                selected = [
+                    (i, row % max_batch_size_per_model)
+                    for i, row in enumerate(sample_rows)
+                    if row // max_batch_size_per_model == rank
+                ]
+                if not selected:
+                    continue
+                if isinstance(output, tuple):
+                    if output[1] is not None:
+                        raise ValueError("Compact host logits cannot discard model-provided logprobs")
+                    output = output[0]
+                pieces.append(
+                    self.model[rank].process_output_decode(
+                        output,
+                        len(selected),
+                        S=1,
+                        is_tokens=False,
+                        sample_rows=[row for _, row in selected],
+                    )
+                )
+                output_order.extend(i for i, _ in selected)
+            logits = pieces[0] if len(pieces) == 1 else torch.cat(pieces, 0)
+            if output_order != list(range(len(sample_rows))):
+                inverse = torch.argsort(torch.tensor(output_order))
+                logits = logits[inverse]
+            return logits, None
+
+        # Host sampling computes its own logprobs. When the model returned only
+        # logits, preserve that absence instead of allocating vocabulary-sized
+        # dummy scores and copying them across DP ranks on every decode step.
+        if not is_tokens and all(
+            isinstance(output, ttnn.Tensor) or (isinstance(output, tuple) and output[1] is None) for output in tt_out
+        ):
+            logits = [
+                self.model[i].process_output_decode(
+                    output[0] if isinstance(output, tuple) else output,
+                    max_batch_size_per_model,
+                    S=1,
+                    is_tokens=False,
+                )
+                for i, output in enumerate(tt_out)
+            ]
+            return (logits[0] if len(logits) == 1 else torch.cat(logits, 0)), None
 
         logits = []
         log_probs = []
