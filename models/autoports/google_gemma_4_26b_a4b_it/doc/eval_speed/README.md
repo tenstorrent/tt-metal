@@ -37,6 +37,11 @@ the previously quoted approximately 74m46s includes other trial phases.
 Saved token totals are 9,994,116 input and 152,897 output; pending and failed
 generations are not included. The token count must not be inferred from
 rounded summaries or sampled throughput.
+Astropy's saved trajectory includes a final response timestamp29.35 seconds
+after the recorded agent deadline, likely collected during timeout cleanup;
+the script reports this outlier explicitly. Saved-response totals therefore
+describe the artifact, while sampled server integration is clipped to the
+agent phase. Neither is an exact completed-work count at the deadline.
 
 Integration of the server's throughput rates over their approximately 10-second
 reporting intervals reveals much more work. These are approximate counts (sample
@@ -315,5 +320,59 @@ reasoning-parser configuration. This is a declared policy change, not a serving
 speed claim. On the already-degenerate42K Sympy context, neither thinking alone
 nor a generic interrupted-generation warning produces a completed action within
 120 seconds: both continue repetitive comments inside a bash argument. That
-recovery hypothesis is rejected for the entrenched context. No speculative
-generation-truncation guard has been implemented.
+recovery hypothesis is rejected for the entrenched context.
+
+## Discarded-generation diagnosis and bounded guard
+
+Django CI [36867491629](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36867491629)
+also reaches the 900-second diagnostic cap with reward 0. Payload-free telemetry
+records 20 request starts and 19 responses. After 18 short tool responses, one
+request takes **668.9739 seconds**, emits **32768 tokens**, finishes with `length`,
+and supplies **zero tool calls**. The next request is pending at timeout. The
+failed-command feedback never fires in this fresh trajectory; its earlier
+next-action replay is not an end-to-end success. Artifact11168053915 is retained
+under `/home/mvasiljevic/gemma4-eval-speed-evidence/django_probe_36867491629`.
+
+The existing vLLM image already implements native output-token repetition
+detection. A request can explicitly select `repetition_detection` with
+`min_pattern_size=16`, `max_pattern_size=128`, and `min_count=8`. This changes
+termination policy, not sampling probabilities or the 32768-token allowance,
+and must be reported separately from serving optimization. On the entrenched
+Sympy context it stops after 803 tokens/42.83 seconds with finish reason
+`repetition`; its text is an exact prefix of the unguarded 120-second capped
+output. Cache state differs, so this is **not a measured 2.8x latency speedup**.
+Normal Django output remains the identical 30-token tool call. After standard
+no-tool feedback, Sympy again repeats and stops at 945 tokens/53.45 seconds:
+containment does not by itself restore useful reasoning. Compact evidence:
+`sympy_native_repetition.json`, `django_native_repetition.json`, and
+`sympy_format_recovery.json`.
+
+A fresh local Matplotlib Harbor trial tests integration, using the exact pinned
+dataset and Harbor commit, existing local async image, C1, engine seed9472,
+corrected testbed environment, unchanged sampling/output allowance, and a
+900-second cap. It finishes with reward0/AgentTimeoutError. HTTP telemetry has
+69 responses: 68 tool-call responses and one native repetition stop at
+1054 tokens/38.34 seconds. The agent resumes valid tools after that stop.
+The verifier applies the produced patch but the required test still fails.
+There are 67 saved assistant actions, 6051 saved output tokens, and 4.28 seconds
+of saved tool execution. Fourteen exact commands repeat, including successful
+read-only inspection, which the failed-command feedback intentionally does not
+classify as an error. One saved response occurs 28.59 seconds after the agent
+deadline during cleanup; artifact totals must not be equated with the exact
+900-second execution interval.
+
+This local trial is diagnostic, not a matched speed/reward comparison: it uses
+the local c9ec image, warm persisted kernel caches, and no external warmup
+sweep, which changes engine RNG history versus CI. It uses Harbor
+`1da0bfd8c71cadbff17413fac984b8e391d2afc2` in a separate Python3.12 environment;
+transitive host dependencies can differ from CI. Artifacts are under
+`/home/mvasiljevic/gemma4-eval-speed-evidence/local_matplotlib_guard`.
+
+Thinking-enabled CI [36870715050](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36870715050)
+is the next separate policy test. It does not yet enable native repetition
+detection. A concurrent **independent local server** tests thinking plus the
+guard on one Django trial capped at1200 seconds. No same-server concurrent
+trials and no full five-task rerun are used. Redacted response text statistics
+(character counts and repeated-line counts, never response text) were added in
+TTI `72185ee1` to distinguish discarded repetitive output in future probes;
+104 relevant host tests pass.

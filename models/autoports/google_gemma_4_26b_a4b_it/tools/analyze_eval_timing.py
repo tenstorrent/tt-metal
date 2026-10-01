@@ -42,7 +42,10 @@ def analyze(path, server_samples):
                 }
             )
             previous_end = end
-            commands.extend(a["command"] for a in extra.get("actions", []))
+            commands.extend(
+                a["command"] if isinstance(a["command"], str) else json.dumps(a["command"], sort_keys=True)
+                for a in extra.get("actions", [])
+            )
         elif message["role"] == "tool" and previous_end:
             tools.append({"duration_s": extra["timestamp"] - previous_end, "returncode": extra.get("returncode")})
             previous_end = extra["timestamp"]
@@ -63,10 +66,15 @@ def analyze(path, server_samples):
         "tool_returncodes": dict(Counter(t["returncode"] for t in tools)),
         "repeated_commands": sum(n - 1 for n in counts.values()),
         "top_repeats": counts.most_common(5),
-        "prompt_tokens_median": statistics.median(r["prompt_tokens"] for r in requests),
-        "prompt_tokens_max": max(r["prompt_tokens"] for r in requests),
-        "output_tokens_median": statistics.median(r["output_tokens"] for r in requests),
-        "last_response_to_timeout_s": epoch(phase["finished_at"]) - requests[-1]["end_epoch_s"],
+        "prompt_tokens_median": statistics.median(r["prompt_tokens"] for r in requests) if requests else None,
+        "prompt_tokens_max": max((r["prompt_tokens"] for r in requests), default=None),
+        "output_tokens_median": statistics.median(r["output_tokens"] for r in requests) if requests else None,
+        "last_response_to_timeout_s": epoch(phase["finished_at"]) - requests[-1]["end_epoch_s"] if requests else None,
+        "response_timestamp_after_agent_end_s": [
+            r["end_epoch_s"] - epoch(phase["finished_at"])
+            for r in requests
+            if r["end_epoch_s"] > epoch(phase["finished_at"])
+        ],
         "server_generated_tokens_10s_approx": round(sum(s[2] * 10 for s in samples)),
         "server_prompt_tokens_10s_approx": round(sum(s[1] * 10 for s in samples)),
         "server_decode_active_s_10s_approx": sum(10 for s in samples if s[2] > 20),

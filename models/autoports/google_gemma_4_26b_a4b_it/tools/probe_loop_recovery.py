@@ -19,6 +19,8 @@ def main():
     parser.add_argument("--task", default="django")
     parser.add_argument("--message-index", type=int, default=322)
     parser.add_argument("--cases", nargs="+", default=["control", "repetition_feedback", "thinking_enabled"])
+    parser.add_argument("--repetition-detection", type=json.loads)
+    parser.add_argument("--wall-cap-sec", type=float, default=120)
     args = parser.parse_args()
     path = next(args.artifact_root.glob(f"**/swe_bench*/{args.task}*/agent/mini-swe-agent.trajectory.json"))
     data = json.loads(path.read_text())
@@ -35,12 +37,17 @@ def main():
         "role": "user",
         "content": "Your previous response repeated the same text extensively without completing a tool action. It was interrupted before any tool command was executed. Reassess using the observations above. Choose one concrete inspection, edit, or test that produces new evidence. Avoid repeating the same explanation.",
     }
+    format_error = {
+        "role": "user",
+        "content": "No tool calls found in the response. Every response MUST include at least one tool call.",
+    }
     rows = []
     for name, context, thinking in [
         ("control", messages, False),
         ("repetition_feedback", messages + [intervention], False),
         ("thinking_enabled", messages, True),
         ("generation_recovery", messages + [generation_recovery], False),
+        ("format_error_recovery", messages + [format_error], False),
     ]:
         if name not in args.cases:
             continue
@@ -59,6 +66,7 @@ def main():
         )["tokens"]
         start = time.monotonic()
         text, usage, finish = "", None, None
+        first, last = None, None
         capped = False
         with post(
             args.base_url,
@@ -73,6 +81,7 @@ def main():
                 "seed": 9472,
                 "stream": True,
                 "stream_options": {"include_usage": True},
+                **({"repetition_detection": args.repetition_detection} if args.repetition_detection else {}),
             },
         ) as response:
             for line in response:
@@ -81,21 +90,28 @@ def main():
                 event = json.loads(line[6:])
                 usage = event.get("usage") or usage
                 for choice in event.get("choices", []):
-                    text += choice.get("text", "")
+                    chunk = choice.get("text", "")
+                    if chunk:
+                        last = time.monotonic()
+                        first = last if first is None else first
+                        text += chunk
                     finish = choice.get("finish_reason") or finish
-                if time.monotonic() - start > 120:
+                if time.monotonic() - start > args.wall_cap_sec:
                     capped = True
                     break
         row = {
             "case": name,
             "prompt_tokens": len(tokens),
             "elapsed_s": time.monotonic() - start,
+            "ttft_s": None if first is None else first - start,
+            "decode_s": None if first is None else last - first,
             "output": text,
             "usage": usage,
             "finish_reason": finish,
             "diagnostic_wall_cap_reached": capped,
             "prompt_format": "pinned HF chat template with mini-swe bash schema",
             "quality_scope": "next-action diagnostic only; no tools executed; no solve/reward claim",
+            "repetition_detection": args.repetition_detection,
         }
         rows.append(row)
         args.output.write_text(json.dumps(rows, indent=2) + "\n")
