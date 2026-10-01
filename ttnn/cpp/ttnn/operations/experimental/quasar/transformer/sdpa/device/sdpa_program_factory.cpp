@@ -538,7 +538,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     const DFBSpecName K_IN{"k_in"};
     const DFBSpecName V_IN{"v_in"};
     const DFBSpecName MASK_IN{"mask_in"};
-    const DFBSpecName CU_WINDOW{"cu_window_seqlens"};
+    const ScratchpadSpecName CU_WINDOW{"cu_window_seqlens"};
     const DFBSpecName IDENTITY_SCALE_IN{"identity_scale_in"};
     const DFBSpecName COL_IDENTITY{"col_identity"};
     const ScratchpadSpecName PAGE_TABLE_SCRATCH{"page_table"};
@@ -557,9 +557,9 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     const DFBSpecName OUT{"out"};
     // Windowed K-range narrowing (#54492): the reader's own cu_window copy, the {k_lo,k_hi} ctrl CB
     // (reader -> compute), and the per-device Q-offset tensor CB.
-    const DFBSpecName WINDOWED_CU_READER{"windowed_cu_reader"};
+    const ScratchpadSpecName WINDOWED_CU_READER{"windowed_cu_reader"};
     const DFBSpecName WINDOWED_K_RANGE{"windowed_k_range"};
-    const DFBSpecName WINDOWED_Q_OFFSET{"windowed_q_offset"};
+    const ScratchpadSpecName WINDOWED_Q_OFFSET{"windowed_q_offset"};
 
     const TensorParamName T_Q_IN{"q_in"};
     const TensorParamName T_K_IN{"k_in"};
@@ -730,39 +730,33 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     uint32_t cu_window_seqlens_eles = 0;
     const uint32_t windowed_q_token_offset = operation_attributes.windowed_q_token_offset;
     const bool windowed_q_offset_present = tensor_args.windowed_q_token_offset_tensor.has_value();
+    uint32_t windowed_q_offset_size = 0;
+    uint32_t cu_window_size = 0;
     if (is_windowed) {
         const auto& cu = tensor_args.cu_window_seqlens.value();
         const tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
-        // Writer's cu_window copy (windowed-mask generation).
-        dfbs.push_back(DataflowBufferSpec{
-            .unique_id = CU_WINDOW,
-            .entry_size = tt::tile_size(cu_df),
-            .num_entries = 1,
-            .data_format_metadata = cu_df});
+        // The writer's cu_window copy (windowed-mask generation) and, for K-range narrowing (#54492), the
+        // reader's own copy: private Scratchpads of the same size, registered on the ProgramSpec below.
+        // Single-entry, so the kernels size their one NoC read of cu_window_seqlens with the scratchpad's
+        // size_in_bytes() -- keep num_entries at 1, or give the kernels the entry size another way.
+        constexpr uint32_t cu_window_num_entries = 1;
+        cu_window_size = tt::tile_size(cu_df) * cu_window_num_entries;
         cu_window_seqlens_eles = cu.logical_shape()[-1];
-        // K-range narrowing (#54492): the reader's OWN cu_window copy (a second producer on the writer's
-        // CB is illegal), plus a small reader->compute ctrl CB carrying each Q chunk's {k_lo, k_hi},
-        // double-buffered so the reader can run a Q chunk ahead.
-        dfbs.push_back(DataflowBufferSpec{
-            .unique_id = WINDOWED_CU_READER,
-            .entry_size = tt::tile_size(cu_df),
-            .num_entries = 1,
-            .data_format_metadata = cu_df});
+        // A small reader->compute ctrl CB carries each Q chunk's {k_lo, k_hi}, double-buffered so the
+        // reader can run a Q chunk ahead.
         constexpr uint32_t k_range_page_size = 16;
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = WINDOWED_K_RANGE,
             .entry_size = k_range_page_size,
             .num_entries = 2,
             .data_format_metadata = tt::DataFormat::Int32});
-        // Per-device Q-offset tensor CB (only when the offset arrives as a tensor).
+        // Per-device Q-offset tensor landing spot (only when the offset arrives as a tensor): a private
+        // Scratchpad of the writer, registered on the ProgramSpec below.
         if (windowed_q_offset_present) {
             const auto& off = tensor_args.windowed_q_token_offset_tensor.value();
             const tt::DataFormat off_df = tt::tt_metal::datatype_to_dataformat_converter(off.dtype());
-            dfbs.push_back(DataflowBufferSpec{
-                .unique_id = WINDOWED_Q_OFFSET,
-                .entry_size = tt::tile_size(off_df),
-                .num_entries = 1,
-                .data_format_metadata = off_df});
+            constexpr uint32_t windowed_q_offset_num_entries = 1;
+            windowed_q_offset_size = tt::tile_size(off_df) * windowed_q_offset_num_entries;
         }
     }
     // Chunked page table: the reader both fills and reads it (former DM self-loop DFB). Converted to a
@@ -1448,18 +1442,12 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         }
     }
     if (is_windowed) {
-        // #54492 K-range narrowing: the reader keeps its own cu_window copy (self-loop) and produces
-        // the {k_lo, k_hi} ctrl CB consumed by compute. It binds cu_window_seqlens under its own
+        // #54492 K-range narrowing: the reader keeps its own cu_window copy (a private Scratchpad) and
+        // produces the {k_lo, k_hi} ctrl CB consumed by compute. It binds cu_window_seqlens under its own
         // accessor, and the per-device Q-offset tensor when supplied (read into the cu copy's landing
-        // spot — no separate CB on the reader side).
-        reader_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = WINDOWED_CU_READER,
-            .accessor_name = "windowed_cu_reader",
-            .endpoint_type = DFBEndpointType::PRODUCER});
-        reader_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = WINDOWED_CU_READER,
-            .accessor_name = "windowed_cu_reader",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+        // spot — no separate buffer on the reader side).
+        reader_scratch.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = WINDOWED_CU_READER, .accessor_name = "windowed_cu_reader"});
         reader_dfbs.push_back(DFBBinding{
             .dfb_spec_name = WINDOWED_K_RANGE,
             .accessor_name = "windowed_k_range",
@@ -1548,31 +1536,20 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
             .dfb_spec_name = MASK_IN, .accessor_name = "mask_in", .endpoint_type = DFBEndpointType::PRODUCER});
         writer_defines.insert({"WRITER_PRODUCES_MASK", "1"});
     }
+    Group<ScratchpadBinding> writer_scratch;
     if (is_windowed) {
-        // cu_window_seqlens is filled and read within the writer — self-loop.
-        writer_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = CU_WINDOW,
-            .accessor_name = "cu_window_seqlens",
-            .endpoint_type = DFBEndpointType::PRODUCER});
-        writer_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = CU_WINDOW,
-            .accessor_name = "cu_window_seqlens",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+        // cu_window_seqlens is filled and read within the writer — a private Scratchpad.
+        writer_scratch.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = CU_WINDOW, .accessor_name = "cu_window_seqlens"});
         writer_tensors.push_back(
             TensorBinding{.tensor_parameter_name = T_CU_WINDOW, .accessor_name = "cu_window_seqlens"});
         writer_defines.insert({"USE_WINDOWED_MASK", "1"});
-        // #54492: per-Q-chunk K narrowing origin. Scalar via a named RTA; per-device via a dedicated
-        // self-loop CB fed by the windowed_q_token_offset tensor (writer reads it into its own CB).
+        // #54492: per-Q-chunk K narrowing origin. Scalar via a named RTA; per-device via a private
+        // Scratchpad fed by the windowed_q_token_offset tensor.
         writer_rta_names.push_back("windowed_q_tok_offset");
         if (windowed_q_offset_present) {
-            writer_dfbs.push_back(DFBBinding{
-                .dfb_spec_name = WINDOWED_Q_OFFSET,
-                .accessor_name = "windowed_q_offset",
-                .endpoint_type = DFBEndpointType::PRODUCER});
-            writer_dfbs.push_back(DFBBinding{
-                .dfb_spec_name = WINDOWED_Q_OFFSET,
-                .accessor_name = "windowed_q_offset",
-                .endpoint_type = DFBEndpointType::CONSUMER});
+            writer_scratch.push_back(
+                ScratchpadBinding{.scratchpad_spec_name = WINDOWED_Q_OFFSET, .accessor_name = "windowed_q_offset"});
             writer_tensors.push_back(
                 TensorBinding{.tensor_parameter_name = T_WINDOWED_Q_OFFSET, .accessor_name = "windowed_q_offset"});
             writer_defines.insert({"WINDOWED_Q_OFFSET_TENSOR", "1"});
@@ -1593,6 +1570,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
             "writer_interleaved.cpp",
         .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
+        .scratchpad_bindings = writer_scratch,
         .tensor_bindings = writer_tensors,
         .compile_time_args = writer_cta,
         .runtime_arg_schema = {.runtime_arg_names = writer_rta_names},
@@ -1763,6 +1741,14 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     if (is_chunked) {
         // size_per_node = entry_size * num_entries = page_table_stick_size * 1 (single entry).
         scratchpads.push_back(ScratchpadSpec{.unique_id = PAGE_TABLE_SCRATCH, .size_per_node = page_table_stick_size});
+    }
+    if (is_windowed) {
+        scratchpads.push_back(ScratchpadSpec{.unique_id = CU_WINDOW, .size_per_node = cu_window_size});
+        scratchpads.push_back(ScratchpadSpec{.unique_id = WINDOWED_CU_READER, .size_per_node = cu_window_size});
+        if (windowed_q_offset_present) {
+            scratchpads.push_back(
+                ScratchpadSpec{.unique_id = WINDOWED_Q_OFFSET, .size_per_node = windowed_q_offset_size});
+        }
     }
 
     ProgramSpec spec{
