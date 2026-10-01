@@ -1058,6 +1058,85 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 
     return pass;
 }
+
+std::vector<std::uint32_t> run_pack_lifecycle_quasar(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::string& compute_kernel,
+    const tt::DataFormat data_format,
+    std::vector<std::uint32_t> input_data,
+    const std::uint32_t output_cb_capacity_tiles,
+    const std::uint32_t output_tiles,
+    const bool unpack_to_dest) {
+    constexpr std::uint32_t input_cb = tt::CBIndex::c_0;
+    constexpr std::uint32_t output_cb = tt::CBIndex::c_16;
+    const std::uint32_t tile_size = tt::tile_size(data_format);
+    const std::uint32_t input_size = input_data.size() * sizeof(std::uint32_t);
+    TT_FATAL(input_size % tile_size == 0, "Input must contain a whole number of tiles");
+    const std::uint32_t input_tiles = input_size / tile_size;
+    const std::uint32_t output_size = output_tiles * tile_size;
+
+    auto& cq = mesh_device->mesh_command_queue();
+    const distributed::MeshCoordinate zero_coord(0, 0);
+    auto input_dram = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = input_size},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = input_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false},
+        mesh_device.get());
+    auto output_dram = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = output_size},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = output_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false},
+        mesh_device.get());
+
+    Program program = CreateProgram();
+    const CoreRange core_range({0, 0}, {0, 0});
+    const CoreRangeSet cores(core_range);
+    CreateCircularBuffer(
+        program,
+        core_range,
+        CircularBufferConfig(tile_size, {{input_cb, data_format}}).set_page_size(input_cb, tile_size));
+    CreateCircularBuffer(
+        program,
+        core_range,
+        CircularBufferConfig(output_cb_capacity_tiles * tile_size, {{output_cb, data_format}})
+            .set_page_size(output_cb, tile_size));
+
+    const auto reader_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+        cores,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    const auto writer_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        cores,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    std::vector<UnpackToDestMode> unpack_modes(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (unpack_to_dest) {
+        unpack_modes[input_cb] = UnpackToDestMode::UnpackToDestFp32;
+    }
+    CreateKernel(
+        program,
+        compute_kernel,
+        cores,
+        ComputeConfig{
+            .fp32_dest_acc_en = unpack_to_dest,
+            .dst_full_sync_en = false,
+            .unpack_to_dest_mode = std::move(unpack_modes)});
+
+    const CoreCoord core(0, 0);
+    SetRuntimeArgs(program, reader_kernel, core, {static_cast<std::uint32_t>(input_dram->address()), 0U, input_tiles});
+    SetRuntimeArgs(
+        program, writer_kernel, core, {static_cast<std::uint32_t>(output_dram->address()), 0U, output_tiles});
+
+    distributed::WriteShard(cq, input_dram, input_data, zero_coord, true);
+    LaunchProgram(*mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> output_data;
+    distributed::ReadShard(cq, output_data, output_dram, zero_coord, true);
+    return output_data;
+}
 }  // namespace unit_tests::compute::reconfig
 
 ////////////////////////////////////////////////////////////////////////////
@@ -1132,6 +1211,26 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixUnpackReconfigQuasarDfb) {
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixPackReconfigQuasarDfb) {
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(device));
+    }
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixPackInitPreservesUnpackToDestSyncHalfParity) {
+    const std::uint32_t tile_size = tt::tile_size(tt::DataFormat::Float32);
+    const std::uint32_t words_per_tile = tile_size / sizeof(std::uint32_t);
+    std::vector<std::uint32_t> input(2 * words_per_tile);
+    std::fill_n(input.begin(), words_per_tile, std::bit_cast<std::uint32_t>(1.0F));
+    std::fill_n(input.begin() + words_per_tile, words_per_tile, std::bit_cast<std::uint32_t>(2.0F));
+
+    for (auto& device : this->devices_) {
+        const auto output = unit_tests::compute::reconfig::run_pack_lifecycle_quasar(
+            device,
+            "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_pack_parity_quasar.cpp",
+            tt::DataFormat::Float32,
+            input,
+            /*output_cb_capacity_tiles=*/1,
+            /*output_tiles=*/2,
+            /*unpack_to_dest=*/true);
+        EXPECT_EQ(output, input);
     }
 }
 
