@@ -18,7 +18,12 @@ Handles:
 import os
 
 import ttnn
-from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, prefill_matmul_program_config
+from models.demos.gemma4_d_p.tt.matmul_config import (
+    is_short_m,
+    prefill_1d_matmul_program_config,
+    prefill_matmul_program_config,
+    to_l1_width_sharded,
+)
 
 from .weights import AttentionWeights
 
@@ -64,17 +69,26 @@ def projection_matmul_configs(hidden_states, weight):
     return program_config, compute_kernel_config
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
-    """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
-    w_tensor = weights.wqk if kv_tied else weights.wqkv
-    program_config, compute_kernel_config = projection_matmul_configs(hidden_states, w_tensor)
-    return ttnn.linear(
-        hidden_states,
-        w_tensor,
-        memory_config=memory_config,
+def project(hidden_states, weight, memory_config=None):
+    """hidden_states @ weight for an attention projection, written interleaved (DRAM unless memory_config says
+    otherwise). A short-M activation is read width-sharded from L1."""
+    x = to_l1_width_sharded(hidden_states) if is_short_m(hidden_states) else hidden_states
+    program_config, compute_kernel_config = projection_matmul_configs(x, weight)
+    out = ttnn.linear(
+        x,
+        weight,
+        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
+    if x is not hidden_states:
+        x.deallocate(True)
+    return out
+
+
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
+    """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
+    return project(hidden_states, weights.wqk if kv_tied else weights.wqkv, memory_config=memory_config)
 
 
 def split_qkv_heads_prefill(
