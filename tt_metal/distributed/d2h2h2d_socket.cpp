@@ -19,7 +19,7 @@ namespace tt::tt_metal::experimental {
 
 struct D2H2H2DSocket::Impl {
     Config cfg{};
-    L1MapNew l1{};
+    L1MapUVA l1{};
     Counters counters{};
     Timing timing{};
     // Stamped at publish, popped when the device reports that page drained. A DEQUE per core,
@@ -83,7 +83,7 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
         }
 
         const uint32_t l1_base = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
-        im.l1 = L1MapNew::compute(
+        im.l1 = L1MapUVA::compute(
             l1_base, static_cast<uint32_t>(device->l1_size_per_core()), cfg.payload_bytes, cfg.bidirectional);
         if (const std::string e = im.l1.fits(cfg.payload_bytes); !e.empty()) {
             err = e;
@@ -225,7 +225,7 @@ uint32_t D2H2H2DSocket::poll() {
     return progress;
 }
 
-const L1MapNew& D2H2H2DSocket::l1() const { return impl_->l1; }
+const L1MapUVA& D2H2H2DSocket::l1() const { return impl_->l1; }
 const D2H2H2DSocket::Counters& D2H2H2DSocket::counters() const { return impl_->counters; }
 const D2H2H2DSocket::Timing& D2H2H2DSocket::timing() const {
     Impl& im = *impl_;
