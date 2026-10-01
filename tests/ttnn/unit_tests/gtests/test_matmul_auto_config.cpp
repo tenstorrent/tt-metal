@@ -260,7 +260,8 @@ TEST(MatmulAutoConfig, TwoDKDepthAtLeastLegacy) {
                             }
                             auto deeper = c.blocking;
                             deeper.in0_block_w = k;
-                            EXPECT_GT(circular_buffer_bytes(p, hw, Family::Mcast2D, deeper), hw.l1_cb_budget)
+                            EXPECT_GT(
+                                circular_buffer_bytes(p, hw, Family::Mcast2D, deeper, c.fuse_batch), hw.l1_cb_budget)
                                 << arch.name << " M=" << s.M << " K=" << s.K << " N=" << s.N << " k=" << k;
                         }
                     }
@@ -381,7 +382,7 @@ TEST(MatmulAutoConfig, ShardedLayouts) {
             EXPECT_EQ(b.out_block_w, b.per_core_N) << c.name << ": sharded output blocks span per_core_N";
             EXPECT_TRUE(b.out_subblock_w == b.per_core_N || b.out_subblock_h == 1) << c.name;
         }
-        EXPECT_LE(circular_buffer_bytes(c.p, hw, chosen->family, b), hw.l1_cb_budget) << c.name;
+        EXPECT_LE(circular_buffer_bytes(c.p, hw, chosen->family, b, chosen->fuse_batch), hw.l1_cb_budget) << c.name;
     }
 
     // Layout combinations the factories reject are not produced
@@ -449,13 +450,15 @@ TEST(MatmulAutoConfig, TinyTiles) {
                             // block of B (all of K by all of N) doesn't fit L1
                             Blocking one_row{1, p.Nt, p.Kt, 1, p.Nt, 1, 1};
                             EXPECT_TRUE(
-                                reuse_only && circular_buffer_bytes(p, hw, Family::Reuse, one_row) > hw.l1_cb_budget)
+                                reuse_only &&
+                                circular_buffer_bytes(p, hw, Family::Reuse, one_row, true) > hw.l1_cb_budget)
                                 << label;
                             continue;
                         }
                         const auto& b = chosen->blocking;
                         EXPECT_LE(b.out_subblock_h * b.out_subblock_w, 8u) << label;
-                        EXPECT_LE(circular_buffer_bytes(p, hw, chosen->family, b), hw.l1_cb_budget) << label;
+                        EXPECT_LE(circular_buffer_bytes(p, hw, chosen->family, b, chosen->fuse_batch), hw.l1_cb_budget)
+                            << label;
                         if (reuse_only) {
                             // the mcast kernels can't unpack these, and Reuse only computes them with one K block
                             EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse)) << label;
@@ -476,11 +479,11 @@ TEST(MatmulAutoConfig, BroadcastA) {
         ASSERT_TRUE(chosen.has_value()) << s.M;
         // Only 1D in1-mcast reuses a single A across B's batches, looping over them
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn1)) << s.M;
-        EXPECT_FALSE(chosen->blocking.fuse_batch) << s.M;
+        EXPECT_FALSE(chosen->fuse_batch) << s.M;
         EXPECT_EQ(chosen->blocking.per_core_N, p.Nt) << s.M;
         // A's rows stay resident across the batch loop
         EXPECT_GE(
-            circular_buffer_bytes(p, hw, Family::Mcast1DIn1, chosen->blocking),
+            circular_buffer_bytes(p, hw, Family::Mcast1DIn1, chosen->blocking, chosen->fuse_batch),
             chosen->blocking.per_core_M * p.Kt * tt::tile_size(p.in0_format))
             << s.M;
         const auto config = select_program_config(p, hw);
@@ -495,7 +498,7 @@ TEST(MatmulAutoConfig, TransposeAOverBatchIsNotFused) {
     const auto chosen = choose_candidate(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_NE(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse));  // Reuse can't broadcast B
-    EXPECT_FALSE(chosen->blocking.fuse_batch);
+    EXPECT_FALSE(chosen->fuse_batch);
 }
 
 TEST(MatmulAutoConfig, NoOneDWhenExcluded) {

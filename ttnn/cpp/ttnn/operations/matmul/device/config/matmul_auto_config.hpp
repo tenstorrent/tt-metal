@@ -154,7 +154,6 @@ struct Blocking {
     uint32_t out_block_w = 0;
     uint32_t out_subblock_h = 0;
     uint32_t out_subblock_w = 0;
-    bool fuse_batch = true;  // mcast families: batch folded into M, else looped over per batch
 };
 
 struct Candidate {
@@ -164,11 +163,14 @@ struct Candidate {
     CoreCoord grid;                         // compute_with_storage_grid_size of the config
     std::optional<CoreRange> worker_cores;  // allowed_worker_cores (sharded layouts: the shard grid)
     bool transpose_mcast = false;           // 2D on a column-major block-sharded A
+    bool fuse_batch = true;                 // mcast families: the batch folded into M, else looped over
 };
 
 // Per-core L1 bytes the factory for `family` needs with this blocking (32x32 tiles): its circular buffers,
 // less those backed by a sharded tensor, plus a sharded output's shard, which is not allocated yet.
-uint32_t circular_buffer_bytes(const MatmulDesc& matmul, const HardwareDesc& hw, Family family, const Blocking& b);
+// `fuse_batch`: the batch folded into M (per_core_M and out_block_h count rows of all batches), else looped over.
+uint32_t circular_buffer_bytes(
+    const MatmulDesc& matmul, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch);
 
 // Per-core roofline terms (cycles) of a blocked candidate, from the rates in HardwareDesc. They depend on the
 // output blocks but not on in0_block_w.
@@ -178,7 +180,8 @@ struct RooflineTerms {
     double dram = 0;     // bytes read from and written to DRAM, chip-wide
     double cycles() const { return std::max({compute, noc, dram}); }
 };
-RooflineTerms roofline(const MatmulDesc& matmul, const HardwareDesc& hw, Family family, const Blocking& b);
+RooflineTerms roofline(
+    const MatmulDesc& matmul, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch);
 
 // The program config of a candidate.
 MatmulProgramConfig to_program_config(const MatmulDesc& matmul, const Candidate& candidate);

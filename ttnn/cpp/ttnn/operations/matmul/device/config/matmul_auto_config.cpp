@@ -187,7 +187,8 @@ HardwareDesc HardwareDesc::for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_c
     return hw;
 }
 
-uint32_t circular_buffer_bytes(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b) {
+uint32_t circular_buffer_bytes(
+    const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch) {
     // Sharded operands are read straight from L1, without DRAM-alignment padding
     const uint32_t in0_tile = p.a.sharded() ? in0_tile_bytes(p) : align_up(in0_tile_bytes(p), hw.dram_alignment);
     const uint32_t in1_tile = align_up(in1_tile_bytes(p), hw.dram_alignment);
@@ -212,7 +213,7 @@ uint32_t circular_buffer_bytes(const MatmulDesc& p, const HardwareDesc& hw, Fami
         out_tiles = b.per_core_M * b.per_core_N;
         bias_bytes = per_batch_M * b.per_core_N * p.bias_tile_bytes;
     } else {
-        const bool looped_batches = !b.fuse_batch && p.batch_a > 1;
+        const bool looped_batches = !fuse_batch && p.batch_a > 1;
         const uint32_t buffering = (num_k_blocks > 1 || looped_batches) ? utilities::MCAST_INPUT_BUFFERING_DEPTH : 1;
         in0_bytes = b.out_block_h * b.in0_block_w * buffering * in0_tile;
         if (family == Family::Mcast1DIn1 && broadcasts_a(p) && !p.a.sharded()) {
@@ -282,7 +283,7 @@ bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_bl
 // overlaps, larger. Deeper wins where the per-block cost is large next to a block's inputs: accumulation off
 // (pack and reload), or block-float inputs (fewer bytes per K tile). With accumulation on and 16-bit inputs,
 // the shallower depth was as fast or faster on every 2D case measured, so the depth is left as is.
-void deepen_to_legacy_k_depth(const MatmulDesc& p, const HardwareDesc& hw, Blocking& b) {
+void deepen_to_legacy_k_depth(const MatmulDesc& p, const HardwareDesc& hw, bool fuse_batch, Blocking& b) {
     if (p.Kt % hw.grid.x != 0) {
         return;
     }
@@ -295,7 +296,7 @@ void deepen_to_legacy_k_depth(const MatmulDesc& p, const HardwareDesc& hw, Block
         }
         Blocking deeper = b;
         deeper.in0_block_w = k;
-        if (circular_buffer_bytes(p, hw, Family::Mcast2D, deeper) <= hw.l1_cb_budget) {
+        if (circular_buffer_bytes(p, hw, Family::Mcast2D, deeper, fuse_batch) <= hw.l1_cb_budget) {
             b = deeper;
             return;
         }
@@ -333,8 +334,8 @@ std::optional<Blocking> block_2d(
                 if ((k > k_max && !rules.prefers(k)) || !k_allowed(rules, k)) {
                     continue;
                 }
-                Blocking b{per_core_M, per_core_N, k, h, w, 0, 0, fuse_batch};
-                if (circular_buffer_bytes(p, hw, Family::Mcast2D, b) > hw.l1_cb_budget) {
+                Blocking b{per_core_M, per_core_N, k, h, w, 0, 0};
+                if (circular_buffer_bytes(p, hw, Family::Mcast2D, b, fuse_batch) > hw.l1_cb_budget) {
                     continue;
                 }
                 const uint64_t product = area * k;
@@ -407,8 +408,8 @@ std::optional<Blocking> block_1d(
             if ((k > k_limit && !rules.prefers(k)) || !k_allowed(rules, k)) {
                 continue;
             }
-            Blocking b{per_core_M, per_core_N, k, out_block_h, out_block_w, 0, 0, fuse_batch};
-            if (circular_buffer_bytes(p, hw, family, b) <= hw.l1_cb_budget) {
+            Blocking b{per_core_M, per_core_N, k, out_block_h, out_block_w, 0, 0};
+            if (circular_buffer_bytes(p, hw, family, b, fuse_batch) <= hw.l1_cb_budget) {
                 return b;
             }
         }
@@ -474,7 +475,7 @@ std::optional<Blocking> block_1d(
 // Reuse with a height-sharded A: each core computes its shard's rows against all of N, over all of K.
 std::optional<Blocking> block_reuse_sharded(const MatmulDesc& p, const HardwareDesc& hw) {
     Blocking b{p.a.shard_h, p.Nt, p.Kt, p.a.shard_h, p.Nt, 0, 0};
-    if (circular_buffer_bytes(p, hw, Family::Reuse, b) > hw.l1_cb_budget) {
+    if (circular_buffer_bytes(p, hw, Family::Reuse, b, true) > hw.l1_cb_budget) {
         return std::nullopt;
     }
     return b;
@@ -501,7 +502,7 @@ std::optional<Blocking> block_reuse(const MatmulDesc& p, const HardwareDesc& hw)
                 continue;
             }
             Blocking b{per_core_M, p.Nt, k, per_core_M, p.Nt, 0, 0};
-            if (circular_buffer_bytes(p, hw, Family::Reuse, b) <= hw.l1_cb_budget) {
+            if (circular_buffer_bytes(p, hw, Family::Reuse, b, true) <= hw.l1_cb_budget) {
                 return b;
             }
         }
@@ -523,12 +524,12 @@ uint64_t total_input_tiles(const MatmulDesc& p, Family family, const Blocking& b
     return a_tiles * (b.per_core_N / b.out_block_w) + b_tiles * (b.per_core_M / b.out_block_h);
 }
 
-uint32_t cores_used(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b) {
+uint32_t cores_used(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch) {
     if (family == Family::Reuse) {
         const uint32_t blocks = p.batch_a * p.Mt / b.per_core_M;
         return std::min(blocks, static_cast<uint32_t>(hw.grid.x * hw.grid.y));
     }
-    return div_up(output_rows(p, b.fuse_batch), b.per_core_M) * div_up(p.Nt, b.per_core_N);
+    return div_up(output_rows(p, fuse_batch), b.per_core_M) * div_up(p.Nt, b.per_core_N);
 }
 
 // Subblocks two tiles or more on each side, unless B's tiles are smaller than A's. Per K step, an h x w
@@ -570,7 +571,7 @@ std::vector<Candidate> sharded_candidates(const MatmulDesc& p, const HardwareDes
         set_subblock(p, family, *b);
         HardwareDesc sub = hw;
         sub.grid = grid;
-        result.push_back({family, *b, cores_used(p, sub, family, *b), grid, workers, transpose_mcast});
+        result.push_back({family, *b, cores_used(p, sub, family, *b, true), grid, workers, transpose_mcast, true});
     };
     const uint32_t M = p.batch_a * p.Mt;  // batch fused into M (the sharded layouts require it)
     const bool b_batched = p.batch_b > 1;
@@ -744,18 +745,18 @@ std::vector<Candidate> candidates(const MatmulDesc& p, const HardwareDesc& hw) {
     const uint32_t cores = hw.grid.x * hw.grid.y;
     // On a sub-device the configs name its cores; the factories otherwise start at (0, 0)
     const std::optional<CoreRange> workers = pinned_workers(hw);
-    auto add = [&](Family family, std::optional<Blocking> b) {
+    auto add = [&](Family family, std::optional<Blocking> b, bool fuse_batch) {
         if (!b) {
             return;
         }
         set_subblock(p, family, *b);
-        result.push_back({family, *b, cores_used(p, hw, family, *b), hw.grid, workers, false});
+        result.push_back({family, *b, cores_used(p, hw, family, *b, fuse_batch), hw.grid, workers, false, fuse_batch});
     };
     // The mcast kernels can't take block-float B with A tiles shorter than 16 rows; Reuse can
     const bool mcast_ok = !(is_block_float(p.in1_format) && p.in0_tile_h < 16);
     if (broadcasts_a(p)) {
         if (mcast_ok && !p.no_mcast_1d) {
-            add(Family::Mcast1DIn1, block_1d(p, hw, Family::Mcast1DIn1, div_up(p.Mt, cores), p.Nt, false));
+            add(Family::Mcast1DIn1, block_1d(p, hw, Family::Mcast1DIn1, div_up(p.Mt, cores), p.Nt, false), false);
         }
         return result;
     }
@@ -764,7 +765,7 @@ std::vector<Candidate> candidates(const MatmulDesc& p, const HardwareDesc& hw) {
     const bool fuse_batch = p.batch_b == 1 && !(p.transpose_a && p.batch_a > 1 && p.Mt > 1);
     // Reuse needs matching batches: batched B, or (when the mcast kernels can't run it) a single batch
     if (p.batch_a == p.batch_b && (p.batch_b > 1 || !mcast_ok)) {
-        add(Family::Reuse, block_reuse(p, hw));
+        add(Family::Reuse, block_reuse(p, hw), true);
     }
     if (!mcast_ok) {
         return result;
@@ -772,12 +773,12 @@ std::vector<Candidate> candidates(const MatmulDesc& p, const HardwareDesc& hw) {
     const uint32_t M = output_rows(p, fuse_batch);
     auto two_d = block_2d(p, hw, div_up(M, hw.grid.y), div_up(p.Nt, hw.grid.x), fuse_batch);
     if (two_d) {
-        deepen_to_legacy_k_depth(p, hw, *two_d);
+        deepen_to_legacy_k_depth(p, hw, fuse_batch, *two_d);
     }
-    add(Family::Mcast2D, two_d);
+    add(Family::Mcast2D, two_d, fuse_batch);
     if (!p.no_mcast_1d) {
-        add(Family::Mcast1DIn0, block_1d(p, hw, Family::Mcast1DIn0, M, div_up(p.Nt, cores), fuse_batch));
-        add(Family::Mcast1DIn1, block_1d(p, hw, Family::Mcast1DIn1, div_up(M, cores), p.Nt, fuse_batch));
+        add(Family::Mcast1DIn0, block_1d(p, hw, Family::Mcast1DIn0, M, div_up(p.Nt, cores), fuse_batch), fuse_batch);
+        add(Family::Mcast1DIn1, block_1d(p, hw, Family::Mcast1DIn1, div_up(M, cores), p.Nt, fuse_batch), fuse_batch);
     }
     return result;
 }
@@ -862,7 +863,7 @@ std::optional<Candidate> choose_by_rules(const MatmulDesc& p, const HardwareDesc
         return chosen;
     }
     auto key = [&](const Candidate& c) {
-        return std::make_pair(roofline(p, hw, c.family, c.blocking).cycles(), static_cast<int>(c.family));
+        return std::make_pair(roofline(p, hw, c.family, c.blocking, c.fuse_batch).cycles(), static_cast<int>(c.family));
     };
     return *std::min_element(
         all.begin(), all.end(), [&](const Candidate& x, const Candidate& y) { return key(x) < key(y); });
@@ -878,7 +879,7 @@ std::optional<Candidate> choose_by_rules(const MatmulDesc& p, const HardwareDesc
 //  - DRAM: the bytes read from and written to DRAM in total (the mcast layouts read A once per output column
 //    block and B once per output row block; Reuse reads A once and B once per M slice of a batch; the output
 //    is written once), over the chip's bandwidth.
-RooflineTerms roofline(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b) {
+RooflineTerms roofline(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch) {
     const double a_bytes = in0_tile_bytes(p);
     const double b_bytes = in1_tile_bytes(p);
     const double engine_share = std::min(p.in0_tile_h, 8u) / 8.0;
@@ -899,7 +900,7 @@ RooflineTerms roofline(const MatmulDesc& p, const HardwareDesc& hw, Family famil
         b_total = double(p.batch_b) * Kt * p.Nt * div_up(p.Mt, b.per_core_M);
     } else {
         // Unfused, the layout loops over the batch; in0 reuse (a broadcast A) keeps A resident across it
-        const double loops = b.fuse_batch ? 1.0 : std::max(p.batch_a, p.batch_b);
+        const double loops = fuse_batch ? 1.0 : std::max(p.batch_a, p.batch_b);
         const double a_passes = double(b.per_core_N) / b.out_block_w;
         const double b_passes = double(b.per_core_M) / b.out_block_h;
         products = double(b.per_core_M) * b.per_core_N * Kt * loops;
@@ -916,7 +917,8 @@ RooflineTerms roofline(const MatmulDesc& p, const HardwareDesc& hw, Family famil
 
 std::optional<Estimate> RooflineEstimator::estimate(
     const MatmulDesc& p, const HardwareDesc& hw, const Candidate& c) const {
-    return Estimate{.cycles = roofline(p, hw, c.family, c.blocking).cycles(), .confidence = 0, .source = name()};
+    return Estimate{
+        .cycles = roofline(p, hw, c.family, c.blocking, c.fuse_batch).cycles(), .confidence = 0, .source = name()};
 }
 
 std::span<const Estimator* const> default_estimators() {
@@ -942,7 +944,7 @@ MatmulProgramConfig to_program_config(const MatmulDesc& p, const Candidate& c) {
                 .per_core_N = b.per_core_N,
                 .transpose_mcast = c.transpose_mcast,
                 .fused_activation = p.activation,
-                .fuse_batch = b.fuse_batch,
+                .fuse_batch = c.fuse_batch,
                 .allowed_worker_cores = worker_cores,
             };
         case Family::Mcast1DIn0:
@@ -956,7 +958,7 @@ MatmulProgramConfig to_program_config(const MatmulDesc& p, const Candidate& c) {
                 .out_block_w = b.out_block_w,
                 .per_core_M = b.per_core_M,
                 .per_core_N = b.per_core_N,
-                .fuse_batch = b.fuse_batch,
+                .fuse_batch = c.fuse_batch,
                 // in0 reuse (broadcast A) can't fuse the activation; matmul then applies it separately
                 .fused_activation = broadcasts_a(p) && !p.a.sharded() ? std::nullopt : p.activation,
                 .mcast_in0 = c.family == Family::Mcast1DIn0,
@@ -1026,7 +1028,7 @@ std::string check(const MatmulDesc& p, const HardwareDesc& hw, const MatmulProgr
                         c.per_core_N,
                         c.out_subblock_h,
                         c.out_subblock_w};
-                    if (circular_buffer_bytes(p, hw, Family::Reuse, b) > hw.l1_cb_budget) {
+                    if (circular_buffer_bytes(p, hw, Family::Reuse, b, true) > hw.l1_cb_budget) {
                         return "circular buffers exceed L1";
                     }
                     return "";
@@ -1076,9 +1078,8 @@ std::string check(const MatmulDesc& p, const HardwareDesc& hw, const MatmulProgr
                         c.out_block_h,
                         c.out_block_w,
                         c.out_subblock_h,
-                        c.out_subblock_w,
-                        c.fuse_batch};
-                    if (circular_buffer_bytes(p, hw, family, b) > hw.l1_cb_budget) {
+                        c.out_subblock_w};
+                    if (circular_buffer_bytes(p, hw, family, b, c.fuse_batch) > hw.l1_cb_budget) {
                         return "circular buffers exceed L1";
                     }
                     return "";
