@@ -95,9 +95,12 @@ from models.demos.common.bringup.knowledge import check as kcheck
 from models.demos.common.bringup.plan import approvals
 from models.demos.common.bringup.plan import op_request as OR
 from models.demos.common.bringup.testing import accuracy_guard
+from models.demos.common.bringup.testing import serving as SV
 
 HERE = Path(__file__).resolve().parent
 AGENT_DEF = HERE / "agents" / "bringup-engineer.md"
+# Roles run by their own agent definition in agents/ (default: bringup-engineer).
+AGENT_OF_ROLE = {"serving": "serving-contract"}
 DEBUGGER = "ttnn-expert-debugger"
 DEBUGGER_DEF = CODE_ROOT / ".claude" / "agents" / f"{DEBUGGER}.md"
 # Retry budget and escalation per role. ttnn-expert-debugger is specialized for TTNN ops (hangs, CB sync, kernel
@@ -118,6 +121,7 @@ DEFAULT_POLICY = {
     "perf": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
     "assemble": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
     "optests": {"attempts": 3, "escalate": "stop"},
+    "serving": {"attempts": 2, "escalate": "stop"},
 }
 ROLE_OF_STEP = {
     "reference": "reference",
@@ -125,6 +129,7 @@ ROLE_OF_STEP = {
     "implement": "implement",
     "assemble": "assemble",
     "contract": "contract",
+    "serving": "serving",
 }
 IGNORED = (
     r"/dashboard/[^/]+\.html$",
@@ -206,12 +211,12 @@ def rel(spec: Spec, p) -> str:
 
 
 # ---------------------------------------------------------------- agent definitions and command
-def agents_json(run_dir: Path) -> Path:
-    """The --agents file for claude -p, built from the markdown definition (frontmatter + body)."""
-    text = AGENT_DEF.read_text()
+def agents_json(run_dir: Path, agent: str = "bringup-engineer") -> Path:
+    """The --agents file for claude -p, built from the markdown definition (frontmatter + body) in agents/."""
+    text = (AGENT_DEF.parent / f"{agent}.md").read_text()
     _, fm, body = text.split("---", 2)
     meta = yaml.safe_load(fm)
-    out = run_dir / "agents.json"
+    out = run_dir / ("agents.json" if agent == "bringup-engineer" else f"agents.{agent}.json")
     out.write_text(
         json.dumps(
             {
@@ -230,8 +235,8 @@ def agents_json(run_dir: Path) -> Path:
 def agent_command(spec: Spec, run_dir: Path, agent: str, prompt: str, model: str | None) -> list[str]:
     exe = shlex.split(os.environ.get("BRINGUP_AGENT_CMD", "claude"))
     cmd = exe + ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
-    if agent == "bringup-engineer":
-        cmd += ["--agents", str(agents_json(run_dir))]
+    if (AGENT_DEF.parent / f"{agent}.md").exists():  # the framework's own agents (bringup-engineer, serving-contract)
+        cmd += ["--agents", str(agents_json(run_dir, agent))]
     cmd += ["--agent", agent]
     if model:
         cmd += ["--model", model]
@@ -415,6 +420,12 @@ class Orchestrator:
         if role == "test":
             return list(task.get("tests") or []) + self.common_paths()
         extra = [f"{b}/plan.yaml", f"{b}/plan.md", f"{b}/components.yaml", f"{b}/tasks.yaml"] if role == "plan" else []
+        if role == "serving":  # the how-to, its test list and the tests; never model code
+            return [
+                f"{b}/serving_contract.md",
+                f"{b}/contract_tests.yaml",
+                f"{rel(self.spec, self.spec.model_dir)}/tests/bringup/contract",
+            ] + self.common_paths()
         if task.get("step") == "contract":
             extra.append(CONTRACT_SHARED)  # the engine's producer and registry learn each new model's layout
             extra.append(f"{b}/hooks.py")  # contract_state_pcc (fixed-size state read-back) is a hook
@@ -467,6 +478,7 @@ class Orchestrator:
         can_defer = defer and role == "implement" and OR.deferrable(task)  # never the debugger (it cannot defer)
         vals["defer"] = self.defer_text(task, comp, vals) if can_defer else ""
         vals["deferred"] = self.deferred_text()
+        vals["serving"] = self.serving_text(task, role)
         vals["role_text"] = Template(self.roles[role]).safe_substitute(vals)
         # spec agents.read.<role>: files every brief of that role lists (e.g. the HF modeling code for the reference role)
         reads = list(task.get("tests") or []) + list(extra_read) + list(brief.get("read") or [])
@@ -527,6 +539,21 @@ class Orchestrator:
             "When this attempt's gate fails and the check passes, the orchestrator marks the task DEFERRED and commits "
             "the request; a request the check rejects counts as a failed attempt. Launching op-gen is the owner's call.\n"
         )
+
+    def serving_text(self, task: dict, role: str) -> str:
+        """The serving contract this step builds to (testing/serving.py): the plan reads all of it; a component step
+        gets its own how-to sections and contract tests; the contract step gets the runner (adapter) part."""
+        md, _ = SV.paths(self.spec)
+        if not md.exists() or role in ("serving", "test", "reference"):
+            return ""
+        if role == "plan":
+            return (
+                f"## Serving contract\n\nBuild to `{rel(self.spec, md)}` (how tt-d-gen drives the model, read from its"
+                " code). `plan.md` must have a `## Serving contract` section saying, for each of its sections, how the"
+                " planned layout meets it. Do not plan anything it rules out.\n"
+            )
+        gate = SV.ADAPTER if task.get("step") == "contract" else (task.get("brief") or {}).get("step")
+        return SV.brief_text(self.spec, gate) if gate else ""
 
     def deferred_text(self) -> str:
         state, tasks = self.led.state(), self.led.tasks()
@@ -768,7 +795,8 @@ class Orchestrator:
         for attempt in range(1, pol["attempts"] + 1):
             # the dashboard shows the agent at work, not the check that ran before it started
             self.led.update(task["id"], status="RUNNING", attempt=attempt, role=role, waiting=None)
-            problems = self.run_agent(task, role, attempt, self.brief(task, role, attempt, previous))
+            agent = AGENT_OF_ROLE.get(role, "bringup-engineer")
+            problems = self.run_agent(task, role, attempt, self.brief(task, role, attempt, previous), agent=agent)
             if task.get("approval") and not problems and self.needs_human(task):
                 return True  # the plan exists; the gate needs the approval next
             res = self.gate(task["id"])
