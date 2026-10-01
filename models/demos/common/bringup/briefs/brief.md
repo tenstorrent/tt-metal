@@ -10,6 +10,7 @@ $role_text
 $rules
 $prior
 $deferred
+$serving
 ## Read first
 - `models/demos/common/bringup/knowledge/repo_map.md`
 - `models/demos/common/bringup/knowledge/known_issues.md`

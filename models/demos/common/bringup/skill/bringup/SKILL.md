@@ -61,7 +61,14 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 5. Launch: `python -u -m models.demos.common.bringup.orchestrator run --spec <spec> >> $ART/runs/run1/orchestrator.log 2>&1`
    as a background process, and watch the log (step 4). The first task, R.1, builds the canonical prompt and runs the
    HF sanity gate (revision, usage-example smoke, next-token accuracy floor).
-6. Publish the dashboard(s): `python -m models.demos.common.bringup.dashboard.export --spec <spec>` writes
+6. The serving contract comes first. Task SC.1 runs the `serving-contract` agent (`agents/serving-contract.md`): it
+   reads how tt-d-gen drives a prefill model at its latest commit and writes `serving_contract.md` (a how-to for
+   each part of the model) and the frozen contract tests (`contract_tests.yaml` says which step's gate runs each).
+   The plan must follow it, each step's brief carries its section, and each step's gate runs its tests; the runner
+   test is part of K.1. When SC.1 passes, bring the owner its `## Questions for the owner` (KV dtype for the decode
+   side, slot count, prefix reuse); their answers go in the spec's `serving:` section (re-approve the intake on
+   their word). Needs a tt-d-gen clone at `/localdev/$USER/tt-d-gen` (ask the owner to clone it if missing).
+7. Publish the dashboard(s): `python -m models.demos.common.bringup.dashboard.export --spec <spec>` writes
    `<bringup_dir>/dashboard/index.html` and/or `teletext.html`; publish them as artifacts and give the links.
 
 ## 4. Supervise the run
