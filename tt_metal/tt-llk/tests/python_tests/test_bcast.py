@@ -61,11 +61,14 @@ supported_formats = [
     DataFormat.Bfp8_b,
 ]
 
+# Eight 32-bit tiles fill DEST under DestSync.Full, so the multi-tile axis reaches DEST tiles 4-7.
+NUM_TILES_32BIT_FULL_DEST = 8
+
 # Sweep tile dimensions from tiny ([1,32]..[16,32]) through full ([32,32]).
 # Tiny tiles have fewer faces (num_faces=2) and variable face_r_dim;
 # full 32x32 tiles have 4 faces with face_r_dim=16.
 # BroadcastType.None_ is a datacopy (unpack A -> DEST -> pack to L1).
-# num_tiles_in_input=8 stacks tiles along rows so math writes DEST tile slots past 0;
+# num_tiles_in_input=NUM_TILES_32BIT_FULL_DEST stacks tiles along rows so math writes DEST tile slots past 0;
 # for 32-bit / dest-accumulation variants under DestSync.Half it also spans two blocks, using both DEST halves.
 # DestSync.Full runs the unpack-to-dest variants with all eight 32-bit tiles in one block (DEST tiles 4-7 included).
 
@@ -74,7 +77,7 @@ supported_formats = [
     # enable tiny tiles tests when they're added formally to the LLKs
     # tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]],
     tile_dimensions=[[32, 32]],
-    num_tiles_in_input=[1, 8],
+    num_tiles_in_input=[1, NUM_TILES_32BIT_FULL_DEST],
     formats=input_output_formats(supported_formats, same=True),
     broadcast_type=[
         BroadcastType.None_,
@@ -96,11 +99,13 @@ def test_unpack_bcast(
     # --- Skips -----------------------------------------------------------
 
     if dest_sync == DestSync.Full and not (
-        num_tiles_in_input == 8
+        num_tiles_in_input == NUM_TILES_32BIT_FULL_DEST
         and dest_acc == DestAccumulation.Yes
         and formats.input_format.is_32_bit()
     ):
-        pytest.skip("DestSync.Full only adds coverage for 8 unpack-to-dest tiles")
+        pytest.skip(
+            f"DestSync.Full only adds coverage for {NUM_TILES_32BIT_FULL_DEST} unpack-to-dest tiles"
+        )
 
     if dest_acc == DestAccumulation.No and formats.input_format in (
         DataFormat.Float32,

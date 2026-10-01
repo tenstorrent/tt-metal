@@ -88,7 +88,7 @@ inline void eltwise_unary_bcast_col_32b_face_pair()
 template <std::uint32_t src_row>
 inline void eltwise_unary_bcast_row_32b_src_row()
 {
-    static_assert(src_row == 0 || src_row == FACE_R_DIM, "src_row must be the first row of the top or bottom face");
+    static_assert(src_row == 0 || src_row == FACE_R_DIM, "src_row must be the first row of face 0 or face 1");
 
     TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, src_row);   // hi16 to B
     TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, src_row); // lo16 to B
@@ -147,13 +147,14 @@ inline void _llk_math_eltwise_unary_datacopy_(
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
-        // Pin the math dest offset to the bank base for the budabackend#2730 ZEROACC below: it takes a CLR_16
-        // block index that is absolute within the 4-tile 32-bit bank (local_tile wraps tiles 4-7 onto 0-3), so a
-        // non-base offset would move the clear onto another tile. A plain copy (NONE) skips the write, as on
-        // Wormhole, and keeps its per-tile cost unchanged; a broadcast restores the base on exit.
+        // Point the math dest offset at this tile. The budabackend#2730 ZEROACC below takes a CLR_16 block index
+        // relative to the 4-tile 32-bit bank (local_tile wraps tiles 4-7 onto 0-3) and selects the bank from this
+        // offset, so SyncFull tiles 4-7 clear their own faces. The broadcast sequences add it to their
+        // MOVD2B/MOVB2D immediates, which carry only the intra-tile row and issue as compile-time TTI_ instructions.
+        // A plain copy (NONE) skips the write, as on Wormhole, and keeps its per-tile cost unchanged.
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
-            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
+            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
         }
 
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
@@ -177,11 +178,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
-            // Point the math dest offset at this tile: hardware adds it to the MOVD2B/MOVB2D immediates of the
-            // broadcast sequences below, so those carry only the intra-tile row and issue as compile-time TTI_
-            // instructions.
-            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-
             // Disable implied SrcA format inference so manual SrcA format switches take effect.
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
@@ -275,7 +271,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
         {
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
 
-            // Restore the bank-base offset so the next 32-bit copy's ZEROACC sees the base, not this tile's offset.
+            // Restore the bank base for a following 32-bit plain copy, whose ZEROACC runs without programming the offset.
+            // This does not cover a plain copy into SyncFull tiles 4-7: its ZEROACC still clears tiles 0-3.
             TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
 
             // The 32b path manipulated the flag directly above (tt-llk#449 Fp32_enabled dance); invalidate the

@@ -19,6 +19,9 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
+// DEST sync mode of the math and pack threads; must match DEST_SYNC_MODE in perf_bcast.py, which sizes the blocks.
+constexpr ckernel::DstSync PERF_DEST_SYNC = ckernel::DstSync::SyncHalf;
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -43,9 +46,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
-        _llk_unpack_A_init_<BROADCAST_TYPE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0 /* transpose_of_faces */,
-            0 /* within_face_16x16_transpose */,
+        _llk_unpack_A_init_<BROADCAST_TYPE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            0 /*transpose_of_faces*/,
+            0 /*within_face_16x16_transpose*/,
             ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
             formats.unpack_A_src,
             formats.unpack_A_dst);
@@ -57,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t i = 0; i < num_tiles; ++i)
             {
-                _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                _llk_unpack_A_<BROADCAST_TYPE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                     L1_ADDRESS(buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
             }
         }
@@ -95,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
 
-    constexpr DstSync sync_mode = DstSync::SyncHalf;
+    constexpr DstSync sync_mode = PERF_DEST_SYNC;
     // Unpack-to-dest leaves the tile in DEST, so math broadcasts it in place on the A2D path.
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE || unpack_to_dest) ? DataCopyType::A2D : DataCopyType::B2D;
 
@@ -151,13 +154,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
 
-    constexpr DstSync sync_mode = DstSync::SyncHalf;
+    constexpr DstSync sync_mode = PERF_DEST_SYNC;
 
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-            formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
-        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
+            formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces /*tile_size*/, FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
     }

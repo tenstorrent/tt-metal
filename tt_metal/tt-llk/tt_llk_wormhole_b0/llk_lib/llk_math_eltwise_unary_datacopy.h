@@ -81,7 +81,7 @@ inline void eltwise_unary_bcast_col_32b_face_pair()
 template <std::uint32_t src_row>
 inline void eltwise_unary_bcast_row_32b_src_row()
 {
-    static_assert(src_row == 0 || src_row == FACE_R_DIM, "src_row must be the first row of the top or bottom face");
+    static_assert(src_row == 0 || src_row == FACE_R_DIM, "src_row must be the first row of face 0 or face 1");
 
     TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, src_row);   // hi16 to B
     TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, src_row); // lo16 to B

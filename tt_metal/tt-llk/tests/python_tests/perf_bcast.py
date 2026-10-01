@@ -38,6 +38,9 @@ LOOP_FACTOR_VALUE = 32
 
 DEST_ACC = DestAccumulation.Yes
 
+# DEST sync mode for the block split; must match PERF_DEST_SYNC in sources/unpack_bcast_perf.cpp.
+DEST_SYNC_MODE = DestSync.Half
+
 
 @pytest.mark.perf
 @parametrize(
@@ -51,7 +54,7 @@ DEST_ACC = DestAccumulation.Yes
 def test_perf_unpack_bcast(perf_report, formats, broadcast_type):
     input_dimensions = [TILE_DIMENSIONS[0] * NUM_TILES, TILE_DIMENSIONS[1]]
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        DEST_SYNC_MODE,
         DEST_ACC,
         formats,
         input_dimensions,
