@@ -28,6 +28,13 @@ Read the code at its latest commit, every time.
   It shows the prefill side that is tested (D2H acks, KV table and entry decode, per-cache PCC, slot counts), but
   its migration is mocked, its starts are chunk-aligned, prefix reuse is off and there is no decode: questions 1, 4
   and 8 and the decode KV format must come from the server code or the owner, never from CI.
+- **The server's own bring-up and validation path** (tt-d-gen PR #1209, unmerged as of 2026-10-01; on main once
+  merged; if not on the commit you read, check `git -C <repo> ls-remote origin 'refs/pull/*/head'` for the PR and
+  read it from there, saying so): `docs/launch_harness.md` (the KV-migration bring-up guide: table + device map,
+  references, prefill loopback, decode loopback, prefill->decode, token generation),
+  `tools/launch_harness/{models,tables,goldens,validation,loopback,config,topology}.py`,
+  `kv_manager/tools/kv_dump_compare.py`, `kv_dram_poke`. These say what a model must provide to be launched and how
+  the server validates KV end to end; the bring-up's contract gate should reuse their checks.
 - **Reference model already served**: `models/demos/deepseek_v3_d_p` (tt/mla/mla.py, tt/kv_ack.py,
   utils/kv_cache_utils.py, tt/runners/). Use it to show how a requirement is met with existing ops.
 
@@ -54,14 +61,23 @@ Read the code at its latest commit, every time.
    each ack, and what must be true of the KV at that moment.
 4. **Migration**: entry granularity, which positions are read and when, what happens to a partial block and the pad
    tail, what the decode side receives.
-5. **KV table / entry format**: what the KV manager checks (entry size, config ids, chunk tokens, layout), and what
-   source and destination must agree on.
-6. **Slots and memory**: max slots / num_users in shipped configs and the engine default, and the KV memory that
-   means per chip for this model.
-7. **Deployment**: the manifest / config fields the model needs (fabric mode, sp_factor, layers_per_chunk, chunk,
-   max seq, slots), and defaults that are wrong for this box or mesh.
+5. **KV table / entry format**: what the KV manager and the harness's table checks require (entry size, config ids
+   and order, tokens per entry, layer set equal to the layers run, slots >= max_slots, hostname form, device-map ids,
+   which config holds the latent cache), what source and destination must agree on, and whether the server's tools
+   can decode this model's entry layout (dtype AND storage: row-major vs TILE) and RoPE frame.
+6. **Slots and memory**: max slots / num_users in shipped configs and the engine default, slots the validation
+   holds or reserves (audit holds, loopback slot), and the KV memory that means per chip for this model.
+7. **Deployment**: the manifest / config fields the model needs (fabric mode, sp_factor, layers_per_chunk,
+   kv_num_layers, chunk, max seq, slots), the settings the harness links and rejects, and defaults that are wrong
+   for this box or mesh.
 8. **This model in the server**: is there a config for it or its family, and a decode implementation; what KV format
    and RoPE layout that decode side reads.
+9. **Launchability and validation**: what the model must register to be launched by the server's harness (model
+   registry entry, decode / prefill configs, runner manifest, mesh descriptor, weights path), which harness modes it
+   could run (prefill loopback, decode loopback, disaggregated), what the box needs (topology, network interface,
+   recovery that resets boards), and how the server validates KV (snapshot and compare rules, tolerances, golden
+   format and its RoPE frame vs the bring-up's golden). Say which of these checks the bring-up's contract gate can
+   reuse offline.
 
 ## Prefill engine docs vs the server (always)
 
