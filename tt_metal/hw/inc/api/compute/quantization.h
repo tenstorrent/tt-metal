@@ -375,11 +375,8 @@ ALWI void dequant_int8_tile_init(const uint32_t zero_point) {
 #if defined(ARCH_BLACKHOLE)
 // clang-format off
 /**
- * Per-tensor (scalar scale) forms. ttnn's per-tensor quantization has one scale for the whole tensor; the tile forms
- * above take it as a DEST tile that the kernel copies into DEST for every output tile and that the SFPU loads once per
- * row. These forms take the scale at init, together with the zero point, so the tile call has one DEST operand and no
- * scale tile is copied or loaded. For a scale tile filled with the same value the results are bit-identical to the
- * tile forms. Dest must be in 32 bit mode, as for the tile forms.
+ * Per-tensor (scalar scale) forms of the quantization ops: the scale is given at init, together with the zero point,
+ * so the tile call has one DEST operand and no scale tile. Dest must be in 32 bit mode, as for the tile forms.
  *
  * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
@@ -486,8 +483,7 @@ ALWI void dequant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
 // clang-format off
 /**
  * Inits of the per-tensor forms: the zero point and the scale of the Op, both as fp32 bits. To be called once at the
- * beginning of a kernel; each pairs with the tile call of the same name (quant_scalar_tile_init with quant_scalar_tile
- * and so on, the int8 and uint8 variants as for the tile forms).
+ * beginning of a kernel; each pairs with the tile call of the same name.
  *
  * | Argument   | Description                                   | Data type | Valid range | Required |
  * |------------|-----------------------------------------------|-----------|-------------|----------|

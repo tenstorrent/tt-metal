@@ -754,8 +754,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 
             compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
             if (rt_is_quant_op) {
-                // The per-tensor scale (fp32 bits) for the compute kernel: on Blackhole the quant LLK takes it at
-                // init and the kernel skips the scale tile (QUANT_SCALE_RT_ARGS_IDX); elsewhere the slot is unused.
+                // The per-tensor scale (fp32 bits), read by the compute kernel at QUANT_SCALE_RT_ARGS_IDX.
                 compute_runtime_args.push_back(packed_scalar);
             }
         }
@@ -941,11 +940,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Per-tensor quantization on Blackhole (the scale is a scalar, on the right): the SFPU takes the scale at init
-    // together with the zero point, so the compute kernel copies only the input tile into DEST (one unpack-to-DEST
-    // handshake per tile instead of two) and the body loads no scale per row. The kernel selects the form through
-    // QUANT_SCALAR_INIT / QUANT_SCALAR_OP (the scalar-scale siblings of BINARY_SFPU_INIT / BINARY_SFPU_OP) when it is
-    // built for Blackhole; the scale reaches it as the fifth runtime argument (QUANT_SCALE_RT_ARGS_IDX).
+    // Per-tensor quantization on Blackhole: the SFPU takes the scale at init, so the kernel copies only the input
+    // tile into DEST. QUANT_SCALAR_INIT / QUANT_SCALAR_OP are the scalar-scale forms of BINARY_SFPU_INIT / _OP.
     if (is_quant_op && !b.has_value() && !operation_attributes.scalar_is_lhs &&
         tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE) {
         const auto scalar_form = [](std::string name) {
@@ -963,8 +959,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["QUANT_SCALE_RT_ARGS_IDX"] = "4";
     }
 
-    // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits (isclose) or, for a
-    // per-tensor quantization, the zero point and the scale bits; the two never share a program.
+    // Indices 3 and 4 of the compute runtime args are rtol and atol bits (isclose) or the quant zero point and scale.
     if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
         compute_kernel_defines["ISCLOSE_OP"] = "1";
         compute_kernel_defines["ISCLOSE_EQUAL_NAN"] = operation_attributes.equal_nan ? "1" : "0";

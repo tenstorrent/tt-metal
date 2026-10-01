@@ -376,12 +376,8 @@ void dequant_init(const uint zero_point) {
     }
 }
 
-// Per-tensor (scalar scale) forms of the three inits. ttnn's per-tensor quantization carries one scale for the whole
-// tensor; the tile forms above still take it as a DEST tile that the kernel copies into DEST for every output tile
-// (an unpack-to-DEST handshake per tile) and load once per row of 32 datums. Here the scale goes into LREG1 once, next
-// to the zero point in LREG2, and the calculate_* bodies with SCALAR_SCALE skip the per-row load and the second DEST
-// tile. The recorded replay bodies read LREG1 in both forms, so they are shared and the results are bit-identical to
-// the tile forms fed a tile filled with the same scale.
+// Per-tensor (scalar scale) forms: the scale goes into LREG1 once at init, next to the zero point in LREG2, and the
+// calculate_* bodies with SCALAR_SCALE skip the per-row scale load. The replay bodies read LREG1 in both forms.
 template <
     bool APPROXIMATION_MODE /*unused*/,
     bool SIGN_MAGNITUDE_FORMAT = false,
@@ -410,8 +406,7 @@ void dequant_init_scalar_scale(const uint zero_point, const uint scale) {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool SCALAR_SCALE = false>
 inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input (fp32).
-    // Operand B is scaling factor (fp32); with SCALAR_SCALE it is the constant in LREG1 loaded by the init and
-    // dst_index_in1 is unused.
+    // Operand B is scaling factor (fp32); with SCALAR_SCALE it is the LREG1 constant from the init.
     // LREG2 holds the zero-point constant (fp32) loaded by _init_quant_int32_.
     // Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
     //
@@ -454,8 +449,8 @@ template <
     bool SCALAR_SCALE = false>
 inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte in [0,
-    // 255]). Operand B is scaling factor (fp32); with SCALAR_SCALE it is the constant in LREG1 loaded by the init and
-    // dst_index_in1 is unused. LREG2 holds the zero-point constant (fp32) loaded by
+    // 255]). Operand B is scaling factor (fp32; with SCALAR_SCALE the LREG1 constant from the init). LREG2 holds
+    // the zero-point constant (fp32) loaded by
     // _init_requant_int32_. Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
     //
     // The replay-buffer body at REQUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
@@ -494,7 +489,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SCALAR_SCALE = false
 inline void calculate_quant_int32_int8_pack(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Int8 output: MAD + offset-128 pack body is recorded once into QUANT_REPLAY_SLOT and replayed.
-    // With SCALAR_SCALE the scale is the constant in LREG1 loaded by the init and dst_index_in1 is unused.
+    // With SCALAR_SCALE the scale is the LREG1 constant from the init.
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
     [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
@@ -514,7 +509,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool INT8_INPUT = false, 
 inline void calculate_requant_int32_int8_pack(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Int8 output: CAST + MAD + offset-128 pack body is recorded once into REQUANT_REPLAY_SLOT and replayed.
-    // With SCALAR_SCALE the scale is the constant in LREG1 loaded by the init and dst_index_in1 is unused.
+    // With SCALAR_SCALE the scale is the LREG1 constant from the init.
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
     [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
@@ -546,8 +541,7 @@ template <
 inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A[LREG0] is input to dequant (int32, sign-magnitude or 2's complement bits;
     // or, when INT8_INPUT, a UInt8-unpacked int8 byte in [0, 255]).
-    // Operand B[LREG1] is scaling factor (fp32); with SCALAR_SCALE it is the constant loaded by the init and
-    // dst_index_in1 is unused.
+    // Operand B[LREG1] is scaling factor (fp32); with SCALAR_SCALE it is the constant from the init.
     // LREG2 holds the (negated) zero-point constant loaded by _init_dequant_int32_;
     // i.e. the formula computed is (A + LREG2) * B, which is (A - zero_point) * B
     // when the caller passes -zero_point through the init.

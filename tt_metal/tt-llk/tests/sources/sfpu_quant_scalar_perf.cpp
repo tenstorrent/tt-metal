@@ -2,27 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//
-// LLK SFPU quantization PERF kernel: quant, requant and dequant with a per-tensor scale, in the two forms the
-// LLK offers.
-//
-// QUANT_SCALE_FORM 0 (tile scale, the binary_ng form): the input tile and the scale tile are both copied into
-// DEST (two unpack-to-DEST handshakes per output tile) and the body loads the scale once per row of 32 datums
-// next to the input.
-// QUANT_SCALE_FORM 1 (scalar scale): the scale is loaded into the SFPU once by the init, together with the zero
-// point; only the input tile is copied into DEST and the body has no scale load.
-//
-// Structure as in sources/eltwise_unary_typecast_perf.cpp: INIT and TILE_LOOP zones, LOOP_FACTOR repeats over
-// TILE_CNT tiles, the run types MATH_ISOLATE, L1_TO_L1, UNPACK_ISOLATE and PACK_ISOLATE. The math thread runs the
-// per-tensor body on DEST tile 0 (input) and, with the tile scale, DEST tile 1 (scale), writing DEST tile 0, which
-// the pack thread packs. Values do not matter for the timing: the bodies have no data-dependent branches.
-//
-// Compile-time configuration emitted by the Python harness:
-//   QUANT_OP          : 0 quant (Float32 in, Int32 out), 1 requant (Int32 in, Int32 out), 2 dequant (Int32 in, Float32 out)
-//   QUANT_SCALE_FORM  : 0 tile scale (two copied tiles), 1 scalar scale (one copied tile)
-//   QUANT_ZP_BITS     : the zero point as fp32 bits (dequant takes the negated zero point, the kernel negates)
-//   QUANT_SCALE_BITS  : the scale as fp32 bits (the scalar form's init argument)
-//
+// LLK SFPU quantization perf kernel: quant, requant and dequant (QUANT_OP 0, 1, 2) with a per-tensor scale as a DEST
+// tile (QUANT_SCALE_FORM 0, two copied tiles) or loaded once by the init (QUANT_SCALE_FORM 1, one copied tile);
+// QUANT_ZP_BITS and QUANT_SCALE_BITS are the zero point and the scale as fp32 bits.
 
 #include <algorithm>
 #include <cstdint>

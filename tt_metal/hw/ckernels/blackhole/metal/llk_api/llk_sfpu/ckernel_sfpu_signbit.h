@@ -28,10 +28,7 @@ inline void calculate_signbit() {
     constexpr int offset = 0;
 
 #ifndef DISABLE_SFPLOADMACRO
-    // The rows alternate between LREG0 and LREG1. The alternation is written out two rows per trip so the macro
-    // instruction word is a compile-time constant (TTI_) in every iteration count: with a run-time register index
-    // (`d & 1` in a loop the compiler does not unroll completely, as with 32 iterations) the RISC assembled the word
-    // on every row and the SFPU waited for it, 4 idle cycles per row.
+    // Two rows per trip so the macro word is a compile-time constant (TTI_) in every iteration count.
 #pragma GCC unroll 8
     for (int d = 0; d + 1 < ITERATIONS; d += 2) {
         TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (p_sfpu::LREG0 >> 2));

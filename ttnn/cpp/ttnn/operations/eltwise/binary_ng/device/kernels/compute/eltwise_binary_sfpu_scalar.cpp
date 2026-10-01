@@ -28,10 +28,7 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
-// Per-tensor quantization on Blackhole: the program factory emits QUANT_SCALAR_INIT / QUANT_SCALAR_OP, the
-// scalar-scale siblings of BINARY_SFPU_INIT / BINARY_SFPU_OP. The SFPU takes the scale at init (fifth runtime
-// argument), so the scalar tile in cb_post_rhs is not copied into DEST and the op reads one DEST tile. Other
-// architectures keep the tile form.
+// Blackhole per-tensor quantization: the SFPU takes the scale at init, so the scalar tile is not copied into DEST.
 #if defined(ARCH_BLACKHOLE) && defined(QUANT_SCALAR_OP)
 #define QUANT_SCALAR_SCALE 1
 #define SFPU_SCALAR_INIT QUANT_SCALAR_INIT
@@ -66,7 +63,6 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
 #ifdef QUANT_SCALAR_SCALE
-    // The scale is in the SFPU; the scalar tile stays in L1 and the op runs in place on the input tile.
     for (uint32_t i = 0; i < n; ++i) {
 #if HAS_ACTIVATIONS(POST)
         SFPU_SCALAR_INIT;

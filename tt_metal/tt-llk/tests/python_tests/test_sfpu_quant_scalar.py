@@ -2,14 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-LLK SFPU quantization tests: quant (Float32 -> Int32), requant (Int32 -> Int32) and dequant (Int32 -> Float32)
-with a per-tensor scale, in the two LLK forms of the scale (see perf_sfpu_quant_scalar.py): the scale as a DEST
-tile (``tile``) and the scale loaded once by the init (``scalar``). Both forms run on the same stimuli against the
-same host reference, bit for bit: whole-number results (``exact``) and fractions, ties and both saturation ends
-(the signed int8 rounding of SFPSTOCHRND rounds to nearest with ties away from zero and clamps to plus or minus 127). One configuration
-per test, so the compile-producer / consumer split of the harness builds every variant.
-
-Int32 buffers use two's complement in L1 (twos_complement=True), the encoding the quant kernels read and write.
+SFPU quantization tests (quant, requant, dequant) with a per-tensor scale, in the two LLK forms of
+the scale (see perf_sfpu_quant_scalar.py), bit for bit against one host reference: whole-number
+results (``exact``) and fractions, ties and both saturation ends. Int32 buffers are two's complement.
 """
 
 import struct
@@ -39,8 +34,7 @@ def _float_bits(x: float) -> int:
 
 
 def _stimuli(quant_op: str, exact: bool, seed: int) -> torch.Tensor:
-    """Input tile A. With ``exact`` every result is a whole number well inside the quantized range; otherwise the
-    inputs cover fractions, ties and both saturation ends."""
+    """Input tile A: whole-number results with ``exact``, else fractions, ties and saturation."""
     g = torch.Generator().manual_seed(seed)
     if exact:
         # x * 0.25 + 3.0 is a whole number for x a multiple of 4; keep it inside [-120, 120].
@@ -58,9 +52,8 @@ def _stimuli(quant_op: str, exact: bool, seed: int) -> torch.Tensor:
 def _reference(quant_op: str, x: torch.Tensor) -> torch.Tensor:
     if quant_op == "dequant":
         return (x.to(torch.float32) - _ZERO_POINT) * _SCALE
-    # x * scale + zero_point in float32 as the SFPMAD computes it, then the SFPSTOCHRND float to int8 conversion in
-    # its round-to-nearest mode: ties away from zero (tt-isa-documentation, SFPSTOCHRND float to integer), clamp to
-    # plus or minus 127. floor(|y| + 0.5) in float64 is exact for every float32 y.
+    # x * scale + zero_point in float32 as the SFPMAD computes it, then the SFPSTOCHRND float to int8
+    # rounding: nearest, ties away from zero, clamp to plus or minus 127 (exact in float64).
     y = (x.to(torch.float32) * _SCALE + _ZERO_POINT).to(torch.float64)
     q = torch.sign(y) * torch.floor(y.abs() + 0.5)
     return torch.clamp(q, -127, 127).to(torch.int32)
@@ -70,8 +63,7 @@ def _run(quant_op: str, scale_form: str, src_A: torch.Tensor) -> torch.Tensor:
     in_fmt, out_fmt = _QUANT_FORMATS[quant_op]
     formats = InputOutputFormat(in_fmt, out_fmt)
     dims = [TILE_DIM, TILE_DIM]
-    # Tile B is the scale tile of the tile form: every datum the scale, as the binary_ng writer fills it. It
-    # travels as the input format's bits (an Int32 buffer carries the fp32 bit pattern).
+    # Tile B, the scale tile of the tile form, travels as the input format's bits.
     src_B = torch.full((ELEMENTS_PER_TILE,), _SCALE, dtype=torch.float32)
     if in_fmt == DataFormat.Int32:
         src_B = src_B.view(torch.int32)

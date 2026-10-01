@@ -52,12 +52,8 @@ inline void calculate_typecast_fp32_to_uint16() {
         }
     }
 #else
-    // SFPLOADMACRO fast path in both Dest modes, throughput of 2 cycles per input row. The two
-    // modes differ only in the store the macro performs, and init_typecast_fp32_to_uint16
-    // programs that store for the Dest mode (a 16-bit LO16 write into a 16-bit Dest, the
-    // swap-hi-lo16 32-bit write into a 32-bit Dest), so the macro program below is the same
-    // for both. Before, the 32-bit Dest took a rolled plain loop of four instructions per row
-    // that cost 264 cycles per tile against the macro's 112.
+    // SFPLOADMACRO fast path in both Dest modes, throughput of 2 cycles per input row; init_typecast_fp32_to_uint16
+    // programs the macro's store for the Dest mode (LO16 into a 16-bit Dest, swap-hi-lo16 into a 32-bit one).
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
     //
@@ -181,21 +177,14 @@ inline void calculate_typecast_int32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_int32() {
-    // Truncation toward zero, saturation to INT32_MAX and INT32_MIN by the sign (NaN by its sign bit), zero for
-    // |in| < 1 and for zero and denormal inputs: 15 instructions per row of 32 datums, one fewer than the previous
-    // form, with the same result for every input (checked bit for bit against the previous form by an emulation of
-    // the instructions' functional models over five million inputs, and on the card by the edge test in
-    // test_eltwise_unary_typecast.py). The sign is folded in two's complement as (m ^ s) - s with s = in >> 31
-    // (arithmetic), the saturation value INT32_MAX comes from vConstIntPrgm0 (init_typecast_fp32_to_int32) and
-    // the same fold turns it into INT32_MIN for a negative input, and the range test keeps its own register so the
-    // shift amount needs no second adjustment. Requires init_typecast_fp32_to_int32.
+    // Truncation toward zero, saturation to INT32_MAX / INT32_MIN by the sign (NaN too), 0 for |in| < 1. The sign
+    // is folded as (m ^ s) - s with s = in >> 31; INT32_MAX comes from vConstIntPrgm0 (init_typecast_fp32_to_int32).
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
-        // result = 0 (stays for |in| < 1, zero and denormals, whose lanes the exponent test disables below)
+        // result = 0
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0);
-        // s = in >> 31 (arithmetic): 0 for a positive input, -1 for a negative one
-        // (SFPSHFT mod1 = ARG_IMM | ARITHMETIC | ARG_IMM_USE_VC: shift the VC register by the immediate)
+        // s = in >> 31 (arithmetic shift: SFPSHFT mod1 = ARG_IMM | ARITHMETIC | ARG_IMM_USE_VC)
         TTI_SFPSHFT(-31 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG4, 7);
 
         // exp = in.Exp (LaneEnabled = exp >= 0)
@@ -203,7 +192,7 @@ inline void calculate_typecast_fp32_to_int32() {
             0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_SET_CC_SGN_EXP | sfpi::SFPEXEXP_MOD1_SET_CC_COMP_EXP);
         // shift = exp - 23
         TTI_SFPIADD(-23 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        // exp -= 31 (LaneEnabled = exp < 31); the saturating lanes keep a non-negative value here
+        // exp -= 31 (LaneEnabled = exp < 31)
         TTI_SFPIADD(-31 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
         // result = exman(in, sfpi::MantissaMode::ImplicitOne) << shift
         TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
@@ -211,15 +200,14 @@ inline void calculate_typecast_fp32_to_int32() {
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
 
-        // result ^= s: the first half of the sign fold (0 stays 0 whatever the sign)
+        // result ^= s
         TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG1, 0);
-        // LaneEnabled = exp - 31 >= 0: the saturating lanes (|in| >= 2^31, infinities and NaN); the fold's first
-        // half of INT32_MAX is INT32_MAX for a positive input and INT32_MIN for a negative one
+        // LaneEnabled = exp - 31 >= 0: the saturating lanes (|in| >= 2^31, inf, NaN) take INT32_MAX (LREG12)
         TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
         TTI_SFPMOV(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
-        // s = result - s: the second half of the fold (m for a positive input, -m for a negative one)
+        // s = result - s, the second half of the sign fold
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
@@ -260,9 +248,6 @@ inline void calculate_typecast_fp32_to_fp16b() {
     // low 16 bits (&0xFFFF0000), and store FP32 for 32-bit-Dest correctness. The historical
     // macro relied on a FP16B store to truncate and does not reproduce the masked-FP32 result,
     // so it is not equivalent and is not restored here. See #46751.
-    // Unrolled: as a rolled loop (`unroll 0`) the body ran as a RISC loop that cost 3.9 idle
-    // cycles per row on top of its seven issue slots (125 of 360 cycles per tile); the
-    // instruction sequence per row is unchanged.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
@@ -308,34 +293,8 @@ inline void calculate_typecast_uint16_to_fp32() {
         TTI_SFPNOP;
         TTI_SFPNOP;
     } else {
-        // 32-bit Dest: the UInt16 datum sits in the low 16 bits of a 32-bit Dest word with
-        // unrelated bits above it, and a 16-bit-view load (LO16) does not read that half in
-        // 32-bit Dest mode, so a row needs the INT32 load, the 0xFFFF mask (LREG1, loaded by
-        // the init) and the cast. Mask and cast are both Simple sub-unit instructions, so a
-        // row is one macro (load and mask) plus one explicit SFPCAST: two issue slots per
-        // row against the four of the rolled plain loop this replaces (267 cycles per tile).
-        //
-        // Macro 1 (programmed by init_typecast_uint16_to_fp32): Simple at delay 1 masks the
-        // loaded register in place, Store at delay 3 writes it as FP32. The delays count
-        // issued instructions, so the schedule holds at any RISC issue rate. The rows use
-        // four registers in rotation (LREG0, LREG2, LREG3, LREG4; LREG1 is the mask) so a
-        // row's store has read its register before a later row reloads it.
-        //
-        // Notation: [x] means scheduled by SFPLOADMACRO with VD=x; the issue slots alternate
-        // between a macro load and the explicit cast of the row before it.
-        //
-        // slot | issued        | Load | Simple             | Store    |
-        // ---- | ------------- | ---- | ------------------ | -------- |
-        // 0    | LOADMACRO [a] | [a]  |                    |          |
-        // 1    | SFPCAST z     |      | z = cast_fp32(z)   |          |
-        // 2    | LOADMACRO [b] | [b]  | [a] = a & LREG1    |          |
-        // 3    | SFPCAST a     |      | a = cast_fp32(a)   |          |
-        // 4    | LOADMACRO [c] | [c]  | [b] = b & LREG1    | [a] FP32 |
-        // 5    | SFPCAST b     |      | b = cast_fp32(b)   |          |
-        //
-        // The Simple sub-unit alternates between a macro's mask and an explicit cast, so no
-        // issued instruction meets a scheduled one on the same sub-unit; the slot after the
-        // first load and the slot in place of the load after the last row carry an SFPNOP.
+        // 32-bit Dest: macro 1 (init_typecast_uint16_to_fp32) loads the INT32 word, masks it with LREG1 at delay 1
+        // and stores it as FP32 at delay 3; the explicit SFPCAST of the row before fills the slot in between.
         static_assert(ITERATIONS % 4 == 0, "the four-register rotation takes a multiple of four rows");
         constexpr int r0 = p_sfpu::LREG0;
         constexpr int r1 = p_sfpu::LREG2;
@@ -346,8 +305,7 @@ inline void calculate_typecast_uint16_to_fp32() {
         TTI_SFPNOP;
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d += 4) {
-            // loads of rows d+1 .. d+4 interleaved with the casts of rows d .. d+3; the load
-            // after the last row is an SFPNOP
+            // loads of rows d+1 .. d+4 interleaved with the casts of rows d .. d+3
             TTI_SFPLOADMACRO((1 << 2) | (r1 & 3), InstrModLoadStore::INT32, ADDR_MOD_6, r1 >> 2);
             TTI_SFPCAST(r0, r0, 0);
             TTI_SFPLOADMACRO((1 << 2) | (r2 & 3), InstrModLoadStore::INT32, ADDR_MOD_6, r2 >> 2);
@@ -562,19 +520,8 @@ inline void calculate_typecast_uint16_to_uint32() {
         }
         TTI_SFPNOP;
     } else {
-        // 32-bit Dest: the UInt16 datum sits in the low 16 bits of a 32-bit Dest word with
-        // unrelated bits above it, and a 16-bit-view load (LO16) does not read that half in
-        // 32-bit Dest mode, so the row loads the INT32 word and masks it with LREG1 (loaded
-        // by the init). Macro 1 does the mask in its Simple slot and stores from LREG16:
-        // one issue slot per row against the three of the plain loop this replaces.
-        //
-        // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-        //
-        // t | Load | Simple                | MAD | Round | Store   |
-        // - | ---- | --------------------- | --- | ----- | ------- |
-        // 0 | [v]  |                       |     |       |         |
-        // 0 | ...  | [v] L16 = v & LREG1   |     |       |         |
-        // 0 | ...  |                       |     |       | [v] L16 |
+        // 32-bit Dest: macro 1 (init_typecast_uint16_to_uint32) loads the INT32 word, masks it with LREG1 and stores
+        // it from LREG16, one issue slot per row.
 
         constexpr int v = p_sfpu::LREG0;
 
@@ -664,8 +611,7 @@ template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_int32() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // INT32_MAX for the saturating lanes of calculate_typecast_fp32_to_int32 (its sign fold makes INT32_MIN of it
-    // for a negative input)
+    // INT32_MAX for the saturating lanes of calculate_typecast_fp32_to_int32.
     sfpi::vConstIntPrgm0 = std::numeric_limits<std::int32_t>::max();
 }
 
@@ -676,14 +622,11 @@ inline void init_typecast_uint16_to_uint32() {
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 #else
-    // The 32-bit Dest (is_fp32_dest_acc_en) path of calculate_typecast_uint16_to_uint32 masks
-    // the loaded word with LREG1 (macro 1 below). Load the mask here; the macro-programming
-    // below only targets LREG0, so LREG1 survives. The 16-bit Dest macro path does not read
-    // LREG1.
+    // LREG1 holds the mask of the 32-bit Dest path of calculate_typecast_uint16_to_uint32 (macro 1 below); the
+    // macro programming only targets LREG0, so it survives. The 16-bit Dest macro path does not read LREG1.
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 
-    // InstructionTemplate[0]: the mask (32-bit Dest, macro 1); the macro logic substitutes the
-    // loaded register for VB and LREG16 for VD, LREG1 stays VC
+    // InstructionTemplate[0]: the mask of macro 1 (32-bit Dest); the loaded register replaces VB, LREG16 VD
     TTI_SFPAND(0, p_sfpu::LREG1, 12, 0);
 
     // Macro 0 (16-bit Dest): store only (the LO16 load already zero-extends the UInt16 value).
@@ -849,17 +792,14 @@ inline void init_typecast_uint16_to_fp32() {
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 #else
-    // The 32-bit Dest (is_fp32_dest_acc_en) path of calculate_typecast_uint16_to_fp32 masks
-    // the loaded word with LREG1 (macro 1 below). Load the mask here; the macro-programming
-    // below only targets LREG0, so LREG1 survives. The 16-bit Dest macro path does not read
-    // LREG1.
+    // LREG1 holds the mask of the 32-bit Dest path of calculate_typecast_uint16_to_fp32 (macro 1 below); the
+    // macro programming only targets LREG0, so it survives. The 16-bit Dest macro path does not read LREG1.
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 
     // InstructionTemplate[0]: the cast (16-bit Dest, macro 0)
     TTI_SFPCAST(0, 12, 0);
 
-    // InstructionTemplate[1]: the mask (32-bit Dest, macro 1); the macro logic substitutes the
-    // loaded register for VB and VD, LREG1 stays VC
+    // InstructionTemplate[1]: the mask of macro 1 (32-bit Dest); the loaded register replaces VB and VD
     TTI_SFPAND(0, p_sfpu::LREG1, 13, 0);
 
     // Macro 0 (16-bit Dest): cast into LREG16 at delay 0, FP32 store of LREG16 at delay 1
@@ -874,8 +814,7 @@ inline void init_typecast_uint16_to_fp32() {
         TTI_SFPCONFIG(0, 4 + 0, 0);
     }
 
-    // Macro 1 (32-bit Dest): mask in place at delay 1, FP32 store of the register at delay 3;
-    // the body issues the explicit SFPCAST between them (see calculate_typecast_uint16_to_fp32)
+    // Macro 1 (32-bit Dest): mask in place at delay 1, FP32 store at delay 3; the body casts in between.
     {
         constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (1 << 3) | (4 + 1);
         constexpr std::uint32_t mad_bits = 0;
@@ -890,8 +829,7 @@ inline void init_typecast_uint16_to_fp32() {
     // Misc: {
     //   StoreMod0: FP32,
     //   UsesLoadMod0ForStore: {0,0},
-    //   UnitDelayKind: {1,0,0,1}, (WaitForElapsedInstructions=1 for the Simple and Store sub-units,
-    //   so macro 1's store cannot overtake the body's explicit cast if the RISC stalls)
+    //   UnitDelayKind: {1,0,0,1}, (WaitForElapsedInstructions=1 for the Simple and Store sub-units)
     // }
     TTI_SFPCONFIG(0x900 | InstrModLoadStore::FP32, 8, 1);
 #endif
@@ -971,11 +909,8 @@ inline void init_typecast_fp32_to_uint16() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
-    // Programs the macro of calculate_typecast_fp32_to_uint16 for both Dest modes. The
-    // program is the same; only the store mode follows the Dest mode: LO16 writes the 16-bit
-    // result into a 16-bit Dest, SFPSTORE_MODE_SWAP_HI_LO16 writes it as the high half of a
-    // 32-bit Dest word, where the packer reads UInt16 (the same store the plain loop and
-    // init_typecast_int32_to_uint16 use).
+    // Programs the macro of calculate_typecast_fp32_to_uint16 for both Dest modes; only the store mode follows the
+    // Dest mode: LO16 into a 16-bit Dest, SFPSTORE_MODE_SWAP_HI_LO16 (high half of the word) into a 32-bit Dest.
 
     // InstructionTemplate[0]
     TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf);  // L[VD] = max(0, L[VD])

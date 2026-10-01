@@ -1894,15 +1894,8 @@ class TYPECAST_FORMATS(TemplateParameter):
 
 @dataclass
 class QUANT_SCALAR_CFG(TemplateParameter):
-    """Compile-time config for the SFPU quantization test kernels
-    (sources/sfpu_quant_scalar_perf.cpp, sources/sfpu_quant_scalar_test.cpp).
-
-    ``quant_op`` selects quant (Float32 in, Int32 out), requant (Int32 in and out)
-    or dequant (Int32 in, Float32 out); ``scale_form`` selects the LLK form of the
-    per-tensor scale: ``tile`` (the scale is a DEST tile the body loads per row, as
-    binary_ng runs it) or ``scalar`` (the scale is loaded once by the init). The
-    zero point and the scale are emitted as fp32 bits.
-    """
+    """Compile-time config for the SFPU quantization test kernels (quant_op, scale_form,
+    the zero point and the scale as fp32 bits)."""
 
     quant_op: str = "quant"
     scale_form: str = "tile"

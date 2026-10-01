@@ -2,18 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//
-// LLK SFPU quantization functional test kernel: quant, requant and dequant with a per-tensor scale, in the two
-// forms the LLK offers (see sources/sfpu_quant_scalar_perf.cpp). Input A (tile 0) and the scale tile B (tile 1,
-// every datum the scale) are unpacked to DEST (32-bit), the body runs on (0, 1) -> 0 with the tile scale or on
-// 0 -> 0 with the scalar scale, and DEST tile 0 is packed. Both forms must produce the same bits.
-//
-// Compile-time configuration emitted by the Python harness:
-//   QUANT_OP          : 0 quant (Float32 in, Int32 out), 1 requant (Int32 in, Int32 out), 2 dequant (Int32 in, Float32 out)
-//   QUANT_SCALE_FORM  : 0 tile scale, 1 scalar scale
-//   QUANT_ZP_BITS     : the zero point as fp32 bits (dequant takes the negated zero point, the kernel negates)
-//   QUANT_SCALE_BITS  : the scale as fp32 bits (the same value the harness fills tile B with)
-//
+// LLK SFPU quantization functional test kernel: quant, requant and dequant with a per-tensor scale, in the two forms
+// of sources/sfpu_quant_scalar_perf.cpp (same QUANT_* configuration); tile A is the input, tile B the scale tile.
 
 #include <cstdint>
 

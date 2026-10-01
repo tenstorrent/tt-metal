@@ -227,10 +227,8 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
     )
 
 
-# The pairs whose 32-bit Dest bodies run SFPLOADMACRO programs on Blackhole (the production Dest mode of
-# ttnn.typecast for them), with the 16-bit Dest pair that shares the fp32 -> uint16 macro. Their stimuli reach
-# the value classes the plain-loop bodies handled: the whole 16-bit range including the top values, negative
-# and fractional floats with ties, and floats past the uint16 range.
+# The pairs whose 32-bit Dest bodies run SFPLOADMACRO programs on Blackhole, with the 16-bit Dest
+# pair that shares the fp32 -> uint16 macro.
 _MACRO_PAIRS_32B = [
     (DataFormat.UInt16, DataFormat.Float32),
     (DataFormat.UInt16, DataFormat.UInt32),
@@ -242,9 +240,8 @@ _MACRO_PAIRS_32B = [
 
 
 def _edge_spec_uint16() -> StimuliSpec:
-    # Every uint16 value class: 0, 1, the halves, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF, then random over the range.
-    # 0xFFFF stays on even positions with a small value next to it, so no 32-bit output word reads back as all
-    # ones (which the readback path treats as a timeout).
+    # Every uint16 value class, then random values. 0xFFFF stays on even positions so no 32-bit
+    # output word reads back as all ones (which the readback path treats as a timeout).
     def dist(size, dtype, generator):
         values = torch.randint(0, 65535, (size,), generator=generator)
         fixed = torch.tensor([0, 1, 255, 256, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF, 0, 0xFFFF, 0, 2, 0xFFFF, 0])
@@ -256,8 +253,8 @@ def _edge_spec_uint16() -> StimuliSpec:
 
 
 def _edge_spec_float_to_uint16() -> StimuliSpec:
-    # Negatives (to 0), fractions with ties (round to nearest, ties away from zero), the top of the range and past it (saturation
-    # to 65535, kept off the odd positions), plus random values in -100 to 70000.
+    # Negatives, fractions with ties, the top of the range and past it, then random values; the
+    # saturating values stay off the odd positions.
     def dist(size, dtype, generator):
         values = torch.rand(size, generator=generator) * 70100.0 - 100.0
         fixed = torch.tensor(
@@ -274,8 +271,7 @@ def _edge_spec_float_to_uint16() -> StimuliSpec:
 
 
 def _edge_spec_float_to_bf16() -> StimuliSpec:
-    # Normal floats of both signs whose low 16 bits sit on and around the rounding tie (the kernel rounds to
-    # nearest even in the integer domain), plus lanes with a random low half.
+    # Low 16 bits on and around the rounding tie, plus lanes with a random low half.
     def dist(size, dtype, generator):
         exponent = torch.randint(100, 150, (size,), generator=generator, dtype=torch.int32)
         mantissa = torch.randint(0, 1 << 23, (size,), generator=generator, dtype=torch.int32)
@@ -295,9 +291,8 @@ def _as_float_tensor(src) -> torch.Tensor:
 
 
 def _golden_float_to_uint16(src):
-    # The body clamps the input at zero (SFPSWAP against 0) and rounds with SFPSTOCHRND in its round-to-nearest
-    # mode, which rounds ties away from zero (tt-isa-documentation, SFPSTOCHRND float to integer), then saturates
-    # at 65535. Computed in float64, where floor(x + 0.5) is exact for every float32 x.
+    # Clamp at zero, round to nearest with ties away from zero (SFPSTOCHRND float to integer),
+    # saturate at 65535; floor(x + 0.5) in float64 is exact for every float32 x.
     values = torch.clamp(_as_float_tensor(src).to(torch.float64), min=0.0)
     return torch.clamp(torch.floor(values + 0.5), 0, 65535).to(torch.int32).flatten()
 
@@ -340,8 +335,7 @@ _INT32_MIN = -(2**31)
 
 
 def _golden_float_to_int32(src):
-    # The contract of the Blackhole float to int32 body: truncation toward zero, saturation to INT32_MAX and
-    # INT32_MIN by the sign, NaN to INT32_MAX or INT32_MIN by its sign bit, zero and denormals to 0.
+    # Truncation toward zero, saturation by the sign (NaN by its sign bit), zero and denormals to 0.
     values = _as_float_tensor(src)
     negative = values.view(torch.int32) < 0
     magnitude = values.abs()
@@ -354,8 +348,7 @@ def _golden_float_to_int32(src):
 
 
 def _edge_spec_float_to_int32(input_format: DataFormat) -> StimuliSpec:
-    # Signs, zero, denormals, the unit neighbourhood, fractions with ties, the 2^24 and 2^31 boundaries,
-    # infinities and NaN payloads of both signs, then random values across the exponent range.
+    # Both signs of zero, denormals, ties, the 2^24 and 2^31 boundaries, inf and NaN, then random.
     def dist(size, dtype, generator):
         fixed_bits = [
             0x00000000, 0x80000000,  # +0, -0
@@ -406,9 +399,6 @@ def test_eltwise_unary_typecast_float_to_int32_edges(
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
 ):
-    # Pins every rounding and saturation case of the float to int32 body (truncation, both saturation ends,
-    # NaN by sign, zero and denormals) with two's complement Int32 readback, so a shorter body has to
-    # reproduce each of them.
     _run_typecast(
         formats,
         dest_acc,
@@ -537,8 +527,7 @@ def _run_typecast(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     if max_ulp == 0 and formats.output_format.is_integer():
-        # The harness ULP gate is defined for the float formats only; an integer output of a bit-exact
-        # test is compared value for value, and the first mismatch is reported with its input.
+        # The harness ULP gate covers the float formats only; integer outputs compare value for value.
         golden_i = golden_tensor.flatten().to(torch.int64)
         result_i = res_tensor.flatten().to(torch.int64)
         mismatch = (golden_i != result_i).nonzero().flatten()

@@ -2,17 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-On-silicon perf benchmark for the SFPU quantization kernels (quant, requant, dequant) with a per-tensor scale.
-
-Two LLK forms of the scale are measured side by side on sources/sfpu_quant_scalar_perf.cpp:
-  * ``tile``: the scale is a DEST tile, copied into DEST next to the input for every output tile (an
-    unpack-to-DEST handshake per tile) and loaded by the body once per row of 32 datums. This is the form the
-    binary_ng scalar kernel ran for a per-tensor scale.
-  * ``scalar``: the scale is loaded into the SFPU once by the init, together with the zero point; only the input
-    tile is copied into DEST and the body has no scale load.
-
-Formats follow the ttnn ops: quant Float32 -> Int32, requant Int32 -> Int32, dequant Int32 -> Float32, all in a
-32-bit Dest with the 32-bit inputs unpacked straight to Dest.
+Perf for the SFPU quantization kernels (quant, requant, dequant) with a per-tensor scale, in the two
+LLK forms of the scale: ``tile`` (a DEST tile the body loads per row) and ``scalar`` (loaded once by
+the init). Formats follow the ttnn ops, in a 32-bit Dest.
 """
 
 import pytest
@@ -81,7 +73,7 @@ def test_perf_sfpu_quant_scalar(perf_report, quant_op, scale_form, loop_factor, 
             tile_count_B=tile_count_B,
             tile_count_res=tile_count_A,
         ),
-        # The 32-bit inputs unpack straight into the 32-bit Dest, as the quant ops run in ttnn.
+        # The 32-bit inputs unpack straight into the 32-bit Dest, as in ttnn.
         unpack_to_dest=True,
         dest_acc=DestAccumulation.Yes,
     )

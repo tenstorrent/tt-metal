@@ -51,17 +51,15 @@ from helpers.test_variant_parameters import (
 # The (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path,
 # including the paths re-introduced by issue #46751.
 #
-# dest_acc is the production setting EXCEPT for the two 16-bit Dest rows marked
-# below: ttnn.typecast forces dest_acc=Yes for 32-bit outputs (typecast.cpp:38-41),
-# so production runs their 32-bit Dest rows, which follow. The 16-bit rows measure
-# the 16-bit Dest macro in isolation.
+# dest_acc is the production setting EXCEPT for the two 16-bit Dest rows marked below
+# (ttnn.typecast forces dest_acc=Yes for 32-bit outputs); their 32-bit Dest rows follow.
 _TYPECAST_PERF_CASES = [
     # Float16_b -> UInt16: routes through calculate_typecast_fp32_to_uint16 (the
     # Compute API maps Float16_b-in-Dest -> UInt16 to it, no FP32 load from L1).
     (DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.No),
     # uint16_to_fp32, 16-bit Dest -- NOT production-reachable (Float32 out -> dest_acc=Yes).
     (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.No),
-    # uint16_to_fp32, 32-bit Dest: the production setting (macro 1: mask in the macro, explicit cast).
+    # uint16_to_fp32, 32-bit Dest: the production setting.
     (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.Yes),
     # uint32_to_fp16b, macro mode-agnostic; UInt32 needs 32-bit Dest.
     (DataFormat.UInt32, DataFormat.Float16_b, DestAccumulation.Yes),
@@ -69,17 +67,15 @@ _TYPECAST_PERF_CASES = [
     (DataFormat.UInt32, DataFormat.Float32, DestAccumulation.Yes),
     # uint16_to_uint32, 16-bit Dest -- NOT production-reachable (UInt32 out -> dest_acc=Yes).
     (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.No),
-    # uint16_to_uint32, 32-bit Dest: the production setting (macro 1: mask in the macro).
+    # uint16_to_uint32, 32-bit Dest: the production setting.
     (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.Yes),
     # int32_to_uint16, macro mode-agnostic; Int32 needs 32-bit Dest.
     (DataFormat.Int32, DataFormat.UInt16, DestAccumulation.Yes),
-    # fp32_to_uint16, 32-bit Dest: the production setting for a Float32 input (unpack to
-    # Dest; the same macro as the 16-bit Dest row with the swap-hi-lo16 store).
+    # fp32_to_uint16, 32-bit Dest: the production setting for a Float32 input.
     (DataFormat.Float32, DataFormat.UInt16, DestAccumulation.Yes),
-    # fp32_to_fp16b: a plain loop in every Dest mode (Float32 in -> dest_acc=Yes, unpack to Dest).
+    # fp32_to_fp16b: a plain loop in every Dest mode.
     (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    # fp32_to_int32 and fp32_to_uint32 from a bf16 input (Int32 / UInt32 out -> dest_acc=Yes): the integer
-    # arithmetic bodies, the heaviest production typecasts.
+    # fp32_to_int32 and fp32_to_uint32 from a bf16 input: the integer arithmetic bodies.
     (DataFormat.Float16_b, DataFormat.Int32, DestAccumulation.Yes),
     (DataFormat.Float16_b, DataFormat.UInt32, DestAccumulation.Yes),
 ]
