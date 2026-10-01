@@ -665,6 +665,13 @@ tasks:
     kind: norm
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-01T01:07:45'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_sliding_moe_ffn_norm.py: 2305b7ee283497d3137ec33a2ef34244d8c1f53642d2b5f88b80b7d65d160837
+      /home/sjovic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 16e0ef60439c47052a9bf2543ea23258b17ea715224d1f9e30e037294a43e9bd
 - id: S.sliding_moe.04
   title: 'sliding_moe block with steps 1-4 on device (last: ffn_norm)'
   step: implement
