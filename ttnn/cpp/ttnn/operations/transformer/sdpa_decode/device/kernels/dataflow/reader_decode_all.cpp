@@ -59,8 +59,14 @@ void kernel_main() {
     // before page_table lookup. Value is in TILE rows (= cache_position_modulo /
     // TILE_HEIGHT). Validated to be a multiple of block_size_t at op level.
     constexpr uint32_t capacity_t = get_compile_time_arg_val(34);
+    // Fused KV append (see KvAppendParams in dataflow_common.hpp): the reader inserts the current token's
+    // K/V row from k_new/v_new into the cache tile holding cur_pos and writes that tile back.
+    constexpr bool fuse_kv_append = get_compile_time_arg_val(35) == 1;
+    constexpr uint32_t cb_kv_new_src = tt::CBIndex::c_4;  // staged bf16 k_new/v_new tiles (attention-sink CB is free)
+    constexpr uint32_t cb_kv_new_dst =
+        tt::CBIndex::c_14;  // repacked by compute into the cache format (block-pad CB is free)
 
-    constexpr auto q_args = TensorAccessorArgs<35>();
+    constexpr auto q_args = TensorAccessorArgs<36>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -183,6 +189,27 @@ void kernel_main() {
     uint32_t output_core_noc_x = all_output_noc_x[cur_batch];
     uint32_t output_core_noc_y = all_output_noc_y[cur_batch];
 
+    // Fused KV append runtime args: k_new/v_new L1 base addresses and the shard core of every user
+    uint32_t k_new_addr = 0, v_new_addr = 0;
+    tt_l1_ptr uint32_t* kv_src_noc_x = nullptr;
+    tt_l1_ptr uint32_t* kv_src_noc_y = nullptr;
+    tt_l1_ptr uint32_t* v_src_noc_x = nullptr;
+    tt_l1_ptr uint32_t* v_src_noc_y = nullptr;
+    if constexpr (fuse_kv_append) {
+        // the y array above was consumed with a single arg_idx++; step past its remaining entries
+        arg_idx += num_output_cores - 1;
+        k_new_addr = get_arg_val<uint32_t>(arg_idx++);
+        v_new_addr = get_arg_val<uint32_t>(arg_idx++);
+        kv_src_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+        arg_idx += B;
+        kv_src_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+        arg_idx += B;
+        v_src_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+        arg_idx += B;
+        v_src_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+        arg_idx += B;
+    }
+
     constexpr uint32_t q_chunk_tiles = PNHt * DHt;
     uint32_t k_chunk_tiles = Sk_chunk_t_dynamic * DHt;
     uint32_t v_chunk_tiles = Sk_chunk_t_dynamic * vDHt;
@@ -270,6 +297,35 @@ void kernel_main() {
         cb_page_table.push_back(num_pages_to_read);
     }
 
+    // Fused KV append: stage this user's new K and V tiles (bf16, DHt + vDHt tiles) for compute to repack into
+    // the cache format. Every core that reaches this point feeds compute's prologue; only cores whose chunk
+    // range holds cur_pos actually need the data, the others push whatever is in the CB.
+    if constexpr (fuse_kv_append && is_paged_attention) {
+        CircularBuffer cb_src(cb_kv_new_src);
+        cb_src.reserve_back(DHt + vDHt);
+        const uint32_t user = cur_batch / q_heads_parallel_factor;
+        const uint32_t virtual_tile_row_of_pos = cur_pos / tt::constants::TILE_HEIGHT;
+        const uint32_t chunk_of_pos = virtual_tile_row_of_pos / Sk_chunk_t_dynamic;
+        if (chunk_of_pos >= k_chunk_start && chunk_of_pos < k_chunk_end) {
+            UnicastEndpoint src;
+            const uint32_t dst = cb_src.get_write_ptr();
+            noc.async_read(
+                src,
+                CoreLocalMem<uint32_t>(dst),
+                DHt * 2048,
+                {.noc_x = kv_src_noc_x[user], .noc_y = kv_src_noc_y[user], .addr = k_new_addr},
+                {});
+            noc.async_read(
+                src,
+                CoreLocalMem<uint32_t>(dst + DHt * 2048),
+                vDHt * 2048,
+                {.noc_x = v_src_noc_x[user], .noc_y = v_src_noc_y[user], .addr = v_new_addr},
+                {});
+            noc.async_read_barrier();
+        }
+        cb_src.push_back(DHt + vDHt);
+    }
+
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
@@ -286,9 +342,98 @@ void kernel_main() {
             .mcast_sem_id = k_mcast_semaphore_id};
 
         if constexpr (is_paged_attention) {
+            // Fused KV append: which chunk / tile-row / row inside the tile holds cur_pos for this user
+            KvAppendParams kv_append{};
+            if constexpr (fuse_kv_append) {
+                kv_append.virtual_tile_row = cur_pos / tt::constants::TILE_HEIGHT;
+                kv_append.chunk_with_pos = kv_append.virtual_tile_row / Sk_chunk_t_dynamic;
+                kv_append.tile_row_in_chunk = kv_append.virtual_tile_row % Sk_chunk_t_dynamic;
+                kv_append.dst_row = cur_pos % tt::constants::TILE_HEIGHT;
+                kv_append.src_row = cur_head;
+                kv_append.enabled = kv_append.chunk_with_pos >= k_chunk_start && kv_append.chunk_with_pos < k_chunk_end;
+                // several cores may hold the same user/head (q heads split across cores); one writes back
+                kv_append.write_back = kv_append.enabled && (cur_batch % q_heads_parallel_factor == 0);
+                if (kv_append.enabled) {
+                    // repacked tiles from compute: K tiles first, then V tiles (kept in the CB for every head)
+                    CircularBuffer cb_dst(cb_kv_new_dst);
+                    cb_dst.wait_front(DHt + vDHt);
+                    kv_append.k_src_tiles = cb_dst.get_read_ptr();
+                    kv_append.v_src_tiles = kv_append.k_src_tiles + DHt * k_tile_bytes;
+                }
+            }
+            uint32_t k_chunk_for_patch = 0;
+            bool kv_write_back_pending = false;
+            auto k_patch = [&](uint32_t chunk_base, uint32_t sk_chunk_t, const auto& reader) {
+                if constexpr (fuse_kv_append) {
+                    if (!kv_append.enabled || k_chunk_for_patch != kv_append.chunk_with_pos) {
+                        return;
+                    }
+                    // K chunk is stored transposed: tile (row r, col c) at base + (c * Sk + r) * tile_bytes
+                    const uint32_t dst_base = chunk_base + kv_append.tile_row_in_chunk * k_tile_bytes;
+                    const uint32_t dst_col_stride = sk_chunk_t * k_tile_bytes;
+                    kv_append_patch_tiles<DHt, k_tile_bytes>(
+                        dst_base, dst_col_stride, kv_append.k_src_tiles, kv_append.src_row, kv_append.dst_row);
+                    if (kv_append.write_back) {
+                        const uint32_t physical_tile_id =
+                            (is_page_table_sharded)
+                                ? virtual_seq_tile_id_to_physical_tile_id<
+                                      uint16_t,
+                                      num_kv_heads,
+                                      block_size_t,
+                                      DHt,
+                                      capacity_t>(kv_append.virtual_tile_row, cur_head, page_table_ptr_u16)
+                                : virtual_seq_tile_id_to_physical_tile_id<
+                                      uint32_t,
+                                      num_kv_heads,
+                                      block_size_t,
+                                      DHt,
+                                      capacity_t>(kv_append.virtual_tile_row, cur_head, page_table_ptr_u32);
+                        kv_append_write_back<DHt, k_tile_bytes>(
+                            noc, dst_base, dst_col_stride, physical_tile_id, reader);
+                        kv_write_back_pending = true;
+                    }
+                }
+            };
+            auto v_patch = [&](uint32_t chunk_base, uint32_t sk_chunk_t, const auto& reader) {
+                if constexpr (fuse_kv_append) {
+                    if (!kv_append.enabled || k_chunk_for_patch != kv_append.chunk_with_pos) {
+                        return;
+                    }
+                    // V chunk is row-major: tile (row r, col c) at base + (r * vDHt + c) * tile_bytes
+                    const uint32_t dst_base = chunk_base + kv_append.tile_row_in_chunk * vDHt * v_tile_bytes;
+                    kv_append_patch_tiles<vDHt, v_tile_bytes>(
+                        dst_base, v_tile_bytes, kv_append.v_src_tiles, kv_append.src_row, kv_append.dst_row);
+                    if (kv_append.write_back) {
+                        const uint32_t physical_tile_id =
+                            (is_page_table_sharded)
+                                ? virtual_seq_tile_id_to_physical_tile_id<
+                                      uint16_t,
+                                      num_kv_heads,
+                                      block_size_t,
+                                      vDHt,
+                                      capacity_t>(kv_append.virtual_tile_row, cur_head, page_table_ptr_u16)
+                                : virtual_seq_tile_id_to_physical_tile_id<
+                                      uint32_t,
+                                      num_kv_heads,
+                                      block_size_t,
+                                      vDHt,
+                                      capacity_t>(kv_append.virtual_tile_row, cur_head, page_table_ptr_u32);
+                        kv_append_write_back<vDHt, v_tile_bytes>(noc, dst_base, v_tile_bytes, physical_tile_id, reader);
+                        kv_write_back_pending = true;
+                    }
+                }
+            };
+
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
                 const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t_dynamic;
                 uint64_t k_base_read_ptr;
+                k_chunk_for_patch = k_chunk;
+                if constexpr (fuse_kv_append) {
+                    if (kv_write_back_pending) {
+                        noc.async_write_barrier();  // patched tiles must reach DRAM before their CB slot is reused
+                        kv_write_back_pending = false;
+                    }
+                }
 
                 // Read K chunk - supports both multicast and non-multicast paths
                 k_base_read_ptr = read_k<
@@ -309,7 +454,8 @@ void kernel_main() {
                     page_table_ptr_u16,
                     page_table_ptr_u32,
                     barrier_count,
-                    k_mcast_params);
+                    k_mcast_params,
+                    k_patch);
 
                 if constexpr (use_attention_mask) {
                     mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
@@ -335,7 +481,14 @@ void kernel_main() {
                     page_table_ptr_u32,
                     barrier_count,
                     k_base_read_ptr,
-                    k_tile_bytes);
+                    k_tile_bytes,
+                    v_patch);
+            }
+            if constexpr (fuse_kv_append) {
+                if (kv_write_back_pending) {
+                    noc.async_write_barrier();
+                    kv_write_back_pending = false;
+                }
             }
         } else {
             // Offset for current batch

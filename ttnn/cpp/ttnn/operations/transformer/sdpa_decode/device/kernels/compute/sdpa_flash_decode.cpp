@@ -66,6 +66,10 @@ void kernel_main() {
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(24);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(25);
     constexpr uint32_t original_block_size = get_compile_time_arg_val(26);
+    // Fused KV append: repack the user's new K/V tiles (bf16) into the cache format once per core
+    constexpr bool fuse_kv_append = get_compile_time_arg_val(27) == 1;
+    constexpr uint32_t cb_kv_new_src = tt::CBIndex::c_4;
+    constexpr uint32_t cb_kv_new_dst = tt::CBIndex::c_14;
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
@@ -199,6 +203,27 @@ void kernel_main() {
         } else {
             active_children_per_round[r] = UINT32_MAX;
         }
+    }
+
+    if constexpr (fuse_kv_append) {
+        // Repack k_new/v_new tiles staged by the reader (bf16) into the K/V cache format with the packer, so
+        // the reader can splice rows into the cache tiles with plain byte copies.
+        constexpr uint32_t n_kv_new_tiles = DHt + vDHt;
+        compute_kernel_hw_startup(cb_kv_new_src, cb_kv_new_dst);
+        copy_init(cb_kv_new_src);
+        pack_reconfig_data_format(cb_kv_new_dst);
+        CircularBuffer(cb_kv_new_src).wait_front(n_kv_new_tiles);
+        CircularBuffer(cb_kv_new_dst).reserve_back(n_kv_new_tiles);
+        for (uint32_t i = 0; i < n_kv_new_tiles; ++i) {
+            tile_regs_acquire();
+            copy_tile(cb_kv_new_src, i, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_kv_new_dst);
+            tile_regs_release();
+        }
+        CircularBuffer(cb_kv_new_dst).push_back(n_kv_new_tiles);
+        CircularBuffer(cb_kv_new_src).pop_front(n_kv_new_tiles);
     }
 
     // We tilize input Q if it is in ROW MAJOR layout

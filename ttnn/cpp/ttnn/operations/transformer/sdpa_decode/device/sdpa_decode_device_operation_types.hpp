@@ -55,6 +55,11 @@ struct SdpaDecodeInputs {
     std::optional<Tensor> page_table_tensor;
     std::optional<Tensor> attn_mask;
     std::optional<Tensor> attention_sink;
+    // Fused KV append (paged mode): the current token's K/V heads, [1, B, n_kv_heads(padded), D] bf16 TILE,
+    // height sharded one user per core. The reader inserts them into the cache tile holding cur_pos before
+    // attending over it and writes that tile back, so no separate paged_update_cache op is needed.
+    std::optional<Tensor> k_new;
+    std::optional<Tensor> v_new;
 };
 
 }  // namespace ttnn::prim

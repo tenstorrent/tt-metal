@@ -196,6 +196,57 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         const auto& page_table_tensor = tensor_args.page_table_tensor.value();
         const auto B = page_table_tensor.is_sharded() ? q_shape[1] : page_table_tensor.padded_shape()[0];
 
+        // Fused KV append
+        TT_FATAL(
+            tensor_args.k_new.has_value() == tensor_args.v_new.has_value(),
+            "Fused KV append needs both k_new and v_new (or neither)");
+        if (tensor_args.k_new.has_value()) {
+            TT_FATAL(operation_attributes.is_causal, "Fused KV append requires causal paged attention");
+            TT_FATAL(tensor_args.v.has_value(), "Fused KV append is not supported with MLA (V derived from K)");
+            TT_FATAL(
+                !tensor_args.attention_sink.has_value(),
+                "Fused KV append reuses the attention-sink CB; not supported together");
+            const auto& cache_k = input_tensors.at(1);
+            TT_FATAL(
+                cache_k.dtype() == DataType::BFLOAT16 || cache_k.dtype() == DataType::BFLOAT8_B,
+                "Fused KV append supports bf16 or bfp8_b caches, got {}",
+                cache_k.dtype());
+            TT_FATAL(
+                tensor_args.v->dtype() == cache_k.dtype(), "Fused KV append needs K and V caches of the same dtype");
+            const uint32_t num_kv_heads_ = k_shape[1];
+            for (const auto& [name, t] :
+                 {std::pair{"k_new", tensor_args.k_new.value()}, std::pair{"v_new", tensor_args.v_new.value()}}) {
+                TT_FATAL(t.dtype() == DataType::BFLOAT16, "{} must be bfloat16", name);
+                TT_FATAL(t.layout() == Layout::TILE, "{} must be TILE layout", name);
+                TT_FATAL(
+                    t.is_sharded() && t.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+                    "{} must be L1 sharded",
+                    name);
+                TT_FATAL(
+                    t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                    "{} must be height sharded (one user per core)",
+                    name);
+                const auto shp = t.padded_shape();
+                TT_FATAL(
+                    shp[0] == 1 && shp[1] == B && shp[2] >= num_kv_heads_ && shp[3] == k_shape[3],
+                    "{} must be [1, B={}, >= {} kv heads, D={}], got {}",
+                    name,
+                    B,
+                    num_kv_heads_,
+                    k_shape[3],
+                    shp);
+                const auto& ss = t.memory_config().shard_spec().value();
+                TT_FATAL(
+                    ss.shape[0] == shp[2] && ss.shape[1] == shp[3] && ss.grid.num_cores() == B,
+                    "{} shard must hold one user's heads: shard {} on {} cores for B={}",
+                    name,
+                    ss.shape,
+                    ss.grid.num_cores(),
+                    B);
+                TT_FATAL(ss.orientation == ShardOrientation::ROW_MAJOR, "{} shard orientation must be ROW_MAJOR", name);
+            }
+        }
+
         if (operation_attributes.is_causal) {
             // Check cur pos tensor for causal mode
             TT_FATAL(
@@ -527,7 +578,9 @@ Tensor sdpa_decode(
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
-    std::optional<uint32_t> cache_position_modulo) {
+    std::optional<uint32_t> cache_position_modulo,
+    const std::optional<const Tensor>& k_new,
+    const std::optional<const Tensor>& v_new) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -555,6 +608,8 @@ Tensor sdpa_decode(
         .page_table_tensor = page_table_tensor,
         .attn_mask = attn_mask,
         .attention_sink = attention_sink,
+        .k_new = k_new,
+        .v_new = v_new,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

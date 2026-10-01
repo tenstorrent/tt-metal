@@ -20,6 +20,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_test_sdpa_decode_single_iter,
     run_test_sdpa_decode_multi_pos,
     run_test_sdpa_decode_paged_attention,
+    run_test_sdpa_decode_paged_kv_append,
     run_test_sdpa_decode_broadcast_mask_batch,
 )
 
@@ -481,3 +482,17 @@ def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_
         grid_size=grid_size,
         mask_dtype=mask_dtype,
     )
+
+
+@pytest.mark.parametrize("kv_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["kv_bfp8", "kv_bf16"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, block_size, positions",
+    (
+        [32, 32, 8, 2048, 128, (8, 8), 32, list(range(5, 5 + 32 * 13, 13))],  # llama 3.1 8b single chip, 32 users
+        [8, 16, 4, 1024, 128, (8, 2), 64, [0, 31, 32, 63, 100, 511, 700, 1023]],  # tile/block edges
+    ),
+    ids=["llama8b-b32", "edges-b8"],
+)
+@pytest.mark.timeout(240)
+def test_sdpa_decode_paged_kv_append(device, b, nh, nkv, s, d, grid_size, block_size, positions, kv_dtype, reset_seeds):
+    run_test_sdpa_decode_paged_kv_append(device, b, nh, nkv, s, d, kv_dtype, grid_size, block_size, positions)

@@ -103,7 +103,12 @@ void bind_sdpa_decode(nb::module_& mod) {
         // SlidingWindowSpec); without it, positions past the bounded capacity collapse
         // onto physical block 0 and silently corrupt the cache. Must be a multiple of
         // (effective) block_size and >= sliding_window_size. Paged-mode only.
-        nb::arg("cache_position_modulo") = nb::none());
+        nb::arg("cache_position_modulo") = nb::none(),
+        // Fused KV append: the current token's K/V heads ([1, B, n_kv_heads, D] bf16, height sharded one
+        // user per core, as paged_update_cache takes them). The kernel inserts them into the cache tile at
+        // cur_pos before attending and writes the tile back, replacing the separate cache-update op.
+        nb::arg("k_new") = nb::none(),
+        nb::arg("v_new") = nb::none());
 
     ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,

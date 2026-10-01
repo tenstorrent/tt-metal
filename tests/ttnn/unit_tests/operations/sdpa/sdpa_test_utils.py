@@ -1388,3 +1388,174 @@ def run_test_sdpa_decode_broadcast_mask_batch(
         f"batch=1 mask vs full-batch mask {out_pcc} (expected >=0.99). "
         f"Batches 1+ likely read OOB DRAM instead of mask[0]."
     )
+
+
+def run_test_sdpa_decode_paged_kv_append(device, b, nh, nkv, s, d, kv_dtype, grid_size, block_size, positions):
+    """Paged SDPA decode with the current token's K/V appended inside the op (k_new / v_new).
+
+    The cache holds garbage at each user's cur_pos; k_new/v_new carry the true row. The op must (1) attend over
+    positions 0..cur_pos including the new row and (2) leave the new row in the cache, which is checked by a
+    second, plain paged SDPA call at the same positions.
+    """
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+    max_num_blocks_per_seq = s // block_size
+    max_num_blocks = b * s // block_size
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+    # the new-token rows: what the cache must hold at cur_pos after the op
+    K_new_rows = fa_rand(b, nkv, 1, d)
+    V_new_rows = fa_rand(b, nkv, 1, d)
+    K_true = K.clone()
+    V_true = V.clone()
+    K_stale = K.clone()
+    V_stale = V.clone()
+    for i, pos in enumerate(positions):
+        K_true[i, :, pos : pos + 1, :] = K_new_rows[i]
+        V_true[i, :, pos : pos + 1, :] = V_new_rows[i]
+        K_stale[i, :, pos : pos + 1, :] = 7.0  # garbage the op must overwrite
+        V_stale[i, :, pos : pos + 1, :] = -7.0
+
+    def to_paged(cache):
+        return (
+            cache.reshape(b, nkv, max_num_blocks_per_seq, block_size, d)
+            .transpose(1, 2)
+            .reshape(b * max_num_blocks_per_seq, nkv, block_size, d)
+        )
+
+    permutation = torch.randperm(max_num_blocks)
+    reverse_permutation = torch.argsort(permutation)
+    page_table = reverse_permutation.reshape(b, max_num_blocks_per_seq)
+
+    tt_K = ttnn.as_tensor(
+        to_paged(K_stale)[permutation],
+        device=device,
+        dtype=kv_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_V = ttnn.as_tensor(
+        to_paged(V_stale)[permutation],
+        device=device,
+        dtype=kv_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
+    shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
+    q_memcfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    # k_new / v_new: [1, B, nkv padded to 32, d] bf16, one user per core (paged_update_cache's input layout);
+    # put V on a different core range than K to exercise the separate coordinate tables
+    kv_rows = nearest_n(nkv, n=32)
+    k_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
+    v_grid = k_grid
+    if b % grid_size[0] == 0:
+        y0 = (b + grid_size[0] - 1) // grid_size[0]
+        y1 = y0 + b // grid_size[0] - 1
+        if y1 < compute_grid_size.y:
+            v_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, y0), ttnn.CoreCoord(grid_size[0] - 1, y1))})
+    kv_memcfg = lambda grid: ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (kv_rows, d), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    k_new_t = torch.zeros(1, b, kv_rows, d)
+    v_new_t = torch.zeros(1, b, kv_rows, d)
+    k_new_t[0, :, :nkv, :] = K_new_rows.squeeze(2)
+    v_new_t[0, :, :nkv, :] = V_new_rows.squeeze(2)
+    tt_k_new = ttnn.as_tensor(
+        k_new_t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=kv_memcfg(k_grid)
+    )
+    tt_v_new = ttnn.as_tensor(
+        v_new_t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=kv_memcfg(v_grid)
+    )
+
+    scale = d**-0.5
+    k_chunk_size = get_chunk_size(max(positions) + 1, s)
+    padded_layer_len = nearest_n(max(positions) + 1, n=k_chunk_size)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=padded_num_heads,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+    )
+    Q = fa_rand(1, b, nh, d)
+    tt_Q = ttnn.as_tensor(Q, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=q_memcfg)
+    cur_pos_tt = ttnn.Tensor(torch.tensor(positions, dtype=torch.int32), ttnn.int32).to(device)
+
+    def reference():
+        attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
+        for i, pos in enumerate(positions):
+            attn_mask[i, :, :, pos + 1 :] = torch.finfo(torch.float32).min
+        Kr = torch.cat([K_true[:, i : i + 1, :padded_layer_len].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+        Vr = torch.cat([V_true[:, i : i + 1, :padded_layer_len].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+        out = torch.nn.functional.scaled_dot_product_attention(
+            Q.permute(1, 2, 0, 3), Kr, Vr, attn_mask, scale=scale, is_causal=False
+        )
+        return out.squeeze(2).unsqueeze(0)
+
+    expect = reference()
+
+    def run(k_new=None, v_new=None):
+        out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            tt_Q,
+            tt_K,
+            tt_V,
+            tt_page_table,
+            cur_pos_tensor=cur_pos_tt,
+            scale=scale,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            k_new=k_new,
+            v_new=v_new,
+        )
+        return ttnn.to_torch(out)[:, :, :nh, :]
+
+    # 0) sanity: with the stale cache and no append, the result must NOT match
+    _, pcc_stale = comp_pcc(expect, run(), 0.99)
+    logger.info(f"stale cache pcc (expected low): {pcc_stale}")
+
+    # 1) fused append
+    fused = run(tt_k_new, tt_v_new)
+    ok, pcc = comp_pcc(expect, fused, 0.98)
+    logger.info(f"fused kv append pcc: {pcc}")
+    assert ok, f"fused KV append attention output pcc {pcc}"
+
+    # 2) the cache now holds the new rows: a plain call must match too
+    after = run()
+    ok2, pcc2 = comp_pcc(expect, after, 0.98)
+    logger.info(f"post-append plain pcc: {pcc2}")
+    assert ok2, f"cache not updated by fused KV append: pcc {pcc2}"
+
+    # 3) direct check of the written rows
+    K_dev = ttnn.to_torch(tt_K)[reverse_permutation]
+    K_dev = K_dev.reshape(b, max_num_blocks_per_seq, nkv, block_size, d).transpose(1, 2).reshape(b, nkv, s, d)
+    V_dev = ttnn.to_torch(tt_V)[reverse_permutation]
+    V_dev = V_dev.reshape(b, max_num_blocks_per_seq, nkv, block_size, d).transpose(1, 2).reshape(b, nkv, s, d)
+    for i, pos in enumerate(positions):
+        okk, pk = comp_pcc(K_new_rows[i, :, 0, :], K_dev[i, :, pos, :], 0.99)
+        okv, pv = comp_pcc(V_new_rows[i, :, 0, :], V_dev[i, :, pos, :], 0.99)
+        assert okk and okv, f"user {i} pos {pos}: written K pcc {pk}, V pcc {pv}"
+        # neighbouring rows untouched
+        if pos > 0:
+            assert torch.allclose(
+                K_dev[i, :, pos - 1, :].float(),
+                ttnn.to_torch(
+                    ttnn.from_torch(K[i : i + 1, :, pos - 1 : pos, :], dtype=kv_dtype, layout=ttnn.TILE_LAYOUT)
+                )
+                .float()
+                .reshape(nkv, d),
+                atol=0.3,
+            ), f"user {i}: row {pos - 1} disturbed"

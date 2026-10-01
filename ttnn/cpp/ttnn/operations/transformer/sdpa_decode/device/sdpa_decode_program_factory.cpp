@@ -37,6 +37,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const auto& page_table_tensor = tensor_args.page_table_tensor;
     const auto& attn_mask = tensor_args.attn_mask;
     const auto& attention_sink = tensor_args.attention_sink;
+    const auto& k_new = tensor_args.k_new;
+    const auto& v_new = tensor_args.v_new;
+    const bool fuse_kv_append = k_new.has_value();
     const auto& output_tensor = tensor_return_value;
 
     // ========== Operation Attributes ==========
@@ -540,6 +543,14 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     add_cb(CBIndex::c_3, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);  // attn_mask
     if (use_attention_sink) {
         add_cb(CBIndex::c_4, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    } else if (fuse_kv_append) {
+        // Fused KV append: the reader stages the user's bf16 k_new/v_new tiles here (DHt + vDHt tiles) ...
+        add_cb(CBIndex::c_4, (DHt + vDHt) * 2048, tt::DataFormat::Float16_b, 2048, &full_tile);
+    }
+    if (fuse_kv_append) {
+        // ... and compute repacks them into the cache format here; the reader splices rows from these tiles.
+        TT_FATAL(!has_block_padding, "Fused KV append reuses the block-padding mask CB; block_size must be >= 32");
+        add_cb(CBIndex::c_14, (DHt + vDHt) * k_tile_size, k_df, k_tile_size, &k_tile);
     }
     add_cb(CBIndex::c_5, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);   // scale
     add_cb(CBIndex::c_6, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // m_in
@@ -675,6 +686,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         static_cast<uint32_t>(use_col_major_group_indexing),  // use_k_mcast
         Bmask,
         capacity_t,
+        static_cast<uint32_t>(fuse_kv_append),
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
@@ -744,6 +756,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         scale_packed,
         sliding_window_size,
         original_block_size,
+        static_cast<uint32_t>(fuse_kv_append),
     };
 
     // ========== Compute Defines ==========
@@ -814,6 +827,24 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // nullptr-when-absent Buffer* pointers computed above.
     Buffer* attn_mask_buffer = use_attention_mask ? attn_mask.value().buffer() : nullptr;
     Buffer* attention_sink_buffer = use_attention_sink ? attention_sink.value().buffer() : nullptr;
+
+    // Fused KV append: physical coords of the shard core of every user for k_new and v_new (shard i = user i)
+    std::vector<uint32_t> kv_new_core_xs, kv_new_core_ys, v_new_core_xs, v_new_core_ys;
+    if (fuse_kv_append) {
+        auto shard_cores = [&](const Tensor& t, std::vector<uint32_t>& xs, std::vector<uint32_t>& ys) {
+            const auto& ss = t.memory_config().shard_spec().value();
+            const auto cores =
+                corerange_to_cores(ss.grid, ss.grid.num_cores(), ss.orientation == ShardOrientation::ROW_MAJOR);
+            TT_FATAL(cores.size() == B, "fused KV append: {} shard cores for B={}", cores.size(), B);
+            for (const auto& c : cores) {
+                auto phys = device->worker_core_from_logical_core(c);
+                xs.push_back(phys.x);
+                ys.push_back(phys.y);
+            }
+        };
+        shard_cores(k_new.value(), kv_new_core_xs, kv_new_core_ys);
+        shard_cores(v_new.value(), v_new_core_xs, v_new_core_ys);
+    }
 
     // ========== Runtime Arguments ==========
     for (uint32_t i = 0; i < num_active_cores; ++i) {
@@ -912,6 +943,14 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.push_back(num_dests);
         reader_rt_args.append(output_core_physical_xs);
         reader_rt_args.append(output_core_physical_ys);
+        if (fuse_kv_append) {
+            reader_rt_args.push_back(k_new->buffer());
+            reader_rt_args.push_back(v_new->buffer());
+            reader_rt_args.append(kv_new_core_xs);
+            reader_rt_args.append(kv_new_core_ys);
+            reader_rt_args.append(v_new_core_xs);
+            reader_rt_args.append(v_new_core_ys);
+        }
 
         // writer runtime args (do_reduce is NOT included — writer doesn't use it)
         // The output address is passed as Buffer* (BufferBinding) so it is re-patched on the fast

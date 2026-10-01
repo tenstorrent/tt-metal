@@ -591,6 +591,94 @@ void read_q(
     }
 }
 
+// ============================================================================
+// Fused KV append: insert the current token's K/V row into the cache tile that
+// holds cur_pos while that tile sits in the K/V chunk CB, then write the patched
+// tile back to its cache page. Replaces the separate paged_update_cache op.
+//
+// Source: k_new / v_new are [1, B, n_kv_heads(padded to 32), D] bf16 TILE, height
+// sharded one user per core: user b's shard on shard core b, kv head h is row h.
+// The reader stages the user's DHt + vDHt source tiles in cb_kv_new_src; the
+// compute kernel repacks them once per core into the cache format (cb_kv_new_dst),
+// so the reader only copies rows: row h of the repacked tile -> row (cur_pos % 32)
+// of the cache tile, per 32-column face.
+// ============================================================================
+struct KvAppendNoop {
+    template <typename... Args>
+    void operator()(Args&&...) const {}
+};
+
+struct KvAppendParams {
+    bool enabled;                // this core patches (its chunk range holds cur_pos)
+    bool write_back;             // and writes the patched tiles to the cache (one core per user/head)
+    uint32_t src_row;            // kv head index = row inside the repacked [32, D] tiles
+    uint32_t dst_row;            // cur_pos % 32 inside the cache tile
+    uint32_t tile_row_in_chunk;  // tile-row of the chunk that holds cur_pos
+    uint32_t chunk_with_pos;     // chunk index that holds cur_pos
+    uint32_t virtual_tile_row;   // cur_pos / 32 (padded space), for the page table lookup
+    uint32_t k_src_tiles;        // L1 address of the repacked K tiles (DHt tiles, contiguous)
+    uint32_t v_src_tiles;        // L1 address of the repacked V tiles (vDHt tiles, contiguous)
+};
+
+// Copy one 16-column face row of a tile in the cache format from src tile row src_row to dst tile row dst_row.
+template <uint32_t tile_bytes>
+inline void kv_append_copy_face_row(
+    uint32_t src_tile, uint32_t dst_tile, uint32_t src_row, uint32_t dst_row, uint32_t half) {
+    constexpr bool is_bf16 = tile_bytes == 2048;
+    constexpr bool is_bfp8 = tile_bytes == 1088;
+    static_assert(is_bf16 || is_bfp8, "fused KV append supports bf16 and bfp8_b caches");
+    const uint32_t src_face = (src_row / 16) * 2 + half;
+    const uint32_t dst_face = (dst_row / 16) * 2 + half;
+    if constexpr (is_bf16) {
+        // 32x32 bf16 tile: 4 faces x 512 B, 32 B per face row
+        auto* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_tile + src_face * 512 + (src_row % 16) * 32);
+        auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile + dst_face * 512 + (dst_row % 16) * 32);
+        for (uint32_t i = 0; i < 8; ++i) {
+            dst[i] = src[i];
+        }
+    } else {
+        // bfp8_b tile: 64 exponent bytes (face*16 + row) then 1024 mantissa bytes (face*256 + row*16 + col)
+        auto* src_exp = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_tile + src_face * 16 + (src_row % 16));
+        auto* dst_exp = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst_tile + dst_face * 16 + (dst_row % 16));
+        *dst_exp = *src_exp;
+        auto* src =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_tile + 64 + src_face * 256 + (src_row % 16) * 16);
+        auto* dst =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile + 64 + dst_face * 256 + (dst_row % 16) * 16);
+        for (uint32_t i = 0; i < 4; ++i) {
+            dst[i] = src[i];
+        }
+    }
+}
+
+// Patch one DHt-wide tile row of the chunk: dst tile c at dst_base + c * dst_col_stride, src tile c at
+// src_tiles + c * tile_bytes.
+template <uint32_t DHt, uint32_t tile_bytes>
+inline void kv_append_patch_tiles(
+    uint32_t dst_base, uint32_t dst_col_stride, uint32_t src_tiles, uint32_t src_row, uint32_t dst_row) {
+    for (uint32_t c = 0; c < DHt; ++c) {
+        const uint32_t src_tile = src_tiles + c * tile_bytes;
+        const uint32_t dst_tile = dst_base + c * dst_col_stride;
+        kv_append_copy_face_row<tile_bytes>(src_tile, dst_tile, src_row, dst_row, 0);
+        kv_append_copy_face_row<tile_bytes>(src_tile, dst_tile, src_row, dst_row, 1);
+    }
+}
+
+// Write the DHt patched tiles of one tile row back to their cache pages (no barrier: the caller
+// barriers before the CB slot can be reused and at kernel end).
+template <uint32_t DHt, uint32_t tile_bytes, typename WriterType>
+inline void kv_append_write_back(
+    Noc& noc, uint32_t dst_base, uint32_t dst_col_stride, uint32_t first_physical_tile_id, const WriterType& writer) {
+    for (uint32_t c = 0; c < DHt; ++c) {
+        noc.async_write(
+            CoreLocalMem<uint32_t>(dst_base + c * dst_col_stride),
+            writer,
+            tile_bytes,
+            {},
+            {.page_id = first_physical_tile_id + c});
+    }
+}
+
 // Multicast parameters for K streaming (vertical multicast along y, same x)
 struct KMcastParams {
     bool do_mcast;          // true = sender, false = receiver
@@ -611,7 +699,8 @@ template <
     bool is_page_table_sharded,
     bool use_mcast,
     uint32_t capacity_t,
-    typename KReaderType>
+    typename KReaderType,
+    typename PatchFn = KvAppendNoop>
 uint32_t read_k(
     uint32_t k_chunk_tiles,
     uint32_t cur_head,
@@ -621,7 +710,8 @@ uint32_t read_k(
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16,
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
-    const KMcastParams& mcast_params = {}) {
+    const KMcastParams& mcast_params = {},
+    const PatchFn& patch = PatchFn{}) {
     Noc noc;
     CircularBuffer cb_k(cb_k_in);
     cb_k.reserve_back(k_chunk_tiles);
@@ -663,6 +753,7 @@ uint32_t read_k(
                 }
             }
             noc.async_read_barrier();
+            patch(k_write_ptr, Sk_chunk_t_dynamic, k_reader);  // fused KV append (no-op unless enabled)
             // Multicast the full K^T chunk to all receiver cores at once
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(k_write_ptr),
@@ -727,6 +818,7 @@ uint32_t read_k(
             }
         }
         noc.async_read_barrier();
+        patch(k_write_ptr, Sk_chunk_t_dynamic, k_reader);  // fused KV append (no-op unless enabled)
         cb_k.push_back(k_chunk_tiles);
     }
     return k_base_read_ptr;
@@ -742,7 +834,8 @@ template <
     bool is_page_table_sharded,
     bool reuse_k,
     uint32_t capacity_t,
-    typename VReaderType>
+    typename VReaderType,
+    typename PatchFn = KvAppendNoop>
 void read_v(
     uint32_t v_chunk_tiles,
     uint32_t cur_head,
@@ -753,11 +846,13 @@ void read_v(
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
     uint32_t k_base_read_ptr = 0,
-    uint32_t k_tile_bytes = 0) {
+    uint32_t k_tile_bytes = 0,
+    const PatchFn& patch = PatchFn{}) {
     Noc noc;
     CircularBuffer cb_v(cb_v_in);
     cb_v.reserve_back(v_chunk_tiles);
     uint32_t v_write_ptr = cb_v.get_write_ptr();
+    const uint32_t v_base_write_ptr = v_write_ptr;
     if constexpr (reuse_k) {
         // Read V chunk (transpose of K), from K's L1 buffer (same core)
         const uint8_t noc_id = noc.get_noc_id();
@@ -806,6 +901,7 @@ void read_v(
             // No padding to skip - V is an independent tensor with contiguous layout
         }
         noc.async_read_barrier();
+        patch(v_base_write_ptr, Sk_chunk_t_dynamic, v_reader);  // fused KV append (no-op unless enabled)
     }
     cb_v.push_back(v_chunk_tiles);
 }
