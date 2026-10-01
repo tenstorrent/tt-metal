@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 
-# Lives in tt-metal as `accuracy-report-command.yaml`; kept here so it cannot drift. Setup: docs/pr-command.md.
+# Copy of tt-metal's `.github/workflows/accuracy-report-command.yaml`; keep the two in step. Setup: docs/pr-command.md.
 
 name: accuracy-report-command
 
@@ -14,17 +14,19 @@ on:
 
 permissions:
   contents: read
-  # Creating a PR conversation comment creates an issue comment; `pull-requests` alone is refused.
+  # A PR conversation comment is an issue comment, and it is created through that endpoint below,
+  # so this is the only write needed and `pull-requests` stays at none.
   issues: write
-  pull-requests: write
 
 env:
   ORACLE: tenstorrent/tt-eltwise-accuracy-report
 
 jobs:
   dispatch:
-    # Gated here like `/test`: an outsider starts no run. Exact, or `/accuracy-reporting` would fire it.
-    if: "github.event.issue.pull_request != null
+    # Forks inherit this file but not the secret; without the repo guard they answer with a failure.
+    # Gated like `/test`: an outsider starts no run. Exact, or `/accuracy-reporting` would fire it.
+    if: "github.repository == 'tenstorrent/tt-metal'
+      && github.event.issue.pull_request != null
       && contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'),
                   github.event.comment.author_association)
       && (github.event.comment.body == '/accuracy-report'
@@ -50,7 +52,7 @@ jobs:
                  --jq .permission 2>"$RUNNER_TEMP/err")
           then
             # Only 404 means "not a collaborator"; any other failure is the token, not a verdict.
-            grep -q 404 "$RUNNER_TEMP/err" || {
+            grep -q "HTTP 404" "$RUNNER_TEMP/err" || {
               cat "$RUNNER_TEMP/err" >&2
               echo "::error::cannot read $ACTOR's access to $GITHUB_REPOSITORY"; exit 1; }
             level=none
@@ -88,9 +90,10 @@ jobs:
           for _ in 1 2 3 4 5 6; do
             sleep 5
             id=$(gh run list --repo "$ORACLE" --workflow accuracy-command.yml \
-              --limit 20 --json databaseId,createdAt,name \
-              --jq "[.[] | select(.name == \"accuracy-report for tt-metal#$PR\" and .createdAt >= \"$since\")]
-                    | sort_by(.createdAt) | last | .databaseId // empty" 2>/dev/null || true)
+              --limit 20 --json databaseId,createdAt,name 2>/dev/null \
+              | jq -r --arg name "accuracy-report for tt-metal#$PR" --arg since "$since" \
+                '[.[] | select(.name == $name and .createdAt >= $since)]
+                 | sort_by(.createdAt) | last | .databaseId // empty' || true)
             [ -z "$id" ] || break
           done
           # The run started either way; only the link is less precise.
@@ -115,5 +118,7 @@ jobs:
             body="$body missing \`ACCURACY_REPORT_DISPATCH_TOKEN\`."
             body="$body [Log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
           fi
-          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
+          # The issues endpoint, not `gh pr comment`: that resolves the pull request first, which
+          # would need `pull-requests` read on top of the write this already has.
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" --silent
           [ "$STARTED" = true ]
