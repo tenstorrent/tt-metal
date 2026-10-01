@@ -84,8 +84,7 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
 #if INDEX_TILES_ON_COMPUTE
         // The index tile is a per-column constant, so its transpose is built in DEST directly;
         // wt_base is this core's first width tile, so the indices are global.
-        ckernel::topk_fill_index_tile(2, (wt_base + wt) * 32);
-        ckernel::topk_fill_index_tile(3, (wt_base + wt + 1) * 32);
+        ckernel::topk_fill_index_tiles<2, 2>((wt_base + wt) * 32);
 #else
         reconfig_data_format_srca(index_dfb.get_id());
         transpose_init(index_dfb.get_id());

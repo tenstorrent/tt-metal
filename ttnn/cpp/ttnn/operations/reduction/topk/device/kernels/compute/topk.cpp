@@ -268,7 +268,7 @@ void kernel_main() {
                 read_cb_and_transpose(input_val_dfb_index, DST_VAL);  // Values: dest regs 0,1
 #if INDEX_TILES_ON_COMPUTE
                 // The index tile is a per-column constant, so its transpose is built in DEST directly.
-                ckernel::topk_fill_index_tile(DST_IND, wt_pos * 32);
+                ckernel::topk_fill_index_tiles<DST_IND, 1>(wt_pos * 32);
                 wt_pos++;
 #else
                 read_cb_and_transpose(input_ind_dfb_index, DST_IND);  // Indices: dest regs 2,3
