@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/streaming_profiler/streaming_profiler_tracy.hpp"
+#include "impl/streaming_profiler/tracy_consumer.hpp"
 
 #include <cstring>
 #include <limits>
@@ -16,7 +16,7 @@
 #include <client/TracyProfiler.hpp>
 #endif
 
-#include "impl/streaming_profiler/streaming_profiler_service.hpp"
+#include "impl/streaming_profiler/service.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 

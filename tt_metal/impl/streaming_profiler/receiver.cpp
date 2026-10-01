@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/streaming_profiler/streaming_profiler_receiver.hpp"
+#include "impl/streaming_profiler/receiver.hpp"
 
 #include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/mesh_device.hpp>
