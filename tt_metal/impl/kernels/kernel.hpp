@@ -397,8 +397,9 @@ public:
     ll_api::BufRwInfo query_buf_rw(const IDevice& device) const;
 
     // Resolve query_buf_rw's raw slots to bound objects (TensorParameter name + bound buffer address).
-    // Non-const: reads the kernel's CRTA (where the runtime wrote the bound addresses). Requires the
-    // program run args to have been set and the binary compiled -- call after an enqueue.
+    // Non-const: reads the kernel's CRTA (where the runtime wrote the bound addresses), so the addresses are those
+    // of the last SetProgramRunArgs / UpdateTensorArgs -- call after the final run-args update for the enqueue being
+    // analyzed, and after the binary is compiled. A slot that can't be resolved marks the result opaque.
     // `program` is the one this kernel belongs to: it holds the address each borrowed-memory DFB is bound to.
     ResolvedBufRw resolve_buf_rw(const IDevice& device, const detail::ProgramImpl& program);
 

@@ -491,27 +491,33 @@ ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device, const detail::Progra
     out.writes.reserve(raw.writes.size());
     // The slot is a binding's base-address CRTA byte offset: it names the binding (its
     // tensor_parameter_name) and points at the CRTA word the runtime filled with the bound buffer address.
+    // A slot that doesn't name one of this kernel's bindings, or points outside its CRTA, can't be attributed (stale
+    // or foreign metadata): mark the kernel opaque and drop it, rather than report an access at a made-up address.
     const RuntimeArgsData& crta = this->common_runtime_args_data();
-    auto resolve = [&](uint32_t slot) {
-        ResolvedBufRw::Access access;
+    auto resolve = [&](uint32_t slot) -> std::optional<ResolvedBufRw::Access> {
+        const std::size_t word = slot / sizeof(uint32_t);
+        if (slot % sizeof(uint32_t) != 0 || word >= crta.size()) {
+            return std::nullopt;
+        }
         for (const auto& handle : this->tensor_binding_handles_) {
             if (handle.addr_crta_offset == slot) {
-                access.param_name = handle.tensor_parameter_name;  // string_view into the handle -- no copy
-                break;
+                // param_name is a string_view into the handle -- no copy
+                return ResolvedBufRw::Access{.param_name = handle.tensor_parameter_name, .address = crta.data()[word]};
             }
         }
-        const std::size_t word = slot / sizeof(uint32_t);
-        if (word < crta.size()) {
-            access.address = crta.data()[word];
-        }
-        return access;
+        return std::nullopt;
     };
-    for (uint32_t slot : raw.reads) {
-        out.reads.push_back(resolve(slot));
-    }
-    for (uint32_t slot : raw.writes) {
-        out.writes.push_back(resolve(slot));
-    }
+    auto resolve_all = [&](const auto& slots, auto& accesses) {
+        for (uint32_t slot : slots) {
+            if (auto access = resolve(slot)) {
+                accesses.push_back(*access);
+            } else {
+                out.opaque = true;
+            }
+        }
+    };
+    resolve_all(raw.reads, out.reads);
+    resolve_all(raw.writes, out.writes);
     // A borrowed-memory DFB is the tensor's memory, but the kernel reaches it only as a DFB, so its device code can't
     // note the tensor. The program says which tensor each DFB borrows and the binding says which side this kernel is
     // on: the producer fills the entries (writes the tensor), the consumer drains them (reads it).

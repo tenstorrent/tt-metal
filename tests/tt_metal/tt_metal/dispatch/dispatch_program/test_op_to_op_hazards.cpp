@@ -88,6 +88,7 @@ const char* kReaderKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazar
 const char* kRawWriterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_writer_raw.cpp";
 const char* kMultiKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_multi_rw.cpp";
 const char* kPathsKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_buf_rw_paths.cpp";
+const char* kUnresolvedSlotKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_unresolved_slot.cpp";
 
 MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
@@ -674,6 +675,49 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
         names(rw.reads),
         (std::set<std::string_view>{"view", "iter", "shard_iter", "shard", "legacy_r", "wrap", "escape", "local"}));
     EXPECT_EQ(names(rw.writes), (std::set<std::string_view>{"state", "zero", "legacy_w", "wrap", "escape", "local"}));
+}
+
+// A record whose slot names none of the kernel's bindings (stale or foreign metadata) can't be attributed:
+// resolve_buf_rw must mark the kernel opaque and drop it, not report an access at a made-up address. The kernel's
+// real read still resolves.
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwUnresolvedSlotIsOpaque) {
+    auto md = devices_.at(0);
+    IDevice* dev = md->get_devices()[0];
+    auto in = alloc(*md, BufferType::DRAM);
+
+    exp::KernelSpec k{
+        .unique_id = exp::KernelSpecName{"unresolved"},
+        .source = kUnresolvedSlotKernel,
+        .num_threads = 1,
+        .hw_config = exp::DataMovementHardwareConfig{},
+    };
+    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    BindTensorParameterToKernel(k, "in", "in");
+    exp::ProgramSpec spec{
+        .name = "hazard_unresolved_slot",
+        .kernels = {k},
+        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
+            .name = "wu", .kernels = {exp::KernelSpecName{"unresolved"}}, .target_nodes = exp::NodeCoord{0, 0}}},
+    };
+    spec.tensor_parameters = {exp::TensorParameter{.unique_id = exp::TensorParamName{"in"}, .spec = in.tensor_spec()}};
+    Program program = exp::MakeProgramFromSpec(*md, spec);
+    exp::ProgramRunArgs params;
+    params.tensor_args = {{exp::TensorParamName{"in"}, exp::TensorArgument{in}}};
+    exp::SetProgramRunArgs(program, params);
+    distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
+
+    const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
+    auto kernel = program_impl.get_kernel_by_spec_name("unresolved");
+    ASSERT_NE(kernel, nullptr);
+    EXPECT_EQ(kernel->query_buf_rw(*dev).reads.size(), 2u) << "both READ records reach the host";
+    const ResolvedBufRw rw = kernel->resolve_buf_rw(*dev, program_impl);
+    EXPECT_TRUE(rw.opaque) << "an unresolvable slot must make the kernel opaque";
+    ASSERT_EQ(rw.reads.size(), 1u) << "only the resolvable read is reported";
+    EXPECT_EQ(rw.reads[0].param_name, "in");
+    EXPECT_EQ(rw.reads[0].address, static_cast<uint32_t>(in.address()));
+    EXPECT_TRUE(rw.writes.empty());
 }
 
 }  // namespace tt::tt_metal
