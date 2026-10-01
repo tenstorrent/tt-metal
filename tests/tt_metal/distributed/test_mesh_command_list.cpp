@@ -200,7 +200,7 @@ uint32_t read_l1(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoord
     return result.at(0);
 }
 
-TEST_F(CommandListTest, BuildsIndependentSnapshotsAndReplaysThroughBothPublicEntryPoints) {
+TEST_F(CommandListTest, BuildsIndependentSnapshotsAndReplaysBlockingAndNonBlocking) {
     // Record the first workload, build a snapshot, then append a second workload
     // and build a new independent snapshot.
     auto workload_a = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "write_a");
@@ -221,7 +221,7 @@ TEST_F(CommandListTest, BuildsIndependentSnapshotsAndReplaysThroughBothPublicEnt
     // The first snapshot contains only workload A.
     write_l1(mesh_device_, kAddressA, 0);
     write_l1(mesh_device_, kAddressB, 0);
-    list_a.replay(/*blocking=*/true);
+    EnqueueCommandList(cq, list_a, /*blocking=*/true);
     EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
     EXPECT_EQ(read_l1(mesh_device_, kAddressB), 0u);
 
@@ -246,7 +246,7 @@ TEST_F(CommandListMultiDeviceTest, ReplaysMeshWideWorkloadOnEveryDevice) {
     for (const auto& coord : all_devices) {
         write_l1(mesh_device_, coord, kAddressA, 0);
     }
-    command_list.replay(/*blocking=*/true);
+    EnqueueCommandList(cq, command_list, /*blocking=*/true);
     for (const auto& coord : all_devices) {
         EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueA) << "Device coordinate: " << coord;
     }
@@ -297,7 +297,7 @@ TEST_F(CommandListMultiDeviceTest, ReplaysHeterogeneousAndNonConvexDeviceRanges)
         write_l1(mesh_device_, coord, kAddressB, 0);
         write_l1(mesh_device_, coord, kAddressC, 0);
     }
-    command_list.replay(/*blocking=*/true);
+    EnqueueCommandList(cq, command_list, /*blocking=*/true);
 
     for (const auto& coord : all_devices) {
         EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueA) << "Device coordinate: " << coord;
@@ -392,8 +392,9 @@ TEST_F(CommandListTest, AllowsTemporaryTensorLifetimeDuringBuild) {
     // Build and replay after the recorded input tensor has been deallocated.
     // Replay intentionally uses the captured raw address after the allocation is released. The stale DRAM contents
     // remain usable until another allocation reuses or overwrites that storage; no live MeshTensor handle is required.
-    auto command_list = builder.build(mesh_device_->mesh_command_queue(0));
-    command_list.replay(/*blocking=*/true);
+    auto& cq = mesh_device_->mesh_command_queue(0);
+    auto command_list = builder.build(cq);
+    EnqueueCommandList(cq, command_list, /*blocking=*/true);
 
     std::vector<uint32_t> result;
     ::tt::tt_metal::detail::ReadFromBuffer(*output.mesh_buffer().get_reference_buffer(), result);
@@ -449,7 +450,7 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
     // A built list owns its serialized commands and required kernel binaries, so it
     // remains replayable without its builder.
     write_l1(mesh_device_, kAddressA, 0);
-    command_list.replay(/*blocking=*/true);
+    EnqueueCommandList(cq, command_list, /*blocking=*/true);
     EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
 }
 
@@ -463,18 +464,18 @@ TEST_F(CommandListTest, CommandListMoveAndDeallocateInvalidateTheHandle) {
 
     CommandList moved_list(std::move(command_list));
     EXPECT_THAT(
-        [&] { command_list.replay(/*blocking=*/true); },  // NOLINT(bugprone-use-after-move)
+        [&] { EnqueueCommandList(cq, command_list, /*blocking=*/true); },  // NOLINT(bugprone-use-after-move)
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been moved from")));
 
     write_l1(mesh_device_, kAddressA, 0);
-    moved_list.replay(/*blocking=*/true);
+    EnqueueCommandList(cq, moved_list, /*blocking=*/true);
     EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
 
     // Explicit deallocation is idempotent and invalidates every remaining operation.
     moved_list.deallocate();
     moved_list.deallocate();
     EXPECT_THAT(
-        [&] { moved_list.replay(/*blocking=*/true); },
+        [&] { EnqueueCommandList(cq, moved_list, /*blocking=*/true); },
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been deallocated")));
     EXPECT_THAT(
         [&] { (void)moved_list.device(); },
@@ -542,32 +543,32 @@ TEST_F(CommandListTest, ReplaysCommandListsUnderTheirRecordedSubDeviceLayouts) {
     // The second manager is still active, so the first list cannot replay until its
     // recorded manager is restored.
     EXPECT_THAT(
-        [&] { list_a.replay(/*blocking=*/true); },
+        [&] { EnqueueCommandList(cq, list_a, /*blocking=*/true); },
         ThrowsMessage<std::runtime_error>(HasSubstr("active sub-device manager changed")));
 
     write_l1(mesh_device_, kAddressB, 0);
-    list_b.replay(/*blocking=*/true);
+    EnqueueCommandList(cq, list_b, /*blocking=*/true);
     EXPECT_EQ(read_l1(mesh_device_, kAddressB), kValueB);
 
     mesh_device_->load_sub_device_manager(full_grid_manager);
     EXPECT_THAT(
-        [&] { list_b.replay(/*blocking=*/true); },
+        [&] { EnqueueCommandList(cq, list_b, /*blocking=*/true); },
         ThrowsMessage<std::runtime_error>(HasSubstr("active sub-device manager changed")));
 
     write_l1(mesh_device_, kAddressA, 0);
-    list_a.replay(/*blocking=*/true);
+    EnqueueCommandList(cq, list_a, /*blocking=*/true);
     EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
 
     // Both lists remain live and can be alternated as long as the matching layout
     // is loaded before each replay.
     mesh_device_->load_sub_device_manager(single_core_manager);
     write_l1(mesh_device_, kAddressB, 0);
-    list_b.replay(/*blocking=*/true);
+    EnqueueCommandList(cq, list_b, /*blocking=*/true);
     EXPECT_EQ(read_l1(mesh_device_, kAddressB), kValueB);
 
     mesh_device_->load_sub_device_manager(full_grid_manager);
     write_l1(mesh_device_, kAddressA, 0);
-    list_a.replay(/*blocking=*/true);
+    EnqueueCommandList(cq, list_a, /*blocking=*/true);
     EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
 }
 

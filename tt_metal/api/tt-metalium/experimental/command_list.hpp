@@ -93,14 +93,6 @@ public:
     ~CommandList();
 
     /**
-     * @brief Replays on the command queue used by build().
-     * The recorded sub-device manager must be active.
-     *
-     * @param blocking If true, waits for completion.
-     */
-    void replay(bool blocking) const;
-
-    /**
      * @brief Mesh device this command list was built for.
      */
     MeshDevice& device() const;
@@ -118,6 +110,17 @@ public:
 
 private:
     friend class detail::CommandListBuilderImpl;
+    friend void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool blocking);
+
+    /**
+     * @brief Replays on the command queue used by build().
+     * Use EnqueueCommandList() to replay a command list.
+     * The recorded sub-device manager must be active.
+     *
+     * @param blocking If true, waits for completion.
+     */
+    void replay(bool blocking) const;
+
     class Impl;
     explicit CommandList(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
