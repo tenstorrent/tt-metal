@@ -756,6 +756,8 @@ class TtPrefillTransformer(LightweightModule):
             self.sp_factor,
             self._mtp_sp_rank,
             self._mtp_all_gather_sp,
+            chunk_end=fwd_kwargs["actual_end"],
+            num_levels=self.num_mtp_levels,
         )
         generation = None
         try:

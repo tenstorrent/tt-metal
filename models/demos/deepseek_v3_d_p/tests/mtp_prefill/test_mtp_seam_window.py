@@ -144,6 +144,16 @@ def test_mtp_seam_windows(mesh_device, device_params, num_links):
                         keep[c, 0, u, 0] = 0.0
                         select[c, 0, u, source_row] = 1.0
 
+        if start % window_len:
+            last_plain_end = start + window_len - start % window_len - NUM_LEVELS
+            for chunk_end, wants_splice in ((last_plain_end, False), (last_plain_end + 1, True)):
+                splice = MTPSeamSplice.for_chunk_start(
+                    start, window_len, sp, sp_rank, all_gather_sp, chunk_end=chunk_end, num_levels=NUM_LEVELS
+                )
+                assert (splice is not None) == wants_splice, f"start={start} chunk_end={chunk_end}: {splice}"
+                if splice is not None:
+                    splice.deallocate()
+
         for two_blocks in (False, True):
             label = f"start={start} {'two' if two_blocks else 'one'}-block"
             if two_blocks:
@@ -154,7 +164,9 @@ def test_mtp_seam_windows(mesh_device, device_params, num_links):
             else:
                 parts = [_upload(union_host, mesh_device, (0, -1))]
             union = MTPUnionEmbedding(parts, num_levels=NUM_LEVELS, window_len=window_len)
-            seam_splice = MTPSeamSplice.for_chunk_start(start, window_len, sp, sp_rank, all_gather_sp)
+            seam_splice = MTPSeamSplice.for_chunk_start(
+                start, window_len, sp, sp_rank, all_gather_sp, chunk_end=start + CHUNK, num_levels=NUM_LEVELS
+            )
             assert (seam_splice is None) == (start % window_len == 0), f"{label}: seam splice {seam_splice}"
             union.set_seam_splice(seam_splice)
 

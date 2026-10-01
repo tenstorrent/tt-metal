@@ -45,10 +45,20 @@ class MTPSeamSplice:
 
     @classmethod
     def for_chunk_start(
-        cls, chunk_start: int, window_len: int, sp_factor: int, sp_rank: ttnn.Tensor, all_gather_sp
+        cls,
+        chunk_start: int,
+        window_len: int,
+        sp_factor: int,
+        sp_rank: ttnn.Tensor,
+        all_gather_sp,
+        *,
+        chunk_end: int,
+        num_levels: int,
     ) -> "Optional[MTPSeamSplice]":
-        """The splice for the chunk at ``chunk_start``, or None when every chip holds one run.
+        """The splice for the chunk ``[chunk_start, chunk_end)``, or None when no real row needs one.
 
+        None when every chip holds one run, or when the chunk ends ``num_levels`` or more positions before
+        ``chunk_start + seam_row``, the next chip's first position: no real row's window reaches it then.
         ``sp_rank`` is ``[1, 1, 1, 1]`` holding each chip's SP rank; ``all_gather_sp`` all-gathers a
         ``[1, 1, 32, H/tp]`` tile over SP into ``[1, 1, 32*sp, H/tp]``, in SP order.
         """
@@ -59,9 +69,12 @@ class MTPSeamSplice:
             f"chunk_start={chunk_start} is not tile-aligned; the KV writer only resumes on a multiple of "
             f"{ttnn.TILE_SIZE}"
         )
+        seam_row = window_len - offset
+        if chunk_end + num_levels <= chunk_start + seam_row:
+            return None
         seam_chip = (chunk_start // window_len) % sp_factor
         return cls(
-            seam_row=window_len - offset,
+            seam_row=seam_row,
             next_chip=(seam_chip + 1) % sp_factor,
             seam_chip_mask=ttnn.eq(sp_rank, float(seam_chip)),
             other_chips_mask=ttnn.ne(sp_rank, float(seam_chip)),
