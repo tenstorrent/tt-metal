@@ -28,17 +28,14 @@ Access mechanism — important:
 
 Memory map (Blackhole; Wormhole analogous with CFG_STATE_SIZE=47):
   - TENSIX_CFG_BASE = 0xFFEF0000.
-  - The thread-config region is double-buffered into two shadow "states". Each
-    state spans CFG_STATE_SIZE 128-bit entries == CFG_STATE_SIZE*4 32-bit words.
-    Register `addr32` lives at word `addr32` in state 0 and `addr32 + stride` in
-    state 1, where `stride = CFG_STATE_SIZE*4` (224 words on BH). A kernel may
-    flip between states mid-run, so we pollute both by default.
+  - The thread-config region is double-buffered into two shadow "states", each
+    spanning CFG_STATE_SIZE 128-bit entries == CFG_STATE_SIZE*4 32-bit words
+    (`stride`). Register `addr32` lives at word `addr32` in state 0 and
+    `addr32 + stride` in state 1. `reset_cfg_state_id()` forces state 0 active
+    before a kernel runs, so this module only ever reads/restores state 0.
   - Every CFG register defined in cfg_defines.h fits within a single state
     (highest addr32 is 222 on BH / 186 on WH, both below CFG_STATE_SIZE*4), so the
     "thread" group below genuinely covers the whole config register space.
-  - Word addr32 0 packs CFG_STATE_ID.StateID (bit 0) alongside legacy ALU format
-    fields. Bit 0 selects the active shadow, so we preserve it (polluting it
-    would just flip shadows — a confound, not a finding).
 """
 
 import json
@@ -62,8 +59,7 @@ _CFG_STATE_SIZE = {
 
 # addr32 words that boot configures (NOT the kernel) and that kernels depend on —
 # polluting them is over-reach (it breaks boot, not kernel compute-init), so the
-# whole-space "thread" sweep excludes them. Verified per arch against the boot path
-# (tests/helpers/include/boot.h::device_setup):
+# whole-space "thread" sweep excludes them. Matches boot.h::device_setup per arch:
 #   - Blackhole: device_setup writes NO CFG-space register (only the 0xFFB12xxx debug
 #     block + TTI instructions), so nothing is excluded.
 #   - Wormhole: device_setup writes the TRISC reset-PC vectors — TRISC_RESET_PC_SEC0/1/2
@@ -116,21 +112,17 @@ def snapshot_cfg(location: str, items, *, device_id: int = 0, context=None) -> d
     return snap
 
 
-def thread_items(arch: ChipArchitecture, states=(0, 1)) -> list:
-    """All kernel-owned (state, addr32) words — the bisection candidate universe."""
-    return [(s, a) for s in states for a in _thread_words(arch)]
+def thread_items(arch: ChipArchitecture) -> list:
+    """Every kernel-owned (0, addr32) word. Restore only ever targets shadow state 0."""
+    return [(0, a) for a in _thread_words(arch)]
 
 
-# Restore plan (restore-mode): a captured pristine/post-op CFG replayed in-kernel before the
-# victim's own init runs, so each trial starts from that exact residue WITHOUT a per-trial
-# tt-smi -r. Quad-encoded [addr32, value, port, mask]; L1 base/magic must match trisc.cpp.
+# L1 base/magic for the restore-mode plan trisc.cpp applies -- must match apply_plan_at() there.
 _INKERNEL_RESTORE_BASE = 0x1A000
 _INKERNEL_RESTORE_MAGIC = 0x52535431  # 'RST1'
-# Per-thread addr-mod restore plan: ThreadConfig is banked per-thread (see snapshot_addr_mod), so a
-# real captured addr-mod snapshot needs a value PER THREAD, unlike the shared-value quad format
-# above. Distinct L1 base/magic (must match trisc.cpp's apply_addrmod_restore()); applied AFTER the
-# restore plan above, so an armed addrmod-restore plan overwrites that plan's addr-mod entries
-# (which otherwise force addr-mod to reset-default 0 — still correct when this isn't armed).
+# L1 base/magic for the per-thread addr-mod plan -- must match trisc.cpp's apply_addrmod_restore().
+# Applied AFTER the restore plan above, so a real captured addr-mod value overwrites that plan's
+# reset-default-0 guess for the same addresses.
 _INKERNEL_ADDRMOD_RESTORE_BASE = 0x1C000
 _INKERNEL_ADDRMOD_RESTORE_MAGIC = 0x41525431  # 'ART1', must match trisc.cpp
 
@@ -150,11 +142,9 @@ def write_inkernel_restore(
 ) -> int:
     """Write a restore plan [(addr32, value[, port[, mask]]), ...] to L1 0x1A000.
 
-    Replayed by the trisc.cpp prologue before the victim's own init runs: re-establishes the
-    captured residue so a trial isn't contaminated by whatever a prior trial left behind.
-    port omitted -> inferred from _port_for (SETC16 for addr-mod/state, cfg_write otherwise).
-    mask omitted -> 0xFFFFFFFF (whole word); on the shared port the prologue RMWs so unmasked
-    bits (e.g. firmware-owned DISABLE_RISC_BP) are preserved.
+    Replayed by trisc.cpp before the victim's own init runs, so a trial starts from the captured
+    residue without a per-trial tt-smi -r. port omitted -> inferred from _port_for; mask omitted
+    -> 0xFFFFFFFF, RMW'd on the shared port so unmasked firmware-owned bits are preserved.
     """
     words = [_INKERNEL_RESTORE_MAGIC, len(entries)]
     for e in entries:
@@ -173,14 +163,11 @@ def write_inkernel_addrmod_restore(
 ) -> int:
     """Write a per-thread addr-mod restore plan [(addr32, v0, v1, v2), ...] to L1 0x1C000.
 
-    Each of the 3 compiled TRISC binaries applies only its own v_thread via SETC16 (see
-    trisc.cpp's apply_addrmod_restore()). Returns the number of entries written.
-
-    ch1x, if given, is (unpacker0_val, packer_val) -- address_counters' channel1-X, hardware
-    state entirely outside Config[]/ThreadConfig[] (see snapshot_adc_ch1x). Appended as two
-    trailing words after the quads, gated by an explicit has_ch1x header word: this L1 buffer is
-    reused across trials, so trisc.cpp must never infer the trailer's presence from leftover
-    bytes of a longer prior plan. Omitted (None) writes has_ch1x=0 and no trailing words.
+    Each compiled TRISC applies only its own v_thread (see apply_addrmod_restore() in trisc.cpp).
+    ch1x, if given, is (unpacker0_val, packer_val) -- address_counters' channel1-X residue (see
+    snapshot_adc_ch1x) -- appended as two trailing words gated by an explicit has_ch1x header:
+    this L1 buffer is reused across trials, so trisc.cpp must never infer the trailer from
+    leftover bytes of a longer prior plan.
     """
     words = [
         _INKERNEL_ADDRMOD_RESTORE_MAGIC,
@@ -205,10 +192,7 @@ def write_inkernel_addrmod_restore(
 # Config[]/ConfigDualWrite (ordinary cfg_write()/cfg_read() can't reach it, and RISCV stores
 # can't write it at all — SETC16 only). It sits immediately after Config[0]+Config[1]+
 # ConfigDualWrite in the same core-private address space _word_core_addr() already reads, so
-# risc_debug.read_memory() reaches it directly — no in-kernel capture needed. Verified on
-# hardware (2026-09-26): a real op leaves genuinely different addr-mod residue per thread
-# (e.g. thread 1 nonzero while 0/2 are zero), confirming this is real ThreadConfig state, not
-# the earlier addr32-collision misread of Config[] space.
+# risc_debug.read_memory() reaches it directly — no in-kernel capture needed.
 _THREAD_CONFIG_BASE_WORDS = {
     ChipArchitecture.BLACKHOLE: 3 * _CFG_STATE_SIZE[ChipArchitecture.BLACKHOLE] * 4,
     ChipArchitecture.WORMHOLE: 3 * _CFG_STATE_SIZE[ChipArchitecture.WORMHOLE] * 4,
@@ -271,27 +255,18 @@ def snapshot_adc_ch1x(location: str, *, device_id: int = 0, context=None) -> dic
 
 
 def maybe_restore_cfg_from_env(location: str, *, device_id: int = 0, context=None):
-    """Restore / snapshot CFG based on env. No-op (returns None) unless one is set.
+    """Restore / snapshot CFG based on env vars. No-op (returns None) unless one is set.
 
-    Modes (checked in order):
-      LLK_CFG_RESTORE=<path>          Restore plan, JSON {entries:[[addr32,value,
-                                   port,mask]..]}. Replayed in-kernel before the victim's own
-                                   init runs, so the trial starts from that captured residue
-                                   WITHOUT a per-trial tt-smi -r.
-      LLK_CFG_ADDRMOD_RESTORE=<path>  Per-thread addr-mod restore, JSON
-                                   {entries:[[addr32,v0,v1,v2]..], ch1x:[unpacker,packer]}.
-                                   ch1x is optional (address_counters channel1-X, see
-                                   snapshot_adc_ch1x). Applied alongside (after)
-                                   LLK_CFG_RESTORE, overwriting that plan's
-                                   addr-mod force-zero default with real captured residue.
-      LLK_CFG_SNAPSHOT=<path>  Read every kernel-owned word (both shadows) and dump a
-                                   JSON clean reference to <path>; do NOT restore. Run this
-                                   once on a device where the kernel passes — the snapshot is
-                                   that passing run's pre-kernel CFG, the pair-sweep baseline.
+    LLK_CFG_RESTORE=<path>          JSON {entries:[[addr32,value,port,mask]..]} ->
+                                    write_inkernel_restore.
+    LLK_CFG_ADDRMOD_RESTORE=<path>  JSON {entries:[[addr32,v0,v1,v2]..], ch1x:[unpacker,packer]}
+                                    -> write_inkernel_addrmod_restore. ch1x is optional.
+    LLK_CFG_SNAPSHOT=<path>         Dump every kernel-owned word to <path> as JSON; do not
+                                    restore. Run once on a device where the kernel passes --
+                                    that run's pre-kernel CFG is the pair-sweep baseline.
     """
     arch = get_chip_architecture()
 
-    # Restore-mode: replay the captured baseline before the victim's own init runs.
     restore_path = os.environ.get("LLK_CFG_RESTORE")
     if restore_path:
         with open(restore_path) as f:
@@ -304,8 +279,6 @@ def maybe_restore_cfg_from_env(location: str, *, device_id: int = 0, context=Non
         print(msg, file=sys.stderr, flush=True)
         logger.warning(msg)
 
-    # Per-thread addr-mod restore: written alongside — and applied AFTER — the restore plan above,
-    # so real captured per-thread residue overwrites that plan's addr-mod force-zero default.
     addrmod_restore_path = os.environ.get("LLK_CFG_ADDRMOD_RESTORE")
     if addrmod_restore_path:
         with open(addrmod_restore_path) as f:

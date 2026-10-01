@@ -1992,10 +1992,8 @@ class TestConfig:
                 boot_mode == BootMode.BRISC
                 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             ):
-                # WH's combined cache-update+start command releases the TRISCs and
-                # returns before the fall-through restore below ever runs, so this
-                # reload path needs its own injection (TRISCs still in reset here).
-                # See the comment on the fall-through call for the rationale.
+                # WH's early-return path releases the TRISCs before the fall-through
+                # call below runs, so this needs its own copy of the injection.
                 maybe_restore_cfg_from_env(TestConfig.TENSIX_LOCATION)
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,

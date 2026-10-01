@@ -16,22 +16,18 @@ Two modes, chosen per X:
 The restore-mode phase is parallelized across pytest-xdist, one round PER POLLUTER (not per
 pair, and not per victim): compile every victim once (--compile-producer), then for each
 polluter X run one `--compile-consumer -n jobs` round with every other victim K as a separate
-item, each pinned to X's restore plan via xdist_plan_plugin.py. That turns what would be N**2
-serial trials into N rounds of up to N-1 parallel trials -- an empirical catalog is 2-7x the
-size of the old hand-curated ~50-op set (which made a fully serial N**2 sweep tolerable), so
-serial pair-by-pair execution no longer fits a weekly CI budget. A small number of launches per worker needs no reset (validated in Phase A at small scale, and
-confirmed again as an isolated 12-launch chain, twice), which is what makes cross-core parallelism
-safe within a small batch. That validation does NOT extend to an arbitrarily large batch or round:
-a physical core accumulates real, persistent hardware state across every no-reset launch regardless
-of which op runs, and past some point -- empirically observed between roughly 12 (clean) and 130-190
-(reliably broken), and NOT simply a fixed launches-since-reset count (composition-dependent: one
-190-launch chain broke at launch 129, an otherwise-similar chain stayed clean through launch 85) --
-every subsequent launch on that core starts failing. Confirmed to survive a fresh pytest subprocess
-restart (so it isn't a host-side leak), but cleared by a real reset; `tt-smi -r` resets the whole
-chip, not one core, so it can only be inserted at a round/batch boundary where every worker is
-synced, never mid-batch. Each polluter's victims are therefore split into small sub-batches (sized
-to keep launches-per-worker safely under the lowest confirmed-clean figure), with a `reset()` before
-every sub-batch rather than once per (potentially much larger) round.
+item, each pinned to X's restore plan via xdist_plan_plugin.py. That turns N**2 serial trials
+into N rounds of up to N-1 parallel trials.
+
+A physical core accumulates persistent hardware state across every no-reset launch, regardless
+of which op runs, and this does not reduce to a fixed launch count (composition-dependent, not
+purely count-dependent) -- so a single reset per polluter round is not enough on its own. The
+only launch count confirmed clean in isolation is 12. It survives a fresh pytest subprocess
+restart (so it isn't a host-side leak) and is only cleared by a real reset; `tt-smi -r` resets
+the whole chip, not one core, so it can only be inserted at a round/batch boundary where every
+worker is synced, never mid-batch. Each polluter's victims are therefore split into small
+sub-batches sized to stay under that floor, with a reset before every sub-batch instead of once
+per (potentially much larger) round.
 
 A pair is an escape when K's baseline is PASS but K after X is FAIL or HANG. A K-side flake
 (K itself sometimes flaky at baseline) is out of scope here: only PASS-baseline ops are used
@@ -39,8 +35,7 @@ as victims at all, so any post-X divergence is attributable to X, not to K's own
 
 Restore mode replants a *captured snapshot* of X's residue rather than running X for real, so a
 restore-mode escape can be a snapshot/replant-fidelity artifact of the harness rather than a real
-hardware effect (confirmed on real escapes: ~half of a full-sweep's candidates were this kind of
-noise). Every restore-mode escape is therefore re-checked with a plain-pytest ground-truth
+hardware effect. Every restore-mode escape is therefore re-checked with a plain-pytest ground-truth
 reproduction before it is reported: reset, then one serial (`-n`-less, single-core) pytest
 invocation running X's real test then K's real test back to back, no restore machinery, no
 plan-map. Only escapes that reproduce this way are reported; unverified candidates are still
@@ -319,20 +314,8 @@ def main():
                     file=sys.stderr,
                 )
 
-        # A physical core accumulates real, persistent hardware state across every no-reset kernel
-        # launch it runs, regardless of which op runs or which CFG/ADC/addr-mod residue is in play:
-        # confirmed on hardware two ways -- (1) it survives a fresh pytest subprocess restart, so
-        # it isn't a host-side leak; (2) it does NOT reduce to a fixed launches-since-reset count
-        # (one clean 190-launch chain failed at launch 129, another otherwise-identical chain
-        # stayed clean through launch 85 -- composition-dependent, not purely count-dependent) --
-        # so a single reset per polluter round is not sufficient on its own: one round's own launch
-        # count per worker (up to (len(victims)-1)/jobs) can still land in unsafe territory. The
-        # only figure confirmed clean twice, in isolation, is 12 sequential launches on one core; a
-        # single `tt-smi -r` resets the WHOLE chip, not one core, so this can only be inserted at a
-        # round boundary (all workers synced), never mid-round while other workers are in flight.
-        # Fix: split each polluter's victims into small sub-batches sized to keep launches-per-
-        # worker safely under that floor, with a reset before every sub-batch instead of once per
-        # (potentially much larger) round.
+        # See module docstring for the no-reset-accumulation finding. 10, not the confirmed-clean
+        # 12, to leave margin since a round's own launch count per worker isn't otherwise bounded.
         SAFE_LAUNCHES_PER_WORKER = 10
 
         def _chunks(seq, size):
@@ -407,7 +390,7 @@ def main():
                 continue
             reset()
             # Compile both variants together in one producer invocation so neither evicts the
-            # other's ELF (cfg_oppair.py's approach), then run each via simulate.
+            # other's ELF, then run each via simulate.
             proc = subprocess.run(
                 [
                     "bash",

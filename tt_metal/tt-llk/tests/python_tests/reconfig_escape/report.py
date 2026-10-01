@@ -52,7 +52,7 @@ def _table(headers, rows) -> list:
 
 def render_markdown(records: list) -> str:
     escapes = [r for r in records if r["verdict"] != r["victim_baseline"]]
-    out = ["# Config-pollution pair-sweep findings", ""]
+    out = ["# Reconfig-escape pair-sweep findings", ""]
     out.append(
         f"{len(records)} trial(s), {len(escapes)} escape(s) "
         f"(a real op X leaves CFG residue that breaks a real op K's own correctness check)."

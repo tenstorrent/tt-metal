@@ -2,57 +2,32 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Empirical CFG-pollution catalog builder: sample broadly across the real test suite, capture each
-sampled op's actual write-footprint (not a human's guess about which axes matter), dedupe on the
-observed signature, then gate-validate only the survivors. Runs standalone in CI (weekly cadence):
-every invocation starts fresh and produces a self-contained manifest.json, the same format
-pair_sweep.py/sequential_fuzz.py already consume.
-
-Rationale: this replaces a hand-curated op set (cfg_pollution_opset.json) that was built by reading
-cfg_state_map.md's static analysis of which ops write which CFG words -- a human prediction of
-which parametrize axes create distinct behavior. That prediction and measured reality turned out to
-barely overlap: sampling 949 candidates (10 per file across all 127 files) found 45 distinct
-field-touch patterns against the curated set's 22, with only 2 in common -- the curated set targeted
-specific rare format-class transitions (e.g. Int8/BFP8->Float16, the one real bug that set ever
-caught) that are a small minority of any one file's parametrize space, so even a broad random sample
-mostly never draws them. The curated set is retired in favor of this sweep, not merged with it.
+"""Empirical catalog builder for the reconfig-escape pair sweep: sample broadly across the real test
+suite, capture each sampled op's actual write-footprint, dedupe on the observed signature, then
+gate-validate only the survivors. Runs standalone in CI (weekly cadence): every invocation starts
+fresh and produces a self-contained manifest.json, the format pair_sweep.py consumes.
 
 Sampling is per (file, function) -- nodeid up to its parametrize '[' -- not per file: several files
 bundle multiple test functions with independent parametrize spaces, and a flat per-file cap skews
 toward whichever function pytest happens to list first.
 
 Three phases:
-  1. DISCOVERY: for a bounded random sample of nodeids per test function (full exhaustive collection
-     is off the table -- the real suite is 233k items, ~89% of which are pure tile-geometry sweeps
-     in 5 files that don't touch CFG format/mode selection at all -- compile once, then ONE
-     `--compile-consumer -n 8` xdist round captures baseline PASS/FAIL and each candidate's true
-     post-exec residue via xdist_capture_plugin.py (no gate yet: most of these get discarded as
-     duplicates, so gating them would be wasted hardware time).
+  1. DISCOVERY: for a bounded random sample of nodeids per test function (the real suite is far too
+     large to run exhaustively), compile once, then one `--compile-consumer -n 8` xdist round
+     captures baseline PASS/FAIL and each candidate's true post-exec residue via
+     xdist_capture_plugin.py. No gate yet -- most candidates get discarded as duplicates next.
   2. DEDUPE: group baseline-PASS candidates with a real write-footprint by their observed
-     (addr32, value) signature (diffed against pristine), EXCLUDING a data-driven set of
-     high-cardinality fields from the key first. A handful of CFG words are per-tile L1 pointers or
-     tile-descriptor words (cfg_state_map.md: addr32 76/77/124/125 = "THCON_SEC0/1_REG3_Base_
-     address[_cntx1] -- per-tile L1 src addr", unconditionally rewritten by every unpack execute
-     path) whose value tracks wherever a test happened to allocate its tensors, not a mode/format
-     axis; a couple of others (addr32 69/70) aren't even documented but show the identical
-     signature. Measured cardinality across the whole sample separates them cleanly from genuine
-     discrete mode-selects (--dedup-cardinality-cutoff) without needing a hand-curated name list.
-     Skipping this step makes the catalog size scale ~linearly with sample count and never converge
-     (measured: ~35 new signatures per 100 additional samples even at 5350 samples); with it, growth
-     visibly decelerates (~1% per 1000 samples by ~9500 samples). The actual restore payload for
-     each representative still replays every field byte-for-byte regardless -- only the DEDUP KEY
-     drops these fields, since replaying a stale-but-valid address is harmless.
+     (addr32, value) signature (diffed against pristine), excluding a data-driven set of
+     high-cardinality fields from the key first (see the dedup-cardinality-cutoff code below for
+     which fields and why). The restore payload for each representative still replays every field
+     byte-for-byte regardless -- only the dedup key drops these fields.
   3. GATE: restore each surviving representative's own captured residue and rerun it (one xdist
-     round via xdist_plan_plugin.py, reusing the artifacts compiled minutes earlier in phase 1 --
-     they don't need recompiling within a single continuous invocation like this one: a run gated
-     ~45 minutes after its own compile step, no --extend-from involved, produced zero
-     "ELF file does not exist" failures across 1851 representatives). A handful of genuine
-     "TENSIX TIMED OUT" gate failures are expected at full scale (the heaviest kernels under -n 8
-     contention with the default 90s budget) and are not bugs -- they just fall out of the catalog
-     as ENVERR/unusable.
+     round via xdist_plan_plugin.py, reusing the artifacts compiled in phase 1 -- no recompile
+     needed within a single continuous invocation). A handful of genuine "TENSIX TIMED OUT" gate
+     failures are expected at full scale (heaviest kernels under -n 8 contention) and fall out of
+     the catalog as ENVERR/unusable, not bugs.
 
-Usage (every other flag has a validated default -- see --sample-per-test's help for how it was
-chosen):
+Usage:
   python3 discover_catalog.py --worktree DIR --arch blackhole \
       --out-dir /path/to/discovered --manifest /path/to/discovered/manifest.json
 """
@@ -70,10 +45,6 @@ import xml.etree.ElementTree as ET
 
 PASS, FAIL, ENVERR = "PASS", "FAIL", "ENVERR"
 
-# Restore-plan construction, ported from .claude/scripts/cfg_catalog.py's build_restore_entries /
-# build_addrmod_restore_entries (only the two functions and constants this pipeline actually calls
-# -- the rest of that file is a standalone single-kernel field-bisection CLI, unrelated to
-# discovery/pair-sweep, so importing the whole module bought nothing but extra diff surface).
 _CFG_STATE_SIZE = {"blackhole": 56}
 _ADDR_MOD_ADDR32 = {
     "blackhole": sorted(
@@ -84,8 +55,9 @@ _ADDR_MOD_ADDR32 = {
     ),
 }
 _BOOT_OWNED = {"blackhole": set()}
-# addr32 0 bit 0 = CFG_STATE_ID (thread-private, preserved); addr32 2 bits 22-31 = firmware
-# DISABLE_RISC_BP (over-reach). Both are skipped by restore so we never write firmware-owned bits.
+# addr32 2 bits 22-31 = firmware DISABLE_RISC_BP; masked out of restore so we never write
+# firmware-owned bits. (addr32 0 here holds only legacy ALU format fields -- CFG_STATE_ID is a
+# same-numbered but separate ThreadConfig field, not reachable through this Config-space path.)
 _RESTORE_MASK_OVERRIDE = {2: 0x003FFFFF}
 # Reachable write surface (written bits per addr32), used only to exclude non-write-surface
 # addresses from the dedup signature below.
@@ -208,12 +180,10 @@ def build_addrmod_restore_entries(addrmod_path):
     return [[addr32, *by_addr[addr32]] for addr32 in sorted(by_addr)]
 
 
-# Embedded verbatim (not imported): single-purpose to this script's discovery round and small
-# enough that a standalone sibling file would buy nothing but extra diff surface. Written out to a
-# generated plugin dir at runtime so `-p xdist_capture_plugin` resolves by bare name. The GATE
-# round's `-p xdist_plan_plugin` (below) resolves the real sibling file instead -- pair_sweep.py
-# already needs that one as a standalone file, so discovery just reuses it via PYTHONPATH
-# (pytest_env puts the real reconfig_escape/ dir on the path) rather than embedding a second copy.
+# Embedded verbatim, not imported: written to a generated plugin dir at runtime so `-p
+# xdist_capture_plugin` resolves it by bare name. The GATE round's `-p xdist_plan_plugin` (below)
+# instead resolves pair_sweep.py's real sibling file via PYTHONPATH (pytest_env puts the real
+# reconfig_escape/ dir on the path).
 _XDIST_CAPTURE_PLUGIN_SRC = '''\
 """pytest plugin: one-shot restore-to-pristine + direct post-exec residue capture, per test item.
 
@@ -752,12 +722,12 @@ def main():
     )
 
     # Exact-value dedup never converges: a handful of CFG words are per-tile L1 pointers or
-    # tile-descriptor words (cfg_state_map.md: addr32 76/77/124/125 = "THCON_SEC0/1_REG3_Base_
-    # address[_cntx1] -- per-tile L1 src addr", unconditionally rewritten by every unpack execute
-    # path) whose value tracks wherever a test happened to allocate its tensors, not a mode/format
-    # axis. Measured cardinality across the whole sample -- not a hand-curated name list, since a
-    # couple of these (addr32 69/70) aren't in cfg_state_map.md at all -- separates them cleanly: a
-    # real discrete mode-select stays under ~15 distinct values across thousands of candidates; an
+    # tile-descriptor words (addr32 76/77/124/125 = THCON_SEC0/1_REG3_Base_address[_cntx1], the
+    # per-tile L1 src addr, unconditionally rewritten by every unpack execute path) whose value
+    # tracks wherever a test happened to allocate its tensors, not a mode/format axis. Measured
+    # cardinality across the whole sample -- not a hand-curated name list, since a couple of these
+    # (addr32 69/70) aren't named fields at all -- separates them cleanly: a real discrete
+    # mode-select stays under ~15 distinct values across thousands of candidates; an
     # address/geometry-encoding field runs into the hundreds. Excluding those from the DEDUP KEY
     # only (the actual restore payload still replays every field byte-for-byte -- replaying a
     # stale-but-valid address is harmless) turns a non-converging accumulation curve into one that
