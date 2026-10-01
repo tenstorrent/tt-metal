@@ -152,17 +152,29 @@ def _h2d_rows(tokens, actual_start: int = 0):
     return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, stride))
 
 
-def _mtp_rows(pool, actual_start: int, actual_isl=None):
+def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
+    """Each chip's MTP lookahead slots as the inference server sends them: the ``MTP_LEVELS`` ids after its
+    last position, and on the seam chip of a chunk starting off a per-chip boundary also the next chip's first
+    ``MTP_LEVELS`` -- in place of its own while its second run lies past ``actual_end``, else after them.
+    deepseek_v3_d_p's ``mtp_lookahead_positions``, inlined."""
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
-    align_pad = [MTP_PAD_TOKEN_ID] * (n_mtp - MTP_LEVELS)
-    # Each chip's lookahead follows its own last row: actual_start + (c + 1) * stride for a chunk-aligned start,
-    # the rotated last position otherwise (see _h2d_rows).
-    last = [row[-1] for row in rotated_chunk_positions(actual_start, sp, stride)]
-    rows = [_pool_slice(pool, last[c] + 1, MTP_LEVELS, actual_isl) + align_pad for c in range(sp)]
+    positions = rotated_chunk_positions(actual_start, sp, stride)
+    starts = [[row[-1] + 1] for row in positions]
+    seam_row = stride - actual_start % stride
+    if sp > 1 and seam_row < stride:
+        seam_chip = (actual_start // stride) % sp
+        seam = positions[seam_chip]
+        actual_end = actual_start + CHUNK_SIZE if actual_end is None else actual_end
+        next_chip = seam[seam_row - 1] + 1
+        starts[seam_chip] = starts[seam_chip] + [next_chip] if seam[seam_row] < actual_end else [next_chip]
+    rows = []
+    for chip_starts in starts:
+        ids = [i for start in chip_starts for i in _pool_slice(pool, start, MTP_LEVELS, actual_isl)]
+        rows.append(ids + [MTP_PAD_TOKEN_ID] * (n_mtp - len(ids)))
     return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 
@@ -1588,7 +1600,11 @@ def main() -> None:
         logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
         _push(
-            service, payload_bytes, _h2d_rows(tokens, actual_start), _mtp_rows(pool, actual_start, actual_isl), metadata
+            service,
+            payload_bytes,
+            _h2d_rows(tokens, actual_start),
+            _mtp_rows(pool, actual_start, actual_isl, actual_end=actual_end),
+            metadata,
         )
         return (time.perf_counter() - push_start) * 1000.0
 

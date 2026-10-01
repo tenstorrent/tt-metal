@@ -14,11 +14,15 @@ KV-cache PCC validation + golden loaders live in
 diagnostics used only by tests live in ``tests/test_runner_utils.py``.
 """
 
+from typing import Optional
+
 import torch
 
 import ttnn
+from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
+    mtp_lookahead_positions,
     reorder_tensor_chunks,
     rotated_chip_positions,
 )
@@ -82,13 +86,17 @@ def prepare_prefill_mtp_tokens(
     sp_axis: int,
     *,
     num_mtp_tokens: int,
+    num_levels: int,
     chunk_start: int = 0,
+    chunk_end: Optional[int] = None,
 ) -> ttnn.Tensor:
-    """Upload the MTP lookahead ids: the ``num_mtp_tokens`` ids that follow each chip's trunk shard.
+    """Upload the MTP lookahead ids, laid out as the inference server sends them.
 
-    Chip ``c`` takes the ids past the LAST POSITION IT CARRIES, so concatenated onto its trunk row
-    every MTP level reads the same local slice -- except, on a chunk starting off a per-chip
-    boundary, the seam chip's first run, which ``MTPSeamSplice`` mends on device. Block-cyclic only.
+    ``token_ids`` is the chunk followed by the ``num_mtp_tokens`` ids after it; its real ids end at
+    ``chunk_end`` (default: the whole chunk). Chip ``c``'s leading slots take the ids its MTP levels
+    read past its trunk shard (``mtp_lookahead_positions``): on a chunk starting off a per-chip
+    boundary the seam chip's also take the next chip's first ids, which ``MTPSeamSplice`` splices in
+    on device. Every later slot is ``MTP_PAD_TOKEN_ID``. Block-cyclic only.
     """
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     isl_per_chip = (len(token_ids) - num_mtp_tokens) // sp_factor
@@ -96,11 +104,12 @@ def prepare_prefill_mtp_tokens(
         f"got {len(token_ids)} ids, expected sp_factor*L + num_mtp_tokens = "
         f"{sp_factor}*{isl_per_chip} + {num_mtp_tokens}"
     )
-    trunk_ends = [row[-1] for row in rotated_chip_positions(chunk_start, sp_factor, isl_per_chip)]
-    index = torch.tensor(
-        [end + 1 + k - chunk_start for end in trunk_ends for k in range(num_mtp_tokens)], dtype=torch.long
-    )
-    rows = torch.tensor(token_ids, dtype=torch.int64)[index].reshape(sp_factor, 1, num_mtp_tokens)
+    chunk_end = chunk_start + sp_factor * isl_per_chip if chunk_end is None else chunk_end
+    ids = torch.tensor(token_ids, dtype=torch.int64)
+    rows = torch.full((sp_factor, 1, num_mtp_tokens), MTP_PAD_TOKEN_ID, dtype=torch.int64)
+    for c, slots in enumerate(mtp_lookahead_positions(chunk_start, sp_factor, isl_per_chip, chunk_end, num_levels)):
+        assert len(slots) <= num_mtp_tokens, f"{len(slots)} lookahead slots do not fit in {num_mtp_tokens}"
+        rows[c, 0, : len(slots)] = ids[torch.tensor(slots) - chunk_start]
     return _upload_ids(rows, mesh_device, mesh_shape, sp_axis)
 
 
@@ -121,28 +130,32 @@ def mtp_generation_union_rows(
     chunk_size: int,
     *,
     num_mtp_tokens: int,
+    num_levels: int,
     chunk_start: int,
     actual_end: int,
     level: int,
 ) -> list:
     """Where global position ``actual_end + level`` sits in each chip's union, or None.
 
-    The geometry of last-chunk generation, stated once for both mask builders below. Adjacent chips'
-    unions overlap, so a position can land on two chips and both get patched. Block-cyclic only, and
-    keyed off ``rotated_chip_positions``: a chunk resuming off a slab boundary is rotated, so chip
-    c's rows are NOT ``[chunk_start + c*isl_per_chip, ...)``.
+    The geometry of last-chunk generation, stated once for both mask builders below. A position can sit
+    in one chip's trunk and another's lookahead slots, and every copy gets patched. Block-cyclic only, and
+    keyed off ``rotated_chip_positions`` and ``mtp_lookahead_positions``: a chunk resuming off a slab
+    boundary is rotated, so chip c's rows are NOT ``[chunk_start + c*isl_per_chip, ...)``.
     """
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     assert chunk_size % sp_factor == 0, f"chunk {chunk_size} not divisible by sp_factor {sp_factor}"
     isl_per_chip = chunk_size // sp_factor
     global_pos = actual_end + level
+    lookahead = mtp_lookahead_positions(chunk_start, sp_factor, isl_per_chip, actual_end, num_levels)
     rows = []
-    for trunk in rotated_chip_positions(chunk_start, sp_factor, isl_per_chip):
+    for trunk, slots in zip(rotated_chip_positions(chunk_start, sp_factor, isl_per_chip), lookahead):
+        assert len(slots) <= num_mtp_tokens, f"{len(slots)} lookahead slots do not fit in {num_mtp_tokens}"
         if global_pos in trunk:
             rows.append(trunk.index(global_pos))
-            continue
-        past_shard = global_pos - trunk[-1] - 1
-        rows.append(isl_per_chip + past_shard if 0 <= past_shard < num_mtp_tokens else None)
+        elif global_pos in slots:
+            rows.append(isl_per_chip + slots.index(global_pos))
+        else:
+            rows.append(None)
     assert any(r is not None for r in rows), (
         f"no chip holds global position {actual_end + level}: chunk_start={chunk_start} "
         f"chunk_size={chunk_size} num_mtp_tokens={num_mtp_tokens} level={level}. MTP levels must be <= num_mtp_tokens."
@@ -159,6 +172,7 @@ def build_mtp_generation_keep_mask(
     *,
     emb_dim_per_chip: int,
     num_mtp_tokens: int,
+    num_levels: int,
     chunk_start: int,
     actual_end: int,
     levels,
@@ -180,6 +194,7 @@ def build_mtp_generation_keep_mask(
                 sp_factor,
                 chunk_size,
                 num_mtp_tokens=num_mtp_tokens,
+                num_levels=num_levels,
                 chunk_start=chunk_start,
                 actual_end=actual_end,
                 level=level,
@@ -199,6 +214,7 @@ def build_mtp_generation_select(
     sp_axis: int,
     *,
     num_mtp_tokens: int,
+    num_levels: int,
     chunk_start: int,
     actual_end: int,
     level: int,
@@ -218,6 +234,7 @@ def build_mtp_generation_select(
             sp_factor,
             chunk_size,
             num_mtp_tokens=num_mtp_tokens,
+            num_levels=num_levels,
             chunk_start=chunk_start,
             actual_end=actual_end,
             level=level,

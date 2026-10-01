@@ -718,6 +718,7 @@ class TtPrefillTransformer(LightweightModule):
             mesh_shape=self.mesh_shape,
             sp_axis=self.sp_axis,
             num_mtp_tokens=union.num_mtp_tokens,
+            num_levels=self.num_mtp_levels,
             chunk_start=actual_start,
             actual_end=actual_end,
         )
@@ -755,7 +756,6 @@ class TtPrefillTransformer(LightweightModule):
             self.seq_len // self.sp_factor,
             self.sp_factor,
             self._mtp_sp_rank,
-            self._mtp_all_gather_sp,
             chunk_end=fwd_kwargs["actual_end"],
             num_levels=self.num_mtp_levels,
         )

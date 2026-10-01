@@ -13,34 +13,35 @@ from __future__ import annotations
 from typing import Optional
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 
 __all__ = ["MTPSeamSplice", "MTPUnionEmbedding", "MTPDeviceEmbedSource", "MTPDeviceGeneration"]
 
 
 class MTPSeamSplice:
-    """Splices the next chip's first rows into the seam chip's MTP windows.
+    """Splices the next chip's first positions into the seam chip's MTP windows, out of its own lookahead.
 
     A chunk that starts off a ``window_len`` boundary is rotated so that ONE chip, the seam chip, holds
     two position runs: rows ``[0, seam_row)`` end where the next chip's rows begin, and rows
     ``[seam_row, window_len)`` continue into its own lookahead. A window shifted by ``d`` therefore
-    needs, in rows ``[seam_row - d, seam_row)``, the next chip's first rows. :meth:`rows_from_next_chip`
-    brings them over; every other chip keeps its own rows there, so one SPMD program serves the whole mesh.
+    needs, in rows ``[seam_row - d, seam_row)``, the next chip's first ``d`` positions. The inference
+    server sends those to the seam chip too, in its lookahead slots from ``slot_offset`` on
+    (``mtp_lookahead_positions``); every other chip keeps its own rows there, so one SPMD program serves
+    the whole mesh and no chip reads another's rows.
     """
 
     def __init__(
         self,
         *,
         seam_row: int,
-        next_chip: int,
+        slot_offset: int,
         seam_chip_mask: ttnn.Tensor,
         other_chips_mask: ttnn.Tensor,
-        all_gather_sp,
     ):
         self.seam_row = int(seam_row)
-        self.next_chip = int(next_chip)
+        self.slot_offset = int(slot_offset)
         self.seam_chip_mask = seam_chip_mask
         self.other_chips_mask = other_chips_mask
-        self.all_gather_sp = all_gather_sp
         assert self.seam_row % ttnn.TILE_SIZE == 0, f"seam row {self.seam_row} is not tile-aligned"
 
     @classmethod
@@ -50,7 +51,6 @@ class MTPSeamSplice:
         window_len: int,
         sp_factor: int,
         sp_rank: ttnn.Tensor,
-        all_gather_sp,
         *,
         chunk_end: int,
         num_levels: int,
@@ -59,8 +59,7 @@ class MTPSeamSplice:
 
         None when every chip holds one run, or when the chunk ends ``num_levels`` or more positions before
         ``chunk_start + seam_row``, the next chip's first position: no real row's window reaches it then.
-        ``sp_rank`` is ``[1, 1, 1, 1]`` holding each chip's SP rank; ``all_gather_sp`` all-gathers a
-        ``[1, 1, 32, H/tp]`` tile over SP into ``[1, 1, 32*sp, H/tp]``, in SP order.
+        ``sp_rank`` is ``[1, 1, 1, 1]`` holding each chip's SP rank.
         """
         offset = chunk_start % window_len
         if sp_factor == 1 or offset == 0:
@@ -73,32 +72,34 @@ class MTPSeamSplice:
         if chunk_end + num_levels <= chunk_start + seam_row:
             return None
         seam_chip = (chunk_start // window_len) % sp_factor
+        slots = mtp_lookahead_positions(chunk_start, sp_factor, window_len, chunk_end, num_levels)[seam_chip]
         return cls(
             seam_row=seam_row,
-            next_chip=(seam_chip + 1) % sp_factor,
+            slot_offset=slots.index(chunk_start + seam_row),
             seam_chip_mask=ttnn.eq(sp_rank, float(seam_chip)),
             other_chips_mask=ttnn.ne(sp_rank, float(seam_chip)),
-            all_gather_sp=all_gather_sp,
         )
 
-    def rows_from_next_chip(self, union: ttnn.Tensor) -> ttnn.Tensor:
-        """``[1, 1, 32, H/tp]`` ROW_MAJOR: the next chip's first rows on the seam chip and this chip's
-        own rows ``[seam_row, seam_row + 32)`` everywhere else. ``union`` is a tile tensor, not consumed.
+    def seam_rows(self, union_rows: ttnn.Tensor, window_len: int) -> ttnn.Tensor:
+        """``[1, 1, 32, H/tp]`` ROW_MAJOR whose rows from ``slot_offset`` on fill a window's seam rows: the
+        lookahead slots on the seam chip, this chip's own rows from ``seam_row`` everywhere else. Both are
+        cut to whole tiles first, so the masks multiply tiles. ``union_rows`` is ROW_MAJOR, not consumed.
         """
-        width = int(union.shape[-1])
+        s = list(union_rows.shape)
         tile = ttnn.TILE_SIZE
-        own_head = ttnn.slice(union, [0, 0, 0, 0], [1, 1, tile, width])
-        all_heads = self.all_gather_sp(own_head)
-        ttnn.deallocate(own_head)
-        next_head = ttnn.slice(all_heads, [0, 0, tile * self.next_chip, 0], [1, 1, tile * (self.next_chip + 1), width])
-        ttnn.deallocate(all_heads)
-        own_rows = ttnn.slice(union, [0, 0, self.seam_row, 0], [1, 1, self.seam_row + tile, width])
-        from_next = ttnn.multiply(next_head, self.seam_chip_mask)
-        from_own = ttnn.multiply(own_rows, self.other_chips_mask)
-        ttnn.deallocate(next_head)
-        ttnn.deallocate(own_rows)
-        rows = ttnn.add(from_next, from_own)
-        ttnn.deallocate(from_next)
+        own_start = self.seam_row - self.slot_offset
+        slots = ttnn.slice(union_rows, [0, 0, window_len, 0], [s[0], s[1], window_len + tile, s[3]])
+        own = ttnn.slice(union_rows, [0, 0, own_start, 0], [s[0], s[1], own_start + tile, s[3]])
+        slots_tile = ttnn.to_layout(slots, ttnn.TILE_LAYOUT)
+        own_tile = ttnn.to_layout(own, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(slots)
+        ttnn.deallocate(own)
+        from_slots = ttnn.multiply(slots_tile, self.seam_chip_mask)
+        from_own = ttnn.multiply(own_tile, self.other_chips_mask)
+        ttnn.deallocate(slots_tile)
+        ttnn.deallocate(own_tile)
+        rows = ttnn.add(from_slots, from_own)
+        ttnn.deallocate(from_slots)
         ttnn.deallocate(from_own)
         rows_rm = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(rows)
@@ -126,7 +127,7 @@ class MTPUnionEmbedding:
         self._rows: Optional[ttnn.Tensor] = None
         self._patched: Optional[ttnn.Tensor] = None
         self._seam_splice: Optional[MTPSeamSplice] = None
-        self._next_chip_rows: Optional[ttnn.Tensor] = None
+        self._seam_rows: Optional[ttnn.Tensor] = None
         rows = sum(int(p.shape[-2]) for p in self._parts)
         assert rows >= self.window_len + self.num_levels, (
             f"union embedding is {rows} rows, needs at least window_len + K = {self.window_len} + "
@@ -175,18 +176,18 @@ class MTPUnionEmbedding:
 
     def window(self, shift: int) -> ttnn.Tensor:
         """MTP window ``shift`` (1..K): rows ``[shift, shift + window_len)`` as
-        ``[1, 1, window_len, H/tp]`` bf16 TILE, with the next chip's rows spliced in at the seam when a
-        splice is set. Caller frees it."""
+        ``[1, 1, window_len, H/tp]`` bf16 TILE, with the next chip's first positions spliced in at the seam
+        when a splice is set. Caller frees it."""
         assert 1 <= shift <= self.num_levels, f"shift {shift} out of range [1, {self.num_levels}]"
         src = self._row_major()
         s = list(src.shape)
         if self._seam_splice is None:
             rows = ttnn.slice(src, [0, 0, shift, 0], [s[0], s[1], shift + self.window_len, s[3]])
         else:
-            seam_row = self._seam_splice.seam_row
+            seam_row, slot = self._seam_splice.seam_row, self._seam_splice.slot_offset
             pieces = [
                 ttnn.slice(src, [0, 0, shift, 0], [s[0], s[1], seam_row, s[3]]),
-                ttnn.slice(self._rows_from_next_chip(), [0, 0, 0, 0], [s[0], s[1], shift, s[3]]),
+                ttnn.slice(self._current_seam_rows(), [0, 0, slot, 0], [s[0], s[1], slot + shift, s[3]]),
                 ttnn.slice(src, [0, 0, seam_row + shift, 0], [s[0], s[1], self.window_len + shift, s[3]]),
             ]
             rows = ttnn.concat(pieces, dim=-2)
@@ -199,12 +200,14 @@ class MTPUnionEmbedding:
     def set_seam_splice(self, seam_splice: "Optional[MTPSeamSplice]") -> None:
         """Make :meth:`window` apply ``seam_splice`` (None: plain shifts). The union does not own it."""
         assert seam_splice is None or (
-            self.num_levels < seam_splice.seam_row < self.window_len and self.num_levels <= ttnn.TILE_SIZE
+            self.num_levels < seam_splice.seam_row < self.window_len
+            and seam_splice.slot_offset + self.num_levels <= ttnn.TILE_SIZE <= self.num_mtp_tokens
         ), (
-            f"a seam at row {seam_splice.seam_row} of {self.window_len} cannot be spliced for K={self.num_levels}: "
-            f"the splice needs K < seam_row < window_len and K <= {ttnn.TILE_SIZE} (one tile of the next chip's rows)"
+            f"a seam at row {seam_splice.seam_row} of {self.window_len} with the next chip's positions from slot "
+            f"{seam_splice.slot_offset} cannot be spliced for K={self.num_levels}: the splice needs K < seam_row < "
+            f"window_len and slot_offset + K <= {ttnn.TILE_SIZE} <= the union's lookahead rows (one tile of slots)"
         )
-        self._drop_next_chip_rows()
+        self._drop_seam_rows()
         self._seam_splice = seam_splice
 
     def clear_seam_splice(self) -> None:
@@ -233,7 +236,7 @@ class MTPUnionEmbedding:
             ttnn.deallocate(t)
         self._parts = []
         self._seam_splice = None
-        for name in ("_patched", "_rows", "_next_chip_rows"):
+        for name in ("_patched", "_rows", "_seam_rows"):
             t = getattr(self, name)
             if t is not None:
                 ttnn.deallocate(t)
@@ -258,7 +261,7 @@ class MTPUnionEmbedding:
         if self._rows is not None:
             ttnn.deallocate(self._rows)
             self._rows = None
-        self._drop_next_chip_rows()
+        self._drop_seam_rows()
 
     def _row_major(self) -> ttnn.Tensor:
         """ROW_MAJOR copy of the joined union, materialized once and reused until invalidated.
@@ -272,19 +275,17 @@ class MTPUnionEmbedding:
                 ttnn.deallocate(joined)
         return self._rows
 
-    def _rows_from_next_chip(self) -> ttnn.Tensor:
-        """The splice's :meth:`MTPSeamSplice.rows_from_next_chip` of the CURRENT union, rebuilt after every
-        patch -- generation may write the next chip's first rows."""
-        if self._next_chip_rows is None:
-            assert self._parts, "union embedding already deallocated"
-            src = self._patched if self._patched is not None else self._parts[0]
-            self._next_chip_rows = self._seam_splice.rows_from_next_chip(src)
-        return self._next_chip_rows
+    def _current_seam_rows(self) -> ttnn.Tensor:
+        """The splice's :meth:`MTPSeamSplice.seam_rows` of the CURRENT union, rebuilt after every patch --
+        generation may write the seam chip's lookahead slots."""
+        if self._seam_rows is None:
+            self._seam_rows = self._seam_splice.seam_rows(self._row_major(), self.window_len)
+        return self._seam_rows
 
-    def _drop_next_chip_rows(self) -> None:
-        if self._next_chip_rows is not None:
-            ttnn.deallocate(self._next_chip_rows)
-            self._next_chip_rows = None
+    def _drop_seam_rows(self) -> None:
+        if self._seam_rows is not None:
+            ttnn.deallocate(self._seam_rows)
+            self._seam_rows = None
 
 
 class MTPDeviceGeneration:

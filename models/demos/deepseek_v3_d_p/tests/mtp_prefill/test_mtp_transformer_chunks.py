@@ -209,12 +209,15 @@ def _last_real_row(transformer: TtPrefillTransformer, start: int, actual_end: in
     return row
 
 
-def _mtp_union(transformer: TtPrefillTransformer, stream: Sequence[int], n_mtp: int, num_levels: int, start: int):
+def _mtp_union(
+    transformer: TtPrefillTransformer, stream: Sequence[int], n_mtp: int, num_levels: int, start: int, end: int
+):
     """Build this chunk's :class:`MTPUnionEmbedding` the way the runtime does.
 
     Mirrors the runtime's first-rank branch: upload both id tensors, gather each with the model's own
     embedding, and hand the blocks to ``from_ids``. The union owns ``trunk`` and frees it. ``start``
-    lets both uploads place each id on the chip that will rope and cache it.
+    lets both uploads place each id on the chip that will rope and cache it; ``end``, the chunk's real
+    end, lays out the lookahead slots as the inference server sends them.
     """
     chunk_ids = prepare_prefill_input_tensor(
         list(stream[: transformer.seq_len]),
@@ -232,7 +235,9 @@ def _mtp_union(transformer: TtPrefillTransformer, stream: Sequence[int], n_mtp: 
         transformer.mesh_shape,
         transformer.sp_axis,
         num_mtp_tokens=n_mtp,
+        num_levels=num_levels,
         chunk_start=start,
+        chunk_end=end,
     )
     union = MTPUnionEmbedding.from_ids(chunk_ids, mtp_ids, transformer.mtp_embed_ids, num_levels=num_levels)
     ttnn.deallocate(chunk_ids)
@@ -593,7 +598,7 @@ def test_mtp_transformer_chunks(
             f"arithmetic clamp(actual_isl - actual_end, 0, K) gives {provided}"
         )
 
-        union = _mtp_union(transformer, stream, N_MTP, NUM_LEVELS, start)
+        union = _mtp_union(transformer, stream, N_MTP, NUM_LEVELS, start, actual_end)
         h0_host.clear()
         captured.clear()
         last_row = _last_real_row(transformer, start, actual_end)

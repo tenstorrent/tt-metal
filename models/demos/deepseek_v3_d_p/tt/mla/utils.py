@@ -171,6 +171,29 @@ def rotated_row_of_position(kv_actual_isl: int, sp: int, chunk_local: int, globa
     return None
 
 
+def mtp_lookahead_positions(
+    kv_actual_isl: int, sp: int, chunk_local: int, actual_end: int, num_levels: int
+) -> list[list[int]]:
+    """Per chip, the global position each MTP lookahead slot carries, in slot order; every later slot is pad.
+
+    The inference server's layout. Chip c's slots ``[0, num_levels)`` carry the ``num_levels`` positions after
+    the last one it holds: the next chip's first, or the next chunk's first on the chip holding the chunk's
+    end. A chunk starting off a ``chunk_local`` boundary leaves the seam chip's first run ending where the next
+    chip's begins, so the seam chip also carries that chip's first ``num_levels`` positions: in place of its
+    own while its second run lies past ``actual_end``, else after them. A position at or past the turn end is
+    pad on the wire too. Keyed off ``rotated_chip_positions`` so it cannot drift from the writer kernel.
+    """
+    positions = rotated_chip_positions(kv_actual_isl, sp, chunk_local)
+    slots = [[row[-1] + 1 + k for k in range(num_levels)] for row in positions]
+    seam_row = chunk_local - kv_actual_isl % chunk_local
+    if sp > 1 and seam_row < chunk_local:
+        seam_chip = (kv_actual_isl // chunk_local) % sp
+        seam = positions[seam_chip]
+        next_chip = [seam[seam_row - 1] + 1 + k for k in range(num_levels)]
+        slots[seam_chip] = slots[seam_chip] + next_chip if seam[seam_row] < actual_end else next_chip
+    return slots
+
+
 def blockcyclic_positions(sp: int, chunk_size_global: int, seq_len_cache: int) -> torch.Tensor:
     """Global natural position held by each block-cyclic shard row (device-major: an SP-contiguous
     split of the cache's seq dim yields each chip's rows).

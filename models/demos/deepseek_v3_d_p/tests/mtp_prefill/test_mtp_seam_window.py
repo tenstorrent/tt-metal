@@ -4,8 +4,9 @@
 
 """``MTPSeamSplice`` on device: a chunk resuming at any tile-aligned start still gets exact MTP windows.
 
-The union holds a random table indexed by global position, so the window every chip must produce is
-known in closed form -- the embedding ``d`` positions on -- and the check is bit-exact. No weights.
+The union holds a random table indexed by global position, its lookahead slots laid out as the inference
+server sends them, so the window every real row must produce is known in closed form -- the embedding
+``d`` positions on -- and the check is bit-exact. No weights.
 """
 
 from __future__ import annotations
@@ -20,16 +21,17 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
+from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPSeamSplice, MTPUnionEmbedding
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import build_sp_rank_tensor
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 SP_AXIS = 0
 CHUNK = 5 * 1024
 HIDDEN = 6144
 LOOKAHEAD = 32
 NUM_LEVELS = 7
+PAD_ROW = 3 * CHUNK + 2 * LOOKAHEAD
+"""The table row every pad slot holds: no real position's embedding."""
 
 STARTS = (0, 3200, 32, 608, 3296, 4512, 5088, 8000)
 """Resume points: slab- and chip-aligned controls (no seam), the largest and the smallest seam row, a
@@ -40,10 +42,12 @@ GENERATED_ROWS = (3, 40, 77, 200)
 """Rows of the gathered generation block that the patch writes, one per generated position."""
 
 
-def _union_positions(start: int, sp: int, window_len: int) -> list:
-    """Per chip, the global position of every union row: the rotated trunk, then the lookahead."""
+def _union_positions(start: int, sp: int, window_len: int, chunk_end: int) -> list:
+    """Per chip, the table row of every union row: the rotated trunk, then the lookahead slots."""
+    slots = mtp_lookahead_positions(start, sp, window_len, chunk_end, NUM_LEVELS)
     return [
-        row + list(range(row[-1] + 1, row[-1] + 1 + LOOKAHEAD)) for row in rotated_chip_positions(start, sp, window_len)
+        row + look + [PAD_ROW] * (LOOKAHEAD - len(look))
+        for row, look in zip(rotated_chip_positions(start, sp, window_len), slots)
     ]
 
 
@@ -69,15 +73,16 @@ def _per_device_scalars(t: ttnn.Tensor) -> list:
     return [ttnn.to_torch(d).flatten()[0].item() for d in ttnn.get_device_tensors(t)]
 
 
-def _check_windows(union, table, positions, window_len, mesh_device, label, failures) -> None:
-    """Every shift's window against ``table[position + d]``, on every chip."""
+def _check_windows(union, table, positions, window_len, chunk_end, mesh_device, label, failures) -> None:
+    """Every shift's window against ``table[position + d]``, on every chip's rows below ``chunk_end``."""
     for d in range(1, NUM_LEVELS + 1):
         window = union.window(d)
         got = _download(window, mesh_device)
         ttnn.deallocate(window)
         for c, pos in enumerate(positions):
-            want = table[torch.tensor(pos[:window_len]) + d]
-            bad = (got[c, 0] != want).any(dim=-1).nonzero().flatten().tolist()
+            trunk = torch.tensor(pos[:window_len])
+            wrong = (got[c, 0] != table[trunk + d]).any(dim=-1) & (trunk < chunk_end)
+            bad = wrong.nonzero().flatten().tolist()
             if bad:
                 failures.append(f"{label} d={d} chip {c}: {len(bad)} wrong rows, first {bad[:4]}")
 
@@ -89,27 +94,19 @@ _MESH_PARAMS = [
             fabric_payload_size=GLM52Config.FABRIC_PAYLOAD_SIZE,
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
         ),
-        2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
     ),
 ]
 
 
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
-)
+@pytest.mark.parametrize("mesh_device, device_params", _MESH_PARAMS, indirect=["mesh_device", "device_params"])
 @pytest.mark.skipif(not is_blackhole(), reason="deepseek_v3_d_p prefill is Blackhole-only")
 @pytest.mark.timeout(1200)
-def test_mtp_seam_windows(mesh_device, device_params, num_links):
+def test_mtp_seam_windows(mesh_device, device_params):
     sp, tp = tuple(mesh_device.shape)
     window_len = CHUNK // sp
     union_len = window_len + LOOKAHEAD
-    sp_topology = per_axis_topology(device_params["fabric_config"])[0]
-
-    def all_gather_sp(rows):
-        return ttnn.all_gather(rows, dim=-2, cluster_axis=SP_AXIS, num_links=num_links, topology=sp_topology)
-
     sp_rank = build_sp_rank_tensor(mesh_device, sp, (sp, tp), SP_AXIS)
     order = _per_device_scalars(sp_rank)
     assert order == [float(i // tp) for i in range(sp * tp)], f"device tensors are not SP-row-major: {order}"
@@ -122,78 +119,97 @@ def test_mtp_seam_windows(mesh_device, device_params, num_links):
             ttnn.deallocate(flag)
 
     g = torch.Generator().manual_seed(0)
-    table = torch.randn(3 * CHUNK + 2 * LOOKAHEAD, HIDDEN, generator=g).to(torch.bfloat16)
+    table = torch.randn(PAD_ROW + 1, HIDDEN, generator=g).to(torch.bfloat16)
     generated = torch.randint(-8, 9, (LOOKAHEAD * sp, HIDDEN), generator=g).to(torch.bfloat16)
     generated_t = _upload(generated.view(1, 1, -1, HIDDEN), mesh_device, (None, -1))
 
     failures = []
     for start in STARTS:
-        positions = _union_positions(start, sp, window_len)
-        union_host = table[torch.tensor(positions)].unsqueeze(1)
+        offset = start % window_len
         seam_chip = (start // window_len) % sp
         next_chip = (seam_chip + 1) % sp
-        targets = [positions[next_chip][0], positions[next_chip][1], start + CHUNK, positions[(seam_chip + 3) % sp][5]]
-        written = table.clone()
-        keep = torch.ones(sp, 1, union_len, 1)
-        select = torch.zeros(sp, 1, union_len, LOOKAHEAD * sp)
-        for p, source_row in zip(targets, GENERATED_ROWS):
-            written[p] = generated[source_row]
-            for c, upos in enumerate(positions):
-                for u, q in enumerate(upos):
-                    if q == p:
-                        keep[c, 0, u, 0] = 0.0
-                        select[c, 0, u, source_row] = 1.0
-
-        if start % window_len:
-            last_plain_end = start + window_len - start % window_len - NUM_LEVELS
+        if offset:
+            last_plain_end = start + window_len - offset - NUM_LEVELS
             for chunk_end, wants_splice in ((last_plain_end, False), (last_plain_end + 1, True)):
                 splice = MTPSeamSplice.for_chunk_start(
-                    start, window_len, sp, sp_rank, all_gather_sp, chunk_end=chunk_end, num_levels=NUM_LEVELS
+                    start, window_len, sp, sp_rank, chunk_end=chunk_end, num_levels=NUM_LEVELS
                 )
                 assert (splice is not None) == wants_splice, f"start={start} chunk_end={chunk_end}: {splice}"
                 if splice is not None:
                     splice.deallocate()
 
-        for two_blocks in (False, True):
-            label = f"start={start} {'two' if two_blocks else 'one'}-block"
-            if two_blocks:
-                parts = [
-                    _upload(union_host[:, :, :window_len], mesh_device, (0, -1)),
-                    _upload(union_host[:, :, window_len:], mesh_device, (0, -1)),
-                ]
-            else:
-                parts = [_upload(union_host, mesh_device, (0, -1))]
-            union = MTPUnionEmbedding(parts, num_levels=NUM_LEVELS, window_len=window_len)
-            seam_splice = MTPSeamSplice.for_chunk_start(
-                start, window_len, sp, sp_rank, all_gather_sp, chunk_end=start + CHUNK, num_levels=NUM_LEVELS
-            )
-            assert (seam_splice is None) == (start % window_len == 0), f"{label}: seam splice {seam_splice}"
-            union.set_seam_splice(seam_splice)
+        # Ending one past the next chip's first position, the seam chip carries that chip's first ids in place
+        # of its own (from slot 0); a full chunk carries them after its own (from slot K).
+        chunk_ends = (start + CHUNK, start + window_len - offset + 1) if offset else (start + CHUNK,)
+        for chunk_end in chunk_ends:
+            positions = _union_positions(start, sp, window_len, chunk_end)
+            union_host = table[torch.tensor(positions)].unsqueeze(1)
+            targets = [
+                positions[next_chip][0],
+                positions[next_chip][1],
+                start + CHUNK,
+                positions[(seam_chip + 3) % sp][5],
+            ]
+            written = table.clone()
+            keep = torch.ones(sp, 1, union_len, 1)
+            select = torch.zeros(sp, 1, union_len, LOOKAHEAD * sp)
+            for p, source_row in zip(targets, GENERATED_ROWS):
+                written[p] = generated[source_row]
+                for c, upos in enumerate(positions):
+                    for u, q in enumerate(upos):
+                        if q == p:
+                            keep[c, 0, u, 0] = 0.0
+                            select[c, 0, u, source_row] = 1.0
 
-            t0 = time.perf_counter()
-            _check_windows(union, table, positions, window_len, mesh_device, f"{label} pristine", failures)
-            t1 = time.perf_counter()
-            for d in range(1, NUM_LEVELS + 1):
-                ttnn.deallocate(union.window(d))
-            ttnn.synchronize_device(mesh_device)
-            t2 = time.perf_counter()
+            for two_blocks in (False, True):
+                label = f"start={start} end={chunk_end} {'two' if two_blocks else 'one'}-block"
+                if two_blocks:
+                    parts = [
+                        _upload(union_host[:, :, :window_len], mesh_device, (0, -1)),
+                        _upload(union_host[:, :, window_len:], mesh_device, (0, -1)),
+                    ]
+                else:
+                    parts = [_upload(union_host, mesh_device, (0, -1))]
+                union = MTPUnionEmbedding(parts, num_levels=NUM_LEVELS, window_len=window_len)
+                seam_splice = MTPSeamSplice.for_chunk_start(
+                    start, window_len, sp, sp_rank, chunk_end=chunk_end, num_levels=NUM_LEVELS
+                )
+                assert (seam_splice is None) == (offset == 0), f"{label}: seam splice {seam_splice}"
+                if seam_splice is not None:
+                    want_slot = NUM_LEVELS if chunk_end == start + CHUNK else 0
+                    assert (
+                        seam_splice.slot_offset == want_slot
+                    ), f"{label}: next chip's ids from slot {seam_splice.slot_offset}, expected {want_slot}"
+                union.set_seam_splice(seam_splice)
 
-            keep_t = _upload(keep.expand(-1, -1, -1, HIDDEN), mesh_device, (0, -1))
-            select_t = _upload(select, mesh_device, (0, None))
-            union.clear_rows(keep_t)
-            union.add_patch(select_t, generated_t)
-            _check_windows(union, written, positions, window_len, mesh_device, f"{label} patched", failures)
-            logger.info(
-                f"[seam] {label}: seam row {seam_splice.seam_row if seam_splice else None}, first {NUM_LEVELS} "
-                f"windows + readback {t1 - t0:.2f}s, warm {NUM_LEVELS} windows {1e3 * (t2 - t1):.1f}ms"
-            )
+                t0 = time.perf_counter()
+                _check_windows(
+                    union, table, positions, window_len, chunk_end, mesh_device, f"{label} pristine", failures
+                )
+                t1 = time.perf_counter()
+                for d in range(1, NUM_LEVELS + 1):
+                    ttnn.deallocate(union.window(d))
+                ttnn.synchronize_device(mesh_device)
+                t2 = time.perf_counter()
 
-            if seam_splice is not None:
-                union.clear_seam_splice()
-                seam_splice.deallocate()
-            union.deallocate()
-            ttnn.deallocate(keep_t)
-            ttnn.deallocate(select_t)
+                keep_t = _upload(keep.expand(-1, -1, -1, HIDDEN), mesh_device, (0, -1))
+                select_t = _upload(select, mesh_device, (0, None))
+                union.clear_rows(keep_t)
+                union.add_patch(select_t, generated_t)
+                _check_windows(
+                    union, written, positions, window_len, chunk_end, mesh_device, f"{label} patched", failures
+                )
+                logger.info(
+                    f"[seam] {label}: seam row {seam_splice.seam_row if seam_splice else None}, first {NUM_LEVELS} "
+                    f"windows + readback {t1 - t0:.2f}s, warm {NUM_LEVELS} windows {1e3 * (t2 - t1):.1f}ms"
+                )
+
+                if seam_splice is not None:
+                    union.clear_seam_splice()
+                    seam_splice.deallocate()
+                union.deallocate()
+                ttnn.deallocate(keep_t)
+                ttnn.deallocate(select_t)
 
     ttnn.deallocate(generated_t)
     ttnn.deallocate(sp_rank)
