@@ -456,7 +456,6 @@ the per-token weight (`MINIMAX_H3_FOLD_NORM_WEIGHT=0` restores). None of these c
 | `MINIMAX_H3_ADALN_GATHER=matmul\|tilerow` | how the modulation reaches the norms (default `matmul`; the pipeline defaults to `tilerow` on Blackhole) |
 | `MINIMAX_H3_ADALN_MIXED_TILES=N` | tile-row slots for tiles that straddle an adaLN run boundary (default 16) |
 | `MINIMAX_H3_FOLD_NORM_WEIGHT=0` | apply the norm's static weight per token again instead of folding it into the table |
-| `MINIMAX_H3_ADALN_CACHE=1` | keep every block's modulation tables per timestep vector (eager path; a 50-step schedule holds ~1.3 GB of tables per device) |
 
 ## Audio decode precision
 
