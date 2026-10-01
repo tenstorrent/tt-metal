@@ -77,10 +77,10 @@ FORCE_INLINE
 void record_stream_done(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32_t stream, uint32_t count) {
     if (count != 0) {
         uint64_t now = realtime_profiler_wall_clock();
-        msg->stream_done[stream].time_hi = static_cast<uint32_t>(now >> 32);
-        msg->stream_done[stream].time_lo = static_cast<uint32_t>(now);
+        msg->streams[stream].done_time_hi = static_cast<uint32_t>(now >> 32);
+        msg->streams[stream].done_time_lo = static_cast<uint32_t>(now);
     }
-    msg->stream_done[stream].count = count;
+    msg->streams[stream].done_count = count;
 }
 
 // PUSH_B means B is in flight.

@@ -162,9 +162,7 @@ volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
 static bool rt_profiler_enabled = false;
 static_assert(REALTIME_PROFILER_STREAM_COUNT_MASK == (1u << MEM_WORD_ADDR_WIDTH) - 1);
 
-static uint32_t rt_open_id[max_num_worker_sems] = {0};
-static uint64_t rt_open_start[max_num_worker_sems] = {0};
-static uint64_t rt_done_time[max_num_worker_sems] = {0};
+static uint64_t rt_done_time = 0;
 
 static uint32_t num_pages_acquired = 0;
 // Counts go signals handed over by dispatch_d, regardless of their transport.
@@ -436,15 +434,14 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
 #ifndef ARCH_QUASAR
     if (rt_profiler_enabled) {
         // Bounded so the profiler never stalls dispatch.
-        volatile tt_l1_ptr realtime_profiler_stream_done_t* done =
-            &rt_profiler_msg->stream_done[wait_stream - first_stream_used];
+        volatile tt_l1_ptr realtime_profiler_stream_t* stream =
+            &rt_profiler_msg->streams[wait_stream - first_stream_used];
         uint32_t spins = 0;
-        while (done->count != (*worker_sem & REALTIME_PROFILER_STREAM_COUNT_MASK) && ++spins < 1000) {
+        while (stream->done_count != (*worker_sem & REALTIME_PROFILER_STREAM_COUNT_MASK) && ++spins < 1000) {
             invalidate_l1_cache();
         }
-        rt_done_time[wait_stream - first_stream_used] =
-            spins < 1000 ? (static_cast<uint64_t>(done->time_hi) << 32) | done->time_lo
-                         : realtime_profiler_wall_clock();
+        rt_done_time = spins < 1000 ? (static_cast<uint64_t>(stream->done_time_hi) << 32) | stream->done_time_lo
+                                    : realtime_profiler_wall_clock();
     }
 #endif
 
@@ -611,11 +608,15 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
 
 FORCE_INLINE
 void publish_realtime_record(uint32_t stream_index) {
-    if (rt_open_id[stream_index] != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
+    volatile tt_l1_ptr realtime_profiler_stream_t* stream = &rt_profiler_msg->streams[stream_index];
+    if (stream->open_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
         write_realtime_record(
-            rt_profiler_msg, rt_open_id[stream_index], rt_open_start[stream_index], rt_done_time[stream_index]);
+            rt_profiler_msg,
+            stream->open_id,
+            (static_cast<uint64_t>(stream->open_start_hi) << 32) | stream->open_start_lo,
+            rt_done_time);
         signal_realtime_profiler_and_switch(rt_profiler_msg);
-        rt_open_id[stream_index] = REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
+        stream->open_id = REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
     }
 }
 
@@ -729,8 +730,9 @@ void process_go_signal_mcast_cmd() {
     if (rt_profiler_enabled) {
         uint64_t go_time = realtime_profiler_wall_clock();
         publish_realtime_record(sync_index);
-        rt_open_id[sync_index] = program_id;
-        rt_open_start[sync_index] = go_time;
+        rt_profiler_msg->streams[sync_index].open_id = program_id;
+        rt_profiler_msg->streams[sync_index].open_start_hi = static_cast<uint32_t>(go_time >> 32);
+        rt_profiler_msg->streams[sync_index].open_start_lo = static_cast<uint32_t>(go_time);
     }
 
     update_worker_completion_count_on_dispatch_d();
@@ -862,6 +864,10 @@ void kernel_main() {
 
     // realtime_profiler_msg_t signalling + FIFO + kernel_* .id fields are zeroed on the host in
     // DispatchSKernel::ConfigureCore() before CQ kernels launch.
+
+    for (uint32_t i = 0; i < max_num_worker_sems; i++) {
+        rt_profiler_msg->streams[i].open_id = REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
+    }
 
     cmd_ptr = cb_base;
     bool done = false;
