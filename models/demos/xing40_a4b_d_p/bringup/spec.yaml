@@ -158,3 +158,6 @@ paths:
 intake:
   smoke: {prompt: "What is the capital of France? Answer in one word.", expect: "Paris"}
 dashboard: {styles: [standard, teletext]}   # owner: both
+serving:                           # owner answers to serving_contract.md (SC.1)
+  server_repo: /localdev/dnijemcevic/tt-d-gen
+  kv_dtype: bfp8                   # owner 2026-10-01: bfp8_b TILE (DeepSeek decode format); every ladder rung requires it
