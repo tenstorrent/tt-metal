@@ -26,6 +26,7 @@
 #include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "llk_sfpu/ckernel_sfpu_rounding_ops.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
+#include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
@@ -45,9 +46,9 @@
 // 2. Add the enumerator to ckernel::BinaryOp (tt_llk_quasar/common/inc/ckernel_defs.h) if it is not there.
 // 3. Add the `if constexpr` branch in call_binary_sfpu_operation_quasar()
 //    (and init_binary_sfpu_operation_quasar() if it needs an init step).
-#include "llk_sfpu/ckernel_sfpu_add.h"            // calculate_add_int (int add)
-#include "llk_sfpu/ckernel_sfpu_atan2.h"          // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
-#include "llk_sfpu/ckernel_sfpu_binary.h"         // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
+#include "llk_sfpu/ckernel_sfpu_add.h"              // calculate_add_int (int add)
+#include "llk_sfpu/ckernel_sfpu_atan2.h"            // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
+#include "llk_sfpu/ckernel_sfpu_binary.h"           // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h"   // calculate_binary_max_min / _init_binary_max_min_
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h" // copy_dest_value / copy_dest_value_init (Dest-to-Dest copy)
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
@@ -120,6 +121,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (is_zero_comp_op(OPERATION))
     {
         init_zero_comp();
+    }
+    else if constexpr (OPERATION == SfpuType::signbit)
+    {
+        init_signbit();
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
@@ -194,6 +199,60 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
 }
 
 /**
+ * @brief Apply signbit in-place on one Dest tile.
+ *
+ * Signbit needs the SFPU math format at runtime to pick the load/store width and the
+ * integer-vs-float result encoding (see `ckernel_sfpu_signbit.h`); the format mapping
+ * matches @ref call_zero_comp_operation_quasar.
+ *
+ * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
+ * @tparam ITERATIONS Number of SFPU loop iterations.
+ * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
+ * @param sfpu_format SFPU math format selecting the sfpmem mode / result encoding.
+ * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for signbit.
+ */
+template <DstSync DST_SYNC, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format)
+{
+    // A sign-bit test is exact, so signbit has no approximate path.
+    constexpr bool approx_mode = false;
+
+    switch (sfpu_format)
+    {
+        case DataFormat::Int32:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::Int32, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        case DataFormat::Int16:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::Int16, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        case DataFormat::Int8:
+        {
+            constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::Int8;
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, sfpu_fmt, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        }
+        case DataFormat::UInt16:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::UInt16, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        case DataFormat::UInt8:
+        {
+            constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::UInt8;
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, sfpu_fmt, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        }
+        case DataFormat::Float16:
+        case DataFormat::Float16_b:
+        case DataFormat::Float32:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::Float32, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        default:
+            LLK_ASSERT(false, "Unsupported Quasar signbit SFPU format");
+            break;
+    }
+}
+
+/**
  * @brief Apply a Quasar unary SFPU op in-place on one Dest tile.
  *
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
@@ -204,7 +263,7 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @tparam TYPECAST_IN_FORMAT Source format for the typecast op (default Float32).
  * @tparam TYPECAST_OUT_FORMAT Destination format for the typecast op (default Float16_b).
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
- * @param sfpu_format SFPU math format; only the comp family reads it (see
+ * @param sfpu_format SFPU math format; only the comp family and signbit read it (see
  *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
  * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
  *        reads it. Defaults to true so each tile is independent.
@@ -341,6 +400,10 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (is_zero_comp_op(OPERATION))
     {
         call_zero_comp_operation_quasar<OPERATION, DST_SYNC, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
+    }
+    else if constexpr (OPERATION == SfpuType::signbit)
+    {
+        call_signbit_operation_quasar<DST_SYNC, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
