@@ -11,6 +11,9 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#if defined(GDN_FUSED_PRODUCER)
+#include "chunk_gdn_fused_map.hpp"
+#endif
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
 constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7;
@@ -36,9 +39,14 @@ void kernel_main() {
     constexpr uint32_t V_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset());
     constexpr uint32_t QK_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 1);
 
-    // Chunk-parallel: this core handles the contiguous work-item slice [wi_start, wi_start+wi_count).
-    // A work-item is a flat (head, chunk) index; it is exactly the DRAM tile-group index (h*NC + c).
+    // A work-item is a flat (head, chunk) index — exactly the DRAM tile-group index h*NC + c.
+#if defined(GDN_FUSED_PRODUCER)
+    // Fused producer p of the map (chunk_gdn_fused_map.hpp): its wi_count items in map order.
+    const uint32_t p = get_arg_val<uint32_t>(0);
+#else
+    // Chunk-parallel: this core handles the work-items wi_start + n * wi_stride, n < wi_count.
     const uint32_t wi_start = get_arg_val<uint32_t>(0);
+#endif
     const uint32_t wi_count = get_arg_val<uint32_t>(1);
     const uint32_t q_addr = get_arg_val<uint32_t>(2);
     const uint32_t k_addr = get_arg_val<uint32_t>(3);
@@ -53,14 +61,28 @@ void kernel_main() {
     const uint32_t NC = get_arg_val<uint32_t>(11);
     const uint32_t HV = get_arg_val<uint32_t>(12);
     const uint32_t Hk = get_arg_val<uint32_t>(13);
-    // Work-item stride: 1 for a contiguous slice (phased prep), NP for the fused NP>1 producer
-    // split, where producer p of head h owns the interleaved chunks c = p, p+NP, ... (wi stays the
-    // flat h*NC + c, so every DRAM index below is unchanged).
-    const uint32_t wi_stride = get_arg_val<uint32_t>(14);
-    // Cycles to wait before the first read. The fused factory staggers its producers with it (producer j of a
-    // head waits j steps): chunk j is not needed before chunk 0 plus j receiver steps, and a smaller kickoff
-    // burst gets chunk 0's reads served sooner. 0 for the phased prep.
+    // Cycles to wait before the first read. The fused factory staggers its producers with it (a producer whose
+    // first chunk is c waits c steps): chunk c is not needed before chunk 0 plus c receiver steps, and a smaller
+    // kickoff burst gets chunk 0's reads served sooner. 0 for the phased prep.
     const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(15);
+#if defined(GDN_FUSED_PRODUCER)
+    // The producer map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp.
+    const GdnFusedMap map{
+        get_arg_val<uint32_t>(14),
+        NC,
+        get_arg_val<uint32_t>(16),
+        get_arg_val<uint32_t>(17),
+        get_arg_val<uint32_t>(18),
+        get_arg_val<uint32_t>(19)};
+    auto item_wi = [&](uint32_t n) {
+        const GdnFusedItem it = gdn_fused_item(map, p, n);
+        return it.h * NC + it.c;
+    };
+#else
+    // Work-item stride: 1 for a contiguous slice (phased prep).
+    const uint32_t wi_stride = get_arg_val<uint32_t>(14);
+    auto item_wi = [&](uint32_t n) { return wi_start + n * wi_stride; };
+#endif
 
     // Mixed precision: q/k/v are bf16; g/beta and the constants are fp32.
     const uint32_t tb_io = get_tile_size(cb_q);
@@ -165,7 +187,7 @@ void kernel_main() {
         riscv_wait(kickoff_wait_cycles);
     }
     if (wi_count > 0) {
-        issue_item(wi_start);
+        issue_item(item_wi(0));
     }
     issue(eye_acc, cb_eye, 0, cc, tb_f);
     issue(tril_acc, cb_tril, 0, cc, tb_f);
@@ -181,7 +203,7 @@ void kernel_main() {
     publish(cb_mask, 3);
 
     for (uint32_t i = 1; i < wi_count; i++) {
-        issue_item(wi_start + i * wi_stride);  // flat (head, chunk) index
+        issue_item(item_wi(i));
         noc.async_read_barrier();
         publish_item();
     }
