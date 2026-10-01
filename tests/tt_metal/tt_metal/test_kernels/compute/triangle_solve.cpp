@@ -37,6 +37,7 @@ static_assert(NUM_TILES % L_TILES_PER_BLOCK == 0, "every L block pairs with L_TI
 
 constexpr uint32_t DST_RHS = 0;  // the copied right-hand side
 constexpr uint32_t DST_X = 1;    // the solution; must differ from DST_RHS
+constexpr uint32_t ONE_TILE = 1;
 }  // namespace
 
 void kernel_main() {
@@ -48,8 +49,7 @@ void kernel_main() {
     CircularBuffer rhs(cb_rhs);
     CircularBuffer out(cb_out);
 
-    // The solve loads and stores DST rows in the SrcB-implied format, so both source formats are configured from
-    // the fp32 RHS CB and DST is read back as fp32.
+    // fp32 RHS and X; the solve's DST loads and stores are fp32 under fp32 dest accumulation.
     compute_kernel_hw_startup(cb_rhs, cb_out);
     copy_init(cb_rhs);
     triangle_solve_tile_init();
@@ -59,20 +59,20 @@ void kernel_main() {
         for (uint32_t j = 0; j < L_TILES_PER_BLOCK; ++j) {
             const uint32_t l_tile_idx = L_TILES_PER_BLOCK - 1 - j;
 
-            rhs.wait_front(1);
-            out.reserve_back(1);
+            rhs.wait_front(ONE_TILE);
+            out.reserve_back(ONE_TILE);
 
             tile_regs_acquire();
-            copy_tile(cb_rhs, 0, DST_RHS);
-            triangle_solve_tile<L_FORMAT, L_NEGATED>(l, l_tile_idx, DST_RHS, DST_X);
+            copy_tile(cb_rhs, 0 /*in_tile_index*/, DST_RHS);
+            triangle_solve_tile<L_FORMAT, L_NEGATED>(cb_l, l_tile_idx, DST_RHS, DST_X);
             tile_regs_commit();
 
             tile_regs_wait();
             pack_tile(DST_X, cb_out);
             tile_regs_release();
 
-            rhs.pop_front(1);
-            out.push_back(1);
+            rhs.pop_front(ONE_TILE);
+            out.push_back(ONE_TILE);
         }
         l.pop_front(L_TILES_PER_BLOCK);
     }

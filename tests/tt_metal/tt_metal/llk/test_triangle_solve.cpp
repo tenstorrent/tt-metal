@@ -449,9 +449,9 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTriangleSolveNegatedL) {
              .seed = 44}});
 }
 
-// Several tiles per run: an L CB of one tile lands every L tile at the same L1 address, so each solve depends on the
-// L1-cache invalidate and on the pop of the previous L tile waiting for MATH to finish reading it; an L block of two
-// tiles solved last-first exercises get_tile_address(l_tile_idx = 1).
+// Several tiles per run: an L CB of one tile lands every L tile at the same L1 address, so the pop of the previous L
+// tile must wait for MATH to finish reading it (the l_reads_done handshake); an L block of two tiles solved last-first
+// exercises get_tile_address(l_tile_idx = 1).
 TEST_F(LLKBlackholeSingleCardFixture, TensixTriangleSolveMultiTile) {
     unit_tests::compute::sfpu::triangle_solve::run_cases(
         this->devices_.at(0),
