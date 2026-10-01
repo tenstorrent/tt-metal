@@ -1,0 +1,110 @@
+{
+ "rung": "last",
+ "chunk": [
+  51200,
+  56320
+ ],
+ "layers": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "wall_ms": 473.3872413635254,
+ "device_ms": {
+  "attention": 297.726678,
+  "experts": 158.162091,
+  "mlp": 5.17919,
+  "router": 2.451963,
+  "attn_residual": 0.86121,
+  "ffn_residual": 0.64676,
+  "mlp_residual": 0.145033,
+  "attn_norm": 0.084541,
+  "ffn_norm": 0.0
+ },
+ "sections_ms": {
+  "attention": 297.726678,
+  "experts": 158.162091,
+  "mlp": 5.17919,
+  "router": 2.451963,
+  "attn_residual": 0.86121,
+  "ffn_residual": 0.64676,
+  "mlp_residual": 0.145033,
+  "attn_norm": 0.084541,
+  "ffn_norm": 0.0
+ },
+ "sections_ms_per_chip": {
+  "attn_norm": {
+   "1": 0.083117,
+   "0": 0.084541,
+   "3": 0.082453,
+   "2": 0.084479
+  },
+  "attention": {
+   "1": 297.065441,
+   "0": 297.63256,
+   "3": 296.808235,
+   "2": 297.416372
+  },
+  "attn_residual": {
+   "1": 0.851974,
+   "0": 0.851895,
+   "3": 0.847466,
+   "2": 0.850168
+  },
+  "ffn_norm": {},
+  "mlp": {
+   "1": 5.17919,
+   "0": 5.171491,
+   "3": 5.175254,
+   "2": 5.142852
+  },
+  "mlp_residual": {
+   "1": 0.142756,
+   "0": 0.145033,
+   "3": 0.139518,
+   "2": 0.141413
+  },
+  "router": {
+   "1": 2.435728,
+   "0": 2.440125,
+   "3": 2.42854,
+   "2": 2.442627
+  },
+  "experts": {
+   "1": 157.927054,
+   "0": 157.165486,
+   "3": 156.72352,
+   "2": 156.716271
+  },
+  "ffn_residual": {
+   "1": 0.634131,
+   "0": 0.641103,
+   "3": 0.64653,
+   "2": 0.634661
+  }
+ },
+ "programs": {
+  "attn_norm": 4,
+  "attention": 1232,
+  "attn_residual": 24,
+  "ffn_norm": 0,
+  "mlp": 20,
+  "mlp_residual": 4,
+  "router": 340,
+  "experts": 240,
+  "ffn_residual": 20
+ },
+ "settings": {
+  "sliding_sdpa_cfg": "base",
+  "sliding_qk": "split",
+  "experts_mode": "unified",
+  "router_mode": "fp32",
+  "fuse_residual_norm": true
+ },
+ "full_prefill": null,
+ "bridged_steps": [],
+ "deferred_cpu_ms": 0.0
+}

@@ -3367,6 +3367,48 @@
   "started": "2026-10-01T02:06:29",
   "status": "PASS"
  },
+ "X.1": {
+  "attempts": 0,
+  "duration_s": 127.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T03:23:51"
+   }
+  ],
+  "last_run": "2026-10-01T03:23:51",
+  "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/logs/X.1.log",
+  "metrics": {
+   "chunk_len": 5120,
+   "chunk_start": 51200,
+   "chunk_wall_ms": 473.4,
+   "deferred_cpu_ms": 0.0,
+   "deferred_cpu_steps": 0,
+   "device_model_hybrid": 0,
+   "device_ms_attention": 297.73,
+   "device_ms_attn_norm": 0.08,
+   "device_ms_attn_residual": 0.86,
+   "device_ms_chip0": 464.13,
+   "device_ms_chip1": 464.32,
+   "device_ms_chip2": 463.43,
+   "device_ms_chip3": 462.85,
+   "device_ms_experts": 158.16,
+   "device_ms_ffn_norm": 0.0,
+   "device_ms_ffn_residual": 0.65,
+   "device_ms_mlp": 5.18,
+   "device_ms_mlp_residual": 0.15,
+   "device_ms_router": 2.45,
+   "device_ms_total": 465.26,
+   "host_overhead_ms": 8.1,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.9999523737786923,
+   "profiled_programs": 1884
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-01T03:21:43",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "sjovic/mimo-llm-perf",
   "created": "2026-09-30T22:59:41",
