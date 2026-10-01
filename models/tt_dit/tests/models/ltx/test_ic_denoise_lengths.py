@@ -92,7 +92,7 @@ def _build_shim_namespace() -> dict:
     bct = _lines(_top("build_conditioning_tensors"))
     i2v_dc = "@dataclass\n" + _lines(_top("_I2VConditioning"))
     static_methods = ("_post_process_latent_tt", "_noise_video_latent", "_draw_seeded_noise")
-    plain_methods = ("_build_i2v_conditioning", "_denoise_no_guidance", "_seeded_noise")
+    plain_methods = ("_build_i2v_conditioning", "_denoise_no_guidance", "_seeded_noise", "_stage_prompts")
     method_blocks = ["    @staticmethod\n" + _lines(_method(n)) for n in static_methods]
     method_blocks += [_lines(_method(n)) for n in plain_methods]
 
@@ -117,6 +117,7 @@ def _build_shim_namespace() -> dict:
     ns: dict = {
         "torch": torch,
         "os": __import__("os"),
+        "time": __import__("time"),
         "ttnn": _shim_ttnn(),
         "dataclass": __import__("dataclasses").dataclass,
         "field": __import__("dataclasses").field,
@@ -142,7 +143,10 @@ def _make_pipeline(ns: dict, *, in_channels: int, sp_factor: int, image_conditio
     captured = ns["_captured"]
     captured["in_channels"] = in_channels
 
+    obj._trace_variant_key = lambda key, per_token: key if key is None or not per_token else f"{key}_i2v"
+    obj._trace_euler_tail = False
     obj.in_channels = in_channels
+    obj.fps = 24.0
     obj.parallel_config = SimpleNamespace(sequence_parallel=SimpleNamespace(factor=sp_factor, mesh_axis=2))
     obj.mesh_device = mock.MagicMock(name="mesh_device")
     obj.ccl_manager = mock.MagicMock(name="ccl_manager")
