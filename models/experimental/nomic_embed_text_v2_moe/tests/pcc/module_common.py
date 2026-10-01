@@ -25,6 +25,11 @@ from models.experimental.nomic_embed_text_v2_moe.common import slice_state_dict
 # multiple of 32, and S is the batch's longest tokenized sequence, so that is the common case.
 TOKEN_SHAPES = [(1, 128), (2, 512), (2, 37)]
 
+# Past 32 tile rows of M = B * S the dense projections run through minimal_matmul, which no
+# TOKEN_SHAPES entry reaches. 4x512 folds to 64: M is below N for QKV and fc1 and above it for
+# out_proj and fc2, so both orientations run, and the QKV, out_proj and fc1 outputs go to L1.
+DENSE_SHAPES = [*TOKEN_SHAPES, (4, 512)]
+
 # A wrong layout or convention does not lose precision, it decorrelates. Anything under this is
 # the wrong tensor, not a less precise one.
 DECORRELATED_PCC = 0.5

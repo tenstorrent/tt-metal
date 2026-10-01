@@ -40,6 +40,7 @@
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
+#include "program/slow_dispatch.hpp"
 #include "memory_tracking/memory_stats_shm.hpp"
 #include "memory_tracking/shm_tracking_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
@@ -349,8 +350,8 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                     // pointers for a serviced device must therefore be written into that device's DRAM, not
                     // the MMIO device's DRAM. Writing to this->id() left non-MMIO devices with an uninitialized
                     // (zero) completion write pointer, causing completion_queue_wait_front to return spuriously.
-                    const uint32_t dram_channel =
-                        this->allocator_impl()->get_dram_channel_from_bank_id(this->sysmem_manager_->get_dram_region_bank_id());
+                    const uint32_t dram_channel = this->allocator_impl()->get_dram_channel_from_bank_id(
+                        this->sysmem_manager_->get_dram_region_bank_id());
                     MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
                         pointers.data(),
                         pointers.size() * sizeof(uint32_t),
@@ -377,7 +378,7 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 
     // Run the cq program
     command_queue_program.impl().finalize_offsets(this);
-    detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
+    slow_dispatch::ConfigureDeviceWithProgram(*this, command_queue_program, /*force_slow_dispatch=*/true);
     MetalEnvAccessor(*env_).impl().get_cluster().l1_barrier(this->id());
 }
 
@@ -505,6 +506,9 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
     const CoreCoord compute_grid_size = compute_with_storage_grid_size();
+    if (context_->get_dispatch_query_manager().fds_signalling_enabled()) {
+        TT_FATAL(active_eth_cores.empty(), "FDS worker signalling does not support ACTIVE_ETH cores");
+    }
     const uint32_t default_sub_device_worker_count =
         compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
     std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), default_sub_device_worker_count);
@@ -530,8 +534,8 @@ void Device::configure_fabric() {
 
     fabric_program_->impl().finalize_offsets(this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
+    slow_dispatch::WriteRuntimeArgsToDevice(*this, *fabric_program_, /*force_slow_dispatch=*/using_fast_dispatch_);
+    slow_dispatch::ConfigureDeviceWithProgram(*this, *fabric_program_, /*force_slow_dispatch=*/using_fast_dispatch_);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox have all landed
@@ -704,9 +708,12 @@ bool Device::close() {
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
-    this->optimal_dram_bank_to_logical_worker_assignment_.clear();
-    this->optimal_dram_bank_to_logical_worker_assignment_noc_.reset();
-    this->optimal_dram_bank_to_logical_worker_assignment_grid_size_.reset();
+    {
+        std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
+        this->optimal_dram_bank_to_logical_worker_assignment_.clear();
+        this->optimal_dram_bank_to_logical_worker_assignment_noc_.reset();
+        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_.reset();
+    }
 
     // Clean up shared memory stats provider
     this->shm_stats_provider_.reset();
@@ -997,20 +1004,24 @@ void Device::reset_sub_device_stall_group() {
     TT_FATAL(false, "reset_sub_device_stall_group is deprecated for device");
 }
 
-std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const {
     // Top level function that users (ex: Op Writers) can use to assign Tensix Worker cores
     // as DRAM readers or writers. Returns logical coordinates of optimally placed workers.
     // This function queries Physical Coordinates (only exposed directly to the Device class)
     // and passes them to logic in core_assignment.cpp to derive the most optimal core placement
     // based on architecture specific logic and Physical Grid configuration.
     const auto noc_tag = static_cast<std::uint8_t>(noc);
-    auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
-    if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
-        this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
-        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
-        return this->optimal_dram_bank_to_logical_worker_assignment_;
+    const auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
+    {
+        std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
+        if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
+            this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
+            this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
+            return this->optimal_dram_bank_to_logical_worker_assignment_;
+        }
     }
-    this->optimal_dram_bank_to_logical_worker_assignment_.clear();
+    // Build the assignment locally so a failure leaves the published cache intact, and so the mutex
+    // is not held across the grid walk.
 
     uint32_t full_grid_size_x = this->grid_size().x;
     uint32_t full_grid_size_y = this->grid_size().y;
@@ -1061,6 +1072,8 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
     // Do not use soc_desc.translate_coord_to(NOC0, LOGICAL): that numbers all Tensix cores including
     // dispatch columns. Also do not split x/y lookups via worker_phy_x/y alone: (phys_x, phys_y) must
     // match physical_worker_core_from_logical_core((lx, ly)) as a pair.
+    std::vector<CoreCoord> assignment;
+    assignment.reserve(physical_worker_cores.size());
     for (const auto& physical_worker_core : physical_worker_cores) {
         bool found = false;
         uint32_t logical_x = 0;
@@ -1091,8 +1104,16 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             logical_y,
             num_cores_x,
             num_cores_y);
-        this->optimal_dram_bank_to_logical_worker_assignment_.push_back(CoreCoord(logical_x, logical_y));
+        assignment.push_back(CoreCoord(logical_x, logical_y));
     }
+    std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
+    // Another thread may have published this same key while we computed.
+    if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
+        this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
+        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
+        return this->optimal_dram_bank_to_logical_worker_assignment_;
+    }
+    this->optimal_dram_bank_to_logical_worker_assignment_ = std::move(assignment);
     this->optimal_dram_bank_to_logical_worker_assignment_noc_ = noc_tag;
     this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ = compute_with_storage_grid_size;
     return this->optimal_dram_bank_to_logical_worker_assignment_;

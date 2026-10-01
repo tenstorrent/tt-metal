@@ -1127,6 +1127,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // uplifted to the MetalEnv level.
     // https://github.com/tenstorrent/tt-metal/issues/21500
     if (destroy_metal_context_instance_on_close_) {
+        // The devices must be closed while their context still exists. An uninitialized mesh (the parent built by
+        // create_unit_meshes) skips the reset above.
+        scoped_devices_.reset();
         MetalContext::destroy_instance(false, context_id_);
         destroy_metal_context_instance_on_close_ = false;
     }
@@ -1353,11 +1356,11 @@ const std::shared_ptr<distributed::multihost::DistributedContext>& MeshDeviceImp
     return coowner_context_;
 }
 
-std::vector<CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+std::vector<CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const {
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 std::unordered_map<uint32_t, CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(
-    NOC noc, const MeshCoordinate& coord) {
+    NOC noc, const MeshCoordinate& coord) const {
     // The assignment is a device-local physical property that can only be queried for a local device.
     // If `coord` maps to a local device, use it. Otherwise (a remote device) fall back to an arbitrary
     // local device's assignment; this is a best-effort approximation that is exact only when the mesh
@@ -1669,9 +1672,8 @@ bool MeshDeviceImpl::initialize_impl(
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    auto sub_devices = {SubDevice(SubDeviceImpl(
-        &metal_env(),
-        std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))}))};
+    auto sub_devices = {
+        SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
 
     // Resource shared across mesh command queues.
     auto cq_shared_state = std::make_shared<CQSharedState>();
@@ -1755,7 +1757,7 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
 
 RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return realtime_profiler_.get(); }
 
-::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() {
+::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() const {
     TT_FATAL(
         drisc_l1_arena_ != nullptr,
         "DriscL1Arena not constructed; programmable DRAM cores auto-enable on Blackhole with firmware "
@@ -2024,11 +2026,11 @@ std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(
     const std::vector<CoreCoord>& logical_cores) const {
     return pimpl_->ethernet_cores_from_logical_cores(logical_cores);
 }
-std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const {
     return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 std::unordered_map<uint32_t, CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(
-    NOC noc, const MeshCoordinate& coord) {
+    NOC noc, const MeshCoordinate& coord) const {
     return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {

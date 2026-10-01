@@ -39,6 +39,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import block_cyclic_reorder
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
 
 
 @dataclass
@@ -247,13 +248,15 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=tuple(dims), mesh_shape=cfg.mesh_shape),
         )
 
-    def make_chunk_input(self, token_ids: list) -> ttnn.Tensor:
+    def make_chunk_input(self, token_ids: list, actual_start: int = 0) -> ttnn.Tensor:
         """Build one chunk's device input for ``prefill_chunk``. On the first rank: the chunk's token IDs
-        as an SP-sharded uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, chunk_size // sp)`` — row r
-        holds the contiguous token slice ``[r*s_local : (r+1)*s_local]``, replicated across the TP cols.
-        This is the SAME per-chip layout the request-mode H2D socket delivers, so both paths feed one code
-        path; ``prefill_chunk`` embeds it on device. (M3 uses a contiguous — non-balanced — SP shard,
-        matching ``prepare_inputs_prefill`` and the block-cyclic layout ``_build_indexed_rope`` assumes.)
+        as an SP-sharded uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, chunk_size // sp)``,
+        replicated across the TP cols. ``token_ids`` are in natural order; chip r receives the tokens at
+        ``rotated_chunk_positions(actual_start)[r]`` — the contiguous slice ``[r*s_local : (r+1)*s_local]``
+        for a chunk-aligned ``actual_start``, rotated for a mid-slab one (a multi-turn resume) so the KV
+        writer and indexed RoPE see each token at its true position. This is the SAME per-chip layout the
+        request-mode H2D socket delivers (the engine's H2D connector applies the same reshuffle), so both
+        paths feed one code path; ``prefill_chunk`` embeds it on device.
 
         On a non-first pipeline rank the input is a hidden-state activation (received over the D2D socket at
         run time), not token IDs — return a placeholder activation of the right spec for warm-up."""
@@ -265,7 +268,8 @@ class TtPrefillRuntime:
         )
         sp = self.config.sp_factor
         s_local = self.config.chunk_size // sp
-        tok = torch.tensor(token_ids, dtype=torch.int32).reshape(sp, 1, s_local)
+        tok = torch.tensor(rotate_chunk_tokens(list(token_ids), actual_start, sp), dtype=torch.int32)
+        tok = tok.reshape(sp, 1, s_local)
         return ttnn.from_torch(
             tok,
             device=self.mesh_device,
@@ -313,7 +317,11 @@ class TtPrefillRuntime:
         t0 = time.perf_counter()
         for start, real in plan:
             self.prefill_chunk(
-                self.make_chunk_input([0] * chunk), kv_cache, slot_id=0, actual_start=start, actual_end=start + real
+                self.make_chunk_input([0] * chunk, start),
+                kv_cache,
+                slot_id=0,
+                actual_start=start,
+                actual_end=start + real,
             )
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
@@ -386,13 +394,13 @@ class TtPrefillRuntime:
         assert (
             actual_start < actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
-        # The block-cyclic SP cache and the MSA cache read address the prefix in whole chunks, so M3 does
-        # not support multi-turn continuation from a prefix that is not chunk-aligned (the shared
-        # producer's PREFILL_PRODUCER_MULTI_TURN_PROB mode resumes at a 32-token boundary). Fail here,
-        # not as a scrambled cache read deep in attention.
-        assert actual_start % self.config.chunk_size == 0, (
-            f"actual_start={actual_start} must be a multiple of chunk_size={self.config.chunk_size}: MiniMax-M3 "
-            f"does not support resuming (multi-turn continuation) from a non-chunk-aligned prefix"
+        # A chunk may start mid-slab (multi-turn continuation resumes at a tile boundary): the input rotation
+        # (make_chunk_input / the engine's H2D reshuffle), the KV writer, indexed rope, ring-joint SDPA, the MSA
+        # indexer / sparse_sdpa_msa and the MoE padding config all derive this device's rotated positions from
+        # actual_start, on the writer's tile-row grid.
+        assert actual_start % ttnn.TILE_SIZE == 0, (
+            f"actual_start={actual_start} must be a multiple of {ttnn.TILE_SIZE} (the KV-cache writer's tile grid); "
+            f"resume a multi-turn continuation at a tile boundary"
         )
 
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
