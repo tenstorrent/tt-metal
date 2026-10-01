@@ -9,7 +9,8 @@ tasks:
   step: intake
   deps: []
   gate:
-    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt && python -m models.demos.common.bringup.intake.check_hf_sanity
+    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt
+      && python -m models.demos.common.bringup.intake.check_hf_sanity
     metrics:
       intake_approved: == 1
       prompt_hash_ok: == 1
@@ -1771,8 +1772,8 @@ tasks:
   deps:
   - L.s56320
   gate:
-    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_total: '> 0'
       profiled_programs: '>= 1'
@@ -1805,19 +1806,22 @@ tasks:
   - models/demos/xing40_a4b_d_p/bringup/hooks.py
   - ttnn/ttnn/bringup
   brief:
-    details: 'Baseline (X.1, rung last, chunk 51200->56320, 40 layers, 4x2): 1735.1 ms device; attention 1104.2 ms (64%). Owner pick (final, 19:30): HiFi2
-      only, no other fidelity; the frozen C.moe.attention test is dropped from this gate by the owner on end-to-end numbers (HiFi2 fails its layer-2 row-norm
-      limit). Owner pick: run the SDPA (ttnn.bringup.ring_mla fork, tt/attention.py) matmuls at MathFidelity.HiFi2 instead of HiFi4; this is an explicit
-      owner exception to rule 7 for the SDPA only (every other matmul stays HiFi4). Keep fp32 dest / the streaming path as now. With HiFi2 re-tune the SDPA
-      program config (q_chunk / k_chunk, L1 fit) if it now allows larger chunks, and measure. Frozen tests must pass unchanged (never edit a frozen test
-      or its limits); if the change cannot pass them, stop and report the measured numbers. A fork change goes behind an option whose default keeps the
-      current behaviour (skill bringup-fork-op), with fork test cases for the new option. Keep the old path selectable behind a switch. Report the measured
-      before/after per op (BRINGUP_PROFILE_OPS=1 profile).'
+    details: 'Baseline (X.1, rung last, chunk 51200->56320, 40 layers, 4x2): 1735.1 ms device; attention 1104.2 ms (64%).
+      Owner pick (final, 19:30): HiFi2 only, no other fidelity; the frozen C.moe.attention test is dropped from this gate
+      by the owner on end-to-end numbers (HiFi2 fails its layer-2 row-norm limit). Owner pick: run the SDPA (ttnn.bringup.ring_mla
+      fork, tt/attention.py) matmuls at MathFidelity.HiFi2 instead of HiFi4; this is an explicit owner exception to rule 7
+      for the SDPA only (every other matmul stays HiFi4). Keep fp32 dest / the streaming path as now. With HiFi2 re-tune the
+      SDPA program config (q_chunk / k_chunk, L1 fit) if it now allows larger chunks, and measure. Frozen tests must pass
+      unchanged (never edit a frozen test or its limits); if the change cannot pass them, stop and report the measured numbers.
+      A fork change goes behind an option whose default keeps the current behaviour (skill bringup-fork-op), with fork test
+      cases for the new option. Keep the old path selectable behind a switch. Report the measured before/after per op (BRINGUP_PROFILE_OPS=1
+      profile).'
   gate:
-    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attention.py && scripts/run_safe_pytest.sh --run-all
-      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_11_ffn_residual.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py
-      && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1
-      TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attention.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_11_ffn_residual.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+      TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all
       --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_attention: < 1050
@@ -1838,27 +1842,34 @@ tasks:
   device: true
   paths: *id004
   brief:
-    details: 'Baseline (X.1): mHC 303 ms per chunk = attn_hc 39.2 + ffn_hc 39.1 + attn_collapse 22.1 + ffn_collapse 22.1 + attn_residual 90.0 + ffn_residual
-      90.5. Adopt the fused bring-up ops (ttnn/ttnn/bringup/mhc_post_ttnn, mhc_pre_ttnn; built, suites pass on this box; GLM wiring in models/demos/glm53_flash_d_p/tt/mhc_fused.py
-      cut its mHC 46 -> 4 ms). (1) mhc_post for attn_/ffn_residual: it computes post*F + comb^T X, Xing needs comb X (xing_ref.py hc_residual): add an option
-      to the fork (default = current comb^T) and use it; it accepts Xing''s column-split [S/4, 4 x 1792] streams as they are. (2) mhc_pre for attn_/ffn_hc
-      + collapse: Xing''s streams are split by column, so the projection is a partial matmul + one [S/4, 32] all_reduce over axis 1 (tt/mhc.py); extend
-      the fork with an entry that takes the reduced 32-wide row (24 mixes + sum of squares) and the local streams, and options for Xing''s math: no +eps
-      on pre, comb logits clamped to [-30, 30], exp(L - rowmax) then 20 x (row + eps, column + eps), comb in Xing''s convention. Land (1) first; if (2)
-      cannot pass the frozen attn_hc / collapse tests, keep (1) and report. Frozen tests must pass unchanged (never edit a frozen test or its limits); if
-      the change cannot pass them, stop and report the measured numbers. A fork change goes behind an option whose default keeps the current behaviour (skill
-      bringup-fork-op), with fork test cases for the new option. Keep the old path selectable behind a switch. Measure only the e2e chunk time and the changed section time, before and after, from the plain profile (no BRINGUP_PROFILE_OPS: per-op mode is for one layer and only when the section time cannot explain a result).'
+    details: 'Baseline (X.1): mHC 303 ms per chunk = attn_hc 39.2 + ffn_hc 39.1 + attn_collapse 22.1 + ffn_collapse 22.1 +
+      attn_residual 90.0 + ffn_residual 90.5. Adopt the fused bring-up ops (ttnn/ttnn/bringup/mhc_post_ttnn, mhc_pre_ttnn;
+      built, suites pass on this box; GLM wiring in models/demos/glm53_flash_d_p/tt/mhc_fused.py cut its mHC 46 -> 4 ms).
+      (1) mhc_post for attn_/ffn_residual: it computes post*F + comb^T X, Xing needs comb X (xing_ref.py hc_residual): add
+      an option to the fork (default = current comb^T) and use it; it accepts Xing''s column-split [S/4, 4 x 1792] streams
+      as they are. (2) mhc_pre for attn_/ffn_hc + collapse: Xing''s streams are split by column, so the projection is a partial
+      matmul + one [S/4, 32] all_reduce over axis 1 (tt/mhc.py); extend the fork with an entry that takes the reduced 32-wide
+      row (24 mixes + sum of squares) and the local streams, and options for Xing''s math: no +eps on pre, comb logits clamped
+      to [-30, 30], exp(L - rowmax) then 20 x (row + eps, column + eps), comb in Xing''s convention. Land (1) first; if (2)
+      cannot pass the frozen attn_hc / collapse tests, keep (1) and report. Frozen tests must pass unchanged (never edit a
+      frozen test or its limits); if the change cannot pass them, stop and report the measured numbers. A fork change goes
+      behind an option whose default keeps the current behaviour (skill bringup-fork-op), with fork test cases for the new
+      option. Keep the old path selectable behind a switch. Measure only the e2e chunk time and the changed section time,
+      before and after, from the plain profile (no BRINGUP_PROFILE_OPS: per-op mode is for one layer and only when the section
+      time cannot explain a result).'
   gate:
-    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py && scripts/run_safe_pytest.sh --run-all
-      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_hc.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_hc.py
-      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_hc.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_collapse.py
-      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_collapse.py && scripts/run_safe_pytest.sh --run-all
-      models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_residual.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_residual.py
-      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_residual.py && scripts/run_safe_pytest.sh --run-all
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_hc.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_hc.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_hc.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_collapse.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_collapse.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_residual.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_residual.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_residual.py && scripts/run_safe_pytest.sh --run-all
       models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_residual.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_11_ffn_residual.py
-      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
-      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py &&
+      BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_attn_residual: < 60
       device_ms_ffn_residual: < 60
@@ -1878,26 +1889,30 @@ tasks:
   device: true
   paths: *id004
   brief:
-    details: 'Required (owner: adopt both mhc ops): after P.2 (mhc_post in the residuals, 9f62db92023), move attn_hc / ffn_hc and attn_collapse / ffn_collapse
-      onto ttnn.bringup.mhc_pre (ttnn/ttnn/bringup/mhc_pre_ttnn). Baseline (P.2 profile): attn_hc 39.2 + ffn_hc 39.1 + attn_collapse 22.1 + ffn_collapse
-      22.1 = 122.5 ms per chunk; device 1255 ms. Extend the fork, every option default-off so the current program is unchanged: (a) an entry (or option)
-      that takes the already all-reduced [S/4, 32] fp32 row (24 mixes + sum of squares, as tt/mhc.py builds it with its partial matmul + all_reduce over
-      axis 1) plus the local column-split streams [S/4, 4 x 1792], and does the RMS scale, sigmoid gates, Sinkhorn and collapse (collapse is column-local);
-      (b) Xing math options: pre = sigmoid(...) with no +eps; comb logits clamped to [-30, 30]; exp(L - rowmax) then 20 x (row / (sum + eps), column / (sum
-      + eps)) (xing_ref.py hc_weights); post = 2 sigmoid; (c) outputs in the layout P.2''s residual (mhc_post comb_transposed=False) consumes. Add fork
-      test cases for the Xing mode vs a torch reference of xing_ref.hc_weights, rebuild, keep the old path behind a switch. "Too much work" is not a stop
-      reason: stop only with measured numbers if, after a real implementation, the frozen hc / collapse tests fail. Frozen tests must pass unchanged; never
-      edit a frozen test or its limits. Report before/after per op.'
+    details: 'Required (owner: adopt both mhc ops): after P.2 (mhc_post in the residuals, 9f62db92023), move attn_hc / ffn_hc
+      and attn_collapse / ffn_collapse onto ttnn.bringup.mhc_pre (ttnn/ttnn/bringup/mhc_pre_ttnn). Baseline (P.2 profile):
+      attn_hc 39.2 + ffn_hc 39.1 + attn_collapse 22.1 + ffn_collapse 22.1 = 122.5 ms per chunk; device 1255 ms. Extend the
+      fork, every option default-off so the current program is unchanged: (a) an entry (or option) that takes the already
+      all-reduced [S/4, 32] fp32 row (24 mixes + sum of squares, as tt/mhc.py builds it with its partial matmul + all_reduce
+      over axis 1) plus the local column-split streams [S/4, 4 x 1792], and does the RMS scale, sigmoid gates, Sinkhorn and
+      collapse (collapse is column-local); (b) Xing math options: pre = sigmoid(...) with no +eps; comb logits clamped to
+      [-30, 30]; exp(L - rowmax) then 20 x (row / (sum + eps), column / (sum + eps)) (xing_ref.py hc_weights); post = 2 sigmoid;
+      (c) outputs in the layout P.2''s residual (mhc_post comb_transposed=False) consumes. Add fork test cases for the Xing
+      mode vs a torch reference of xing_ref.hc_weights, rebuild, keep the old path behind a switch. "Too much work" is not
+      a stop reason: stop only with measured numbers if, after a real implementation, the frozen hc / collapse tests fail.
+      Frozen tests must pass unchanged; never edit a frozen test or its limits. Report before/after per op.'
   gate:
-    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py && scripts/run_safe_pytest.sh --run-all
-      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_hc.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_hc.py
-      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_hc.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_collapse.py
-      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_collapse.py && scripts/run_safe_pytest.sh --run-all
-      models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_collapse.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_collapse.py
-      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_11_ffn_residual.py && scripts/run_safe_pytest.sh
-      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile
-      --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_hc.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_hc.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_hc.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_collapse.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_collapse.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_collapse.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_collapse.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_11_ffn_residual.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+      TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_attn_hc: < 25
       device_ms_ffn_hc: < 25
@@ -1918,15 +1933,20 @@ tasks:
   paths: *id004
   brief:
     details: 'Baseline (X.1): routed experts 256.0 ms per chunk (15%). Owner pick: run the routed-expert matmuls (ttnn.bringup.unified_routed_expert_moe
-      in tt/experts.py) at MathFidelity.HiFi2 instead of HiFi4 (explicit owner exception to rule 7 for the routed experts only); weights stay bfp8, never
-      bfp4. Re-tune the expert kernel config if HiFi2 allows it, and measure. Frozen tests must pass unchanged (never edit a frozen test or its limits);
-      if the change cannot pass them, stop and report the measured numbers. A fork change goes behind an option whose default keeps the current behaviour
-      (skill bringup-fork-op), with fork test cases for the new option. Keep the old path selectable behind a switch. Measure only the e2e chunk time and the changed section time, before and after, from the plain profile (no BRINGUP_PROFILE_OPS: per-op mode is for one layer and only when the section time cannot explain a result).'
+      in tt/experts.py) at MathFidelity.HiFi2 instead of HiFi4 (explicit owner exception to rule 7 for the routed experts
+      only); weights stay bfp8, never bfp4. Re-tune the expert kernel config if HiFi2 allows it, and measure. Frozen tests
+      must pass unchanged (never edit a frozen test or its limits); if the change cannot pass them, stop and report the measured
+      numbers. A fork change goes behind an option whose default keeps the current behaviour (skill bringup-fork-op), with
+      fork test cases for the new option. Keep the old path selectable behind a switch. Measure only the e2e chunk time and
+      the changed section time, before and after, from the plain profile (no BRINGUP_PROFILE_OPS: per-op mode is for one layer
+      and only when the section time cannot explain a result).'
   gate:
-    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_experts.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_11_experts.py
-      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
-      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_experts.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_11_experts.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+      TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_experts: < 235
       host_transfers_per_layer: == 0
@@ -1937,9 +1957,10 @@ tasks:
   deps:
   - P.3
   gate:
-    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1
-      TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh
-      --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
+      BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
     metrics:
       pcc_layer_L*: '>= 0.97'
       pcc_state_min: '>= 0.97'
@@ -1959,9 +1980,10 @@ tasks:
   deps:
   - X.3
   gate:
-    cmd: BRINGUP_CAPTURE_FORKS=models/demos/xing40_a4b_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile
-      models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture && python -m models.demos.common.bringup.testing.fork_cases
-      --capture models/demos/xing40_a4b_d_p/bringup/results/fork_calls.json --run-tests
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/xing40_a4b_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
+      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/xing40_a4b_d_p/bringup/results/fork_calls.json
+      --run-tests
     metrics:
       forks_used: '>= 0'
       fork_calls_uncovered: == 0
@@ -1970,3 +1992,41 @@ tasks:
   paths:
   - ttnn/ttnn/bringup
   device: true
+- id: SC.1
+  title: 'Serving contract: how tt-d-gen drives the model, a how-to for each part and its tests'
+  step: serving
+  role: serving
+  deps:
+  - R.1
+  gate:
+    cmd: python -m models.demos.common.bringup.testing.serving
+    metrics:
+      serving_contract_errors: == 0
+      serving_contract_tests: '>= 1'
+- id: K.2
+  title: 'Serving contract per tt-d-gen: every contract test (runner, unaligned starts, pad, acks, slots); accuracy unchanged'
+  step: contract
+  role: contract
+  deps:
+  - SC.1
+  - O.1
+  gate:
+    cmd: python -m models.demos.common.bringup.testing.serving --run all && BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_contract.py
+    metrics:
+      contract_tests_failed: == 0
+      contract_tests_run: '>= 1'
+      pcc_layer_L*: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+      contract_checks_failed: == 0
+  device: true
+  paths:
+  - models/demos/xing40_a4b_d_p/tt
+  - models/demos/xing40_a4b_d_p/bringup/hooks.py
+  brief:
+    details: 'Xing was built before its serving contract existed (the framework now writes it first, SC.1). Make the model
+      meet bringup/serving_contract.md: every test in bringup/contract_tests.yaml must pass, without changing those tests,
+      and the s56320 accuracy must hold. Follow the how-to section by section; where it points at DeepSeek (deepseek_v3_d_p
+      tt/mla/mla.py, tt/kv_ack.py) reuse that code path rather than writing a new one.'
