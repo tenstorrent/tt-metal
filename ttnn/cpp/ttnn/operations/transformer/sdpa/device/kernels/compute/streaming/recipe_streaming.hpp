@@ -591,7 +591,7 @@ void reduce_c_row_group(
 
     tile_regs_commit();
     tile_regs_wait();
-#if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
+#if defined(SDPA_PA) && defined(SDPA_PA_SAFE) && !(defined(SDPA_PA_SAFE_DBG) && (SDPA_PA_SAFE_DBG & 4))
     if (do_eltwise_max) {
         static_assert(true);
         for (uint32_t i = 0; i < group_size; i++) {
@@ -1878,7 +1878,11 @@ static void sdpa_inner_loop_step(
 #if defined(SDPA_PA) && defined(SDPA_PA_SAFE)
         // Groups whose reference max is unchanged (bitwise, UNPACK's Phase-1 scans), sent to MATH and PACK.
         uint32_t pa_ident = 0;
+#if defined(SDPA_PA_SAFE_DBG) && (SDPA_PA_SAFE_DBG & 2)
+        if (false) {  // debug: no identity mailbox
+#else
         if (!is_first_iter) {
+#endif
             CircularBuffer(prev.max).wait_front(Sq_chunk_t);
             CircularBuffer(cur.max).wait_front(Sq_chunk_t);
             UNPACK({
@@ -1912,6 +1916,12 @@ static void sdpa_inner_loop_step(
             const uint32_t read_row = is_last_iter ? 0 : g * rows;
             CircularBuffer(lsum_cb).push_back(rows * sdpa_sum_stride);
             CircularBuffer(lsum_cb).wait_front(rows * sdpa_sum_stride);
+#if defined(SDPA_PA_SAFE_DBG) && (SDPA_PA_SAFE_DBG & 8)
+            if (!first) {  // debug: skip the per-group l fold
+                CircularBuffer(lsum_cb).pop_front(rows * sdpa_sum_stride);
+                return;
+            }
+#endif
             if (first || ident) {
                 reconfig_data_format_srca(lsum_cb);
                 copy_init(lsum_cb);
