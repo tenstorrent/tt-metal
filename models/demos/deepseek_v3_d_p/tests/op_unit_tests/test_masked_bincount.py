@@ -112,7 +112,8 @@ def test_masked_bincount(
             torch_histograms[(group, chip)] = hist
 
     # masked_bincount consumes the gate's output directly: UINT16, TILE, L1-interleaved. The op
-    # untiles in-kernel and splits the token rows across a fixed 8x8 (64-core) grid internally.
+    # untiles in-kernel and splits the token rows across up to an 8x8 (64-core) grid internally; above
+    # 64 * 128 rows it needs all 64, so the token count must divide by 64 there.
     num_cores = 64
     assert sp_dim % num_cores == 0, f"sp_dim={sp_dim} must be divisible by {num_cores}"
 
