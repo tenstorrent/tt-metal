@@ -1,0 +1,342 @@
+[
+  {
+    "index": 322,
+    "usage": {
+      "prompt_tokens": 12028,
+      "total_tokens": 12058,
+      "completion_tokens": 30
+    },
+    "elapsed_s": 7.781450401991606,
+    "first_visible_delta_s": 7.29035983607173,
+    "decode_visible_s": 0.4710866082459688,
+    "finish_reason": "tool_calls",
+    "deltas_sha256": "c789465facf9f33f94eadc051de457c8f228b09fe7b52349e1ee24e384627744",
+    "tool_deltas": [
+      [
+        {
+          "id": "chatcmpl-tool-a46358a7629f2017",
+          "type": "function",
+          "index": 0,
+          "function": {
+            "name": "bash"
+          }
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "function": {
+            "arguments": "{\"command\": \"grep -rn \\\"CheckConstraint\\\" django/db/models/sql/compiler.py\"}"
+          }
+        }
+      ]
+    ],
+    "protocol": "C1 native stop, same sampling/output limit, seeded diagnostic, tools not executed; 180s request wall cap"
+  },
+  {
+    "index": 324,
+    "usage": {
+      "prompt_tokens": 12086,
+      "total_tokens": 12116,
+      "completion_tokens": 30
+    },
+    "elapsed_s": 7.788349180482328,
+    "first_visible_delta_s": 7.288812465965748,
+    "decode_visible_s": 0.4795458931475878,
+    "finish_reason": "tool_calls",
+    "deltas_sha256": "7ee23e8893767dbf189940787841f64e5bc6769313bd05fc6c231b04aaabde3a",
+    "tool_deltas": [
+      [
+        {
+          "id": "chatcmpl-tool-8801d4c76e233791",
+          "type": "function",
+          "index": 0,
+          "function": {
+            "name": "bash"
+          }
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "function": {
+            "arguments": "{\"command\": \"grep -rn \\\"CheckConstraint\\\" django/db/models/sql/compiler.py\"}"
+          }
+        }
+      ]
+    ],
+    "protocol": "C1 native stop, same sampling/output limit, seeded diagnostic, tools not executed; 180s request wall cap"
+  },
+  {
+    "index": 326,
+    "usage": {
+      "prompt_tokens": 12144,
+      "total_tokens": 12174,
+      "completion_tokens": 30
+    },
+    "elapsed_s": 7.796104990877211,
+    "first_visible_delta_s": 7.2992873676121235,
+    "decode_visible_s": 0.4770598439499736,
+    "finish_reason": "tool_calls",
+    "deltas_sha256": "25ea8b387c8ca4be403b4becd617595a296ac14fdfb9e20dc5536fe0c831229e",
+    "tool_deltas": [
+      [
+        {
+          "id": "chatcmpl-tool-8253a30b9f7cd63a",
+          "type": "function",
+          "index": 0,
+          "function": {
+            "name": "bash"
+          }
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "function": {
+            "arguments": "{\"command\": \"grep -rn \\\"CheckConstraint\\\" django/db/models/sql/compiler.py\"}"
+          }
+        }
+      ]
+    ],
+    "protocol": "C1 native stop, same sampling/output limit, seeded diagnostic, tools not executed; 180s request wall cap"
+  },
+  {
+    "index": 328,
+    "usage": {
+      "prompt_tokens": 12202,
+      "total_tokens": 12232,
+      "completion_tokens": 30
+    },
+    "elapsed_s": 7.7966498620808125,
+    "first_visible_delta_s": 7.299587623216212,
+    "decode_visible_s": 0.47668362874537706,
+    "finish_reason": "tool_calls",
+    "deltas_sha256": "364e9ffc852009a089feb71e6ca7373e54317c2864487a3eb32a51b24ac04767",
+    "tool_deltas": [
+      [
+        {
+          "id": "chatcmpl-tool-bb6debe6a06cbe3b",
+          "type": "function",
+          "index": 0,
+          "function": {
+            "name": "bash"
+          }
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "function": {
+            "arguments": "{\"command\": \"grep -rn \\\"CheckConstraint\\\" django/db/models/sql/compiler.py\"}"
+          }
+        }
+      ]
+    ],
+    "protocol": "C1 native stop, same sampling/output limit, seeded diagnostic, tools not executed; 180s request wall cap"
+  },
+  {
+    "index": 330,
+    "usage": {
+      "prompt_tokens": 12260,
+      "total_tokens": 12290,
+      "completion_tokens": 30
+    },
+    "elapsed_s": 7.826511247083545,
+    "first_visible_delta_s": 7.3289327854290605,
+    "decode_visible_s": 0.4791221981868148,
+    "finish_reason": "tool_calls",
+    "deltas_sha256": "dadaad12e635e4b821d3ebac4c34e602191cb924de4183af5efee6ab9a523647",
+    "tool_deltas": [
+      [
+        {
+          "id": "chatcmpl-tool-a37c35204d9c2d48",
+          "type": "function",
+          "index": 0,
+          "function": {
+            "name": "bash"
+          }
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "function": {
+            "arguments": "{\"command\": \"grep -rn \\\"CheckConstraint\\\" django/db/models/sql/compiler.py\"}"
+          }
+        }
+      ]
+    ],
+    "protocol": "C1 native stop, same sampling/output limit, seeded diagnostic, tools not executed; 180s request wall cap"
+  },
+  {
+    "index": 332,
+    "usage": {
+      "prompt_tokens": 12318,
+      "total_tokens": 12348,
+      "completion_tokens": 30
+    },
+    "elapsed_s": 8.174385422840714,
+    "first_visible_delta_s": 7.680389727465808,
+    "decode_visible_s": 0.4739811588078737,
+    "finish_reason": "tool_calls",
+    "deltas_sha256": "0b9d3ecd52d81536ab2de6418761b7f5466978815ca16aaa215390a4dc139759",
+    "tool_deltas": [
+      [
+        {
+          "id": "chatcmpl-tool-8b53d49834c50f3f",
+          "type": "function",
+          "index": 0,
+          "function": {
+            "name": "bash"
+          }
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "function": {
+            "arguments": "{\"command\": \"grep -rn \\\"CheckConstraint\\\" django/db/models/sql/compiler.py\"}"
+          }
+        }
+      ]
+    ],
+    "protocol": "C1 native stop, same sampling/output limit, seeded diagnostic, tools not executed; 180s request wall cap"
+  },
+  {
+    "index": 334,
+    "usage": {
+      "prompt_tokens": 12376,
+      "total_tokens": 12406,
+      "completion_tokens": 30
+    },
+    "elapsed_s": 8.196795192547143,
+    "first_visible_delta_s": 7.69597902148962,
+    "decode_visible_s": 0.4803913030773401,
+    "finish_reason": "tool_calls",
+    "deltas_sha256": "a1fc9f6fa8d8e4b47f745a3c3a36d77dafd9d64e3481c4558e72d349b72991c9",
+    "tool_deltas": [
+      [
+        {
+          "id": "chatcmpl-tool-a578e140ee65c65d",
+          "type": "function",
+          "index": 0,
+          "function": {
+            "name": "bash"
+          }
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "function": {
+            "arguments": "{\"command\": \"grep -rn \\\"CheckConstraint\\\" django/db/models/sql/compiler.py\"}"
+          }
+        }
+      ]
+    ],
+    "protocol": "C1 native stop, same sampling/output limit, seeded diagnostic, tools not executed; 180s request wall cap"
+  },
+  {
+    "index": 336,
+    "usage": {
+      "prompt_tokens": 12434,
+      "total_tokens": 12464,
+      "completion_tokens": 30
+    },
+    "elapsed_s": 8.199177399277687,
+    "first_visible_delta_s": 7.699665678665042,
+    "decode_visible_s": 0.47977251652628183,
+    "finish_reason": "tool_calls",
+    "deltas_sha256": "5cddeb7a69b6272472f3af1ea10ecdddf92197ec033337f074ea91a1f101da77",
+    "tool_deltas": [
+      [
+        {
+          "id": "chatcmpl-tool-a8f4cf6ee309fb9b",
+          "type": "function",
+          "index": 0,
+          "function": {
+            "name": "bash"
+          }
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "function": {
+            "arguments": "{\"command\": \"grep -rn \\\"CheckConstraint\\\" django/db/models/sql/compiler.py\"}"
+          }
+        }
+      ]
+    ],
+    "protocol": "C1 native stop, same sampling/output limit, seeded diagnostic, tools not executed; 180s request wall cap"
+  },
+  {
+    "index": 338,
+    "usage": {
+      "prompt_tokens": 12492,
+      "total_tokens": 12522,
+      "completion_tokens": 30
+    },
+    "elapsed_s": 8.31578578799963,
+    "first_visible_delta_s": 7.800685410387814,
+    "decode_visible_s": 0.4949470767751336,
+    "finish_reason": "tool_calls",
+    "deltas_sha256": "e77a0df64a014d02c0605a1f84530080f4d3d15ab26160126140306086fa8705",
+    "tool_deltas": [
+      [
+        {
+          "id": "chatcmpl-tool-ac354d769bc8fc09",
+          "type": "function",
+          "index": 0,
+          "function": {
+            "name": "bash"
+          }
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "function": {
+            "arguments": "{\"command\": \"grep -rn \\\"CheckConstraint\\\" django/db/models/sql/compiler.py\"}"
+          }
+        }
+      ]
+    ],
+    "protocol": "C1 native stop, same sampling/output limit, seeded diagnostic, tools not executed; 180s request wall cap"
+  },
+  {
+    "index": 340,
+    "usage": {
+      "prompt_tokens": 12550,
+      "total_tokens": 12580,
+      "completion_tokens": 30
+    },
+    "elapsed_s": 8.254419202916324,
+    "first_visible_delta_s": 7.75356700271368,
+    "decode_visible_s": 0.4811395173892379,
+    "finish_reason": "tool_calls",
+    "deltas_sha256": "8d59d5c48a1914a2b65650e3ee2f81cb375e5c0fd07f9cf8559c4d6169e2e737",
+    "tool_deltas": [
+      [
+        {
+          "id": "chatcmpl-tool-8620a7d434be6fdd",
+          "type": "function",
+          "index": 0,
+          "function": {
+            "name": "bash"
+          }
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "function": {
+            "arguments": "{\"command\": \"grep -rn \\\"CheckConstraint\\\" django/db/models/sql/compiler.py\"}"
+          }
+        }
+      ]
+    ],
+    "protocol": "C1 native stop, same sampling/output limit, seeded diagnostic, tools not executed; 180s request wall cap"
+  }
+]

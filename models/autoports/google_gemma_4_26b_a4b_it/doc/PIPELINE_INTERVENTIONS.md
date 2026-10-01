@@ -241,7 +241,45 @@ Result:
 - Review did not convert the unrun full sweep, timeout-limited evals or blocked
   remote run into passes.
 
-## TODO: Eval-focused performance optimization
+### 9. Eval wall-time investigation (ongoing)
+
+Human prompt, 2026-10-01: “start an astra agent ... analyze and understand what
+are the bottlenecks ... make full prediction ... iterate on small tests ... then
+run actual CI tests and monitor them.” The parent delegated a dedicated Astra
+agent. The retained evidence window starts at 12:43 UTC; work duration and final
+CI outcomes will be closed out after the monitored probes finish.
+
+Problem and current measured findings:
+
+- The baseline used the old image with async scheduling disabled. At real
+  12K–49K SWE contexts, same-image warmed async decode improves approximately
+  5–6%, not the earlier short-context 17.7% on every request. Prompt processing
+  remains unchanged; all ten compared output hashes match.
+- New growing-context requests compile thousands of kernels: ten native
+  30-token Django responses take 168.17 seconds on first use versus 80.13
+  seconds warm. This is a cache-state comparison, not a delivered speedup.
+- The task shell selected base Python instead of the task's `testbed` conda
+  environment. The exact Matplotlib task image reproduces the missing-package
+  failure; the corrected environment immediately reproduces the real bug.
+- Django repeated the same failed command 300 times. A generic warning changes
+  the next action in a matched replay; its effect on solve/reward is not yet
+  validated. It is explicitly separated as an agent-policy intervention.
+- Approximately 686K generated tokens are missing from saved successful
+  responses, including no-tool format errors and timed-out/retried requests.
+  New payload-free request telemetry captures those attempts, usage, timings
+  and tool categories. Request timeout now accommodates the unchanged 32K
+  output limit; final per-trial budget remains 7200 seconds.
+
+Fast iteration strategy: existing images only; 2K–49K real-context replays,
+short next-action probes, exact task-image environment checks, 33 host tests,
+then capped 15-minute CI trials. No full five-task rerun has been launched yet.
+CI probes: [Matplotlib36865475336](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36865475336),
+[Django36867491629](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36867491629).
+Detailed forecasts, configuration, image digests, assumptions and measurements
+are in [`eval_speed/README.md`](eval_speed/README.md). No eval-quality success is
+claimed while these outcome-bearing tests remain unresolved.
+
+## Remaining eval-focused work
 
 - Analyze why standard and agentic evals take so long.
 - Measure their TTFT and TSU.
