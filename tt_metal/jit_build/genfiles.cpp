@@ -43,6 +43,7 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
+#include "impl/data_format/hw_data_format.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
@@ -365,7 +366,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "};\n";
         } else if (entry.metadata.has_value()) {
             content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", ";
-            emit_llk_metadata(content, *entry.metadata);
+            content << serialize_llk_metadata(*entry.metadata);
             content << "};\n";
         } else {
             content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
@@ -406,7 +407,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset << "u, "
                 << entry.addr_crta_offset << "u>;\n";
         content << "constexpr " << entry.name << "_t " << entry.name << "{";
-        emit_llk_metadata(content, entry.metadata);
+        content << serialize_llk_metadata(entry.metadata);
         content << "};\n";
     }
 
@@ -435,7 +436,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         if (entry.metadata.has_value()) {
             content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
                     << entry.size_bytes << "u, ";
-            emit_llk_metadata(content, *entry.metadata);
+            content << serialize_llk_metadata(*entry.metadata);
             content << "};\n";
         } else {
             content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
@@ -830,29 +831,6 @@ void emit_formats_array(
         fmt::join(arr, ","));
 }
 
-// Quasar HW DataFormat codes (mirror of the relevant entries in
-// tensix_types.h. A few host DataFormat
-// enumerators use a value that differs from the HW encoding to keep host enum
-// values unique / avoid collisions, so device compilation needs the real HW
-// code. Keep these in sync with tensix_types.h.
-using hw_format_t = std::underlying_type_t<DataFormat>;
-constexpr hw_format_t kHwInt16 = 9;        // host Int16 is 13 (UInt16 owns 9 on host)
-constexpr hw_format_t kHwMxFp4_2x_B = 24;  // host MxFp4_2x_B is 29 (UInt32 owns 24 on host)
-constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on host)
-constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
-constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
-
-hw_format_t host_data_format_to_hw(DataFormat f) {
-    switch (f) {
-        case DataFormat::Int16: return kHwInt16;
-        case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
-        case DataFormat::MxInt8: return kHwMxInt8;
-        case DataFormat::MxInt4: return kHwMxInt4;
-        case DataFormat::MxInt2: return kHwMxInt2;
-        default: return static_cast<hw_format_t>(f);
-    }
-}
-
 void emit_formats_array(
     std::ostream& out,
     std::string_view array_type,
@@ -1199,21 +1177,6 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOption
     generate_all_descriptors(env, options);
 }
 
-void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata) {
-    const Tile& tile = metadata.tile;
-    const uint32_t face_r_dim = tile.get_face_shape()[0];
-    const uint32_t num_faces = tile.get_num_faces();
-    const uint32_t num_faces_c_dim = std::min(tile.get_width() / constants::FACE_WIDTH, num_faces);
-    const uint32_t num_faces_r_dim = num_faces / num_faces_c_dim;
-    os << fmt::format(
-        "::binding_details::LLKMetadata{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
-        ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
-        host_data_format_to_hw(metadata.format),
-        face_r_dim,
-        constants::FACE_WIDTH,
-        num_faces_r_dim,
-        num_faces_c_dim);
-}
 // clang-format on
 
 }  // namespace tt::tt_metal
