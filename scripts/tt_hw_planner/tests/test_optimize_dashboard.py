@@ -492,3 +492,22 @@ def test_the_metric_says_what_it_covers_and_the_end_to_end_sits_beside_it():
     assert _metric_now(metric, ledger)["scope"] == {"depth": "2", "mode": "eager"}
     assert _fullpipe_baseline(ledger) == 900.0 and _fullpipe_baseline({}) is None
     assert "not end-to-end" in PAGE_HTML and 'k: "end-to-end", v: S.fullpipe_ms' in PAGE_HTML
+
+
+def test_the_metric_current_follows_even_when_the_pinned_baseline_is_a_mid_run_reading():
+    """The FSM can pin state.json's baseline to a reading taken mid-run at the resident depth, not the
+    series' first 'before' (voxtral: baseline 535.46 is a depth-26 `after` of a 609 -> 398 series).
+    `current` must still follow that series' latest reading at that depth, not freeze at baseline."""
+    from scripts.tt_hw_planner.optimize_dashboard import _metric_now
+
+    metric = {"name": "device_ms", "baseline": 535.46, "current": 535.46}
+    rows = [
+        {"kind": "eager_per_op", "phase": "before", "value_ms": 609.42, "depth": "all", "mode": "eager"},
+        {"kind": "eager_per_op", "phase": "after", "value_ms": 478.15, "depth": "all", "mode": "eager"},
+        {"kind": "eager_per_op", "phase": "after", "value_ms": 604.24, "depth": "26", "mode": "eager"},
+        {"kind": "eager_per_op", "phase": "after", "value_ms": 535.46, "depth": "26", "mode": "eager"},
+        {"kind": "eager_per_op", "phase": "after", "value_ms": 397.64, "depth": "26", "mode": "eager"},
+    ]
+    out = _metric_now(metric, {"eager_per_op": rows})
+    assert out["current"] == 397.64, "follows the latest depth-26 reading, not the frozen baseline"
+    assert out["scope"] == {"depth": "26", "mode": "eager"}, "scope names the matched slice"

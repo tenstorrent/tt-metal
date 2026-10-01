@@ -203,26 +203,31 @@ def _metric_now(metric, ledger: dict):
     """The run's metric with `current` taken from the ledger's latest committed reading of it.
 
     state.json is written by the FSM when the loop starts and the optimize loop never touches it
-    again, so its `current` stayed at the baseline for the whole run (Qwen-Image-Edit: 11615.70 ms
-    "current" after six committed wins took it to 5257.93). The ledger's device-time readings are the
-    same quantity -- linked by evidence, not by name: when the ledger's first `before` reading IS the
-    metric's baseline, its latest `after` reading is the current value. Anything else is unchanged."""
+    again, so its `current` stays at the start-of-run value for the whole run even as the ledger
+    records every committed win (voxtral: `device_ms` read 535.46 "current" after the device-time
+    series had fallen to 397.64; qwen the same). The ledger's device-time readings are the SAME
+    quantity -- linked by EVIDENCE, not by name: the metric's baseline IS one of this series'
+    readings. The FSM may pin that baseline to a reading taken mid-run at the resident depth, not the
+    series' first `before` (voxtral's 535.46 is a depth-26 `after` of a 609 -> 398 series), so match
+    the reading the baseline equals, then `current` is the latest reading AT THAT SAME DEPTH and
+    `scope` names that slice. A metric whose baseline matches no reading is a different quantity and is
+    left untouched (its `current` is not borrowed from an unrelated series)."""
     if not isinstance(metric, dict):
         return metric
     from models.experimental.perf_automation.cc_optimize import measurements as _m
 
     rows = [r for r in (ledger or {}).get(_m.KIND_EAGER) or [] if isinstance(r.get("value_ms"), (int, float))]
-    first = next((r for r in rows if r.get("phase") == _m.PHASE_BEFORE), None)
-    before = first["value_ms"] if first else None
-    afters = [r["value_ms"] for r in rows if r.get("phase") == _m.PHASE_AFTER]
     base = metric.get("baseline")
-    if not (isinstance(base, (int, float)) and before is not None and abs(before - base) < 1e-6):
+    if not isinstance(base, (int, float)) or not rows:
         return metric
-    # WHAT THIS NUMBER COVERS, as the ledger recorded it: the profiled slice (its depth) and how it was
-    # timed, so the page can say it is not the end-to-end time. Summing a depth-limited per-op profile
-    # gives a number far below the full-pipeline stage times beside it, and read as "end to end" it
-    # looked like a contradiction (5258 ms device time next to 24537 ms for one stage alone).
-    out = {**metric, "scope": {"depth": first.get("depth"), "mode": first.get("mode")}}
+    # The reading the pinned baseline equals (anywhere in the series, not just the first `before`):
+    # that is the proof this series IS the headline metric, and it tells us which depth/slice it is.
+    matched = next((r for r in rows if abs(r["value_ms"] - base) < 1e-6), None)
+    if matched is None:
+        return metric
+    depth = matched.get("depth")
+    afters = [r["value_ms"] for r in rows if r.get("phase") == _m.PHASE_AFTER and r.get("depth") == depth]
+    out = {**metric, "scope": {"depth": depth, "mode": matched.get("mode")}}
     if afters:
         out["current"] = afters[-1]
     return out
