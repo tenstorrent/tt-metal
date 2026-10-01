@@ -71,13 +71,16 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
 
     const auto& weight_tensor = tensor_args.weight_tensor;
     TT_FATAL(
-        weight_tensor.dtype() == DataType::BFLOAT16 || weight_tensor.dtype() == DataType::FLOAT32,
-        "Weight tensor must be bfloat16 or float32. got {}",
+        weight_tensor.dtype() == DataType::BFLOAT16 || weight_tensor.dtype() == DataType::FLOAT32 ||
+            weight_tensor.dtype() == DataType::BFLOAT8_B,
+        "Weight tensor must be bfloat16, float32 or bfloat8_b. got {}",
         weight_tensor.dtype());
     TT_FATAL(weight_tensor.layout() == Layout::TILE, "Weight tensor must be tile.");
+    // bfloat8_b weights pair with bfloat16 activations only; the matmul unpacks them to bf16 in src regs.
     TT_FATAL(
-        input_tensor_a.dtype() == weight_tensor.dtype(),
-        "Input and weight tensors must have the same dtype. got {} vs {}",
+        input_tensor_a.dtype() == weight_tensor.dtype() ||
+            (weight_tensor.dtype() == DataType::BFLOAT8_B && input_tensor_a.dtype() == DataType::BFLOAT16),
+        "Input and weight tensors must have the same dtype (or bfloat8_b weights with bfloat16 input). got {} vs {}",
         input_tensor_a.dtype(),
         weight_tensor.dtype());
 

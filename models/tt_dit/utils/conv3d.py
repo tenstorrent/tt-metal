@@ -829,12 +829,17 @@ def conv3d_blocking_hash(module: Module) -> str:
     Cached weights depend on C_in_block (prepare_conv3d_weights reshapes by it) and, for
     depth-to-space convs, depth_to_space_stride (they reorder output channels at load). The
     stride is appended only when set, so keys for modules without any depth-to-space conv are
-    byte-identical to the pre-reorder scheme and their existing caches stay valid.
+    byte-identical to the pre-reorder scheme and their existing caches stay valid. A weight dtype
+    that differs from the conv's activation dtype is appended the same way.
     """
     parts = []
     for m in _walk_conv3d_modules(module):
         dts = getattr(m, "depth_to_space_stride", None)
-        parts.append(str(m.conv_config.C_in_block) if dts is None else f"{m.conv_config.C_in_block}:{dts}")
+        part = str(m.conv_config.C_in_block) if dts is None else f"{m.conv_config.C_in_block}:{dts}"
+        weight = getattr(m, "weight", None)
+        if weight is not None and hasattr(m, "dtype") and weight.dtype != m.dtype:
+            part += f":{weight.dtype}"
+        parts.append(part)
     if not parts:
         return ""
     return "cin" + hashlib.sha256("_".join(parts).encode()).hexdigest()[:8]

@@ -27,6 +27,7 @@ from ...utils import cache as cache_module
 from ...utils.conv3d import (
     ConvDims,
     _ntuple,
+    _walk_conv3d_modules,
     aligned_channels,
     conv3d_blocking_hash,
     conv_pad_height,
@@ -192,6 +193,25 @@ class LTXCausalConv3d(Module):
 
         self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
         self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
+
+    def set_precision(
+        self, *, weight_dtype: ttnn.DataType | None = None, math_fidelity: ttnn.MathFidelity | None = None
+    ) -> None:
+        """Override the weight dtype and/or matmul fidelity. Must run before the weights are loaded."""
+        if weight_dtype is not None and weight_dtype != self.weight.dtype:
+            if self.weight._data is not None:
+                raise RuntimeError("set_precision must run before the conv weights are loaded")
+            self.weight = Parameter(
+                total_shape=self.weight.total_shape, device=self.mesh_device, pad_value=0, dtype=weight_dtype
+            )
+        if math_fidelity is not None:
+            self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=math_fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
 
     def _get_pad_offset(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
         """Per-device [h_start, w_start] of the local shard, which conv3d needs to place its logical-pad mask."""
@@ -696,6 +716,22 @@ def _compute_ltx_decoder_dims(
     return dims
 
 
+_CONV_WEIGHT_DTYPES = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}
+
+
+def _decoder_conv_precision_from_env() -> tuple[ttnn.DataType | None, ttnn.MathFidelity | None]:
+    """LTX_VAE_CONV_WEIGHT_DTYPE (bf16|bf8) and LTX_VAE_CONV_FIDELITY (LoFi|HiFi2|HiFi3|HiFi4); unset = default."""
+    dtype_name = os.environ.get("LTX_VAE_CONV_WEIGHT_DTYPE", "")
+    fidelity_name = os.environ.get("LTX_VAE_CONV_FIDELITY", "")
+    if dtype_name and dtype_name not in _CONV_WEIGHT_DTYPES:
+        raise ValueError(f"LTX_VAE_CONV_WEIGHT_DTYPE must be one of {sorted(_CONV_WEIGHT_DTYPES)} (got {dtype_name!r})")
+    if fidelity_name and fidelity_name not in ("LoFi", "HiFi2", "HiFi3", "HiFi4"):
+        raise ValueError(f"LTX_VAE_CONV_FIDELITY must be LoFi, HiFi2, HiFi3 or HiFi4 (got {fidelity_name!r})")
+    weight_dtype = _CONV_WEIGHT_DTYPES[dtype_name] if dtype_name else None
+    math_fidelity = getattr(ttnn.MathFidelity, fidelity_name) if fidelity_name else None
+    return weight_dtype, math_fidelity
+
+
 class LTXVideoDecoder(Module):
     """LTX-2 Video VAE decoder (TTNN): (B, 128, F', H', W') latent → (B, 3, F, H, W) pixels."""
 
@@ -818,6 +854,12 @@ class LTXVideoDecoder(Module):
                 # ch stays the same (in == out for mid block)
             else:
                 raise ValueError(f"Unknown decoder block: {block_name}")
+
+        # Opt-in lower precision for the up-block conv3d layers; conv_in/conv_out keep the defaults.
+        weight_dtype, math_fidelity = _decoder_conv_precision_from_env()
+        if weight_dtype is not None or math_fidelity is not None:
+            for conv in _walk_conv3d_modules(self.up_blocks):
+                conv.set_precision(weight_dtype=weight_dtype, math_fidelity=math_fidelity)
 
         # Output: RMSNorm+SiLU fused → conv_out
         self.norm_out_compute_kernel_config = ttnn.init_device_compute_kernel_config(
