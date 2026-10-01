@@ -10,10 +10,13 @@
  * share only the MISC register: one bank shift, one bank order field per side). These helpers take the side as a
  * template argument so a walk can be programmed, popped, saved and restored on either.
  *
- * Save/restore lets more walks than there are address-generator sides share them: a parked walk's registers are read
- * back (save_state_addrgen) and later written into any side of any address generator (restore_state_addrgen), which
- * then continues the walk exactly where it stopped. FACE_SIZE is not part of the state: callers that program it must
- * save it themselves.
+ * Save/restore lets more walks than there are address-generator sides share them. A walk is what software programmed
+ * (AddrgenProgram) plus how far the hardware has advanced it (AddrgenPosition). Hardware moves only the position
+ * registers -- BANK_CURRENT, INNER_ADDRESS, OUTER_ADDRESS -- so a save reads back just those three
+ * (save_position_addrgen); the program is the caller's to keep, as it wrote it. restore_addrgen writes both into any
+ * side of any address generator, which then continues the walk exactly where it stopped. This is the address-generator
+ * part of the HW team's command-buffer context-switch table ("Qsr cmd buffers"). FACE_SIZE is not part of the program:
+ * callers that program it must restore it themselves.
  */
 
 #pragma once
@@ -61,25 +64,19 @@ inline __attribute__((always_inline)) uint64_t pop_addrgen(uint64_t amount) {
     }
 }
 
-// Kept compact (56 bytes): callers hold these in thread-local storage, which shares a DM core's 8 KB with its stack.
-struct AddrgenState {
-    uint64_t inner_stride, inner_end, inner_address;
-    uint64_t outer_stride, outer_end, outer_address;
-    // BANK_CURRENT, BANK_BASE, BANK_SIZE, BANK_SKIP and MISC's bank_offset (6 bits each) and this side's bank order
-    // (2 bits).
-    uint32_t banking;
+// Everything software programs for a walk on one side; hardware never changes it. banking.current is not part of it
+// (that is position). banking.endpoint_id_shift lands in MISC, which both sides of an address generator share.
+struct AddrgenProgram {
+    BankingConfig banking;
+    uint64_t inner_stride, inner_end;
+    uint64_t outer_stride, outer_end;
+};
 
-    static constexpr uint32_t pack(
-        uint32_t current, uint32_t base, uint32_t size, uint32_t skip, uint32_t offset, uint32_t order) {
-        return (current & 0x3F) | (base & 0x3F) << 6 | (size & 0x3F) << 12 | (skip & 0x3F) << 18 |
-               (offset & 0x3F) << 24 | (order & 0x3) << 30;
-    }
-    constexpr uint32_t bank_current() const { return banking & 0x3F; }
-    constexpr uint32_t bank_base() const { return (banking >> 6) & 0x3F; }
-    constexpr uint32_t bank_size() const { return (banking >> 12) & 0x3F; }
-    constexpr uint32_t bank_skip() const { return (banking >> 18) & 0x3F; }
-    constexpr uint32_t bank_offset() const { return (banking >> 24) & 0x3F; }
-    constexpr uint32_t bank_order() const { return banking >> 30; }
+// The registers hardware advances while a walk runs.
+struct AddrgenPosition {
+    uint64_t inner_address;
+    uint64_t outer_address;
+    uint32_t bank_current;
 };
 
 // Register read, then a fence. Back-to-back rd_reg instructions hung the address generator on emu-quasar-2x3 (the same
@@ -96,42 +93,20 @@ inline __attribute__((always_inline)) uint64_t read_reg_fenced(uint32_t reg_offs
     ((SIDE) == ::overlay::Side::Src ? TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_SRC_##name##_REG_OFFSET \
                                     : TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_DEST_##name##_REG_OFFSET)
 
-// Fills `s` in place: no temporary copy of the struct, which matters where stack is tight (see AddrgenState).
 template <AddrGen ADDRGEN, Side SIDE>
-inline __attribute__((always_inline)) void save_state_addrgen(AddrgenState& s) {
-    const uint32_t current = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, BANK_CURRENT));
-    const uint32_t base = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, BANK_BASE));
-    const uint32_t size = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, BANK_SIZE));
-    const uint32_t skip = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, BANK_SKIP));
-    s.inner_stride = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, INNER_STRIDE));
-    s.inner_end = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, INNER_END));
-    s.inner_address = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, INNER_ADDRESS));
-    s.outer_stride = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, OUTER_STRIDE));
-    s.outer_end = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, OUTER_END));
-    s.outer_address = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, OUTER_ADDRESS));
-    TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;
-    misc.val = read_reg_fenced<ADDRGEN>(TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET);
-    s.banking = AddrgenState::pack(
-        current,
-        base,
-        size,
-        skip,
-        misc.f.bank_offset,
-        SIDE == Side::Src ? misc.f.src_bank_order : misc.f.dst_bank_order);
+inline __attribute__((always_inline)) void save_position_addrgen(AddrgenPosition& p) {
+    p.bank_current = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, BANK_CURRENT));
+    p.inner_address = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, INNER_ADDRESS));
+    p.outer_address = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, OUTER_ADDRESS));
 }
 
 template <AddrGen ADDRGEN, Side SIDE>
-inline __attribute__((always_inline)) void restore_state_addrgen(const AddrgenState& s) {
-    setup_banking_addrgen<ADDRGEN, SIDE>(BankingConfig{
-        .endpoint_id_shift = s.bank_offset(),
-        .size = s.bank_size(),
-        .skip = s.bank_skip(),
-        .base = s.bank_base(),
-        .current = s.bank_current(),
-        .bank_order = static_cast<bank_order_e>(s.bank_order()),
-    });
-    setup_inner_loop_addrgen<ADDRGEN, SIDE>(s.inner_stride, s.inner_end, s.inner_address);
-    setup_outer_loop_addrgen<ADDRGEN, SIDE>(s.outer_stride, s.outer_end, s.outer_address);
+inline __attribute__((always_inline)) void restore_addrgen(const AddrgenProgram& prog, const AddrgenPosition& pos) {
+    BankingConfig banking = prog.banking;
+    banking.current = pos.bank_current;
+    setup_banking_addrgen<ADDRGEN, SIDE>(banking);
+    setup_inner_loop_addrgen<ADDRGEN, SIDE>(prog.inner_stride, prog.inner_end, pos.inner_address);
+    setup_outer_loop_addrgen<ADDRGEN, SIDE>(prog.outer_stride, prog.outer_end, pos.outer_address);
 }
 
 #undef OVERLAY_AG_REG

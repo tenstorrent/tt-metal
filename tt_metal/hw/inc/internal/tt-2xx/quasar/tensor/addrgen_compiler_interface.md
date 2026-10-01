@@ -65,7 +65,7 @@ What the compiler needs to know, per walk:
 - **Which kind and direction.** Page-id walk, shard-base walk (ShardView), or in-shard walk (`shard_pages()`), read
   or write. These are different walks even for the same tensor.
 
-With more than two live walks, the compiler would place `save_src_state_addrgen` / `restore_src_state_addrgen`
+With more than two live walks, the compiler would place `save_position_addrgen` / `restore_addrgen`
 (`overlay/addrgen_state.hpp`) at region boundaries, where register allocation would place spills, instead of the
 library's per-transfer LRU.
 

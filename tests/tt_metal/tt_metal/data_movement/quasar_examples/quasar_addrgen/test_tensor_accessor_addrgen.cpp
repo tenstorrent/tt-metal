@@ -2241,8 +2241,8 @@ TEST_P(AddrgenLoopProbe, MatchesLoopModel) {
     const auto& c = GetParam();
     auto& device = *devices_.at(0);
     const m2::NodeCoord node{0, 0};
-    constexpr uint32_t kNumStateWords = 12;  // AddrgenSrcState fields, see addrgen_loop_probe.cpp
-    constexpr uint32_t kReportBytes = (loop_probe::kNumPops + kNumStateWords) * sizeof(uint64_t);
+    constexpr uint32_t kNumRegWords = 12;  // one register snapshot (RegSnapshot order), see addrgen_loop_probe.cpp
+    constexpr uint32_t kReportBytes = (loop_probe::kNumPops + 2 * kNumRegWords) * sizeof(uint64_t);
     auto report = unit_tests::dm::ta_addrgen::make_l1_region(device, kReportBytes);
     std::vector<uint32_t> report_init(kReportBytes / sizeof(uint32_t), 0xDEADBEEF);
     slow_dispatch::WriteToL1(device, node, report->address(), report_init);
@@ -2302,8 +2302,12 @@ TEST_P(AddrgenLoopProbe, MatchesLoopModel) {
             loop_probe::describe(expected[i]),
             got == expected[i] ? "" : "  <-- differs");
     }
+    // A spill's restore must leave every register of the walk's side as it was before the save -- the trimmed save
+    // reads back only the position, so this is what shows a stale program register (one this walk's pops might not
+    // exercise).
+    std::string reg_diffs;
     if (c.spill_after != 0) {
-        static constexpr const char* kStateNames[] = {
+        static constexpr const char* kRegNames[] = {
             "bank_current",
             "bank_base",
             "bank_size",
@@ -2316,15 +2320,25 @@ TEST_P(AddrgenLoopProbe, MatchesLoopModel) {
             "outer_address",
             "bank_offset",
             "bank_order"};
-        table += fmt::format("\n  saved after pop {}:", c.spill_after - 1);
-        for (uint32_t i = 0; i < kNumStateWords; ++i) {
-            const uint64_t v = (static_cast<uint64_t>(raw[2 * (loop_probe::kNumPops + i) + 1]) << 32) |
-                               raw[2 * (loop_probe::kNumPops + i)];
-            table += fmt::format(" {}=0x{:x}", kStateNames[i], v);
+        auto word = [&](uint32_t i) {
+            const uint32_t w = loop_probe::kNumPops + i;
+            return (static_cast<uint64_t>(raw[2 * w + 1]) << 32) | raw[2 * w];
+        };
+        table += fmt::format("\n  registers before save (after pop {}) / after restore:", c.spill_after - 1);
+        for (uint32_t i = 0; i < kNumRegWords; ++i) {
+            const uint64_t before = word(i);
+            const uint64_t after = word(kNumRegWords + i);
+            table += fmt::format(
+                "\n    {:14} 0x{:x} / 0x{:x}{}", kRegNames[i], before, after, before == after ? "" : "  <-- differs");
+            if (before != after) {
+                reg_diffs += fmt::format(" {}", kRegNames[i]);
+            }
         }
     }
     log_info(tt::LogTest, "addrgen loop probe {}:{}", c.name, table);
     EXPECT_EQ(first_bad, -1) << c.name << ": first difference from the loop model at pop " << first_bad << table;
+    EXPECT_TRUE(reg_diffs.empty()) << c.name << ": restore left registers different from before the save:" << reg_diffs
+                                   << table;
 }
 
 INSTANTIATE_TEST_SUITE_P(
