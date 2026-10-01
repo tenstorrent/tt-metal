@@ -285,6 +285,42 @@ inline void lmask_fused(uint32_t ones, uint32_t decay, uint32_t decay_row, uint3
     cb_push_back(o, Ct * Ct);
 }
 
+// lmask_fused for one tile (Ct == 1) that also forms the nkd column in the same DST pass: the front tile of `dexp`
+// is copied to DST2, negated and packed as the one tile of `o_neg`. A separate function so the Ct == 2 build's
+// lmask_fused instantiation stays as it was.
+inline void lmask_negexp_fused(
+    uint32_t ones, uint32_t decay, uint32_t decay_row, uint32_t tril, uint32_t o, uint32_t dexp, uint32_t o_neg) {
+    cb_reserve_back(o, 1);
+    cb_reserve_back(o_neg, 1);
+    pack_reconfig_data_format(o);
+    tile_regs_acquire();
+    reconfig_data_format(ones, decay);  // bcast(a, b): a->srcA, b->srcB
+    mul_bcast_cols_init(ones, decay);
+    mul_tiles_bcast_cols(ones, decay, 0, 0, 0);  // DST0[i,j] = decay_i
+    mul_bcast_rows_init(ones, decay_row);
+    mul_tiles_bcast_rows(ones, decay_row, 0, 0, 1);  // DST1[i,j] = decay_j
+    sub_binary_tile_init();
+    sfpu_sub_dst(0, 1, 0);  // DST0 = decay_i - decay_j
+    copy_init(tril);
+    copy_tile(tril, 0, 1);  // DST1 = tril tile
+    copy_init(dexp);
+    copy_tile(dexp, 0, 2);  // DST2 = decay_exp
+    mul_binary_tile_init();
+    sfpu_mul_dst(0, 1, 0);  // zero the upper triangle before the exp
+    exp_tile_init();
+    sfpu_exp_dst(0);
+    sfpu_mul_dst(0, 1, 0);  // * tril -> L_mask
+    negative_tile_init();
+    negative_tile(2);  // -decay_exp
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, o, 0);
+    cb_push_back(o, 1);
+    pack_tile(2, o_neg, 0);
+    tile_regs_release();
+    cb_push_back(o_neg, 1);
+}
+
 // dl*I: the identity tile scaled by column 0 of tile `col_tile` of `col` (dl in every row).
 inline void dl_tile(uint32_t eye, uint32_t col, uint32_t col_tile, uint32_t o) {
     cb_reserve_back(o, 1);
@@ -762,6 +798,8 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     // The solve build waits for the normalized q/k at their first readers (Kk at k_beta, Q at intra); the Horner
     // build drains them here, at its size limit.
     constexpr bool kLateNormWaits = qk_norm && kGdnTinvSfpu;
+    // The fused Ct == 1 solve producer's forms of the blocks below; the Horner and Ct == 2 builds keep theirs.
+    constexpr bool kCt1Sfpu = kGdnTinvSfpu && Ct == 1;
     {
         GDN_ZONE("pp_norm");
         if constexpr (qk_norm) {
@@ -809,7 +847,6 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         GDN_ZONE("pp_decay");
         // ---- P2: decay = tril@g, decay_exp, decayfac = exp(g_sum - decay), dl = exp(g_sum): one DST pass;
         // then decay_row ----
-        constexpr bool kCt1Sfpu = kGdnTinvSfpu && Ct == 1;
         decay_all<kCt1Sfpu, kCt1Sfpu>(cb.tril, cb.ones, cb.g, cb.decay, cb.decay_exp, cb.decayfac, ct);
         WAIT(cb.decay, Ct);  // decay_exp / decayfac are waited for at pp_kd / pp_kdec
         POP(cb.g, Ct);
@@ -820,7 +857,13 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     {
         GDN_ZONE("pp_lmask");
         // ---- L_mask = tril(exp(decay_i - decay_j)): one DST pass per tile (was five packed blocks) ----
-        lmask_fused(cb.ones, cb.decay, cb.scr1, cb.tril, cb.lmask, ct);
+        // The solve build also forms -decay_exp (the nkd column) in this pass, into scr2.
+        if constexpr (kCt1Sfpu) {
+            WAIT(cb.decay_exp, Ct);
+            lmask_negexp_fused(cb.ones, cb.decay, cb.scr1, cb.tril, cb.lmask, cb.decay_exp, cb.scr2);
+        } else {
+            lmask_fused(cb.ones, cb.decay, cb.scr1, cb.tril, cb.lmask, ct);
+        }
         WAIT(cb.lmask, cc);
         POP(cb.scr1, Ct);  // decay_row done
         POP(cb.decay, Ct);
@@ -925,10 +968,17 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // T_inv (cb.Tinv). The scan computes v_new = T_inv @ (v_beta + nkd@S), applying the inverse
         // AFTER the subtraction so its fp error is not amplified by the u - w@S cancellation. The
         // operand is handed off NEGATED so the scan forms v_beta + nkd@S as one DST accumulation
-        // (nkd @ S, then I @ v_beta accumulated onto it): the negation is an exact SFPU sign flip of
-        // the broadcast product before it is packed.
-        WAIT(cb.decay_exp, Ct);
-        bcast_cols_mul_neg(cb.kbeta, cb.decay_exp, cb.w, ct, Kt);  // nkd -> cb.w (output, no wait)
+        // (nkd @ S, then I @ v_beta accumulated onto it): the negation is an exact SFPU sign flip, of the
+        // decay_exp column (scr2, formed at pp_lmask) in the solve build and of each broadcast product
+        // before its pack in the Horner build.
+        if constexpr (kCt1Sfpu) {
+            WAIT(cb.scr2, 1);
+            bcast_cols_mul(cb.kbeta, cb.scr2, cb.w, ct, Kt);  // nkd -> cb.w (output, no wait)
+            POP(cb.scr2, 1);
+        } else {
+            WAIT(cb.decay_exp, Ct);
+            bcast_cols_mul_neg(cb.kbeta, cb.decay_exp, cb.w, ct, Kt);  // nkd -> cb.w (output, no wait)
+        }
         POP(cb.kbeta, ck);
     }
     // cb.vbeta (v_beta) and cb.Tinv (T_inv) remain pushed for the writer; NOT popped here.
