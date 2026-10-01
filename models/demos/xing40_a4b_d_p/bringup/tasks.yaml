@@ -2022,7 +2022,7 @@ tasks:
       top5_overlap: '>= 0.9'
       contract_checks_failed: == 0
   device: true
-  paths:
+  paths: &id005
   - models/demos/xing40_a4b_d_p/tt
   - models/demos/xing40_a4b_d_p/bringup/hooks.py
   brief:
@@ -2030,3 +2030,27 @@ tasks:
       meet bringup/serving_contract.md: every test in bringup/contract_tests.yaml must pass, without changing those tests,
       and the s56320 accuracy must hold. Follow the how-to section by section; where it points at DeepSeek (deepseek_v3_d_p
       tt/mla/mla.py, tt/kv_ack.py) reuse that code path rather than writing a new one.'
+- id: K.3
+  title: 'One KV cache format: the accuracy ladder runs on the served bfp8_b TILE cache'
+  step: contract
+  role: contract
+  deps:
+  - K.2
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && python -m models.demos.common.bringup.testing.serving --run all
+    metrics:
+      contract_tests_failed: == 0
+      contract_tests_run: '>= 1'
+      pcc_layer_L*: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+  paths: *id005
+  brief:
+    details: K.2 made the served cache bfp8_b TILE (tt/runners/kv_contract.py cache_dtype()) but the bring-up harness (hooks.py,
+      TtMlaAttention geometry caches) still builds a bf16 cache, so the accuracy ladder no longer measures what is served.
+      Make the harness build and use the cache in cache_dtype() (same dtype and storage as the runtime), keep XING_KV_CACHE_DTYPE=bf16
+      as the switch back. Then the s56320 ladder must pass its thresholds on the bfp8 cache, and every contract test must
+      still pass. Do not change thresholds or tests. Report the s56320 numbers (min layer PCC, final hidden, logits, top1,
+      top5) next to the bf16 ones in BREADCRUMBS.
