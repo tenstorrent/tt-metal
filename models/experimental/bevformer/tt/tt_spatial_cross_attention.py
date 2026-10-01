@@ -376,17 +376,24 @@ class TTSpatialCrossAttention:
         # last dimension and transposes all three operands to get there.
         #
         # Selecting zero makes padded rows neutral even if attention produces NaN or infinity.
+        # Each contribution is already BF16. Adding those tensors rounds after every camera, so a
+        # 1 sitting next to 256 disappears before the cancelling term arrives (256 + 1 + -256
+        # comes back as 2). The running sum stays in FP32 and is rounded once, after the last camera.
         contribution_rows = ttnn.reshape(
             ttnn.to_layout(ttnn.where(rebatch_plan.row_mask, queries_output, 0.0), ttnn.ROW_MAJOR_LAYOUT),
             (1, 1, bs * self.num_cams * rebatch_len, self.embed_dims),
         )
         slots = None
         for index in rebatch_plan.inverse_index:
-            gathered = ttnn.to_layout(
-                ttnn.reshape(ttnn.embedding(index, contribution_rows), (bs, num_queries, self.embed_dims)),
-                ttnn.TILE_LAYOUT,
+            gathered = ttnn.typecast(
+                ttnn.to_layout(
+                    ttnn.reshape(ttnn.embedding(index, contribution_rows), (bs, num_queries, self.embed_dims)),
+                    ttnn.TILE_LAYOUT,
+                ),
+                ttnn.float32,
             )
             slots = gathered if slots is None else ttnn.add(slots, gathered)
+        slots = ttnn.typecast(slots, ttnn.bfloat16)
 
         if ENABLE_LOGGING:
             logger.info("SCA Feature Aggregation Complete")
