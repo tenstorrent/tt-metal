@@ -154,6 +154,16 @@ export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 ```
 
+**Model checkpoint** — the single-chip PCC/perf path (and every single-chip number in this
+README) uses the openpi base checkpoint **`gs://openpi-assets/checkpoints/pi05_base`**
+(public JAX/Orbax), converted to torch safetensors at `weights/pi05_base`. One command
+downloads, converts, verifies and links it (details in
+[`weights/README.md`](weights/README.md#pi05_base--single-chip-pccperf)):
+
+```bash
+models/experimental/pi0_5/weights/download_pi05_base.sh   # → $HOME/pi05_cache/pi05_base, linked at weights/pi05_base
+```
+
 **Resetting / selecting devices** (Blackhole Galaxy = 32 chips, numbered 0–31):
 
 ```bash
@@ -171,7 +181,7 @@ fabric router-sync / ethernet-handshake timeout.
 ## Quickstart
 
 Set the environment once. The single-chip PCC/perf tests default to the base checkpoint
-in `weights/pi05_base`; LIBERO task-success needs a fine-tuned checkpoint (see
+in `weights/pi05_base` (converted from `gs://openpi-assets/checkpoints/pi05_base`); LIBERO task-success needs a fine-tuned checkpoint (see
 [`weights/download_pi05_libero.py`](weights/README.md)):
 
 ```bash
@@ -252,6 +262,33 @@ TT_VISIBLE_DEVICES=0 PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
 |---|---|---|
 | **5 steps** | 35.76 ms | 41.11 ms |
 | **10 steps** | 50.13 ms | 56.93 ms |
+
+#### Single Chip p150a, e2e trace + 2CQ (openpi `pi05_base`, horizon 50)
+
+Standalone **p150a** (host: AMD Ryzen 9 7900X), checkpoint converted from
+`gs://openpi-assets/checkpoints/pi05_base`. Mean of 3 fresh-process repeats per config
+(20 timed chunks each, D2H included; repeats agree within 0.06 ms); AICLK held at 1350 MHz.
+2-camera runs set `PI0_VLM_CHUNK_SIZE=768`, 3-camera runs use the env-file default 1024:
+
+```bash
+source models/experimental/pi0_5/common/pi05_production.env
+export PI05_CHECKPOINT_DIR=$PWD/models/experimental/pi0_5/weights/pi05_base   # env file hardcodes another path
+TT_VISIBLE_DEVICES=0 PI0_NUM_CAMERAS=2 PI0_VLM_CHUNK_SIZE=768 PI05_NUM_DENOISE_STEPS=5 \
+  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace_2cq.py
+```
+
+| Denoise steps | 2 cameras | 3 cameras |
+|---|---|---|
+| **5 steps** | 34.60 ms | 38.28 ms |
+| **10 steps** | 48.87 ms | 53.46 ms |
+
+| | Physical Tensix grid | Tensix cores | Usable compute grid (what ttnn reports) |
+|---|---|---|---|
+| p150a (this board) | 14×10, no harvested columns | 140 | 13×10 = 130 |
+
+Usable = 140 minus one Tensix column reserved for fast dispatch (`DispatchCoreType.WORKER`,
+axis `COL`). Verified via firmware `ENABLED_TENSIX_COL=0x3fff`, UMD Tensix harvesting mask
+`0x0`, and `device.compute_with_storage_grid_size()` = 13×10.
 
 **PCC — TTNN vs torch (device 0).** The full-model e2e needs `PI0_UPSTREAM_MASKS=1`
 (correct prefix-offset suffix RoPE positions for the base checkpoint; the default

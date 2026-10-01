@@ -1,8 +1,48 @@
 # weights/
 
-Checkpoints are **not** tracked in git. Use the download script to fetch and
-prepare the upstream openpi **pi05_libero** checkpoint in the torch/safetensors
-layout this package expects.
+Checkpoints are **not** tracked in git.
+
+## pi05_base — single-chip PCC/perf
+
+Model checkpoint: **`gs://openpi-assets/checkpoints/pi05_base`** (openpi JAX/Orbax, public
+bucket, ~12.4 GB). The single-chip PCC/perf numbers are measured with this checkpoint — use
+it, not the HF `lerobot/pi05_base` mirror. [`download_pi05_base.sh`](download_pi05_base.sh)
+converts it to torch safetensors with openpi's own exporter, in one command:
+
+```bash
+models/experimental/pi0_5/weights/download_pi05_base.sh
+# PI05_CACHE=<dir>  work/output dir, outside the repo (default $HOME/pi05_cache)
+# KEEP_JAX=1        keep the downloaded JAX checkpoint (default: deleted after conversion)
+export PI05_CHECKPOINT_DIR=$HOME/pi05_cache/pi05_base
+```
+
+Needs `curl`, `git`, `uv`, `python3`, ~27 GB free disk while converting (~14.5 GB after) and
+~44 GB RAM (CPU-only conversion, ~1 min). The script:
+
+1. downloads the Orbax checkpoint from the public bucket via `curl` (resumable, sizes verified);
+2. clones openpi (pinned commit) into `$PI05_CACHE/openpi`, runs `uv sync`, and applies
+   openpi's `transformers_replace` patch (AdaRMS) — with `UV_LINK_MODE=copy`, so the patch
+   stays inside openpi's `.venv` (uv's default hardlink mode would also patch the shared uv cache);
+3. runs `examples/convert_jax_model_to_pytorch.py --config_name pi05_aloha --precision float32`;
+4. verifies the result with this package's `Pi0_5WeightLoader` (horizon 50, adaRMS + `time_mlp_*` tensors);
+5. links it at `weights/pi05_base` (the PCC/perf test default) and deletes the JAX checkpoint.
+
+Exporter details the script handles:
+
+- `--config_name pi05_aloha` is `Pi0Config(pi05=True)` with all defaults, so `config.json`
+  gets `action_horizon=50` (pi05_base's horizon). The weights don't depend on the config.
+- `--checkpoint_dir` must contain `pi05` — the exporter picks the adaRMS weight mapping by
+  that substring.
+- `--precision float32`: the Orbax params are fp32; the exporter's default `bfloat16` rounds them.
+- The exporter looks for `assets/` next to `--checkpoint_dir`, not inside it, so the script copies them.
+
+Result: `model.safetensors` (~14.5 GB fp32, 812 tensors, no `model.` prefix), `config.json`,
+`assets/<robot>/norm_stats.json`.
+
+## pi05_libero — LIBERO task success
+
+Use the download script to fetch and prepare the upstream openpi **pi05_libero**
+checkpoint in the torch/safetensors layout this package expects.
 
 ```bash
 # gated repo → authenticate first
