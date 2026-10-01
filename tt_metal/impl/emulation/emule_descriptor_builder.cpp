@@ -304,6 +304,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word, const std::optional<LLKMetadata>&) {
                     kd.bindings.scratch.push_back(ScratchBinding{name, size_bytes, addr_crta_word});
                 });
+            k.process_tensor_binding_sequences([&kd](const std::string& name, const std::vector<std::string>& members) {
+                kd.bindings.tensor_sequences.push_back(TensorBindingSequence{name, members});
+            });
+            kd.bindings.compile_time_vararg_count = k.get_compile_time_vararg_count();
             for (const auto& r : k.core_range_set().ranges()) {
                 kd.core_ranges.push_back(
                     {static_cast<uint32_t>(r.start_coord.x),
