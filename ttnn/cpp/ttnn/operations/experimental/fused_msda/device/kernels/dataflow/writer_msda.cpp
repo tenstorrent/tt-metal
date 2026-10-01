@@ -19,22 +19,27 @@
 // Generic writer: one head's stick at a byte offset in the query page.
 //
 // With SPLIT_GATHER the writer also gathers rows [SPLIT_ROW, 32) of every
-// point the reader stages (msda_gather_rows.hpp): it waits for the reader's
-// `ready` count, gathers from the point it posted to the mailbox, and bumps
-// `done`. The data-movement RISC here is otherwise idle for all but the last
-// few microseconds of each block, and it issues its reads on its own NoC.
+// point the reader stages, into the input-CB block the reader reserved (the
+// handshake is in msda_gather_rows.hpp). This RISC has spare issue capacity
+// and its own NoC, and the reader is bound by decode and read issue.
 //
 // Tile face layout (bf16, 32x32 = 4 faces of 16x16, 2048 B) is documented in
 // ../msda_tile_layout.hpp. D-tile k holds value columns [k*32, k*32+31].
 //
-// Per-tile runtime args (3 per tile): (base_page, head, v_rows), where
-// base_page = b * Q + q_start; rows 0..v_rows-1 go to consecutive pages.
+// Runtime args:
+//   [0]        output buffer address
+//   [1]        num_output_tiles
+//   [2]        value buffer address (read only with SPLIT_GATHER)
+//   [3 ...]    per output tile: base_page, head, v_rows, where
+//              base_page = b * Q + q_start; rows 0..v_rows-1 go to consecutive pages
+// Compile-time arg order is fixed by fused_msda_program_factory.cpp (writer_ct).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tile_layout.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/msda_gather_rows.hpp"
@@ -47,14 +52,15 @@ constexpr bool SPLIT_GATHER = get_compile_time_arg_val(4) != 0;
 constexpr uint32_t gather_ready_sem_id = get_compile_time_arg_val(5);
 constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(6);
 constexpr uint32_t gather_mailbox_cb_index = get_compile_time_arg_val(7);
-constexpr uint32_t POINTS_PER_BLOCK = get_compile_time_arg_val(8);
-constexpr uint32_t NUM_HEADS = get_compile_time_arg_val(9);
-constexpr uint32_t NUM_KEYS = get_compile_time_arg_val(10);
-constexpr bool VALUE_PACKED = get_compile_time_arg_val(11) != 0;
-constexpr uint32_t value_stick_nbytes = get_compile_time_arg_val(12);
-constexpr uint32_t value_page_nbytes = get_compile_time_arg_val(13);
+constexpr uint32_t gather_mailbox_nbytes = get_compile_time_arg_val(8);  // allocated page; 0 without SPLIT_GATHER
+constexpr uint32_t POINTS_PER_BLOCK = get_compile_time_arg_val(9);
+constexpr uint32_t NUM_HEADS = get_compile_time_arg_val(10);
+constexpr uint32_t NUM_KEYS = get_compile_time_arg_val(11);
+constexpr bool VALUE_PACKED = get_compile_time_arg_val(12) != 0;
+constexpr uint32_t value_stick_nbytes = get_compile_time_arg_val(13);
+constexpr uint32_t value_page_nbytes = get_compile_time_arg_val(14);
 
-constexpr auto output_args = TensorAccessorArgs<14>();
+constexpr auto output_args = TensorAccessorArgs<15>();
 constexpr auto value_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
 struct WriterGatherCfg {
@@ -75,6 +81,10 @@ constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
 constexpr uint32_t N_D_TILES = (STICK_WORDS + WORDS_PER_TILE_ROW - 1) / WORDS_PER_TILE_ROW;
 constexpr uint32_t HEAD_NBYTES = D * sizeof(uint16_t);
 static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
+static_assert(!SPLIT_GATHER || value_stick_nbytes == D * 2u, "the split gather packs unpadded D*2-byte sticks");
+static_assert(
+    !SPLIT_GATHER || sizeof(fused_msda_gather::PointArgs) <= gather_mailbox_nbytes,
+    "PointArgs no longer fits the gather mailbox page");
 
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -93,10 +103,8 @@ void kernel_main() {
 
     [[maybe_unused]] const uint32_t gather_mailbox_l1 =
         SPLIT_GATHER ? CircularBuffer(gather_mailbox_cb_index).get_write_ptr() : 0u;
-    [[maybe_unused]] volatile tt_l1_ptr uint32_t* gather_ready =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather_ready_sem_id));
-    [[maybe_unused]] volatile tt_l1_ptr uint32_t* gather_done =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather_done_sem_id));
+    [[maybe_unused]] Semaphore<> gather_ready(gather_ready_sem_id);
+    [[maybe_unused]] Semaphore<> gather_done(gather_done_sem_id);
     [[maybe_unused]] uint32_t gather_seq = 0;
 
     uint32_t arg_idx = 3;
@@ -110,16 +118,18 @@ void kernel_main() {
             // The block's output cannot exist before its last point is
             // gathered, so helping with every point first costs no overlap.
             for (uint32_t j = 0; j < POINTS_PER_BLOCK; ++j) {
-                ++gather_seq;
-                while (*gather_ready != gather_seq) {
-                }
+                // The wait invalidates the RISC L1 data cache on every poll, so
+                // the mailbox and the x0/y0 tiles read after it are the
+                // reader's and compute's current writes.
+                gather_ready.wait(++gather_seq);
                 const auto pt = fused_msda_gather::fetch_point(gather_mailbox_l1);
                 fused_msda_gather::gather_rows<WriterGatherCfg>(
                     noc, value_acc, pt, fused_msda_gather::SPLIT_ROW, fused_msda_tile_layout::TILE_MAX_ROWS);
                 noc.async_read_barrier();
-                // Plain zero stores above; keep them ahead of the release.
+                // Plain zero stores above: a compiler barrier keeps them ahead
+                // of the done store, and L1 stores from one RISC are in order.
                 asm volatile("" ::: "memory");
-                *gather_done = gather_seq;
+                gather_done.set(gather_seq);
             }
         }
 
