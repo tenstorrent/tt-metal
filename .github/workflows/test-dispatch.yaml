@@ -61,6 +61,35 @@ jobs:
           ref: v0.26.0
           path: pair-runtime/vllm-source
           persist-credentials: false
+      - name: Setup job-local verified GitHub CLI
+        timeout-minutes: 2
+        run: |
+          python3 - <<'PY'
+          import hashlib, io, json, os, pathlib, platform, subprocess, tarfile, urllib.request
+          assert platform.machine() == 'x86_64'
+          version = '2.78.0'
+          digest = 'ac309f70c5d6b122c82e6138ce82cb65ca5d8595cc09d11751fbc4e3907e1a05'
+          url = 'https://github.com/cli/cli/releases/download/v' + version + '/gh_' + version + '_linux_amd64.tar.gz'
+          with urllib.request.urlopen(url, timeout=30) as response:
+              payload = response.read()
+          assert hashlib.sha256(payload).hexdigest() == digest, 'Official CLI archive digest mismatch'
+          binary = pathlib.Path('pair-runtime/tools/gh/bin/gh')
+          binary.parent.mkdir(parents=True)
+          with tarfile.open(fileobj=io.BytesIO(payload), mode='r:gz') as archive:
+              member = archive.getmember('gh_' + version + '_linux_amd64/bin/gh')
+              assert member.isfile()
+              binary.write_bytes(archive.extractfile(member).read())
+          binary.chmod(0o755)
+          actual = subprocess.check_output([str(binary.resolve()), '--version'], text=True, timeout=10)
+          assert actual.splitlines()[0].split()[2] == version
+          with open(os.environ['GITHUB_PATH'], 'a') as path:
+              path.write(str(binary.parent.resolve()) + '\n')
+          evidence = pathlib.Path('pair-runtime/evidence')
+          evidence.mkdir(exist_ok=True)
+          receipt = {'version': version, 'official_url': url, 'archive_sha256': digest, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'job_local': True}
+          (evidence / 'gh-cli.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          print('Verified job-local gh ' + version + ': ' + receipt['binary_sha256'])
+          PY
       - name: Verify current assignment and sealed artifact metadata
         env:
           GH_TOKEN: ${{ github.token }}
@@ -85,7 +114,7 @@ jobs:
               assert item['digest'] == 'sha256:' + digest
               receipts['artifacts'].append({'id': artifact_id, 'digest': item['digest'], 'source': item['workflow_run']['head_sha']})
           path = pathlib.Path('pair-runtime/evidence')
-          path.mkdir()
+          path.mkdir(exist_ok=True)
           (path / 'ci-assignment-and-artifacts.json').write_text(json.dumps(receipts, indent=2) + '\n')
           PY
       - name: Download ONE native archive for both source legs
