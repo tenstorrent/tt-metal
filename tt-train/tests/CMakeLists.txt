@@ -35,6 +35,7 @@ set(SOURCES
     optimizers/adamw_composite_test.cpp
     optimizers/sgd_test.cpp
     optimizers/adamw_test.cpp
+    optimizers/adamw_sr_repro_test.cpp
     optimizers/muon_composite_test.cpp
     ops/newton_schulz_op_test.cpp
     ops/frobenius_normalize_test.cpp
