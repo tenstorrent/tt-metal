@@ -71,7 +71,12 @@ def _layer_parameters(layer, device, dtype):
 
 
 def create_decoder_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
-    """Parameters for one ``TtDetectionTransformerDecoder``, which consumes part of them."""
+    """Parameters for a single ``TtDetectionTransformerDecoder``.
+
+    Single use: the decoder's constructor folds the BEV size into each layer's
+    ``cross_attn.sampling_offsets`` and frees the original, so every decoder instance (and
+    every BEV size) needs its own call.
+    """
     return SimpleNamespace(layers=[_layer_parameters(layer, device, dtype) for layer in torch_model.layers])
 
 

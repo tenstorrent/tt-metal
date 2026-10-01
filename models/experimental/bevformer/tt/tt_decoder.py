@@ -5,10 +5,12 @@
 """TTNN port of BEVFormer's detection decoder, from UniAD's ``TtDetectionTransformerDecoder``
 (``models/experimental/uniad/tt/ttnn_decoder.py``).
 
-The decoder takes and returns the reference's sequence-first ``(num_query, bs, embed_dims)``
-tensors but runs its layers batch-first, the layout its cross-attention and reg branches
-need, so each input and the stacked output are permuted once per forward. Parameters come
-from ``model_preprocessing_decoder.create_decoder_parameters``. Forward runs on device only.
+The layers run batch-first, the layout the cross-attention and reg branches need. By
+default the decoder takes and returns the reference's sequence-first
+``(num_query, bs, embed_dims)`` tensors, permuting ``query``, ``query_pos`` and ``value`` on
+entry and the stacked layer outputs on exit; ``batch_first=True`` skips those permutes.
+Parameters come from ``model_preprocessing_decoder.create_decoder_parameters``. Forward runs
+on device only.
 
 Reference points are float32, as is the sampling grid built from them (``GRID_DTYPE``).
 In bfloat16 a point in (0.5, 1) moves in steps of 2^-8, 0.8 px on the 200x200 BEV grid,
@@ -51,11 +53,11 @@ class TtMultiheadAttention:
         qk = ttnn.linear(ttnn.add(query, query_pos), p.qk_proj.weight, bias=p.qk_proj.bias)
         v = ttnn.linear(query, p.v_proj.weight, bias=p.v_proj.bias)
 
-        def heads(x):
-            return ttnn.permute(ttnn.reshape(x, (bs, num_query, self.num_heads, head_dim)), (0, 2, 1, 3))
+        def heads(x, order=(0, 2, 1, 3)):
+            return ttnn.permute(ttnn.reshape(x, (bs, num_query, self.num_heads, head_dim)), order)
 
         q = heads(qk[..., :embed_dims])
-        k = ttnn.permute(heads(qk[..., embed_dims:]), (0, 1, 3, 2))
+        k = heads(qk[..., embed_dims:], order=(0, 2, 3, 1))  # (bs, heads, head_dim, nq), transposed for q @ k
         v = heads(v)
 
         attn = ttnn.softmax(ttnn.matmul(q, k), dim=-1)
@@ -109,7 +111,8 @@ class TtDetectionTransformerDecoder:
     ``create_decoder_parameters``, and reusing them raises.
     """
 
-    def __init__(self, params, device, bev_shape):
+    def __init__(self, params, device, bev_shape, batch_first=False):
+        self.batch_first = batch_first
         grid_sample_compute_config = fp32_grid_sample_config(device)
         self.layers = [
             TtDetrTransformerDecoderLayer(p, device, bev_shape, grid_sample_compute_config) for p in params.layers
@@ -123,16 +126,20 @@ class TtDetectionTransformerDecoder:
         return ttnn.linear(x, branch[2].weight, bias=branch[2].bias, dtype=GRID_DTYPE)
 
     def __call__(self, query, value, query_pos, reference_points, reg_branches):
-        """Sequence-first ``query``/``query_pos`` ``(nq, bs, C)`` and ``value`` ``(bev_h * bev_w, bs, C)``;
-        ``reference_points`` ``(bs, nq, 3)`` ``GRID_DTYPE`` in [0, 1].
+        """``query``/``query_pos`` ``(nq, bs, C)`` and ``value`` ``(bev_h * bev_w, bs, C)``, or
+        ``(bs, nq, C)`` and ``(bs, bev_h * bev_w, C)`` with ``batch_first``; ``reference_points``
+        ``(bs, nq, 3)`` ``GRID_DTYPE`` in [0, 1] either way.
 
-        Returns every layer's output ``(L, nq, bs, C)`` and refined reference points ``(L, bs, nq, 3)``.
+        Returns every layer's output ``(L, nq, bs, C)`` (``(L, bs, nq, C)`` with ``batch_first``)
+        and refined reference points ``(L, bs, nq, 3)``.
         """
         if reference_points.dtype != GRID_DTYPE:
             raise ValueError(f"reference_points must be {GRID_DTYPE}, got {reference_points.dtype}")
-        output = ttnn.permute(query, (1, 0, 2))
-        value = ttnn.permute(value, (1, 0, 2))
-        query_pos = ttnn.permute(query_pos, (1, 0, 2))
+        output = query
+        if not self.batch_first:
+            output = ttnn.permute(output, (1, 0, 2))
+            value = ttnn.permute(value, (1, 0, 2))
+            query_pos = ttnn.permute(query_pos, (1, 0, 2))
         intermediate = []
         intermediate_reference_points = []
         for layer, branch in zip(self.layers, reg_branches, strict=True):
@@ -147,5 +154,7 @@ class TtDetectionTransformerDecoder:
             intermediate.append(output)
             intermediate_reference_points.append(reference_points)
 
-        outputs = ttnn.permute(ttnn.stack(intermediate, dim=0), (0, 2, 1, 3))
+        outputs = ttnn.stack(intermediate, dim=0)
+        if not self.batch_first:
+            outputs = ttnn.permute(outputs, (0, 2, 1, 3))
         return outputs, ttnn.stack(intermediate_reference_points, dim=0)
