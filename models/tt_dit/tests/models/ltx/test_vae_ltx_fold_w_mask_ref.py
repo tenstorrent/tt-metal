@@ -225,3 +225,26 @@ def test_w_valid_sticks(logical_w, w_in, rw):
     assert sum(valid) == logical_w
     assert all(0 <= v <= w_in for v in valid)
     assert valid == sorted(valid, reverse=True)
+
+
+@pytest.mark.parametrize("env, expected", [(None, True), ("1", True), ("0", False)])
+def test_fold_w_mask_default_on(monkeypatch, env, expected):
+    """LTXCausalConv3d folds the W mask unless LTX_VAE_FOLD_W_MASK=0. Builds the module on a mock 2x4 mesh."""
+    from unittest import mock
+
+    ttnn = pytest.importorskip("ttnn")
+    from models.tt_dit.models.vae.vae_ltx import LTXCausalConv3d
+    from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
+
+    if env is None:
+        monkeypatch.delenv("LTX_VAE_FOLD_W_MASK", raising=False)
+    else:
+        monkeypatch.setenv("LTX_VAE_FOLD_W_MASK", env)
+    mesh = mock.MagicMock()
+    mesh.compute_with_storage_grid_size.return_value = ttnn.CoreCoord(13, 10)
+    mesh.arch.return_value = ttnn.device.Arch.BLACKHOLE
+    pc = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=2, mesh_axis=0), width_parallel=ParallelFactor(factor=4, mesh_axis=1)
+    )
+    conv = LTXCausalConv3d(128, 128, kernel_size=3, mesh_device=mesh, parallel_config=pc, ccl_manager=mock.MagicMock())
+    assert conv.fold_w_mask is expected

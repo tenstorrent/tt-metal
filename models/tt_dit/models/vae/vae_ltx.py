@@ -153,9 +153,10 @@ class LTXCausalConv3d(Module):
             and internal_padding[1] == 0
             and internal_padding[2] == 0
         )
-        # Opt-in: neighbor_pad zeros the W pad columns itself (logical_w), replacing the mask multiply over
-        # the whole activation. Only the fused 2D halo (H and W both sharded) supports it.
-        self.fold_w_mask = os.environ.get("LTX_VAE_FOLD_W_MASK", "0") == "1"
+        # On by default (LTX_VAE_FOLD_W_MASK=0 turns it off): neighbor_pad zeros the W pad columns itself
+        # (logical_w), replacing the mask multiply over the whole activation. Only the fused 2D halo (H and W
+        # both sharded) supports it.
+        self.fold_w_mask = os.environ.get("LTX_VAE_FOLD_W_MASK", "1") != "0"
 
         dims_T, dims_H, dims_W = (conv_dims.T, conv_dims.H, conv_dims.W) if conv_dims is not None else (0, 0, 0)
         self.conv_config = get_conv3d_config(

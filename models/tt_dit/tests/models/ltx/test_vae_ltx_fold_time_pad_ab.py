@@ -64,7 +64,7 @@ def test_vae_ltx_fold_time_pad_ab(mesh_device, device_params):
     )
 
     fold = os.environ.get("LTX_VAE_FOLD_TIME_PAD", "1")
-    wmask = os.environ.get("LTX_VAE_FOLD_W_MASK", "0")
+    wmask = os.environ.get("LTX_VAE_FOLD_W_MASK", "1")
     arm = f"t{fold}w{wmask}"
     torch.manual_seed(42)
     tdec = _TorchLTXVideoDecoder(
