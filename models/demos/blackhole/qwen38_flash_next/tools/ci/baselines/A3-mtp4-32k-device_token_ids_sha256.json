@@ -1,0 +1,25 @@
+{
+ "expected": {
+  "chat": "1bbbf060a22e2aa1b9613a7b48b18680b6f2c02f4b06636859d563b50dd43690",
+  "code": "159de7287947ac44a7f8fe4d4405341775aaf5b0c73b974dce3e826dbc2d42ff",
+  "fact": "9afd57cc03036e8beac9b7fc53121826c939780b810095f3b88e2c987be9c521",
+  "json": "a5b4defa72fae270391869377862fe60b95d893a6c2cfd24ea265bb59de6d16f",
+  "list": "8253ba344696e880fc2ea18fe604e6c46e92c4401b748abc239c436cd27f0d44",
+  "math": "19f55ccb4bb2174423d32141df95c365aa6306b246a65f26b4e5b255b64a7ea2",
+  "multilingual": "8b3efd7442387f9681d8badad61e359a0e7bcf85a925df9bc7d5cdf9d2e74032",
+  "prose": "19538e64128d3b8c2f47fc3580ee0ddf792b59ba6b0ef12989181b30df69a547",
+  "refactor": "8a812a8ea01b3d7da9da5788d0d03034082562b5c5e7208ab7efc74ac301ee3d",
+  "sky": "de86bbc09c482272bf2da4c31c3f13cc593e5590ed85a8dacbd72d6cc80205fc",
+  "story": "efaf8f20e25c7c28bc558ffaff42caf2a05be421c80a16552c67a64ec780bab4",
+  "summary": "d9d024681580637c7df49daeb494605434d11459d87314dae53566a7527cbba6"
+ },
+ "pin": "A3/mtp4-32k/device_token_ids_sha256",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "date": "2026-09-28",
+  "evidence": "chat server startup replay, chunked prefill with MTP drafting k=4 (--mtp 4) on the served default set (the verify-rows fold gdn_rows_scan, the MoE rows on two rings, the gated-residual read's re-associated norm gr_recip_last), one idle run on a 1x4 p150 line, 2026-09-28, hold sb-case2-49b8a0f; every value measured on this replay",
+  "head": "49b8a0f2ea3cd4193e14a2c237109d2e0fd942b7",
+  "sku": "p150x4"
+ },
+ "status": "proposal"
+}
