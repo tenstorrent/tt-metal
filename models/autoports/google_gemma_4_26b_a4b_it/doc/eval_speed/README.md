@@ -376,3 +376,47 @@ trials and no full five-task rerun are used. Redacted response text statistics
 (character counts and repeated-line counts, never response text) were added in
 TTI `72185ee1` to distinguish discarded repetitive output in future probes;
 104 relevant host tests pass.
+
+`tools/audit_repetition_guard.py` performs a CPU-only retrospective audit using
+the exact installed vLLM detector and pinned tokenizer. Across562 saved baseline
+responses,696 parsed response fields and153286 field tokens,17 fields trigger:
+Sympy message81; sklearn messages112,114,116,118,120,122,126,128,130,134,136,138,
+142,144,146; Astropy message47. All contain conspicuous degenerate repetition,
+including1953 identical sklearn comment lines and69 identical malformed Astropy
+assignments. No legitimate repeated code was identified among these flags.
+This is not an exhaustive false-positive guarantee: parsed fields do not
+preserve the original raw token stream or missing responses, and a command can
+contain useful work after a long repeated segment that the guard would prevent
+from executing. The policy therefore still needs outcome-bearing validation.
+
+The matched thinking-plus-guard CI probe is
+[36876743431](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36876743431),
+job110418160465, TTI `35a0fd50e01b8f335761b396149d090f0ce47455`.
+It reuses the preceding CI's image, seed, task,900-second cap and short warmup;
+native repetition termination and payload-free response statistics are the
+declared differences. No new image was built. Both actual CI runs are monitored
+through their job state and read-only server metrics.
+
+## Additional fast hypothesis checks
+
+Exact repeated-tool-output compaction keeps the first complete output and
+replaces later copies only when both the command and complete output are
+identical, with a minimum256-character output. Five host invariants cover
+input immutability, first-copy retention, changed commands, changed outputs,
+short outputs and unmatched messages. The tokenizer-only experiment finds
+**zero eligible savings in the five baseline terminal contexts**. On the fresh
+local Matplotlib trajectory,13 repeated outputs reduce the final tested context
+from24294 to20647 tokens (15.0%). At the measured approximate1700 input tokens/s,
+that suggests about2.1 seconds less warmed prefill for this specific next turn,
+not a measured serving or solve-time gain. No live agent compaction is enabled;
+next-action quality remains untested. Evidence: `local_context_dedup.json` and
+`tools/probe_context_dedup.py`.
+
+Coarse whole-prompt padding is not a configuration-only cache optimization.
+The scheduler allocates KV pages for the actual prompt; padding to1024-token
+buckets can write beyond those allocated pages unless the model's valid-length
+and padded-query contracts are extended correctly. Selecting the last padded
+token's logits is also incorrect. No such unvalidated padding was enabled.
+Similarly, vLLM exposes a thinking-token budget, but the installed TT plugin has
+no matching thinking-budget state integration; its existence in the HTTP schema
+alone is not evidence that the device-sampling path enforces it.
