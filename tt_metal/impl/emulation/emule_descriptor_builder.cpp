@@ -448,7 +448,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     const tt::tt_metal::emule::ResolvedTileGeometry g =
                         tt::tt_metal::emule::resolve_tile_geometry(c.tile, std::nullopt);
                     dd.geom = to_resolved_geom(g, c.data_format);
-                    dd.sets_tile_dims = c.tile.has_value() || c.unpack_face_geometry.has_value();
+                    dd.sets_tile_dims = c.tile.has_value();
                 }
                 auto cl = dfb->core_lookup_.find(core);
                 dd.has_finalize = (cl != dfb->core_lookup_.end());
