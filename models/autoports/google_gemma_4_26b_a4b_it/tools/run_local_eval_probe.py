@@ -24,6 +24,9 @@ def main():
     parser.add_argument("--seconds", type=int, default=900)
     parser.add_argument("--repetition-detection", type=json.loads)
     parser.add_argument(
+        "--normalize-submission-marker", action="store_true", help="Opt-in audited harness policy change"
+    )
+    parser.add_argument(
         "--request-seed", type=int, help="Explicit paired-diagnostic policy change, not a release default"
     )
     args = parser.parse_args()
@@ -57,6 +60,7 @@ def main():
         task_names=[args.task],
         llm_timeout_sec=1800,
         request_telemetry=True,
+        normalize_submission_marker=args.normalize_submission_marker,
         agent_env={"OPENAI_API_KEY": "local-diagnostic"},
         venv_python=args.harbor_python,
     )

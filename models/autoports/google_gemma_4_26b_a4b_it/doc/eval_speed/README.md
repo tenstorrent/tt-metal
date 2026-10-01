@@ -762,3 +762,30 @@ last command against the candidate server with output directory
 hashes are retained in `weight_control/server/launch.json` and
 `weight_control/selected_seeded_server/launch.json` under the untracked artifact
 directory. Never run the readiness process concurrently with a device server.
+
+The candidate's corrected 26,142-token replay exactly reproduces the original
+724-token natural-stop response, including a final plain-text line
+`echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`, but no native tool call. It takes
+32.084 seconds on the restarted server; the prior trial took 41.849 seconds for
+that response. This cache-state timing difference is not a delivered speedup.
+The native parser is not discarding a valid wire-format call: the model prints
+the command in ordinary final text instead of invoking it.
+
+TTI `4eb09ae1` adds a default-off, audited `normalize_submission_marker` harness
+adapter. It requires exactly one assistant response, natural `stop`, no existing
+tool/function call or refusal, an available bash command tool, and the exact
+standalone final command line outside an unclosed Markdown fence. Only the fixed
+submission command is converted; arbitrary generated shell text is never
+interpreted. Original content, reasoning and usage remain unchanged. Telemetry
+records original finish/tool counts and response hash, plus a separate conversion
+event and forwarded hash. This is a declared harness-policy change, not a native
+model/tool-format pass. It can still accept an incorrect model-chosen completion;
+the ordinary external verifier remains mandatory, as for a native submission.
+
+The actual replay response passes this adapter offline. The broader host suite
+passes 140 tests after synchronizing its fake Harbor config with the existing
+telemetry fields and new default-off flag (`63bb532c`). At 19:28:37 UTC a fresh
+same-seed Django 900-second local trial starts with only this additional adapter,
+using `--normalize-submission-marker` and output
+`/home/mvasiljevic/gemma4-eval-speed-evidence/local_django_bfp8_submit_seed9472`.
+The separate CI run remains unchanged and has no submission adapter enabled.
