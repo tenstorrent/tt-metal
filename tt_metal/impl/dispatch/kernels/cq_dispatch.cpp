@@ -177,6 +177,8 @@ constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb
 volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
+static uint32_t rt_next_program_id = REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
+
 static uintptr_t cmd_ptr;  // walks through pages in cb cmd by cmd
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 
@@ -1263,6 +1265,14 @@ void process_notify_dispatch_s_go_signal_cmd() {
     while (index_bitmask != 0) {
         uint32_t set_index = __builtin_ctz(index_bitmask);
         uintptr_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + set_index * L1_ALIGNMENT;
+        // dispatch_s pops one id per go signal, unprofiled ones included.
+        invalidate_l1_cache();
+        if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0) {
+            while (!program_id_fifo_append(rt_profiler_msg, rt_next_program_id)) {
+                invalidate_l1_cache();
+            }
+        }
+        rt_next_program_id = REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
         if constexpr (distributed_dispatcher) {
             static uint32_t num_go_signals_safe_to_send[max_num_worker_sems] = {0};
             uint64_t dispatch_s_notify_addr =
@@ -1439,12 +1449,7 @@ re_run_command:
                     dispatch_telemetry_base)
                     ->program_count = ++program_counter;
             }
-            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
-                program_host_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
-                while (!program_id_fifo_append(rt_profiler_msg, program_host_id)) {
-                    invalidate_l1_cache();
-                }
-            }
+            rt_next_program_id = program_host_id;
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
             ASSERT(offset_count <= std::size(write_offset));
