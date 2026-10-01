@@ -11,7 +11,12 @@ correctness and device-time changes of the new matmul default selection.
 
   PYTHONPATH=tests/ttnn/unit_tests/benchmarks/matmul_oob:$PYTHONPATH DEVICE_TIME_OUT=off.jsonl pytest -p pytest_device_time <tests>
 
+Each line also records auto_config: the last program config matmul's default selection chose during the test, or
+null when no matmul in the test went through it (every matmul passed its own program_config, or the test has no
+matmul). compare_pytest_times.py --auto-only compares just the tests where it is set.
+
 DEVICE_TIME_SAMPLE=N keeps every Nth collected test (a fixed, deterministic sample for quick runs).
+DEVICE_TIME_TESTS=FILE keeps only the tests whose node ids are listed in FILE, one per line.
 """
 
 import json
@@ -31,6 +36,12 @@ DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 
 def pytest_collection_modifyitems(config, items):
+    tests_file = os.environ.get("DEVICE_TIME_TESTS")
+    if tests_file:
+        with open(tests_file) as f:
+            wanted = {line.strip() for line in f if line.strip()}
+        config.hook.pytest_deselected(items=[i for i in items if i.nodeid not in wanted])
+        items[:] = [i for i in items if i.nodeid in wanted]
     sample = int(os.environ.get("DEVICE_TIME_SAMPLE", "1"))
     if sample > 1:
         kept = items[::sample]
@@ -56,6 +67,18 @@ def _read_device_time(device):
     return total, programs
 
 
+def _last_auto_config(reset):
+    import ttnn
+
+    return ttnn._ttnn.operations.matmul.matmul_last_auto_program_config(reset)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item):
+    _last_auto_config(reset=True)  # from here to the end of the call, so matmuls in fixtures count too
+    yield
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
     device = item.funcargs.get("device") if hasattr(item, "funcargs") else None
@@ -65,12 +88,20 @@ def pytest_runtest_call(item):
         except Exception:
             device = None
     outcome = yield
-    if device is not None:
+    auto_config = _last_auto_config(reset=True)
+    if device is None:
+        _results[item.nodeid] = {"auto_config": auto_config}
+    else:
         try:
             total, programs = _read_device_time(device)
-            _results[item.nodeid] = {"device_ns": total, "programs": programs}
+            _results[item.nodeid] = {"device_ns": total, "programs": programs, "auto_config": auto_config}
         except Exception as e:
-            _results[item.nodeid] = {"device_ns": None, "programs": None, "error": str(e)[:200]}
+            _results[item.nodeid] = {
+                "device_ns": None,
+                "programs": None,
+                "auto_config": auto_config,
+                "error": str(e)[:200],
+            }
 
 
 def pytest_runtest_logreport(report):

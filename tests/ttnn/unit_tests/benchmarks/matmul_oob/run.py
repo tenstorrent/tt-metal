@@ -15,6 +15,8 @@ Suites (the fast ones take a few minutes each on Wormhole):
   validation-fast  the cases in cases_fast.csv (41 cases across the tiers)
   pytest           the matmul pytest directory, flag off and on (outcome and device time per test)
   pytest-fast      every 10th test of it
+  pytest-auto      the tests in pytest_auto_tests.txt: the matmul pytest tests where some matmul uses the default
+                   config selection (the rest pass their own program configs, so the flag cannot change them)
   all              validation, gist-device and pytest (every suite that reports device kernel time)
 
 Results go to generated/matmul_oob/<arch>_<git rev>/<suite>/, with a summary.txt. Rerunning a suite skips the
@@ -31,7 +33,18 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SUITES = ["gist", "gist-fast", "gist-device", "validation", "validation-fast", "pytest", "pytest-fast", "all"]
+SUITES = [
+    "gist",
+    "gist-fast",
+    "gist-device",
+    "validation",
+    "validation-fast",
+    "pytest",
+    "pytest-fast",
+    "pytest-auto",
+    "all",
+]
+AUTO_TESTS = f"{HERE}/pytest_auto_tests.txt"
 
 
 def geomean(xs):
@@ -117,7 +130,7 @@ def run_cases(out, selection):
     return ([f"run_suite exit {rc}"] if rc else []) + summary.splitlines()
 
 
-def pytest(out, fast):
+def pytest(out, sample=1, tests_file=None):
     lines = []
     for mode, overrides in (("off", "{}"), ("on", '{"matmul_auto_config_v2": true}')):
         jsonl = f"{out}/pytest_{mode}.jsonl"
@@ -130,8 +143,10 @@ def pytest(out, fast):
             "PYTHONPATH": f"{HERE}:{os.environ.get('PYTHONPATH', '')}",
             "TTNN_CONFIG_OVERRIDES": overrides,
             "DEVICE_TIME_OUT": jsonl,
-            "DEVICE_TIME_SAMPLE": "10" if fast else "1",
+            "DEVICE_TIME_SAMPLE": str(sample),
         }
+        if tests_file:
+            env["DEVICE_TIME_TESTS"] = tests_file
         rc = run(
             [
                 "pytest",
@@ -146,12 +161,14 @@ def pytest(out, fast):
             env,
         )
         open(done, "w").write(f"exit {rc}\n")
-    compare = subprocess.run(
-        [sys.executable, f"{HERE}/compare_pytest_times.py", f"{out}/pytest_off.jsonl", f"{out}/pytest_on.jsonl"],
-        capture_output=True,
-        text=True,
+    compare = [sys.executable, f"{HERE}/compare_pytest_times.py", f"{out}/pytest_off.jsonl", f"{out}/pytest_on.jsonl"]
+    every = subprocess.run(compare, capture_output=True, text=True).stdout
+    auto = subprocess.run(
+        compare + ["--auto-only", "--write-auto-list", f"{out}/auto_tests.txt"], capture_output=True, text=True
     ).stdout
-    return lines + compare.splitlines()[:16]
+    if tests_file:
+        return lines + auto.splitlines()[:18]
+    return lines + ["every test:"] + every.splitlines()[:16] + ["", "default selection only:"] + auto.splitlines()[:18]
 
 
 def main():
@@ -167,9 +184,12 @@ def main():
         "gist-device": lambda o: run_cases(o, ["--tiers", "gist"]),
         "validation": lambda o: validation(o, False),
         "validation-fast": lambda o: validation(o, True),
-        "pytest": lambda o: pytest(o, False),
-        "pytest-fast": lambda o: pytest(o, True),
+        "pytest": lambda o: pytest(o),
+        "pytest-fast": lambda o: pytest(o, sample=10),
+        "pytest-auto": lambda o: pytest(o, tests_file=AUTO_TESTS),
     }
+    if args.suite == "pytest-auto" and not os.path.exists(AUTO_TESTS):
+        sys.exit(f"{AUTO_TESTS} is missing: run --suite pytest and copy its pytest/auto_tests.txt there")
     names = ["validation", "gist-device", "pytest"] if args.suite == "all" else [args.suite]
     for name in names:
         out = f"{base}/{name}"

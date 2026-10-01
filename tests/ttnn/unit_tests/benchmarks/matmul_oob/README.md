@@ -13,7 +13,8 @@ default selection (`oob`) with the new one (`v2`) on the same inputs.
 | `run_suite.py` | Runs cases in one or more modes; records the selected config, device kernel time, per-RISC times, cores and PCC |
 | `summarize.py` | Per-tier speedup of one mode over another, regressions, status changes |
 | `pytest_device_time.py` | pytest plugin: per-test outcome and total device kernel time |
-| `compare_pytest_times.py` | Compares two `pytest_device_time` outputs |
+| `compare_pytest_times.py` | Compares two `pytest_device_time` outputs (`--auto-only`: just the tests that use the default selection) |
+| `pytest_auto_tests.txt` | The `pytest-auto` suite's tests |
 | `sweep_configs.py` | Times alternative explicit configs for a case (investigation only) |
 | `compare_runs.py` | Joins two `run_all.sh` result directories per case and per pytest test |
 | `results/<arch>/` | Reference results of `run_all.sh` (same layout as a run directory) |
@@ -32,12 +33,19 @@ default selection (`oob`) with the new one (`v2`) on the same inputs.
 | `validation-fast` | `cases_fast.csv`: 41 cases across the tiers, including block-float and fp32-accumulation cases | about 5 min |
 | `pytest` | The matmul pytest directory, flag off and on (outcome and device time per test) | about 50 min |
 | `pytest-fast` | Every 10th test of it (`DEVICE_TIME_SAMPLE=10`) | about 5 min |
+| `pytest-auto` | The tests in `pytest_auto_tests.txt`: the matmul pytest tests in which some matmul goes through the default config selection. The others pass their own program configs, so the flag cannot change them and they only add noise | |
 | `all` | `validation`, `gist-device` and `pytest` (the suites that report device kernel time) | |
 
 ```bash
 tests/ttnn/unit_tests/benchmarks/matmul_oob/run.py --suite gist-fast
 MM_KCAP=32 tests/ttnn/unit_tests/benchmarks/matmul_oob/run.py --suite gist-fast --out generated/matmul_oob/kcap32
 ```
+
+`pytest_device_time.py` records, for each test, the last config the default selection chose during it
+(`auto_config`, null when every matmul in the test passed its own program config). The `pytest` suite's summary
+reports every test and then the default-selection tests only, and writes their node ids to
+`pytest/auto_tests.txt`. To refresh `pytest_auto_tests.txt` after tests are added, run the `pytest` suite and copy
+that file over it. A test skipped on the machine that made the list is not in it.
 
 "Legacy" is the same build with the flag off, which is within about 1% of main on these suites. To compare
 against main itself, run the gist suite on a main build: `gist/time_default.py` works there too (it only
