@@ -1124,6 +1124,25 @@
   "started": "2026-10-01T00:01:19",
   "status": "PASS"
  },
+ "S.full_dense.06": {
+  "attempts": 0,
+  "duration_s": 27.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T00:05:35"
+   }
+  ],
+  "last_run": "2026-10-01T00:05:35",
+  "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/logs/S.full_dense.06.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999956808621163
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-01T00:05:08",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "sjovic/mimo-llm-perf",
   "created": "2026-09-30T22:59:41",
