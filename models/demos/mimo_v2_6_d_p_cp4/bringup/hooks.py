@@ -362,7 +362,113 @@ class HybridDeviceModel:
         pass
 
 
+class _DeviceState:
+    """Per-layer device ring KV caches (tt/model.py:TtMiMoModel.new_caches); each binds its chunk-major layout to the
+    first chunk it runs (a prefix loaded before that is written then)."""
+
+    def __init__(self, model, max_seq):
+        self.caches = model.new_caches(max_seq)
+
+    def load_prefix(self, layer, tensors, length):
+        self.caches[layer].load_prefix(tensors["key"], tensors["value"], length)
+
+    def to_torch(self, layer, length):
+        return self.caches[layer].to_torch(length)
+
+
+class MiMoCPDeviceModel:
+    """Ladder/profile adapter over tt/model.py:TtMiMoModel (CP=4).
+
+    The hidden state is chip c's CP slice [1, 1, S/4, H] bf16 on the device from the embedding to the final norm. Each
+    layer is TtMiMoBlock.__call__: run_block over the reference block graph with the validated device modules (one
+    profiler section per step). RoPE tables, masks, ring buffers and router / dispatch tables are built once at load
+    and sliced on the device. Only the LM head runs on the host (ladder logits on sampled rows, when the stack ends at
+    the last layer)."""
+
+    def __init__(self, mesh, spec, layers, lm_head=True):
+        import time
+
+        from models.demos.common.bringup.reference.golden import hf_path
+        from models.demos.mimo_v2_6_d_p_cp4.tt.model import TtMiMoModel
+
+        t0 = time.time()
+        self.mesh, self.spec = mesh, spec
+        self.path = hf_path(spec)
+        self.model = TtMiMoModel(
+            mesh, self.path, max_seq=_rope_max_seq(spec), chunk_sizes=_chunk_sizes(spec), layers=list(layers)
+        )
+        self.cfg = self.model.cfg
+        self.blocks = {b.i: b for b in self.model.blocks}
+        self._lm_head = None
+        if lm_head:
+            from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
+
+            self._lm_head = WeightLoader(self.path).get("lm_head.weight").float()  # untied
+        self.load_seconds = time.time() - t0
+
+    def new_state(self, max_seq):
+        return _DeviceState(self.model, max_seq)
+
+    def embed(self, tokens):
+        import ttnn
+
+        ids = self.model.ids_to_device(tokens)
+        h = self.model.embed(ids)
+        ttnn.deallocate(ids)
+        return h
+
+    def from_host(self, h):
+        from models.demos.mimo_v2_6_d_p_cp4.tt.rms_norm import to_device_cp
+
+        return to_device_cp(self.mesh, h)
+
+    def to_host(self, h):
+        from models.demos.mimo_v2_6_d_p_cp4.tt.rms_norm import cp_to_host
+
+        return cp_to_host(self.mesh, h).float()
+
+    def layer(self, i, h, start, state):
+        cache = state.caches[i]
+        cache.bind_chunk(h.shape[-2] * self.mesh.get_num_devices())  # no-op once bound (first chunk only)
+        return self.blocks[i](h, start, cache)
+
+    def final_norm(self, h):
+        return self.model.final_norm(h)
+
+    def logits(self, hidden, rows):
+        import torch
+
+        return torch.nn.functional.linear(self.to_host(hidden)[rows], self._lm_head)
+
+    def free(self, h):
+        import ttnn
+
+        if isinstance(h, ttnn.Tensor) and h.is_allocated():
+            ttnn.deallocate(h)
+
+    def sync(self):
+        import ttnn
+
+        ttnn.synchronize_device(self.mesh)
+
+    def perf_settings(self):
+        """Recorded in the profile: the active attention / experts / router modes."""
+        import os
+
+        return {
+            "sliding_sdpa_cfg": os.environ.get("MIMO_SLIDING_SDPA_CFG", "base"),
+            "sliding_qk": os.environ.get("MIMO_SLIDING_QK", "split"),
+            "experts_mode": os.environ.get("MIMO_EXPERTS_MODE", "unified"),
+            "router_mode": os.environ.get("MIMO_ROUTER_MODE", "fp32"),
+            "fuse_residual_norm": os.environ.get("MIMO_FUSE_RESIDUAL_NORM", "1") != "0",
+        }
+
+
 def device_model(mesh, spec, layers, lm_head=True):
-    """The hybrid harness (CPU reference + DEVICE_STEPS on the device) until the assemble step adds the all-device
-    model."""
-    return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    """All-device model (default); BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + DEVICE_STEPS on the
+    device, host in / host out per step) for debugging."""
+    import os
+
+    if os.environ.get("BRINGUP_HYBRID") == "1":
+        return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    return MiMoCPDeviceModel(mesh, spec, layers, lm_head=lm_head)

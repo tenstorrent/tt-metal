@@ -395,3 +395,26 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   - Device gate (existing ffn_residual registration): PASS. pcc 0.999997, rel 0.0023, ratio [0.9988, 1.0014], slices 0.0023, coef 1.0016, experts rel 0.0194 (slices 0.0175-0.0213).
 - The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_ffn_residual.py`
+
+## M.1 assemble.1
+- Added `tt/model.py`, a port of the prior's `tt/model.py` to CP=4:
+  - `TtEmbedding`: replicated bf16 table, cached at `generated/mimo_v2_6_d_p_cp4/tt_cache/embed_bf16*` (1.2 GB). The ids arrive as chip c's CP slice [1, 1, S/4] uint32 (`ids_to_device`, ShardTensorToMesh dim 2).
+  - `TtMiMoBlock`: runs the reference DENSE_GRAPH / MOE_GRAPH through `run_block`. Each intermediate is freed after its last reader.
+  - `TtMiMoModel`: one shared `RingCCL`, `new_caches`, `prefill_chunk`.
+- The builders mirror the hooks' component path. They use the same cp4 modules and arguments: RoPE max_seq = longest rung or target seq, the chunk sizes of every rung, router rows = max_chunk / 4, and `experts.build_experts` with max_chunk. The hooks' component functions are unchanged.
+- The router hands (idx, wts) straight to the experts (`experts(x, idx=, wts=)`), as in the prior, with no dense -> topk round. The dense output is freed.
+- Residual add + the next norm are fused (`TtRMSNorm.fused_add`, stash). This is on by default, as in the prior; `MIMO_FUSE_RESIDUAL_NORM=0` turns it off.
+- The experts' dispatch / combine modules are prebuilt at load for every chunk size (`_seq_modules`), so nothing is built per chunk.
+- `bringup/hooks.py`:
+  - `MiMoCPDeviceModel` and `_DeviceState` (ring caches from `TtMiMoModel.new_caches`).
+  - `layer()` calls `cache.bind_chunk(S)`, which is a no-op after the first chunk. It writes any golden prefix loaded before the chunk size was known, so the host write happens on a cold call only.
+  - `device_model` returns the all-device model by default; `BRINGUP_HYBRID=1` selects the old `HybridDeviceModel`.
+  - `to_host` / `from_host` concatenate / shard the CP slices on the sequence dim.
+- Gate (s4096, layers 0-5): PASS.
+  - Worst layer PCC 0.999969, worst state PCC 0.999926.
+  - Host transfers per layer (warm) 0.
+  - Chunk 0 took 39.7 s (cold, kernel compiles); chunk 1 took 0.20 s.
+  - Load: roughly 45 s with the expert cache warm (estimated as the 86 s test call minus the chunks; not printed on its own).
+- The orchestrator's earlier run (on the hybrid) died writing the junit xml with "No space left on device", because the 32 GB cp4 expert cache was being written. The cache is now complete and 26 GB is free (known issue proposed).
+- Not run here: final norm and logits (the layer 0-5 subset does not end at the last layer). They follow the prior.
+- Re-run: `PYTHONPATH=$PWD BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py` (`BRINGUP_HYBRID=1` for the hybrid).
