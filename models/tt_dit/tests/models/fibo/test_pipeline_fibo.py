@@ -101,7 +101,7 @@ def test_fibo_edit_pipeline_vlm(*, mesh_device: ttnn.MeshDevice, model_location_
     """Editing instructions, turned into FIBO Edit's prompts by the edit VLM."""
     pipeline = FiboPipeline.create_pipeline(
         mesh_device=mesh_device,
-        checkpoint_name=model_location_generator("briaai/fibo-edit"),
+        checkpoint_name=model_location_generator("briaai/Fibo-Edit"),
         vlm_checkpoint_name=model_location_generator("briaai/FIBO-edit-vlm"),
         edit=True,
     )
