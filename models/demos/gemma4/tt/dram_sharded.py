@@ -17,6 +17,7 @@ import math
 import os
 
 import ttnn
+from models.common.tensor_utils import with_dram_sharded_cores_per_bank
 from models.common.utility_functions import is_blackhole
 
 TILE_SIZE = 32
@@ -193,12 +194,13 @@ def decode_progcfg(m, k, n, dtype=None):
       * ``in0_block_w`` from K/core, L1-shrunk when needed
     """
     _rows, _cols, num_cores = _decode_core_grid(k, n)
-    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=_decode_in0_block_w(k, n, num_cores, dtype=dtype),
         per_core_M=math.ceil(m / TILE_SIZE),
         per_core_N=math.ceil(n / (TILE_SIZE * num_cores)),
         fused_activation=None,
     )
+    return with_dram_sharded_cores_per_bank(program_config, m, k, n, num_cores)
 
 
 def activation_memcfg(k, n):

@@ -56,6 +56,7 @@ from models.common.tensor_utils import (
     get_out_subblock_w,
     get_rot_transformation_mat,
     nearest_32,
+    with_dram_sharded_cores_per_bank,
     zeros_like_kv_cache,
     zeros_like_paged_cache,
 )
@@ -2448,12 +2449,13 @@ def _dram_matmul_config(
     m: int, k: int, n: int, num_cores: int, tile_size: int = TILE_SIZE
 ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
     """Create DRAM-sharded matmul program config."""
-    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=_find_largest_divisor(k // (tile_size * num_cores)),
         per_core_M=math.ceil(m / tile_size),
         per_core_N=math.ceil(n / (tile_size * num_cores)),
         fused_activation=None,
     )
+    return with_dram_sharded_cores_per_bank(program_config, m, k, n, num_cores)
 
 
 def _matmul_config(
