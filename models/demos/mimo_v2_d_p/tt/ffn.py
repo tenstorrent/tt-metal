@@ -15,6 +15,7 @@ Hidden states are ``[1, 1, S_local, H]``: sequence block-cyclic over SP rows, re
 """
 
 import math
+from pathlib import Path
 
 import torch
 
@@ -197,15 +198,15 @@ def build_flat_expert(
     weights_dtype,
     cache_prefix=None,
     options=None,
+    gids=None,
 ):
     """One FlatExpert over the mesh: device (r, c) runs the experts the EP table puts there (the same global ids the
-    unified op reads through its global expert idx table: table[c, r], get_ep_mesh_mapper's sharding)."""
+    unified op reads through its global expert idx table: table[c, r], get_ep_mesh_mapper's sharding), or ``gids``
+    (a per-layer placement: gids[d] the global ids of row-major device d)."""
     rows, cols = tuple(mesh_device.shape)
     assert (rows, cols) == (dgs, ndg), (rows, cols, dgs, ndg)
-    table = ExpertMapping.create_global_expert_idx_table(
-        experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg
-    )
-    gids = [[int(g) for g in table[c, r]] for r in range(rows) for c in range(cols)]
+    if gids is None:
+        gids = default_gids(experts_per_chip, dgs, ndg)
     # nn.Linear [out, in] -> x @ W [in, out]; bf16 (the checkpoint values are bf16-exact); built only on a cache miss
     tw = lambda g, n: sd[f"experts.{g}.{n}.weight"].T.contiguous()
     weights = lambda: [[(tw(g, "gate_proj"), tw(g, "up_proj"), tw(g, "down_proj")) for g in gl] for gl in gids]
@@ -229,6 +230,28 @@ def build_flat_expert(
             else {}
         ),
     )
+
+
+def default_gids(experts_per_chip, dgs, ndg):
+    """The EP table's placement: gids[d] = the global expert ids of row-major device d, in local order."""
+    table = ExpertMapping.create_global_expert_idx_table(
+        experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg
+    )
+    return [[int(g) for g in table[c, r]] for r in range(dgs) for c in range(ndg)]
+
+
+def load_expert_placement(path, layer_idx, n_dev, experts_per_chip, n_global):
+    """``path``: JSON {"layers": {"<layer>": [[global ids of device d] for d in row-major order]}} (tests/perf/
+    expert_placement.py writes it); -> that layer's gids, or None when the layer is not in the file."""
+    import json
+
+    layers = json.loads(Path(path).read_text())["layers"]
+    gids = layers.get(str(layer_idx))
+    if gids is None:
+        return None
+    assert len(gids) == n_dev and all(len(g) == experts_per_chip for g in gids), (layer_idx, len(gids))
+    assert sorted(g for d in gids for g in d) == list(range(n_global)), f"L{layer_idx}: not a permutation"
+    return gids
 
 
 def moe_capacity_factor(K: int, E: int, n_dev: int, override: int | None = None) -> int:
@@ -317,10 +340,7 @@ class TtMoE:
         if options.use_moe_ag:
             from models.demos.mimo_v2_d_p.tt.moe_ag import MoeAgBlock, flat_rows
 
-            table_g = ExpertMapping.create_global_expert_idx_table(
-                experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg
-            )
-            gids = [[int(g) for g in table_g[c, r]] for r in range(dgs) for c in range(ndg)]
+            gids = default_gids(experts_per_chip, dgs, ndg)
             # worst-case flat rows (every pair of the column's tokens on this chip): the dispatch capacity factor
             # would let adversarial routing overrun token_index / y (the route plan cannot drop pairs)
             ag_rows = flat_rows(dgs * seq_len_per_chip, K, experts_per_chip)
@@ -334,9 +354,33 @@ class TtMoE:
                 buf_rows=ag_rows,
                 options=options,
             )
+        # per-layer expert placement (all-gather block only): the layer's flat expert holds its own experts and the
+        # shared block's route plan reads this layer's local-slot map
+        self.gids, self.lmap = None, None
+        if options.expert_placement and self.ag is not None and cache_prefix:
+            self.gids = load_expert_placement(
+                options.expert_placement, int(cache_prefix.lstrip("L")), n_dev, experts_per_chip, E
+            )
+            if self.gids is not None:
+                from models.demos.mimo_v2_d_p.tt.moe_ag import local_map
+
+                # UntilizeActive (y_row_major off) maps local slots through the block's own map
+                assert options.moe_ag_y_row_major, "expert_placement needs moe_ag_y_row_major"
+
+                self.lmap = local_map(mesh_device, self.gids, E)
         if options.flat_expert:
             self.flat = build_flat_expert(
-                mesh_device, sd, cfg, experts_per_chip, dgs, ndg, max_tok, weights_dtype, cache_prefix, options
+                mesh_device,
+                sd,
+                cfg,
+                experts_per_chip,
+                dgs,
+                ndg,
+                max_tok,
+                weights_dtype,
+                cache_prefix,
+                options,
+                gids=self.gids,
             )
             self.expert = None
         else:
@@ -390,7 +434,7 @@ class TtMoE:
         if gathered:
             ttnn.deallocate(x_rm)
             ttnn.deallocate(w_rm)
-        counts, regions, token_index, _ = self.ag.plan()
+        counts, regions, token_index, _ = self.ag.plan(self.lmap)
         y = self.expert_indexed(gx, counts, regions, token_index)
         out = self.ag.reduce(y)
         ttnn.deallocate(y)

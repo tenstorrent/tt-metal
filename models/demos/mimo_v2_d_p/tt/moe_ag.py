@@ -55,6 +55,16 @@ def flat_rows(tokens, k, experts_per_chip):
     return _up(pairs, 32) + 32 * (min(pairs, experts_per_chip) - 1)
 
 
+def local_map(mesh_device, gids, n_global):
+    """gids[d] (row-major device order) -> per device [1, 1, n_global] uint32: the global id's local slot, or NONE."""
+    mr, mc = tuple(mesh_device.shape)
+    lmap = torch.full((mr * mc, n_global), NONE, dtype=torch.int64)
+    for d, gl in enumerate(gids):
+        for l, g in enumerate(gl):
+            lmap[d, g] = l
+    return _per_device(mesh_device, lmap, ttnn.uint32)
+
+
 class RoutePlan:
     """Gathered top-k indices [T, K] uint16 -> counts / regions [1, NG], token_index [1, rows], y_slot [1, T * K]
     (uint32, DRAM, persistent). gids[d]: device d's (row-major mesh order) local experts' global ids, local order."""
@@ -63,11 +73,7 @@ class RoutePlan:
         self.T, self.K, self.NG, self.rows = tokens, k, n_global, rows
         self.EPC = len(gids[0])
         mr, mc = tuple(mesh_device.shape)
-        lmap = torch.full((mr * mc, n_global), NONE, dtype=torch.int64)
-        for d, gl in enumerate(gids):
-            for l, g in enumerate(gl):
-                lmap[d, g] = l
-        self.lmap = _per_device(mesh_device, lmap, ttnn.uint32)
+        self.lmap = local_map(mesh_device, gids, n_global)
         self.counts = _dram(mesh_device, [1, n_global], ttnn.uint32)
         self.regions = _dram(mesh_device, [1, n_global], ttnn.uint32)
         # zero-initialized once: the plan writes only the used regions, and a consumer that reads the whole capacity
@@ -82,10 +88,15 @@ class RoutePlan:
         )
         self.y_slot = _dram(mesh_device, [1, tokens * k], ttnn.uint32)
 
-    def __call__(self, idx):
-        """idx: gathered top-k [.., T, K] uint16 row major DRAM. Returns (counts, regions, token_index, y_slot)."""
+    def __call__(self, idx, lmap=None):
+        """idx: gathered top-k [.., T, K] uint16 row major DRAM; ``lmap``: a layer's own local-slot map (``local_map``,
+        a per-layer expert placement) instead of the block's. Returns (counts, regions, token_index, y_slot)."""
         _ops.moe_ag_route_plan(
-            idx, self.lmap, self.EPC, self.rows, outputs=[self.counts, self.regions, self.token_index, self.y_slot]
+            idx,
+            self.lmap if lmap is None else lmap,
+            self.EPC,
+            self.rows,
+            outputs=[self.counts, self.regions, self.token_index, self.y_slot],
         )
         return self.counts, self.regions, self.token_index, self.y_slot
 
@@ -282,8 +293,8 @@ class MoeAgBlock:
             self._ag(w, self.gw, 0)
         return self.gx, self.gidx, self.gw
 
-    def plan(self):
-        return self.plan_op(self.gidx)
+    def plan(self, lmap=None):
+        return self.plan_op(self.gidx, lmap)
 
     def buffers_mb(self):
         """Persistent DRAM per chip (MB) held by this block (gather outputs, plan, reduce buffers, untilized y)."""
