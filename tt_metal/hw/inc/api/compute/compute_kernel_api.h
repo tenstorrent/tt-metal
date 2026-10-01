@@ -838,7 +838,7 @@ ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chu
         idst,
         idst_idx,
         0 /* DST out unused, but required for _llk_math_eltwise_binary_sfpu_params_ */,
-        VectorMode::RC,
+        VectorMode::None,
         chunk)));
 }
 
