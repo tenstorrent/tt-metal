@@ -5,6 +5,7 @@
 #include <cstdint>
 namespace ckernel::sfpu {
 struct AsinhBf16Config {
+    // Fit: degree-8 polynomial on [-10, 10], 2 segments, max pure (continuous) ULP 0.886.
     static constexpr float kNegative[] = {
         __builtin_bit_cast(float, 0x3f80336au),
         __builtin_bit_cast(float, 0x3b8c467cu),
@@ -34,7 +35,6 @@ struct AsinhBf16Config {
     static constexpr uint32_t kUpperBits = 0x41200000u;
     static constexpr uint32_t kAddendBits = 0x3f317218u;
     static constexpr bool kMirrorFold = true;
-    static constexpr bool kSignedNanFinalizer = false;
 };
 }  // namespace ckernel::sfpu
 #include "ckernel_sfpu_bf16_symmetric_factored_log.h"

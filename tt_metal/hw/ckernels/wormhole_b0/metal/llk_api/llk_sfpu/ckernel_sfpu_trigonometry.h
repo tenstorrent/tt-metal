@@ -1101,6 +1101,9 @@ inline void calculate_acosh() {
     }
 }
 
+template <int ITERATIONS>
+void calculate_asinh_bf16();
+
 // asinh(x) = sign(x) * log(|x| + sqrt(x^2 + 1)), reformulated to remove the
 // cancellation at x -> 0 and the x^2 overflow at large |x|. Regions in a = |x|:
 //   a < 0.75          -> a * P(a^2), degree-6 minimax polynomial (<=1 ulp)
@@ -1112,12 +1115,9 @@ inline void calculate_acosh() {
 // so the log1p argument never loses precision through a subtract-1 cancellation;
 // the large region exits the x^2 regime entirely so |x| up to fp32 max no longer
 // overflows (the old x^2 + 1 produced +inf at ~1.84e19).
-template <int ITERATIONS>
-void calculate_asinh_bf16();
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_asinh() {
-    if constexpr (!is_fp32_dest_acc_en) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         calculate_asinh_bf16<ITERATIONS>();
         return;
     }

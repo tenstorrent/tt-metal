@@ -15,7 +15,6 @@ namespace ckernel::sfpu::bf16 {
 template <typename Config, int Iterations = 32>
 inline void calculate_symmetric_factored_log() {
     static_assert(Iterations == 32, "selected factored log requires its complete dual-row tile");
-    static_assert(Config::kSignedNanFinalizer);
     for (int d = 0; d < 32; d += 2) {
         sfpi::vFloat x1 = sfpi::dst_reg[d];
         sfpi::vFloat x2 = sfpi::dst_reg[d + 1];
@@ -38,17 +37,8 @@ inline void calculate_symmetric_factored_log() {
             sfpi::dst_reg[d], r1, Config::kLog);
         sfpi::symmetric_direct_log_tail<Config::kLowerBits, Config::kUpperBits, Config::kAddendBits>(
             sfpi::dst_reg[d + 1], r2, Config::kLog);
-        if constexpr (Config::kSignedNanFinalizer) {
-            sfpi::signed_nan_class_terminal<1, 2>(sfpi::dst_reg[d].template mode<sfpi::DataLayout::U16>(), r1);
-            sfpi::signed_nan_class_terminal<1, 2>(sfpi::dst_reg[d + 1].template mode<sfpi::DataLayout::U16>(), r2);
-        } else {
-            sfpi::vUInt raw1 = sfpi::dst_reg[d].template mode<sfpi::DataLayout::U16>();
-            sfpi::positive_nan_class_terminal<1>(raw1, r1);
-            sfpi::negative_nan_class_terminal<2, true>(raw1, r1);
-            sfpi::vUInt raw2 = sfpi::dst_reg[d + 1].template mode<sfpi::DataLayout::U16>();
-            sfpi::positive_nan_class_terminal<1>(raw2, r2);
-            sfpi::negative_nan_class_terminal<2, true>(raw2, r2);
-        }
+        sfpi::nan_class_terminal<0>(sfpi::dst_reg[d].template mode<sfpi::DataLayout::U16>(), r1);
+        sfpi::nan_class_terminal<0>(sfpi::dst_reg[d + 1].template mode<sfpi::DataLayout::U16>(), r2);
         r1 = sfpi::convert<sfpi::vFloat16b>(r1, sfpi::RoundMode::Nearest);
         r2 = sfpi::convert<sfpi::vFloat16b>(r2, sfpi::RoundMode::Nearest);
         sfpi::dst_reg[d] = r1;
