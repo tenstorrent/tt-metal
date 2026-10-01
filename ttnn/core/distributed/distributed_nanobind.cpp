@@ -262,17 +262,28 @@ void py_module(nb::module_& mod) {
                 return nb::make_iterator<nb::rv_policy::reference_internal>(
                     nb::type<MeshCoordinateRange>(), "iterator", mcr.begin(), mcr.end());
             },
-            nb::keep_alive<0, 1>());
+            nb::keep_alive<0, 1>())
+        .def("__hash__", [](const MeshCoordinateRange& r) { return std::hash<MeshCoordinateRange>{}(r); })
+        .def(
+            "__eq__",
+            [](const MeshCoordinateRange& a, const MeshCoordinateRange& b) { return a == b; },
+            nb::is_operator());
 
     static_cast<nb::class_<MeshCoordinateRangeSet>>(mod.attr("MeshCoordinateRangeSet"))
         .def(nb::init<>(), "Default constructor for an empty MeshCoordinateRangeSet.")
         .def(nb::init<const MeshCoordinateRange&>(), "Constructor with specified range.", nb::arg("range"))
         .def("merge", &MeshCoordinateRangeSet::merge, nb::arg("range"))
-        .def("__repr__", [](const MeshCoordinateRangeSet& mcrs) {
-            std::ostringstream str;
-            str << mcrs;
-            return str.str();
-        });
+        .def(
+            "__repr__",
+            [](const MeshCoordinateRangeSet& mcrs) {
+                std::ostringstream str;
+                str << mcrs;
+                return str.str();
+            })
+        .def(
+            "__eq__",
+            [](const MeshCoordinateRangeSet& a, const MeshCoordinateRangeSet& b) { return a == b; },
+            nb::is_operator());
 
     static_cast<nb::class_<SystemMeshDescriptor>>(mod.attr("SystemMeshDescriptor"))
         .def(nb::init<>())

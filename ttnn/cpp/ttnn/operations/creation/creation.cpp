@@ -389,6 +389,12 @@ Tensor empty_like(
     DataType dtype_value = dtype.value_or(tensor.dtype());
     MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
     MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
+    tt::tt_metal::TensorSpec spec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
+
+    // A host input with no device requested stays on host, as full_like / zeros_like / ones_like do.
+    if (device_ptr == nullptr) {
+        return Tensor(tt::tt_metal::HostTensor::allocate_for_overwrite(spec));
+    }
 
     std::optional<tt::tt_metal::TensorTopology> topology = std::nullopt;
     if (is_device_tensor(tensor) &&
@@ -396,10 +402,7 @@ Tensor empty_like(
         topology = tensor.tensor_topology();
     }
 
-    return create_device_tensor(
-        tt::tt_metal::TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-        device_ptr,
-        std::move(topology));
+    return create_device_tensor(spec, device_ptr, std::move(topology));
 }
 
 Tensor arange(

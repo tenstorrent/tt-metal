@@ -628,7 +628,7 @@ void pytensor_module(nb::module_& mod) {
                     std::nullopt,
                     pad_value));
             },
-            nb::keep_alive<1, 7>(),  // 1,6?
+            nb::keep_alive<1, 6>(),  // self keeps `device` alive
             nb::arg("data"),
             nb::arg("shape"),
             nb::arg("data_type"),
