@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_blackhole, run_for_wormhole_b0
 from models.tt_dit.models.transformers.transformer_fibo import FiboCheckpoint, image_ids
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
@@ -20,7 +21,8 @@ from models.tt_dit.utils.tracing import Tracer
     ("mesh_device", "sp_axis", "tp_axis", "num_links"),
     [
         pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((4, 8), 0, 1, 4, id="4x8sp0tp1"),
+        pytest.param((4, 8), 0, 1, 4, id="4x8sp0tp1_wh", marks=run_for_wormhole_b0()),
+        pytest.param((4, 8), 0, 1, 2, id="4x8sp0tp1_bh", marks=run_for_blackhole()),
     ],
     indirect=["mesh_device"],
 )
