@@ -149,3 +149,18 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
 
 - 22:15 P.3: my brief asked for a per-op before/after (BRINGUP_PROFILE_OPS=1); the agent ran op mode over all 40 layers (~1 min per layer), the agent's task limit killed it at 22:08 and the agent sat polling its log. Owner: unacceptable, only e2e + the changed section matter. Stopped agent + orchestrator (WIP kept: XING_EXPERTS_FIDELITY hifi2 default; overseer removed its hifi3 entry). Framework fix 2f64c73fb7d: op mode on representative layers only (whole model refused, selftest), perf role brief + SKILL.md + P.* briefs: e2e + section before/after from the plain profile. P.3 rerun from its gate (measures the WIP).
 - Owner (22:00): cherry-pick the 6 newer F56 commits (origin/dnijemcevic/f56-component-checks a8f208fe443..2d36f827ca3) after X.3, before O.1.
+
+## 2026-09-30 22:15 - 2026-10-01 07:30 (overseer)
+- P.3 (routed experts HiFi2): A/B report (F57): experts 256.6 -> 242.8 ms, e2e 1171.9 -> 1158.0 ms, top1 s56320
+  0.9714 -> 0.9686, component -1.36% bias. Owner: reject (ba92108166b). Framework: per-op profiling on representative
+  layers only (2f64c73fb7d); perf picks run an orchestrator A/B and wait for the owner (508858edd42, 2765a6a6c33).
+- tt-d-gen audit: K.1 tested only the easy serving case (aligned starts, one slot, host acks); Xing asserts
+  start % chunk == 0, writes pad rows as real KV, has no D2H acks and the wrong build_kv_chunk_table signature.
+  Owner: the serving contract must come first. F58 (eeb2ae9ae84): serving-contract agent (SC.1, before the plan)
+  writes serving_contract.md + frozen contract tests; plan, briefs and gates build to them.
+- F56 update cherry-picked (6 commits, 9091f6d77f6). positions doubling fixed (3906670bbde).
+- X.3 PASS 039d0d0c652 (fix: hooks fallback to the target chunk + cache release; ring_mla fork accepts
+  kv_actual_isl=0 on a one-chunk cache, own test). Full prefill 0->56k 9.79 s; chunk at 0 / 51200 / 102400 / 153600 /
+  204800: 596 / 1222 / 1853 / 2495 / 3132 ms. O.1 PASS 65ba16635b5 (8 forks, 90 calls covered, 0 failing).
+- Xing retrofit: SC.1 (serving contract) and K.2 (all contract tests + s56320 accuracy) added; contract step fixes
+  the model to the tests.
