@@ -106,15 +106,17 @@ inline void calculate_sfpu_binary(
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
     // XLOGY: the log body's two polynomial constants are bound here and held in LREGs across the
     // loop; as literals inside the loop they would be re-materialised on every row.
-    // Declared for every op but loaded only for XLOGY: sfpi does not drop an unused SFPLOADI.
-    // Unassigned for every other op, so do not read them outside the XLOGY branch.
+    // Assigned only for XLOGY so no other arm can read them. The gate is not needed for codegen:
+    // sfpi drops a pre-loop constant nothing reads (every non-XLOGY instantiation is
+    // instruction-identical with the assignment unconditional, sfpi 7.83.0 and 7.84.0).
     sfpi::vFloat log_c;
     sfpi::vFloat log_d;
     if constexpr (BINOP == BinaryOp::XLOGY) {
         log_c = LogPoly::C;
         log_d = LogPoly::D;
     }
-    // bf16 RNE addend, hoisted out of the row loop (arms that do not round drop it).
+    // bf16 RNE addend, hoisted out of the row loop. Unconditional on purpose: the arms that do
+    // not round never read it, and the compiler emits no SFPLOADI for it there (see log_c above).
     const sfpi::vUInt rne_bias = bf16_rne_bias();
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {

@@ -3,7 +3,6 @@
 
 import itertools
 import math
-import struct
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Dict
@@ -11,6 +10,7 @@ from typing import Dict
 import pytest
 import torch
 from conftest import skip_for_quasar
+from helpers.bf16_ties import BF16_FRAC_BITS, BF16_SIG_ONE, assert_is_bf16_tie
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -558,6 +558,20 @@ def sfpu_binary(
     ):
         dest_acc = DestAccumulation.Yes
 
+    # Argument check, ahead of the device run (and of --compile-producer, which skips it).
+    if (
+        exact
+        and dest_acc == DestAccumulation.No
+        and format_dict[formats.output_format] == torch.bfloat16
+        and mathop not in (MathOperation.SfpuElwmul, MathOperation.SfpuElwdiv)
+        and dst_rounding_mode != DstRoundingMode.NearestEven
+    ):
+        raise ValueError(
+            f"exact=True: {mathop.name} in {dst_rounding_mode.name} mode truncates into "
+            "a bf16 Dest while the golden rounds to nearest even; a bit-for-bit compare "
+            "cannot pass there. Use DstRoundingMode.NearestEven or dest_acc=Yes."
+        )
+
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_format = (
         DataFormat.Float16_b
@@ -635,27 +649,10 @@ def sfpu_binary(
     ), "Result tensor and golden tensor are not of the same length"
 
     if exact:
-        if (
-            dest_acc == DestAccumulation.No
-            and torch_format == torch.bfloat16
-            and mathop not in (MathOperation.SfpuElwmul, MathOperation.SfpuElwdiv)
-            and dst_rounding_mode != DstRoundingMode.NearestEven
-        ):
-            raise ValueError(
-                f"exact=True: {mathop.name} in {dst_rounding_mode.name} mode truncates into "
-                "a bf16 Dest while the golden rounds to nearest even; a bit-for-bit compare "
-                "cannot pass there. Use DstRoundingMode.NearestEven or dest_acc=Yes."
-            )
-        # View by the output's width, so a Float16 result is not paired up into int32 lanes.
-        bit_type = {2: torch.int16, 4: torch.int32}[res_tensor.element_size()]
-        res_bits = res_tensor.view(bit_type)
-        golden_bits = golden_tensor.to(torch_format).flatten().view(bit_type)
-        diff = torch.nonzero(res_bits != golden_bits).flatten()
-        assert diff.numel() == 0, (
-            f"{diff.numel()} of {res_bits.numel()} lanes differ bit-for-bit; first lane "
-            f"{int(diff[0])}: result {res_tensor[diff[0]].item()} golden "
-            f"{golden_tensor[diff[0]].item()}"
-        )
+        # max_ulp=0 is the bit-exact gate: zero representable steps between result and golden.
+        assert passed_test(
+            golden_tensor, res_tensor, formats.output_format, max_ulp=0
+        ), "Result is not bit-identical to the golden"
         return
 
     # Per-op tolerances, for the two ops whose error is a property of the op's own
@@ -1584,14 +1581,6 @@ _BF16_RNE_OPS = [
 ]
 _BF16_RNE_FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
 
-# bf16 significand geometry for the tie builder: 7 explicit fraction bits, so an integer
-# significand runs over [_BF16_SIG_ONE, 2 * _BF16_SIG_ONE), and an fp32 value is a bf16 tie
-# when the 16 bits the narrowing drops are exactly the half-ULP pattern.
-_BF16_FRAC_BITS = 7
-_BF16_SIG_ONE = 1 << _BF16_FRAC_BITS
-_FP32_LOW_HALF_MASK = 0xFFFF
-_FP32_TIE_LOW_HALF = 0x8000
-
 
 @parametrize(formats=_BF16_RNE_FORMATS, mathop=_BF16_RNE_OPS)
 def test_eltwise_binary_sfpu_float_rne(formats, mathop):
@@ -1642,12 +1631,12 @@ def _bf16_tie_pairs(mathop, count, seed=0):
     pairs = []
     if mathop == MathOperation.SfpuElwmul:
         tie_significands = []
-        for ma in range(_BF16_SIG_ONE, 2 * _BF16_SIG_ONE):
-            for mb in range(_BF16_SIG_ONE, 2 * _BF16_SIG_ONE):
+        for ma in range(BF16_SIG_ONE, 2 * BF16_SIG_ONE):
+            for mb in range(BF16_SIG_ONE, 2 * BF16_SIG_ONE):
                 p = ma * mb
-                # The product (15 or 16 bits) keeps its top _BF16_FRAC_BITS + 1 bits as the bf16
+                # The product (15 or 16 bits) keeps its top BF16_FRAC_BITS + 1 bits as the bf16
                 # significand; a tie has the first dropped bit set and nothing below it.
-                dropped = p.bit_length() - (_BF16_FRAC_BITS + 1)
+                dropped = p.bit_length() - (BF16_FRAC_BITS + 1)
                 if p & ((1 << dropped) - 1) == 1 << (dropped - 1):
                     tie_significands.append((ma, mb))
         for idx, ea, eb, sa, sb in zip(
@@ -1658,16 +1647,16 @@ def _bf16_tie_pairs(mathop, count, seed=0):
             signs(),
         ):
             ma, mb = tie_significands[idx]
-            a = sa * math.ldexp(ma, ea - _BF16_FRAC_BITS)
-            b = sb * math.ldexp(mb, eb - _BF16_FRAC_BITS)
+            a = sa * math.ldexp(ma, ea - BF16_FRAC_BITS)
+            b = sb * math.ldexp(mb, eb - BF16_FRAC_BITS)
             pairs.append((a, b))
     else:
         for exp, m, sa, sb in zip(
-            draw(-20, 20), draw(1, _BF16_SIG_ONE - 1), signs(), signs()
+            draw(-20, 20), draw(1, BF16_SIG_ONE - 1), signs(), signs()
         ):
             # a = +/-(1 + m / 128) * 2^exp with m >= 1; b = half of a's bf16 ULP, 2^(exp - 8).
-            a = sa * math.ldexp(_BF16_SIG_ONE + m, exp - _BF16_FRAC_BITS)
-            b = sb * math.ldexp(1.0, exp - (_BF16_FRAC_BITS + 1))
+            a = sa * math.ldexp(BF16_SIG_ONE + m, exp - BF16_FRAC_BITS)
+            b = sb * math.ldexp(1.0, exp - (BF16_FRAC_BITS + 1))
             pairs.append((a, b))
 
     # Self-check on the host: every pair must be an exact fp32 tie, else the test proves nothing.
@@ -1679,10 +1668,7 @@ def _bf16_tie_pairs(mathop, count, seed=0):
                 torch.tensor(b, dtype=torch.float32),
             )
         )
-        (bits,) = struct.unpack("<I", struct.pack("<f", exact))
-        assert (
-            bits & _FP32_LOW_HALF_MASK == _FP32_TIE_LOW_HALF
-        ), f"({a}, {b}) is not a bf16 tie for {mathop.name}"
+        assert_is_bf16_tie(exact, f"({a}, {b}) for {mathop.name}")
     return pairs
 
 

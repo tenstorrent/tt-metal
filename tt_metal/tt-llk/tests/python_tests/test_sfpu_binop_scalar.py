@@ -2,10 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import struct
 
 import pytest
 import torch
+from helpers.bf16_ties import (
+    BF16_FRAC_BITS,
+    BF16_SIG_ONE,
+    assert_is_bf16_tie,
+    fp32_bits,
+)
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
@@ -30,12 +35,8 @@ from helpers.test_variant_parameters import (
     SFPU_BINOP_MODE,
     SFPU_UNARY_SCALAR,
 )
+from helpers.tile_constants import MAX_TILE_ELEMENTS
 from helpers.utils import passed_test
-
-
-def _bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
 
 # The scalar is a swept axis: zero, unity, a sign flip, a large multiplier, and a value
 # small enough to matter against the tolerance. Kept deliberately small -- inputs are
@@ -62,8 +63,8 @@ _ZERO_DIVISOR_UNREACHABLE = (
 def _scalar_bits_for(mathop, scalar):
     """The 32-bit pattern the kernel is given for *mathop* at *scalar*."""
     if mathop == MathOperation.ScalarDiv:
-        return _bits(1.0 / scalar)
-    return _bits(scalar)
+        return fp32_bits(1.0 / scalar)
+    return fp32_bits(scalar)
 
 
 # Keep inputs small and bounded so the bf16 result stays accurate across all five scalar
@@ -150,15 +151,10 @@ def _run_sfpu_binop_scalar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
     if exact:
-        bit_type = {2: torch.int16, 4: torch.int32}[res_tensor.element_size()]
-        diff = torch.nonzero(
-            res_tensor.view(bit_type) != golden_tensor.view(bit_type)
-        ).flatten()
-        assert diff.numel() == 0, (
-            f"{diff.numel()} of {res_tensor.numel()} lanes differ bit-for-bit; first lane "
-            f"{int(diff[0])}: result {res_tensor[diff[0]].item()} golden "
-            f"{golden_tensor[diff[0]].item()}"
-        )
+        # max_ulp=0 is the bit-exact gate: zero representable steps between result and golden.
+        assert passed_test(
+            golden_tensor, res_tensor, formats.output_format, max_ulp=0
+        ), "Result is not bit-identical to the golden"
         return
 
     assert passed_test(
@@ -287,13 +283,9 @@ def test_sfpu_binop_scalar_edges(formats, dest_acc, mathop):
 # tell RNE from truncation or from a miswired rounding bias, so its ties are pinned bit for bit.
 # =============================================================================
 
-_BF16_FRAC_BITS = 7
-_BF16_SIG_ONE = 1 << _BF16_FRAC_BITS
-_FP32_LOW_HALF_MASK = 0xFFFF
-_FP32_TIE_LOW_HALF = 0x8000
 # Half a bf16 ULP of [1, 2): s - x lands exactly between two bf16 neighbours for every
 # x = +/-(1 + m / 128) whose result stays in that binade.
-_RSUB_TIE_SCALAR = math.ldexp(1.0, -(_BF16_FRAC_BITS + 1))
+_RSUB_TIE_SCALAR = math.ldexp(1.0, -(BF16_FRAC_BITS + 1))
 
 
 def _rsub_tie_tensor(count):
@@ -304,12 +296,11 @@ def _rsub_tie_tensor(count):
     the result is exact). Both parities of the bf16 LSB occur, which is where round-to-even and
     round-half-away differ.
     """
-    values = [-(1.0 + m / _BF16_SIG_ONE) for m in range(_BF16_SIG_ONE)]
-    values += [1.0 + m / _BF16_SIG_ONE for m in range(1, _BF16_SIG_ONE)]
+    values = [-(1.0 + m / BF16_SIG_ONE) for m in range(BF16_SIG_ONE)]
+    values += [1.0 + m / BF16_SIG_ONE for m in range(1, BF16_SIG_ONE)]
     # Self-check on the host: every lane must be an exact tie, else the test proves nothing.
     for x in values:
-        (bits,) = struct.unpack("<I", struct.pack("<f", _RSUB_TIE_SCALAR - x))
-        assert bits & _FP32_LOW_HALF_MASK == _FP32_TIE_LOW_HALF, f"{x} is not a tie"
+        assert_is_bf16_tie(_RSUB_TIE_SCALAR - x, f"s - x for x = {x}")
     return torch.tensor(
         [values[i % len(values)] for i in range(count)], dtype=torch.bfloat16
     )
@@ -330,6 +321,6 @@ def test_sfpu_binop_scalar_bf16_rne_ties(formats, mathop):
         DestAccumulation.No,
         mathop,
         scalar=_RSUB_TIE_SCALAR,
-        src_A=_rsub_tie_tensor(32 * 32),
+        src_A=_rsub_tie_tensor(MAX_TILE_ELEMENTS),  # one tile, the runner's default
         exact=True,
     )

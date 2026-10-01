@@ -30,7 +30,10 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
 }
 
 // The 0x7fff addend of float32_to_bf16_rne_for_store(). Materialise it once, before the row
-// loop: sfpi re-issues an SFPLOADI per row for a literal used inside the loop.
+// loop: sfpi re-issues an SFPLOADI per row for a literal used inside the loop. Binding it
+// unconditionally is free for an instantiation that never rounds: the compiler drops a pre-loop
+// constant nothing reads (every non-rounding arm of the six call sites is instruction-identical
+// to a build without it, sfpi 7.83.0 and 7.84.0).
 sfpi_inline sfpi::vUInt bf16_rne_bias() { return sfpi::vUInt(0x7fffU); }
 
 // fp32 -> bf16 round-to-nearest-even, 4 SFPU instructions: bits + 0x7fff + lsb, where lsb is

@@ -27,7 +27,8 @@ enum {
 template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_binop_with_scalar(std::uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
-    // bf16 RNE addend, hoisted out of the row loop (arms that do not round drop it).
+    // bf16 RNE addend, hoisted out of the row loop. Only RSUB on a bf16 Dest reads it; the other
+    // arms carry no SFPLOADI for it (unused pre-loop constants are dropped, see bf16_rne_bias).
     const sfpi::vUInt rne_bias = bf16_rne_bias();
 
     for (int d = 0; d < ITERATIONS; d++) {
