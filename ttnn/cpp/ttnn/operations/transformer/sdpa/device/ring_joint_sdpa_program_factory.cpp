@@ -1448,6 +1448,26 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         ksplit_count = 1;
     }
     log_debug(tt::LogOp, "ring_joint K split: requested={} splits={}", ksplit_requested, ksplit_count);
+    // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
+    // restore CBs, on single-Q-chunk cores that do not split K. Its merge walks whole row groups too.
+    const bool seg_accum = args.program_config.has_value() && args.program_config->segmented_accumulation &&
+                           ksplit_count == 1 && !has_sliding_window && kernel_chunked && !args.is_balanced &&
+                           use_streaming_compute && B == 1 && L == 0 && max_q_per_core == 1 &&
+                           Sq_chunk_t % writer_out_row_group_h == 0;
+    log_debug(tt::LogOp, "ring_joint segmented accumulation: {}", seg_accum);
+    // A core that holds several Q chunks runs them unsegmented, so the bf16 running sums span the whole prefix again
+    // and long-prefix accuracy drops (Gemma4 at chunk 12288 with q 96: 128 Q chunks on 110 cores, RRMSE 0.19 -> 0.25).
+    // The K-split exclusion above is by design; this one is a config the caller can avoid, so refuse it.
+    TT_FATAL(
+        !(args.program_config.has_value() && args.program_config->segmented_accumulation && ksplit_count == 1 &&
+          max_q_per_core > 1),
+        "segmented_accumulation needs one Q chunk per core, but {} Q chunks ({} per head of {} rows) share {} cores. "
+        "Raise q_chunk_size so that ceil(local Q rows / q_chunk_size) x heads <= cores, give the op more cores, or "
+        "turn segmented_accumulation off.",
+        all_heads_num_q_chunks,
+        num_q_chunks,
+        Sq_chunk_t * tt::constants::TILE_HEIGHT,
+        num_cores);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
@@ -1851,6 +1871,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
+        TT_FATAL(use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
+        defines["SDPA_MATMUL_FIDELITY"] =
+            std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
+    }
+    // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
+    if (math_fidelity == MathFidelity::LoFi) {
+        defines["SDPA_COMPUTE_LOFI"] = "1";
+    }
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
 
@@ -2580,6 +2609,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Valid groups are full multicast rows with Q work.
         // build_kv_chains requires B == 1 so a row cannot mix batches' K/V data.
         remainder_changes_owner && build_kv_chains && ksplit_count == 1 &&
+        // Segmented accumulation keeps one Q chunk's state per core across ring iterations.
+        !seg_accum &&
         // Separate-V head chains use static forwarding counts and cannot follow migrated chunks.
         !use_head_chain &&
         // Only streaming compute consumes rotated IDs. The reader loads a sink for the
@@ -3031,6 +3062,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"ksplit_count", ksplit_count},
         {"ksplit_sem_id", ksplit_sem_id},
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
+        {"seg_accum", seg_accum ? 1u : 0u},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
