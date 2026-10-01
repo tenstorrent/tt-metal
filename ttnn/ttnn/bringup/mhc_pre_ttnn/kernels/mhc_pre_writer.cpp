@@ -49,7 +49,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "perf_instrumentation.hpp"
 #include "mhc_pre_layout.hpp"
 
@@ -73,6 +73,38 @@ constexpr uint32_t MCAST_CT_BASE = 22;
 constexpr uint32_t MCAST_RT_BASE = 18;
 constexpr uint32_t W_ROLE_DRAM = 0;
 constexpr uint32_t W_ROLE_SPREAD = 1;
+
+// The W all-gather's send. #57547's rotating Counter SenderPipe also counts its own send on its own counter, with a
+// local non-atomic += (LOCAL_NONATOMIC scope on BH DM) that races the other rows' NoC atomic increments landing on the
+// same word: an update is lost and the receive hangs. So the share goes out through a NON-rotating pipe built from
+// this core's own sender record of the same wire (bounds, counts, mode): the transfers the old pipe made (payload +
+// inc_multicast to the rest of the column, no self-count). A template so it compiles for an absent block.
+template <uint32_t W_RT, typename M>
+FORCE_INLINE void send_w_share(const M& w_mc, const Noc& noc, uint32_t addr, uint32_t size) {
+    if constexpr (M::active) {
+        using namespace dataflow_kernel_lib::mcast_wire;
+        constexpr uint32_t W_RECT = W_RT + rectangles_offset(M::rotating_span);
+        static_assert(M::rectangle_capacity == 1, "mhc_pre: a W column is one rectangle");
+        const dataflow_kernel_lib::SenderRuntimeArguments args(
+            {get_arg_val<uint32_t>(W_RECT + SX),
+             get_arg_val<uint32_t>(W_RECT + SY),
+             get_arg_val<uint32_t>(W_RECT + EX),
+             get_arg_val<uint32_t>(W_RECT + EY)},
+            get_arg_val<uint32_t>(W_RECT + REMOTE),
+            get_arg_val<uint32_t>(W_RECT + LOOPBACK),
+            0,
+            static_cast<dataflow_kernel_lib::SenderMcastMode>(get_arg_val<uint32_t>(W_RECT + RECT_SENDER_MCAST_MODE)));
+        dataflow_kernel_lib::SenderPipe<
+            noc_index,
+            M::data_ready,
+            /*PRE_HANDSHAKE=*/false,
+            dataflow_kernel_lib::UNUSED_SEM_ID,
+            dataflow_kernel_lib::DataReadySignal::Counter,
+            /*ROTATING_SENDER=*/false>
+            sender(noc, args);
+        sender.send(addr, addr, size);
+    }
+}
 
 void kernel_main() {
     constexpr uint32_t cb_partial = get_compile_time_arg_val(0);
@@ -212,14 +244,15 @@ void kernel_main() {
             }
             if (own_p1 > own_p0) {
                 MaybeDeviceZoneScope("w_w_send");
-                auto w_sender = w_mc.sender(noc);
-                const uint32_t a = w_base + own_p0 * w_tile_bytes;
-                w_sender.send(a, a, (own_p1 - own_p0) * w_tile_bytes);
+                // See send_w_share: not the family's rotating sender (its self-count races).
+                send_w_share<mc.next_runtime_args_offset()>(
+                    w_mc, noc, w_base + own_p0 * w_tile_bytes, (own_p1 - own_p0) * w_tile_bytes);
             }
             MaybeDeviceZoneScope("w_w_recv");
-            auto w_receiver = w_mc.receiver(noc);
-            for (uint32_t e = 0; e < w_events; ++e) {
-                w_receiver.receive();  // Counter: one event per other row's share, lands in place
+            // Counter: one event per other row's share, landed in place; receive(round) waits for round + 1.
+            if (w_events != 0) {
+                auto w_receiver = w_mc.optional_receiver(noc);
+                w_receiver->receive(w_events - 1);
             }
         }
         cb_push_back(cb_weight, core_k_tiles);
@@ -247,8 +280,10 @@ void kernel_main() {
     const uint64_t root_slot_noc = get_noc_addr(root_x, root_y, gathered_base + rank * slot_tiles * f_tile_bytes);
 
     // Group combine pipes (the group rectangle, root = rank 0 is the fixed sender, its own copy by loopback).
-    auto sender = mc.sender(noc);
-    auto receiver = mc.receiver(noc);
+    // #57547: optionals, empty off-role (the root has no receiver face, a rank no sender face) and for an absent
+    // block (one-core groups, which never multicast).
+    auto sender = mc.optional_sender(noc);
+    auto receiver = mc.optional_receiver(noc);
 
     uint32_t y_ring_pos = 0;  // position (in pages) of cb_y_out's read pointer within its ring
 
@@ -308,7 +343,7 @@ void kernel_main() {
             const uint32_t s_src = get_read_ptr(cb_combined);
             MaybeDeviceZoneScope("w_s_send");
             if constexpr (group_cores > 1) {
-                sender.send(s_src, s_dst, slot_tiles * f_tile_bytes);
+                sender->send(s_src, s_dst, slot_tiles * f_tile_bytes);
             } else {
                 noc_async_write(s_src, get_noc_addr(s_dst), slot_tiles * f_tile_bytes);
                 noc_async_write_barrier();
@@ -316,7 +351,7 @@ void kernel_main() {
             cb_pop_front(cb_combined, slot_tiles);
         } else {
             MaybeDeviceZoneScope("w_s_recv");
-            receiver.receive();
+            receiver->receive();
         }
         cb_push_back(cb_coef_in, slot_tiles);
     };
