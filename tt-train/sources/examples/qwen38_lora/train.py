@@ -56,6 +56,7 @@ import numpy as np
 
 import ttnn
 import ttml
+from tracy import signpost
 from ttml.common.performance import get_device_peak_tflops_bf16
 from ttml.models.qwen38 import Qwen38Config, Qwen38Transformer
 from ttml.models.qwen38.flops import flops_per_token
@@ -89,6 +90,22 @@ def parse_args() -> argparse.Namespace:
         "frees ~80%% of activation memory for ~10%% more FLOPs, and is what makes seq_len=1024 fit",
     )
     p.add_argument("--random-init", action="store_true", help="skip the checkpoint; for MFU measurement")
+    p.add_argument(
+        "--random-data",
+        action="store_true",
+        help="train on uniformly random token ids instead of the tokenized corpus; needs no tokenizer",
+    )
+    p.add_argument(
+        "--delta-rule",
+        choices=["fused", "composite"],
+        default="fused",
+        help="fused: the ttnn forward/backward device ops; composite: the ttml-op decomposition",
+    )
+    p.add_argument(
+        "--profile",
+        action="store_true",
+        help="under `python -m tracy`: emit a signpost at the start of each step",
+    )
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -114,6 +131,13 @@ def load_tokens(data_path: Path, model_path: Path, vocab_size: int) -> np.ndarra
         raise ValueError(f"token id {tokens.max()} exceeds vocab {vocab_size}")
     np.save(cache, tokens)
     print(f"tokens: {len(tokens):,} (tokenized {data_path.name}, cached)")
+    return tokens
+
+
+def random_tokens(vocab_size: int, num_tokens: int, seed: int) -> np.ndarray:
+    """Uniform random token ids, for throughput runs where the data is irrelevant."""
+    tokens = np.random.default_rng(seed).integers(0, vocab_size, num_tokens, dtype=np.uint32)
+    print(f"tokens: {len(tokens):,} (random, --random-data)")
     return tokens
 
 
@@ -149,7 +173,16 @@ def main() -> int:
     print(f"mesh {mesh.shape} {mesh.axis_names}: dp={args.dp} tp={args.tp} ({num_devices} chips)")
 
     model_path = Path(args.model_path)
-    config = Qwen38Config.from_hf_json(model_path / "config.json")
+    config_path = model_path / "config.json"
+    if config_path.exists():
+        config = Qwen38Config.from_hf_json(config_path)
+    elif args.random_init:
+        # The dataclass defaults are the Qwen3.8-27B text config.
+        print(f"no {config_path}; using the built-in Qwen3.8-27B defaults")
+        config = Qwen38Config()
+    else:
+        raise FileNotFoundError(f"{config_path} not found (pass --random-init to use the built-in 27B config)")
+    config.delta_rule_impl = args.delta_rule
     if args.layers:
         config.num_hidden_layers = args.layers
         config.layer_types = config.layer_types[: args.layers]
@@ -164,8 +197,12 @@ def main() -> int:
     )
     if args.recompute_deltanet:
         print("DeltaNet mixer activations are recomputed in backward")
+    print(f"delta rule: {config.delta_rule_impl}")
 
-    tokens = load_tokens(Path(args.data), model_path, config.vocab_size)
+    if args.random_data:
+        tokens = random_tokens(config.vocab_size, 1 << 20, args.seed)
+    else:
+        tokens = load_tokens(Path(args.data), model_path, config.vocab_size)
     batcher = Batcher(tokens, args.seq_len, args.seed)
 
     print("building model ...")
@@ -228,6 +265,8 @@ def main() -> int:
             y_np.reshape(global_batch, args.seq_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, dp_mapper
         )
 
+        if args.profile:
+            signpost(f"step {step}")
         t0 = time.perf_counter()
         optimizer.zero_grad()
         logits = model(inputs, None)

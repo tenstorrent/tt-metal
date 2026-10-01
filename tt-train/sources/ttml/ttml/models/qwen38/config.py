@@ -63,6 +63,11 @@ class Qwen38Config:
     # a purely numerical tiling choice, and must be a power of two dividing the
     # sequence length (see delta_rule.wy_inverse).
     delta_chunk_size: int = 64
+    # How the delta rule runs. "fused": the ttnn chunk_gated_delta_rule forward
+    # and gated_delta_net_backward device ops (see fused_delta_rule.py).
+    # "composite": the ttml-op decomposition in delta_rule.py, whose backward
+    # comes from the autograd graph.
+    delta_rule_impl: str = "fused"
 
     # --- parallelism ---
     # Megatron tensor parallelism. The TP width comes from the mesh axis named

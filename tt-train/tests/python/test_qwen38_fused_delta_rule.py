@@ -1,0 +1,165 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Correctness of the fused-op delta rule and its wiring into the DeltaNet mixer.
+
+1. :func:`fused_chunk_gated_delta_rule` against the in-repo FLA torch
+   reference: output and the gradient w.r.t. every input.
+2. The whole :class:`Qwen38GatedDeltaNet` mixer, fused path against the
+   composite (ttml-op) path on the same weights.  This pins everything around
+   the op that differs between the two -- the token-major layout, the L2 norm
+   moved ahead of the GVA repeat, and the per-head output norm.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+import torch
+
+import ttnn
+import ttml
+
+from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_rule_ops import (
+    chunk_gated_delta_rule as torch_chunk_gated_delta_rule,
+)
+from ttml.models.qwen38 import Qwen38Config, Qwen38GatedDeltaNet
+from ttml.models.qwen38.fused_delta_rule import fused_chunk_gated_delta_rule
+
+
+@pytest.fixture(autouse=True)
+def reset_graph():
+    yield
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def _pcc(a, b):
+    a = np.asarray(a, dtype=np.float64).ravel()
+    b = np.asarray(b, dtype=np.float64).ravel()
+    if np.allclose(a, b):
+        return 1.0
+    return float(np.corrcoef(a, b)[0, 1])
+
+
+def _assert_pcc(got, ref, name, threshold):
+    got = np.asarray(got)
+    ref = np.asarray(ref)
+    assert got.shape == ref.shape, f"{name}: shape {got.shape} != {ref.shape}"
+    pcc = _pcc(got, ref)
+    print(f"  PCC {name}: {pcc:.6f}")
+    assert pcc >= threshold, f"{name}: PCC {pcc:.6f} < {threshold}"
+
+
+def _leaf(x_np):
+    t = ttml.autograd.Tensor.from_numpy(
+        np.ascontiguousarray(x_np, dtype=np.float32),
+        layout=ttnn.Layout.TILE,
+        new_type=ttnn.DataType.BFLOAT16,
+    )
+    t.set_requires_grad(True)
+    return t
+
+
+def _projection_loss(out, seed=99):
+    """``mean(out * w)`` for a fixed random ``w``, so the upstream gradient is not all ones."""
+    w_np = np.random.RandomState(seed).randn(*out.to_numpy().shape).astype(np.float32)
+    w = ttml.autograd.Tensor.from_numpy(w_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+    ttml.ops.unary.mean(ttml.ops.binary.mul(out, w)).backward(False)
+    return w_np
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize(
+    "batch,heads,seq,chunk,key_dim,val_dim",
+    [
+        (1, 12, 256, 64, 128, 128),  # Qwen3.8 per-chip heads at TP=4
+        (2, 4, 128, 32, 64, 64),
+    ],
+)
+def test_fused_delta_rule_vs_torch(batch, heads, seq, chunk, key_dim, val_dim):
+    rng = np.random.RandomState(1234)
+
+    def l2(x):
+        return x / np.linalg.norm(x, axis=-1, keepdims=True)
+
+    q_np = l2(rng.randn(batch, seq, heads, key_dim)).astype(np.float32)
+    k_np = l2(rng.randn(batch, seq, heads, key_dim)).astype(np.float32)
+    v_np = rng.randn(batch, seq, heads, val_dim).astype(np.float32)
+    beta_np = rng.uniform(0.1, 0.9, size=(batch, seq, heads)).astype(np.float32)
+    g_np = (-rng.uniform(0.01, 0.4, size=(batch, seq, heads))).astype(np.float32)
+
+    q, k, v = _leaf(q_np), _leaf(k_np), _leaf(v_np)
+    beta = _leaf(beta_np[:, None])
+    g = _leaf(g_np[:, None])
+
+    out = fused_chunk_gated_delta_rule(q, k, v, g, beta, chunk_size=chunk)  # [B, 1, T*H, V]
+    out_np = out.to_numpy().reshape(batch, seq, heads, val_dim)
+    w_np = _projection_loss(out)
+
+    tensors = [torch.tensor(x, requires_grad=True) for x in (q_np, k_np, v_np, beta_np, g_np)]
+    qt, kt, vt, bt, gt = tensors
+    ref, _ = torch_chunk_gated_delta_rule(q=qt, k=kt, v=vt, g=gt, beta=bt, chunk_size=chunk, use_qk_l2norm=False)
+    (ref * torch.tensor(w_np.reshape(batch, seq, heads, val_dim))).mean().backward()
+
+    _assert_pcc(out_np, ref.detach().numpy(), "forward", 0.999)
+    _assert_pcc(q.get_grad_tensor().to_numpy(), qt.grad.numpy(), "grad q", 0.99)
+    _assert_pcc(k.get_grad_tensor().to_numpy(), kt.grad.numpy(), "grad k", 0.99)
+    _assert_pcc(v.get_grad_tensor().to_numpy(), vt.grad.numpy(), "grad v", 0.99)
+    _assert_pcc(beta.get_grad_tensor().to_numpy()[:, 0], bt.grad.numpy(), "grad beta", 0.99)
+    _assert_pcc(g.get_grad_tensor().to_numpy()[:, 0], gt.grad.numpy(), "grad g", 0.99)
+
+
+# One chip, so the value-head count has to fit the fused ops' 32-head cap.
+SMALL = dict(
+    hidden_size=512,
+    linear_num_key_heads=4,
+    linear_num_value_heads=12,
+    linear_key_head_dim=128,
+    linear_value_head_dim=128,
+    delta_chunk_size=64,
+)
+
+
+def _run_mixer(mixer, x_np, impl):
+    mixer.config.delta_rule_impl = impl
+    x = _leaf(x_np)
+    out = mixer(x)
+    out_np = out.to_numpy()
+    _projection_loss(out)
+    grads = {"input": x.get_grad_tensor().to_numpy()}
+    for name, p in mixer.parameters().items():
+        if p.is_grad_initialized():
+            grads[name] = p.get_grad_tensor().to_numpy()
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    return out_np, grads
+
+
+@pytest.mark.requires_device
+def test_gated_deltanet_fused_matches_composite():
+    config = Qwen38Config(**SMALL)
+    mixer = Qwen38GatedDeltaNet(config, layer_idx=0)
+    # The zero-initialized decay parameters would give every head the same
+    # gate; spread them so the per-head plumbing is actually exercised.
+    rng = np.random.RandomState(7)
+    for param, values in (
+        (mixer.A_log, rng.uniform(-1.0, 1.0, (1, 1, 1, config.linear_num_value_heads))),
+        (mixer.dt_bias, rng.uniform(-1.0, 1.0, (1, 1, 1, config.linear_num_value_heads))),
+    ):
+        param.tensor.set_value(
+            ttml.autograd.Tensor.from_numpy(
+                values.astype(np.float32), layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
+            ).get_value()
+        )
+
+    x_np = np.random.RandomState(0).randn(1, 1, 256, config.hidden_size).astype(np.float32)
+
+    out_c, grads_c = _run_mixer(mixer, x_np, "composite")
+    optimizer = ttml.optimizers.SGD(mixer.parameters(), ttml.optimizers.SGDConfig.make(0.0, 0.0, 0.0, 0.0, False))
+    optimizer.zero_grad()
+    out_f, grads_f = _run_mixer(mixer, x_np, "fused")
+
+    _assert_pcc(out_f, out_c, "mixer forward", 0.995)
+    assert grads_f.keys() == grads_c.keys()
+    for name in grads_c:
+        _assert_pcc(grads_f[name], grads_c[name], f"mixer grad {name}", 0.98)

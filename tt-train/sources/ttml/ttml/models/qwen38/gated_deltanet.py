@@ -34,6 +34,7 @@ from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
 from .autograd_ops import autograd_concat, autograd_slice
 from .delta_rule import chunk_gated_delta_rule
+from .fused_delta_rule import fused_chunk_gated_delta_rule
 from .parallel import make_column_linear, make_row_linear, make_sharded_parameter, tp_size
 
 __all__ = ["Qwen38GatedDeltaNet", "fold_heads", "unfold_heads", "causal_conv1d_silu"]
@@ -47,6 +48,7 @@ _softplus = ttml.ops.unary.softplus
 _exp = ttml.ops.unary.exp
 _transpose = ttml.ops.unary.transpose
 _shift = ttml.ops.unary.shift_along_dim
+_l2_norm = ttml.ops.unary.l2_norm
 _rmsnorm = ttml.ops.rmsnorm.rmsnorm
 
 
@@ -95,6 +97,15 @@ def repeat_interleave_heads(x, num_heads: int, head_dim: int, repeats: int):
     wide = autograd_concat([per_head] * repeats, 3)  # [B, T, H, R * D]
     # [B, T, H, R*D] -> [B, 1, T, H*R*D]: row-major (h, r, d) == (h * R + r, d).
     return _reshape(wide, [batch, 1, seq, num_heads * repeats * head_dim])
+
+
+def repeat_interleave_token_major(x, repeats: int):
+    """:func:`repeat_interleave_heads` for token-major ``[B, T, H, D] -> [B, T, H * R, D]``."""
+    if repeats == 1:
+        return x
+    batch, seq, num_heads, head_dim = [int(d) for d in x.shape()]
+    wide = autograd_concat([x] * repeats, 3)  # [B, T, H, R * D]
+    return _reshape(wide, [batch, seq, num_heads * repeats, head_dim])
 
 
 def causal_conv1d_silu(x, weight_taps, kernel_size: int):
@@ -203,17 +214,46 @@ class Qwen38GatedDeltaNet(AbstractModuleBase):
         k = autograd_slice(qkv, [0, 0, 0, key_dim], [batch, 1, seq, 2 * key_dim])
         v = autograd_slice(qkv, [0, 0, 0, 2 * key_dim], [batch, 1, seq, 2 * key_dim + value_dim])
 
-        # GVA: each key head serves `gva_repeats` value heads (3 for Qwen3.8), so
-        # every key head is repeated that many times. Head counts here are the
-        # per-chip ones, and the ratio is the same locally as globally.
-        q = repeat_interleave_heads(q, self.num_k_heads, self.head_k_dim, self.gva_repeats)
-        k = repeat_interleave_heads(k, self.num_k_heads, self.head_k_dim, self.gva_repeats)
-
         # --- gates ---------------------------------------------------------
         beta = _sigmoid(self.in_proj_b(hidden_states))  # [B, 1, T, H_v]
         # g = -exp(A_log) * softplus(a + dt_bias), the log-space decay per step.
         a = _add(self.in_proj_a(hidden_states), self.dt_bias.tensor)
         g = _mul(_softplus(a), _mul(_exp(self.A_log.tensor), -1.0))
+
+        if self.config.delta_rule_impl == "fused":
+            out = self._fused_mixer(hidden_states, q, k, v, g, beta)
+        else:
+            out = self._composite_mixer(hidden_states, q, k, v, g, beta)
+        return self.out_proj(out)
+
+    def _fused_mixer(self, hidden_states, q, k, v, g, beta):
+        """Delta rule + gated norm on the fused device ops, token-major throughout."""
+        batch, _, seq, _ = [int(d) for d in hidden_states.shape()]
+        n_k, n_v = self.num_k_heads, self.num_v_heads
+
+        # L2-normalize before the GVA repeat: it commutes with the repeat and
+        # touches a third of the data.
+        q = _l2_norm(_reshape(q, [batch, seq, n_k, self.head_k_dim]))
+        k = _l2_norm(_reshape(k, [batch, seq, n_k, self.head_k_dim]))
+        q = repeat_interleave_token_major(q, self.gva_repeats)
+        k = repeat_interleave_token_major(k, self.gva_repeats)
+        v = _reshape(v, [batch, seq, n_v, self.head_v_dim])
+
+        out = fused_chunk_gated_delta_rule(q, k, v, g, beta, chunk_size=self.chunk_size)  # [B, 1, T*H_v, V]
+
+        gate = _reshape(self.in_proj_z(hidden_states), [batch, 1, seq * n_v, self.head_v_dim])
+        out = _mul(_rmsnorm(out, self.norm_weight.tensor, self.eps), _silu(gate))
+        return _reshape(out, [batch, 1, seq, n_v * self.head_v_dim])
+
+    def _composite_mixer(self, hidden_states, q, k, v, g, beta):
+        """Delta rule composed from ttml ops, one head-folded sequence per value head."""
+        batch, _, seq, _ = [int(d) for d in hidden_states.shape()]
+
+        # GVA: each key head serves `gva_repeats` value heads (3 for Qwen3.8), so
+        # every key head is repeated that many times. Head counts here are the
+        # per-chip ones, and the ratio is the same locally as globally.
+        q = repeat_interleave_heads(q, self.num_k_heads, self.head_k_dim, self.gva_repeats)
+        k = repeat_interleave_heads(k, self.num_k_heads, self.head_k_dim, self.gva_repeats)
 
         # --- delta rule, one sequence per value head -----------------------
         bh = batch * self.num_v_heads
@@ -234,10 +274,8 @@ class Qwen38GatedDeltaNet(AbstractModuleBase):
             use_qk_l2norm=True,
         )
 
-        # --- gated output norm + projection --------------------------------
+        # --- gated output norm ---------------------------------------------
         # RMSNorm is over head_v_dim, so normalize while still head-folded.
         gate = fold_heads(self.in_proj_z(hidden_states), self.num_v_heads, self.head_v_dim)
         out = _mul(_rmsnorm(out, self.norm_weight.tensor, self.eps), _silu(gate))
-
-        out = unfold_heads(out, batch, self.num_v_heads)
-        return self.out_proj(out)
+        return unfold_heads(out, batch, self.num_v_heads)
