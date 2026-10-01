@@ -44,6 +44,7 @@ class Flux1SingleTransformerBlock(Module):
         padding_config: PaddingConfig | None,
         attention_k_chunk_size: int = 512,
         attention_q_chunk_size: int = 128,
+        attention_exp_approx_mode: bool = False,
     ) -> None:
         super().__init__()
 
@@ -67,6 +68,7 @@ class Flux1SingleTransformerBlock(Module):
             use_spatial_weights_for_prompt=True,
             k_chunk_size=attention_k_chunk_size,
             q_chunk_size=attention_q_chunk_size,
+            exp_approx_mode=attention_exp_approx_mode,
         )
 
         self.norm = DistributedLayerNorm(
