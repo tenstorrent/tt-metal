@@ -38,7 +38,7 @@ inline void Noc::async_write_zeros(
     uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(scratch, src_args_t<Scratch>{});
     // Addressed directly rather than through get_dst_ptr, so note the write here.
     tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, ::TensorAccessor<DSpecT>>();
-    uint64_t dst = tensor_accessor::transfer_noc_addr(accessor, args.page_id, args.offset_bytes, noc_id_);
+    uint64_t dst = tensor_accessor::detail::transfer_noc_addr(accessor, args.page_id, args.offset_bytes, noc_id_);
     uint32_t remaining = size_bytes;
     while (remaining > 0) {
         uint32_t curr = (remaining > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : remaining;

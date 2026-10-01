@@ -10,7 +10,7 @@
 #include "internal/tensor/array_wrapper.h"
 #include "internal/tensor/dspec.h"
 #include "api/dataflow/buf_rw_note.h"
-#include "api/tensor/transfer_noc_addr.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "internal/tensor/helpers.h"
 #include "api/tensor/shard_pages_address_iterator.h"
 #include "api/tensor/pages_address_iterator.h"
@@ -149,9 +149,8 @@ public:
     // Op-to-op R/W inference: the public address getters hand the kernel a raw address, which it can then use with any
     // NoC call (noc_async_read/write, a UnicastEndpoint, ...) or none, so the access can't be attributed later. Each
     // notes the tensor as both read and written (api/dataflow/buf_rw_note.h). The library's own transfer paths use the
-    // un-noted transfer_* members instead (private; reached through api/tensor/transfer_noc_addr.h), since each path
-    // notes its exact access itself.
-    // NOC APIs
+    // un-noted transfer_* members instead (private; reached through internal/tensor/transfer_noc_addr.h), since each
+    // path notes its exact access itself. NOC APIs
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t page_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         tt_buf_rw::note_read_write<DSpec::binding_id>();
@@ -483,9 +482,9 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     // Op-to-op R/W inference: the public address getters hand the kernel a raw address, which it can then use with any
     // NoC call (noc_async_read/write, a UnicastEndpoint, ...) or none, so the access can't be attributed later. Each
     // notes the tensor as both read and written (api/dataflow/buf_rw_note.h). The library's own transfer paths use the
-    // un-noted transfer_* members instead (private; reached through api/tensor/transfer_noc_addr.h), since each path
-    // notes its exact access itself.
-    // These hide InterleavedAddrGen's get_noc_addr, which raw kernels also use directly.
+    // un-noted transfer_* members instead (private; reached through internal/tensor/transfer_noc_addr.h), since each
+    // path notes its exact access itself. These hide InterleavedAddrGen's get_noc_addr, which raw kernels also use
+    // directly.
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         tt_buf_rw::note_read_write<BindingId>();
