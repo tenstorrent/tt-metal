@@ -12,13 +12,13 @@ import transformers
 
 import ttnn
 from models.tt_dit.blocks.rope import RopeConfig
+from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel
 from models.tt_dit.encoders.transformer import (
     WEIGHT_CACHE_DTYPE,
     StateConversion,
     TransformerEncoder,
     TransformerEncoderConfig,
 )
-from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache
