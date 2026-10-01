@@ -19,6 +19,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/instructions/metal-api.instructions.md @tenstorrent/metalium-api-owners
 .github/instructions/metal-dispatch.instructions.md @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @anashTT @abhullar-tt
 .github/instructions/metal-runtime.instructions.md @tenstorrent/metalium-runtime
+.github/instructions/metal2-host-api.instructions.md @tenstorrent/metalium-api-owners
 .github/instructions/models.instructions.md @uaydonat @yieldthought @cglagovichTT @esmalTT @mtairum
 .github/instructions/nanobind.instructions.md @tenstorrent/metalium-developers-ttnn-core @nsextonTT
 .github/instructions/python.instructions.md @tenstorrent/metalium-developers-infra
@@ -73,6 +74,7 @@ conftest.py @tenstorrent/metalium-developers-infra
 
 # test scripts
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
+tests/model_behavior/ @mtairum @uaydonat @yieldthought @tchedaTT
 tests/pipeline_reorg/agentic_research_model_tests.yaml @yieldthought @tchedaTT @mtairum @uaydonat @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @yieldthought @uaydonat @jonathansuTT @cglagovichTT
@@ -527,6 +529,7 @@ tests/ttnn/unit_tests/operations/experimental/test_attn_res_*.py @tenstorrent/me
 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py @tenstorrent/cse-developer-ttnn @iwroszTT
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_*.py @tenstorrent/cse-developer-ttnn @iwroszTT
 
 # OP docs examples
 tests/ttnn/docs_examples/test_backward_examples.py @tenstorrent/metalium-developers-eltwise

@@ -277,7 +277,7 @@ def test_expert_matmuls(device, tt_config, config, state_dict, batch, seqlen):
 
     x_tt = to_device(x, device)
     hidden = experts.token_major_w1(x_tt) if token_major else experts.transposed_w1(x_tt)
-    activated = ttnn.gelu(hidden)
+    activated = ttnn.gelu(hidden, variant=tt_config.expert_gelu)
     out = experts.token_major_w2(activated) if token_major else experts.transposed_w2(activated)
 
     def tokens_on_rows(tensor: ttnn.Tensor, width: int) -> torch.Tensor:
@@ -290,6 +290,39 @@ def test_expert_matmuls(device, tt_config, config, state_dict, batch, seqlen):
     assert_with_pcc(ref_hidden, tokens_on_rows(hidden, config.intermediate_size), OPERATOR_PCC)
     assert_with_pcc(ref_activated, tokens_on_rows(activated, config.intermediate_size), OPERATOR_PCC)
     assert_with_pcc(torch.matmul(ref_activated, w2), tokens_on_rows(out, config.hidden_size), OPERATOR_PCC)
+
+
+# One pass per block shape of matmul_config.expert_w1_gelu_config, by token tiles a core holds: 1
+# (200 tokens, off the tile grid), 2, 3, 5 and 7 raised to 6 and 8, 9, 11 raised to 12, and 12.
+FUSED_W1_TOKENS = [200, 500, 1024, 1600, 2300, 3072, 3584, 4096]
+
+# GELU's minimum is about -0.17, near x = -0.75. bfloat8_b rounds it to -0.25 where a 16-value
+# block's largest magnitude is 16 to 32, a step of 0.25, and to less in any other block, so no
+# GELU output reads below this. The w1 product reaches -25.
+GELU_FLOOR = -0.25
+
+
+@pytest.mark.needs_weights
+@pytest.mark.parametrize("tokens", FUSED_W1_TOKENS)
+def test_transposed_w1_fuses_the_gelu_at_every_block_shape(device, tt_config, config, state_dict, tokens):
+    """The transposed w1 with its GELU fused, against the same product with the GELU as its own op.
+
+    A 2D multicast ttnn.matmul applies the fused GELU from the packer (matmul_config.gelu_on_packer),
+    in a block shape set by the token tiles each core holds; each pass here lands on another one.
+    A program that dropped the activation would still return the finite product, as sparse_matmul
+    does, so the floor below is asserted as well as the agreement.
+    """
+    experts = TtNomicExperts(device, config, tt_config, state_dict, EXPERTS_PREFIX)
+    x_tt = to_device(torch.randn(1, 1, tokens, config.hidden_size), device)
+
+    fused = ttnn.to_torch(experts.transposed_w1(x_tt, tt_config.expert_gelu)).float()
+    product = experts.transposed_w1(x_tt)
+    separate = ttnn.to_torch(ttnn.gelu(product, variant=tt_config.expert_gelu)).float()
+    raw_min = float(ttnn.to_torch(product).float().min())
+
+    assert raw_min < 4 * GELU_FLOOR, f"the product only reaches {raw_min:.3f}, too close to GELU's floor to test it"
+    assert float(fused.min()) >= GELU_FLOOR, f"fused output reaches {float(fused.min()):.3f}: the GELU was not applied"
+    assert_with_pcc(separate, fused, OPERATOR_PCC)
 
 
 @pytest.mark.needs_weights
