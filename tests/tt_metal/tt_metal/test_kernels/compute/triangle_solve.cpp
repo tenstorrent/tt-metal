@@ -24,6 +24,7 @@
 //                       i % L_TILES_PER_BLOCK) and a nonzero l_tile_idx reaches get_tile_address
 //   2 L_IS_BF16         1: the L tiles are Float16_b, 0: Float32
 //   3 L_NEGATED         1: the L tiles hold -L below the diagonal
+//   4 L_CACHED          1: L is read through the math RISC's L1 data cache, 0: uncached reads
 //
 // Per RHS tile: copy RHS to DST 0, solve into DST 1, pack DST 1. Requires fp32_dest_acc_en.
 
@@ -32,6 +33,7 @@ constexpr uint32_t NUM_TILES = get_compile_time_arg_val(0);
 constexpr uint32_t L_TILES_PER_BLOCK = get_compile_time_arg_val(1);
 constexpr bool L_IS_BF16 = get_compile_time_arg_val(2) != 0;
 constexpr bool L_NEGATED = get_compile_time_arg_val(3) != 0;
+constexpr bool L_CACHED = get_compile_time_arg_val(4) != 0;
 constexpr DataFormat L_FORMAT = L_IS_BF16 ? DataFormat::Float16_b : DataFormat::Float32;
 static_assert(NUM_TILES % L_TILES_PER_BLOCK == 0, "every L block pairs with L_TILES_PER_BLOCK RHS tiles");
 
@@ -64,7 +66,7 @@ void kernel_main() {
 
             tile_regs_acquire();
             copy_tile(cb_rhs, 0 /*in_tile_index*/, DST_RHS);
-            triangle_solve_tile<L_FORMAT, L_NEGATED>(cb_l, l_tile_idx, DST_RHS, DST_X);
+            triangle_solve_tile<L_FORMAT, L_NEGATED, DST_ACCUM_MODE, L_CACHED>(cb_l, l_tile_idx, DST_RHS, DST_X);
             tile_regs_commit();
 
             tile_regs_wait();
