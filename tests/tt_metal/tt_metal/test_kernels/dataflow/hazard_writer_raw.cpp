@@ -4,7 +4,7 @@
 
 // Hazard-test WRITER on the intentionally UN-ANALYZABLE path (the "bail" case). Unlike hazard_writer,
 // this kernel has NO tensor binding: its destination is a plain named runtime-arg carrying a raw DRAM
-// address, written via the VANILLA C NoC free-functions (InterleavedAddrGen + noc_async_write) rather
+// address, written via the VANILLA C NoC free-functions (get_noc_addr_from_bank_id + noc_async_write) rather
 // than a TensorAccessor. With no tensor binding the framework cannot infer which buffer this kernel
 // touches, so a future op-to-op detector must conservatively KEEP the barrier. Its staging scratchpad
 // is still a framework-allocated ScratchpadSpec binding -- no magic address anywhere.
@@ -43,10 +43,9 @@ void kernel_main() {
         }
     }
 
-    // Vanilla C NoC path: build the interleaved-DRAM NoC address for page 0 and push the scratchpad out
-    // with the free-function noc_async_write -- no Noc / AllocatorBank / TensorAccessor abstraction.
-    InterleavedAddrGen<true> dst{.bank_base_address = dst_addr, .page_size = pad.size_in_bytes()};
-    const uint64_t dst_noc_addr = dst.get_noc_addr(0);
+    // Vanilla C NoC path: build the interleaved-DRAM NoC address for page 0 (bank 0, offset 0) and push the
+    // scratchpad out with the free-function noc_async_write -- no Noc / AllocatorBank / TensorAccessor abstraction.
+    const uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(/*bank_id=*/0, dst_addr);
     noc_async_write(pad.get_base_address(), dst_noc_addr, pad.size_in_bytes());
     noc_async_write_barrier();
 }

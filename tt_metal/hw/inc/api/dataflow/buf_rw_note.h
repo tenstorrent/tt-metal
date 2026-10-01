@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "internal/tensor/dspec.h"  // tensor_accessor::NO_BINDING_ID
+#include "internal/tensor/binding_id.h"  // tensor_accessor::NO_BINDING_ID
 
 // Op-to-op R/W inference (POC) -- device emit side. When a kernel reads/writes a bound tensor via the Noc
 // APIs, we emit one 8-byte (object-slot, kind) record into a non-allocatable SHT_NOTE ".tt.BUF_RW" section.

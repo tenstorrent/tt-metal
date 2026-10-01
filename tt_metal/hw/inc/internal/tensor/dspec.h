@@ -8,6 +8,7 @@
 #include <variant>
 #include "internal/tensor/helpers.h"
 #include "internal/tensor/array_wrapper.h"
+#include "internal/tensor/binding_id.h"
 #include "api/compile_time_args.h"
 #include <cstring>
 
@@ -38,11 +39,6 @@ namespace tensor_accessor {
  * @tparam BankCoordsWrapper_   Wrapper for the bank coordinates. Can be detail::ArrayStaticWrapperU16<...> for static
  * shapes or detail::ArrayDynamicWrapper for dynamic shapes.
  */
-// Sentinel BindingId meaning "no op-to-op binding id tracked" for this accessor. Real ids are small
-// per-binding CRTA byte offsets (the binding's base-address word), so 0xFFFFFFFF never collides. See
-// binding_id below and the op-to-op R/W inference note emit (api/dataflow/buf_rw_note.h).
-inline constexpr uint32_t NO_BINDING_ID = 0xFFFFFFFFu;
-
 template <
     uint32_t RankCT = 0,
     uint32_t NumBanksCT = 0,
