@@ -159,10 +159,10 @@ def _run_sfpu_ternary(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # The op's declared accuracy contract for this exact variant, the same lookup the
-    # binary driver makes. No ternary op is enrolled yet, so every one of them resolves
-    # to today's per-format tolerance -- enrolling one is then a table edit. The mode the
-    # kernel compiled is passed: left unset, a row keyed `approx: "No"` would not match.
+    # The op's declared accuracy contract for this exact variant, the same gate the
+    # binary driver applies: the whole contract, step budget included, since the ternary
+    # rows were measured over this driver's own variants. The mode the kernel compiled
+    # is passed: left unset, a row keyed `approx: "No"` would not match.
     assert_against_contract(
         mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=_APPROX_MODE
     )
