@@ -23,12 +23,15 @@ inline void dispatch_metadata_local_device(
     uint32_t token_indices_address,
     uint64_t metadata_write_addr,
     uint32_t metadata_page_size,
-    uint64_t global_noc_semaphore_address) {
+    uint64_t global_noc_semaphore_address,
+    bool increment) {
     // send metadata to local device output buffer
     noc_async_write(token_indices_address, metadata_write_addr, metadata_page_size);
     noc_async_write_barrier();
-    noc_semaphore_inc(global_noc_semaphore_address, 1);
-    noc_async_atomic_barrier();
+    if (increment) {
+        noc_semaphore_inc(global_noc_semaphore_address, 1);
+        noc_async_atomic_barrier();
+    }
 }
 
 void zero_buffer_async(uint32_t cb_id, uint32_t bytes) {
@@ -45,6 +48,33 @@ void zero_buffer_barrier() {
 }  // namespace detail
 
 using namespace ttnn::operations::ccl::common;
+
+// One completion credit to every device on both arcs. The antipode gets one per arc, so each receiver counts
+// dispatch_devices. A template so non-Ring builds never instantiate the multicast, which needs a 1D axis.
+template <
+    bool Enable,
+    uint32_t LinearizedMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ReplicateGroup Axis>
+inline void send_ring_completion_credit(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header_pos,
+    volatile PACKET_HEADER_TYPE* packet_header_neg,
+    uint64_t global_noc_semaphore_address) {
+    if constexpr (Enable) {
+        fabric_multicast_bidirectional_atomic_inc_1d<
+            LinearizedMeshCoord,
+            Topology,
+            MeshRows,
+            MeshCols,
+            Axis,
+            /*DoubleAntipodalAtomicInc=*/true>(
+            fabric_connections, packet_header_pos, packet_header_neg, global_noc_semaphore_address);
+        noc_async_atomic_barrier();
+    }
+}
 
 void kernel_main() {
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
@@ -155,6 +185,8 @@ void kernel_main() {
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     auto* metadata_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
+    auto* completion_neg_packet_header =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 2 * sizeof(PACKET_HEADER_TYPE));
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
 
@@ -257,6 +289,13 @@ void kernel_main() {
     // with a semaphore
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
 
+    // Ring: the antipode is a routing tie, so payloads to it alternate arcs, and a credit on the metadata packet
+    // could arrive before a payload on the other arc. So metadata carries no credit; a completion credit goes out
+    // on both arcs after all payloads, behind every payload on each arc.
+    constexpr bool ring_completion =
+        is_1d_topology<topology>() && topology == tt::tt_fabric::Topology::Ring && axis != ReplicateGroup::NONE;
+    constexpr uint32_t metadata_increment = ring_completion ? 0 : 1;
+
     // two modes: send pages directly to the output buffer or send pages to the intermediate buffer and then write to
     // the output buffer latter is slower but is less L1 intensive
     if constexpr (write_page_by_page) {
@@ -271,7 +310,11 @@ void kernel_main() {
                 if (d == linearized_mesh_coord) {
                     // dispatch the metadata to the current device and increment the local copy of the semaphore
                     detail::dispatch_metadata_local_device(
-                        token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
+                        token_indices_address,
+                        metadata_write_addr,
+                        metadata_page_size,
+                        global_noc_semaphore_address,
+                        !ring_completion);
                 } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                     // dispatch the metadata to the remote device and increment the remote device's copy of the
                     // semaphore
@@ -291,7 +334,7 @@ void kernel_main() {
                             global_noc_semaphore_address,
                             (int)metadata_page_size,
                             alignment,
-                            1,
+                            metadata_increment,
                             true);
                     } else {
                         fabric_send_chip_unicast_noc_unicast_with_semaphore<
@@ -309,11 +352,17 @@ void kernel_main() {
                             global_noc_semaphore_address,
                             (int)metadata_page_size,
                             alignment,
-                            1,
+                            metadata_increment,
                             true);
                     }
                 }
             }
+        }
+        if constexpr (ring_completion) {
+            // Local credit, once the local writes have landed.
+            noc_async_write_barrier();
+            noc_semaphore_inc(global_noc_semaphore_address, 1);
+            noc_async_atomic_barrier();
         }
     } else {
         uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
@@ -344,7 +393,7 @@ void kernel_main() {
                         global_noc_semaphore_address,
                         (int)indices_size_per_core,
                         alignment,
-                        1,
+                        metadata_increment,
                         true);
                 } else {
                     l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore<
@@ -361,7 +410,7 @@ void kernel_main() {
                         global_noc_semaphore_address,
                         (int)indices_size_per_core,
                         alignment,
-                        1,
+                        metadata_increment,
                         true);
                 }
             }
@@ -371,6 +420,9 @@ void kernel_main() {
         noc_semaphore_inc(global_noc_semaphore_address, 1);
         noc_async_atomic_barrier();
     }
+
+    send_ring_completion_credit<ring_completion, linearized_mesh_coord, topology, mesh_rows, mesh_cols, axis>(
+        fabric_connections, metadata_packet_header, completion_neg_packet_header, global_noc_semaphore_address);
 
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
