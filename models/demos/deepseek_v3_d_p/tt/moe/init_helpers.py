@@ -20,16 +20,16 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.moe.fabric2d_contract import FABRIC2D_FORWARDING_METADATA_BYTES
 
 # Fabric packet payload limits (conservative round values below hardware maximums).
 MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
 MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
-CMB_FABRIC2D_ROUTING_INFO_BYTES = 64
 
 
 def get_max_payload_size() -> int:
     """Return the arch-appropriate fabric payload size. Deferred to avoid probing hardware at import time."""
-    return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + CMB_FABRIC2D_ROUTING_INFO_BYTES
+    return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + FABRIC2D_FORWARDING_METADATA_BYTES
 
 
 @dataclass
@@ -337,7 +337,8 @@ def get_gate_outputs(
     to a group are zeroed out.
 
     Args:
-        indices: Expert indices tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
+        indices: Expert indices tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok).
+            An entry equal to num_routed_experts marks a padded token and is not counted.
         dispatch_group_size: Number of chips in each dispatch group
         num_routed_experts: Total number of routed experts across all chips
         experts_per_chip: Number of experts per chip
@@ -380,7 +381,9 @@ def get_gate_outputs(
         for token in range(seq_len_per_chip):
             for topk_idx in range(num_experts_per_tok):
                 routed_expert = indices[chip, token, topk_idx]
-                expert_counter_dense[chip, routed_expert] += 1
+                # num_routed_experts marks a padded token, which goes to no expert.
+                if routed_expert != num_routed_experts:
+                    expert_counter_dense[chip, routed_expert] += 1
 
     # Create group masks from dispatch table: (num_dispatch_groups, 1, num_routed_experts)
     group_masks = (expert_dispatch_table >= 0).unsqueeze(1).to(torch.int32)

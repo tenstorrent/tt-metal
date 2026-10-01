@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_y_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_moe
+from models.demos.deepseek_v3_d_p.tt.moe.fabric2d_contract import fabric2d_payload_size
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -139,6 +140,8 @@ def run_model(
     gate_up_scale=1.0,
     score_func=None,
     skip_upstream_reference=False,
+    dispatch_impl="direct",
+    combine_impl="direct",
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -167,6 +170,8 @@ def run_model(
     A HASH_HOST / HASH_DEVICE ``gate_fallback_mode`` selects hash routing: the tid2eid table and
     per-token ids are built here and handed to both sides, and the torch reference takes the
     resulting route instead of running its own gate.
+
+    ``dispatch_impl`` / ``combine_impl`` pick TtMoe's dispatch and combine ops ("direct" or "fabric2d").
 
     ``measure`` wraps the forward for a perf caller: it is called as ``measure(forward)``,
     must invoke the thunk and return its result, and owns the device sync. The perf gates use
@@ -560,6 +565,8 @@ def run_model(
         latent_weights=latent_weights,
         latent_use_norm=latent_use_norm,
         rms_norm_eps=rms_norm_eps,
+        dispatch_impl=dispatch_impl,
+        combine_impl=combine_impl,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -622,6 +629,24 @@ def run_model(
         mesh_composer=get_sp_mesh_composer(mesh_device),
         dtype=torch.int32,
     )
+
+    if combine_impl == "fabric2d":
+        # combine_fabric2d reads every routed token, including any dispatch dropped, so check that none
+        # were: on every chip, the last expert region must end inside the dispatch buffer.
+        _, device_counts, device_region_offsets, _ = get_gate_outputs(
+            tt_indices.view(dispatch_group_size, seq_len_per_chip, -1),
+            dispatch_group_size,
+            num_routed_experts,
+            experts_per_chip,
+            seq_len_per_chip,
+            num_experts_per_tok,
+            expert_dispatch_table=expert_dispatch_table,
+        )
+        buffer_end = int((device_region_offsets + device_counts).max())
+        assert buffer_end <= max_dispatch_buffer_token_size, (
+            f"the device routing needs {buffer_end} dispatch buffer pages but the buffer has "
+            f"{max_dispatch_buffer_token_size}; dispatch dropped tokens, which combine_fabric2d cannot handle"
+        )
 
     if gate_fallback_mode in _HASH_GATE_MODES:
         # Golden and device index the same tid2eid with the same ids, so the route is exact. The
@@ -963,6 +988,77 @@ def test_ds_moe(
     )
 
 
+# The fabric2d dispatch and combine ops need a ring on axis 0 and a fabric payload that fits one routed
+# token. Only the 8x4 TorusXY Galaxy case is defined: an 8x1 case cannot run on a Galaxy and no CI job
+# collects it.
+def _fabric2d_torus_xy_8x4(model_cfg):
+    return [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=fabric2d_payload_size(model_cfg)),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        )
+    ]
+
+
+# test_ds_moe's pcc-device-256 row with each fabric2d pair. The PCC bars are the direct path's own: the
+# transport itself is checked byte for byte in test_ttnn_dispatch_combine_fabric2d.py, but with a bf16
+# TILE combine input. The routed expert's bfloat8_b TILE output, which combine gets here, is checked
+# only by this PCC.
+# run_model engages padding only when it skips the PCC check, so the padded case only checks that the
+# padding-aware path runs. 30% padding on SP=8 leaves chip 5 with a partial real-token count.
+@pytest.mark.parametrize(
+    "dispatch_impl, combine_impl, padded_percent, run_pcc_check",
+    [
+        pytest.param("fabric2d", "fabric2d", 0, True, id="pcc-both"),
+        pytest.param("fabric2d", "direct", 0, True, id="pcc-dispatch_only"),
+        pytest.param("direct", "fabric2d", 0, True, id="pcc-combine_only"),
+        pytest.param("fabric2d", "fabric2d", 30, False, id="nopcc-pad30-both"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _fabric2d_torus_xy_8x4(DeepSeekV3Config),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_ds_moe_fabric2d(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    num_links,
+    request,
+    dispatch_impl,
+    combine_impl,
+    padded_percent,
+    run_pcc_check,
+):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=DeepSeekV3Config.EMB_SIZE,
+        hidden_dim=DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=256,
+        num_experts_per_tok=8,
+        dispatch_buffer_capacity_factor=8,
+        run_pcc_check=run_pcc_check,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        padded_percent=padded_percent,
+        dispatch_impl=dispatch_impl,
+        combine_impl=combine_impl,
+    )
+
+
 # ---------------------------------------------------------------------------
 # GLM-5.3 MoE
 # ---------------------------------------------------------------------------
@@ -1059,6 +1155,36 @@ def test_glm_moe(
         request,
         is_balanced=is_balanced,
         padded_percent=padded_percent,
+    )
+
+
+# The pcc-device-glm-256 row with both ops on fabric2d.
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _fabric2d_torus_xy_8x4(GLM53Config),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["ds-ref"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_glm_moe_fabric2d(variant, config_only, mesh_device, device_params, num_links, request):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=GLM53Config.EMB_SIZE,
+        hidden_dim=GLM53Config.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=GLM53Config.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=GLM53Config.NUM_EXPERTS_PER_TOKEN,
+        dispatch_buffer_capacity_factor=8,
+        run_pcc_check=True,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        dispatch_impl="fabric2d",
+        combine_impl="fabric2d",
     )
 
 
@@ -1177,10 +1303,54 @@ def test_kimi_moe(
     )
 
 
+# The kimi-5k-pcc row with both ops on fabric2d. Capacity factor 5 could drop tokens on skewed routing,
+# which combine_fabric2d cannot handle until it clamps overflow; this test's routing is balanced enough
+# that nothing is dropped, and run_model asserts so.
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _fabric2d_torus_xy_8x4(KimiK27Config),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_kimi_moe_fabric2d(variant, config_only, mesh_device, device_params, num_links, request):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=KimiK27Config.EMB_SIZE,
+        hidden_dim=KimiK27Config.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=KimiK27Config.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=KimiK27Config.NUM_EXPERTS_PER_TOKEN,
+        dispatch_buffer_capacity_factor=5,
+        run_pcc_check=True,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        dispatch_impl="fabric2d",
+        combine_impl="fabric2d",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Kimi-K3 LatentMoE
 # ---------------------------------------------------------------------------
 #
+# The Kimi-K3 dims and activations run_model takes on top of the row's parameters.
+_KIMI_K3_RUN_MODEL_KWARGS = dict(
+    routed_emb_dim=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
+    shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
+    latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
+    rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
+    final_output_pcc=0.965,
+    routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
+    shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
+)
+
+
 # Capacity factor 5 carries over from Kimi-K2.6: K3 halves the row width (7168 -> 3584 latent) and
 # doubles the token slots (top-8 -> top-16), so per-chip dispatch bytes are roughly unchanged.
 @pytest.mark.parametrize(
@@ -1273,13 +1443,42 @@ def test_kimi_k3_moe(
         topology,
         gate_fallback_mode,
         request,
-        routed_emb_dim=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
-        shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
-        latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
-        rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
-        final_output_pcc=0.965,
-        routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
-        shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
+        **_KIMI_K3_RUN_MODEL_KWARGS,
+    )
+
+
+# The kimi_k3-5k-pcc row with combine on fabric2d. Dispatch stays direct until dispatch_fabric2d
+# supports top-16. The routed side runs at the 3584 latent width, so this also checks the packet size
+# is taken from it. Capacity factor 5 could drop tokens on skewed routing, which combine_fabric2d cannot
+# handle until it clamps overflow; this test's routing is balanced enough that nothing is dropped, and
+# run_model asserts so.
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _fabric2d_torus_xy_8x4(KimiK3Config),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["kimi_k3"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_kimi_k3_moe_fabric2d(variant, config_only, mesh_device, device_params, num_links, request):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=KimiK3Config.EMB_SIZE,
+        hidden_dim=KimiK3Config.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=KimiK3Config.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=KimiK3Config.NUM_EXPERTS_PER_TOKEN,
+        dispatch_buffer_capacity_factor=5,
+        run_pcc_check=True,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        dispatch_impl="direct",
+        combine_impl="fabric2d",
+        **_KIMI_K3_RUN_MODEL_KWARGS,
     )
 
 
