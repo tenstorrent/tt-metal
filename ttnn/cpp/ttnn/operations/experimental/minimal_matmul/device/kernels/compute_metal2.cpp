@@ -21,11 +21,24 @@
 #include "api/dataflow/dfb_binding_token.h"
 #include "experimental/kernel_args.h"
 
+// Quasar: the packer's destination buffer descriptor (BFD) is baked in by the last PACK init;
+// pack_reconfig_data_format only reprograms the format gasket, and none of the inits this kernel
+// uses (matmul_block_init, copy_init, add_bcast_rows_init, mul_*_init, add_init) carries a PACK step
+// on Quasar. So every switch of the pack destination (intermediate <-> out) must be followed by an
+// explicit pack_init, or the tiles land in the previous destination's ring. WH/BH: their inits /
+// pack_reconfig_data_format retarget the packer themselves, so this is a no-op there.
+inline void retarget_packer([[maybe_unused]] uint32_t ocb) {
+#ifdef ARCH_QUASAR
+    pack_init(ocb);
+#endif
+}
+
 void copy_and_pack_block(
     DFBBindingToken in_dfb, DFBBindingToken out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
     reconfig_data_format_srca(in_dfb);
     pack_reconfig_data_format(out_dfb);
+    retarget_packer(out_dfb);
     copy_init(in_dfb);
     uint32_t fused_act_dst_id = 0;
 
@@ -74,6 +87,7 @@ void swiglu_block(
     reconfig_data_format_srca(in_dfb);
 #endif
     pack_reconfig_data_format(out_dfb);
+    retarget_packer(out_dfb);
 
     constexpr uint32_t GATE_DST = 0;
     constexpr uint32_t UP_DST = 1;
@@ -112,6 +126,13 @@ void swiglu_block(
 }
 #endif  // FUSE_SWIGLU
 
+#ifdef FUSE_BIAS
+// Only compiled when bound: it is a plain (non-template) function, so without this guard its
+// add_tiles_bcast<ROW> is instantiated even on the bias-less path. On Quasar that instantiation fails
+// to build -- bcast.h::any_tiles_bcast forwards the kernel's MATH_FIDELITY (HiFi2 here) into an
+// ELWADD, and the Quasar LLK static_asserts "Math fidelity must be LoFi for non-ELWMUL ops"
+// (llk_math_binary_api.h). The guard is codegen-neutral on WH/BH (the function was unused there).
+// NOTE: a Quasar FUSE_BIAS build still hits that assert -- compute-API (bcast.h) item, see the report.
 // For caller: if FUSE_TERNARY defined then out_dfb == intermediate_dfb
 /**
  * Add bias to input block
@@ -130,6 +151,7 @@ void add_bias_block(
     DataflowBuffer dfb_out(out_dfb);
     reconfig_data_format(in_dfb, bias_dfb);
     pack_reconfig_data_format(out_dfb);
+    retarget_packer(out_dfb);
     add_bcast_rows_init(in_dfb, bias_dfb);
     uint32_t fused_act_dst_id = 0;
 
@@ -150,6 +172,7 @@ void add_bias_block(
         dfb_out.push_back(N_block_tiles);
     }
 }
+#endif  // FUSE_BIAS
 
 void add_bias_and_addcmul_block(
     DFBBindingToken intermediate_dfb,
@@ -185,6 +208,7 @@ void add_bias_and_addcmul_block(
 
     reconfig_data_format(intermediate_dfb, bias_dfb);
     pack_reconfig_data_format(intermediate_dfb);
+    retarget_packer(intermediate_dfb);
     add_bcast_rows_init(intermediate_dfb, bias_dfb);
 
     // Wait for ALL input data ONCE at the beginning
@@ -214,6 +238,9 @@ void add_bias_and_addcmul_block(
 
     // Restore intermediate_dfb to ready (+ sync packer/unpacker)
     dfb_intermediate.reserve_back(out_block_num_tiles);
+    // TEN-4746: Quasar orders a PUSH after its WAIT_FREE only across a real packer op; dummy_pack is
+    // the no-write PACR provided for exactly this reserve->push idiom (no-op on WH/BH).
+    dummy_pack(intermediate_dfb);
     dfb_intermediate.push_back(out_block_num_tiles);
 #endif  // FUSE_BIAS
 
@@ -233,6 +260,7 @@ void add_bias_and_addcmul_block(
 
         reconfig_data_format(intermediate_dfb, ternary_b_dfb);
         pack_reconfig_data_format(intermediate_dfb);
+        retarget_packer(intermediate_dfb);
 #ifndef TERNARY_B_IS_FLOAT32
         mul_bcast_rows_init(intermediate_dfb, ternary_b_dfb);
 #else
@@ -285,6 +313,7 @@ void add_bias_and_addcmul_block(
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
         reconfig_data_format(intermediate_dfb, ternary_b_dfb);
         pack_reconfig_data_format(intermediate_dfb);
+        retarget_packer(intermediate_dfb);
 #ifndef TERNARY_B_IS_FLOAT32
         mul_init(intermediate_dfb, ternary_b_dfb);
 #endif
@@ -328,12 +357,14 @@ void add_bias_and_addcmul_block(
 
     // 'refill' intermediate_dfb (also synchronize packer/unpacker)
     dfb_intermediate.reserve_back(out_block_num_tiles);
+    dummy_pack(intermediate_dfb);  // TEN-4746, see above
     dfb_intermediate.push_back(out_block_num_tiles);
 
     dfb_intermediate.wait_front(out_block_num_tiles);
 
     reconfig_data_format(intermediate_dfb, ternary_a_dfb);
     pack_reconfig_data_format(out_dfb);
+    retarget_packer(out_dfb);
     add_init(intermediate_dfb, ternary_a_dfb);
 
     tile_id = 0;
@@ -491,6 +522,7 @@ void kernel_main() {
             // configured for the previous output stage's operands (see #55052).
             reconfig_data_format(dfb::in1, dfb::in0);
             pack_reconfig_data_format(dfb::intermediate);
+            retarget_packer(dfb::intermediate);
             matmul_block_init(
                 dfb::in0,
                 dfb::in1,
