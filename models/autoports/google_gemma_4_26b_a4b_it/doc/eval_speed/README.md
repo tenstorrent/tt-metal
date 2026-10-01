@@ -594,3 +594,23 @@ diagnostic requires runtime-policy attestation and short matched replay before
 any accuracy/qualitative adoption gates. Large local artifacts remain under
 `readiness_vllm/eval_speed/` and`/home/mvasiljevic/gemma4-eval-speed-evidence/`;
 they are intentionally not added wholesale to git.
+
+## Resume — user revoked the stop request
+
+The user explicitly authorized continuation after checkpoint0fdb72b2da. Resume
+starts with exclusive-device checks and a bounded mesh open/close, then the same
+isolated configurable-weight control. The previous stop was user-requested, not
+a model failure: Docker's20-second grace expired and the container exited137 at
+15:28:53 UTC; both device files were subsequently unowned. The image's standalone
+tt-smi wrapper lacks pyluwen, so that utility error is not classified as hardware
+failure. No new image or full five-task CI run is needed for this control.
+The bounded mesh check passes on all four chips at18:21:19 UTC without reset;
+the initial probe needed its log directory pointed at the owned artifact path.
+The policy-isolation host test passes: reversing exactly93 configurable weight
+changes recovers the original complete policy, including fixed prefill fields.
+
+The wider-guard CI initial prompt differs from the narrow-guard prompt only in
+the harness-provided kernel/version string in`system_information`, explaining
+1153 versus1154 input tokens on the two hosts. This adds another reason not to
+treat those independent trajectories as paired causal evidence. Exact replay
+controls retain the saved prompt and explicit request seed.
