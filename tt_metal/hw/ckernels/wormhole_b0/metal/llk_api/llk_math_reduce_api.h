@@ -25,7 +25,7 @@ inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::Tensor
         StateVal<OperationFpuReduce::PoolType>(to_underlying(type)),
         StateVal<OperationFpuReduce::ReduceDim>(to_underlying(dim)),
         StateVal<OperationFpuReduce::MathFidelity>(to_underlying(math_fidelity)),
-        StateVal<OperationFpuReduce::NumFaces>(tensor_shape.total_num_faces()),
+        StateVal<OperationFpuReduce::NumFacesRDim>(tensor_shape.num_faces_r_dim),
         StateVal<OperationFpuReduce::NumFacesCDim>(tensor_shape.num_faces_c_dim),
         StateDiscard<std::uint32_t>(dst_index),
         StateDiscard<bool>(is_fp32_dest_acc_en),
@@ -50,7 +50,7 @@ inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t op
         StateVal<OperationFpuReduce::PoolType>(to_underlying(type)),
         StateVal<OperationFpuReduce::ReduceDim>(to_underlying(dim)),
         StateVal<OperationFpuReduce::MathFidelity>(to_underlying(math_fidelity)),
-        StateVal<OperationFpuReduce::NumFaces>(tensor_shape.total_num_faces()),
+        StateVal<OperationFpuReduce::NumFacesRDim>(tensor_shape.num_faces_r_dim),
         StateVal<OperationFpuReduce::NumFacesCDim>(tensor_shape.num_faces_c_dim),
         StateDiscard<std::uint32_t>(dst_index),
         StateDiscard<bool>(is_fp32_dest_acc_en),
@@ -68,7 +68,7 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
         StateVal<OperationFpuReduce::PoolType>(to_underlying(type)),
         StateVal<OperationFpuReduce::ReduceDim>(to_underlying(dim)),
         StateVal<OperationFpuReduce::MathFidelity>(to_underlying(math_fidelity)),
-        StateVal<OperationFpuReduce::NumFaces>(tensor_shape.total_num_faces()),
+        StateVal<OperationFpuReduce::NumFacesRDim>(tensor_shape.num_faces_r_dim),
         StateVal<OperationFpuReduce::NumFacesCDim>(tensor_shape.num_faces_c_dim),
         StateDiscard<bool>(is_fp32_dest_acc_en)));
 

@@ -466,7 +466,7 @@ struct OperationFpuReduce : Operation<Exu::Fpu, Hoistable::Yes>
     {
     };
 
-    struct NumFaces : Field<std::uint32_t>
+    struct NumFacesRDim : Field<std::uint32_t>
     {
     };
 
@@ -480,7 +480,7 @@ struct OperationFpuReduce : Operation<Exu::Fpu, Hoistable::Yes>
         PoolType,
         ReduceDim,
         MathFidelity,
-        NumFaces,
+        NumFacesRDim,
         NumFacesCDim>;
 };
 
