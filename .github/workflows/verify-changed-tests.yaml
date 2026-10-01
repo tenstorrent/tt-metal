@@ -75,7 +75,8 @@ env:
 
   # Yamls under tests/pipeline_reorg/ that legitimately hold no test matrix, so the
   # gate has nothing to prove for them. ttsim-skip-list.yaml is a per-arch mapping of
-  # test ids, not a list of entries.
+  # test ids, not a list of entries. models_trace_config.yaml selects trace-audit
+  # families and sweep inputs; its generated models_sweep_tests.yaml stays gated.
   #
   # Only these may be a non-list. Any other yaml that stops being a list of test
   # entries fails the gate, the same way prepare_test_matrix.py errors on that shape
@@ -83,6 +84,7 @@ env:
   # pass the PR with zero coverage.
   NON_MATRIX_YAMLS: >-
     ttsim-skip-list.yaml
+    models_trace_config.yaml
 
   # Yamls whose tests need a tracy-enabled build. This cannot be derived: nothing
   # in a test entry says "profiler build", and matching cmds on "profiler" also

@@ -232,10 +232,12 @@ source test's model tier, SKU and owner:
 | GPT-OSS 120B | WH Galaxy, BH QuietBox 2, BH Galaxy | |
 
 The **LLM Trace Allocation Audit** workflow runs on the first day of each month at 06:00 UTC.
-It reads the same e2e registry and selects all entries in the Llama, Qwen, Gemma, Mistral,
-Falcon, GPT-OSS, Phi, Mamba and DeepSeek families, except Qwen Image. It retains all registered
-SKUs and tiers, including the DeepSeek SC4 and SC16 jobs. New models and SKUs within these
-families enter the audit automatically. For a new LLM family, add its `model_family` value to
+It reads the same e2e registry and selects entries in the four focused families:
+Llama, Qwen, Gemma and GPT-OSS, except Qwen Image. Other families, including DeepSeek,
+are excluded. It retains the selected entries' registered SKUs and tiers, including multihost
+jobs when present. New models and SKUs within these families enter the audit automatically.
+Coordinate added hardware time with the model owners before expanding the family list.
+For a new LLM family, add its `model_family` value to
 `families` in `models_trace_config.yaml`. Use `exclude_models` for non-LLM models that share
 an LLM family. Neither change needs Python code.
 
@@ -259,6 +261,10 @@ if the added work exceeds an existing budget. The generator inherits the e2e met
 resolves separate e2e entries for the same model across SKUs. It rejects unknown selections.
 CI checks that the generated section is current, including when an e2e tier or timeout changes.
 The sweep workflows accept model filters as text, so new models do not require dropdown edits.
+
+`models_trace_config.yaml` is configuration, not a test registry. The changed-test gate skips
+it through `NON_MATRIX_YAMLS`. The time-budget checker skips its mapping format. Both gates
+still process the generated entries in `models_sweep_tests.yaml`.
 
 Both paths set the following variables before the model command starts:
 
@@ -297,8 +303,9 @@ python .github/scripts/utils/model_trace_tests.py matrix \
 python -m pytest --noconftest .github/scripts/utils/test_model_trace_tests.py -q
 ```
 
-Allocation diagnostics add host overhead. The jobs reserve twice the source e2e job time;
-these estimates need measurements on each CI SKU. Individual test timeouts and performance
+Allocation diagnostics add host overhead. `DIAGNOSTIC_TIMEOUT_MULTIPLIER` in
+`model_trace_tests.py` controls the extra job time for both schedules. Its current value is 2;
+this estimate needs measurements on each CI SKU. Individual test timeouts and performance
 assertions remain unchanged, so a timeout or performance failure must be distinguished from
 an unsafe-allocation report. The tracker checks trace replays that the source test actually
 executes. Passing an eager-only or skipped test does not establish trace correctness. The audit

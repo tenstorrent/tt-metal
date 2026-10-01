@@ -2,7 +2,7 @@ name: "LLM Trace Allocation Audit"
 
 on:
   schedule:
-    # All LLM e2e entries, all tiers and their existing SKUs, monthly.
+    # Configured LLM families, all tiers and their existing SKUs, monthly.
     - cron: "0 6 1 * *"
   workflow_dispatch:
     inputs:

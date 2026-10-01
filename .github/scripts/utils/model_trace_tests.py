@@ -26,6 +26,8 @@ TRACE_CONFIG = REPO_ROOT / "tests/pipeline_reorg/models_trace_config.yaml"
 SWEEP_TESTS = REPO_ROOT / "tests/pipeline_reorg/models_sweep_tests.yaml"
 GENERATED_START = "# BEGIN GENERATED TRACE ALLOCATION SWEEPS"
 GENERATED_END = "# END GENERATED TRACE ALLOCATION SWEEPS"
+# Reserve extra job time for allocation diagnostics; this estimate needs per-SKU measurements.
+DIAGNOSTIC_TIMEOUT_MULTIPLIER = 2
 TRACKER_ENV = {
     "TT_METAL_TRACE_ALLOC_TRACKING": "1",
     "TT_METAL_TRACE_ALLOC_TRACEBACKS": "1",
@@ -47,6 +49,7 @@ def load_trace_config():
 
 
 def select_test(tests, name, sku, config=None):
+    config = load_trace_config() if config is None else config
     matches = [test for test in tests if test["name"] == name]
     if len(matches) != 1:
         raise ValueError(f"Expected one e2e test named {name!r}; found {len(matches)}")
@@ -58,8 +61,7 @@ def select_test(tests, name, sku, config=None):
     return test
 
 
-def is_llm(test, config=None):
-    config = load_trace_config() if config is None else config
+def is_llm(test, config):
     return test.get("model_family") in config["families"] and test.get("model") not in config["exclude_models"]
 
 
@@ -78,7 +80,7 @@ def audit_matrix(tests, sku_config, skus="all", model="all", config=None):
         entry["cmd"] = tracked_command(entry["cmd"])
         # Diagnostics add host work. Preserve individual test timeouts and assertions;
         # only reserve more job time for the complete e2e entry.
-        entry["timeout"] *= 2
+        entry["timeout"] *= DIAGNOSTIC_TIMEOUT_MULTIPLIER
     return matrix
 
 
@@ -106,7 +108,10 @@ def focused_tests(tests, config):
                     "model": model,
                     "model_family": test["model_family"],
                     "skus": {
-                        sku: {"timeout": test["skus"][sku]["timeout"] * 2, "tier": test["skus"][sku]["tier"]}
+                        sku: {
+                            "timeout": test["skus"][sku]["timeout"] * DIAGNOSTIC_TIMEOUT_MULTIPLIER,
+                            "tier": test["skus"][sku]["tier"],
+                        }
                         for sku in selected
                     },
                     "owner_id": test["owner_id"],

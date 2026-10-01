@@ -16,6 +16,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import model_trace_tests as trace_tests
+import verify_time_budget
 from prepare_test_matrix import build_test_matrix, collect_skus_from_tests, load_sku_config, load_tests
 
 
@@ -29,14 +30,14 @@ def sku_config():
     return load_sku_config(str(trace_tests.SKU_CONFIG))
 
 
-def test_monthly_audit_covers_all_llm_entries_without_mutating_source(registry, sku_config):
+def test_monthly_audit_covers_configured_entries_without_mutating_source(registry, sku_config):
     original = copy.deepcopy(registry)
-    llms = [entry for entry in registry if trace_tests.is_llm(entry)]
+    config = trace_tests.load_trace_config()
+    llms = [entry for entry in registry if trace_tests.is_llm(entry, config)]
     source = build_test_matrix(llms, collect_skus_from_tests(llms), sku_config)
     audit = trace_tests.audit_matrix(registry, sku_config)
     assert len(audit) == len(source)
     assert {entry["tier"] for entry in audit} == {1, 2, 3}
-    assert any(entry["multihost"] for entry in audit)
     for before, after in zip(source, audit):
         assert after["cmd"] == trace_tests.tracked_command(before["cmd"])
         assert after["timeout"] == before["timeout"] * 2
@@ -47,10 +48,26 @@ def test_monthly_audit_covers_all_llm_entries_without_mutating_source(registry, 
 
 @pytest.mark.parametrize(
     "family,model",
-    [("Qwen", "qwenimage"), ("ResNet", "resnet50"), ("Flux", "flux.1-dev"), (None, "[tt-train] tinyllama")],
+    [
+        ("Qwen", "qwenimage"),
+        ("ResNet", "resnet50"),
+        ("Flux", "flux.1-dev"),
+        (None, "[tt-train] tinyllama"),
+        ("DeepSeek", "deepseek-v3-tg"),
+        ("Mistral", "mixtral-8x7b"),
+        ("Falcon", "falcon7b"),
+        ("Phi", "phi-3-mini"),
+        ("Mamba", "mamba2-2.7b"),
+    ],
 )
-def test_audit_excludes_non_llms_even_when_family_is_shared(family, model):
-    assert not trace_tests.is_llm({"model_family": family, "model": model})
+def test_audit_excludes_models_outside_configured_scope(family, model):
+    assert not trace_tests.is_llm({"model_family": family, "model": model}, trace_tests.load_trace_config())
+
+
+def test_time_budget_skips_trace_config_and_counts_generated_sweeps():
+    registries = dict(verify_time_budget.load_tests(str(trace_tests.TRACE_CONFIG.parent)))
+    assert trace_tests.TRACE_CONFIG.name not in registries
+    assert any("model_trace_tests.py run" in test["cmd"] for test in registries[trace_tests.SWEEP_TESTS.name])
 
 
 def test_audit_filters_keep_exact_models_and_skus(registry, sku_config):

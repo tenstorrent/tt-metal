@@ -99,7 +99,6 @@ jobs:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
-        MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }}
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         # Only the per-runner BH cache modes (local-disk, lfc) need HF online
