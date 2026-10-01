@@ -28,17 +28,13 @@ GRID_DTYPE = ttnn.float32
 
 
 INVERSE_SIGMOID_EPS = 1e-5
-
-
-def inverse_sigmoid(x, eps=INVERSE_SIGMOID_EPS):
-    x = ttnn.clamp(x, min=0, max=1)
-    x1 = ttnn.clamp(x, min=eps)
-    x2 = ttnn.clamp(ttnn.rsub(x, 1.0), min=eps)
-    return ttnn.log(ttnn.div(x1, x2))
+# inverse_sigmoid's range: its eps clamp bounds the logits to +-log(1 / eps).
+LOGIT_BOUND = math.log(1.0 / INVERSE_SIGMOID_EPS)
 
 
 class TtMultiheadAttention:
-    """Batch-first self-attention over the object queries.
+    """Batch-first self-attention over the object queries, without the residual (the layer
+    adds it inside the following LayerNorm).
 
     ``params.qk_proj`` packs Q (pre-scaled by ``head_dim**-0.5``) and K into one Linear.
     """
@@ -50,36 +46,29 @@ class TtMultiheadAttention:
     def __call__(self, query, query_pos):
         """``query`` and ``query_pos`` are ``(bs, nq, C)``."""
         p = self.params
-        bs, num_query, embed_dims = query.shape
-        head_dim = embed_dims // self.num_heads
-
         qk = ttnn.linear(ttnn.add(query, query_pos), p.qk_proj.weight, bias=p.qk_proj.bias)
         v = ttnn.linear(query, p.v_proj.weight, bias=p.v_proj.bias)
 
-        def heads(x, order=(0, 2, 1, 3)):
-            return ttnn.permute(ttnn.reshape(x, (bs, num_query, self.num_heads, head_dim)), order)
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+            ttnn.concat([qk, v], dim=-1), num_heads=self.num_heads, transpose_key=False
+        )
+        # scale=1: the head_dim**-0.5 is folded into the Q weights.
+        out = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=1.0)
 
-        q = heads(qk[..., :embed_dims])
-        k = heads(qk[..., embed_dims:], order=(0, 2, 3, 1))  # (bs, heads, head_dim, nq), transposed for q @ k
-        v = heads(v)
-
-        attn = ttnn.softmax(ttnn.matmul(q, k), dim=-1)
-        out = ttnn.matmul(attn, v)
-
-        out = ttnn.reshape(ttnn.permute(out, (0, 2, 1, 3)), (bs, num_query, embed_dims))
-        out = ttnn.linear(out, p.out_proj.weight, bias=p.out_proj.bias)
-        return ttnn.add(out, query)
+        out = ttnn.transformer.concatenate_heads(out)
+        return ttnn.linear(out, p.out_proj.weight, bias=p.out_proj.bias)
 
 
 class TtFFN:
+    """Linear-ReLU-Linear, without the residual (the layer adds it inside the following LayerNorm)."""
+
     def __init__(self, params):
         self.params = params
 
     def __call__(self, x):
         p = self.params
-        y = ttnn.relu(ttnn.linear(x, p.linear1.weight, bias=p.linear1.bias))
-        y = ttnn.linear(y, p.linear2.weight, bias=p.linear2.bias)
-        return ttnn.add(y, x)
+        y = ttnn.linear(x, p.linear1.weight, bias=p.linear1.bias, activation="relu")
+        return ttnn.linear(y, p.linear2.weight, bias=p.linear2.bias)
 
 
 class TtDetrTransformerDecoderLayer:
@@ -100,10 +89,10 @@ class TtDetrTransformerDecoderLayer:
         """All batch-first: ``query``/``query_pos`` ``(bs, nq, C)``, ``value`` ``(bs, bev_h * bev_w, C)``,
         ``reference_points`` ``(bs, nq, 1, 2)`` in [0, 1]."""
         norms = self.params.norms
-        query = layer_norm(self.self_attn(query, query_pos), norms[0])
+        query = layer_norm(self.self_attn(query, query_pos), norms[0], residual=query)
         query = self.cross_attn(query=query, value=value, query_pos=query_pos, reference_points=reference_points)
         query = layer_norm(query, norms[1])
-        return layer_norm(self.ffn(query), norms[2])
+        return layer_norm(self.ffn(query), norms[2], residual=query)
 
 
 class TtDetectionTransformerDecoder:
@@ -123,8 +112,8 @@ class TtDetectionTransformerDecoder:
 
     @staticmethod
     def _reg_branch(x, branch):
-        x = ttnn.relu(ttnn.linear(x, branch[0].weight, bias=branch[0].bias))
-        x = ttnn.relu(ttnn.linear(x, branch[1].weight, bias=branch[1].bias))
+        x = ttnn.linear(x, branch[0].weight, bias=branch[0].bias, activation="relu")
+        x = ttnn.linear(x, branch[1].weight, bias=branch[1].bias, activation="relu")
         # (x, y, z) logit updates (see create_reg_branch_parameters), in GRID_DTYPE as they
         # are added to the reference points' logits.
         return ttnn.linear(x, branch[2].weight, bias=branch[2].bias, dtype=GRID_DTYPE)
@@ -147,8 +136,7 @@ class TtDetectionTransformerDecoder:
         # The reference refines with sigmoid(delta + inverse_sigmoid(points)). Every layer's
         # points are the previous layer's sigmoid, and inverse_sigmoid(sigmoid(z)) is z clamped
         # to its eps bound, so the logits are carried instead of recomputed.
-        logit_bound = math.log(1.0 / INVERSE_SIGMOID_EPS)
-        logits = inverse_sigmoid(reference_points)
+        logits = ttnn.logit(reference_points, eps=INVERSE_SIGMOID_EPS)
         intermediate = []
         intermediate_reference_points = []
         for index, (layer, branch) in enumerate(zip(self.layers, reg_branches, strict=True)):
@@ -156,7 +144,7 @@ class TtDetectionTransformerDecoder:
             output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
             if index:
-                logits = ttnn.clamp(logits, min=-logit_bound, max=logit_bound)
+                logits = ttnn.clamp(logits, min=-LOGIT_BOUND, max=LOGIT_BOUND)
             logits = ttnn.add(self._reg_branch(output, branch), logits)
             reference_points = ttnn.sigmoid(logits)
 
