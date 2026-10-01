@@ -358,3 +358,16 @@ def test_serving_gate_commit_stages_its_outputs(fx):
     got = stage_paths(s, led, sc)
     assert any(p.endswith("serving_contract.md") for p in got) and any(p.endswith("contract_tests.yaml") for p in got)
     assert any(p.endswith("tests/bringup/contract") for p in got)
+
+
+def test_served_kv_dtype_is_required_on_every_ladder_rung(fx):
+    s = Spec.load(fx())
+    s.data.setdefault("serving", {})["kv_dtype"] = "bfp8"
+    t = {x["id"]: x for x in generate(s, Reference())["tasks"]}
+    names = s.get("state.tensors") or []
+    assert names and all(
+        t[f"L.{r['name']}"]["gate"]["metrics"][f"state_bits_{names[0]}"] == "== 8" for r in s.data["ladder"]
+    )
+    s.data["serving"].pop("kv_dtype")
+    t = {x["id"]: x for x in generate(s, Reference())["tasks"]}
+    assert not any(k.startswith("state_bits_") for k in t["L.s256"]["gate"]["metrics"])

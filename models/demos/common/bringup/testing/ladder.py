@@ -11,6 +11,7 @@ layer (the gaps never run on the device). A rung may set ``layers`` to stack few
 Metrics (last chunk unless noted):
     pcc_layer_L{i}       per-layer output trail
     pcc_state_min        worst state tensor over every layer and the whole sequence (and pcc_state_<name>_L{i})
+    state_bits_<name>    bits per element of each state tensor the ladder ran on (state.formats(), optional hook)
     pcc_final_hidden, top1_match, top5_overlap, pcc_logits_tail     only when the stack ends at the model's last layer
     chunk_seconds_c{c}, prefill_seconds, model_load_s, covered_layers, subset,
     host_transfers_per_layer (warm chunks only: the most host round-trips inside one model.layer call; a deferred
@@ -18,6 +19,8 @@ Metrics (last chunk unless noted):
 """
 
 from __future__ import annotations
+
+STATE_BITS = {"bfloat16": 16, "float32": 32, "bfloat8_b": 8, "bfloat4_b": 4}
 
 import time
 
@@ -54,6 +57,10 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
     metrics.record("covered_layers", len(layers))
     metrics.record("subset", int(not full_stack))
     state = model.new_state(rung["seq"])
+    # F58: the KV format the ladder actually runs on, so a gate can require the served one (one format for the
+    # ladder, the contract and serving). Optional hook: state.formats() -> {name: ttnn dtype}; bits per element.
+    for name, dt in (state.formats() if hasattr(state, "formats") else {}).items():
+        metrics.record(f"state_bits_{name}", STATE_BITS.get(str(dt).split(".")[-1].lower(), -1))
 
     first = 0
     metrics.record("rung_start", (n_chunks - 1) * chunk if rung.get("prefix_from_golden") else 0)
