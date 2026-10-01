@@ -44,6 +44,7 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
 from models.experimental.voxtral_tts.reference.voxtral_paths import CKPT_NAME, resolve_model_dir
 from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flowmod
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_device_loop import DeviceFrameLoop
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import TtVoxtralFlow
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TILE, TtVoxtralGPT
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (
@@ -54,6 +55,10 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (
 
 
 PER_BATCH_TRACE = os.environ.get("VOXTRAL_TRACE_PER_BATCH", "0") == "1"
+# Phase B: sampling, stop logic, positions, noise and the next input embedding on device (one trace
+# replay per frame, no host work between frames). VOXTRAL_DEVICE_LOOP=0 restores the host loop.
+DEVICE_LOOP = os.environ.get("VOXTRAL_DEVICE_LOOP", "1") != "0"
+CHECK_EVERY = int(os.environ.get("VOXTRAL_STOP_CHECK_EVERY", "8"))
 
 
 class TtVoxtralBatchedPipeline:
@@ -75,11 +80,24 @@ class TtVoxtralBatchedPipeline:
             self.backbone = TtVoxtralGPT(mesh_device, state=self.wb, max_seq_len=max_seq_len, max_batch=self.B)
             self.flow = TtVoxtralFlow(mesh_device, ckpt_path=ckpt)
             self.codec = TtVoxtralCodecDecoder(mesh_device, ckpt_path=ckpt)
+            self.loop = None
+            self.device_loop = DEVICE_LOOP
+            if DEVICE_LOOP:
+                self.loop = DeviceFrameLoop(
+                    mesh_device,
+                    self.B,
+                    max_frames=max_seq_len,
+                    audio_embeddings=self.wb["audio_embeddings"],
+                    semantic_mask=self.flow.semantic_mask_host,
+                    xin_dtype=self.backbone.dtype,
+                    check_every=CHECK_EVERY,
+                )
         except Exception:
             if self._owns_device:
                 ttnn.close_device(mesh_device)
             raise
         self._tr = None
+        self._tr_head = None
         self.last_timings = {}
         self.warmed = {}
         logger.info(
@@ -95,6 +113,11 @@ class TtVoxtralBatchedPipeline:
         [1,B,3072]; semantic logits [1,B,8320] fp32; flow solve x [B,1,36] fp32."""
         bb, fl, B = self.backbone, self.flow, self.B
         h = bb.step_device(ttnn.clone(xin), pos_u32, pos_i32)
+        return self._head(h, x0, cfg_alpha, n_steps)
+
+    def _head(self, h, x0, cfg_alpha, n_steps):
+        """normed hidden [1,B,3072] (device) -> (semantic logits [1,B,8320] fp32, flow solve x fp32)."""
+        fl, B = self.flow, self.B
         lg = ttnn.linear(
             ttnn.typecast(h, flowmod.SEMANTIC_DTYPE), fl.semantic_dev, compute_kernel_config=flowmod.COMPUTE_CONFIG
         )
@@ -110,9 +133,13 @@ class TtVoxtralBatchedPipeline:
         Bpad = -(-B // TILE) * TILE
         return {
             "xin": dv(torch.zeros(1, B, DIM), self.backbone.dtype),
+            "h0": dv(torch.zeros(1, B, DIM), self.backbone.dtype),  # frame-0 trace input (device loop)
             "pos_u32": dv(torch.zeros(1, Bpad, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             "pos_i32": ttnn.from_torch(torch.zeros(B, dtype=torch.int32), dtype=ttnn.int32, device=dev),
-            "x0": dv(torch.zeros(B, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32),
+            "x0": dv(
+                torch.zeros(*((1, B, N_ACOUSTIC_CODEBOOK) if self.loop is not None else (B, 1, N_ACOUSTIC_CODEBOOK))),
+                ttnn.float32,
+            ),
         }
 
     def _fill(self, buf, x_host, positions, x0):
@@ -125,7 +152,7 @@ class TtVoxtralBatchedPipeline:
         ttnn.copy_host_to_device_tensor(host(x_host.reshape(1, B, DIM), self.backbone.dtype), buf["xin"])
         ttnn.copy_host_to_device_tensor(host(padded, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), buf["pos_u32"])
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(positions.to(torch.int32), dtype=ttnn.int32), buf["pos_i32"])
-        ttnn.copy_host_to_device_tensor(host(x0.reshape(B, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32), buf["x0"])
+        ttnn.copy_host_to_device_tensor(host(x0.reshape(tuple(buf["x0"].shape)), ttnn.float32), buf["x0"])
 
     def _trace_capture(self, positions, cfg_alpha, n_steps):
         """Capture the frame graph. The warm-up run and the capture both write K/V at `positions`
@@ -133,21 +160,42 @@ class TtVoxtralBatchedPipeline:
         dev = self.device
         buf = self._buffers()
         self._fill(buf, torch.zeros(1, self.B, DIM), positions, torch.zeros(self.B, N_ACOUSTIC_CODEBOOK))
-        self._graph(buf["xin"], buf["pos_u32"], buf["pos_i32"], buf["x0"], cfg_alpha, n_steps)  # program cache
+        lg, xr = self._graph(buf["xin"], buf["pos_u32"], buf["pos_i32"], buf["x0"], cfg_alpha, n_steps)  # program cache
+        if self.loop is not None:
+            self.loop.sample_and_advance(lg, xr, buf)
         ttnn.synchronize_device(dev)
         tid = ttnn.begin_trace_capture(dev, cq_id=0)
         try:
             lg, xr = self._graph(buf["xin"], buf["pos_u32"], buf["pos_i32"], buf["x0"], cfg_alpha, n_steps)
+            if self.loop is not None:
+                self.loop.sample_and_advance(lg, xr, buf)
         finally:
             ttnn.end_trace_capture(dev, tid, cq_id=0)
         self._tr = (tid, buf, lg, xr)
         self._tr_args = (float(cfg_alpha), int(n_steps))
         ttnn.synchronize_device(dev)
+        if self.loop is not None:
+            # Frame 0 as its own trace: semantic head + flow solve from the prefill hidden in buf["h0"],
+            # then the sampler (eager, these ~60 small ops cost ~0.6 s of host dispatch per batch).
+            lg0, xr0 = self._head(buf["h0"], buf["x0"], cfg_alpha, n_steps)
+            self.loop.sample_and_advance(lg0, xr0, buf)
+            ttnn.synchronize_device(dev)
+            tid0 = ttnn.begin_trace_capture(dev, cq_id=0)
+            try:
+                lg0, xr0 = self._head(buf["h0"], buf["x0"], cfg_alpha, n_steps)
+                self.loop.sample_and_advance(lg0, xr0, buf)
+            finally:
+                ttnn.end_trace_capture(dev, tid0, cq_id=0)
+            self._tr_head = tid0
+            ttnn.synchronize_device(dev)
 
     def _trace_release(self):
         if self._tr is not None:
             ttnn.release_trace(self.device, self._tr[0])
             self._tr = None
+        if getattr(self, "_tr_head", None) is not None:
+            ttnn.release_trace(self.device, self._tr_head)
+            self._tr_head = None
 
     def _frame_codes(self, logits, xr, stopped):
         """host: masked argmax -> semantic [B]; FSQ -> acoustic [B,36]; END rows get EMPTY codes.
@@ -320,8 +368,7 @@ class TtVoxtralBatchedPipeline:
         frozen = lens.clone()  # a stopped row keeps rewriting its last slot instead of advancing
 
         t0 = time.perf_counter()
-        # Frame 0 from the prefill hidden, eager (TtVoxtralPipeline does the same).
-        codes = self.flow(h0, cfg_alpha=cfg_alpha, n_steps=n_steps, x_0=x0[0])
+        codes = None  # frame 0: host below for the host loop, device inside _device_loop
         traced = False
         kept = self._tr is not None and getattr(self, "_tr_args", None) == (float(cfg_alpha), int(n_steps))
         if kept:
@@ -335,6 +382,15 @@ class TtVoxtralBatchedPipeline:
                 self._trace_release()
                 logger.warning(f"[batched] trace capture failed ({type(exc).__name__}), running eager")
         steps = 0
+        if traced and self.device_loop and self.loop is not None:
+            try:
+                frames, steps, stopped = self._device_loop(h0, lens, caps, x0, F, cfg_alpha, n_steps, verbose, t0)
+            finally:
+                if PER_BATCH_TRACE or not kept:
+                    self._trace_release()
+            return self._finish(frames, steps, t_prefill, time.perf_counter() - t0, caps, n, traced, kept, B, True)
+        # Frame 0 from the prefill hidden, eager (TtVoxtralPipeline does the same).
+        codes = self.flow(h0, cfg_alpha=cfg_alpha, n_steps=n_steps, x_0=x0[0])
         try:
             for t in range(F):
                 for b in range(B):
@@ -360,7 +416,9 @@ class TtVoxtralBatchedPipeline:
         finally:
             if PER_BATCH_TRACE or not kept:
                 self._trace_release()
-        t_decode = time.perf_counter() - t0
+        return self._finish(frames, steps, t_prefill, time.perf_counter() - t0, caps, n, traced, kept, B, False)
+
+    def _finish(self, frames, steps, t_prefill, t_decode, caps, n, traced, kept, B, device_loop):
         n_frames = [len(f) for f in frames]
         self.last_timings = {
             "prefill_s": t_prefill,
@@ -371,6 +429,7 @@ class TtVoxtralBatchedPipeline:
             "stopped_naturally": [bool(n_frames[b] < int(caps[b])) for b in range(n)],
             "traced": traced,
             "trace_reused": bool(kept),
+            "device_loop": device_loop,
             "batch": B,
             "requests": n,
         }
@@ -380,6 +439,47 @@ class TtVoxtralBatchedPipeline:
                 raise RuntimeError(f"row {b} emitted [END_AUDIO] on the first frame -- nothing to decode")
             out.append(torch.stack(frames[b], dim=0))
         return out
+
+    def _device_loop(self, h0, lens, caps, x0, F, cfg_alpha, n_steps, verbose, t0):
+        """Frame 0 from the prefill hidden through the device sampler (eager), then frames 1..F-1 as
+        trace replays with no host work in between; the stopped mask is read every `check_every`
+        frames, the codes once at the end. -> (frames per row, steps, stopped)."""
+        B, loop = self.B, self.loop
+        tid, buf, _, _ = self._tr
+        # Frame 0: the sampler advances positions by one for live rows, so it is seeded one slot back
+        # (lens - 1) and with frame index 0; afterwards pos = lens, the record holds frame 0 and buf
+        # carries frame 1's input, exactly the state a replay expects.
+        loop.seed0(buf, lens, caps, x0)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                h0.reshape(1, B, DIM).to(torch.float32).contiguous(), dtype=self.backbone.dtype, layout=ttnn.TILE_LAYOUT
+            ),
+            buf["h0"],
+        )
+        ttnn.execute_trace(self.device, self._tr_head, cq_id=0, blocking=False)
+        steps = 0
+        last = 0  # index of the last frame produced
+        for t in range(1, F):
+            ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+            steps += 1
+            last = t
+            if t % loop.check_every == 0 and bool(loop.read_stopped().all()):
+                break
+            if verbose and t % 25 == 0:
+                el = time.perf_counter() - t0
+                logger.info(f"[batched/device-loop] {t} frames, {el / t * 1e3:.1f} ms/frame")
+        cache = loop.read_codes()  # [B, F_pad, 37]; frame t at [:, t]
+        frames = [[] for _ in range(B)]
+        stopped = torch.zeros(B, dtype=torch.bool)
+        for b in range(B):
+            cap = int(caps[b])
+            for t in range(0, last + 1):
+                c = cache[b, t]
+                if int(c[0]) == END_AUDIO_ID or t >= cap:
+                    stopped[b] = True
+                    break
+                frames[b].append(c.clone())
+        return frames, steps, stopped
 
     @torch.no_grad()
     def decode(self, frames):
