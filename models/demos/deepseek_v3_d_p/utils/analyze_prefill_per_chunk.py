@@ -16,8 +16,6 @@ For P>1 the period and the traversal are different quantities and must not be co
 
 Without CHUNK_END the finish is approximated by the last rank's next start, exact only while that
 rank stays saturated.
-
-See also analyze_prefill_kv_ramp.py, which attributes the growth to specific ops.
 """
 
 import argparse
