@@ -1,19 +1,21 @@
 #!/bin/bash
 # CPU-only setup on blx03 for the #60 decode A/B (no device access): a worktree of the shared repo at
 # the t60 commit, submodules from the shared repo's objects, and a Release build (~2.5 GB, a few min).
-# Usage (from g15blx02): ssh g14blx03 'bash -s -- <commit>' < tmp/t60/blx03_setup60.sh   (returns at once)
+# Usage (from g15blx02): ssh g14blx03 'bash -s' < tmp/t60/blx03_setup60.sh   (returns at once; worktree at the
+# pushed branch tip; for a given commit use 'bash -s -- <sha>')
 # Done when ~/fasth3/t60-setup.log ends with SETUP60_DONE rc=0.
 # Remove afterwards: git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/t60; rm ~/fasth3/t60-setup.*
 set -u
-REV=${1:?t60 commit sha}
+REV=${1:-FETCH_HEAD}
 BASE=/home/smarton/fasth3/tt-metal; W=/home/smarton/fasth3/t60; LOG=/home/smarton/fasth3/t60-setup.log
 BR=ttp/t60-fold-per-conv-pad-mask-mul-and-temporal-
 cat > /home/smarton/fasth3/t60-setup.sh <<EOF
 set -x
 run() {
   git -C $BASE fetch origin $BR && git -C $BASE cat-file -e $REV^{commit} || return 11
-  [ -d $W ] || git -C $BASE worktree add --detach $W $REV || return 12
-  git -C $W checkout --detach $REV || return 13
+  REV=\$(git -C $BASE rev-parse $REV)
+  [ -d $W ] || git -C $BASE worktree add --detach $W \$REV || return 12
+  git -C $W checkout --detach \$REV || return 13
   for n in tracy umd tt-cluster-descriptors; do
     git -C $W submodule update --init --reference $BASE/.git/modules/tt_metal/third_party/\$n -- tt_metal/third_party/\$n || return 14
   done

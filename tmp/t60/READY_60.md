@@ -26,7 +26,7 @@ expect ~60-67 ms per decode, bit-identical output. With #44 (concat, 38 ms/chip)
 
 ## Run (blx03; one project device job at a time; check the broker CLI after its 1.0.0 upgrade)
 1. Setup, CPU only (~5 min, ~2.5 GB in ~/fasth3/t60):
-   `ssh g14blx03 'bash -s -- <t60 commit>' < tmp/t60/blx03_setup60.sh`
+   `ssh g14blx03 'bash -s' < tmp/t60/blx03_setup60.sh` (worktree at the pushed branch tip, 643a12bb924 or later)
    Ready when `ssh g14blx03 tail -1 ~/fasth3/t60-setup.log` prints `SETUP60_DONE rc=0`.
 2. Optional device unit checks (op level + conv level, fold on vs off bit-identical; short):
    `ttp lock g14blx03-device -- ssh g14blx03 '~/fasth3/tt-metal/tmp/blx03/submit.sh 900 bash /home/smarton/fasth3/t60/tmp/t60/check60.sh'`
