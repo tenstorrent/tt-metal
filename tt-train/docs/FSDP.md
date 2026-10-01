@@ -111,7 +111,7 @@ Wraps `module` in place and returns it. After the call:
 | Parameter | Default | Description |
 |---|---|---|
 | `module` | required | An `AbstractModuleBase` instance (block, root model, etc.). |
-| `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto picks `rank-2` (the typical "first matmul weight dim" for `[1, 1, O, I]` weights), falls back to `rank-1` if `rank-2` is already taken by another mesh axis (e.g. TP) or has size 1. Parameters whose chosen dim is not divisible by the FSDP axis size are skipped with a warning. |
+| `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto considers `rank-2` (the typical "first matmul weight dim" for `[1, 1, O, I]` weights) then `rank-1`, skipping a dim already taken by another mesh axis (e.g. TP) or of size 1, and prefers the one whose per-device shards are whole tiles, then one that divides evenly (see [Tile alignment](#tile-alignment)). Parameters whose chosen dim is not divisible by the FSDP axis size are skipped with a warning. |
 | `mesh_axis` | `"fsdp"` | Name of the mesh axis to shard across. Must exist on the mesh and have size > 1. Kept distinct from `"dp"` so a 2D mesh `("fsdp", "dp")` cleanly supports hybrid sharded data parallel later. |
 | `reshard_after_forward` | `True` | If `True`, weights are resharded between forward and backward to keep peak memory low; the backward-pre callback re-gathers just in time. If `False`, weights stay gathered between forward and backward — cheaper in CCL but uses more memory. |
 
@@ -131,6 +131,41 @@ is what gives the canonical "one block gathered at a time" memory profile.
 
 You can wrap any other granularity (e.g. only every other block, or just
 the root), but per-block wrapping is the granularity we test against.
+
+---
+
+## Tile alignment
+
+ttnn stores tensors in 32×32 tiles. When a parameter's **per-device shard is
+not a whole number of tiles** along the shard dim, `all_gather` and
+`reduce_scatter` can't use the native CCL and fall back to a composite
+implementation (broadcast to every device, then concat). On an 8-card
+Blackhole loudbox that path measured 7–19× slower per call, e.g. an
+all-gather of a `[384, 1024]` weight took 868 µs as 48-row shards vs 118 µs
+as 128-column shards. It is paid on every step: two all-gathers (forward,
+and again before backward) plus one reduce-scatter per parameter.
+
+### What `fully_shard` does about it
+
+1. **Picks an aligned dim when there is one.** In auto mode, a candidate dim
+   whose shards are whole tiles wins over the default order. This covers
+   most real cases, e.g. a Llama-3 embedding `[128256, 4096]` over 32
+   devices shards into 128 columns instead of 4008 rows.
+2. **Warns when there isn't one.** If no candidate dim gives whole-tile
+   shards, the parameter is still sharded (correct, but on the slow path)
+   and a warning names it. It is reported once per shape, so a model with
+   many identical norms produces a single warning.
+
+### Which models are affected
+
+Once the aligned dim is picked, the only unalignable weights in the models
+we checked (FSDP sizes 2–32) are:
+
+| Model | Unalignable weights |
+|---|---|
+| Llama 3.2 1B, TinyLlama, Llama 3 8B / 70B, Llama 405B | none |
+| Qwen3 (0.6B–32B), FSDP ≥ 8 | per-head `q_norm` / `k_norm` (`[1, 1, 1, 128]`) |
+| Small models with narrow hidden sizes (e.g. 384 at FSDP 8, GPT-2's 768 at FSDP ≥ 16) | norms, and possibly attention matrices or the embedding |
 
 ---
 
@@ -320,11 +355,12 @@ In this layout:
 - **`clip_grad_norm`** raises under FSDP for the same reason it raises
   under TP: the per-rank L2 norm isn't the global norm. A
   sharding-aware clip is on the TODO list.
-- **Parameters on the chosen shard dim with size 1** (e.g. RMSNorm
-  `gamma` shaped `[1, 1, 1, F]` with `shard_dim` 2) are skipped
-  with a warning rather than sharded. They stay replicated. For the
-  small norm-style parameters this is the right behavior. If `shard_dim`
-  is set to `auto`, it will try to shard on dim 2, and then dim 3 before skipping.
+- **Parameters with no usable shard dim** (every candidate has size 1, e.g.
+  a `[1, 1, 1, 1]` scalar), or whose chosen dim isn't divisible by the FSDP
+  axis size, are skipped with a warning and stay replicated. In auto mode
+  an RMSNorm `gamma` shaped `[1, 1, 1, F]` is sharded along dim 3, since
+  dim 2 has size 1.
+- **Sub-tile shards are slow.** See [Tile alignment](#tile-alignment).
 
 ---
 

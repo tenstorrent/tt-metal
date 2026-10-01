@@ -403,6 +403,30 @@ class TestFullyShardLinear:
         with expect_error(RuntimeError, "Mesh has no axis named"):
             ttml.fsdp.fully_shard(linear, mesh_axis="this_axis_does_not_exist")
 
+    def test_prefers_tile_aligned_shard_dim(self):
+        """A weight whose ``rank-2`` shards would be sub-tile is sharded on ``rank-1`` instead.
+
+        ``[1,1,48,64]`` over 2 devices: rows split into 24 (misaligned), columns into 32 (aligned).
+        """
+        linear = LinearLayer(64, 48, has_bias=False)
+        ttml.fsdp.fully_shard(linear)
+
+        assert linear.weight.tensor.shape() == [1, 1, 48, 64 // self.axis_size]
+        assert linear.weight.tensor._fsdp_shard_dim == 3
+
+    def test_warns_once_per_shape_when_no_dim_is_tile_aligned(self):
+        """Bias ``[1,1,1,48]`` has 24-wide shards and no alternative dim: sharded, with one warning."""
+        ttml.fsdp._warned_misaligned.clear()
+        first, second = LinearLayer(64, 48, has_bias=True), LinearLayer(64, 48, has_bias=True)
+        with pytest.warns(UserWarning, match="composite path") as record:
+            ttml.fsdp.fully_shard(first)
+            ttml.fsdp.fully_shard(second)
+
+        assert sum("composite path" in str(w.message) for w in record) == 1
+        for linear in (first, second):
+            assert ttml.fsdp.is_fsdp_managed(linear.bias.tensor)
+            assert linear.bias.tensor.shape() == [1, 1, 1, 48 // self.axis_size]
+
 
 # ---------------------------------------------------------------------------
 # Root-wrapping semantics
@@ -467,9 +491,10 @@ class TestFSDPEquivalence:
         rng = np.random.default_rng(seed)
         return rng.standard_normal((batch_size, 1, seq_len, features)).astype(np.float32) * 0.1
 
-    def test_forward_matches_reference(self):
+    @pytest.mark.parametrize("hidden", [128, 48], ids=["tile_aligned", "misaligned"])
+    def test_forward_matches_reference(self, hidden):
         """FSDP forward output ≈ replicated-reference forward output."""
-        in_features, hidden, out_features = 64, 128, 64
+        in_features, out_features = 64, 64
         batch_size, seq_len = 2, 32
         input_np = self._make_input(batch_size, seq_len, in_features, seed=0)
         mapper = _replicated_mapper()
@@ -494,9 +519,15 @@ class TestFSDPEquivalence:
         assert out_fsdp_np.shape == out_ref_np.shape
         np.testing.assert_array_equal(out_fsdp_np, out_ref_np)
 
-    def test_backward_matches_reference(self):
-        """FSDP gathered gradients ≈ replicated-reference gradients."""
-        in_features, hidden, out_features = 64, 128, 64
+    @pytest.mark.parametrize("hidden", [128, 48], ids=["tile_aligned", "misaligned"])
+    def test_backward_matches_reference(self, hidden):
+        """FSDP gathered gradients ≈ replicated-reference gradients.
+
+        ``hidden=48`` splits into 24-wide (sub-tile) shards on the fsdp axis: fc1's weight is
+        sharded on its tile-aligned in-features dim instead, and fc1's bias (no aligned dim)
+        is sharded misaligned, through the composite CCLs.
+        """
+        in_features, out_features = 64, 64
         batch_size, seq_len = 2, 32
         input_np = self._make_input(batch_size, seq_len, in_features, seed=1)
         mapper = _replicated_mapper()

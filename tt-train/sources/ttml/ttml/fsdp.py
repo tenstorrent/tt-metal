@@ -38,6 +38,14 @@ Contract:
       to ``"fsdp"``, set up via ``ttml.open_device_mesh`` with that axis name.
     * Non-eltwise optimizers like Muon cannot be used with FSDP-managed
       parameters yet (guarded inside the Muon constructor).
+
+Tile alignment:
+    ttnn stores tensors in 32x32 tiles. When a parameter's per-device shard is
+    not a whole number of tiles along its shard dim, ``all_gather`` and
+    ``reduce_scatter`` fall back to a composite implementation (broadcast +
+    concat) that is several times slower than the native CCL. Auto mode
+    therefore prefers a shard dim whose shards are tile-aligned, and warns when
+    no candidate is.
 """
 
 from __future__ import annotations
@@ -302,17 +310,31 @@ class FSDPState:
 # ---------------------------------------------------------------------------
 
 
+def _is_tile_aligned_shard(shape: List[int], dim: int, axis_size: int) -> bool:
+    """True if splitting ``shape[dim]`` evenly over ``axis_size`` devices gives whole-tile shards.
+
+    Only the two tiled (last) dims can be misaligned; any even split of an outer dim is fine.
+    A misaligned shard sends ``all_gather`` / ``reduce_scatter`` down ttnn's composite path.
+    """
+    if shape[dim] % axis_size != 0:
+        return False
+    if dim < len(shape) - 2:
+        return True
+    return (shape[dim] // axis_size) % ttnn.TILE_SIZE == 0
+
+
 def _pick_shard_dim_from_shape(
     shape: List[int],
     already_sharded: set,
     axis_index: int,
+    axis_size: Optional[int] = None,
 ) -> Optional[int]:
     """Shape-only ``_auto_shard_dim_for_param`` core, shared by eager and lazy paths.
 
-    Same precedence rule as :func:`_auto_shard_dim_for_param`: prefer ``rank-2``
-    (the first matmul weight dim on TTML's ``[1,1,O,I]`` convention), fall back
-    to ``rank-1`` if ``rank-2`` is already sharded by another mesh axis (e.g. TP)
-    or has size 1.
+    Candidates are ``rank-2`` (the first matmul weight dim on TTML's ``[1,1,O,I]``
+    convention) then ``rank-1``, dropping dims already sharded by another mesh axis
+    (e.g. TP) or of size 1. Given ``axis_size``, the first candidate with tile-aligned
+    shards wins, then the first that divides evenly; otherwise the first candidate.
     """
     rank = len(shape)
     if rank < 1:
@@ -322,15 +344,18 @@ def _pick_shard_dim_from_shape(
     if rank >= 2:
         candidates.append(rank - 2)
     candidates.append(rank - 1)
+    candidates = [c for c in candidates if c not in already_sharded and shape[c] != 1]
+    if not candidates:
+        return None
 
-    for cand in candidates:
-        if cand in already_sharded:
-            continue
-        if shape[cand] == 1:
-            continue
-        return cand
-
-    return None
+    if axis_size is not None:
+        for cand in candidates:
+            if _is_tile_aligned_shard(shape, cand, axis_size):
+                return cand
+        for cand in candidates:
+            if shape[cand] % axis_size == 0:
+                return cand
+    return candidates[0]
 
 
 def _placements_from_mapper(mapper: Any) -> Optional[List[Any]]:
@@ -360,18 +385,19 @@ def _param_shape(parameter: Parameter) -> List[int]:
     return list(inner.shape())
 
 
-def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int) -> Optional[int]:
+def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int, axis_size: Optional[int] = None) -> Optional[int]:
     """Pick a shard dim for ``parameter``, or return ``None`` to skip it.
 
     Rules (shared between lazy and eager paths):
-      1. Prefer ``rank - 2`` (the first matmul weight dim on TTML's
-         ``[1,1,O,I]`` convention, where ``O`` is typically large). Fall back
-         to ``rank - 1`` if either:
-             (a) ``rank - 2`` is already sharded on another mesh axis (e.g. TP), or
-             (b) shape on ``rank - 2`` is 1 (e.g. LayerNorm gamma sized ``[1,1,1,F]``).
-      2. If no candidate survives those checks, return ``None`` — caller
-         skips this parameter with a warning.
-      3. Divisibility is enforced by the caller.
+      1. Candidates are ``rank - 2`` (the first matmul weight dim on TTML's
+         ``[1,1,O,I]`` convention, where ``O`` is typically large), then
+         ``rank - 1``. A candidate is dropped if either:
+             (a) it is already sharded on another mesh axis (e.g. TP), or
+             (b) its size is 1 (e.g. ``rank - 2`` of a LayerNorm gamma ``[1,1,1,F]``).
+      2. Among the survivors prefer, in order: one whose per-device shard is a
+         whole number of tiles (native CCL path), one that divides evenly, the first.
+      3. If no candidate survives, return ``None`` — caller skips this
+         parameter with a warning. Divisibility is enforced by the caller.
 
     "Already sharded on another mesh axis" is read from
     ``parameter.tensor.tensor_topology().placements()`` in the eager case and
@@ -385,7 +411,28 @@ def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int) -> Optional
     else:
         placements = _get_placements(inner)
     already_sharded = _sharded_tensor_dims(placements)
-    return _pick_shard_dim_from_shape(_param_shape(parameter), already_sharded, axis_index)
+    return _pick_shard_dim_from_shape(_param_shape(parameter), already_sharded, axis_index, axis_size)
+
+
+# (shape, shard_dim, axis_size) combinations already warned about; one warning per kind is
+# enough (e.g. Qwen3-32B has 128 identical q/k-norm weights).
+_warned_misaligned: set = set()
+
+
+def _warn_misaligned_shard(rel_name: str, shape: List[int], dim: int, axis_size: int, explicit: bool) -> None:
+    key = (tuple(shape), dim, axis_size)
+    if key in _warned_misaligned:
+        return
+    _warned_misaligned.add(key)
+    warnings.warn(
+        f"FSDP: parameter {rel_name!r} (shape {shape}) is sharded along dim {dim} into "
+        f"{shape[dim] // axis_size}-wide shards over {axis_size} devices, which is not a whole number "
+        f"of {ttnn.TILE_SIZE}-wide tiles"
+        f"{' (shard_dim was set explicitly)' if explicit else ', and no other candidate dim is'}. Its all_gather / "
+        f"reduce_scatter will use ttnn's slower composite path every step. Other parameters "
+        f"of the same shape are not reported again.",
+        stacklevel=3,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -688,10 +735,13 @@ def fully_shard(
     Args:
         module: An ``AbstractModuleBase`` instance to wrap.
         shard_dim: Tensor dim to shard along, or ``"auto"`` (default).
-            Auto prefers ``rank-2`` and falls back to ``rank-1`` if that's
-            already sharded by another mesh axis (e.g. TP). Parameters whose
-            chosen shard dim has size 1 are skipped (not sharded) with a warning. Any param
-            whose chosen dim is not divisible by the mesh axis size raises an error.
+            Auto considers ``rank-2`` then ``rank-1`` (skipping dims already
+            sharded by another mesh axis, e.g. TP, or of size 1) and prefers the
+            one whose per-device shard is a whole number of tiles, then one that
+            divides evenly. Parameters with no usable dim, or whose chosen dim is
+            not divisible by the mesh axis size, are skipped (left replicated)
+            with a warning. A parameter sharded into sub-tile shards (no aligned
+            dim available) gets a one-time warning, since its CCLs are slow.
         mesh_axis: Name of the mesh axis to shard across. Defaults to ``"fsdp"``
         reshard_after_forward: If ``True`` (default), the module's weights
             are resharded between forward and backward (after forward) to keep peak memory
@@ -736,7 +786,7 @@ def fully_shard(
 
         shape = _param_shape(parameter)
         if shard_dim == "auto":
-            chosen = _auto_shard_dim_for_param(parameter, axis_index)
+            chosen = _auto_shard_dim_for_param(parameter, axis_index, axis_size)
         else:
             rank = len(shape)
             chosen = int(shard_dim)
@@ -764,6 +814,8 @@ def fully_shard(
                 stacklevel=2,
             )
             continue
+        if not _is_tile_aligned_shard(shape, chosen, axis_size):
+            _warn_misaligned_shard(rel_name, shape, chosen, axis_size, explicit=shard_dim != "auto")
 
         if isinstance(parameter.peek_tensor(), TensorMetadata):
             _shard_lazy_param(parameter, chosen, axis_index, n_axes)
