@@ -40,8 +40,9 @@ Accuracy criteria
       A PCC over the whole grid is dominated by the largest-magnitude decade,
       so tanh, sigmoid_accurate and polygamma additionally get a per-element
       ULP assertion over the well-conditioned sub-range their replaced tests
-      covered. softplus's negative tail is ULP-gated too: a whole-grid PCC
-      stays near 1.0 when that tail is flushed to 0.
+      covered. softplus's whole evaluated arm (beta*x <= threshold) is
+      ULP-gated too: a whole-grid PCC stays near 1.0 when its negative tail
+      is flushed to 0.
 
 Coverage that deliberately lives elsewhere (recorded here so an unrelated
 refactor of those files doesn't silently delete coverage this one relies on):
@@ -801,14 +802,17 @@ def test_softplus_op(device, beta, threshold_val):
     _assert_excluded_region(~finite, "softplus non-finite", max_fraction=0.05)
     assert_with_pcc(golden[finite], result[finite], pcc=0.999)
 
-    # The bf16 kernel used to clamp the residual to 0 for |beta*x| > 5, so every input with
-    # beta*x < -5 came back exactly 0 while the exact answer was still a normal bf16. PCC over
-    # the whole grid stays ~1.0 through that (the large outputs dominate), so gate the tail on
-    # ULP. t > -80 stays above the point where exp(t) itself drops through the fp32 normal floor.
+    # PCC over the whole grid is dominated by the pass-through arm (x up to ~3e38), so it is
+    # blind to the softplus arm itself: the bf16 kernel used to clamp the residual to 0 for
+    # |beta*x| > 5, returning exactly 0 for every beta*x < -5 while the exact answer was still a
+    # normal bf16, and PCC stayed ~1.0 through that. Gate the whole softplus arm (every lane
+    # the kernel evaluates, t <= threshold) on ULP instead. t > -80 stays above the point where
+    # exp(t) itself drops through the fp32 normal floor.
     golden_bf16 = golden.to(torch.bfloat16)
     result_bf16 = result.to(torch.bfloat16)
     t = beta * input_tensor
-    tail = finite & (t < -5.0) & (t <= threshold_val) & (t > -80.0)
+    arm = finite & (t <= threshold_val) & (t > -80.0)
+    tail = arm & (t < -5.0)
     assert tail.any(), f"softplus(beta={beta}, threshold={threshold_val}) negative-tail window is empty"
     # Positive beta keeps softplus in (0, inf). Negative beta flips the sign, so the
     # zero-tail regression is the ULP check below rather than a positivity check.
@@ -816,7 +820,7 @@ def test_softplus_op(device, beta, threshold_val):
         assert torch.all(
             result_bf16[tail] > 0
         ), f"softplus(beta={beta}, threshold={threshold_val}) returned 0 on the negative tail"
-    assert_with_ulp(expected_result=golden_bf16[tail], actual_result=result_bf16[tail], ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_bf16[arm], actual_result=result_bf16[arm], ulp_threshold=1)
 
 
 def test_softplus_beta_zero(device):
