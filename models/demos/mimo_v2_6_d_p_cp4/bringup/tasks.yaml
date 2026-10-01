@@ -1042,6 +1042,13 @@ tasks:
     - attention
     - attn_residual
     layer: 5
+  frozen:
+    at: '2026-10-01T02:22:22'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_swap_full_moe_03_attn_residual.py: 872132bdf00b20abd20382ce048c017d3f499502b01637bd90ca72630b60ffc8
+      /home/sjovic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 16e0ef60439c47052a9bf2543ea23258b17ea715224d1f9e30e037294a43e9bd
 - id: C.full_moe.ffn_norm
   title: full_moe ffn_norm (norm) on device, layer 5
   step: implement
