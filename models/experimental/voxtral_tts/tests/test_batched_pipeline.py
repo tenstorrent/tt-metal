@@ -145,12 +145,19 @@ def test_a2_rows_match_the_single_user_pipeline(pipe, single):
         if not torch.equal(c1[0], history[b][0]):
             frame0_ok = False  # the single-user side itself must reproduce its own run
         rows_out[b] = {"voice": voice, "frame0_identical": same, "frame0_codes_equal_fraction": frame0_codes_eq}
-    # Teacher-forced steps: feed every slot its history frame t-1 (probe rows) and compare frame t.
-    pos = torch.tensor([lens[s] if s in history else lens[probe[0]] for s in range(B)], dtype=torch.int32)
-    singles = {}
+    # Teacher-forced steps. Single-user side FIRST, one probe row at a time to completion: Luka's
+    # backbone has one cache row and one position counter, so rows cannot be interleaved.
+    codes1 = {}
     for b in probe:
         single.backbone.reset()
         single.backbone.prefill_last(embeds[b])
+        out = []
+        for t in range(1, K):
+            h1 = single.backbone.step(bref.embed_frame(single.wb, history[b][t - 1]))[0]  # [1,3072]
+            out.append(single.flow(h1, x_0=noise[b][t : t + 1])[0])  # [37]
+        codes1[b] = out
+    # Batched side: every slot fed its history frame t-1 at its own position; compare frame t.
+    pos = torch.tensor([lens[s] if s in history else lens[probe[0]] for s in range(B)], dtype=torch.int32)
     per_row = {b: {"sem_eq": 0, "ac_eq": 0, "n": 0} for b in probe}
     for t in range(1, K):
         x = torch.cat(
@@ -159,10 +166,9 @@ def test_a2_rows_match_the_single_user_pipeline(pipe, single):
         hB = bp.step_batched(x, pos + (t - 1))[0]  # [B,3072]
         codesB = pipe.flow(hB, x_0=X0(t))  # the batched flow at B rows: [B,37]
         for b in probe:
-            h1 = single.backbone.step(bref.embed_frame(single.wb, history[b][t - 1]))[0]  # [1,3072]
-            codes1 = single.flow(h1, x_0=noise[b][t : t + 1])[0]  # [37]
-            per_row[b]["sem_eq"] += int(codesB[b, 0] == codes1[0])
-            per_row[b]["ac_eq"] += int((codesB[b, 1:] == codes1[1:]).sum())
+            c1 = codes1[b][t - 1]
+            per_row[b]["sem_eq"] += int(codesB[b, 0] == c1[0])
+            per_row[b]["ac_eq"] += int((codesB[b, 1:] == c1[1:]).sum())
             per_row[b]["n"] += 1
     worst_sem = worst_ac = 1.0
     for b in probe:
