@@ -4,6 +4,8 @@
 """A model's switches in one place: the Settings helper, and the lint that keeps environment reads out of the model's
 code and out of the forks (diagnostics aside)."""
 
+import os
+
 from models.demos.common.bringup.core.model_settings import Setting, Settings
 from models.demos.common.bringup.testing.settings_lint import violations
 
@@ -49,3 +51,33 @@ def test_lint_flags_env_reads_outside_settings(tmp_path):
     assert any("op/op.py:2" in v for v in got) and not any("op/op.py:3" in v for v in got)
     assert not any("settings.py" in v.split(":")[0] or "tests/" in v or "other/" in v for v in got)
     assert len(got) == 3
+
+
+def test_component_tests_get_the_max_precision_overrides(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    from models.demos.common.bringup.testing import model_precision
+
+    s = Settings(
+        "TOY_",
+        {"KV": Setting("bfp8"), "FID": Setting("hifi2"), "Q": Setting(64)},
+        max_precision={"KV": "bf16", "FID": "hifi4"},
+    )
+    assert s.max_precision_env() == {"TOY_KV": "bf16", "TOY_FID": "hifi4"}
+    mod = types.ModuleType("models.demos.toy.tt.settings")
+    mod.settings = s
+    monkeypatch.setitem(sys.modules, "models.demos.toy.tt.settings", mod)
+
+    class Spec:
+        repo = tmp_path
+        model_dir = tmp_path / "models/demos/toy"
+
+        def get(self, key, default=None):
+            return {"tests.component_max_precision": True}.get(key, default)
+
+    monkeypatch.delenv("TOY_KV", raising=False)
+    monkeypatch.setenv("TOY_FID", "hifi2")  # set by the caller: kept
+    assert model_precision.apply(Spec()) == {"TOY_KV": "bf16"}
+    assert s.get("KV") == "bf16" and s.get("FID") == "hifi2"
+    os.environ.pop("TOY_KV", None)  # apply() sets the environment directly

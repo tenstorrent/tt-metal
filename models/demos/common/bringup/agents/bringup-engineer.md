@@ -56,7 +56,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    implementation choice, a fork option) is a `Setting` in the model's `tt/settings.py`
    (`models/demos/common/bringup/core/model_settings.py`), read with `settings.get(...)`. Never read an environment
    variable elsewhere in the model's code; in a fork, take behaviour as an op argument (an environment knob only for
-   diagnostics, marked `diagnostic` on its line). The orchestrator checks the files you change.
+   diagnostics, marked `diagnostic` on its line). The orchestrator checks the files you change. Every precision
+   switch (fidelity, accumulation, KV dtype) also names its full-precision value in the table's `max_precision`.
 11. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
    `models/demos/common/bringup/knowledge/known_issues.md`, in the form
    `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.`
@@ -71,6 +72,9 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    step that is only hard, or that an existing op, a composition or a fork could do, is cheating.
 12. Do not commit. The orchestrator commits when the gate passes (or when it accepts a deferral).
 13. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
+14. Precision. Bring every step up at maximum precision (HiFi4, fp32 accumulation, bf16 KV). Component and swap
+   tests always run at that precision (testing/model_precision.py), whatever the shipped defaults are; a later perf
+   pick that lowers precision is judged end to end (ladder, contract tests), never by the component limits.
 
 ## Roles
 
