@@ -342,7 +342,7 @@ def _bare_tt_ccl(mesh):
 
 
 def test_sparse_mla_overlap_qb2_profile_resources_and_teardown(monkeypatch):
-    """The local proxy owns exactly 80/30 cores, a mesh-initialized pair, and idempotent teardown."""
+    """The local proxy owns exactly 88/22 cores (top-k / KV gather), a mesh-initialized pair, and idempotent teardown."""
     mesh = _FakeOverlapMesh(11, 10)
     ccl = _bare_tt_ccl(mesh)
     events = []
@@ -367,16 +367,16 @@ def test_sparse_mla_overlap_qb2_profile_resources_and_teardown(monkeypatch):
         lambda semaphore, value: events.append(("reset", semaphore, value)),
     )
 
-    resources = ccl.get_sparse_mla_overlap_resources("qb2_80_30")
-    assert resources.topk_core_grid.num_cores() == 80
-    assert resources.gather_core_grid.num_cores() == 30
+    resources = ccl.get_sparse_mla_overlap_resources("qb2_rows2")
+    assert resources.topk_core_grid.num_cores() == 88
+    assert resources.gather_core_grid.num_cores() == 22
     assert resources.ready_semaphore == "ready"
     assert resources.data_valid_semaphore == "valid"
-    assert ccl.get_sparse_mla_overlap_resources("qb2_80_30") is resources
+    assert ccl.get_sparse_mla_overlap_resources("qb2_rows2") is resources
     assert mesh.calls[0][0] == "create" and mesh.calls[0][2] == 0
     assert events[:3] == [
-        ("create_sem", 30, 0, ttnn.BufferType.L1_SMALL),
-        ("create_sem", 30, 0, ttnn.BufferType.L1_SMALL),
+        ("create_sem", 22, 0, ttnn.BufferType.L1_SMALL),
+        ("create_sem", 22, 0, ttnn.BufferType.L1_SMALL),
         ("sync", mesh),
     ]
 
@@ -393,7 +393,7 @@ def test_sparse_mla_overlap_qb2_profile_resources_and_teardown(monkeypatch):
 
 @pytest.mark.parametrize(
     "profile,grid",
-    [("galaxy_80_40", (11, 10)), ("loudbox_80_40", (12, 9)), ("qb2_80_30", (12, 10))],
+    [("galaxy_rows2", (11, 10)), ("loudbox_rows2", (12, 9)), ("qb2_rows2", (12, 10))],
 )
 def test_sparse_mla_overlap_profiles_fail_closed(profile, grid, expect_error):
     ccl = _bare_tt_ccl(_FakeOverlapMesh(*grid))
@@ -549,7 +549,9 @@ def test_sparse_mla_overlap_full_mesh_tp_gather_threads_external_resources(monke
         captured.update(kwargs)
         return gathered_storage
 
+    # the model picks the op from DS_ALL_GATHER_OP (tt/all_gather_op.py); both share one contract
     monkeypatch.setattr(ttnn.experimental, "high_bw_all_gather", fake_gather)
+    monkeypatch.setattr(ttnn.experimental, "fabric_all_gather", fake_gather)
     result = mla._gather_kvpe_prefix(
         cache,
         cache_batch_idx=0,
@@ -705,30 +707,30 @@ def _overlap_integration_cases():
         pytest.param(
             (2, 2),
             fabric2d(),
-            "qb2_80_30",
-            30,
+            "qb2_rows2",
+            22,
             256,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="qb2_80_30-full-mesh-tp-sharded-2x2",
+            id="qb2_rows2-full-mesh-tp-sharded-2x2",
         ),
         pytest.param(
             (2, 4),
             fabric2d(),
-            "loudbox_80_40",
-            40,
+            "loudbox_rows2",
+            24,
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="loudbox_80_40-fabric2d-2x4",
+            id="loudbox_rows2-fabric2d-2x4",
         ),
         pytest.param(
             (8, 4),
             fabric2d(),
-            "galaxy_80_40",
-            40,
+            "galaxy_rows2",
+            24,
             # 8*4*TILE_SIZE: the smallest seq_len whose per-chip SPxTP cache stripe holds whole tiles.
             1024,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="galaxy_80_40-fabric2d-8x4",
+            id="galaxy_rows2-fabric2d-8x4",
         ),
     ]
 
@@ -777,7 +779,8 @@ def test_glm53_sparse_mla_overlap_matches_serial(
     )
     resources = mla._sparse_mla_overlap
     assert resources is not None
-    assert resources.topk_core_grid.num_cores() == 80
+    worker_grid = mesh_device.compute_with_storage_grid_size()
+    assert resources.topk_core_grid.num_cores() == worker_grid.x * worker_grid.y - expected_gather_cores
     assert resources.gather_core_grid.num_cores() == expected_gather_cores
 
     try:
@@ -879,7 +882,8 @@ def test_glm53_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
     )
     resources = mla._sparse_mla_overlap
     assert resources is not None
-    assert resources.topk_core_grid.num_cores() == 80
+    worker_grid = mesh_device.compute_with_storage_grid_size()
+    assert resources.topk_core_grid.num_cores() == worker_grid.x * worker_grid.y - expected_gather_cores
     assert resources.gather_core_grid.num_cores() == expected_gather_cores
 
     def run_chunks(overlap):
