@@ -11,6 +11,9 @@
 #include "api/compute/experimental/2_0/llk_operand.h"
 #include "api/tensor/tensor_binding_token.h"
 
+struct DFBBindingToken;
+struct ScratchpadBindingToken;
+
 namespace binding_details {
 
 /**
