@@ -184,7 +184,7 @@ def create_program_artifacts(
     compute = ttnn.KernelSpec(
         unique_id=K_COMPUTE,
         source=str(KERNEL_DIR / "compute.cpp"),
-        hw_config=ttnn.ComputeGen1Config(),
+        hw_config=ttnn.ComputeHardwareConfig(),
         dfb_bindings=[
             ttnn.consumer_of(DFB_IN, DFB_IN),
             ttnn.consumer_of(DFB_SCALER, DFB_SCALER),
