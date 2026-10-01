@@ -131,7 +131,7 @@ def test_first_sampling_trace_precompiles_all_configurations(monkeypatch):
     assert precompile_calls == [("logits", None, True)]
 
 
-def test_sampling_trace_rejects_late_precompile_for_new_bucket(monkeypatch):
+def test_sampling_trace_rejects_late_precompile_for_new_bucket(monkeypatch, expect_error):
     sampling = _make_trace_capture_test_generator()
 
     def precompile(logits, *, tt_out_tok, all_configs):
@@ -146,7 +146,7 @@ def test_sampling_trace_rejects_late_precompile_for_new_bucket(monkeypatch):
     sampling.capture_trace("logits")
     sampling.set_trace_bucket(8)
 
-    with pytest.raises(RuntimeError, match=r"precompile\(\.\.\., all_configs=True\)"):
+    with expect_error(RuntimeError, r"precompile\(\.\.\., all_configs=True\)"):
         sampling.capture_trace("bucket-8-logits")
 
 
