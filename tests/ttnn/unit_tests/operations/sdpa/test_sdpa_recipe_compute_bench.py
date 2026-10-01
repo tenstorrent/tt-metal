@@ -115,6 +115,10 @@ def test_sdpa_recipe_compute_throughput(device, q_chunk, k_chunk, variant, recor
         pytest.skip("geometry filtered")
     torch.manual_seed(0)
     host = [torch.randn(1, 1, rows, D).bfloat16() for rows in (q_chunk, k_chunk, k_chunk)]
+    # Perf research: SDPA_BENCH_LOGIT_SCALE=f scales q and k by f (logit std f^2) to force rescale events.
+    f = float(os.getenv("SDPA_BENCH_LOGIT_SCALE", "1"))
+    if f != 1:
+        host = [(host[0].float() * f).bfloat16(), (host[1].float() * f).bfloat16(), host[2]]
     inputs = prepare([ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in host], variant)
     chunks = SEQ_K // k_chunk
     block_flops = 4 * q_chunk * k_chunk * D
