@@ -68,12 +68,28 @@ case "$HF_MODEL" in
     MODEL_NUM_LAYERS=48
     DEFAULT_LAGUNA_PROFILE=p150x4
     MODEL_PROFILES="p150x4"
+    # Hybrid KV (default for S): the 36 sliding layers share block slots with the 12 full layers, so the
+    # pool costs 12 layer-equivalents (6.4 KiB/token/chip) and 131072 fits. Uniform KV (TT_LAGUNA_HYBRID_KV=0
+    # rollback) costs 25.5 KiB/token/chip: measured 2026-10-01 on p150x4, 32768 leaves 11.4% DRAM free after
+    # the decode trace (floor 10%) and 131072 OOMs while allocating the KV pool.
+    MODEL_HYBRID_DEFAULT=1
+    MODEL_HYBRID_PROFILES="p150x4"
+    MODEL_HYBRID_MAX_MODEL_LEN=131072
+    MODEL_MAX_MODEL_LEN_CAP=32768
+    # S's chat template thinks by default (prompt ends in <think>); vLLM's poolside_v1 reasoning parser
+    # only splits reasoning when enable_thinking is passed. Make the server default match the template.
+    MODEL_CHAT_TEMPLATE_KWARGS='{"enable_thinking": true}'
     ;;
   poolside/Laguna-XS-2.1)
     # The qualified XS production default is two P150 ASICs. D4 is an explicit regression profile.
     MODEL_NUM_LAYERS=40
     DEFAULT_LAGUNA_PROFILE=p150x2
     MODEL_PROFILES="p150 p150x2 p150x4"
+    MODEL_HYBRID_DEFAULT=0
+    MODEL_HYBRID_PROFILES="p150x2"
+    MODEL_HYBRID_MAX_MODEL_LEN=
+    MODEL_MAX_MODEL_LEN_CAP=
+    MODEL_CHAT_TEMPLATE_KWARGS=
     ;;
   *)
     die "HF_MODEL must be poolside/Laguna-S-2.1 or poolside/Laguna-XS-2.1; the adapter and cached weights are model-specific"
@@ -81,6 +97,9 @@ case "$HF_MODEL" in
 esac
 export HF_MODEL
 export TT_LAGUNA_MODEL="$HF_MODEL"
+# Server-default chat-template kwargs; LAGUNA_CHAT_TEMPLATE_KWARGS replaces the checkpoint default
+# (e.g. '{"enable_thinking": false}' for clients that expect plain answers; an empty value passes none).
+MODEL_CHAT_TEMPLATE_KWARGS="${LAGUNA_CHAT_TEMPLATE_KWARGS-$MODEL_CHAT_TEMPLATE_KWARGS}"
 LAGUNA_PROFILE="${LAGUNA_PROFILE:-$DEFAULT_LAGUNA_PROFILE}"
 case " $MODEL_PROFILES " in
   *" $LAGUNA_PROFILE "*) ;;
@@ -134,6 +153,24 @@ case "$LAGUNA_PROFILE" in
     die "invalid LAGUNA_PROFILE '$LAGUNA_PROFILE' (expected p150, p150x2, or p150x4)"
     ;;
 esac
+# Hybrid KV is resolved here because it sets the context and sequence limits below. Its default is
+# per checkpoint and profile (S on p150x4: on); an explicit 0 is always an accepted rollback.
+HYBRID_KV_DEFAULT=0
+case " $MODEL_HYBRID_PROFILES " in
+  *" $LAGUNA_PROFILE "*) HYBRID_KV_DEFAULT=$MODEL_HYBRID_DEFAULT ;;
+esac
+TT_LAGUNA_HYBRID_KV="${TT_LAGUNA_HYBRID_KV:-$HYBRID_KV_DEFAULT}"
+case "$TT_LAGUNA_HYBRID_KV" in
+  0|1) ;;
+  *) die "TT_LAGUNA_HYBRID_KV must be 0 or 1" ;;
+esac
+# A checkpoint may hold less context than the profile's XS-qualified limit (S: larger KV per token).
+if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ] && [ "$HYBRID_KV_DEFAULT" -eq 1 ] && [ -n "$MODEL_HYBRID_MAX_MODEL_LEN" ]; then
+  PROFILE_MAX_MODEL_LEN=$MODEL_HYBRID_MAX_MODEL_LEN
+  PROFILE_MAX_NUM_SEQS=1  # hybrid KV is qualified with one sequence (see the hybrid checks below)
+elif [ -n "$MODEL_MAX_MODEL_LEN_CAP" ] && ((PROFILE_MAX_MODEL_LEN > MODEL_MAX_MODEL_LEN_CAP)); then
+  PROFILE_MAX_MODEL_LEN=$MODEL_MAX_MODEL_LEN_CAP
+fi
 
 # A singleton selected from the dual-P150 qualification card is reported by UMD as
 # ClusterType.CUSTOM and needs an explicit 1x1 graph. Multi-device profiles use normal discovery;
@@ -293,11 +330,6 @@ case "$TT_LAGUNA_PREFIX_CACHE" in
   0|1) ;;
   *) die "TT_LAGUNA_PREFIX_CACHE must be 0 or 1" ;;
 esac
-TT_LAGUNA_HYBRID_KV="${TT_LAGUNA_HYBRID_KV:-0}"
-case "$TT_LAGUNA_HYBRID_KV" in
-  0|1) ;;
-  *) die "TT_LAGUNA_HYBRID_KV must be 0 or 1" ;;
-esac
 TT_LAGUNA_DFLASH="${TT_LAGUNA_DFLASH:-0}"
 case "$TT_LAGUNA_DFLASH" in
   0|1) ;;
@@ -383,7 +415,11 @@ for name in \
   record_if_set "$name"
 done
 record_if_nondefault TT_LAGUNA_PIPE_CHUNK 2048
-record_if_nondefault TT_LAGUNA_HYBRID_KV 0
+# Enabling hybrid KV where it is not the default is diagnostic-only; disabling it where it is the default
+# (S on p150x4) is the uniform-KV rollback and, like TT_LAGUNA_PREFIX_CACHE=0, needs no acknowledgement.
+if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ] && [ "$HYBRID_KV_DEFAULT" -eq 0 ]; then
+  EXPERIMENTAL_OVERRIDES+=("TT_LAGUNA_HYBRID_KV=1 (qualified=0)")
+fi
 record_if_nondefault TT_LAGUNA_DFLASH 0
 record_if_nondefault TT_LAGUNA_CONTEXT_PROBE 0
 record_if_nondefault TT_LAGUNA_MULTI_SEQ_POOL 0
@@ -496,7 +532,8 @@ if [ "$PROFILE_DEVICE_COUNT" -eq 1 ] && [ "$TT_LAGUNA_DECODE_SDPA_PC" -eq 1 ]; t
 else
   DECODE_SDPA_PC_STATUS=profile_safe
 fi
-if [ "$LAGUNA_PROFILE" = p150x2 ]; then
+# The adapter streams on D2, and on D4 for Laguna-S only (tt/generator_vllm.py _STREAMING_PREFILL_TOPOLOGIES).
+if [ "$LAGUNA_PROFILE" = p150x2 ] || { [ "$LAGUNA_PROFILE" = p150x4 ] && [ "$HF_MODEL" = poolside/Laguna-S-2.1 ]; }; then
   if [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ]; then
     STREAMING_PREFILL_STATUS=production_qualified
   else
@@ -552,8 +589,10 @@ fi
 is_positive_integer "$TT_LAGUNA_MIN_CONTIGUOUS_MIB" ||
   die "TT_LAGUNA_MIN_CONTIGUOUS_MIB must be a positive integer"
 if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ]; then
-  [ "$LAGUNA_PROFILE" = p150x2 ] ||
-    die "Laguna hybrid KV qualification is restricted to LAGUNA_PROFILE=p150x2"
+  case " $MODEL_HYBRID_PROFILES " in
+    *" $LAGUNA_PROFILE "*) ;;
+    *) die "Laguna hybrid KV for $HF_MODEL is restricted to LAGUNA_PROFILE=$MODEL_HYBRID_PROFILES" ;;
+  esac
   [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
     die "Laguna hybrid KV qualification requires TT_LAGUNA_PREFIX_CACHE=0"
   [ "$MAX_NUM_SEQS" -eq 1 ] ||
@@ -564,15 +603,26 @@ if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ]; then
     die "Laguna hybrid KV qualification requires TT_LAGUNA_STREAMING_PREFILL=1"
   [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
     die "Laguna hybrid KV qualification does not support sparse-MoE experimental paths"
-  HYBRID_KV_STATUS=experimental_cache_off_qualification
-  HYBRID_KV_LAYOUT=four_groups_ten_aliased_tensor_pairs
+  if [ "$HYBRID_KV_DEFAULT" -eq 1 ]; then
+    HYBRID_KV_STATUS=production_qualified
+  else
+    HYBRID_KV_STATUS=experimental_cache_off_qualification
+  fi
+  case "$MODEL_NUM_LAYERS" in
+    40) HYBRID_KV_LAYOUT=four_groups_ten_aliased_tensor_pairs ;;
+    48) HYBRID_KV_LAYOUT=four_groups_twelve_aliased_tensor_pairs ;;
+  esac
   CHUNKED_PREFILL_CLI_ARG=--enable-chunked-prefill
   CHUNKED_PREFILL_CLI_ARGS=(
     "$CHUNKED_PREFILL_CLI_ARG"
     --max-num-batched-tokens "$HYBRID_KV_SCHEDULER_CHUNK"
   )
 else
-  HYBRID_KV_STATUS=production_safe_disabled
+  if [ "$HYBRID_KV_DEFAULT" -eq 1 ]; then
+    HYBRID_KV_STATUS=operator_rollback_uniform
+  else
+    HYBRID_KV_STATUS=production_safe_disabled
+  fi
   case "$MODEL_NUM_LAYERS" in
     40) HYBRID_KV_LAYOUT=uniform_forty_tensor_pairs ;;
     48) HYBRID_KV_LAYOUT=uniform_forty_eight_tensor_pairs ;;
@@ -699,6 +749,7 @@ if [ "$1" = "config" ]; then
     "enforce_memory_margin=$TT_LAGUNA_ENFORCE_MEMORY_MARGIN" \
     "min_dram_free_fraction=$TT_LAGUNA_MIN_DRAM_FREE_FRACTION" \
     "min_contiguous_mib=$TT_LAGUNA_MIN_CONTIGUOUS_MIB" \
+    "chat_template_kwargs=${MODEL_CHAT_TEMPLATE_KWARGS:-<none>}" \
     "additional_config=$VLLM_ADDITIONAL_CONFIG"
   exit 0
 fi
@@ -738,7 +789,8 @@ setsid "$VLLM_ENV_BIN/vllm" serve "$HF_MODEL" \
   --trust-remote-code --max-model-len "$MAX_MODEL_LEN" --max-num-seqs "$MAX_NUM_SEQS" --block-size "$PREFIX_CACHE_BLOCK_SIZE" \
   --additional-config "$VLLM_ADDITIONAL_CONFIG" \
   "${PREFIX_CACHE_CLI_ARGS[@]}" "${CHUNKED_PREFILL_CLI_ARGS[@]}" --enable-auto-tool-choice \
-  --tool-call-parser poolside_v1 --reasoning-parser poolside_v1 --port 8000 >> "$LOG" 2>&1 &
+  --tool-call-parser poolside_v1 --reasoning-parser poolside_v1 \
+  ${MODEL_CHAT_TEMPLATE_KWARGS:+--default-chat-template-kwargs "$MODEL_CHAT_TEMPLATE_KWARGS"} --port 8000 >> "$LOG" 2>&1 &
 echo $! > "$PIDF"
 echo "[serve_vllm] booting (pid $(cat "$PIDF")). Ready at 'Application startup complete' (~10 min)."
 echo "  tail -f $LATEST"

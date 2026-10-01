@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Explicit P150x2 gate for chunk-major streaming prefill.
+"""Explicit P150x2 / P150x4 gate for chunk-major streaming prefill.
+
+``LAGUNA_PROFILE`` selects the mesh (p150x2 on chips 0,1 by default; p150x4 on chips 0,1,2,3, which
+Laguna-S needs) and the checkpoint comes from ``TT_LAGUNA_MODEL``. The commands below show p150x2.
 
 The production adapter executes a cold 8,256-token prompt as two complete model
 calls: an 8,192-token outer chunk followed by a 64-token tail at absolute
@@ -96,18 +99,25 @@ WARM_REPETITIONS = 3
 CLIFF_WARM_REPETITIONS = 2
 
 
+# Streaming profiles and the exact physical chips each one is qualified on.
+STREAMING_PROFILES = {"p150x2": "0,1", "p150x4": "0,1,2,3"}
+
+
 @pytest.fixture(scope="module")
 def p150x2_mesh():
+    """The selected multichip streaming mesh (name kept for existing runbooks)."""
     # Validate the physical target before any API can open hardware.
+    profile_name = os.environ.get("LAGUNA_PROFILE", "p150x2")
+    assert profile_name in STREAMING_PROFILES, f"streaming prefill runs on {sorted(STREAMING_PROFILES)}"
     assert (
-        os.environ.get("TT_VISIBLE_DEVICES") == "0,1"
-    ), "streaming-prefill hardware proof is pinned to TT_VISIBLE_DEVICES=0,1"
+        os.environ.get("TT_VISIBLE_DEVICES") == STREAMING_PROFILES[profile_name]
+    ), f"{profile_name} streaming-prefill hardware proof is pinned to TT_VISIBLE_DEVICES={STREAMING_PROFILES[profile_name]}"
     assert "TT_METAL_HOME" not in os.environ, "run with env -u TT_METAL_HOME"
     assert os.environ.get("TT_LAGUNA_STREAMING_PREFILL", "1") == "1"
-    profile = resolve_profile("p150x2", trace_region_size=TRACE_REGION_SIZE)
+    profile = resolve_profile(profile_name, trace_region_size=TRACE_REGION_SIZE)
     mesh = open_mesh(ttnn, profile)
     try:
-        assert mesh.get_num_devices() == 2
+        assert mesh.get_num_devices() == profile.num_devices
         yield mesh
     finally:
         close_mesh(ttnn, mesh)
@@ -239,7 +249,7 @@ def _prefix_snapshot(cache, prefix_blocks: int):
 
 def _assert_prefix_unchanged(cache, snapshots, *, name: str):
     device_tensors = ttnn.get_device_tensors(cache)
-    assert len(device_tensors) == len(snapshots) == 2
+    assert len(device_tensors) == len(snapshots) >= 2
     for chip, (tensor, expected) in enumerate(zip(device_tensors, snapshots)):
         actual = ttnn.to_torch(tensor)[: expected.shape[0]]
         assert torch.equal(actual, expected), f"tail prefill overwrote prefix {name.upper()} on mesh device {chip}"
@@ -248,7 +258,7 @@ def _assert_prefix_unchanged(cache, snapshots, *, name: str):
 def _cache_block_pccs(actual_cache, reference_cache, block: int):
     actual_devices = ttnn.get_device_tensors(actual_cache)
     reference_devices = ttnn.get_device_tensors(reference_cache)
-    assert len(actual_devices) == len(reference_devices) == 2
+    assert len(actual_devices) == len(reference_devices) >= 2
     return tuple(
         D._pcc(
             ttnn.to_torch(actual)[block : block + 1].float(),
@@ -285,7 +295,7 @@ def test_d2_sequential_8192_plus_64_matches_monolithic_8256_and_preserves_prefix
     """Cross the adapter outer-call boundary with production D2 layer programs."""
     mesh = p150x2_mesh
     dec = D._decoder(hf_config, D.FULL_DENSE, mesh)
-    assert dec.D == 2
+    assert dec.D == mesh.get_num_devices()
     assert dec.PIPE_CHUNK == 2048, "run the production TT_LAGUNA_PIPE_CHUNK=2048 profile"
     assert dec.PREFILL_FAST, "run with TT_LAGUNA_PREFILL_FAST=1"
     assert dec._prefill_pipe_chunk == OUTER
@@ -418,7 +428,7 @@ def test_d2_sequential_8192_plus_64_matches_monolithic_8256_and_preserves_prefix
 )
 @torch.inference_mode()
 def test_d2_full_stack_streamed_8192_plus_64_matches_monolithic_8256_logits(p150x2_mesh, hf_config):
-    """Qualify the outer-call boundary through all 40 layers and the production LM head."""
+    """Qualify the outer-call boundary through every layer and the production LM head."""
     mesh = p150x2_mesh
     build_started = time.perf_counter()
     model = LagunaModel.from_pretrained(mesh, hf_config=hf_config, max_seq_len=TOTAL)
@@ -426,10 +436,10 @@ def test_d2_full_stack_streamed_8192_plus_64_matches_monolithic_8256_logits(p150
     build_seconds = time.perf_counter() - build_started
 
     expected_layers = int(hf_config.num_hidden_layers)
-    assert expected_layers == 40
+    assert expected_layers in (40, 48)  # XS / S
     assert len(model.layers) == expected_layers
     assert model.meta["layer_indices"] == list(range(expected_layers))
-    assert model.D == 2
+    assert model.D == mesh.get_num_devices()
     assert all(dec.PIPE_CHUNK == 2048 for dec in model.layers)
     assert all(dec.PREFILL_FAST and dec._prefill_pipe_chunk == OUTER for dec in model.layers)
 
@@ -646,7 +656,7 @@ def test_d2_full_stack_streamed_16400_beats_legacy_32768_bucket(p150x2_mesh, hf_
         hf_config=hf_config,
         max_seq_len=CLIFF_LEGACY_BUCKET,
     )
-    assert len(model.layers) == 40 and model.D == 2
+    assert len(model.layers) == int(hf_config.num_hidden_layers) and model.D == mesh.get_num_devices()
     assert all(dec._prefill_pipe_chunk == OUTER for dec in model.layers)
 
     physical_blocks = CLIFF_LEGACY_BUCKET // BLOCK_SIZE

@@ -627,8 +627,39 @@ def test_s_is_the_default_model_and_selects_p150x4(tmp_path):
     assert "mesh_device=P150x4\n" in result.stdout
     assert "tt_visible_devices=0,1,2,3\n" in result.stdout
     assert "prefix_cache=0\n" in result.stdout
-    assert "hybrid_kv_layout=uniform_forty_eight_tensor_pairs\n" in result.stdout
     assert "experimental_overrides=<none>\n" in result.stdout
+    # S on p150x4 serves with hybrid KV, chunk-major streaming prefill and 131072 context by default.
+    assert "hybrid_kv=1\n" in result.stdout
+    assert "hybrid_kv_status=production_qualified\n" in result.stdout
+    assert "hybrid_kv_layout=four_groups_twelve_aliased_tensor_pairs\n" in result.stdout
+    assert "streaming_prefill_status=production_qualified\n" in result.stdout
+    assert "max_model_len=131072\n" in result.stdout
+    assert "max_num_seqs=1\n" in result.stdout
+    assert ("chunked_prefill_cli_args=--enable-chunked-prefill " "--max-num-batched-tokens 8192\n") in result.stdout
+    assert 'chat_template_kwargs={"enable_thinking": true}\n' in result.stdout
+
+
+def test_s_uniform_kv_rollback_needs_no_ack_and_keeps_its_measured_limit(tmp_path):
+    rollback = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                       TT_LAGUNA_HYBRID_KV="0")
+    assert rollback.returncode == 0, rollback.stderr
+    assert "hybrid_kv=0\n" in rollback.stdout
+    assert "hybrid_kv_status=operator_rollback_uniform\n" in rollback.stdout
+    assert "hybrid_kv_layout=uniform_forty_eight_tensor_pairs\n" in rollback.stdout
+    assert "max_model_len=32768\n" in rollback.stdout
+    assert "experimental_overrides=<none>\n" in rollback.stdout
+
+    too_long = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                       TT_LAGUNA_HYBRID_KV="0", LAGUNA_MAX_MODEL_LEN="65536")
+    assert too_long.returncode == 2
+    assert "exceeds the verified p150x4 limit 32768" in too_long.stderr
+
+
+def test_s_hybrid_rejects_context_beyond_131072(tmp_path):
+    result = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                     LAGUNA_MAX_MODEL_LEN="262144")
+    assert result.returncode == 2
+    assert "exceeds the verified p150x4 limit 131072" in result.stderr
 
 
 def test_tt_laguna_model_alone_selects_the_checkpoint(tmp_path):
@@ -637,6 +668,18 @@ def test_tt_laguna_model_alone_selects_the_checkpoint(tmp_path):
     assert result.returncode == 0, result.stderr
     assert f"hf_model={XS}\n" in result.stdout
     assert "hybrid_kv_layout=uniform_forty_tensor_pairs\n" in result.stdout
+    assert "max_model_len=131072\n" in result.stdout
+    assert "chat_template_kwargs=<none>\n" in result.stdout
+
+
+def test_xs_p150x4_is_unchanged_by_s_policies(tmp_path):
+    result = _config(tmp_path, HF_MODEL=XS, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3")
+    assert result.returncode == 0, result.stderr
+    assert "hybrid_kv=0\n" in result.stdout
+    assert "hybrid_kv_status=production_safe_disabled\n" in result.stdout
+    assert "streaming_prefill_status=topology_inactive\n" in result.stdout
+    assert "max_model_len=131072\n" in result.stdout
+    assert "max_num_seqs=8\n" in result.stdout
 
 
 @pytest.mark.parametrize(("profile", "devices"), (("p150", "0"), ("p150x2", "0,1")))
@@ -659,3 +702,14 @@ def test_unknown_model_is_rejected(tmp_path):
 
     assert result.returncode == 2
     assert "HF_MODEL must be poolside/Laguna-S-2.1 or poolside/Laguna-XS-2.1" in result.stderr
+
+
+def test_chat_template_kwargs_override(tmp_path):
+    off = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                  LAGUNA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}')
+    assert off.returncode == 0, off.stderr
+    assert 'chat_template_kwargs={"enable_thinking": false}\n' in off.stdout
+    none = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                   LAGUNA_CHAT_TEMPLATE_KWARGS="")
+    assert none.returncode == 0, none.stderr
+    assert "chat_template_kwargs=<none>\n" in none.stdout

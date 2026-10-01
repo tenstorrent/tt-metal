@@ -46,7 +46,8 @@ import ttnn
 
 try:
     from .generator import LagunaGenerator, _replicate
-    from .model_spec import MODEL_MAX_CONTEXT
+    from .host_sampling import penalties_active, sample_penalized
+    from .model_spec import MODEL_ID, MODEL_MAX_CONTEXT
     from .kv_grouping import HybridKVLayout, build_laguna_hybrid_kv_layout, validate_per_layer_tensor_aliases
     from .prefill_runtime import (
         PrefillRuntimeOffsets,
@@ -57,7 +58,8 @@ try:
     )
 except ImportError:  # loaded as a standalone module by some tooling
     from models.autoports.poolside_laguna_xs_2_1.tt.generator import LagunaGenerator, _replicate
-    from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MODEL_MAX_CONTEXT
+    from models.autoports.poolside_laguna_xs_2_1.tt.host_sampling import penalties_active, sample_penalized
+    from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MODEL_ID, MODEL_MAX_CONTEXT
     from models.autoports.poolside_laguna_xs_2_1.tt.kv_grouping import (
         HybridKVLayout,
         build_laguna_hybrid_kv_layout,
@@ -136,6 +138,11 @@ class LagunaForCausalLM:
     # D1 retains monolithic prefill because its sliding decoder carries K/V
     # locally within one call.
     _STREAMING_PREFILL_ENABLED = os.environ.get("TT_LAGUNA_STREAMING_PREFILL", "1") == "1"
+    # D2 and D4 run the same MultichipDecoder, whose sliding layers read earlier K/V from the paged cache,
+    # so a later adapter call can continue a prompt. D4 is enabled only for Laguna-S, where it was qualified
+    # (tests/test_streaming_prefill_hardware.py on p150x4) because S's hybrid KV needs vLLM chunked prefill;
+    # XS keeps its qualified monolithic D4 prefill.
+    _STREAMING_PREFILL_TOPOLOGIES = (2, 4) if MODEL_ID == "poolside/Laguna-S-2.1" else (2,)
     _PREFILL_STREAM_OUTER_CHUNK = 8192
     # vLLM 0.24 groups Laguna as four 10-layer block-table groups and aliases
     # equal slots onto ten physical K/V tensor pairs.  The feature remains
@@ -202,9 +209,9 @@ class LagunaForCausalLM:
             raise RuntimeError("Laguna DFlash serving cannot be combined with TT_LAGUNA_SPEC_DECODE")
 
     def _streaming_prefill_active(self):
-        """D2-only until D1 sliding attention can cross adapter-call boundaries."""
+        """D2/D4 only: D1 sliding attention cannot yet cross adapter-call boundaries."""
 
-        return bool(self._STREAMING_PREFILL_ENABLED) and int(self.D) == 2
+        return bool(self._STREAMING_PREFILL_ENABLED) and int(self.D) in self._STREAMING_PREFILL_TOPOLOGIES
 
     def __init__(self, generator: LagunaGenerator, mesh_device, max_batch_size: int, max_model_len: int):
         self._closed = False
@@ -514,14 +521,17 @@ class LagunaForCausalLM:
             if env_nl:
                 n_layers = [int(x) for x in env_nl.split(",")] if "," in env_nl else int(env_nl)
         requested_max_seq_len = int(max_seq_len)
-        # D2 streams fixed 8192-token chunks and pads only the final tail, so its
+        # D2 (and D4 for S) streams fixed 8192-token chunks and pads only the final tail, so its
         # shared RoPE tables need the logical context rounded once. D1 retains the
         # legacy monolithic horizon because its sliding decoder cannot carry a
         # local K/V tail across separate adapter calls. KV allocation and scheduler
         # admission remain bounded by the requested logical context on both.
         rope_capacity = _prefill_rope_capacity(
             requested_max_seq_len,
-            streaming=(bool(cls._STREAMING_PREFILL_ENABLED) and int(mesh_device.get_num_devices()) == 2),
+            streaming=(
+                bool(cls._STREAMING_PREFILL_ENABLED)
+                and int(mesh_device.get_num_devices()) in cls._STREAMING_PREFILL_TOPOLOGIES
+            ),
         )
         gen = LagunaGenerator.from_pretrained(
             mesh_device,
@@ -1156,8 +1166,12 @@ class LagunaForCausalLM:
 
     @staticmethod
     def _sampling_row_params(sp, row):
-        """Map one row of a vLLM ``TTSamplingParams`` to (k, p, temp, seed). temperature==0 → greedy
-        top-1. top_k<=0 (disabled) → the device candidate-set width (32).
+        """Map one row of a vLLM ``TTSamplingParams`` to the device sampler's (k, p, inverse temp, seed).
+        temperature==0 → greedy top-1. top_k<=0 (disabled) → the device candidate-set width (32).
+
+        The device sampler multiplies logits by its ``temp`` input, i.e. it takes 1/T (see
+        ``models.common.sampling.generator.format_sampling_params``). Passing T itself ran every request at
+        1/T: a temperature-2.0 request sampled like 0.5 (first token "\n" in 29 of 30 draws vs ~45% expected).
 
         No explicit seed (``sp.seed[row] is None``) means "sample randomly" — so a FRESH random seed is
         drawn per call (via ``secrets``, independent of the torch/global RNG which vLLM pins to seed 0).
@@ -1167,12 +1181,16 @@ class LagunaForCausalLM:
         top_k = int(sp.top_k[row]) if sp.top_k is not None else 0
         top_p = float(sp.top_p[row]) if sp.top_p is not None else 1.0
         seed = sp.seed[row] if sp.seed is not None else None
+        # The plugin encodes "no seed" as -1 (vllm_tt_plugin.input_batch SEED_NONE_SENTINEL); treating it as a
+        # real seed made every unseeded request deterministic.
+        if seed is not None and int(seed) < 0:
+            seed = None
         if temp <= 0.0:  # greedy — seed irrelevant (top-k(k=1) is deterministic)
             return 1, 1.0, 1.0, 0
         k = top_k if 0 < top_k <= 32 else 32
         p = top_p if 0.0 < top_p <= 1.0 else 1.0
         s = int(seed) if seed is not None else secrets.randbelow(2_000_000_000)
-        return k, p, temp, s
+        return k, p, 1.0 / temp, s
 
     def _sampling_buffers_from_params(self, sp, B):
         """Build host [B] arrays of k/p/temp/seed from a vLLM TTSamplingParams (lists), padding to B
@@ -1316,7 +1334,7 @@ class LagunaForCausalLM:
             # the established monolithic kernel family's tail reduction while
             # still removing the 32768 power-of-two cliff (16400 real rows
             # compute 24576 rows).
-            canonical_tail=int(self.D) == 2 and (start > 0 or length > outer),
+            canonical_tail=int(self.D) in self._STREAMING_PREFILL_TOPOLOGIES and (start > 0 or length > outer),
         )
         # Prefix hits additionally enforce scheduler alignment.  Their compute
         # plan is already canonical under the D2 long-stream rule above; retain
@@ -1503,7 +1521,7 @@ class LagunaForCausalLM:
 
     def _runtime_offsets_for_prefill(self, bucket_len, start_pos, block_size):
         """Return qualified runtime inputs without perturbing legacy/cold single-shot paths."""
-        if int(self.D) != 2:
+        if int(self.D) not in self._STREAMING_PREFILL_TOPOLOGIES:
             return None
         L, start = int(bucket_len), int(start_pos)
         if start == 0 and L <= int(self.model.layers[0].PIPE_CHUNK):
@@ -1531,7 +1549,7 @@ class LagunaForCausalLM:
         """Allocate (once) the persistent prefill sampling buffers + B=1 sampler. Called from
         warmup_model_prefill BEFORE any decode trace is captured, so these allocations are safe."""
         if self._pf is not None:
-            if block_size is not None and int(getattr(self, "D", 0)) == 2:
+            if block_size is not None and int(getattr(self, "D", 0)) in self._STREAMING_PREFILL_TOPOLOGIES:
                 self._allocate_prefill_runtime_offsets(self._pf, block_size)
             return self._pf
         z = torch.zeros([1], dtype=torch.int32)
@@ -1564,7 +1582,7 @@ class LagunaForCausalLM:
             L: self.gen._rep(torch.zeros([1, 1, 1, L], dtype=torch.float32), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             for L in self._prefill_bucket_lens()
         }
-        if block_size is not None and int(getattr(self, "D", 0)) == 2:
+        if block_size is not None and int(getattr(self, "D", 0)) in self._STREAMING_PREFILL_TOPOLOGIES:
             self._allocate_prefill_runtime_offsets(st, block_size)
         self._pf = st
         return st
@@ -2662,10 +2680,30 @@ class LagunaForCausalLM:
                 tokens, pos, page_table, kv_cache, page_tables_per_layer, reset_batch, kwargs, read_from_device
             )
 
+        if sampling_params is not None and penalties_active(sampling_params):
+            # The plugin keeps penalized requests on the device-sampling path, but Sampling1D cannot apply
+            # repetition/presence/frequency penalties (they used to be silently dropped). Sample on host.
+            return self._decode_penalized(
+                tokens,
+                pos,
+                page_table,
+                kv_cache,
+                page_tables_per_layer,
+                hybrid_cache,
+                sampling_params,
+                kwargs.get("prompt_tokens"),
+                kwargs.get("output_tokens"),
+                read_from_device,
+            )
+
         if sampling_params is None:
+            # Host sampling serves requests the device sampler cannot (logprobs, min_p, ...). With hybrid KV
+            # each group needs its own block table. Raising here killed the whole engine on one such request.
             if hybrid_cache:
-                raise RuntimeError("hybrid KV host-sampling decode is unsupported; use on-device sampling")
-            return self._decode_host_sampling(tokens, pos, page_table, kv_cache, read_from_device)
+                pt = self._hybrid_page_tables_to_device(page_tables_per_layer, purpose="host-sampling decode")
+            else:
+                pt = self._page_table_to_device(page_table)
+            return self._decode_host_sampling(tokens, pos, pt, kv_cache, read_from_device)
 
         hybrid = hybrid_cache
         st = self._decode.get(B)
@@ -2755,9 +2793,54 @@ class LagunaForCausalLM:
         return th.reshape(-1, 1, self.vocab)
 
     # ---- host-sampling (compat) decode ---- #
-    def _decode_host_sampling(self, tokens, pos, page_table, kv_cache, read_from_device):
+    def _decode_penalized(
+        self,
+        tokens,
+        pos,
+        page_table,
+        kv_cache,
+        page_tables_per_layer,
+        hybrid_cache,
+        sampling_params,
+        prompt_tokens,
+        output_tokens,
+        read_from_device,
+    ):
+        """One eager decode step whose logits are penalized and sampled on host (see tt/host_sampling.py).
+
+        The sampled tokens are written into the persistent decode token buffer, so both the async readback
+        (``read_decode_output`` / ``process_decode_output_host``) and the next traced step see them. The
+        traced state is marked unstaged so its next replay re-reads tokens and positions from the host."""
         B = tokens.shape[0]
-        pt = self._page_table_to_device(page_table)
+        if hybrid_cache:
+            pt = self._hybrid_page_tables_to_device(page_tables_per_layer, purpose="penalized decode")
+        else:
+            pt = self._page_table_to_device(page_table)
+        logits = self._decode_host_sampling(tokens, pos, pt, kv_cache, read_from_device=True)
+        sampled = sample_penalized(logits.reshape(B, self.vocab), sampling_params, prompt_tokens, output_tokens, pos)
+        self.gen.counters["host_penalized_decode"] = self.gen.counters.get("host_penalized_decode", 0) + 1
+        if read_from_device:
+            return sampled
+        st = self._decode.get(B)
+        if st is None:
+            raise RuntimeError(
+                f"penalized async decode for batch B={B} needs the warmed decode trace's token buffer; "
+                "warmup_model_decode must capture this B first"
+            )
+        ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(sampled.to(torch.int64).reshape(-1, 1), B), st["tok"])
+        st["staged"] = False
+        return [st["tok"]]
+
+    def _hybrid_page_tables_to_device(self, page_tables_per_layer, *, purpose):
+        """Eager per-layer device page tables for hybrid KV: one upload per group, expanded per layer."""
+        layout = self._hybrid_kv_layout()
+        hosts = self._validated_group_page_tables(page_tables_per_layer, purpose=purpose)
+        groups = [self._page_table_to_device(hosts[group_id]) for group_id in range(layout.num_groups)]
+        return layout.expand_group_values(groups)
+
+    def _decode_host_sampling(self, tokens, pos, pt, kv_cache, read_from_device):
+        """Eager decode returning logits. ``pt`` is the device page table, or a per-layer list (hybrid KV)."""
+        B = tokens.shape[0]
         tok_tt = self.gen._rep(tokens.reshape(1, B).to(torch.int32), ttnn.uint32)
         cur = self.gen._rep(pos, ttnn.int32)
         ridx = self.gen._rep(pos.reshape(1, B), ttnn.uint32)

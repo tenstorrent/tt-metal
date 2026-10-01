@@ -16,6 +16,7 @@ class _Stub:
     _STREAMING_PREFILL_ENABLED = True
     _PREFILL_STREAM_OUTER_CHUNK = 8192
     _PREFIX_CACHE_ENABLED = False
+    _STREAMING_PREFILL_TOPOLOGIES = gv.LagunaForCausalLM._STREAMING_PREFILL_TOPOLOGIES
     _streaming_prefill_active = gv.LagunaForCausalLM._streaming_prefill_active
     _prefill_bucket_lens = gv.LagunaForCausalLM._prefill_bucket_lens
     _bucket_len = gv.LagunaForCausalLM._bucket_len
@@ -113,13 +114,22 @@ def test_d2_long_stream_uses_canonical_tail_but_short_cold_request_keeps_ladder(
     assert [(chunk.real_len, chunk.bucket_len) for chunk in continuation] == [(16, 8192)]
 
 
-def test_streaming_default_is_d2_only_and_d1_retains_safe_monolithic_geometry():
+def test_streaming_default_is_d2_d4_and_d1_retains_safe_monolithic_geometry():
     d2 = _Stub(131072)
+    d4 = _Stub(131072)
+    d4.D = 4
     d1 = _Stub(131072)
     d1.D = 1
 
     assert d2._streaming_prefill_active() is True
     assert d1._streaming_prefill_active() is False
+    # D4 streams only for Laguna-S (qualified there); XS keeps monolithic D4 prefill.
+    assert d4._streaming_prefill_active() is (gv.MODEL_ID == "poolside/Laguna-S-2.1")
+    d4._STREAMING_PREFILL_TOPOLOGIES = (2, 4)
+    # Where D4 streams, it plans exactly like D2: canonical 8192-query chunks, no power-of-two cliff.
+    assert [(c.relative_start, c.real_len, c.bucket_len) for c in d4._prefill_plan_for_range(16400, 0, 64)] == [
+        (c.relative_start, c.real_len, c.bucket_len) for c in d2._prefill_plan_for_range(16400, 0, 64)
+    ]
     assert len(d2._prefill_plan_for_range(16384, 0, 64)) == 2
     d1_plan = d1._prefill_plan_for_range(16384, 0, 64)
     assert [(chunk.relative_start, chunk.real_len, chunk.bucket_len) for chunk in d1_plan] == [(0, 16384, 16384)]

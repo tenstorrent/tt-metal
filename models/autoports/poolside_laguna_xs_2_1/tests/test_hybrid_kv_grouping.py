@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from models.autoports.poolside_laguna_xs_2_1.tt import generator_vllm as generator_vllm_module
@@ -338,3 +339,30 @@ def test_get_kv_cache_spec_rejects_prefix_overlap_and_checkpoint_drift(monkeypat
     unknown[0] = "mystery_attention"
     with expect_error(ValueError, "unknown layer_types"):
         LagunaForCausalLM.get_kv_cache_spec(_vllm_config(unknown))
+
+
+@pytest.mark.parametrize("num_layers", [40, 48])
+def test_hybrid_host_sampling_decode_uploads_one_table_per_group(num_layers):
+    # Regression: a logprobs request (host sampling) on a hybrid-KV server raised in decode_forward and
+    # killed the vLLM engine. The eager path now uploads each group's table once and expands it per layer.
+    bridge = object.__new__(LagunaForCausalLM)
+    bridge._layer_kinds = None
+    bridge._hybrid_layout_cache = None
+    bridge.model = SimpleNamespace(
+        layers=[SimpleNamespace(cfg=SimpleNamespace(is_sliding=(i % 4 != 0))) for i in range(num_layers)]
+    )
+    uploads = []
+    bridge._page_table_to_device = lambda pt: uploads.append(pt.clone()) or ("device", len(uploads) - 1)
+    layout = bridge._hybrid_kv_layout()
+    tables = []
+    for layer in range(num_layers):
+        group = next(g for g, members in enumerate(layout.groups) if layer in members)
+        tables.append(torch.full((1, 8), group, dtype=torch.int32))
+
+    per_layer = bridge._hybrid_page_tables_to_device(tables, purpose="host-sampling decode")
+
+    assert len(uploads) == layout.num_groups == 4
+    assert len(per_layer) == num_layers
+    for group_id, members in enumerate(layout.groups):
+        assert torch.equal(uploads[group_id], torch.full((1, 8), group_id, dtype=torch.int32))
+        assert all(per_layer[layer] == ("device", group_id) for layer in members)

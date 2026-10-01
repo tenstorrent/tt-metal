@@ -576,3 +576,18 @@ def test_program_cache_freeze_records_post_trace_count(monkeypatch):
 
     assert bridge._program_cache_entries_after_trace == 123
     assert bridge.mesh_device.allowed is False
+
+
+@pytest.mark.parametrize("D", [1, 2, 4])
+def test_prefill_state_allocates_runtime_offsets_exactly_where_streaming_runs(D):
+    # Regression: the adapter streamed on D4 (Laguna-S) but _prefill_state still allocated the
+    # runtime-offset buffers only on D2, so the first D4 warmup prefill raised KeyError('runtime_offsets').
+    bridge = _runtime_bridge()
+    bridge.D = D
+    bridge._pf = {}
+    state = bridge._prefill_state(64)
+    streams = D in LagunaForCausalLM._STREAMING_PREFILL_TOPOLOGIES
+    assert ("runtime_offsets" in state) is streams
+    calls = []
+    bridge._refresh_prefill_runtime_offsets = lambda L, start, bs: calls.append((L, start, bs)) or object()
+    assert (bridge._runtime_offsets_for_prefill(4096, 64, 64) is not None) is streams
