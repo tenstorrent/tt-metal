@@ -4,6 +4,7 @@
 
 import ttnn
 from models.common.modules.tt_ccl import get_num_links as get_common_num_links
+from models.tt_transformers.tt.pcie_ccl import PcieCCL, pcie_p2p_chips
 
 
 def get_num_links(mesh_device, cluster_axis=None):
@@ -36,6 +37,10 @@ class TT_CCL:
         mesh_device,
     ):
         self.mesh_device = mesh_device
+        # PCIe peer-to-peer collectives for a 2-chip mesh with no Ethernet (TT_PCIE_P2P_CHIPS=4,5).
+        self.pcie = None
+        if pcie_p2p_chips() is not None and mesh_device.get_num_devices() == 2:
+            self.pcie = PcieCCL(mesh_device)
         self.sub_device_crs = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -151,6 +156,10 @@ def tt_all_reduce(
     mesh_shape = list(mesh_device.shape)
     if mesh_shape == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
+
+    # PCIe P2P mesh: sum on device over the peer windows; output replicated with the input's layout.
+    if getattr(tt_ccl, "pcie", None) is not None:
+        return tt_ccl.pcie.all_reduce(input_tensor)
 
     # Auto-detect num_links if not provided
     if num_reduce_scatter_links is None:
@@ -307,6 +316,9 @@ def tt_all_gather(
     mesh_shape = list(mesh_device.shape)
     if mesh_shape == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
+
+    if getattr(tt_ccl, "pcie", None) is not None:
+        return tt_ccl.pcie.all_gather(input_tensor, dim)
 
     # Auto-detect num_links if not provided
     if num_links is None:

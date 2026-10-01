@@ -14,6 +14,7 @@
 #include "ttnn-nanobind/device.hpp"
 #include "ttnn-nanobind/events.hpp"
 #include "ttnn-nanobind/fabric.hpp"
+#include "ttnn-nanobind/pcie_p2p.hpp"
 #include "ttnn-nanobind/disaggregation.hpp"
 #include "ttnn-nanobind/layer_completion.hpp"
 #include "ttnn-nanobind/global_circular_buffer.hpp"
@@ -269,6 +270,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_reports = mod.def_submodule("reports", "ttnn reports");
     auto m_operations = mod.def_submodule("operations", "ttnn Operations");
     auto m_fabric = mod.def_submodule("fabric", "Fabric instantiation APIs");
+    auto m_pcie_p2p = mod.def_submodule("pcie_p2p", "Blackhole chip-to-chip PCIe peer-to-peer windows");
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
 
@@ -283,6 +285,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::core::py_module_types(m_core);
     ttnn::device::py_device_module_types(m_device);
     ttnn::fabric::bind_fabric_api(m_fabric);
+    ttnn::pcie_p2p::bind_pcie_p2p_api(m_pcie_p2p);
     ttnn::distributed::py_module_types(m_multi_device);
     ttnn::events::py_module_types(m_events);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);

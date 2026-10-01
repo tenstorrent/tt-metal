@@ -112,6 +112,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/device.cpp
     cpp/ttnn-nanobind/events.cpp
     cpp/ttnn-nanobind/fabric.cpp
+    cpp/ttnn-nanobind/pcie_p2p.cpp
     cpp/ttnn-nanobind/disaggregation.cpp
     cpp/ttnn/experimental/disaggregation/tensor_helpers.cpp
     cpp/ttnn-nanobind/global_circular_buffer.cpp

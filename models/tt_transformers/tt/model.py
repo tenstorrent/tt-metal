@@ -396,7 +396,11 @@ class Transformer(LightweightModule):
             R = None
 
         host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
-        host_full = torch.cat(host_tensors, dim=-1)
+        # Column-sharded residual: concatenate the device halves. On the PCIe P2P mesh the residual is replicated
+        # (all-reduced on device), so every device already holds the full hidden dim; concatenating would double
+        # the width and, once copied into the [.., dim]-wide sampling trace input, scramble the rows.
+        replicated_hidden = getattr(self.tt_ccl, "pcie", None) is not None
+        host_full = host_tensors[0] if replicated_hidden else torch.cat(host_tensors, dim=-1)
 
         if R is not None:
             combined = host_full[:, :, R : R + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
@@ -426,7 +430,11 @@ class Transformer(LightweightModule):
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=(
+                ttnn.ReplicateTensorToMesh(self.mesh_device)
+                if replicated_hidden
+                else ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
+            ),
         )
         return user_tokens
 
@@ -522,7 +530,7 @@ class Transformer(LightweightModule):
         tt_chunk_page_table,
         tt_chunk_start_idx,
     ):
-        tt_tokens = self.embd(tokens)
+        tt_tokens = self._pcie_gather_embd(self.embd(tokens))
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
@@ -571,7 +579,7 @@ class Transformer(LightweightModule):
 
         # self.embd expects that tokens are on device ; if trace is enabled, the tensors will be later on device, so we will do these 2 steps when we copy the tokens to the device
         if not trace_enabled:
-            tokens_embd = self.embd(tokens)
+            tokens_embd = self._pcie_gather_embd(self.embd(tokens))
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
@@ -743,9 +751,16 @@ class Transformer(LightweightModule):
             tokens,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.prefetcher is None else decode_residual_mem_cfg,
         )
-        tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        tt_tokens = self._pcie_gather_embd(ttnn.unsqueeze_to_4D(tt_tokens))
         tt_tokens = ttnn.to_memory_config(tt_tokens, decode_residual_mem_cfg)
         return tt_tokens
+
+    def _pcie_gather_embd(self, x):
+        """On the PCIe P2P mesh the embedding table is column-parallel but the residual is replicated."""
+        pcie = getattr(self.tt_ccl, "pcie", None)
+        if pcie is None:
+            return x
+        return pcie.all_gather(x)
 
     def concat_host_output(self, tt_out, is_log_probs=False):
         """
@@ -1043,7 +1058,9 @@ class Transformer(LightweightModule):
             return tt_logits
 
         # Gather the output across all devices and untilize the tensor (for argmax)
-        if self.args.num_devices > 1:
+        if self.args.num_devices > 1 and getattr(self.tt_ccl, "pcie", None) is not None:
+            tt_logits = self.tt_ccl.pcie.all_gather(tt_logits)
+        elif self.args.num_devices > 1:
             cluster_axis = 0 if self.args.is_galaxy else None
             num_links = 2 if self.args.is_galaxy else 1
             tt_logits = ttnn.experimental.all_gather_async(
@@ -1079,6 +1096,10 @@ class Transformer(LightweightModule):
         if self.prefetcher is not None:
             self.prefetcher.init(mode)
             self.prefetcher.prefetch()
+        if getattr(self.args, "dram_core_prefetch", None) is not None and mode == Mode.DECODE:
+            self.args.dram_core_prefetch.rebuild_if_released()  # decode traces hold the GCB address
+        if mode == Mode.DECODE and getattr(self.tt_ccl, "pcie", None) is not None:
+            self.tt_ccl.pcie.release_prefill_buffers()  # prefill-sized PCIe landing buffers would sit in decode L1
 
     def forward(
         self,

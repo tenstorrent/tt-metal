@@ -492,8 +492,18 @@ class MLP(LightweightModule):
             memory_config=w1_out.memory_config(),
         )
 
-        if mode == Mode.DECODE and not TG and self.prefetcher is None:
-            # w2 may use a different core grid, this is a no-op if they already match
+        if (
+            mode == Mode.DECODE
+            and not TG
+            and self.prefetcher is None
+            and not (
+                self.args.use_wide_dram_sharded_decode_grid()
+                and (self.args.num_devices == 1 or self.args.pcie_tp_mlp_grids())
+            )
+        ):
+            # w2 may use a different core grid, this is a no-op if they already match. On the wide P150 grid the
+            # w1/w3 outputs already sit on 64 cores with 7-tile shards, which is what w2's in0 needs, and a
+            # row-major 64-core activation streams as fast as the 8x8 grid, so the reshard is skipped.
             w2_in = ttnn.to_memory_config(w2_in, self.args.get_mlp_binary_mult_mem_config(mode))
 
         ttnn.deallocate(w3_out)

@@ -569,6 +569,12 @@ def mesh_device(request, silicon_arch_name, device_params):
     """
     import ttnn
 
+    # Two PCIe-only chips as one mesh (desktop-0 chips 4/5): declare the topology before anything touches the
+    # control plane, and run without fabric (there is no Ethernet between them).
+    pcie_chips = os.environ.get("TT_PCIE_P2P_CHIPS")
+    if pcie_chips:
+        ttnn._ttnn.pcie_p2p.use_isolated_mesh([int(c) for c in pcie_chips.split(",")])
+
     request.node.pci_ids = ttnn.get_pcie_device_ids()
 
     try:
@@ -654,6 +660,8 @@ def mesh_device(request, silicon_arch_name, device_params):
     updated_device_params = get_updated_device_params(device_params)
     updated_device_params.pop("require_exact_physical_num_devices", False)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    if pcie_chips:
+        fabric_config = None
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
@@ -671,6 +679,9 @@ def mesh_device(request, silicon_arch_name, device_params):
     for submesh in mesh_device.get_submeshes():
         ttnn.close_mesh_device(submesh)
 
+    if pcie_chips:
+        # Disable the PCIe P2P iATU regions / TLB windows before the devices close (they outlive the process).
+        ttnn._ttnn.pcie_p2p.teardown()
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
     del mesh_device

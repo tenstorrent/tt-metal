@@ -40,6 +40,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/control_plane.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     api/tt-metalium/experimental/fabric/fabric.hpp
+    api/tt-metalium/experimental/pcie_p2p.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/fabric_switch_manager.hpp
     api/tt-metalium/experimental/fabric/fabric_telemetry.hpp

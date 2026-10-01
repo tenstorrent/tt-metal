@@ -791,13 +791,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         """
         mesh_device = self.model_args[model_id].mesh_device
         full_dim = self.model_args[model_id].dim
+        # The residual stream is fractured over devices (gathered inside the norm) except on the PCIe P2P mesh,
+        # where it is replicated: the trace input must have the layout the model actually hands over, or the
+        # host copy of user_hidden lands in half-width shards and the sampled token is garbage.
+        hidden_mapper = (
+            ttnn.ReplicateTensorToMesh(mesh_device)
+            if getattr(self.model[model_id].tt_ccl, "pcie", None) is not None
+            else ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+        )
 
         dummy_input = ttnn.from_torch(
             torch.zeros(1, 1, sampling_batch, full_dim, dtype=torch.bfloat16),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            mesh_mapper=hidden_mapper,
         )
 
         logits = self.model[model_id]._apply_norm_and_lm_head(dummy_input)
@@ -813,7 +821,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            mesh_mapper=hidden_mapper,
         )
         return {"model_id": model_id, "input": trace_input}
 

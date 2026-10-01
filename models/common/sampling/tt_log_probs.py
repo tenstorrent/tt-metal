@@ -284,6 +284,15 @@ class LogProbsCalculator:
             raise primary
 
     def _perform_all_gather(self, tensor: ttnn.Tensor, dim: int, num_links: int, buffer_key: str = None):
+        pcie = getattr(self.tt_ccl, "pcie", None)
+        if pcie is not None:
+            # 2-chip PCIe P2P mesh (no fabric): gather over the P2P windows, keep the input's memory layout.
+            gathered = pcie.all_gather(tensor, dim)
+            if gathered.memory_config() != tensor.memory_config():
+                out = ttnn.to_memory_config(gathered, tensor.memory_config())
+                ttnn.deallocate(gathered)
+                return out
+            return gathered
         if callable(self._line_all_gather):
             kwargs = {
                 "dim": dim,
