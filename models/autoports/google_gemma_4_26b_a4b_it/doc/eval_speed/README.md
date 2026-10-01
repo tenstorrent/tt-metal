@@ -614,3 +614,43 @@ the harness-provided kernel/version string in`system_information`, explaining
 1153 versus1154 input tokens on the two hosts. This adds another reason not to
 treat those independent trajectories as paired causal evidence. Exact replay
 controls retain the saved prompt and explicit request seed.
+
+### Resumed configurable-weight control
+
+The same image initializes all30 layers and the full262144-token serving
+contract. Construction calls`precision_summary()`, which validates allocated
+weight dtypes and bound compute configs against the mounted complete policy.
+Observed`/server_info?config_format=json` confirms async scheduling and on-device
+sampling. No profiler is enabled on the live serving path.
+
+The first14,467-token greedy128-token request has cold TTFT129.104 seconds and
+2.453-second decode. It is compilation evidence, not warmed speed. The subsequent
+fixed-seed sampled request finishes naturally after1100 tokens in31.701 seconds
+(TTFT9.041, decode22.618). The selected policy on this exact context/seed with
+the same1024 guard previously produces4155 tokens in91.651 seconds and stops
+for repetition. The candidate writes an incomplete, comment-heavy reproduction
+script: reduced pathological generation is observed, but solve-quality is not
+established. Native chat parsing repeats the1100-token response in31.537 seconds
+with finish_reason`tool_calls` and one valid bash call; no tool is executed by
+these replays.
+
+The official six-prompt suite is replayed C1 with thinking explicitly disabled,
+matching its existing HF and selected-policy prompt format. All six outputs
+are coherent: haiku, learning explanation, story, thermodynamics, French
+translation and Fibonacci code. No visible degeneracy appears. Exact-text
+equality against the selected policy fails, as expected for this deliberately
+different precision; the harness retains that failure rather than turning it
+into a quality pass. Longer responses end at the suite's256-token diagnostic
+allowance. This small qualitative check is not the full readiness accuracy gate.
+
+At18:32:53 UTC one fresh900-second Django trial starts against this local
+candidate. It explicitly supplies request seed9472, guard1024 and the existing
+task/sampling/max-output settings. Per-request seeding is a declared paired-
+diagnostic policy change, not a scored release default. Artifacts:
+`/home/mvasiljevic/gemma4-eval-speed-evidence/local_django_weight_bfp8_seed9472`.
+No full release suite or new CI image is launched on this evidence alone.
+
+Short replay tools now enforce a real wall deadline across blocked first-token
+and stream reads, preserving partial evidence on expiry. Seven host invariants
+pass, including timer restoration and complete policy isolation. A client abort
+does not reset or forcibly terminate the serving engine.

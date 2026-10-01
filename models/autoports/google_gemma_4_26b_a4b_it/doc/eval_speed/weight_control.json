@@ -1,0 +1,20 @@
+{
+  "status": "experimental_unselected_accuracy_gate_pending",
+  "image_id": "sha256:ad58effd178b9d8c7689a392159532d30aea0c1fe24bec82c06dbc0d3ebf4bbd",
+  "tt_metal_sha": "c9ec3469f1b875e7e5e505660c4421e5126e8dad",
+  "policy_sha256": "46389c08f1c99f068669f66e902cc34daf00e54e7c7d8014dc1539b3dd1af954",
+  "changed_fields": 93,
+  "change": "Configurable decode/head BFP4 weights to BFP8; fixed prefill, activations, KV, CCL and fidelity unchanged",
+  "max_model_len": 262144,
+  "prompt_tokens": 14467,
+  "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "seed": 9472, "max_tokens": 32768},
+  "repetition_detection": {"min_pattern_size": 16, "max_pattern_size": 1024, "min_count": 8},
+  "selected_policy": {"elapsed_s": 91.65056063886732, "completion_tokens": 4155, "finish_reason": "repetition"},
+  "candidate": {"elapsed_s": 31.700529008172452, "ttft_s": 9.04064723290503, "decode_s": 22.618373124860227, "completion_tokens": 1100, "finish_reason": "stop"},
+  "native_chat_confirmation": {"elapsed_s": 31.536756318993866, "completion_tokens": 1100, "finish_reason": "tool_calls", "bash_calls": 1},
+  "next_action_verdict": "Valid parsed call writes an incomplete/comment-heavy reproduction script; no solve or useful-test claim",
+  "shared_qualitative": {"prompts": 6, "concurrency": 1, "thinking": false, "max_tokens": 256, "exact_text_matches_selected_policy": false, "manual_review": "All six coherent; no visible degeneracy; different text is not an accuracy-gate pass"},
+  "raw_artifacts": "readiness_vllm/eval_speed/weight_control/",
+  "outcome_trial": "/home/mvasiljevic/gemma4-eval-speed-evidence/local_django_weight_bfp8_seed9472",
+  "outcome_status": "running_900_second_diagnostic_seeded_trial"
+}

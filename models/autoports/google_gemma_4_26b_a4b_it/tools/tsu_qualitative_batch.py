@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--concurrency", type=int, default=18)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--chat-template-kwargs", type=json.loads, default={})
     args = parser.parse_args()
     if not 1 <= args.concurrency <= 32 or args.repeats < 1:
         parser.error("concurrency must be1..32 and repeats positive")
@@ -48,6 +49,7 @@ def main():
         "concurrency": args.concurrency,
         "repeats": args.repeats,
         "request_params": {"model": MODEL_ID, "temperature": 0, "max_tokens": 256, "seed": 0},
+        "chat_template_kwargs": args.chat_template_kwargs,
         "prompts": [],
         "responses": [],
         "passed": False,
@@ -59,9 +61,11 @@ def main():
                 "index": index,
                 "messages": messages,
                 "expected_greedy": row["greedy_completion"],
-                "rendered_prompt": tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True),
+                "rendered_prompt": tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True, **args.chat_template_kwargs
+                ),
                 "prompt_token_ids": tokenizer.apply_chat_template(
-                    messages, tokenize=True, add_generation_prompt=True, return_dict=False
+                    messages, tokenize=True, add_generation_prompt=True, return_dict=False, **args.chat_template_kwargs
                 ),
             }
         )
@@ -74,7 +78,15 @@ def main():
 
         def request(index, repeat):
             record = report["prompts"][index]
-            completion = client.chat.completions.create(messages=record["messages"], **report["request_params"])
+            completion = client.chat.completions.create(
+                messages=record["messages"],
+                **report["request_params"],
+                **(
+                    {"extra_body": {"chat_template_kwargs": args.chat_template_kwargs}}
+                    if args.chat_template_kwargs
+                    else {}
+                ),
+            )
             choice = completion.choices[0]
             return {
                 "index": index,

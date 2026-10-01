@@ -23,6 +23,9 @@ def main():
     parser.add_argument("--server", default="http://127.0.0.1:8000")
     parser.add_argument("--seconds", type=int, default=900)
     parser.add_argument("--repetition-detection", type=json.loads)
+    parser.add_argument(
+        "--request-seed", type=int, help="Explicit paired-diagnostic policy change, not a release default"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     sys.path.insert(0, str(args.tti_root.resolve()))
@@ -30,6 +33,8 @@ def main():
 
     saved = json.loads(args.source_config.read_text())
     kwargs = copy.deepcopy(saved["agents"][0]["kwargs"])
+    if args.request_seed is not None:
+        kwargs["config"]["model"]["model_kwargs"]["seed"] = args.request_seed
     if args.repetition_detection:
         kwargs["config"]["model"]["model_kwargs"]["extra_body"]["repetition_detection"] = args.repetition_detection
     # The local server has no API authentication; do not reuse CI credentials.
