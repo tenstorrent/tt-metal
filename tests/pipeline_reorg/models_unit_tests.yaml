@@ -2267,3 +2267,13 @@
     wh_n150:
       timeout: 50
       tier: 3
+- name: TT-DiT Mochi VAE Conv1x1 matmul stress 8x7 grid (probe for #58653)
+  cmd: |
+    export MM_STRESS_GRID=8x7
+    pytest --timeout 2400 models/tt_dit/tests/models/mochi/test_vae_conv1x1_matmul_stress.py
+  model: mochi
+  model_family: Mochi
+  skus:
+    wh_n300:
+      timeout: 50
+      tier: 3

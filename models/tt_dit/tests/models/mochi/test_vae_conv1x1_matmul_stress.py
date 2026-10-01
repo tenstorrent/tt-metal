@@ -38,6 +38,11 @@ def test_conv1x1_matmul_stress(device):
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
+    grid = device.core_grid
+    if os.environ.get("MM_STRESS_GRID"):
+        gy, gx = (int(v) for v in os.environ["MM_STRESS_GRID"].split("x"))
+        grid = ttnn.CoreGrid(y=gy, x=gx)
+    logger.info(f"conv1x1 matmul stress: core_grid={grid} (device default {device.core_grid})")
     t0 = time.time()
     for i in range(iterations):
         x_tile = ttnn.to_layout(x_rm, ttnn.TILE_LAYOUT)
@@ -48,7 +53,7 @@ def test_conv1x1_matmul_stress(device):
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=device.core_grid,
+            core_grid=grid,
         )
         ttnn.deallocate(x_tile)
         out_rm = ttnn.to_layout(out_tile, ttnn.ROW_MAJOR_LAYOUT)
