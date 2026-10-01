@@ -186,6 +186,10 @@ jobs:
             title: "(Kimi-K2.7-1T) disaggregated prefill SC4 vs SC1 scaling"
           - model: glm53
             title: "(GLM-5.3-744B) disaggregated prefill SC4 vs SC1 scaling"
+          # sc4 alone: K3's sc1 leg runs 24 of 93 layers, so there is no sc1 baseline to scale from.
+          - model: kimi_k3
+            title: "(Kimi-K3-2.8T) disaggregated prefill SC4 perf"
+            sc4_only: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -211,7 +215,7 @@ jobs:
       - name: Report scaling
         run: |
           python3 models/demos/common/prefill/runners/ci/scaling_summary.py \
-            --metrics-dir perf_metrics --model "${{ matrix.model }}" \
+            --metrics-dir perf_metrics --model "${{ matrix.model }}" ${{ matrix.sc4_only && '--sc4-only' || '' }} \
             ${{ steps.gantt.outputs.url && format('--gantt-url {0}', steps.gantt.outputs.url) || '' }}
 
   ai-run-summary:
