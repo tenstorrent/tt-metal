@@ -30,7 +30,8 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     REALTIME_PROFILER_MSG = 9,
     DISPATCH_TELEMETRY = 10,
     DISPATCH_TELEMETRY_CONTROL = 11,
-    // Completion counters for worker-done signalling on Quasar. Not used on WH/BH.
+    // Quasar L1 worker-done counters; unused on WH/BH. Incremented by worker NOC, or by dispatch_s from FDS group
+    // counts when FDS signalling is enabled.
     WORKER_COMPLETION_SEMAPHORES = 12,
     UNRESERVED = 13,
 };

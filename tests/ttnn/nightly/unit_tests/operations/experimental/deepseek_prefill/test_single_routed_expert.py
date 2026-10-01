@@ -18,7 +18,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
@@ -31,10 +31,12 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     CLAMPED_SILU_GLU_LIMIT,
     TorchExpert,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
+    TtRoutedExpert,
+    routed_expert_weight_memory_config,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
-
 
 SINGLE_CHIP_MESH_PARAMS = [
     pytest.param(
@@ -231,9 +233,10 @@ def run_single_routed_expert(
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=weights_dtype,
         activation=activation,
+        # Both placements are swept explicitly: the module's None default would pick ND-sharded on
+        # Blackhole and leave the interleaved path uncovered.
+        weights_dram_nd_sharded=weights_dram_sharded,
     )
-    if weights_dram_sharded:
-        reshard_expert_weights_nd(tt_expert, device)
 
     # Run TTNN forward
     logger.debug("Running TTNN forward...")
@@ -261,57 +264,16 @@ def run_single_routed_expert(
     logger.debug("Test PASSED!")
 
 
-def dram_nd_shard_spec(mesh_device, n_dim: int) -> "ttnn.NdShardSpec":
-    """DRAM ND shard spec that lets the FFN fetch a whole per_core_N weight slice in ONE NoC
-    request instead of one per tile.
-
-    The WIDTH is not a free choice: the op rejects any shard whose width is not exactly its own
-    per_core_N, because a wider or narrower shard splits or straddles the slice and loses the
-    point. per_core_N = ceil(n_tiles / GRID_X) mirrors that split, so this is the one spec the op
-    accepts -- read GRID_X from the op rather than hardcoding it.
-
-    The HEIGHT stays at one tile-row. Shards distribute ROUND_ROBIN_1D, so a core's requests within
-    a K-block step by the shard grid's N extent and their COUNT decides how many DRAM banks the
-    block touches. A bank-pinned core saturates near 30 GB/s against ~370 GB/s rotating, so trading
-    request count for coverage loses.
-
-    n_tiles need not be a multiple of per_core_N: the last shard is partially valid and those
-    columns are dropped by the op's N-bounds guards.
-    """
-    grid_x = ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID.x
-    n_tiles = n_dim // ttnn.TILE_SIZE
-    per_core_n = (n_tiles + grid_x - 1) // grid_x
-    dram_grid = mesh_device.dram_grid_size()
-    return ttnn.NdShardSpec(
-        shard_shape=ttnn.Shape([ttnn.TILE_SIZE, per_core_n * ttnn.TILE_SIZE]),
-        grid=ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid.x - 1, dram_grid.y - 1))]
-        ),
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-
-
 def to_dram_nd_sharded(tensor, mesh_device):
-    """One weight tensor moved into the ND-sharded placement, its width taken from its own N."""
-    return ttnn.to_memory_config(
-        tensor,
-        ttnn.MemoryConfig(
-            buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=dram_nd_shard_spec(mesh_device, tensor.shape[-1])
-        ),
-    )
+    """One weight tensor moved into the production ND-sharded placement, its width taken from its own N.
 
-
-def reshard_expert_weights_nd(tt_expert, mesh_device) -> None:
-    """Move a built TtRoutedExpert's weights to the ND-sharded placement, in place.
-
-    Done after construction rather than during it: the module builds interleaved and the op reads
-    the placement off the tensors themselves, so nothing about the module has to know. Every expert
-    is resharded -- the op requires all experts to share one memory config, since one program serves
-    them all from expert 0's accessor.
+    The spec is the module's (routed_expert_weight_memory_config), not a test-local one: it is what a
+    TtRoutedExpert built with weights_dram_nd_sharded=True hands the ops, so a raw-tensor test measures
+    the layout the module ships rather than one of its own.
     """
-    for projs in (tt_expert.gate_projs, tt_expert.up_projs, tt_expert.down_projs):
-        for i, w in enumerate(projs):
-            projs[i] = to_dram_nd_sharded(w, mesh_device)
+    return ttnn.to_memory_config(
+        tensor, routed_expert_weight_memory_config(mesh_device, tensor.shape[-1], dram_nd_sharded=True)
+    )
 
 
 # Per-model dims as (id_prefix, config, extended), each run at its own (emb_dim,
@@ -320,7 +282,7 @@ def reshard_expert_weights_nd(tt_expert, mesh_device) -> None:
 SINGLE_EXPERT_MODELS = [
     ("dsv3", DeepSeekV3Config, False),
     ("minimax_m27", MiniMaxM27Config, True),
-    ("glm_51", GLM51Config, True),
+    ("glm_53", GLM53Config, True),
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
     ("gptoss_120b", GptOss120BConfig, True),
@@ -366,7 +328,7 @@ _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 
 # Exhaustive sweep: the full range from empty to fully-packed
 _ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
-_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
+_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_53")
 
 
 def _isl_params(active_sweep, only_models=None):

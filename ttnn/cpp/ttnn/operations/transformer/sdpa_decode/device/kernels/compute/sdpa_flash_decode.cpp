@@ -68,6 +68,11 @@ void kernel_main() {
     constexpr uint32_t original_block_size = get_compile_time_arg_val(26);
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
+    // get_workload_for_core assigns at most one chunk per participating core when
+    // the fixed non-causal chunk count does not exceed num_cores_per_head. Its
+    // local online-softmax correction is then unreachable; tree reduction still runs.
+    constexpr bool single_local_chunk = !is_causal && sliding_window_size == 0 && Sk_chunk_t > 0 &&
+                                        ((St + Sk_chunk_t - 1) / Sk_chunk_t <= num_cores_per_head);
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool untilize_output = tilize_q;
@@ -461,7 +466,7 @@ void kernel_main() {
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk == k_chunk_start) {
                     cb_out_mm = cb_out_im;
-                } else {
+                } else if constexpr (!single_local_chunk) {
                     // When there is more than 1 chunk, we perform Lazy Softmax
                     // Reconfig register DF
                     reconfig_data_format(cb_prev_max, cb_cur_max);

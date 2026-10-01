@@ -33,5 +33,4 @@ teams:
 # lead regardless of Slack activity. The escalation workflow removes these IDs from the active set so their
 # tests get flagged. Each entry is a Slack user ID with a "# Name" comment.
 blacklist:
-  - U07J3K6KS1K # Bryan Lozano
   - U0883RN6CRE # William Ly

@@ -303,6 +303,9 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
         addr_mod_t {}.set(ADDR_MOD_3);
     }
 
+    // Each dest tile uses its total face rows, but takes at least one full face.
+    _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));
+
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -318,25 +321,18 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
  * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
  * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
- * @param clear_in_fp32_mode: When true, clears the dest face in Float32 mode during dest reuse
  * @note Call @ref _llk_math_eltwise_binary_init_ with matching template args before this function.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckernel::TensorShape& tensor_shape, const bool clear_in_fp32_mode = false)
+inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckernel::TensorShape& tensor_shape)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_by_rows_(tile_idx);
 
     if constexpr (reuse_dest != EltwiseBinaryReuseDestType::NONE)
     {
-        [[maybe_unused]] auto tile_start = tile_idx * tensor_shape.total_num_faces();
         for (std::uint32_t face_num = 0; face_num < tensor_shape.total_num_faces(); face_num++)
         {
             eltwise_binary_reuse_dest_as_src<reuse_dest>();
-            if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL)
-            {
-                // ELWMUL needs HiFi (therefore dest_acc). Clear dest face-by-face when reusing dest as srcA/B
-                TT_ZEROACC(p_zeroacc::CLR_16, clear_in_fp32_mode, 0, ADDR_MOD_3, tile_start + face_num);
-            }
             ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
         }
     }

@@ -165,10 +165,44 @@ class TT_CCL:
         # keyed by shape signature. See get_indexer_ring_k_buffer.
         self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
+        # Shared across sequential norm layers. Semaphore and stats scratch must
+        # alternate together to absorb inter-device skew at collective completion.
+        # Sequential layers with the same geometry share two semaphore/stats pairs.
+        # Keep resources alive until mesh teardown: traces may still reference them.
+        self.fused_rmsnorm_resources: dict[tuple, dict] = {}
+
         # One model-wide sparse-MLA overlap manager and external high-BW-gather semaphore pair.
         # Full-indexer layers execute serially, so they reuse the same resources. The pair belongs
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
+
+    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
+        key = (
+            tuple(x.shape),
+            tuple(x.padded_shape),
+            x.dtype,
+            tuple(weight.shape),
+            weight.dtype,
+            cluster_axis,
+            num_links,
+        )
+        resources = self.fused_rmsnorm_resources.get(key)
+        if resources is None:
+            pairs = []
+            for _ in range(2):
+                semaphores = [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)]
+                stats = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+                    x, cluster_axis, self.mesh_device, num_links=num_links, weight=weight
+                )
+                pairs.append((semaphores, stats))
+            # All chips must initialize their semaphores before any peer sends.
+            # This allocation happens during the first warmup, once per geometry.
+            ttnn.synchronize_device(self.mesh_device)
+            resources = {"pairs": pairs, "next": 0}
+            self.fused_rmsnorm_resources[key] = resources
+        index = resources["next"]
+        resources["next"] = 1 - index
+        return resources["pairs"][index]
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
         """Create or return the exact 80/40 production or 80/30 QB2 overlap profile.
@@ -400,16 +434,18 @@ class TT_CCL:
     def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
         """Return the persistent full-K output buffer for the fused ring indexer.
 
-        ``local_k`` is the persistent local cache [B,1,T/sp,D]. In indexed mode the fused op gathers
-        only the selected slot over ``sp_axis`` into [1,1,T,D] while scoring arriving bands. All layers
-        execute serially and share the same index-cache geometry, so one stable-address scratch buffer
-        per shape/dtype is sufficient for the whole model instead of allocating a full gathered cache
-        per layer.
+        ``local_k`` is the persistent local cache [B,1,T/ring,D]. In indexed mode the fused op gathers
+        only the selected slot over ``sp_axis`` -- or over the complete mesh when ``sp_axis`` is None --
+        into [1,1,T,D] while scoring arriving bands. All layers execute serially and share the same
+        index-cache geometry, so one stable-address scratch buffer per shape/dtype is sufficient for
+        the whole model instead of allocating a full gathered cache per layer.
         """
         import torch
 
         local_shape = tuple(local_k.shape)
-        global_seq_len = local_shape[2] * self.mesh_device.shape[sp_axis]
+        # sp_axis None means the gather spans the complete mesh, so the ring is every device.
+        ring_size = self.mesh_device.get_num_devices() if sp_axis is None else self.mesh_device.shape[sp_axis]
+        global_seq_len = local_shape[2] * ring_size
         key = (global_seq_len, local_shape[3], local_k.dtype, sp_axis)
         if key not in self.indexer_ring_k_buffers:
             self.indexer_ring_k_buffers[key] = ttnn.from_torch(

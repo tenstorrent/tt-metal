@@ -50,7 +50,7 @@ private:
     const std::vector<uint32_t>& get_program_config_sizes();
     const std::unordered_set<SubDeviceId>& determine_sub_device_ids(MeshDevice* mesh_device);
     bool is_finalized() const { return finalized_metadata_.has_value(); }
-    void set_finalized(uint32_t max_program_kernels_sizeB);
+    void set_finalized(uint32_t max_program_kernels_sizeB, int mesh_device_id);
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
     ProgramConfig& get_program_config(uint32_t index, bool using_fast_dispatch);
@@ -66,6 +66,8 @@ private:
         // can compare it against the mesh size instead of re-walking every range.
         size_t num_program_devices = 0;
         uint32_t max_program_kernels_sizeB = 0;
+        // Offsets and binary sizes are computed for this MeshDevice and are not recomputed for another.
+        int mesh_device_id = 0;
         bool runs_on_noc_multicast_only_cores = false;
         bool runs_on_noc_unicast_only_cores = false;
     };

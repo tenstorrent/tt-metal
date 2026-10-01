@@ -21,6 +21,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.attention import TtNomicBertAttention
 from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device
 from models.experimental.nomic_embed_text_v2_moe.tt.mlp import TtNomicBertMLP
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from models.experimental.nomic_embed_text_v2_moe.tt.moe import TtNomicMoELayer
 
 
@@ -47,13 +48,15 @@ class TtNomicBertBlock(LightweightModule):
         self.norm2_weight, self.norm2_bias = norm("norm2", "weight"), norm("norm2", "bias")
 
     def _norm(self, x: ttnn.Tensor, residual: ttnn.Tensor, weight, bias) -> ttnn.Tensor:
+        # The attention output may sit in L1 (dense_linear); the block's activations stay in DRAM.
         return ttnn.layer_norm(
             x,
             residual_input_tensor=residual,
             weight=weight,
             bias=bias,
             epsilon=self.epsilon,
-            compute_kernel_config=self.tt_config.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
 
     def forward(

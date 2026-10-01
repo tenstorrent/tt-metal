@@ -151,7 +151,7 @@ static void report_tensor_arg_mismatch(
 //     both are set -- precedence, not containment: the two are not strictly ordered, since padded
 //     shape matching tolerates the logical-rank changes padding absorbs while dynamic_tensor_shape
 //     pins the rank. The worked pair is in CPU_DynamicDoesNotContainPaddedShapeOnly
-//     (test_tensor_spec_relaxations.cpp).
+//     (metal2_host_api/unit_tests/tensor_spec_relaxations/tensor_spec_relaxations.cpp).
 //       - Neither flag set (default): full TensorSpec equality.
 //       - match_padded_shape_only=true (only): tensor_layout() must match exactly, and
 //         padded_shape() must match exactly. logical_shape() may differ.
@@ -253,7 +253,7 @@ void ValidatePrefetcherPipeArgs(
             "Program's mesh.",
             param_name);
         TT_FATAL(
-            binding->bound_pipe == nullptr || binding->bound_pipe == &pipe.impl(),
+            binding->bound_pipe == nullptr || binding->bound_pipe_identity == pipe.identity(),
             "PrefetcherPipeArgument for '{}' supplies a different PrefetcherPipe object than the one this Program "
             "is bound to. A Program binds a parameter to one pipe for its lifetime; build a new Program to use "
             "another pipe.",

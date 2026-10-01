@@ -61,7 +61,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    tt::tt_metal::distributed::MeshDevice& device = a.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = a.device();
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
 

@@ -43,7 +43,6 @@ from tests.ttnn.profiling.realtime_profiler_utils import (
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
-    reshard_expert_weights_nd,
     _ISL_EXHAUSTIVE_MODELS,
     _ISL_EXHAUSTIVE_SWEEP,
     SINGLE_EXPERT_MODELS,
@@ -92,15 +91,15 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 2048): 580_342,
     ("kimi_k2_7", 4096): 1_150_448,
     ("kimi_k2_7", 5120): 1_435_379,
-    ("glm_51", 0): 3_055,
-    ("glm_51", 128): 85_743,
-    ("glm_51", 256): 108_096,
-    ("glm_51", 512): 143_664,
-    ("glm_51", 768): 196_770,
-    ("glm_51", 1024): 257_645,
-    ("glm_51", 2048): 507_790,
-    ("glm_51", 4096): 1_005_379,
-    ("glm_51", 5120): 1_258_299,
+    ("glm_53", 0): 3_055,
+    ("glm_53", 128): 85_743,
+    ("glm_53", 256): 108_096,
+    ("glm_53", 512): 143_664,
+    ("glm_53", 768): 196_770,
+    ("glm_53", 1024): 257_645,
+    ("glm_53", 2048): 507_790,
+    ("glm_53", 4096): 1_005_379,
+    ("glm_53", 5120): 1_258_299,
 }
 
 # Same measurement and key as _EXPECTED_NS, with the weights DRAM ND-sharded. Its own table because
@@ -116,15 +115,15 @@ _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 2048): 579_184,
     ("kimi_k2_7", 4096): 1_149_750,
     ("kimi_k2_7", 5120): 1_437_132,
-    ("glm_51", 0): 3_048,
-    ("glm_51", 128): 77_648,
-    ("glm_51", 256): 97_732,
-    ("glm_51", 512): 138_846,
-    ("glm_51", 768): 198_238,
-    ("glm_51", 1024): 257_887,
-    ("glm_51", 2048): 506_324,
-    ("glm_51", 4096): 1_006_251,
-    ("glm_51", 5120): 1_257_201,
+    ("glm_53", 0): 3_048,
+    ("glm_53", 128): 77_648,
+    ("glm_53", 256): 97_732,
+    ("glm_53", 512): 138_846,
+    ("glm_53", 768): 198_238,
+    ("glm_53", 1024): 257_887,
+    ("glm_53", 2048): 506_324,
+    ("glm_53", 4096): 1_006_251,
+    ("glm_53", 5120): 1_257_201,
 }
 
 
@@ -211,11 +210,10 @@ def _build(device, emb_dim: int, hidden_dim: int, active_tokens: int, activation
         weights_dtype=ttnn.bfloat4_b,
         activation=activation,
         hybrid_token_threshold=MAX_TOKENS,
+        # Built once and read by both ops in turn, so the two are compared on one placement rather
+        # than each on its own.
+        weights_dram_nd_sharded=weights_dram_sharded,
     )
-    # Resharded once and read by both ops in turn, so the two are compared on one placement rather
-    # than each on its own.
-    if weights_dram_sharded:
-        reshard_expert_weights_nd(tt_expert, device)
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
