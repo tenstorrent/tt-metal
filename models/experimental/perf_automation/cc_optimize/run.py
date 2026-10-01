@@ -2732,6 +2732,47 @@ def _cov_ladder(model_root, model_id: str = "") -> list:
     return out
 
 
+def _stacks_the_knob_sizes(per_stack_map: dict, probe_at, ladder) -> dict:
+    """The stacks of a first-block map that the depth knob actually shortens; the others are dropped.
+
+    A SIGNPOSTED STACK IS NOT NECESSARILY A SIZEABLE ONE. The signpost window is "the block where a
+    stack's last new op first appears", and it is only a window for the knob if the knob can stop the
+    stack before that block. Qwen-Image-Edit on a WH Galaxy, 2026-09-30: once the VAE's blocks became
+    visible to the probe they were the only signposted stack -- 11 blocks, each a different shape, run
+    in full whatever TT_PERF_LAYERS says -- so the window came out 11, the bridge then saw 11->11 and
+    switched capping off, and the full-depth capture blew tracy's 32K source-location limit. The
+    previous run, with no signposts visible, took the measured ladder and correctly got 2.
+
+    Asked, not assumed: one extra probe at the ladder's lowest rung. A stack whose deepest first
+    appearance does not move under that cap ignores the knob; a stack too short to be cut by it at
+    all is kept (it cannot inflate the window past that rung). When the probe yields nothing, the map
+    is returned unchanged -- exactly the behaviour before this check. Empty means no signposted stack
+    is sizeable, and the caller falls back to the measured ladder."""
+    if not per_stack_map or not ladder:
+        return per_stack_map
+    floor = int(min(ladder))
+    try:
+        capped, _ = _first_block_map(probe_at(floor))
+    except Exception:  # noqa: BLE001 -- a probe that cannot run must not cost the run its window
+        return per_stack_map
+    if not capped:
+        return per_stack_map
+    kept = {}
+    for sid, fb in per_stack_map.items():
+        deepest = max(fb.values()) if fb else 0
+        under = capped.get(sid)
+        # Kept when: too short for the cap to cut, gone under the cap (the cap reached it), or cut.
+        if deepest < floor or not under or max(under.values()) < deepest:
+            kept[sid] = fb
+        else:
+            print(
+                "  [optimize/cc] signposted %s ignores the depth knob (deepest first-op block %d at full "
+                "depth and at %d); not used to size the window" % (sid, deepest, floor),
+                flush=True,
+            )
+    return kept
+
+
 def _validate_signpost_window(window: int, stack_len: int, declared) -> tuple:
     """(ok, why) for a window the signpost path derived, cross-checked against the model's config.
 
@@ -2811,25 +2852,37 @@ def _knob_is_inert(seq_at_depth, full_signal, depth, model_root) -> bool:
     return _work_signal(seq_at_depth) == full_signal
 
 
+def _knob_base(model_root, base_knob=None) -> dict:
+    """The depth knob a coverage probe drives: the one the run resolved, else the LLM default."""
+    return dict(base_knob) if base_knob else (_llm_depth_env(model_root, 2) if model_root is not None else {})
+
+
+def _knob_probe_env(mcp_env: dict, base: dict, d: int) -> dict:
+    """The environment a coverage probe runs at depth `d` under knob `base` -- one spelling for every
+    probe that asks "what runs at this depth", so they cannot disagree about how the cap is set."""
+    env = dict(base)
+    numkey = next((k for k, v in base.items() if str(v).isdigit()), None)
+    if numkey:
+        _set_depth(env, d, key=numkey)  # see _knob_at: cap and FORCE_ALL must move together
+    penv = dict(mcp_env)
+    penv.update(env)
+    return penv
+
+
 def _measure_cov(
     repo_root: Path, mcp_env: dict, devices: str, node, case, full_types, model_root, base_knob=None, full_signal=None
 ):
-    base = dict(base_knob) if base_knob else (_llm_depth_env(model_root, 2) if model_root is not None else {})
+    base = _knob_base(model_root, base_knob)
     if not base:
         print("  [optimize/cc] coverage measurement skipped: no depth knob")
         return None
-    numkey = next((k for k, v in base.items() if str(v).isdigit()), None)
     want = set(full_types or [])
     if not want:
         return None
     ladder = _cov_ladder(model_root)
     got = set()
     for d in ladder:
-        env = dict(base)
-        if numkey:
-            _set_depth(env, d, key=numkey)  # see _knob_at: cap and FORCE_ALL must move together
-        penv = dict(mcp_env)
-        penv.update(env)
+        penv = _knob_probe_env(mcp_env, base, d)
         sigs_d, _, seq_d = _run_op_sigs(repo_root, penv, devices, node, case, d)
         if not sigs_d:
             print(f"  [optimize/cc] coverage measurement inconclusive: depth-{d} probe returned no ops")
@@ -3112,6 +3165,13 @@ def _coverage_layers(
         _signpost = None
         if _signposts_usable(seq):
             per_stack_map, _ = _first_block_map(seq)
+            # Only stacks the knob can actually cut may size its window (see _stacks_the_knob_sizes).
+            _kb = _knob_base(_model_root_from_node(repo_root, node), depth_knob)
+            per_stack_map = _stacks_the_knob_sizes(
+                per_stack_map,
+                lambda k: _run_op_sigs(repo_root, _knob_probe_env(mcp_env, _kb, k), devices, node, case, k)[2],
+                _cov_ladder(_model_root_from_node(repo_root, node), model_name or config_ref),
+            )
             # Compute per-stack coverage depth. per_stack_map is {stack_id: {op: block_idx}}.
             # For single-stack models this is {"stack0": {...}}.
             _per_stack_cov: dict = {}
