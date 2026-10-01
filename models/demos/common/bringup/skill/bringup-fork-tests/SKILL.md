@@ -97,8 +97,11 @@ them from the model's output.
   `ttnn/ttnn/bringup/dispatch/tests/test_dispatch.py`).
 - Build heavy inputs lean (weights one expert at a time), and give a case that needs more than pytest.ini's 300 s a
   `@pytest.mark.timeout`.
-- Run on device only through `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/<fork>/tests`, in the
-  foreground.
+- Run on device only through `scripts/run_safe_pytest.sh`, in the foreground. For the model cases use
+  `python -m models.demos.common.bringup.testing.fork_tests --fork <fork>`: it groups the cases by their `mesh` and
+  runs each group with only the cards of this box that form that mesh visible (`testing/cards.py` probes them once
+  per box and caches; never write card ids into a test). The unit suite: `scripts/run_safe_pytest.sh --run-all
+  ttnn/ttnn/bringup/<fork>/tests/unit`.
 
 ## 6. Done when
 
