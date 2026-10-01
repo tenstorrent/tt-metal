@@ -26,7 +26,7 @@ import torch
 _TRACED_RAGGED = os.environ.get("PREFILL_TRACED_RAGGED", "0") == "1"  # DS4F-0268: ragged final chunk on the islands
 # DS4F-0300: a ragged FIRST chunk (every prompt shorter than one chunk) replays islands A + B like a full chunk 0; only its
 # attention runs eager (trace_ready is False at kv_actual 0). Without it the whole layer runs eager (~5.6 s at 43 layers).
-_TRACED_RAGGED0 = os.environ.get("PREFILL_TRACED_CHUNK0_RAGGED", "0") == "1"
+_TRACED_RAGGED0 = os.environ.get("PREFILL_TRACED_CHUNK0_RAGGED", "1") == "1"  # default on: bit-exact (DS4F-0300 v1)
 # DS4F-0300: chunk 0's attention on a second captured A2 island per slot (the modules' forward_attn(chunk0=True): CSA repacks
 # its index rows, HCA / SWA mask the carry columns) instead of the eager path (trace_ready is False at kv_actual 0).
 _TRACED_CHUNK0 = os.environ.get("PREFILL_TRACED_CHUNK0", "0") == "1"
@@ -320,6 +320,30 @@ class TtV4PrefillBlock(LightweightModule):
                 for t in list(a2_warm) + list(warm):
                     if t is not None:  # the SWA phases carry None for entries / mask
                         ttnn.deallocate(t)
+                if os.environ.get("PREFILL_A1_OPTIME", "0") == "1" and self.kind == CSA:
+                    # DS4F-0300 measurement: one more EAGER pass (compiled above) with a synchronize after every step
+                    import time as _time
+
+                    from loguru import logger
+
+                    marks = []
+
+                    def _t(name, _m=marks):
+                        ttnn.synchronize_device(self.mesh_device)
+                        _m.append((name, _time.perf_counter()))
+
+                    _t("start")
+                    w2 = self.attn.forward_pre(h, state, chunk_tokens, _t=_t)
+                    self.attn.glue_chunk(state, w2, chunk_tokens, None)
+                    _t("glue")
+                    a2t = self.attn.forward_attn(h, w2, state, chunk_tokens, _t=_t)
+                    logger.info(
+                        f"[v4 optime] layer {self.layer_idx} CSA eager A1/glue/A2 ms: "
+                        + ", ".join(f"{n} {(t1 - t0) * 1e3:.2f}" for (_, t0), (n, t1) in zip(marks, marks[1:]))
+                    )
+                    for t in list(a2t) + list(w2):
+                        if t is not None:
+                            ttnn.deallocate(t)
                 self.attn.prepare_chunk(state, chunk_tokens)
                 A1 = TraceIsland(
                     self.mesh_device,

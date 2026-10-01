@@ -23,7 +23,9 @@ import torch
 
 import ttnn
 
-_RAGGED_FULL_CUT = os.environ.get("PREFILL_RAGGED_FULL_CUT", "0") == "1"  # DS4F-0300: full-width cut on a ragged chunk
+_RAGGED_FULL_CUT = (
+    os.environ.get("PREFILL_RAGGED_FULL_CUT", "1") == "1"
+)  # DS4F-0300: full-width cut on a ragged chunk (default on: bit-exact, v3)
 _TRACED_CHUNK0 = os.environ.get("PREFILL_TRACED_CHUNK0", "0") == "1"  # DS4F-0300: chunk 0 on a captured A2 island
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import (
     SharedScalar,
@@ -916,19 +918,28 @@ class TtCSA(TtHCA):
         self.compressor._push_scalar(self.compressor._entry_index_full[1], fwp // rate)
         self.indexer.compressor._push_scalar(self.indexer.compressor._entry_index_full[1], fwp // rate)
 
-    def forward_pre(self, hidden_states, state, real_len: int):
+    def forward_pre(self, hidden_states, state, real_len: int, _t=None):
         """Island A1 (chunk-invariant shapes; reads the persistent scalar buffers): rope gather, q / kv stems, both
         compressors (priors updated in place), the SP gather of the chunk's K rows and the next carry slice.
         -> (q, q_latent, sliding_kv_gathered, next_carry, entries, keys, cos, sin), all persistent island outputs."""
         rate = self.compressor.compress_rate
+        _t = _t or (
+            lambda name: None
+        )  # DS4F-0300 PREFILL_A1_OPTIME: per-step timer (eager only, never inside a capture)
         cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
+        _t("rope")
         q, q_latent = self._q_stem(hidden_states, cos, sin, return_latent=True)
+        _t("q_stem")
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        _t("kv_stem")
         fwp = state.entry_count * rate
         entries, _, new_prior_c = self.compressor(hidden_states, real_len, fwp, state.prior_c, need_mask=False)
+        _t("compressor")
         keys, _, new_prior_i = self.indexer.compressor(hidden_states, real_len, fwp, state.prior_i, need_mask=False)
+        _t("idx_compressor")
         for persistent, new in zip(state.prior_c + state.prior_i, new_prior_c + new_prior_i):
             self._update_in_place(persistent, new)
+        _t("priors")
         if self.sp_factor > 1:
             sliding_kv = ttnn.experimental.all_gather_async(
                 sliding_kv,
@@ -940,14 +951,19 @@ class TtCSA(TtHCA):
                 topology=self.tp_ccl_topology,
                 cluster_axis=self.sp_axis,
             )
+        _t("sp_gather")
         seq_len = hidden_states.shape[2] * self.sp_factor
         start, end = self._carry_index[self._carry_key(real_len)]
         next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
         # ROW_MAJOR bf16 copies for the slab (each lands in ONE update_padded_kv_cache in glue_chunk): the chunk's K rows,
         # this chunk's entries, the previous chunk's carry (state.sliding_carry is still the previous chunk's here)
+        _t("carry_slice")
         kv_rm = self._rm_pieces(sliding_kv, int(sliding_kv.shape[2]), ttnn.bfloat16)[0]
+        _t("kv_rm")
         entries_rm = self._rm_pieces(entries, int(entries.shape[2]), ttnn.bfloat16)[0]
+        _t("entries_rm")
         carry_rm = self._rm_pieces(state.sliding_carry, self.sliding_window, ttnn.bfloat16)[0]
+        _t("carry_rm")
         return q, q_latent, sliding_kv, next_carry, entries, keys, cos, sin, kv_rm, entries_rm, carry_rm
 
     def glue_chunk(self, state, outs, real_len: int, export=None) -> None:
@@ -1082,15 +1098,19 @@ class TtCSA(TtHCA):
         ttnn.deallocate(cat)
         return out
 
-    def forward_attn(self, hidden_states, outs, state, real_len: int, chunk0: bool = False):
+    def forward_attn(self, hidden_states, outs, state, real_len: int, chunk0: bool = False, _t=None):
         """Island A2 (chunk-invariant): the static fused scorer + top-k over the whole key cache, the sparse gather
         over the persistent slab, the TP head<->seq transposes, V's un-RoPE and the output projection -> y; plus the
         static halves of the export (H128-rotated index keys, the window ring rows, the pending-state block), so the
         eager epilogue is only writes. -> (y, k_rot, ring, pending_block)."""
         q, q_latent, sliding_kv_g, _nc, entries, keys, cos, sin = outs[:8]
+        _t = _t or (lambda name: None)
         idx = self.indexer.select_indices_static(q_latent, hidden_states, cos, sin, state.index_k, state.score_mask)
+        _t("scorer_topk")
         attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2], chunk0=chunk0)
+        _t("sparse_core")
         y = self._o_proj(attn)
+        _t("o_proj")
         # export prep (contract dtypes from kv_contract): rotated index keys (bfp8 tiles), the unified rows as RM pieces
         # -- entries land at unified row 128 + entry_count, so their pieces are 128 rows (gcd of 128 + k*1280 and 1280);
         # the ring (rows [0, 128)) and the pending block (32 rows at row 0) are one piece each
@@ -1110,8 +1130,10 @@ class TtCSA(TtHCA):
             sliding_kv_g, state.sliding_carry, state.kv_actual, real_len
         )  # k_prev = 0 on full chunks
         ring_rm = self._rm_pieces(ring, self.sliding_window, self._contract_dtype("csa_unified"))[0]
+        _t("export_prep")
         pblock = self._pending_block(state)
         pblock_rm = self._rm_pieces(pblock, int(pblock.shape[2]), self._contract_dtype("csa_pending"))[0]
+        _t("pending")
         return (y, k_rot, ring_rm, pblock_rm, *ent_pieces)
 
     @staticmethod

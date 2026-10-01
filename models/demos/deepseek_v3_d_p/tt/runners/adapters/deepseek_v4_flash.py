@@ -90,7 +90,7 @@ class DeepSeekV4FlashAdapter(PrefillModelAdapter):
         # builder documents None for a complete cache). Every start used to read them although only the cache was used.
         cached = (
             self._complete_expert_layers(params, hf_config)
-            if os.environ.get("PREFILL_SKIP_CACHED_EXPERTS", "0") == "1"
+            if os.environ.get("PREFILL_SKIP_CACHED_EXPERTS", "1") == "1"
             else set()
         )
 
