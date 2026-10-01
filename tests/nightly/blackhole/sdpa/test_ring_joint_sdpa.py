@@ -7322,9 +7322,10 @@ else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
-        # Three-run medians with compute optimizations and blocking K multicast: 2.726 / 4.600 ms.
-        ("kimi50k", 32, 640, 4, 69.54),
-        ("kimi_k3", 32, 640, 4, 70.64),
+        # Four-run bh_quietbox_2 (p300c) CI medians with compute optimizations: 2.720 / 4.659 ms.
+        # A p150b QuietBox runs kimi_k3 ~1% faster (4.607 ms), so targets track the CI SKU.
+        ("kimi50k", 32, 640, 4, 69.70),
+        ("kimi_k3", 32, 640, 4, 69.75),
     ]
 
 
