@@ -41,3 +41,21 @@ running (broker startup + fabric-check passed at 08:11). Rules now: full mesh + 
 - blx03 ~/fasth3/t40 checked out at 49af172e20; prof driver relaunched: broker job 027 (started 09:59 UTC).
 Next: read ~/fasth3/out/t40/prof.log (GEMMA4_TIMING / GEMMA4_PCC). If blx03 dropped while 027 ran: stop all
 device work, kill our queued jobs, report. Numbers are TP=4 on 2x4, not the TP=8 production layout.
+
+## 2026-10-01 10:15 UTC (attempt 1, wake 4)
+Job 027 (prof, TP=4 on create_submesh(2,4)) completed, no drop. Numbers (~/fasth3/out/t40/prof.log on blx03):
+- eager, new prompt: total 0.22-0.25s = prep 12-33ms + device 199-204ms + readback 13-19ms.
+  device split: gemma48 134ms, feature extractor 19ms, connectors 47ms.
+- traced capture (prep run + capture + execute): 0.82s. replay[0] 0.71s (!), replay[1..] 0.22s; device time
+  is the same as eager (199ms): the graph is device-bound, tracing buys nothing at steady state.
+- replay[0] is slow because Tracer._update_input runs ttnn.copy per device input; those copy programs are built
+  on the first replay. capture_trace only captured + executed, so gen #1 would still pay ~0.5s.
+- 256-token bucket: gemma48 65ms vs 134ms (-69ms TP=4); PCC real-token hidden min 0.9986 (layer 11), final 0.99998.
+  Not done: connectors/FE are sized for 1024, and steady encode is already < 0.5s.
+- 4f92bc4025f: capture_trace encodes twice (capture, then a replay). New device test
+  test_gemma4_first_request_after_capture (pipeline order: eager, capture_trace, then encode new prompts).
+  Unit test updated (fails without, passes with).
+- Verification job 028 (driver t40_drive.sh, PYTEST_K=first_request) -> ~/fasth3/out/t40/first.log,
+  marker ~/fasth3/out/t40/DONE_first. Expect request[0].encode ~0.23s, PCC 1.0.
+Next: read first.log (GEMMA4_TIMING capture_trace / request[i].encode, GEMMA4_PCC request), report, done.
+e2e clip still pending full-mesh permission (4x8 banned).
