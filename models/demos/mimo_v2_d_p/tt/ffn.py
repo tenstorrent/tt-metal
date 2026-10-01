@@ -149,8 +149,9 @@ class TtGate:
         self._pcs = {}
         self.mesh_device = mesh_device
 
-    def __call__(self, x, row_major=False):
-        """``row_major``: (indices, weights) both uint16 / bf16 ROW_MAJOR [1, 1, S, K] (the all-gather block's input)."""
+    def __call__(self, x, row_major=False, tiles=False):
+        """``row_major``: (indices, weights) both uint16 / bf16 ROW_MAJOR [1, 1, S, K] (the all-gather block's input);
+        ``tiles``: the same as TILE (the all-gather block gathers tiles and untilizes after)."""
         M = x.shape[-2]
         if M not in self._pcs:
             self._pcs[M] = router_mm_config(self.mesh_device, M, N=self.E)
@@ -168,6 +169,8 @@ class TtGate:
             score_func="sigmoid",
         )
         logits.deallocate(True)
+        if tiles:
+            return idx, w
         if row_major:
             return ttnn.to_layout(idx, ttnn.ROW_MAJOR_LAYOUT), ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT)
         S = x.shape[2]
@@ -379,7 +382,8 @@ class TtMoE:
 
     def _call_ag(self, x):
         """All-gather block: x [1,1,S,H] TILE -> [1,1,S,H] TILE (replicated over TP)."""
-        idx4, w_rm = self.gate(x, row_major=True)
+        tiles = self.ag.tile_topk and self.ag.rows > 1
+        idx4, w_rm = self.gate(x, row_major=not tiles, tiles=tiles)
         x_rm = self.ag.to_rm(x)
         gx, _, _ = self.ag.gather(x_rm, idx4, w_rm)
         gathered = self.ag.rows > 1  # one mesh row: gather returns x_rm / idx / w themselves (used until the reduce)

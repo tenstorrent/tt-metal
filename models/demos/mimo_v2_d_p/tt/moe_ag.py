@@ -208,6 +208,12 @@ class MoeAgBlock:
             self.gx = _dram(mesh_device, [1, 1, T * self.xppr, H // self.xppr])
             self.gidx = _dram(mesh_device, [1, 1, T, k], ttnn.uint16)
             self.gw = _dram(mesh_device, [1, 1, T, k])
+        # top-k idx / w gathered as tiles, untilized after the gather: high_bw_all_gather costs per page, and S rows of
+        # K = 8 values are S pages (~80 us at 2 links) where S / 32 tiles move in ~14 us (+ ~10 us more untilize)
+        self.tile_topk = options.moe_ag_tile_topk
+        if rows > 1 and self.tile_topk:
+            self.gidx_t = _dram(mesh_device, [1, 1, T, k], ttnn.uint16, ttnn.TILE_LAYOUT)
+            self.gw_t = _dram(mesh_device, [1, 1, T, k], ttnn.bfloat16, ttnn.TILE_LAYOUT)
         self.plan_op = RoutePlan(mesh_device, tokens=T, k=k, n_global=n_global, gids=gids, rows=buf_rows)
         self.info = chip_info(mesh_device, S)
         split = rows == 2
@@ -260,13 +266,20 @@ class MoeAgBlock:
         return untilize_x(x) if self.xppr > 1 else ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     def gather(self, x_rm, idx, w):
-        """x_rm (``to_rm``), idx [1, 1, S, K] uint16 RM, w [1, 1, S, K] bf16 RM -> the column's T tokens."""
+        """x_rm (``to_rm``), idx [1, 1, S, K] uint16, w [1, 1, S, K] bf16 (RM, or TILE with ``tile_topk``) -> the
+        column's T tokens (idx / w row major)."""
+        rm = lambda t: ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT) if t.layout == ttnn.TILE_LAYOUT else t
         if self.rows == 1:  # no dispatch axis: the chip's own tokens are the column's
-            self.gx, self.gidx, self.gw = x_rm, idx, w
-            return x_rm, idx, w
+            self.gx, self.gidx, self.gw = x_rm, rm(idx), rm(w)
+            return self.gx, self.gidx, self.gw
         self._ag(x_rm, self.gx, 0)
-        self._ag(idx, self.gidx, 0)
-        self._ag(w, self.gw, 0)
+        if idx.layout == ttnn.TILE_LAYOUT:
+            self._ag(idx, self.gidx_t, 0)
+            self._ag(w, self.gw_t, 0)
+            self.gidx, self.gw = rm(self.gidx_t), rm(self.gw_t)
+        else:
+            self._ag(idx, self.gidx, 0)
+            self._ag(w, self.gw, 0)
         return self.gx, self.gidx, self.gw
 
     def plan(self):

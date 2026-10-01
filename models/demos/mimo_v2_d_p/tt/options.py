@@ -44,6 +44,8 @@ class MiMoRuntimeOptions:
     hbw_links: int | None = None  # MIMO_HBW_LINKS
     # reduce_scatter / all_gather links of the > 2-row send-back and the "rsag" TP all-reduce (None: op default).
     moe_ag_rs_links: int | None = None  # MIMO_MOE_AG_RS_LINKS
+    # Gather the top-k idx / w as tiles and untilize after the gather (high_bw_all_gather costs per page).
+    moe_ag_tile_topk: bool = True  # MIMO_MOE_AG_TILE_TOPK
     # Gathered x pages per token row: 1 (one 8 KB page) or H / 1024 (2 KB pages over H / 1024 DRAM banks).
     moe_ag_x_pages_per_row: int = 1  # MIMO_MOE_AG_XPPR
     # TP all-reduce of the MoE output: "hbw" (high_bw_all_gather + one add / tilize pass) or "rsag" (reduce_scatter
@@ -111,6 +113,7 @@ class MiMoRuntimeOptions:
         kw["moe_ag_tp"] = env.get("MIMO_MOE_AG_TP")
         kw["moe_ag_y_row_major"] = flag("MIMO_MOE_AG_YRM", True)
         kw["moe_ag_fused_send_back"] = flag("MIMO_MOE_AG_FUSED_SB", True)
+        kw["moe_ag_tile_topk"] = flag("MIMO_MOE_AG_TILE_TOPK", True)
         kw["untilize_width"] = int(env.get("MIMO_UA_W", "32"))
         root = env.get("MIMO_TTNN_CACHE")
         kw["ttnn_cache"] = root not in ("0", "off", "none", "")
