@@ -509,3 +509,25 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gotcha: with BRINGUP_TASK set but BRINGUP_RESULTS_DIR unset, metrics land in generated/bringup_adhoc/K.3.json, not
   bringup/results/ (the orchestrator copies them).
 - Re-run: the brief's gate command; `XING_KV_CACHE_DTYPE=bf16` for the bf16 comparison.
+
+## Settings audit (Z.1): every switch now in `tt/settings.py` (`Settings("XING_", ...)`, behaviour unchanged)
+| switch (env) | default | was before |
+|---|---|---|
+| KV_CACHE_DTYPE (XING_KV_CACHE_DTYPE) | bfp8 | tt/attention.py kv_cache_dtype env read (spec serving.kv_dtype: bfp8) |
+| MLA_K_CHUNK | 256 | tt/attention.py K_CHUNK |
+| MLA_Q_CHUNK | 0 = 64 at HiFi2 / 32 at HiFi4 | tt/attention.py sdpa_q_chunk |
+| MLA_SDPA_FIDELITY | HiFi2 | tt/attention.py sdpa_fidelity |
+| MLA_SDPA | fork | tt/attention.py sdpa_impl (fp32 dest follows it) |
+| MLA_EXP_APPROX | False | tt/attention.py ring_mla call (`== "1"`) |
+| HC_IMPL | fused | tt/mhc.py |
+| RESIDUAL_MIX | fused | tt/residual.py |
+| MATMUL_FIDELITY (new name, no env before) | HiFi4 | literal `MathFidelity.HiFi4` in attention (ckc), q_a, norm, mhc, mlp, residual |
+| EXPERTS_MODE | unified | tt/experts.py, hooks.perf_settings |
+| EXPERTS_FIDELITY | hifi2 | tt/experts.py |
+| HYBRID (BRINGUP_HYBRID) | False | hooks.device_model |
+| BRINGUP_SPEC_SET (BRINGUP_SPEC, presence only) | False | tt/runners/adapter.py |
+| HF_MODEL (PREFILL_HF_MODEL) / LAYERS (PREFILL_XING_LAYERS) / TTNN_CACHE (PREFILL_TTNN_CACHE) | "" / "" / @default (= adapter ttnn_cache_default) | tt/runners/adapter.py |
+
+`hooks.settings()` returns `settings.all()`. Left as literals (constants of the math / not owner-tunable, unclear): fp32_dest_acc_en / packer_l1_acc
+in the compute configs, expert weights bfp8_b, num_links (arch-derived), bf16 activations.
+Fork env knobs (RMS_*, MHC_PRE_KERNEL_DEFINES, TT_EXP_SDPA_MUX_*, DS_NO_WRITER_MCAST) are perf/trace only, marked `diagnostic`; none changes what an op computes, so no op argument added.
