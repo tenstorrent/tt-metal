@@ -667,6 +667,36 @@ _GAP_MULT = 3
 # it scales with what the caller already said the work is worth.
 _HARD_CEILING_MULT = 4
 
+# WHICH WATCHDOG FIRED IS A FACT THE CALLER NEEDS, NOT PROSE.
+#
+# _execute kills for two reasons that mean opposite things: a STALL (no progress — a hang, a livelock,
+# a deadlocked device) and the CEILING behind it (still making progress, just slower than the budget
+# allows). Both raise TracyHangError, so a caller that only sees the type cannot tell a dead board
+# from a model that needs more time. perf_test_gen's verdict reported BOTH as
+# "device hung capturing the module's forward": Qwen-Image-Edit overran a 3600s ceiling three times
+# (3645s, <=3681s, and a third at the same mark) while writing device output every 150s, and each
+# attempt was reported as a hang — so three attempts' worth of evidence said nothing, and the perf
+# test was regenerated three times to fix a test that was never wrong.
+#
+# These prefixes are what _kill_and_raise writes AND what kill_kind reads back, so the wording cannot
+# drift from the classification the way a second copy of the phrase would.
+KILL_STALL = "made no forward progress"
+KILL_CEILING = "exceeded its budget"
+KILL_KINDS = (KILL_STALL, KILL_CEILING)
+
+
+def kill_kind(text) -> str:
+    """Which watchdog killed the run: KILL_STALL, KILL_CEILING, or "" when the text says neither.
+
+    Single owner of the question. Callers branch on the answer rather than matching prose, so a
+    reworded reason changes one constant instead of silently un-matching every reader."""
+    s = str(text or "")
+    for kind in KILL_KINDS:
+        if kind in s:
+            return kind
+    return ""
+
+
 # HOW LONG A STEP MAY TAKE, WHEN NOBODY CAN KNOW IN ADVANCE.
 #
 # Every budget in this tree started as a number someone typed for the step they had in front of them,
@@ -1668,7 +1698,7 @@ def _execute(
             _stall_limit = _watch.limit()
             if stall_timeout_s and now - last_progress >= _stall_limit:
                 _kill_and_raise(
-                    f"made no forward progress for {int(_stall_limit)}s -- no log growth, no syscalls, "
+                    f"{KILL_STALL} for {int(_stall_limit)}s -- no log growth, no syscalls, "
                     f"no bytes and an unchanged stack. CPU alone is not progress; a livelock has "
                     f"plenty of it. Process group killed"
                 )
@@ -1702,9 +1732,10 @@ def _execute(
             # wrong costs one attempt, so it can be set low enough to matter.
             if timeout_s and now - start >= timeout_s * _HARD_CEILING_MULT:
                 _kill_and_raise(
-                    f"exceeded {int(timeout_s * _HARD_CEILING_MULT)}s -- {_HARD_CEILING_MULT}x its "
-                    f"{int(timeout_s)}s budget. It was still moving, so this is the ceiling behind "
-                    f"the stall detector, not a stall: the attempt is failed and may be retried"
+                    f"{KILL_CEILING}: {int(now - start)}s of a {int(timeout_s * _HARD_CEILING_MULT)}s "
+                    f"ceiling ({_HARD_CEILING_MULT}x its {int(timeout_s)}s budget). It was still "
+                    f"moving, so this is the ceiling behind the stall detector, not a stall: the "
+                    f"attempt is failed and may be retried"
                 )
 
 

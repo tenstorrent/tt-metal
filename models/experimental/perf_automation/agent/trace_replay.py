@@ -60,7 +60,7 @@ _REPLAY_ITERS = max(1, int(os.environ.get("TT_TRACE_REPLAY_ITERS", "16")))
 # as `stall_s=`, the no-progress detector's window, not an allowance for the work. Sizing a
 # measurement from it would have cut sample counts in the optimize domain, where it is routinely set,
 # for a reason that has nothing to do with how long the measurement may take.
-_REPLAY_BUDGET_ENVS = ("PERF_MCP_VALIDATE_TIMEOUT", "PERF_MCP_MEASURE_BACKSTOP")
+_REPLAY_BUDGET_ENVS = ("TT_PERF_REPLAY_BUDGET_S", "PERF_MCP_VALIDATE_TIMEOUT", "PERF_MCP_MEASURE_BACKSTOP")
 _MIN_REPLAY_ITERS = 2  # an average needs two; dimensionless, so it assumes nothing about the model
 
 
@@ -74,6 +74,31 @@ def _measurement_budget_s(stages=1) -> float:
         if v > 0:
             return v / max(1, int(stages or 1))
     return 0.0
+
+
+# WHAT A STAGE SPENDS BEFORE ITS FIRST REPLAY, AND CANNOT NOT SPEND.
+#
+# Every stage runs its step in full five times before a single replay is timed: once for
+# _count_op_dispatches ("Run `fn` once"), _WARMUP_ITERS times inside _capture_step_trace's _warm, and
+# once more inside the capture itself. _affordable_iters only ever sizes the REPLAY count, so those
+# five are not negotiable -- and a budget handed out as if they were free is overspent before the
+# sizing is consulted. On Qwen-Image-Edit's denoise (119.9s a step) they are 599s of a stage's share.
+_FIXED_STEP_CALLS = 1 + _WARMUP_ITERS + 1
+
+
+def _replay_share(budget_s, per_iter_s) -> float:
+    """What is left of a stage's budget once its unavoidable pre-replay executions are paid for.
+
+    0 budget means "nothing stated" to _affordable_iters, which then honours the request in full, so
+    an unstated budget must stay exactly 0 here rather than becoming a tiny positive number."""
+    try:
+        budget_s = float(budget_s or 0.0)
+        per_iter_s = float(per_iter_s or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if budget_s <= 0 or per_iter_s <= 0:
+        return budget_s if budget_s > 0 else 0.0
+    return max(0.0, budget_s - _FIXED_STEP_CALLS * per_iter_s)
 
 
 def _affordable_iters(requested, per_iter_s, budget_s) -> int:
@@ -252,7 +277,7 @@ def _replay_1cq(device, tid, iters, budget_s=0.0):
     with _Alive("replay 1"):
         ttnn.synchronize_device(device)
     one_s = time.perf_counter() - t1
-    n = _affordable_iters(iters, one_s, budget_s)
+    n = _affordable_iters(iters, one_s, _replay_share(budget_s, one_s))
     print("TRACE_STAGE_REPLAYS=%d of %d requested (%.1fs each)" % (n, iters, one_s), flush=True)
     if n <= 1:
         return one_s
@@ -447,7 +472,7 @@ def _measure_native(device, stage, budget_s=0.0):
     _t1 = time.perf_counter()
     stage.step()
     _one = time.perf_counter() - _t1
-    _n = _affordable_iters(_REPLAY_ITERS, _one, budget_s)
+    _n = _affordable_iters(_REPLAY_ITERS, _one, _replay_share(budget_s, _one))
     print("TRACE_STAGE_REPLAYS=%d of %d requested (%.1fs each)" % (_n, _REPLAY_ITERS, _one), flush=True)
     _iterate(stage.step, max(0, _n - 1), stage.name)
     with _Alive(stage.name):

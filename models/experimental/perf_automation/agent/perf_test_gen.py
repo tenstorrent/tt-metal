@@ -544,6 +544,18 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
         # measure_runs -> probes.make_run_profiled), so that only made validation 32x slower.
         env.setdefault("TT_PERF_OSL_TOKENS", "4")
         env.pop("TT_METAL_DEVICE_PROFILER", None)
+        # TELL THE CHILD THE BUDGET IT IS BEING HELD TO.
+        #
+        # trace_replay already sizes its replay count to a budget (_measurement_budget_s ->
+        # _affordable_iters, fair-shared across the stages it is about to measure), and it was never
+        # given one: neither name in _REPLAY_BUDGET_ENVS reached the child, so the budget read as 0,
+        # sizing was skipped, and every stage replayed the full requested count regardless of cost.
+        # Qwen-Image-Edit then needed 5529s of replay against a 3600s ceiling and was killed three
+        # times in `denoise`, the stage where the cumulative total crosses it.
+        #
+        # The value is the ceiling that will actually kill the run, not the soft budget, because that
+        # is the number the child has to fit inside. setdefault, so an operator's own value wins.
+        env.setdefault("TT_PERF_REPLAY_BUDGET_S", str(max(1, int(timeout_s * _HARD_CEILING_MULT()))))
         env.update(ev)
         from . import probes as _pr
 
@@ -712,6 +724,111 @@ def signal_note(rc) -> str:
     except (ValueError, AttributeError):
         name = "signal %d" % -n
     return "terminated by %s (rc=%d)" % (name, n)
+
+
+def _probes():
+    """The probes module, or None. probes pulls in the device layer, so this file imports it inside
+    functions; this is the ONE place that does so for the watchdog's vocabulary, rather than three
+    accessors each repeating the import and its fallback."""
+    try:
+        from . import probes as _pr
+
+        return _pr
+    except Exception:  # noqa: BLE001 -- the questions below all have a safe answer without it
+        return None
+
+
+def _KILL_CEILING() -> str:
+    """probes.KILL_CEILING, or a sentinel that matches nothing, so an unavailable probes never
+    classifies a kill as a budget overrun and silently grants it a free retry."""
+    _pr = _probes()
+    return _pr.KILL_CEILING if _pr is not None else "\0"
+
+
+# HOW FAR THE BUDGET MAY GROW ON EVIDENCE, AND NO FURTHER.
+#
+# A ceiling overrun says the budget was too small, not that the code is wrong, so the budget grows.
+# It grows a bounded number of times and never past the cap, because the ceiling exists to kill work
+# that progresses forever (see probes._HARD_CEILING_MULT): a raise with no limit would restore exactly
+# the "softened to a warning, which nothing acts on" backstop that ceiling replaced.
+_BUDGET_RAISE_LIMIT = int(os.environ.get("PERF_MCP_BUDGET_RAISE_LIMIT", "2") or "2")
+_BUDGET_RAISE_MULT = 2
+_BUDGET_RAISE_CAP_S = int(os.environ.get("PERF_MCP_BUDGET_RAISE_CAP_SEC", "7200") or "7200")
+_VALIDATE_TIMEOUT_ENV = "PERF_MCP_VALIDATE_TIMEOUT"
+_VALIDATE_TIMEOUT_DEFAULT = 900
+
+
+def _validate_timeout_s() -> int:
+    """The per-attempt validation budget. ONE reader, so a raise is visible to every later attempt."""
+    try:
+        return max(
+            1, int(os.environ.get(_VALIDATE_TIMEOUT_ENV, str(_VALIDATE_TIMEOUT_DEFAULT)) or _VALIDATE_TIMEOUT_DEFAULT)
+        )
+    except ValueError:
+        return _VALIDATE_TIMEOUT_DEFAULT
+
+
+def _raise_validate_budget() -> tuple[int, int]:
+    """Grow the validation budget for the next attempt; return (was, now).
+
+    probes.sized_budget owns "a measurement becomes a budget" -- headroom over an observed cost, never
+    below a floor, capped. The observed cost here is the budget the run already exhausted, which is a
+    lower bound on what it needs; the multiple supplies the headroom and the cap supplies the limit."""
+    was = _validate_timeout_s()
+    _pr = _probes()
+    try:
+        now = int(_pr.sized_budget(was, floor_s=was, mult=_BUDGET_RAISE_MULT, ceiling_s=_BUDGET_RAISE_CAP_S))
+    except Exception:  # noqa: BLE001 -- without probes there is no raise, only the original budget
+        now = was
+    if now > was:
+        os.environ[_VALIDATE_TIMEOUT_ENV] = str(now)
+    return was, now
+
+
+def _KILL_STALL() -> str:
+    """probes.KILL_STALL, or a sentinel that matches nothing."""
+    _pr = _probes()
+    return _pr.KILL_STALL if _pr is not None else "\0"
+
+
+def _HARD_CEILING_MULT() -> int:
+    """The multiple of the budget at which the run is killed. probes owns it; without it the soft
+    budget is the safe assumption, since under-sizing only costs replay samples."""
+    _pr = _probes()
+    try:
+        return max(1, int(_pr._HARD_CEILING_MULT)) if _pr is not None else 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def _kill_kind(text) -> str:
+    """Which watchdog killed a run, per probes.kill_kind. "" when it cannot be told."""
+    _pr = _probes()
+    try:
+        return _pr.kill_kind(text) if _pr is not None else ""
+    except Exception:  # noqa: BLE001 -- an unclassifiable kill is still a kill
+        return ""
+
+
+def _wedge_detail(out: str) -> str:
+    """The WEDGE detail, saying WHICH watchdog fired rather than calling every kill a hang.
+
+    `rc == 124` was reported as "device hung capturing the module's forward" whatever caused it, so a
+    run killed for merely being slower than its budget was indistinguishable from a dead board. The
+    two reasons want opposite responses -- a hang means the code or the device is wrong, a ceiling
+    overrun means the budget is too small for this model -- and a reader who cannot tell them apart
+    retries the wrong thing. probes owns both reasons and the classifier; this only reports it."""
+    err = _extract_error(out) or ""
+    kind = _kill_kind(out) or _kill_kind(err)
+    if kind == _KILL_CEILING():
+        return (
+            "BUDGET: the run was killed for exceeding its time ceiling while still making progress -- "
+            "NOT a hang. Raise the budget (PERF_MCP_VALIDATE_TIMEOUT) or measure fewer replay "
+            "iterations; the test itself ran. " + err
+        ).strip()
+    if kind == _KILL_STALL():
+        return ("WEDGE: the device %s and the run was killed. " % _KILL_STALL() + err).strip()
+    return "WEDGE: " + (err or "killed with no reason recorded; the watchdog did not say which fired")
 
 
 def killed_verdict(rc, out):
@@ -955,7 +1072,7 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
     Measurement is trace+1cq end to end.
     Records what it saw in the trace_caps sidecar either way. Second return value is the failure detail."""
     node_abs = f"{out_path}::test_{task}_perf"
-    vt = int(os.environ.get("PERF_MCP_VALIDATE_TIMEOUT", "900") or "900")
+    vt = _validate_timeout_s()
     if component:
         rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_TRACE": "1"}, timeout_s=vt)
         if rc1 is None:
@@ -986,7 +1103,7 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
             )
             return "ok_marker", ""
         if rc1 == 124 or "WEDGE" in out1:
-            return "invalid", "WEDGE: " + (_extract_error(out1) or "device hung capturing the module's forward")
+            return "invalid", _wedge_detail(out1)
         _killed = killed_verdict(rc1, out1)
         if _killed:
             return _killed
@@ -1730,6 +1847,7 @@ def generate_perf_test(
     prev_draft = None
     stall = 0
     trace_wedges = 0
+    budget_raises = 0
     while stall < _STALL_LIMIT:
         content = _strip_fence(gen(prompt + feedback) or "")
         if "def test_" not in content or "ttnn" not in content:
@@ -1821,11 +1939,41 @@ def generate_perf_test(
                 return None
             feedback = _correction_feedback(_COMPONENT_WEDGE_REASON, failure, prev_draft)
             continue
+        # A TEST THAT RAN OUT OF TIME IS NOT A TEST THAT IS WRONG.
+        #
+        # The ceiling kills work that is still progressing, so the draft that was running is not at
+        # fault and regenerating it cannot help: the next draft measures the same stages at the same
+        # cost and dies at the same mark. Qwen-Image-Edit spent all three regenerations that way.
+        # Sizing the replay count to the budget (TT_PERF_REPLAY_BUDGET_S, set in _run_perf_node) is
+        # what normally prevents this; when even the floor of _MIN_REPLAY_ITERS does not fit, the
+        # budget itself is too small and nothing the generator writes will change that.
+        #
+        # So: raise the budget from the measurement, retry the SAME draft, and do not spend a
+        # regeneration. Bounded by _BUDGET_RAISE_LIMIT and by sized_budget's own cap, because an
+        # unbounded raise is how the livelock backstop stops being one.
+        if _kill_kind(failure) == _KILL_CEILING() and budget_raises < _BUDGET_RAISE_LIMIT:
+            budget_raises += 1
+            _was, _now = _raise_validate_budget()
+            print(
+                "      · perf-test budget raise %d/%d: the draft ran out of TIME, not wedged -- "
+                "%ds -> %ds, retrying the SAME draft" % (budget_raises, _BUDGET_RAISE_LIMIT, _was, _now),
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+
         stall += 1
-        if "WEDGE" in failure:
+        # THE OPERATOR-FACING LINE IS THE ONLY ONE THAT SURVIVES. The detail lives in the attempt's
+        # perf-node log, which is deleted when the node rotates, so a fixed summary here means the
+        # reason is gone for good -- which is how three identical ceiling overruns were each recorded
+        # as "wedged on a non-capturable step" and nothing was learnt from any of them.
+        _first = ((_extract_error(failure).splitlines() or [""])[0] or "").strip()
+        if _kill_kind(failure) == _KILL_CEILING():
+            _why = "ran out of TIME, not wedged -- the budget is already at its cap"
+        elif "WEDGE" in failure:
             _why = "device wedged on a non-capturable step — reset + regenerating"
         else:
-            _why = ((_extract_error(failure).splitlines() or [""])[0] or "did not run the full pipeline").strip()[:80]
+            _why = (_first or "did not run the full pipeline")[:80]
         print(f"      · perf-test regen {stall}/{_STALL_LIMIT}: {_why}", file=sys.stderr, flush=True)
         reason = (
             "the module perf test produced no TRACE_PER_TOKEN_MS — implement the trace-replay block so "
