@@ -29,7 +29,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
-from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
+from models.tt_transformers.tt.prefetcher import ARCH_CONFIG, is_prefetcher_supported
 
 
 class TokenAccuracy:
@@ -937,8 +937,16 @@ def test_demo_text(
     if use_prefetcher and not is_blackhole():
         logger.warning("--use_prefetcher requested but DRAM prefetcher is only supported on Blackhole; disabling.")
         use_prefetcher = False
+    # Prefetcher() picks the first legal receiver count that fits; gate on the same search instead of only the
+    # 16-core default ring (Llama-3.1-8B on one P150 needs the 64-core ring).
     use_prefetcher = (
-        use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
+        use_prefetcher
+        and any(
+            is_prefetcher_supported(hf_dir, num_devices, r * len(ARCH_CONFIG["blackhole"]["dram_banks"]))
+            for r in ARCH_CONFIG["blackhole"]["legal_receiver_cores"]
+        )
+        and "Llama" in hf_dir
+        and "8B" in hf_dir
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
     use_hf_rope = request.config.getoption("--use_hf_rope")

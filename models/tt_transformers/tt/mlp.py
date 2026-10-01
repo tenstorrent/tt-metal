@@ -101,6 +101,59 @@ class MLP(LightweightModule):
         self.w2 = as_sharded_tensor("w2_sharded", self.ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", self.ff1_3_dtype, dims=w1_dims)
 
+        # Decode weights for the DRAM-core tensor prefetcher (receiver-contiguous layout, see dram_core_prefetch.py)
+        self.dcp = getattr(args, "dram_core_prefetch", None)
+        if self.dcp is not None:
+
+            def rc_weight(name, dtype, dims):
+                raw = pad_hidden_dim(torch_weight(name), dims[-1]).unsqueeze(0).unsqueeze(0)
+                return self.dcp.make_weight(raw, dtype, cache_name(f"{name}_rc64{hidden_dim_string}"))
+
+            self.w1_rc = rc_weight("w1", self.ff1_3_dtype, w1_dims)
+            self.w3_rc = rc_weight("w3", self.ff1_3_dtype, w1_dims)
+            self.w2_rc = rc_weight("w2", self.ff2_dtype, w2_dims)
+            self.dcp.register("w1", self.w1_rc, args.dim, args.hidden_dim)
+            self.dcp.register("w3", self.w3_rc, args.dim, args.hidden_dim)
+            self.dcp.register("w2", self.w2_rc, args.hidden_dim, args.dim)
+
+        # Decode-only hidden-dim chunks for the DRAM prefetcher when a whole w2 block does not fit L1 (see
+        # ModelArgs.mlp_hidden_split_for_prefetcher). Prefill keeps using the unsplit tensors above.
+        self.hidden_split = args.mlp_hidden_split_for_prefetcher(prefetcher)
+        self.w_split = []
+        if self.hidden_split:
+            assert not args.is_galaxy and args.num_devices == 1, "MLP hidden split is only wired for one device"
+
+            def as_split_tensor(name, dtype, start, size, split_cols):
+                raw = torch_weight(name[:2])  # [dim, hidden] for w1/w3, [hidden, dim] for w2
+                raw = pad_hidden_dim(raw, -1 if split_cols else -2)
+                chunk = raw[:, start : start + size] if split_cols else raw[start : start + size, :]
+                mem = (
+                    args.create_dram_sharded_mem_config(args.dim, size)
+                    if split_cols
+                    else args.create_dram_sharded_mem_config(size, args.dim)
+                )
+                return ttnn.as_tensor(
+                    chunk.unsqueeze(0).unsqueeze(0),
+                    dtype=dtype,
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-2, -1), mesh_shape=args.cluster_shape),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=mem,
+                    cache_file_name=cache_name(f"{name}.split_{start}_{size}"),
+                )
+
+            start = 0
+            for size in self.hidden_split:
+                self.w_split.append(
+                    {
+                        "h": size,
+                        "w1": as_split_tensor("w1_sharded", self.ff1_3_dtype, start, size, True),
+                        "w3": as_split_tensor("w3_sharded", self.ff1_3_dtype, start, size, True),
+                        "w2": as_split_tensor("w2_sharded", self.ff2_dtype, start, size, False),
+                    }
+                )
+                start += size
+
         # Default activation is SILU
         self.activation_type = (
             args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
@@ -110,6 +163,13 @@ class MLP(LightweightModule):
         if self.prefetcher is not None:
 
             def register_weights():
+                if self.w_split:
+                    # Same order the split decode path consumes them: per chunk w1, w3, then w2
+                    for ws in self.w_split:
+                        self.prefetcher.insert_tensor(ws["w1"])
+                        self.prefetcher.insert_tensor(ws["w3"])
+                        self.prefetcher.insert_tensor(ws["w2"])
+                    return
                 self.prefetcher.insert_tensor(self.w1)
                 self.prefetcher.insert_tensor(self.w3)
                 self.prefetcher.insert_tensor(self.w2)
@@ -139,6 +199,7 @@ class MLP(LightweightModule):
         Llama-3.2-1B-Instruct); the multi-chip replicated -> 2D-sharded mesh
         projection is not inserted (a no-op on the 1x1 transfer case).
         """
+        assert not self.w_split, "MLP.update does not yet refresh the prefetcher hidden-dim split copies of w1/w2/w3"
         assert self.args.num_devices == 1, (
             f"MLP.update for num_devices > 1 is not yet implemented "
             f"(got num_devices={self.args.num_devices}); w1/w2/w3 are "
@@ -159,6 +220,66 @@ class MLP(LightweightModule):
         copy_to_buffer(w1_internal, self.w1, self.ff1_3_dtype)
         copy_to_buffer(w3_internal, self.w3, self.ff1_3_dtype)
         copy_to_buffer(w2_internal, self.w2, self.ff2_dtype)
+
+    def _forward_decode_hidden_split(self, x, activation_dtype, cfg_ff1_3, cfg_ff2, w2_output_dtype):
+        """Decode MLP through the DRAM prefetcher ring with the hidden dim in chunks: per chunk
+        silu(x @ w1_c) * (x @ w3_c) @ w2_c, partial outputs summed. Single device only (no CCL)."""
+        pf = self.prefetcher
+        out = None
+        for ws in self.w_split:
+            h = ws["h"]
+            pc13 = self.args.get_mlp_ff1_3_prg_config(Mode.DECODE, 1, pf, hidden_chunk=h)
+            mem13 = self.args.get_mlp_ff1_3_mem_config(Mode.DECODE, pf, hidden_chunk=h)
+            w1_out = ttnn.linear(
+                x,
+                ws["w1"],
+                dtype=activation_dtype or ttnn.bfloat16,
+                compute_kernel_config=cfg_ff1_3,
+                program_config=pc13,
+                memory_config=mem13,
+                global_cb=pf.global_cb,
+                sub_device_id=pf.worker_sub_device_id,
+            )
+            w3_out = ttnn.linear(
+                x,
+                ws["w3"],
+                dtype=activation_dtype or ttnn.bfloat16,
+                compute_kernel_config=cfg_ff1_3,
+                program_config=pc13,
+                memory_config=mem13,
+                global_cb=pf.global_cb,
+                sub_device_id=pf.worker_sub_device_id,
+            )
+            w2_in = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
+            )
+            ttnn.deallocate(w3_out)
+            ttnn.deallocate(w1_out)
+            w2_out = ttnn.linear(
+                w2_in,
+                ws["w2"],
+                compute_kernel_config=cfg_ff2,
+                dtype=w2_output_dtype,
+                program_config=self.args.get_mlp_ff2_prg_config(Mode.DECODE, 1, pf, hidden_chunk=h),
+                memory_config=self.args.get_mlp_ff2_mem_config(Mode.DECODE, pf),
+                global_cb=pf.global_cb,
+                sub_device_id=pf.worker_sub_device_id,
+            )
+            ttnn.deallocate(w2_in)
+            if out is None:
+                out = w2_out
+            else:
+                summed = ttnn.add(out, w2_out, memory_config=out.memory_config())
+                ttnn.deallocate(out)
+                ttnn.deallocate(w2_out)
+                out = summed
+        ttnn.deallocate(x)
+        out = ttnn.to_memory_config(out, self.args.get_mlp_output_mem_config(Mode.DECODE, pf))
+        return out
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
@@ -196,6 +317,54 @@ class MLP(LightweightModule):
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
+        if mode == Mode.DECODE and self.w_split:
+            li_ff2_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
+            )
+            return self._forward_decode_hidden_split(
+                x,
+                activation_dtype,
+                li_ff1_3_compute_kernel_cfg,
+                li_ff2_compute_kernel_cfg,
+                activation_dtype or ttnn.bfloat16,
+            )
+
+        if mode == Mode.DECODE and not TG and self.prefetcher is None and self.dcp is not None:
+            li_ff2_cfg = self.decoders_optimizations.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
+            )
+            w1_out = self.dcp.linear(
+                x,
+                self.w1_rc,
+                self.dim,
+                self.args.hidden_dim,
+                activation_dtype or ttnn.bfloat16,
+                li_ff1_3_compute_kernel_cfg,
+            )
+            w3_out = self.dcp.linear(
+                x,
+                self.w3_rc,
+                self.dim,
+                self.args.hidden_dim,
+                activation_dtype or ttnn.bfloat16,
+                li_ff1_3_compute_kernel_cfg,
+            )
+            ttnn.deallocate(x)
+            w2_in = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
+            )
+            ttnn.deallocate(w3_out)
+            ttnn.deallocate(w1_out)
+            w2_out = self.dcp.linear(
+                w2_in, self.w2_rc, self.args.hidden_dim, self.dim, activation_dtype or ttnn.bfloat16, li_ff2_cfg
+            )
+            ttnn.deallocate(w2_in)
+            return ttnn.to_memory_config(w2_out, self.args.get_mlp_output_mem_config(mode, self.prefetcher))
+
         pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)

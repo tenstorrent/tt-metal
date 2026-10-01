@@ -905,6 +905,43 @@ class TTSampling(LightweightModule):
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
             x_untilized = self._untilize_for_argmax(x)
+            # Decode only (tt_out_tok is the decode token feedback buffer): prefill logits carry the last-token
+            # rows of every position in the final chunk and the host picks last_token_idx from them.
+            if (
+                tt_out_tok is not None
+                and self._argmax_valid_rows is not None
+                and x_untilized.shape[-2] > self._argmax_valid_rows
+            ):
+                rows = ttnn.slice(
+                    x_untilized,
+                    [0, 0, 0, 0],
+                    [x_untilized.shape[0], x_untilized.shape[1], self._argmax_valid_rows, x_untilized.shape[-1]],
+                    memory_config=x_untilized.memory_config(),
+                )
+                valid_tok = ttnn.argmax(rows, dim=-1, keepdim=False, sub_core_grids=self._force_argmax_sub_core_grids)
+                ttnn.deallocate(rows)
+                if self._argmax_pad_tokens is None:
+                    self._argmax_pad_tokens = ttnn.from_torch(
+                        torch.zeros(
+                            list(valid_tok.shape)[:-1] + [x_untilized.shape[-2] - self._argmax_valid_rows],
+                            dtype=torch.int32,
+                        ),
+                        dtype=valid_tok.dtype,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=self.mesh_device,
+                        memory_config=valid_tok.memory_config(),
+                    )
+                full_tok = ttnn.concat(
+                    [valid_tok, self._argmax_pad_tokens], dim=-1, memory_config=valid_tok.memory_config()
+                )
+                ttnn.deallocate(valid_tok)
+                if tt_out_tok is not None:
+                    ttnn.copy(ttnn.reshape(full_tok, tt_out_tok.shape), tt_out_tok)
+                    ttnn.deallocate(full_tok)
+                else:
+                    tt_out_tok = full_tok
+                self.tt_log_probs = None
+                return tt_out_tok, self.tt_log_probs
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,

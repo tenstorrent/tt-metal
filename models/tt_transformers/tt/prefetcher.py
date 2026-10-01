@@ -78,7 +78,9 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
         return False
     TILE_SIZE, MAX_CB_PAGES = 32, 65535
     BYTES_PER_TILE_BFP8 = 1088  # bfloat8_b tile size in bytes
-    MAX_L1_PER_BANK = {4: 1000000, 8: 1000000}.get(num_devices, 850000)
+    # Largest per-receiver block the global CB must hold. Llama-3.1-8B on one P150 with 64 receivers needs
+    # 975 KB (w2: 448x128 tiles / 64 x 1088 B) with zero ring padding; the multi-device limit already allows it.
+    MAX_L1_PER_BANK = {1: 1000000, 4: 1000000, 8: 1000000}.get(num_devices, 850000)
     kv_heads_divisible = VERIFIED_MODEL_CONFIGS[verified_model_name]["n_kv_heads"] % num_devices == 0
     dim, hidden_dim = (
         VERIFIED_MODEL_CONFIGS[verified_model_name]["dim"],
@@ -298,7 +300,25 @@ class Prefetcher(LightweightModule):
                 for s in self.core_config.sender_cores(active=True)
             ]
             sender_set = ttnn.CoreRangeSet(sender_cores)
-            self.all_worker_cores_range_set = full_grid.subtract(sender_set)
+            # Build the worker sub-device as single-row segments rather than the rectangles that
+            # full_grid.subtract(sender_set) returns. The gather_in0 matmul factory intersects its (receiver-core)
+            # grid with each sub-device range and, for a 2D range, takes the intersection's BOUNDING BOX, which
+            # pulls non-receiver rows into the global-CB circular buffer ("Specified cores are not contained in
+            # associated GlobalCircularBuffer"). Row segments intersect exactly.
+            senders_xy = {(s.x, s.y) for s in self.core_config.sender_cores(active=True)}
+            row_ranges = []
+            for y in range(grid.y):
+                x = 0
+                while x < grid.x:
+                    if (x, y) in senders_xy:
+                        x += 1
+                        continue
+                    x0 = x
+                    while x < grid.x and (x, y) not in senders_xy:
+                        x += 1
+                    row_ranges.append(ttnn.CoreRange(ttnn.CoreCoord(x0, y), ttnn.CoreCoord(x - 1, y)))
+            self.all_worker_cores_range_set = ttnn.CoreRangeSet(row_ranges)
+            del full_grid, sender_set
         else:
             left_range = self.core_config._receiver_cols["left"]
             right_range = self.core_config._receiver_cols["right"]

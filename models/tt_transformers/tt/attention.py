@@ -293,6 +293,12 @@ class Attention(LightweightModule):
             ),
             cache_file_name=cache_name("wqkv_sharded_2d"),
         )
+        self.dcp = getattr(configuration, "dram_core_prefetch", None)
+        if self.dcp is not None:
+            self.wqkv_rc = self.dcp.make_weight(qkv_cat, self.wqkv_dtype, cache_name("wqkv_rc64"))
+            self.dcp.register(
+                "wqkv", self.wqkv_rc, configuration.dim, configuration.qkv_size // configuration.num_devices
+            )
 
         def norm_reshard(x, norm, mode, norm_config):
             """Hack until RMSNorm supports height-sharded output config"""
@@ -385,6 +391,15 @@ class Attention(LightweightModule):
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
+        if self.dcp is not None:
+            self.wo_rc = self.dcp.make_weight(pt_wo, self.wo_dtype, cache_name("wo_rc64"))
+            self.dcp.register(
+                "wo",
+                self.wo_rc,
+                (configuration.n_heads * configuration.head_dim) // configuration.num_devices,
+                configuration.dim,
+            )
+
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -743,6 +758,29 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype,
             )
             ttnn.deallocate(x_interleaved)
+        elif self.dcp is not None:
+            xqkv_fused_sharded = self.dcp.linear(
+                x,
+                self.wqkv_rc,
+                self.args.dim,
+                self.args.qkv_size // self.args.num_devices,
+                ttnn.bfloat16,
+                self.li_qkv_decode_compute_kernel_cfg,
+            )
+            if self.args.qkv_heads_aligned_output():
+                # ring output is 96 columns per core; one head (128) per core lets create_heads read it sharded
+                n_qkv = self.args.qkv_size // self.args.num_devices
+                heads_grid = ttnn.num_cores_to_corerangeset(
+                    n_qkv // self.head_dim, self.mesh_device.compute_with_storage_grid_size(), True
+                )
+                xqkv_fused_sharded = ttnn.to_memory_config(
+                    xqkv_fused_sharded,
+                    ttnn.MemoryConfig(
+                        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                        ttnn.BufferType.L1,
+                        ttnn.ShardSpec(heads_grid, [ttnn.TILE_SIZE, self.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+                    ),
+                )
         else:
             xqkv_fused_sharded = ttnn.linear(
                 x,
@@ -788,7 +826,18 @@ class Attention(LightweightModule):
             )
         else:
             # bfloat16 is required by nlp_create_qkv_heads_decode
-            if self.prefetcher is None:
+            # The ring layout puts 96-column shards on the 64 receiver cores; nlp_create_qkv_heads_decode reads
+            # sharded input by whole heads (128 columns) and produced wrong Q/K/V from it on one P150, so the
+            # single-device prefetcher path goes through interleaved like the non-prefetcher path does.
+            heads_aligned = (
+                self.prefetcher is None
+                and xqkv_fused_sharded.is_sharded()
+                and xqkv_fused_sharded.memory_config().shard_spec.shape[1] == self.head_dim
+                and xqkv_fused_sharded.dtype == ttnn.bfloat16
+            )
+            if heads_aligned:
+                xqkv_fused = xqkv_fused_sharded  # one head per shard: feed create_heads directly
+            elif self.prefetcher is None or self.args.num_devices == 1:
                 xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
                 ttnn.deallocate(xqkv_fused_sharded)
             else:
@@ -838,19 +887,29 @@ class Attention(LightweightModule):
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
 
-        if self.use_qk_fused:
-            ttnn.experimental.paged_fused_update_cache(
-                keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-            )
-        else:
-            ttnn.experimental.paged_update_cache(
-                keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-            )
-            ttnn.experimental.paged_update_cache(
-                values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-            )
-        ttnn.deallocate(k_heads_1BKD)
-        ttnn.deallocate(v_heads_1BKD)
+        # Fused KV append: the paged SDPA op inserts this token's K/V into the cache tile it reads anyway and
+        # writes it back, so the separate cache-update op (8.7 us + a launch per layer on P150) goes away.
+        fuse_kv_append = (
+            page_table is not None
+            and self.args.fuse_kv_append_in_sdpa()
+            and self.kv_cache_dtype in (ttnn.bfloat16, ttnn.bfloat8_b)
+            and self.sliding_window is None
+            and k_heads_1BKD.dtype == ttnn.bfloat16
+        )
+        if not fuse_kv_append:
+            if self.use_qk_fused:
+                ttnn.experimental.paged_fused_update_cache(
+                    keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+                )
+            else:
+                ttnn.experimental.paged_update_cache(
+                    keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+                )
+                ttnn.experimental.paged_update_cache(
+                    values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+                )
+            ttnn.deallocate(k_heads_1BKD)
+            ttnn.deallocate(v_heads_1BKD)
         # NOTE: Varying the batch size will result in slightly different outputs.
         # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
@@ -868,7 +927,12 @@ class Attention(LightweightModule):
                 program_config=sdpa_decode_prog_cfg,
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                k_new=k_heads_1BKD if fuse_kv_append else None,
+                v_new=v_heads_1BKD if fuse_kv_append else None,
             )
+            if fuse_kv_append:
+                ttnn.deallocate(k_heads_1BKD)
+                ttnn.deallocate(v_heads_1BKD)
         else:
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
                 q_heads_1BQD,
@@ -923,6 +987,18 @@ class Attention(LightweightModule):
                     num_workers_per_link=self.model_config["ATTN_AGMM_CONFIG"]["num_workers_per_link"],
                     num_buffers_per_channel=2,
                     subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+                )
+            elif self.args.num_devices == 1:
+                # Prefetcher on a single chip: nothing to gather, the concat_heads output already sits in the
+                # ring layout the global-CB matmul expects.
+                dense_out_sharded = ttnn.linear(
+                    attn_output_cat,
+                    self.wo_sharded_ring if self.prefetcher is not None else self.wo,
+                    memory_config=self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
+                    program_config=self.args.get_attn_all_gather_matmul_program_config(Mode.DECODE, self.prefetcher),
+                    compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
+                    global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                    sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 )
             else:
                 all_gather_output = ttnn.experimental.all_gather_async(
@@ -982,20 +1058,39 @@ class Attention(LightweightModule):
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
 
+            wo_input_mem_config = self.args.get_attn_wo_input_mem_config(Mode.DECODE)
+            attn_output_resharded = None
+            if wo_input_mem_config is not None and not self.TG:
+                # On one device tt_all_gather hands back attn_output_cat itself, which is freed below.
+                attn_output_resharded = ttnn.to_memory_config(attn_output, wo_input_mem_config)
+                attn_output = attn_output_resharded
+
             # TODO: Fix this once self.TG supports dram-sharded matmuls
-            dense_out_sharded = ttnn.linear(
-                attn_output,
-                self.wo,
-                core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
-                program_config=self.args.get_attn_wo_program_config(Mode.DECODE, 1, self.prefetcher),
-                memory_config=self.args.get_attn_wo_output_mem_config(Mode.DECODE, self.prefetcher),
-                dtype=ttnn.bfloat8_b if self.TG else None,
-                compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-            )
+            if self.dcp is not None and not self.TG:
+                dense_out_sharded = self.dcp.linear(
+                    attn_output,
+                    self.wo_rc,
+                    (self.n_heads * self.head_dim) // self.num_devices,
+                    self.args.dim,
+                    ttnn.bfloat16,
+                    self.li_o_decode_compute_kernel_cfg,
+                )
+            else:
+                dense_out_sharded = ttnn.linear(
+                    attn_output,
+                    self.wo,
+                    core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
+                    program_config=self.args.get_attn_wo_program_config(Mode.DECODE, 1, self.prefetcher),
+                    memory_config=self.args.get_attn_wo_output_mem_config(Mode.DECODE, self.prefetcher),
+                    dtype=ttnn.bfloat8_b if self.TG else None,
+                    compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
+                    global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                    sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+                )
 
             ttnn.deallocate(attn_output_cat)
+            if attn_output_resharded is not None:
+                ttnn.deallocate(attn_output_resharded)
 
             # All reduce
             dense_out_reduced = tt_all_reduce(
@@ -1291,7 +1386,7 @@ class Attention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
         # Non fused All Gather Matmul
-        if self.use_fused_all_gather_matmul:  # is true for Ring topology
+        if self.use_fused_all_gather_matmul and self.args.num_devices > 1:  # is true for Ring topology
             attn_output_11SH = ttnn.experimental.all_gather_async(
                 attn_output_11SH,
                 persistent_output_buffer=None,

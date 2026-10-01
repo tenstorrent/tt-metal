@@ -917,6 +917,9 @@ def create_tt_model(
         prefetcher=prefetcher,
         use_hf_rope=use_hf_rope,
     )
+    if prefetcher is not None:
+        split = tt_model_args.mlp_hidden_split_for_prefetcher(prefetcher)
+        prefetcher.num_tensors = 2 + 3 * (len(split) if split else 1)  # wqkv, wo + w1/w3/w2 per hidden chunk
 
     if num_layers is not None:
         tt_model_args.n_layers = num_layers

@@ -453,12 +453,18 @@ class Transformer(LightweightModule):
 
     def _apply_norm_and_lm_head(self, x):
         """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
-        x = self.norm(
-            x, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
-        )
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
-        if lm_head_input_mem_cfg.is_sharded():
-            x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
+        if getattr(self.args, "dram_core_prefetch", None) is not None:
+            # 32 rows: the decode (sharded) norm needs a few tiles of L1 per core, where the prefill interleaved
+            # norm wants >1 MB of CBs on one core and collides with the decode buffers kept in L1.
+            x = self.norm(x, mode=Mode.DECODE, norm_config=self.args.get_norm_config("lm_head", Mode.DECODE, None))
+            x = ttnn.to_memory_config(x, lm_head_input_mem_cfg)
+        else:
+            x = self.norm(
+                x, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
+            )
+            if lm_head_input_mem_cfg.is_sharded():
+                x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
         logits = self.lm_head(x)
         logits = self._apply_final_logit_softcapping(logits)
         logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -828,6 +834,8 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        if getattr(self.args, "dram_core_prefetch", None) is not None:
+            self.args.dram_core_prefetch.release()  # prefill needs the L1 the decode GCB occupies
         if page_tables_per_layer is None:
             # vLLM hybrid bridges (HybridAttentionForCausalLM subclasses) stash
             # the per-layer list on the model handle for the duration of a
@@ -1002,6 +1010,8 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        if getattr(self.args, "dram_core_prefetch", None) is not None:
+            self.args.dram_core_prefetch.ensure_built()  # first (eager) decode: GCB + DRAM-core streamer
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
 
@@ -1052,6 +1062,10 @@ class Transformer(LightweightModule):
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
 
+        if self.prefetcher is not None and tt_logits.is_sharded():
+            # On one device no all-gather ran, so the logits are still in the lm_head ring layout; the
+            # sub_core_grids untilize below needs an interleaved input.
+            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
         tt_logits = ttnn.untilize(
             tt_logits,
             use_multicore=True,
