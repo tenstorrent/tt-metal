@@ -84,7 +84,12 @@ WidthShardedAllReduceMeshWorkloadFactory::create_mesh_workload(
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
     auto scratch = make_scratch_tensor(tensor_args.input, operation_attributes.ring_size);
-    auto out_ready_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    // In L1_SMALL when the device reserves it, so the semaphore does not fragment L1.
+    const auto sem_buffer_type = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0
+                                     ? tt::tt_metal::BufferType::L1_SMALL
+                                     : tt::tt_metal::BufferType::L1;
+    auto out_ready_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
 
     tt::tt_metal::distributed::MeshWorkload workload;

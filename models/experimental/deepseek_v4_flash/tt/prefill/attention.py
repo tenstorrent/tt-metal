@@ -87,6 +87,11 @@ HEAVILY_COMPRESSED_ATTENTION = "heavily_compressed_attention"
 ALIGNMENT = 128
 _SDPA_CHUNK = 128
 
+# ``indexer_score_dsa`` keeps every index head resident, so its q and gate circular buffers are
+# ``index_n_heads * q_chunk_size`` rows (64 heads x 64 rows: ~1.3 MB of the core's L1). 32 halves them, which
+# leaves room for the L1 the decode model keeps on the same cores; the scores are identical.
+_INDEXER_PROGRAM_CONFIG = dict(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+
 # Gate logit for a slot that must get softmax weight 0 (window 0 of the first CSA chunk has no
 # previous window). Finite so ``exp(gate - max)`` underflows to exactly 0 instead of ``inf - inf``.
 _NO_WINDOW_GATE = -1.0e30
@@ -763,7 +768,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             weights,
             chunk_start_idx=entry_tiles,
             kv_len=kv_len,
-            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=64, head_group_size=0),
+            program_config=ttnn.IndexerScoreProgramConfig(**_INDEXER_PROGRAM_CONFIG),
             seq_shard_axes=[0] if self.tp_size > 1 else [],  # 1xTP mesh: the SP axis has extent 1 -> no offset
         )  # [1, 1, T, kv_len] bf16 ROW_MAJOR, columns [0, kv_len) written
         scores = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, num_tokens, num_entries])
@@ -1118,7 +1123,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             weights,
             chunk_start_idx=cap,
             kv_len=kv_len,
-            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=64, head_group_size=0),
+            program_config=ttnn.IndexerScoreProgramConfig(**_INDEXER_PROGRAM_CONFIG),
             seq_shard_axes=[0] if self.tp_size > 1 else [],
         )
         scores = ttnn.to_layout(ttnn.slice(logits, [0, 0, 0, 0], [1, 1, num_tokens, cap]), ttnn.TILE_LAYOUT)
