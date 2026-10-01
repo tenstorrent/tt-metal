@@ -538,7 +538,9 @@ void kernel_main() {
                 /*q_base_tiles=*/0,
                 rotated_slots);
         } else {
-            assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
+            // kernel_main is not a template, so both branches of the if constexpr are instantiated; fold the
+            // branch condition in so the guard fires only on the path it protects.
+            assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled && !use_streaming_compute>();
             sdpa_ring<
                 cb_qk_im,
                 cb_identity_scale_in,
