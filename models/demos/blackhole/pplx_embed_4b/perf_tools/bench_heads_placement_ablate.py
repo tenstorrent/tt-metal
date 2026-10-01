@@ -88,7 +88,7 @@ try:
             ts.append((time.perf_counter() - t0) / n * 1e6)
         ttnn.release_trace(D, tid)
         print(
-            f"RES heads Bin={B_IN} Bout={B_OUT} Q={'L1' if qmc is L1 else 'DRAM'} rotdb={os.getenv('QWEN_HEADS_ROT_DB','0')} {vname:24s} {statistics.median(ts):7.1f} us/call",
+            f"RES heads Bin={B_IN} Bout={B_OUT} Q={'L1' if qmc is L1 else 'DRAM'} rotdb={os.getenv('QWEN_HEADS_ROT_DB','1')} {vname:24s} {statistics.median(ts):7.1f} us/call",
             flush=True,
         )
 finally:
