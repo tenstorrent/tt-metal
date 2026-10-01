@@ -140,7 +140,7 @@ def run_all_gather_impl(
     mem_config_ag_resolved = mem_config_ag if mem_config_ag is not None else mem_config_input
 
     # Skip unsupported cases
-    (is_known_failure, message) = is_unsupported_case(
+    is_known_failure, message = is_unsupported_case(
         ag_output_shape,
         dim,
         mem_config_ag_resolved,
@@ -1301,8 +1301,10 @@ def test_all_gather_nd_sharded(
         # The mapper keeps the dim as the caller spelled it while the gather dim is normalized, so the two
         # have to be compared as axes: -1 and 3 are the same axis of a rank-4 tensor.
         (-1, -1, True),
-        # Different axes, so the Shard placement must survive.
-        (-2, 3, False),
+        # Different axes: a whole-mesh (cluster_axis=None) gather still leaves every device with every shard
+        # concatenated along dim 3, so all devices hold identical bytes and the honest label is Replicate. The
+        # earlier expectation that Shard(-2) survived was wrong: that label said the devices held distinct rows.
+        (-2, 3, True),
         # No Shard placement anywhere to begin with; gathering must not introduce a spurious one.
         (None, -1, True),
     ],
@@ -1312,7 +1314,7 @@ def test_all_gather_nd_sharded(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
 )
 def test_all_gather_output_topology(mesh_device, mapper_dim, gather_dim, expect_replicated):
-    # Gathering the sharded axis replicates it, and the output topology has to say so.
+    # A whole-mesh gather leaves every device with the same bytes, and the output topology has to say so.
     devices = mesh_device.get_num_devices()
     mesh_mapper = (
         ttnn.ReplicateTensorToMesh(mesh_device)
