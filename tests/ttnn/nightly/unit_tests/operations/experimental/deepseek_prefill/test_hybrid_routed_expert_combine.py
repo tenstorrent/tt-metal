@@ -15,9 +15,9 @@ the wait. Every case runs the threshold the model ships: on (8, 1) balanced leav
 so the fused pass takes them all, hot-expert lifts one into the unified half, and real (8x4 only) replays
 measured routing from one layer and chunk of each model.
 
-The perf test times the overlap both eagerly and replayed from a trace. On 8x4 the eager overlap loses to
-dispatch skew: the host writes each chip's program in turn, so a ring's chips start apart. The traced
-overlap is what it asserts beats RE + combine.
+The perf test times every program replayed from a trace, as the model runs it. Eager, the host writes each
+chip's program in turn and, on 8x4, issues the overlap slower than the device runs it, so a ring's chips
+start hundreds of microseconds apart and the overlap waits on its late neighbours.
 
 TtMoe turns this overlap on by default wherever the op exists, so the model suites cover the production
 path; this module is pruned from CI and run by hand.
@@ -26,7 +26,6 @@ path; this module is pruned from CI and run by hand.
 from pathlib import Path
 from types import SimpleNamespace
 
-import statistics
 import time
 
 import pytest
@@ -57,7 +56,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_comb
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
 
 pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
 
@@ -137,14 +135,8 @@ _KIMI_K27_REAL_COUNTS = (
     49, 79, 6, 60, 38, 42, 136, 197, 8, 50, 112, 129, 27, 130, 90, 100, 86, 185, 134, 116, 31, 27
 )
 # fmt: on
-# Measured programs per configuration; the median is reported.
+# Timed replays per program; the mean wall time per replay is reported.
 _PERF_ITERS = 5
-# What tells the three programs apart in the real-time profiler's records. The overlap builds the routed
-# expert's kernels and combine_fabric2d's, so neither directory names it on its own; the collector, which
-# only the overlap has, does.
-_OVERLAP_KERNELS = "/collector_combine_fabric2d.cpp"
-_SOLO_RE_KERNELS = "/hybrid_routed_expert_ffn/device/kernels/"
-_COMBINE_KERNELS = "/deepseek_prefill/combine_fabric2d/"
 
 
 def _scaled_model(mesh, model_id):
@@ -470,7 +462,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     def combine(re_output, widen=True):
         # The standalone op takes bfloat16 only; bfloat8_b widens exactly, so this is the bytes the
         # overlap's untilizers produce. `widen=False` takes an already-widened input, so a trace of
-        # this call is combine alone, as the eager measurement is.
+        # this call is combine alone.
         if widen:
             re_output = ttnn.typecast(re_output, ttnn.bfloat16)
         return ttnn.experimental.deepseek_prefill.combine_fabric2d(
@@ -592,44 +584,6 @@ def test_hybrid_routed_expert_combine_overlap(mesh_device, device_params, thresh
         result.assert_passed(f"run {run}: overlapped RE + combine vs PyTorch RE + combine")
 
 
-def _median_program_ns(mesh_device, run_fn, iters, is_target, label):
-    """Median device time, slowest chip, of the one program per run that `is_target` picks out.
-
-    Also logs each chip's median as a grid -- rows the chips of a ring (mesh rows), columns the dispatch groups
-    (mesh columns) -- so a slow run can be pinned to the chips that set it."""
-
-    def run_all():
-        return [run_fn() for _ in range(iters)]
-
-    outputs, records = profile_realtime_program(mesh_device, run_all, collect_all=True)
-    per_program: dict = {}  # runtime_id -> {chip_id: duration_ns}, in arrival (= dispatch) order
-    for record in records:
-        if record["runtime_id"] and is_target(record["kernel_sources"]):
-            per_program.setdefault(record["runtime_id"], {})[record["chip_id"]] = record["duration_ns"]
-    # The warm-up run's record can be delivered after the window opens; records arrive in dispatch order,
-    # so the measured runs are the last `iters`.
-    runs = list(per_program.values())[-iters:]
-    assert len(runs) == iters, f"{label}: expected {iters} programs, the profiler matched {len(per_program)}"
-
-    rows, cols = tuple(mesh_device.shape)
-    device_ids = list(mesh_device.get_device_ids())
-    per_chip = {chip: statistics.median(run[chip] for run in runs if chip in run) for chip in runs[-1]}
-    grid = [
-        "  ".join(
-            f"{per_chip[device_ids[r * cols + c]] / 1e3:7.1f}" if device_ids[r * cols + c] in per_chip else "      -"
-            for c in range(cols)
-        )
-        for r in range(rows)
-    ]
-    slowest = max(per_chip, key=per_chip.get)
-    at = device_ids.index(slowest)
-    logger.info(
-        f"{label} per chip, median us (rows: chip in ring, columns: dispatch group); slowest chip {slowest} at "
-        f"row {at // cols}, group {at % cols}:\n" + "\n".join(grid)
-    )
-    return outputs, statistics.median(max(run.values()) for run in runs)
-
-
 def _capture(mesh_device, run_fn):
     """Trace one call of `run_fn`. Returns the trace and what the call returned, which must stay alive until the
     trace is released: a replay writes into the buffers the capture allocated."""
@@ -659,10 +613,6 @@ def _replay_us(mesh_device, trace_id, iters):
     return (time.perf_counter() - start) / iters * 1e6
 
 
-def _has(sources, path):
-    return any(path in source.replace("\\", "/") for source in sources)
-
-
 @pytest.mark.requires_host_iommu
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
 @pytest.mark.parametrize(
@@ -675,50 +625,26 @@ def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, t
     combine_fabric2d. Sequential is the sum of the two programs' times, so it assumes no gap between
     them and is the best a sequential dispatch can do; the overlap must beat it.
 
-    Measured twice. Eager, per chip with the real-time profiler, logged for information. Traced, as the
-    model runs it, as wall time per replay: that is the verdict.
+    Every program is replayed from a trace, as the model runs it, and timed as wall time per replay. One eager
+    call of each first compiles it: compiling writes to the device, which a capture does not allow.
 
-    Every solo routed-expert run comes first: its per-call arena takes all free L1, which combine's
-    fwd_arrived holds a piece of from its first call on. One warm-up run of each program fills the
-    program cache outside the measured window.
+    The routed expert comes first: its first call sizes its arena to all free L1, and combine's fwd_arrived
+    takes a piece of L1 from its own first call on. The overlap keeps an arena of its own, so it comes last.
     """
-    require_realtime_profiler("the RE + combine overlap perf test")
     if variant == "8x1-submesh":
         mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
     case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")
 
-    warm_re = case.solo_routed_expert()
-    re_outputs, re_ns = _median_program_ns(
-        mesh_device,
-        case.solo_routed_expert,
-        _PERF_ITERS,
-        lambda k: _has(k, _SOLO_RE_KERNELS) and not _has(k, _OVERLAP_KERNELS),
-        "solo routed expert",
-    )
-
-    # Traced, as the model runs it. Eager, the host sends a 32-chip mesh this large a program slowly enough
-    # that a ring's chips start it apart, and an overlapped chip then waits on its late neighbours' relays; a
-    # replay starts every chip together. Each trace is captured, replayed and released in the same place its
-    # eager run sits, for the same reason: the solo routed expert sized its arena to the whole of L1 on its
-    # first call, so it must replay before combine's fwd_arrived takes any; the overlap keeps an arena of its
-    # own, so it comes last. The widening sits outside the combine trace, as it does outside the eager number.
+    case.solo_routed_expert()
     re_trace, traced_re_out = _capture(mesh_device, case.solo_routed_expert)
     try:
         traced_re_us = _replay_us(mesh_device, re_trace, _PERF_ITERS)
     finally:
         ttnn.release_trace(mesh_device, re_trace)
 
-    case.combine(warm_re)
-    re_iter = iter(re_outputs)
-    _, combine_ns = _median_program_ns(
-        mesh_device,
-        lambda: case.combine(next(re_iter)),
-        _PERF_ITERS,
-        lambda k: _has(k, _COMBINE_KERNELS) and not _has(k, _OVERLAP_KERNELS),
-        "combine_fabric2d",
-    )
-
+    # The widening sits outside the combine trace, so the trace is combine alone.
     widened = ttnn.typecast(traced_re_out, ttnn.bfloat16)
+    case.combine(widened, widen=False)
     combine_trace, combine_out = _capture(mesh_device, lambda: case.combine(widened, widen=False))
     try:
         traced_combine_us = _replay_us(mesh_device, combine_trace, _PERF_ITERS)
@@ -727,19 +653,6 @@ def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, t
         del traced_re_out, widened, combine_out
 
     case.overlapped()
-    _, overlap_ns = _median_program_ns(
-        mesh_device, case.overlapped, _PERF_ITERS, lambda k: _has(k, _OVERLAP_KERNELS), "overlap"
-    )
-
-    sequential_ns = re_ns + combine_ns
-    saved_ns = sequential_ns - overlap_ns
-    logger.info(
-        f"RE+combine {model_id} {threshold_id} eager: sequential {sequential_ns / 1e3:.1f} us (RE {re_ns / 1e3:.1f} + "
-        f"combine {combine_ns / 1e3:.1f}), overlap {overlap_ns / 1e3:.1f} us -> {sequential_ns / overlap_ns:.3f}x, "
-        f"saved {saved_ns / 1e3:.1f} us ({saved_ns / sequential_ns:.1%}); combine hidden "
-        f"{min(saved_ns, combine_ns) / combine_ns:.0%}"
-    )
-
     overlap_trace, overlap_out = _capture(mesh_device, case.overlapped)
     try:
         traced_overlap_us = _replay_us(mesh_device, overlap_trace, _PERF_ITERS)
