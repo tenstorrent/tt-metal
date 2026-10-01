@@ -600,11 +600,10 @@ class XingDeviceModel:
         (XING_RESIDUAL_MIX), the ring_mla implementation
         (XING_MLA_SDPA), its fidelity / chunks (XING_MLA_SDPA_FIDELITY, XING_MLA_Q_CHUNK) and the routed-experts
         path (XING_EXPERTS_MODE)."""
-        import os
-
         from models.demos.xing40_a4b_d_p.tt.attention import K_CHUNK, sdpa_fidelity, sdpa_impl, sdpa_q_chunk
         from models.demos.xing40_a4b_d_p.tt.mhc import hc_impl
         from models.demos.xing40_a4b_d_p.tt.residual import residual_mix_mode
+        from models.demos.xing40_a4b_d_p.tt.settings import settings
 
         return {
             "residual_mix": residual_mix_mode(),
@@ -612,15 +611,22 @@ class XingDeviceModel:
             "mla_sdpa": sdpa_impl(),
             "mla_sdpa_fidelity": sdpa_fidelity(),
             "mla_sdpa_chunks": f"q{sdpa_q_chunk()}/k{K_CHUNK}",
-            "experts_mode": os.environ.get("XING_EXPERTS_MODE", "unified"),
+            "experts_mode": settings.get("EXPERTS_MODE"),
         }
+
+
+def settings():
+    """The profile's record: every switch's current value (tt/settings.py)."""
+    from models.demos.xing40_a4b_d_p.tt.settings import settings as _s
+
+    return _s.all()
 
 
 def device_model(mesh, spec, layers, lm_head=True):
     """All-device model (default); BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + DEVICE_STEPS on the
     device, host in / host out per step) for debugging."""
-    import os
+    from models.demos.xing40_a4b_d_p.tt.settings import settings
 
-    if os.environ.get("BRINGUP_HYBRID") == "1":
+    if settings.get("HYBRID"):
         return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
     return XingDeviceModel(mesh, spec, layers, lm_head=lm_head)
