@@ -34,9 +34,11 @@ of those `diagnostic` in a comment on its line.
    values, and why (copy the owner decisions and dates from the code comments, the spec, `bringup/supervision.md`).
    Keep the existing environment variable names, so A/B switches in `tasks.yaml` (`ab.env`, `ab.change`) still work.
    A value a gate checks (the spec's `serving:` section, e.g. `kv_dtype`) takes its default from the spec.
-4. Replace each read with `settings.get("<NAME>")`. Make `hooks.settings()` (the profile's record) return
+4. Give every precision switch (fidelity, accumulation, KV dtype) its full-precision value in the table's
+   `max_precision` (component and swap tests run with it).
+5. Replace each read with `settings.get("<NAME>")`. Make `hooks.settings()` (the profile's record) return
    `settings.all()`.
-5. For a fork knob that changes behaviour: add the op argument (default = old behaviour), pass it from the model's
+6. For a fork knob that changes behaviour: add the op argument (default = old behaviour), pass it from the model's
    settings, and add a case to the fork's `tests/` (skill `bringup-fork-tests`).
 
 ## Rules

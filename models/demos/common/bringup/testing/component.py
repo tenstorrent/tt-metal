@@ -39,7 +39,7 @@ import torch
 
 from models.demos.common.bringup.core import defaults, metrics
 from models.demos.common.bringup.reference.interface import run_block
-from models.demos.common.bringup.testing import accuracy_guard
+from models.demos.common.bringup.testing import accuracy_guard, model_precision
 from models.demos.common.bringup.testing.harness import (
     compare,
     component_golden,
@@ -96,6 +96,7 @@ def run_component_test(
     """checks=None: the gate vs the golden only (compare_mode, thr). checks="auto" (F56): also the built-in checks
     by output kind and the second inputs (testing/component_checks.py); BRINGUP_IMPL=mutations runs the freeze sweep
     (CPU) instead."""
+    model_precision.apply(s)  # framework rule: steps are checked at maximum precision
     if checks not in (None, "auto"):
         raise ValueError(f"checks={checks!r}: None or 'auto'")
     if checks == "auto":
@@ -369,6 +370,7 @@ def run_swap_test(
     swapped step's own output, gated (module docstring). An optional model hook ``swap_context(spec, ref, layer,
     golden, chunk, rctx, dctx)`` may put what one block cannot compute into both contexts (e.g. another layer's top-k
     from the golden)."""
+    model_precision.apply(s)  # framework rule: steps are checked at maximum precision
     if checks not in (None, "steps"):
         raise ValueError(f"checks={checks!r}: None or 'steps'")
     g, c = component_golden(s)
