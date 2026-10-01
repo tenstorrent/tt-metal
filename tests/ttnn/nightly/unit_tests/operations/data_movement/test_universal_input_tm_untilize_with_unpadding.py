@@ -496,3 +496,38 @@ def test_block_sharded_dtype_int_uint32(device, dtype):
     input_memory_config = _make_block_sharded_cfg(2, 2, 64, 64)
     output_memory_config = _make_block_sharded_cfg(2, 2, 64, 64)
     _check(device, torch_tensor, output_end, input_memory_config, output_memory_config, dtype=dtype)
+
+
+# ---------------------------------------------------------------------------
+# UINT8 regression (issue #58106): downstream factories must skip UnpackToDest
+# for UINT8 or the int-FPU reconstruct path silently returns all zeros.
+# ---------------------------------------------------------------------------
+
+
+def _uint8_tensor(shape, seed=24):
+    torch.manual_seed(seed)
+    return torch.randint(0, 256, shape, dtype=torch.uint8)
+
+
+def test_interleaved_dtype_uint8(device):
+    shape = [1, 1, 4 * TILE, 2 * TILE]
+    output_end = [0, 0, 100, 2 * TILE - 1]
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, L1)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, L1)
+    _check(device, _uint8_tensor(shape), output_end, input_memory_config, output_memory_config, dtype=ttnn.uint8)
+
+
+def test_height_sharded_dtype_uint8(device):
+    shape = [1, 1, 4 * TILE, 2 * TILE]
+    output_end = [0, 0, 100, 2 * TILE - 1]
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, L1)
+    output_memory_config = _make_height_sharded_cfg(4, TILE, 2 * TILE)
+    _check(device, _uint8_tensor(shape), output_end, input_memory_config, output_memory_config, dtype=ttnn.uint8)
+
+
+def test_block_sharded_dtype_uint8(device):
+    shape = [1, 1, 128, 128]
+    output_end = [0, 0, 100, 100]
+    input_memory_config = _make_block_sharded_cfg(2, 2, 64, 64)
+    output_memory_config = _make_block_sharded_cfg(2, 2, 64, 64)
+    _check(device, _uint8_tensor(shape), output_end, input_memory_config, output_memory_config, dtype=ttnn.uint8)

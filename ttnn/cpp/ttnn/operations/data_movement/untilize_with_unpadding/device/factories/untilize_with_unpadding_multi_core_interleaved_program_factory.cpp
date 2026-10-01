@@ -152,7 +152,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
     }
     ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (fp32_dest_acc_en && a.dtype() != DataType::UINT8) {
         compute_hw_config.unpack_modes = {{MCI_IN, UnpackMode::UnpackToDest}};
     }
     const std::string compute_kernel(

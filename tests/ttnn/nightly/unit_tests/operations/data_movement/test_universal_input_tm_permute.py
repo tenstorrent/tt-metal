@@ -1035,3 +1035,27 @@ def test_permute_specless_sharded_output_grid_shrinks_block_col_major(device):
     ref = x.permute(0, 1, 3, 2)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+# ──────────────────────────────────────────────────────────────
+# UINT8 regression (issue #58106): int-FPU reconstruct path in
+# permute_rm / permute_tiled silently returned all zeros for UINT8
+# in 16-bit Dest. Bit-exact against torch.
+# ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
+@pytest.mark.parametrize(
+    "shape, dims",
+    [
+        ((32, 32), (1, 0)),
+        ((1, 1, 64, 128), (0, 1, 3, 2)),
+        ((2, 3, 96, 64), (0, 1, 3, 2)),
+    ],
+)
+def test_permute_dtype_uint8(device, shape, dims, input_layout):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, shape, dtype=torch.uint8)
+    ttnn_in = ttnn.from_torch(x, dtype=ttnn.uint8, layout=input_layout, device=device)
+    got = ttnn.to_torch(ttnn.permute(ttnn_in, dims).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, x.permute(dims))
