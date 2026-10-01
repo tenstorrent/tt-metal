@@ -1,22 +1,22 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# t82: BH SFPU constant hoists (PR 58179 @ba45c87952e, PR 58217 @49a0b6a0047) on LTX
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
+Branch ttp/t82-cherry-pick-bh-sfpu-constant-hoists-5817, on t48 @a613d669eef. 4 cherry-picked commits,
+kernel headers only (15 files under tt_metal/hw/ckernels/blackhole + tt-llk expm1_cw). No host .cpp change,
+so no rebuild: blx03 runs both arms on the t48 build; the hoist arm points TT_METAL_RUNTIME_ROOT at
+~/fasth3/t82rt (symlink farm of t48, the 15 headers real; `diff -rq` = exactly those 15). Separate JIT caches
+/var/tmp/fasth3/t82/jit_{base,hoist}.
 
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
+## Device run (blx03, launched 2026-10-01)
+Driver: ~/fasth3/t48/tmp/t82/drive82.sh (detached), log /var/tmp/fasth3/t82/drive82.log, ends with
+`DRIVE82_DONE <ok|fail_...>`. Job 1 = run82.sh vae (conv VAE 544x960/145f, base then hoist), job 2 = run82.sh
+block (traced AV block 2x4 Linear 10x34x60), only if job 1 exits 0. Logs: /var/tmp/fasth3/t82/run82_{vae,block}.log.
+Queued behind t81's job 040 at launch.
 
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
+## Reading results
+- `T82_CMP ... identical=True` per output and `T82_IDENTICAL=True` = bit-identical.
+- VAE time: `AB arm=t1w1 ... min=` lines, first = base, second = hoist. Block: `AB_BLOCK arm=base|hoist ms=`.
+- Check the hoist arm actually compiled the new headers: grep t82rt in /var/tmp/fasth3/t82/jit_hoist/**/*.d.
 
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+## Next step
+Both identical and hoist faster -> merge t82 into local ttp/t48-ltx25-integrated, push it (no PR).
+Otherwise report the diff and stop. Then clean up ~/fasth3/t82rt, ~/fasth3/t48/tmp/t82, /var/tmp/fasth3/t82/jit_*.
