@@ -166,13 +166,13 @@ class TtV4PrefillTransformer(LightweightModule):
                             ent[key] = mc[name] if isinstance(mc[name], SharedScalar) else SharedScalar(mc[name])
                         mc[name] = ent[key]
 
-    def enable_trace_islands(self, x, input_ids=None) -> None:
+    def enable_trace_islands(self, x, input_ids=None, moe_meta=None) -> None:
         """Capture every layer's trace islands (``TtV4PrefillBlock.enable_trace_islands``) after an eager warm-up
         compiled their programs. ``x`` is a chunk input of the shape every chunk uses (the first rank's token ids
         tensor, a placeholder activation otherwise); ``input_ids`` the device ids tensor for the hash-routed layers."""
         streams = self._entry_streams(x)
         for layer in self.layers:
-            layer.enable_trace_islands(streams, input_ids=input_ids if layer.hash_layer else None)
+            layer.enable_trace_islands(streams, input_ids=input_ids if layer.hash_layer else None, moe_meta=moe_meta)
         for t in streams:
             ttnn.deallocate(t)
 

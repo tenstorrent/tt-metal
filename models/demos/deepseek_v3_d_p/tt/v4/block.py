@@ -277,7 +277,7 @@ class TtV4PrefillBlock(LightweightModule):
         st.fresh = True
 
     # ---- trace islands (DS4F-0246/0247) --------------------------------------------------------------------------
-    def enable_trace_islands(self, streams: list, input_ids=None) -> None:
+    def enable_trace_islands(self, streams: list, input_ids=None, moe_meta=None) -> None:
         """Capture the position-independent slices of this block as traces, ONCE, after an eager warm-up has compiled
         their programs. ``streams`` are live activations of the shape every chunk uses (their contents do not matter);
         ``input_ids`` a device ids tensor of the gate's layout for a hash-routed layer (``None`` otherwise).
@@ -392,7 +392,9 @@ class TtV4PrefillBlock(LightweightModule):
             h2 = self.post_norm(x)
             ttnn.deallocate(x)
             h3 = ttnn.reshape(h2, [1, S_l, D_l])
-            moe_out, _ = self.moe(h3, input_ids=ids_buf, actual_isl=chunk_tokens, actual_start=0)
+            # moe_meta (DS4F-0300): the padding config is built ON DEVICE from this chunk's (slot, start, end) tensors, so a ragged
+            # chunk's pad rows are not dispatched; None = the capture's full-chunk config (every row routed)
+            moe_out, _ = self.moe(h3, input_ids=ids_buf, actual_isl=chunk_tokens, actual_start=0, metadata=moe_meta)
             moe_out = ttnn.reshape(moe_out, [1, 1, S_l, D_l])
             out = self.ffn_hc.mix(streams2, moe_out, post2, comb2)
             ttnn.deallocate(moe_out)
@@ -400,6 +402,9 @@ class TtV4PrefillBlock(LightweightModule):
                 ttnn.deallocate(t)
             return out
 
+        if moe_meta is not None:
+            # allocate the persistent device padding-config row and compile its op BEFORE the capture (DS4F-0271 rule)
+            self.moe.gate.build_padding_config_device(moe_meta)
         B = TraceIsland(self.mesh_device, island_b, S_in + [y_buf], moe=self.moe, name=f"layer{self.layer_idx}.B")
         B.capture()
         self._islands = (A, B, S_in, y_buf, ids_buf)

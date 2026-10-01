@@ -165,10 +165,28 @@ class TtV4PrefillRuntime:
         # before any island replays, so no eager tensor that a later layer reads survives a replay (the trace's
         # intermediates land wherever DRAM was free at capture time -- a live view there is overwritten).
         self._ids_dev = self._token_ids_view(x) if self._needs_token_ids else None
-        self.model.enable_trace_islands(x, input_ids=self._ids_dev)
+        # DS4F-0300 (PREFILL_MOE_TRACED_PADDING=1): island B's MoE reads (slot, start, end) from persistent 1-element device
+        # tensors, so a ragged chunk's pad rows get the sentinel expert ON DEVICE (not dispatched) instead of the capture's
+        # full-chunk config; allocated before any capture (DS4F-0271), refreshed per chunk in prefill_chunk (value-cached)
+        self._moe_meta = None
+        if os.environ.get("PREFILL_MOE_TRACED_PADDING", "1") == "1":  # default on: bit-exact (DS4F-0300 s5)
+            self._moe_meta = tuple(self._meta1_dev(v) for v in (0, 0, c.chunk_size))
+            self._moe_meta_vals = [0, 0, c.chunk_size]
+        self.model.enable_trace_islands(x, input_ids=self._ids_dev, moe_meta=self._moe_meta)
         self._trace_captured = True
         # warm the traced path once (the islands' copy / reshape programs compile here, not on the first request)
-        self.prefill_chunk(x, kv_caches, slot_id=0, actual_start=0, actual_end=c.chunk_size, warmup=True)
+        out = self.prefill_chunk(x, kv_caches, slot_id=0, actual_start=0, actual_end=c.chunk_size, warmup=True)
+        if out is not None and os.environ.get("PREFILL_WARM_TAIL_ROWS", "1") == "1":
+            # DS4F-0300: tail_hidden_row slices the 32-row tile holding the request's last row, and the tile start is part of the
+            # program -> every NEW local tile start compiled on its first request (~300 ms, measured 256 / 1k / 2k vs 4k).
+            # Compile all chunk // sp // 32 of them here (transient slices; the to_torch path too).
+            s_l = c.chunk_size // c.sp_factor
+            t_w = time.perf_counter()
+            for row in range(0, s_l, 32):
+                self.tail_hidden_row(out, row)
+            logger.info(
+                f"[v4 runtime] warmed {s_l // 32} tail-row slice programs in {(time.perf_counter() - t_w) * 1e3:.0f} ms"
+            )
         _clear_export_caches(kv_caches, "the capture warm chunk")
         for layer in self.model.layers:
             layer.reset_slot(0)
@@ -181,6 +199,29 @@ class TtV4PrefillRuntime:
         logger.info(f"[v4 runtime] trace islands captured: {len(self.model.layers)} layers, {segs} trace segments")
         self._log_dram("after capture_trace")
         self._log_state_addresses()
+
+    def _meta1_dev(self, val: int):
+        """One persistent 1-element uint32 replicated-DRAM scalar (the MLA runtime's _meta1_dev)."""
+        return ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def _set_moe_meta(self, idx: int, val: int) -> None:
+        if self._moe_meta_vals[idx] == int(val):
+            return
+        host = ttnn.from_torch(
+            torch.tensor([int(val)], dtype=torch.int64).reshape(1, 1, 1, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host, self._moe_meta[idx])
+        self._moe_meta_vals[idx] = int(val)
 
     def _log_dram(self, tag: str) -> None:
         """Per-bank DRAM occupancy (the chunk-10240 43-layer run OOMed at 4.026 of 4.071 GB per bank, DS4F-0260)."""
@@ -331,6 +372,10 @@ class TtV4PrefillRuntime:
                 cb = self._ack_after_drain
             else:
                 cb = deferred.append
+        if getattr(self, "_moe_meta", None) is not None:
+            # DS4F-0300: this chunk's real length for island B's padding-aware MoE (start 0: the block lays the chunk out from
+            # SP row 0; slot 0: unused by the padding config) -- host write only when the value changes
+            self._set_moe_meta(2, int(actual_end) - int(actual_start))
         t_issue0 = time.perf_counter()
         out = self.model(
             input_tensor,
