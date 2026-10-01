@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 
 // Exports symbols
 #include <tt-metalium/tensor/tensor_apis.hpp>
@@ -78,14 +79,15 @@ tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
     const std::optional<tt::tt_metal::CoreRangeSet>& core_ranges = std::nullopt);
 
 /**
- * @brief Get the L1 byte address of a CB descriptor.
+ * @brief Get the L1 byte address a CB descriptor is programmed at.
  *
- * Returns buffer->address() + address_offset when a buffer is present,
- * or just address_offset when no buffer is set (manually placed CB).
+ * Returns the backing buffer's address + address_offset, or just address_offset when no buffer is set
+ * (manually placed CB). A per-core-allocated buffer sits at a different address on each core, so its
+ * address is the one on the CB's cores, not Buffer::address() (the first core's); those cores must share
+ * one address, and for a tensor-backed descriptor so must every local device, or this TT_FATALs.
  */
-// The address the CB is programmed at. A per-core-allocated buffer sits at a different address on each core,
-// so that is its address on the CB's cores (which must share one), not Buffer::address(), the first core's.
 inline uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc) {
+    namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
     auto addr_offset = desc.address_offset;
     const tt::tt_metal::Buffer* buffer = desc.buffer;
     if (buffer == nullptr && desc.tensor != nullptr) {
@@ -94,13 +96,29 @@ inline uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc) {
     if (buffer == nullptr) {
         return addr_offset;
     }
-    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(*buffer) &&
-        !desc.core_ranges.ranges().empty()) {
-        return tt::tt_metal::experimental::per_core_allocation::get_shard_base_address(
-                   *buffer, desc.core_ranges.ranges().front().start_coord) +
-               addr_offset;
+    if (!per_core_allocation::is_per_core_allocation(*buffer) || desc.core_ranges.empty()) {
+        return buffer->address() + addr_offset;
     }
-    return buffer->address() + addr_offset;
+    std::optional<tt::tt_metal::DeviceAddr> base;
+    for (const auto& core_range : desc.core_ranges.ranges()) {
+        for (const auto& core : core_range) {
+            const auto address = desc.buffer == nullptr ? per_core_allocation::get_uniform_per_core_address(
+                                                              desc.tensor->mesh_buffer(), core)
+                                                        : per_core_allocation::get_per_core_address(*buffer, core);
+            if (!base.has_value()) {
+                base = address;
+                continue;
+            }
+            TT_FATAL(
+                address == *base,
+                "CB descriptor on cores {} is backed by a per-core-allocated buffer that sits at {:#x} and {:#x} on "
+                "different cores; a circular buffer has one address",
+                desc.core_ranges.str(),
+                *base,
+                address);
+        }
+    }
+    return *base + addr_offset;
 }
 
 }  // namespace ttnn

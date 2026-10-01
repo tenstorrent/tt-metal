@@ -764,3 +764,17 @@ def test_per_core_address_resolves_per_device_after_skew(mesh_device):
     assert [w.experimental_per_core_buffer_address(c, core) for c in w.device_coords()] == per_device
 
     assert skew.is_allocated()
+
+
+@requires_hybrid_allocator
+def test_cb_descriptor_rejects_per_core_tensor_at_different_addresses_across_devices(mesh_device, expect_error):
+    """A CB descriptor carries only the first device's buffer while one program runs on every device,
+    so a per-core tensor that sits at different addresses on different devices must be rejected."""
+    core = ttnn.CoreCoord(0, 0)
+    _skew = _allocate_per_core_on_device(mesh_device, ttnn.MeshCoordinate(0, 1), core, 4096)
+    tensor = _create_per_core_single(mesh_device, core, 2048)
+    addrs = [_per_core_addr(dt, core) for dt in ttnn.get_device_tensors(tensor)]
+    assert addrs[0] != addrs[1], f"the skew did not move device 1: {[f'{a:#x}' for a in addrs]}"
+
+    with expect_error(RuntimeError, "one address cannot serve both"):
+        ttnn.cb_descriptor_from_sharded_tensor(0, tensor)

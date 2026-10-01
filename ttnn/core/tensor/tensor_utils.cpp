@@ -46,10 +46,23 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
         "Address offset + total size exceeds buffer size");
 
     uint32_t effective_total_size = (total_size != 0) ? total_size : tensor.buffer()->aligned_size_per_bank();
+    const CoreRangeSet cb_core_ranges = core_ranges.value_or(tensor.shard_spec()->grid);
+
+    // The descriptor carries only the reference device's buffer, so a CB built from it gets that device's address
+    // on every device it runs on. A per-core tensor must therefore sit at one address across devices on these
+    // cores; get_uniform_per_core_address TT_FATALs otherwise.
+    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(*tensor.buffer())) {
+        for (const auto& core_range : cb_core_ranges.ranges()) {
+            for (const auto& core : core_range) {
+                tt::tt_metal::experimental::per_core_allocation::get_uniform_per_core_address(
+                    tensor.mesh_buffer(), core);
+            }
+        }
+    }
 
     return CBDescriptor{
         .total_size = effective_total_size,
-        .core_ranges = core_ranges.value_or(tensor.shard_spec()->grid),
+        .core_ranges = cb_core_ranges,
         .format_descriptors = {CBFormatDescriptor{
             .buffer_index = cb_index,
             .data_format = datatype_to_dataformat_converter(tensor.tensor_spec().tensor_layout().get_data_type()),

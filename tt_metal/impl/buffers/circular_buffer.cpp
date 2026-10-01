@@ -6,6 +6,8 @@
 #include <circular_buffer.hpp>
 #include <global_circular_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <array>
 #include <string>
 
@@ -31,13 +33,14 @@ DeviceAddr cb_buffer_base_address(const Buffer& buffer, const CoreRangeSet& core
         return buffer.address();
     }
     std::optional<DeviceAddr> base;
-    std::optional<CoreCoord> base_core;
+    CoreCoord base_core;
     for (const CoreRange& core_range : core_ranges.ranges()) {
         for (const CoreCoord& core : core_range) {
-            const DeviceAddr address = experimental::per_core_allocation::get_shard_base_address(buffer, core);
+            const DeviceAddr address = experimental::per_core_allocation::get_per_core_address(buffer, core);
             if (!base.has_value()) {
                 base = address;
                 base_core = core;
+                continue;
             }
             TT_FATAL(
                 address == *base,
@@ -45,13 +48,27 @@ DeviceAddr cb_buffer_base_address(const Buffer& buffer, const CoreRangeSet& core
                 "but {:#x} on core {}; a circular buffer has one address, so split it into one per address",
                 core_ranges.str(),
                 *base,
-                base_core->str(),
+                base_core.str(),
                 address,
                 core.str());
         }
     }
     TT_FATAL(base.has_value(), "Circular buffer backed by a per-core-allocated buffer has no cores");
     return *base;
+}
+
+// A CB built from a tensor takes its address from the tensor's reference (first local) device buffer, on every
+// device it runs on, so a per-core tensor must sit at one address across devices on the CB's cores.
+void check_uniform_across_devices(const MeshTensor& tensor, const CoreRangeSet& core_ranges) {
+    const auto& mesh_buffer = tensor.mesh_buffer();
+    if (!experimental::per_core_allocation::is_per_core_allocation(mesh_buffer)) {
+        return;
+    }
+    for (const CoreRange& core_range : core_ranges.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            experimental::per_core_allocation::get_uniform_per_core_address(mesh_buffer, core);
+        }
+    }
 }
 
 }  // namespace
@@ -68,9 +85,13 @@ CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_range_set, const
         this->config_.remote_buffer_indices().empty(),
         "Remote buffer indices are not supported without a GlobalCircularBuffer");
     if (globally_allocated()) {
-        globally_allocated_address_ = config.globally_allocated_address().value();
+        // The config only knows Buffer::address(); resolve against this CB's cores now, so a per-core
+        // buffer's address is right (or rejected) from construction, not only once a Program adds the CB.
+        // Without the buffer (e.g. a config rebuilt from a trace), keep the address the config stores.
         if (config_.shadow_global_buffer != nullptr) {
             this->assign_global_address();
+        } else {
+            globally_allocated_address_ = config_.globally_allocated_address().value();
         }
     }
 }
@@ -109,9 +130,14 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
         this->set_global_circular_buffer(*descriptor.global_circular_buffer);
     } else {
         if (globally_allocated()) {
-            globally_allocated_address_ = config_.globally_allocated_address().value();
+            if (descriptor.tensor != nullptr) {
+                check_uniform_across_devices(*descriptor.tensor, core_ranges_);
+            }
+            // As above: resolve a per-core buffer's address against this CB's cores at construction.
             if (config_.shadow_global_buffer != nullptr) {
                 this->assign_global_address();
+            } else {
+                globally_allocated_address_ = config_.globally_allocated_address().value();
             }
         }
     }
