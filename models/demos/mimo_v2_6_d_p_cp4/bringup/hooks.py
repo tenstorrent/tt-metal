@@ -456,7 +456,9 @@ class MiMoCPDeviceModel:
         import os
 
         from models.demos.mimo_v2_6_d_p_cp4.tt.attention import full_sdpa_chunks
+        from models.demos.mimo_v2_6_d_p_cp4.tt.experts import moe_fabric_settings
 
+        moe_links, dispatch_workers = moe_fabric_settings()
         return {
             "sliding_sdpa_cfg": os.environ.get("MIMO_SLIDING_SDPA_CFG", "base"),
             "sliding_qk": os.environ.get("MIMO_SLIDING_QK", "split"),
@@ -465,6 +467,8 @@ class MiMoCPDeviceModel:
             "full_sdpa_chunks": [int(c) for c in full_sdpa_chunks()],
             "experts_mode": os.environ.get("MIMO_EXPERTS_MODE", "unified"),
             "router_mode": os.environ.get("MIMO_ROUTER_MODE", "fp32"),
+            "moe_links": moe_links,
+            "dispatch_workers": dispatch_workers,
             "fuse_residual_norm": os.environ.get("MIMO_FUSE_RESIDUAL_NORM", "1") != "0",
         }
 

@@ -462,3 +462,32 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - The profile records `sliding_heads`, `sliding_wlo` and `full_sdpa_chunks` (hooks `perf_settings`).
 - Gotcha: I started the gate in the background by mistake (rule 3 asks for the foreground). It ran to completion unattended.
 - Re-run (old behaviour for comparison: `MIMO_SLIDING_HEADS=reshape MIMO_FULL_SDPA_CHUNKS=64,256`): `PYTHONPATH=$PWD TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py` (add `BRINGUP_PROFILE_OPS=1` for the per-op rows).
+
+## P.2 perf.1 (routed experts)
+- Per-op profile before the change (`BRINGUP_PROFILE_OPS=1`, rung last, chunk 51200 -> 56320, MoE layers 1-5): experts 157.6 ms. Each layer took about 31 ms:
+  - `bringup.dispatch` 10.5-11.2 ms.
+  - `unified_routed_expert_moe` 11.4-14.7 ms (slowest chip).
+  - `bringup.combine` 6.9-9.5 ms.
+  - `post_combine_reduce` 0.28 ms. The rest is under 0.1 ms.
+- Change: offset_cumsum, dispatch and combine now use 2 fabric links instead of 1. P150x4 has 2 links per axis (`deepseek_v3_d_p/tt/tt_ccl.py:get_num_links`).
+  - `tt/experts.py:moe_fabric_settings()` reads `MIMO_MOE_LINKS` (default 2; 1 restores the X.1 behaviour) and `MIMO_DISPATCH_WORKERS` (default 2, unchanged).
+  - Both are passed through `build_experts` and are part of the `_SEQ_MODULES` key.
+  - The profile records them as `moe_links` and `dispatch_workers` (hooks `perf_settings`).
+- Numerics are unchanged: only the transport changed. There is no fork change, no precision or format change, and the capacity factor is unchanged.
+- Results (experts ms):
+
+  | Setting | Experts ms | Dispatch ms per layer | Combine ms per layer |
+  |---|---|---|---|
+  | links 1, workers 2 (before) | 157.6 | ~11 | ~7 |
+  | links 2, workers 2 | 114.6 | ~5.4 | ~4.0 |
+  | links 2, workers 4 | 120.1 | | |
+
+  - The gate's profile run measured 118.6 ms (device 389 ms total).
+  - The unified op is now the largest part, at 11.4-15.6 ms on the slowest chip. Its chips are uneven because of routing imbalance.
+- Gate: every step passed.
+  - Component experts L01 0.999980 and L05 0.999974.
+  - Swap: experts vs CPU rel 0.0058 / 0.0055, ffn_residual rel 0.0017 / 0.0013.
+  - Ladder: worst layer 0.99969, worst state 0.98945 (same as before), host transfers 0.
+- Gotcha: `results/P.2.json` and `results/P.2_profile.json` are written only for the orchestrator's run. A manual run's profile (with `ops`) lands in `/home/sjovic/bringup/mimo_v2_6_d_p_cp4/profiles/P.2_<time>.json`.
+- Not tried (left for later): a smaller dispatch capacity factor or per-expert cap, fp8 dispatch, and unified-op program configs.
+- Re-run (old behaviour: `MIMO_MOE_LINKS=1`): `PYTHONPATH=$PWD TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py` (add `BRINGUP_PROFILE_OPS=1` for per-op rows).

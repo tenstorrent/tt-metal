@@ -1,0 +1,118 @@
+{
+ "rung": "last",
+ "chunk": [
+  51200,
+  56320
+ ],
+ "layers": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "wall_ms": 393.7976360321045,
+ "device_ms": {
+  "attention": 260.784966,
+  "experts": 117.323978,
+  "mlp": 5.179404,
+  "router": 2.449009,
+  "attn_residual": 0.843983,
+  "ffn_residual": 0.649568,
+  "mlp_residual": 0.142518,
+  "attn_norm": 0.084653,
+  "ffn_norm": 0.0
+ },
+ "sections_ms": {
+  "attention": 260.784966,
+  "experts": 117.323978,
+  "mlp": 5.179404,
+  "router": 2.449009,
+  "attn_residual": 0.843983,
+  "ffn_residual": 0.649568,
+  "mlp_residual": 0.142518,
+  "attn_norm": 0.084653,
+  "ffn_norm": 0.0
+ },
+ "sections_ms_per_chip": {
+  "attn_norm": {
+   "1": 0.081474,
+   "0": 0.084176,
+   "3": 0.083738,
+   "2": 0.084653
+  },
+  "attention": {
+   "1": 260.137831,
+   "0": 260.696269,
+   "3": 259.942038,
+   "2": 260.552692
+  },
+  "attn_residual": {
+   "1": 0.836987,
+   "0": 0.839,
+   "3": 0.823875,
+   "2": 0.836634
+  },
+  "ffn_norm": {},
+  "mlp": {
+   "1": 5.172256,
+   "0": 5.179404,
+   "3": 5.155951,
+   "2": 5.02622
+  },
+  "mlp_residual": {
+   "1": 0.140987,
+   "0": 0.141037,
+   "3": 0.142518,
+   "2": 0.140905
+  },
+  "router": {
+   "1": 2.438314,
+   "0": 2.42411,
+   "3": 2.439518,
+   "2": 2.438648
+  },
+  "experts": {
+   "1": 113.2097,
+   "0": 115.265554,
+   "3": 113.546525,
+   "2": 114.616349
+  },
+  "ffn_residual": {
+   "1": 0.636471,
+   "0": 0.643932,
+   "3": 0.645399,
+   "2": 0.637033
+  }
+ },
+ "programs": {
+  "attn_norm": 4,
+  "attention": 1136,
+  "attn_residual": 24,
+  "ffn_norm": 0,
+  "mlp": 20,
+  "mlp_residual": 4,
+  "router": 340,
+  "experts": 240,
+  "ffn_residual": 20
+ },
+ "settings": {
+  "sliding_sdpa_cfg": "base",
+  "sliding_qk": "split",
+  "sliding_heads": "split",
+  "sliding_wlo": true,
+  "full_sdpa_chunks": [
+   64,
+   512
+  ],
+  "experts_mode": "unified",
+  "router_mode": "fp32",
+  "moe_links": 2,
+  "dispatch_workers": 2,
+  "fuse_residual_norm": true
+ },
+ "full_prefill": null,
+ "bridged_steps": [],
+ "deferred_cpu_ms": 0.0
+}

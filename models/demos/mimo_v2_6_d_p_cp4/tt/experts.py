@@ -119,6 +119,7 @@ class TtExperts:
         num_links: int = 1,
         weights_dtype=ttnn.bfloat8_b,
         cache: bool = True,
+        dispatch_workers: int = 2,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         mode: str = "unified",
         loop_act_dtype=ttnn.bfloat16,
@@ -133,6 +134,7 @@ class TtExperts:
         assert weights_dtype != ttnn.bfloat4_b, "owner rule: experts are bfp8 on device, never bfp4"
         assert mode in ("unified", "unified_lofi", "loop"), mode
         self.mesh, self.layer, self.num_links, self.mode = mesh, layer, num_links, mode
+        self.dispatch_workers = dispatch_workers
         self.E, self.K, self.H, self.I = E, top_k, emb_dim, hidden_dim
         self.dgs, self.ngroups, self.n, self.epc = cols, 1, n, E // n
         self.max_seq_len = max_seq_len
@@ -190,7 +192,7 @@ class TtExperts:
         )
 
     def _seq_modules(self, S_chip: int):
-        key = (self.E, self.K, self.H, S_chip)
+        key = (self.E, self.K, self.H, S_chip, self.num_links, self.dispatch_workers)
         hit = _SEQ_MODULES.get(key)
         if hit is None or hit[0] is not self.mesh:  # tests reopen the mesh: rebuild on a new one
             assert self.dgs * S_chip <= self.max_seq_len, f"chunk {self.dgs * S_chip} > max_seq_len {self.max_seq_len}"
@@ -210,6 +212,7 @@ class TtExperts:
                 num_links=self.num_links,
                 topology=ttnn.Topology.Linear,
                 subdevice_id=None,
+                num_workers_per_sender=self.dispatch_workers,
             )
             combine = TtCombineModule(
                 mesh_device=self.mesh,
@@ -347,12 +350,22 @@ class TtExperts:
         return out
 
 
+def moe_fabric_settings():
+    """(fabric links for offset_cumsum / dispatch / combine, worker cores per dispatch sender).
+    MIMO_MOE_LINKS (default 2: both P150x4 links on axis 1; 1 = the X.1 behaviour), MIMO_DISPATCH_WORKERS (default 2).
+    """
+    import os
+
+    return int(os.environ.get("MIMO_MOE_LINKS", "2")), int(os.environ.get("MIMO_DISPATCH_WORKERS", "2"))
+
+
 def build_experts(mesh, loader, cfg, layer: int, max_chunk: int):
     """TtExperts (CP=4 EP=4: one 4-chip dispatch group on axis 1, 64 complete experts per chip, bfp8).
     Default mode 'unified' (ttnn.bringup.unified_routed_expert_moe, high_precision, HiFi4 + fp32 dest);
     MIMO_EXPERTS_MODE=loop selects the per-expert ttnn.linear path, unified_lofi the op without high_precision."""
     import os
 
+    links, workers = moe_fabric_settings()
     weights = LazyExpertWeights(loader, f"model.layers.{layer}.mlp.experts.", cfg.n_routed_experts)
     return TtExperts(
         mesh,
@@ -363,4 +376,6 @@ def build_experts(mesh, loader, cfg, layer: int, max_chunk: int):
         top_k=cfg.num_experts_per_tok,
         max_seq_len=max_chunk,
         mode=os.environ.get("MIMO_EXPERTS_MODE", "unified"),
+        num_links=links,
+        dispatch_workers=workers,
     )
