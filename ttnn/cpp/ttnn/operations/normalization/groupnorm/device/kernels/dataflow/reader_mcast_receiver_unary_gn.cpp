@@ -118,6 +118,11 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;    // E[x] global reduce
     constexpr uint32_t dfb_ex2_id = tt::CBIndex::c_13;          // E[x]^2 partial reduce
     constexpr uint32_t dfb_ex2_global_id = tt::CBIndex::c_14;   // E[x]^2 global reduce
+    // Corrected two-pass statistics (compute/groupnorm.cpp): D = mean(x - s). The sender gathers
+    // this core's c_11 partial next to its Q partial on pass 2 and multicasts the global D into c_12.
+    constexpr bool corrected_stats = get_named_compile_time_arg_val("corrected_stats") == 1;
+    constexpr uint32_t dfb_exd_partial_id = tt::CBIndex::c_11;
+    constexpr uint32_t dfb_exd_global_id = tt::CBIndex::c_12;
     constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;           // input cb
     constexpr uint32_t dfb_repack_id = tt::CBIndex::c_26;
     constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_31;
@@ -136,6 +141,8 @@ void kernel_main() {
     DataflowBuffer dfb_ex2_partial(dfb_ex2_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_ex2_global(dfb_ex2_global_id);
+    DataflowBuffer dfb_exd_partial(dfb_exd_partial_id);
+    DataflowBuffer dfb_exd_global(dfb_exd_global_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
@@ -249,6 +256,10 @@ void kernel_main() {
                         } else {
                             //Wait for local variance calculation
                             dfb_ex2_partial.wait_front(1);
+                            if constexpr (corrected_stats) {
+                                // The sender reads both partials after this signal.
+                                dfb_exd_partial.wait_front(1);
+                            }
                         }
                         reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
 
@@ -257,6 +268,9 @@ void kernel_main() {
                             dfb_ex_partial.pop_front(1);
                         } else {
                             dfb_ex2_partial.pop_front(1);
+                            if constexpr (corrected_stats) {
+                                dfb_exd_partial.pop_front(1);
+                            }
                         }
                     } else if (cur_read_iteration == 2) {
                         // add or copy with previous output results
@@ -313,8 +327,14 @@ void kernel_main() {
                         dfb_ex_global.push_back(1);
                     } else if (cur_read_iteration == 1) {
                         dfb_ex2_global.reserve_back(1);
+                        if constexpr (corrected_stats) {
+                            dfb_exd_global.reserve_back(1);
+                        }
                         reduce_sender_sem.wait(VALID);
                         dfb_ex2_global.push_back(1);
+                        if constexpr (corrected_stats) {
+                            dfb_exd_global.push_back(1);
+                        }
                     }
                 }
             }

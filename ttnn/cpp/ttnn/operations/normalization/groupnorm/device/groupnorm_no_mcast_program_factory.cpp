@@ -84,6 +84,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(im_data_format);
     // fp32 stats CBs (welford + fp32 DEST): reader kernels combine mean/variance as fp32, not bf16.
     const bool stats_is_fp32 = cb_data_format == tt::DataFormat::Float32;
+    // Corrected two-pass statistics (compute/groupnorm.cpp): pass 2 also sums the masked residual
+    // (x - s) so mean, variance and the normalized output are formed from values of magnitude ~std
+    // instead of |mean|. Only the bf16-statistics legacy path needs it; fp32 statistics are
+    // left on the plain two-pass (the writer's ones tile is bf16).
+    // PROTOTYPE A/B KNOB (remove before merge): TT_GN_PLAIN_TWO_PASS=1 forces the plain two-pass.
+    const bool corrected_stats =
+        !use_welford && cb_data_format == tt::DataFormat::Float16_b && std::getenv("TT_GN_PLAIN_TWO_PASS") == nullptr;
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format =
         reciprocals.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(reciprocals.value().dtype())
@@ -669,6 +676,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     reader_mcast_sender_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_mcast_sender_desc_g1.core_ranges = mcast_sender_cores_group_1;
     reader_mcast_sender_desc_g1.compile_time_args = reader_mcast_sender_compile_time_args_group_1;
+    reader_mcast_sender_named_compile_time_args_group_1["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
+    reader_mcast_sender_named_compile_time_args_group_2["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
     reader_mcast_sender_desc_g1.named_compile_time_args =
         to_named_args_no_mcast(reader_mcast_sender_named_compile_time_args_group_1);
     reader_mcast_sender_desc_g1.defines =
@@ -815,6 +824,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     writer_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc_g1.core_ranges = all_cores_group_1;
     writer_desc_g1.compile_time_args = writer_mcast_sender_compile_time_args_group_1;
+    writer_named_compile_time_args_group_1["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
+    writer_named_compile_time_args_group_2["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
     writer_desc_g1.named_compile_time_args = to_named_args_no_mcast(writer_named_compile_time_args_group_1);
     writer_desc_g1.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
     writer_desc_g1.config = DataMovementConfigDescriptor{
@@ -989,6 +1000,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     mcast_sender_compute_named_compile_time_args_group_2["mean_recip_bits"] = pad.recip_bits(reduce_factor_w_group_2);
     mcast_sender_compute_named_compile_time_args_group_2["global_recip_bits"] =
         std::bit_cast<uint32_t>(1.0f / static_cast<float>(reduce_factor_c_group_2));
+    mcast_sender_compute_named_compile_time_args_group_1["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
+    mcast_sender_compute_named_compile_time_args_group_2["corrected_stats"] = static_cast<uint32_t>(corrected_stats);
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel_path;
@@ -1379,8 +1392,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             (num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes + single_tile_size -
              1) /
             single_tile_size;
+        // corrected_stats: the reader lays the pass-2 D slots out in a second region of the same
+        // size and reserves both regions on every pass, so the ring needs twice the tiles.
         desc.cbs.push_back(CBDescriptor{
-            .total_size = cb_ex_external_tiles * single_tile_size,
+            .total_size = cb_ex_external_tiles * single_tile_size * (corrected_stats ? 2 : 1),
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(ex_cb_external_index),
@@ -1422,6 +1437,37 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                   },
                   CBFormatDescriptor{
                       .buffer_index = static_cast<uint8_t>(ex2_cb_index),
+                      .data_format = cb_data_format,
+                      .page_size = single_tile_size,
+                  }}},
+        });
+    }
+
+    if (corrected_stats) {
+        // D statistics (compute/groupnorm.cpp): c_11 per-out-block partial, c_12 global with the
+        // reader's c_19 alias (like c_9/c_15), c_7 the D-filled tile, c_1 the writer's ones tile.
+        for (uint32_t single_cb : {tt::CBIndex::c_11, tt::CBIndex::c_7, tt::CBIndex::c_1}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = single_tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(single_cb),
+                    .data_format = cb_data_format,
+                    .page_size = single_tile_size,
+                }}},
+            });
+        }
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors =
+                {{CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_12),
+                      .data_format = cb_data_format,
+                      .page_size = single_tile_size,
+                  },
+                  CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_19),
                       .data_format = cb_data_format,
                       .page_size = single_tile_size,
                   }}},

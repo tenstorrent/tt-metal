@@ -70,6 +70,8 @@ void kernel_main() {
     constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
     constexpr bool use_welford = get_named_compile_time_arg_val("groupnorm_mode") > 0;
+    // Corrected two-pass statistics (see compute/groupnorm.cpp): this writer only adds the ones tile.
+    constexpr bool corrected_stats = get_named_compile_time_arg_val("corrected_stats") == 1;
 
     // Non-tile-aligned H*W: a second, row-masked set of mask tiles streamed behind the normal
     // one. The element-count correction itself lives in the compute kernel's post-reduce
@@ -268,6 +270,20 @@ void kernel_main() {
                         dfb_in_4,
                         ckernel::PoolType::SUM,
                         ckernel::ReduceDim::REDUCE_SCALAR>();
+                }
+
+                if constexpr (corrected_stats) {
+                    // All-ones tile. Compute multiplies it by the global D (scalar broadcast) to
+                    // build the D-filled tile that pass 3 subtracts in DEST.
+                    constexpr uint32_t dfb_ones_id = tt::CBIndex::c_1;
+                    DataflowBuffer dfb_ones(dfb_ones_id);
+                    dfb_ones.reserve_back(1);
+                    volatile tt_l1_ptr uint32_t* ones_ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_ones.get_write_ptr());
+                    for (uint32_t k = 0; k < 512U; ++k) {
+                        ones_ptr[k] = 0x3F803F80u;  // two packed bf16 1.0
+                    }
+                    dfb_ones.push_back(1);
                 }
 
                 constexpr uint32_t eps_dfb_id = tt::CBIndex::c_3;

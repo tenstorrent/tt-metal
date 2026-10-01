@@ -114,6 +114,13 @@ void kernel_main() {
     constexpr std::uint32_t mean_recip_bits = get_named_compile_time_arg_val("mean_recip_bits");
     constexpr std::uint32_t global_recip_bits = get_named_compile_time_arg_val("global_recip_bits");
 
+    // Corrected two-pass statistics. With bf16 DEST the pass-1 sum of x runs on values of magnitude
+    // |mean|, so its error scales with |mean|/std. Pass 2 already forms the masked residual
+    // (x - s), s being the pass-1 mean every core received; summing it once more gives
+    // D = mean(x - s), and then mean = s + D, var = Q - D^2 and y = ((x - s) - D) * rstd, all of
+    // which only ever accumulate values of magnitude ~std. Host enables this for bf16 statistics.
+    constexpr bool corrected_stats = get_named_compile_time_arg_val("corrected_stats") == 1;
+
     constexpr std::uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr std::uint32_t block_w = get_named_compile_time_arg_val("block_w");
     constexpr std::uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
@@ -188,6 +195,14 @@ void kernel_main() {
     constexpr std::uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
     constexpr std::uint32_t dfb_ex2_global_id = tt::CBIndex::c_14;
     constexpr std::uint32_t dfb_ex2pe_id = tt::CBIndex::c_27;
+    // corrected_stats only. c_11: per-out-block partial of (x - s); c_12: global D (c_19 is the
+    // reader's alias of c_12, like c_9 is of c_15); c_7: a tile filled with D for the pass-3
+    // DEST-reuse subtract; c_1: the writer's all-ones tile that fill is broadcast from.
+    constexpr std::uint32_t dfb_exd_partial_id = tt::CBIndex::c_11;
+    constexpr std::uint32_t dfb_exd_global_id = tt::CBIndex::c_12;
+    constexpr std::uint32_t dfb_exd_id = tt::CBIndex::c_19;
+    constexpr std::uint32_t dfb_dfill_id = tt::CBIndex::c_7;
+    constexpr std::uint32_t dfb_ones_id = tt::CBIndex::c_1;
 
     // interm cbs reuse
     constexpr std::uint32_t dfb_fusion_id = dfb_xmm_id;
@@ -256,6 +271,11 @@ void kernel_main() {
     DataflowBuffer dfb_reread_write_out(dfb_reread_write_out_id);
     DataflowBuffer dfb_x(dfb_x_id);
     DataflowBuffer dfb_xmm(dfb_xmm_id);
+    DataflowBuffer dfb_ex_external(dfb_ex_external_id);
+    DataflowBuffer dfb_exd(dfb_exd_id);
+    DataflowBuffer dfb_exd_global(dfb_exd_global_id);
+    DataflowBuffer dfb_dfill(dfb_dfill_id);
+    DataflowBuffer dfb_ones(dfb_ones_id);
 
 #ifdef TILIZE_IN
 #ifdef READER_REPACK
@@ -271,6 +291,10 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_input_mask_id, dfb_x_id);
     constexpr std::uint32_t dfb_input_id = dfb_in0_id;
 #endif
+    if constexpr (corrected_stats) {
+        // Written once by the writer; never popped.
+        dfb_ones.wait_front(1);
+    }
     constexpr auto input_strided_block_input = ckl::input(
         dfb_input_id,
         ckl::WaitPolicy::None,
@@ -501,6 +525,12 @@ void kernel_main() {
                     dfb_ex.reserve_back(1);
                     dfb_ex.push_back(1);
                 }
+                if constexpr (corrected_stats) {
+                    // The reader gathers two regions of dfb_ex_external_tiles_required tiles on every
+                    // pass so the ring stays block-aligned; pass 1 leaves the D region unused.
+                    dfb_ex_external.wait_front(dfb_ex_external_tiles_required);
+                    dfb_ex_external.pop_front(dfb_ex_external_tiles_required);
+                }
             }
             // End Global Reduce
             // End Average Calc
@@ -617,22 +647,58 @@ void kernel_main() {
                 }
                 dfb_x.push_back(static_cast<uint16_t>(out_block_hw_normal));
 
-                reconfig_data_format_srcb(dfb_input_mask_id, dfb_x_id);
-                ckl::square<
-                    ckl::input(
+                if constexpr (corrected_stats) {
+                    // Partial-D: sum of the masked residual (x - s) over this out-block. Both this
+                    // reduce and the square below read dfb_x, so the square must not pop it.
+                    reconfig_data_format_srcb(dfb_input_mask_id, dfb_scaler_id);
+                    dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_SCALAR,
                         dfb_x_id,
-                        ckl::WaitPolicy::Upfront,
-                        ckl::PopPolicy::AtEnd,
-                        ckl::InputTileMapping::Block,
-                        ckl::DataFormatReconfig::Disabled),
-                    ckl::output(
-                        dfb_xmm_id,
-                        ckl::ReservePolicy::Upfront,
-                        ckl::PushPolicy::AtEnd,
-                        ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
+                        dfb_scaler_id,
+                        dfb_exd_partial_id,
+                        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                        compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_mean_recip);
+                    reconfig_data_format_srcb(dfb_scaler_id, dfb_x_id);
+                    ckl::square<
+                        ckl::input(
+                            dfb_x_id,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::InputTileMapping::Block,
+                            ckl::DataFormatReconfig::Disabled),
+                        ckl::output(
+                            dfb_xmm_id,
+                            ckl::ReservePolicy::Upfront,
+                            ckl::PushPolicy::AtEnd,
+                            ckl::DataFormatReconfig::Disabled)>(
+                        ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
+                    dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal));
+                } else {
+                    reconfig_data_format_srcb(dfb_input_mask_id, dfb_x_id);
+                    ckl::square<
+                        ckl::input(
+                            dfb_x_id,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::AtEnd,
+                            ckl::InputTileMapping::Block,
+                            ckl::DataFormatReconfig::Disabled),
+                        ckl::output(
+                            dfb_xmm_id,
+                            ckl::ReservePolicy::Upfront,
+                            ckl::PushPolicy::AtEnd,
+                            ckl::DataFormatReconfig::Disabled)>(
+                        ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
+                    if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                        dfb_x.pop_front(out_block_hw_normal - out_block_hw_last);
+                    }
+                }
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    dfb_x.pop_front(out_block_hw_normal - out_block_hw_last);
                     dfb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
                     dfb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                 }
@@ -672,6 +738,26 @@ void kernel_main() {
                     dfb_ex2.reserve_back(1);
                     dfb_ex2.push_back(1);
                 }
+                if constexpr (corrected_stats) {
+                    // Global D over the second region of the pass-2 gather (the reader lays the D
+                    // slots out after the Q slots).
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_SCALAR,
+                        dfb_ex_external_id,
+                        dfb_scaler_global_id,
+                        dfb_exd_global_id,
+                        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                        compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_global_recip);
+                    if constexpr (num_cores_per_mcast_group > 1) {
+                        dfb_exd.reserve_back(1);
+                        dfb_exd.push_back(1);
+                    }
+                }
             }
             // End Global Reduce
 
@@ -686,24 +772,88 @@ void kernel_main() {
             }
             // The row mask keeps the padding out of both sums, so this is already the variance over
             // the real rows; no back-correction needed.
-            // (Var + eps)
-            ckl::eltwise_chain(
-                ckl::IterationShape::one_tile(),
-                ckl::BinaryFpu<
-                    ckl::BinaryFpuOp::Add,
-                    ckl::input(
-                        dfb_ex2_global_id,
-                        ckl::WaitPolicy::PerTile,
-                        ckl::PopPolicy::PerTile,
-                        ckl::DataFormatReconfig::Disabled),
-                    ckl::input(
-                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{},
-                ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(
-                    dfb_ex2pe_id,
-                    ckl::ReservePolicy::PerTile,
-                    ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>{});
+            if constexpr (corrected_stats) {
+                dfb_exd_global.wait_front(1);
+                // A full tile of D (ones * D[0,0]); pass 3 subtracts it from (x - s) in DEST.
+                ckl::eltwise_chain(
+                    ckl::IterationShape::one_tile(),
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::input(
+                            dfb_ones_id,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::DataFormatReconfig::Disabled),
+                        ckl::input(
+                            dfb_exd_global_id,
+                            ckl::BroadcastDim::Scalar,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::DataFormatReconfig::Disabled)>{},
+                    ckl::PackTile<ckl::output(
+                        dfb_dfill_id,
+                        ckl::ReservePolicy::PerTile,
+                        ckl::PushPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled)>{});
+                dfb_dfill.wait_front(1);
+                // rstd = rsqrt((Q - D*D) + eps). D*D is formed as D_tile * Dfill so it lands at
+                // [0,0] like Q; every other datum stays 0 as before.
+                ckl::eltwise_chain(
+                    ckl::IterationShape::one_tile(),
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::input(
+                            dfb_exd_global_id,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::DataFormatReconfig::Disabled),
+                        ckl::input(
+                            dfb_dfill_id,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::DataFormatReconfig::Disabled)>{},
+                    ckl::DestReuseBinary<
+                        ckl::BinaryFpuOp::Sub,
+                        ckl::input(
+                            dfb_ex2_global_id,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::AtEnd,
+                            ckl::DataFormatReconfig::Disabled),
+                        ckl::DestReuseType::DEST_TO_SRCB>{},
+                    ckl::DestReuseBinary<
+                        ckl::BinaryFpuOp::Add,
+                        ckl::input(
+                            dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                        ckl::DestReuseType::DEST_TO_SRCA>{},
+                    ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
+                    ckl::PackTile<ckl::output(
+                        dfb_ex2pe_id,
+                        ckl::ReservePolicy::PerTile,
+                        ckl::PushPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled)>{});
+            } else {
+                // (Var + eps)
+                ckl::eltwise_chain(
+                    ckl::IterationShape::one_tile(),
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Add,
+                        ckl::input(
+                            dfb_ex2_global_id,
+                            ckl::WaitPolicy::PerTile,
+                            ckl::PopPolicy::PerTile,
+                            ckl::DataFormatReconfig::Disabled),
+                        ckl::input(
+                            dfb_eps_id,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::DataFormatReconfig::Disabled)>{},
+                    ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
+                    ckl::PackTile<ckl::output(
+                        dfb_ex2pe_id,
+                        ckl::ReservePolicy::PerTile,
+                        ckl::PushPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled)>{});
+            }
             // End Variance Calc
 
             const bool start_copy_or_add = copy_or_add;
@@ -729,26 +879,44 @@ void kernel_main() {
                     reconfig_data_format_srca(dfb_input_id);
                     reconfig_data_format_srcb(dfb_ex_global_id);
                 }
+                // corrected_stats: (x - s) - D, the D-filled tile subtracted in DEST right after the
+                // broadcast s subtract, so no quantity of magnitude |mean| is ever rounded to bf16.
+                constexpr auto sub_dfill = ckl::DestReuseBinary<
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::input(
+                        dfb_dfill_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                    ckl::DestReuseType::DEST_TO_SRCA>{};
 #ifdef TILIZE_IN
-                ckl::eltwise_chain(
-                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w),
-                    ckl::BinaryFpu<
-                        ckl::BinaryFpuOp::Sub,
-                        input_strided_block_input,
-                        ckl::input(
-                            dfb_ex_global_id,
-                            ckl::BroadcastDim::Scalar,
-                            ckl::WaitPolicy::None,
-                            ckl::PopPolicy::None,
-                            ckl::DataFormatReconfig::Disabled)>{
-                        ckl::StridedTileRange{out_block_index * out_block_hw_normal, block_w}},
-                    ckl::PackTile<ckl::output(
-                        dfb_xmm_id,
-                        ckl::ReservePolicy::Upfront,
-                        ckl::PushPolicy::AtEnd,
-                        ckl::DataFormatReconfig::Disabled)>{});
+                constexpr auto sub_mean_resident = ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Sub,
+                    input_strided_block_input,
+                    ckl::input(
+                        dfb_ex_global_id,
+                        ckl::BroadcastDim::Scalar,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::DataFormatReconfig::Disabled)>{
+                    ckl::StridedTileRange{out_block_index * out_block_hw_normal, block_w}};
+                constexpr auto pack_xmm = ckl::PackTile<ckl::output(
+                    dfb_xmm_id,
+                    ckl::ReservePolicy::Upfront,
+                    ckl::PushPolicy::AtEnd,
+                    ckl::DataFormatReconfig::Disabled)>{};
+                if constexpr (corrected_stats) {
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w),
+                        sub_mean_resident,
+                        sub_dfill,
+                        pack_xmm);
+                } else {
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w),
+                        sub_mean_resident,
+                        pack_xmm);
+                }
 #else
-                ckl::sub<
+                constexpr auto sub_mean_tiled = ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Sub,
                     ckl::input(
                         dfb_in0_id,
                         ckl::WaitPolicy::PerTile,
@@ -759,13 +927,24 @@ void kernel_main() {
                         ckl::BroadcastDim::Scalar,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
-                        ckl::DataFormatReconfig::Disabled),
-                    ckl::output(
-                        dfb_xmm_id,
-                        ckl::ReservePolicy::Upfront,
-                        ckl::PushPolicy::AtEnd,
-                        ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
+                        ckl::DataFormatReconfig::Disabled)>{};
+                constexpr auto pack_xmm = ckl::PackTile<ckl::output(
+                    dfb_xmm_id,
+                    ckl::ReservePolicy::Upfront,
+                    ckl::PushPolicy::AtEnd,
+                    ckl::DataFormatReconfig::Disabled)>{};
+                if constexpr (corrected_stats) {
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w),
+                        sub_mean_tiled,
+                        sub_dfill,
+                        pack_xmm);
+                } else {
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w),
+                        sub_mean_tiled,
+                        pack_xmm);
+                }
 #endif
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
 #ifndef TILIZE_IN
@@ -1018,6 +1197,10 @@ void kernel_main() {
             }
             dfb_ex_global.pop_front(1);
             dfb_ex2pe.pop_front(1);
+            if constexpr (corrected_stats) {
+                dfb_exd_global.pop_front(1);
+                dfb_dfill.pop_front(1);
+            }
             dfb_input_mask.pop_front(mask_tiles_per_group);
         }
         // End Group Loop

@@ -201,6 +201,12 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
     constexpr uint32_t dfb_ex2_id = tt::CBIndex::c_13;
     constexpr uint32_t dfb_ex_external_id = tt::CBIndex::c_10;
+    // Corrected two-pass statistics (compute/groupnorm.cpp): D = mean(x - s). The per-core partial
+    // in c_11 is gathered next to the Q partials on the second pass; the sender's global D is
+    // read through c_19 (alias of compute's c_12) and multicast with Q.
+    constexpr bool corrected_stats = get_named_compile_time_arg_val("corrected_stats") == 1;
+    constexpr uint32_t dfb_exd_partial_id = tt::CBIndex::c_11;
+    constexpr uint32_t dfb_exd_id = tt::CBIndex::c_19;
     constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t dfb_repack_id = tt::CBIndex::c_26;
     constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_31;
@@ -217,6 +223,8 @@ void kernel_main() {
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex2(dfb_ex2_id);
     DataflowBuffer dfb_ex_external(dfb_ex_external_id);
+    DataflowBuffer dfb_exd_partial(dfb_exd_partial_id);
+    DataflowBuffer dfb_exd(dfb_exd_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
@@ -319,8 +327,14 @@ void kernel_main() {
                 //Definition: num_read_of_input = 3
                 for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                     uint32_t out_block_start_id_offset = 0;
-                    dfb_ex_external.reserve_back(dfb_ex_external_tiles_required);
+                    // corrected_stats: two regions per pass (Q slots, then D slots) so the ring stays
+                    // block-aligned; pass 1 leaves the second region unused and compute pops it.
+                    constexpr uint32_t ex_external_tiles_per_pass =
+                        corrected_stats ? 2 * dfb_ex_external_tiles_required : dfb_ex_external_tiles_required;
+                    dfb_ex_external.reserve_back(ex_external_tiles_per_pass);
                     uint32_t l1_write_addr_external = dfb_ex_external.get_write_ptr();
+                    uint32_t l1_write_addr_external_d =
+                        l1_write_addr_external + dfb_ex_external_tiles_required * single_tile_size_bytes;
 
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                         uint32_t out_block_h_actual;
@@ -374,6 +388,9 @@ void kernel_main() {
                                 dfb_ex_partial.wait_front(1);
                             } else {
                                 dfb_ex2_partial.wait_front(1);
+                                if constexpr (corrected_stats) {
+                                    dfb_exd_partial.wait_front(1);
+                                }
                             }
 
                             // read self Ex partial - this slot is treated the same as every
@@ -385,9 +402,22 @@ void kernel_main() {
                             // slots tile exactly).
                             const uint32_t l1_read_addr_ex_par =
                                 cur_read_iteration== 0 ? dfb_ex_partial.get_read_ptr() : dfb_ex2_partial.get_read_ptr();
+                            // corrected_stats, pass 2 only: every core's D partial sits at the same
+                            // c_11 address, exactly as the Q partial does in c_21.
+                            const bool gather_d = corrected_stats && cur_read_iteration == 1;
+                            uint32_t l1_read_addr_exd_par = 0;
+                            if constexpr (corrected_stats) {
+                                if (gather_d) {
+                                    l1_read_addr_exd_par = dfb_exd_partial.get_read_ptr();
+                                }
+                            }
                             const UnicastEndpoint remote_ep;
                             noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par}, {});
                             l1_write_addr_external += dfb_ex_external_slot_pitch_bytes;
+                            if (gather_d) {
+                                noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external_d), num_bytes_read, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_exd_par}, {});
+                            }
+                            l1_write_addr_external_d += dfb_ex_external_slot_pitch_bytes;
                             noc.async_read_barrier();
 
                             if constexpr (num_mcast_cores > 1) {
@@ -400,6 +430,10 @@ void kernel_main() {
                                     const UnicastEndpoint remote_ep;
                                     noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[core_i + 1], .noc_y = noc_coord_y[core_i + 1], .addr = l1_read_addr_ex_par}, {});
                                     l1_write_addr_external += dfb_ex_external_slot_pitch_bytes;
+                                    if (gather_d) {
+                                        noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external_d), num_bytes_read, {.noc_x = noc_coord_x[core_i + 1], .noc_y = noc_coord_y[core_i + 1], .addr = l1_read_addr_exd_par}, {});
+                                    }
+                                    l1_write_addr_external_d += dfb_ex_external_slot_pitch_bytes;
                                     noc.async_read_barrier();
                                 }
                             }
@@ -407,6 +441,9 @@ void kernel_main() {
                                 dfb_ex_partial.pop_front(1);
                             } else {
                                 dfb_ex2_partial.pop_front(1);
+                                if constexpr (corrected_stats) {
+                                    dfb_exd_partial.pop_front(1);
+                                }
                             }
 
                             if constexpr (num_mcast_cores > 1) {
@@ -487,7 +524,7 @@ void kernel_main() {
                         out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }
                     if (cur_read_iteration== 0 || cur_read_iteration == 1) {
-                        dfb_ex_external.push_back(dfb_ex_external_tiles_required);
+                        dfb_ex_external.push_back(ex_external_tiles_per_pass);
 
                         if constexpr (num_mcast_cores > 1) {
                             uint32_t l1_read_addr_ex;
@@ -497,6 +534,16 @@ void kernel_main() {
                             } else {
                                 dfb_ex2.wait_front(1);
                                 l1_read_addr_ex = dfb_ex2.get_read_ptr();
+                            }
+                            // corrected_stats: the global D rides along with Q on pass 2, written to
+                            // the receivers' c_12 (same address everywhere) before the semaphore.
+                            const bool mcast_d = corrected_stats && cur_read_iteration == 1;
+                            uint32_t l1_read_addr_exd = 0;
+                            if constexpr (corrected_stats) {
+                                if (mcast_d) {
+                                    dfb_exd.wait_front(1);
+                                    l1_read_addr_exd = dfb_exd.get_read_ptr();
+                                }
                             }
 
                             const MulticastEndpoint mcast_dst;
@@ -508,6 +555,16 @@ void kernel_main() {
                                 {},
                                 {.noc_x_start = mcast_dest_noc_start_x, .noc_y_start = mcast_dest_noc_start_y, .noc_x_end = mcast_dest_noc_end_x, .noc_y_end = mcast_dest_noc_end_y, .addr = l1_read_addr_ex},
                                 true);
+                            if (mcast_d) {
+                                noc.async_write_multicast(
+                                    CoreLocalMem<uint32_t>(l1_read_addr_exd),
+                                    mcast_dst,
+                                    num_bytes_read,
+                                    num_mcast_cores_mid_group,
+                                    {},
+                                    {.noc_x_start = mcast_dest_noc_start_x, .noc_y_start = mcast_dest_noc_start_y, .noc_x_end = mcast_dest_noc_end_x, .noc_y_end = mcast_dest_noc_end_y, .addr = l1_read_addr_exd},
+                                    true);
+                            }
                             reduce_sender_sem.set_multicast(
                                 noc,
                                 mcast_dest_noc_start_x,
@@ -527,6 +584,16 @@ void kernel_main() {
                                     {},
                                     {.noc_x_start = mcast_first_group_dest_noc_start_x, .noc_y_start = mcast_first_group_dest_noc_start_y, .noc_x_end = mcast_first_group_dest_noc_end_x, .noc_y_end = mcast_first_group_dest_noc_end_y, .addr = l1_read_addr_ex},
                                     true);
+                                if (mcast_d) {
+                                    noc.async_write_multicast(
+                                        CoreLocalMem<uint32_t>(l1_read_addr_exd),
+                                        mcast_first_dst,
+                                        num_bytes_read,
+                                        num_mcast_cores_first_group,
+                                        {},
+                                        {.noc_x_start = mcast_first_group_dest_noc_start_x, .noc_y_start = mcast_first_group_dest_noc_start_y, .noc_x_end = mcast_first_group_dest_noc_end_x, .noc_y_end = mcast_first_group_dest_noc_end_y, .addr = l1_read_addr_exd},
+                                        true);
+                                }
                                 reduce_sender_sem.set_multicast(
                                     noc,
                                     mcast_first_group_dest_noc_start_x,
@@ -547,6 +614,16 @@ void kernel_main() {
                                     {},
                                     {.noc_x_start = mcast_last_group_dest_noc_start_x, .noc_y_start = mcast_last_group_dest_noc_start_y, .noc_x_end = mcast_last_group_dest_noc_end_x, .noc_y_end = mcast_last_group_dest_noc_end_y, .addr = l1_read_addr_ex},
                                     true);
+                                if (mcast_d) {
+                                    noc.async_write_multicast(
+                                        CoreLocalMem<uint32_t>(l1_read_addr_exd),
+                                        mcast_last_dst,
+                                        num_bytes_read,
+                                        num_mcast_cores_last_group,
+                                        {},
+                                        {.noc_x_start = mcast_last_group_dest_noc_start_x, .noc_y_start = mcast_last_group_dest_noc_start_y, .noc_x_end = mcast_last_group_dest_noc_end_x, .noc_y_end = mcast_last_group_dest_noc_end_y, .addr = l1_read_addr_exd},
+                                        true);
+                                }
                                 reduce_sender_sem.set_multicast(
                                     noc,
                                     mcast_last_group_dest_noc_start_x,
@@ -561,6 +638,9 @@ void kernel_main() {
                                 dfb_ex.pop_front(1);
                             } else {
                                 dfb_ex2.pop_front(1);
+                                if constexpr (corrected_stats) {
+                                    dfb_exd.pop_front(1);
+                                }
                             }
                         }
                     }
