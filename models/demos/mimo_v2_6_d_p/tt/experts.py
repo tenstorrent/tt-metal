@@ -252,7 +252,8 @@ class TtExperts:
         dispatch, combine = self._seq_modules(S)
         idx2 = ttnn.reshape(ttnn.typecast(idx, ttnn.uint16) if idx.dtype != ttnn.uint16 else idx, (S, K))
         hist = ttnn.experimental.deepseek_prefill.masked_bincount(idx2, self.dispatch_table, self.E, K)
-        offsets, counts, region_offsets = ttnn.bringup.offset_cumsum(
+        # 4th output (#57859, every device's offsets row along the axis) is not used here
+        offsets, counts, region_offsets, _ = ttnn.bringup.offset_cumsum(
             hist,
             cluster_axis=0,
             num_links=self.num_links,
