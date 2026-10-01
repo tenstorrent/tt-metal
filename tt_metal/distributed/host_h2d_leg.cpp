@@ -140,7 +140,7 @@ std::unique_ptr<H2DLeg> H2DLeg::create(
         slots.push_back(RingAlias::Slot{d.shm_name, d.shm_size, d.data_offset, d.fifo_size});
     }
 
-    im.alias = RingAlias::map(cfg.alias_region_base, AliasArena::Rx, slots, err);
+    im.alias = RingAlias::map(mesh->impl().host_region(), cfg.alias_region_base, AliasArena::Rx, slots, err);
     if (!im.alias) {
         return nullptr;
     }
