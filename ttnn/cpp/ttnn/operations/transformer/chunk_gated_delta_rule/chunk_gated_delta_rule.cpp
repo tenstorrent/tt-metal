@@ -283,16 +283,19 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // Fused and mono are the two program factories of one device op (chunk_gdn_device_operation.hpp);
     // phased is the two prims of chunk_gdn_phased.hpp. The program config names the path, as a matmul
     // program config names its factory; without one the op chooses by the fused path's calibrated
-    // geometry cost model: fused iff a row-local geometry fits this grid AND its predicted time beats
-    // the phased reference (fused_pays). On QB2's 11x10 grid that is every BH <= 48 (BH=64 needs 128
-    // cores -> phased); the fused path is bit-exact vs phased and measured 1.2-1.9x faster at
-    // BH = 4..32. Every config field is hashed inside the device op's attributes (the factory choice
-    // included), so each path has its own program-cache entries.
+    // geometry cost model: fused iff a geometry (NP producers per head, or one producer pool) fits this
+    // grid AND its predicted time beats the phased reference (fused_pays). On QB2's 11x10 grid that is
+    // every BH <= 48 (BH=64 needs 128 cores -> phased); the fused path is bit-exact vs phased and
+    // measured 1.2-2.0x faster at BH = 4..48. Every config field is hashed inside the device op's
+    // attributes (the factory choice included), so each path has its own program-cache entries.
     const ChunkGdnProgramConfig cfg = program_config.has_value() ? *program_config : [&]() -> ChunkGdnProgramConfig {
         const auto grid = dev->compute_with_storage_grid_size();
         const auto choice = ttnn::prim::choose_fused_geometry(grid.x, grid.y, BH, NC, V / tt::constants::TILE_WIDTH);
         if (choice.nv >= 1 && choice.fused_pays) {
-            return ChunkGdnFusedProgramConfig{};  // geometry left free: the prim re-derives this same pick
+            // Geometry left free: the prim re-derives this same pick among the candidates of its kind.
+            ChunkGdnFusedProgramConfig fused{};
+            fused.producer_pool = choice.placement == 2;
+            return fused;
         }
         return ChunkGdnPhasedProgramConfig{};
     }();
