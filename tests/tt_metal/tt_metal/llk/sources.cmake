@@ -29,6 +29,7 @@ set(UNIT_TESTS_LLK_SRC
     test_sdpa_reconciliation.cpp
     test_sfpu_binary_bcast.cpp
     test_sfpu_compute.cpp
+    test_sfpu_exp_fp32_replay.cpp
     test_sfpu_reduce.cpp
     test_single_core_binary_compute.cpp
     test_single_core_matmul_compute.cpp
