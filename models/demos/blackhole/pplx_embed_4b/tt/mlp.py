@@ -115,6 +115,66 @@ def _wrap_silu_mul(original_mul, min_rows):
     return wrapper
 
 
+def _wrap_ff13_1d(original_linear, w1, w3, device):
+    """bs1 FF1 / FF3 ([512, 2560] x [2560, 9728], bfp4 weights DRAM width-sharded over the 8 banks) on the 1D
+    in0-multicast matmul over 12x10 instead of the 2D multicast on 12x8: every core owns all 16 M tiles and 3 N tiles
+    (102 cores working instead of 96) and reads its weight slice straight from its DRAM bank(s) (the 1D factory's
+    IN1_DRAM_WIDTH_SHARDED path). in0 must be width-sharded: the norm's 10x8 block-sharded output is resharded once
+    onto 10 cores (512 x 256 each, 1.6 us) and both projections read it. Standalone 69.6 -> 61.9 us per call
+    (perf_tools/bench_bs1_mm_ablate.py). QWEN_BS1_FF13_1D=0: the 2D path."""
+    grid = device.compute_with_storage_grid_size()
+    ws10 = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 0))}),
+            [512, 256],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(12, 10),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        out_block_h=16,
+        out_block_w=3,
+        per_core_M=16,
+        per_core_N=3,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    state = {"src": None, "x": None, "uses": 0}
+
+    def eligible(x, w):
+        if w is not w1 and w is not w3 or grid.x < 12 or grid.y < 10:
+            return False
+        mc = x.memory_config()
+        return (
+            mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            and list(x.padded_shape)[-2:] == [512, 2560]
+            and list(w.padded_shape)[-2:] == [2560, 9728]
+            and w.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            and w.memory_config().buffer_type == ttnn.BufferType.DRAM
+        )
+
+    def wrapper(x, w, *args, **kwargs):
+        if args or not eligible(x, w):
+            return original_linear(x, w, *args, **kwargs)
+        if state["src"] is not x:
+            state["src"], state["x"], state["uses"] = x, ttnn.to_memory_config(x, ws10), 0
+        kwargs = dict(kwargs, program_config=pc, core_grid=None)
+        out = original_linear(state["x"], w, **kwargs)
+        state["uses"] += 1
+        if state["uses"] == 2:  # FF1 and FF3 both done: free the resharded copy
+            ttnn.deallocate(state["x"])
+            state["src"], state["x"] = None, None
+        return out
+
+    return wrapper
+
+
 class PplxFusedSwigluMLP(MLP):
     """MLP whose batched-prefill FF1/FF3/mul collapse into one fused matmul."""
 
@@ -194,13 +254,16 @@ class PplxFusedSwigluMLP(MLP):
             if self._can_silu_in_ff1(mode, seq_len):
                 return self._forward_silu_in_ff1(x, mode, seq_len)
             if mode == Mode.PREFILL and os.getenv("QWEN_SILU_MUL", "1") == "1":
-                # Unfused SwiGLU path (bs32): the silu(a)*b product as one model-local generic_op.
-                _orig_mul = ttnn.mul
+                # Unfused SwiGLU path (bs32 opt-out, bs1): the silu(a)*b product as one model-local generic_op,
+                # and at bs1 FF1 / FF3 on the 1D matmul over 120 cores.
+                _orig_mul, _orig_linear = ttnn.mul, ttnn.linear
                 ttnn.mul = _wrap_silu_mul(_orig_mul, int(os.getenv("QWEN_SILU_MUL_MIN_ROWS", "8192")))
+                if os.getenv("QWEN_BS1_FF13_1D", "1") == "1":
+                    ttnn.linear = _wrap_ff13_1d(_orig_linear, self.w1, self.w3, self.mesh_device)
                 try:
                     return super().forward(x, mode)
                 finally:
-                    ttnn.mul = _orig_mul
+                    ttnn.mul, ttnn.linear = _orig_mul, _orig_linear
             return super().forward(x, mode)
 
         layer = max(self.layer_num, 0)

@@ -43,9 +43,10 @@ From the e2e-vs-roofline analysis on the device-profile artifact (https://claude
 - **bs1 focus (2026-10-01).** Gap table at cdb9143 (device µs per call vs floor): matmuls 10.2 ms (67%; FF1 / FF3 /
   FF2 70 µs vs 48 on their 96 cores, 38 on 120), SwiGLU product 1.88 ms, heads op 1.02, SDPA 0.98 (floor 9 µs
   compute), residual adds + LayerNorm 1.1 (142 calls of 7-8 µs). Landed: SwiGLU product via `silu_mul` mode 3,
-  15.6 -> 14.8 ms cold (NEGATIVE_RESULTS §68). Next candidates: a 6-segment `lut2` sigmoid (<= 10 µs / layer if it
-  holds accuracy), then the matmuls (M = 16 tile rows does not split over 10 grid rows: a different decomposition to
-  use all 120 cores), heads op, SDPA.
+  15.6 -> 14.8 ms cold (NEGATIVE_RESULTS §68). Then FF1 / FF3 on the 1D matmul over 120 cores with DRAM-streamed
+  weights (tt-metal 1D factory change), 14.8 -> 14.1 ms (§69); the matmuls are compute-kernel-bound (~21 cycles per tile
+  matmul, data movement hidden), QKV / WO / FF2 cannot use 120 cores. Next candidates: heads op (28 µs / call), SDPA (27 µs vs a 9 µs compute
+  floor), a 6-segment `lut2` sigmoid (<= 10 µs / layer if it holds accuracy).
 - **Add+norm leads, if revisited.** What is exposed is each wave's read / write latency (no reads: −15 / −15 / −42 µs;
   no writes: −4 / −4 / −58 µs). Options not tried: software-pipeline the compute (next wave's add / square / partial
   before this wave's normalise) with CB 8 turned into a ring of 2-3 waves to free L1 (it holds every wave now: 147 KB

@@ -1675,3 +1675,53 @@ mode 3, larger ones keep mode 0): e2e chip 4, `ab_one.sh` 2 rounds, cold best 15
 `sustained_run.sh` 2 alternating rounds, sustained 15.7 / 15.7 → 14.9 / 15.0 ms (bs1 holds 1350 MHz). STS-B bs1
 bucketed 0.8159 (0.8161 before), fixed-ISL batch 1 0.8117 (0.8121). bs8 / 16 / 32 run the fused-SwiGLU matmul and never
 reach the product.
+
+## 69. bs1 matmuls: compute-kernel-bound on 96 cores; FF1 / FF3 on the 1D matmul over 120 cores with DRAM-streamed weights (landed) (2026-10-01)
+
+The bs1 projections (legacy 2D multicast on 12×8, M = 16 tile rows over 8 grid rows, bfp4 weights DRAM width-sharded
+over the 8 banks, LoFi) were 10.2 ms of the 15.27 ms replay at ~70% of the FPU on their 96 cores. Kernel-variant
+ablation (`perf_tools/mm_legacy_variants.py` trees via `TT_METAL_KERNEL_PATH`, `perf_tools/bench_bs1_mm_ablate.py`,
+device µs, chip 5):
+
+| | full | compute only | no in1 (reads + multicast) | no in0 | no output writes | FPU ideal on 96 cores |
+|---|---|---|---|---|---|---|
+| QKV | 42.5 | 40.8 | 41.7 | 42.6 | 41.6 | 30.3 |
+| WO | 31.6 | 31.0 | 31.2 | 31.5 | 31.2 | 20.2 |
+| FF1 / FF3 | 69.6 | 68.5 | 68.8 | 70.2 | 69.7 | 48.0 |
+| FF2 | 68.7 | 68.6 | 68.9 | 68.8 | 68.3 | 48.0 |
+
+Data movement is entirely hidden; the compute kernel takes ~21 cycles per tile matmul against LoFi's 16. (The
+`no_in1_read` guard alone did not take effect: the coalesced weight reads go through another call site.) Bigger
+blocks barely help: compute only, 2 × 26 / 2 × 16 / 2 × 7 tiles per core run 20.8 / 20.2 / 21.1 cycles per tile
+matmul, 8 × 8 with 4×2 subblocks 19.1, 8 × 16 18.6. In-model configs (block-sharded in0 pins QKV / FF1's
+in0_block_w to its 8-tile shard): FF2 1×7 / in0_block_w 19 68.7 → 65.9, WO 1×7 31.8 → 31.3, the rest at their best:
+≈ 3 µs per layer, the §39 fine-sweep result again (noise e2e), not pursued.
+
+The lever is the 24 idle cores, which the 2D kernel cannot reach (16 M tile rows over 10 grid rows). With every core
+owning all 16 M rows and an N slice (the 1D in0-multicast kernel, `MatmulMultiCoreReuseMultiCast1DProgramConfig`
+`mcast_in0`), FF1 / FF3's 304 N tiles fill 102 cores at 3 per core:
+
+| FF1, 1D on 12×10, 16 × 3 tiles per core, device µs | in0_block_w 2 | 4 | 8 | 16 |
+|---|---|---|---|---|
+| weights L1-resident, in0 L1 interleaved (one in0 sender) | 105.1 | 89.3 | 78.7 | — |
+| weights L1-resident, in0 width-sharded over 10 cores | 100.7 | 78.0 | 61.3 | — |
+| weights L1-resident, in0 width-sharded over 5 cores | — | — | 64.3 | 60.2 |
+| weights DRAM interleaved (stock 1D, tile reads), in0 width-sharded over 10 cores | — | — | 91.8–105 | — |
+| **weights DRAM width-sharded (patched factory), in0 width-sharded over 10 cores** | — | — | **61.9** | 63.1 (5 cores) |
+
+4 N tiles per core (76 cores) is 79-85 µs. `minimal_matmul` at M = 512 is +60% (§45); the DRAM-sharded config
+requires M = 1 tile; the gather_in0 ring keeps all of in0 per core (1.4 MB). Width-sharded in0 over 40 / 20 cores
+returned wrong results (PCC 0.23 / 0.47) without an error.
+
+**tt-metal change.** The 1D factory had no DRAM width-sharded in1: it treated any sharded in1 as an L1-local shard,
+and its Metal 2.0 fork (the default factory) lacks the `IN1_DRAM_WIDTH_SHARDED` reader by design. Now
+`MatmulMultiCoreReuseMultiCast1DProgramConfig(mcast_in0=True)` with a DRAM width-sharded in1 runs on the legacy
+builder, whose mcast_in0 path sets `IN1_DRAM_WIDTH_SHARDED` and gives each core the (bytes, bank) segments covering its
+N tiles, as the 2D factory's in1 senders do (the shared legacy in1 kernel already reads them); the program-cache
+override no longer re-points cb_src1 at a DRAM in1. The weight stream is hidden (61.9 vs 61.3 L1-resident), PCC 0.99995.
+
+**Landed** (`QWEN_BS1_FF13_1D=1`, default; `tt/mlp.py` `_wrap_ff13_1d`): at bs1 FF1 / FF3 read the MLP norm's 10×8
+block-sharded output resharded once onto 10 cores (512 × 256 each, 1.6 µs device) and run the 1D config above.
+E2e chip 4, `ab_one.sh` 2 rounds: cold 14.8 / 14.8 → 14.1 / 14.1 ms (−4.7%); `sustained_run.sh` 2 alternating rounds:
+14.9 / 14.9 → 14.3 / 14.3 ms. STS-B unchanged (0.8159 bucketed, 0.8117 fixed ISL). QKV (192 N tiles: 2 per core
+fills 96 cores) and WO / FF2 (80) gain nothing from 120 cores.
