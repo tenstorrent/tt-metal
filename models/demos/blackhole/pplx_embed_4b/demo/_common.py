@@ -392,6 +392,28 @@ WORKLOAD_CONFIGS = {
 }
 
 
+# The firmware power cap below is applied for the two checkpoints this stack serves and for nothing else.
+_TDP_MODELS = ("pplx-embed", "qwen3-embedding")
+
+
+def _apply_tdp_limit() -> None:
+    """Firmware power cap for this model: ``QWEN_TDP_LIMIT_WATTS`` (default 160 W; the board default is 130 W).
+
+    The fused kernels are power-limited from bs 8 up at 130 W (settled clock ~1.0-1.1 GHz); 160 W lifts the settled
+    clock to ~1.2-1.35 GHz. DP=32 per-chip median at 130 / 160 / 190 W: bs1 17.0 / 15.7 / 15.5 ms, bs8 99.3 / 89.6 /
+    81.3, bs16 190.1 / 172.0 / 158.0, bs32 389.6 / 336.0 / 311.2. tt-metal hands the cap to the firmware when the
+    device opens and it stays on the chip until a reset. ``QWEN_TDP_LIMIT_WATTS=0`` restores the board default, an
+    empty value leaves the firmware limit alone, and an explicit ``TT_METAL_TDP_LIMIT_WATTS`` always wins. Any other
+    ``HF_MODEL`` is left untouched.
+    """
+    model = os.getenv("HF_MODEL", MODEL_NAME).lower()
+    if not any(name in model for name in _TDP_MODELS):
+        return
+    watts = os.getenv("QWEN_TDP_LIMIT_WATTS", "160").strip()
+    if watts:
+        os.environ.setdefault("TT_METAL_TDP_LIMIT_WATTS", watts)
+
+
 def _model_is_bidirectional() -> bool:
     """pplx-embed is a bidirectional Qwen3-4B; Qwen3-Embedding-4B (same backbone) is causal."""
     return "pplx" in os.getenv("HF_MODEL", MODEL_NAME).lower()
@@ -407,6 +429,7 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # Attention direction follows the checkpoint: causal for Qwen3-Embedding-4B, bidirectional for pplx-embed.
     if not _model_is_bidirectional():
         os.environ.setdefault("QWEN_SDPA_CAUSAL", "1")
+    _apply_tdp_limit()
     cfg = WORKLOAD_CONFIGS.get((batch_size, seq_len))
     if cfg is None:
         activation_bytes = batch_size * seq_len * HIDDEN_DIM * 2
