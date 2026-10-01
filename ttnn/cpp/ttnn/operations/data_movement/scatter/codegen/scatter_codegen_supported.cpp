@@ -174,33 +174,38 @@ bool supported_by_codegen(
 }
 
 bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& index_tensor, const Tensor& src_tensor) {
-    // No general predicate over the normalized attributes was found for these three measured cases;
-    // each is an ungeneralized, exact-match branch on the pre-transform shape/dim/dtype/layout, not a
-    // shape this op happens to reject for correctness. `dim` is included because these shape combos
-    // remain in-range for more than one axis (e.g. [1,2,128,1,768] with index/src [1,2,8,1,768] is
-    // valid at both dim=2 and dim=-1/4), and only the measured axis was found to be worth demoting.
+    // A unit logical row in TILE layout is padded to 32 rows, so input, index, src and output all
+    // carry 32x their logical volume through every transpose in the pre/post sandwich and through
+    // the kernel itself; the streaming reader additionally scans and rejects the 992 padded-row
+    // positions one element at a time. Native's own force_row_major path collapses the padding to
+    // logical volume (an UntilizeWithUnpadding bookend) before it ever transposes or scatters, so it
+    // pays the 32x cost nowhere. `rank == 1` inputs normalize to a [1,1,1,N] working shape, whose row
+    // extent is 1 by construction. Index and src necessarily share the unit row here: scatter
+    // requires index.shape[d] <= input.shape[d] for every non-scatter axis d, and this row is never
+    // the scatter axis (the scatter axis is transposed to last, so this is always the pre-last axis
+    // of the post-transpose shape) -- so a 1 here forces the same 1 on index/src without checking
+    // them separately.
     if (input_tensor.dtype() != DataType::BFLOAT16 || input_tensor.layout() != Layout::TILE) {
         return false;
     }
     const auto& input_shape = input_tensor.logical_shape();
-    const auto& index_shape = index_tensor.logical_shape();
-    const auto& src_shape = src_tensor.logical_shape();
-
-    // input=[1,2,128,1,768] dim=2, index=src=[1,2,8,1,768]
-    if (dim == 2 && input_shape == ttnn::Shape{1, 2, 128, 1, 768} && index_shape == ttnn::Shape{1, 2, 8, 1, 768} &&
-        src_shape == ttnn::Shape{1, 2, 8, 1, 768}) {
+    const auto rank = static_cast<int32_t>(input_shape.rank());
+    if (rank == 1) {
         return true;
     }
-    // input=[1,2,8,1,768] dim=-1, index=src=[1,2,8,1,128]
-    if (dim == -1 && input_shape == ttnn::Shape{1, 2, 8, 1, 768} && index_shape == ttnn::Shape{1, 2, 8, 1, 128} &&
-        src_shape == ttnn::Shape{1, 2, 8, 1, 128}) {
-        return true;
+    if (dim < -rank || dim >= rank) {
+        // Out-of-range dim: not this predicate's concern, let native's own error fire.
+        return false;
     }
-    // input=[100] dim=0, index=src=[80]
-    if (dim == 0 && input_shape == ttnn::Shape{100} && index_shape == ttnn::Shape{80} && src_shape == ttnn::Shape{80}) {
-        return true;
-    }
-    return false;
+    const int32_t axis = dim < 0 ? dim + rank : dim;
+    // normalized_shape = input_shape with axis `dim` swapped to the last position (the same
+    // transpose-to-last the pre/post sandwich applies before any kernel runs). That swap only ever
+    // touches positions `axis` and `rank - 1`, so normalized_shape[-2] (position rank - 2) is
+    // input_shape[rank - 1] when the scatter axis IS rank - 2 (the swap lands the old last dim
+    // there), and input_shape[rank - 2] unchanged otherwise (including when the scatter axis is
+    // already rank - 1, i.e. the transpose is a no-op).
+    const uint32_t normalized_second_to_last = (axis == rank - 2) ? input_shape[rank - 1] : input_shape[rank - 2];
+    return normalized_second_to_last == 1;
 }
 
 }  // namespace ttnn::operations::data_movement::scatter
