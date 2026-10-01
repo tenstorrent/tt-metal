@@ -20,7 +20,7 @@ inline void calculate_logsigmoid(
     const uint dst_index_out)  // Index for output
 {
     // The four highest polynomial coefficients, loaded once and kept in the four LRegs the row leaves free
-    // (sfpi 7.83.0 never lifts a literal out of a loop by itself, so each otherwise costs an SFPLOADI pair
+    // (sfpi (through 7.84.0) never lifts a literal out of a loop by itself, so each otherwise costs an SFPLOADI pair
     // per row). LRegs only, no programmable constants: ttnn's logsigmoid_tile_init is the bare binary
     // init, and the fast exp that produces exp(-x) right before this op owns the Prgm registers.
     sfpi::vFloat c5 = -0.00028794066747650504f;
@@ -44,9 +44,10 @@ inline void calculate_logsigmoid(
             // For very negative: use exp
             result = -exp_neg_x;
         }
-        // x >= -4 is implied here: v_elseif runs only where the v_if above was false, and for a NaN both
-        // compares are false either way, so result stays x. (The explicit `x >= -4.0f &&` it replaces cost
-        // an SFPLOADI and an SFPLE per row.)
+        // x >= -4 is implied here: v_elseif runs only where the v_if above was false, and Blackhole float
+        // compares are a sign-magnitude total order (-NaN < -Inf < ... < +Inf < +NaN, see
+        // ckernel_sfpu_relu.h), so `not (x < -4)` already means x >= -4 for every bit pattern, NaN included.
+        // (The explicit `x >= -4.0f &&` it replaces cost an SFPLOADI and an SFPLE per row.)
         v_elseif(x < 4.0f) {
             // Polynomial approximation for softplus(-x) in the mid-range
             result = PolynomialEvaluator::eval(

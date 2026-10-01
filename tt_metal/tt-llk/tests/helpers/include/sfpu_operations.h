@@ -2313,7 +2313,7 @@ void call_ternary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
         // snake_beta uses sfpu_reciprocal internally; snake_beta_init forwards to sfpu_reciprocal_init
-        // (Prgm0) and, on Blackhole, also programs Prgm1/2 = 1/pi, pi for the range reduction.
+        // (BH: Prgm0; WH: Prgm0..2) and, on Blackhole, also programs Prgm1/2 = 1/pi, pi for the range reduction.
         SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX_MODE));
     }
     else

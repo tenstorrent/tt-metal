@@ -151,7 +151,7 @@ constexpr float GELU_NEG_HALF_ONE_LN2 = -0.72134752044f;
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
 //
-// The loop-invariant constants the caller hoists are passed in (sfpi 7.83.0 never lifts a literal out of a
+// The loop-invariant constants the caller hoists are passed in (sfpi (through 7.84.0) never lifts a literal out of a
 // loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row): exp_21f's c0 and c1 are
 // read from vConstFloatPrgm1/2 (programmed by gelu_init<false, false>); -0.5/ln2 and the two highest CDF
 // coefficients are sfpi::vFloats the caller built once before its loop.
