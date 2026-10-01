@@ -55,6 +55,15 @@ Read the code at its latest commit, every time.
 8. **This model in the server**: is there a config for it or its family, and a decode implementation; what KV format
    and RoPE layout that decode side reads.
 
+## Prefill engine docs vs the server (always)
+
+Go through `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` and `PREFILL_MIGRATION_TESTING.md` (and any
+other doc in that folder) statement by statement: every rule, default, example or assumption about requests, chunks,
+starts / ends, padding, acks, KV layout, migration, slots, fabric or deployment. For each, say whether the server
+code agrees, contradicts it, or does not cover it, with a citation on both sides (doc file:line, server file:line).
+Also list what the server requires that the docs never mention. This is the list of fixes those docs need; the
+bring-up must follow the server, not the doc.
+
 ## When the model already has a serving adapter
 
 (`models/demos/<model>/tt/runners/` or the spec's `contract.adapter`): add an **audit**. For each answer above, check
@@ -68,8 +77,11 @@ not exercise.
 Write `<bringup dir>/serving.md` (replace it if it exists) with:
 - first line `server: <repo path> @ <sha>` and `tt-metal: <sha>`, then the date;
 - one `## <n>. <question>` section per question, answer first, then the citations;
+- `## Prefill engine docs vs the server`: a table (doc statement, doc file:line, server says, server file:line,
+  agrees / contradicts / not covered), then the server requirements the docs never mention;
 - `## Audit` (only when an adapter exists);
 - `## Questions for the owner`: what the code cannot answer (KV dtype / layout the decode side expects, slot count,
   prefix reuse on or off, which decode implementation), each with the default the findings suggest.
 
-Then reply in under 40 lines: the sha, the headline findings, the audit's top items, the owner questions.
+Then reply in under 40 lines: the sha, the headline findings, the doc contradictions, the audit's top items, the owner
+questions.
