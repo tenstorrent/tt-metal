@@ -17,12 +17,10 @@ inline void abs_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <int ITERATIONS>
 void calculate_abs_bf16();
-void init_abs_bf16();
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en>
 inline void calculate_abs() {
-    if constexpr (!is_fp32_dest_acc_en) {
-        init_abs_bf16();
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         calculate_abs_bf16<ITERATIONS>();
         return;
     }

@@ -9,7 +9,6 @@
 namespace ckernel::sfpu::bf16 {
 constexpr uint32_t kAbsHold = ADDR_MOD_7;
 constexpr uint32_t kAbsAdvance = ADDR_MOD_6;
-constexpr uint32_t kSelectedAbsSlots = 23;
 
 template <typename Config>
 inline void init_abs_value() {

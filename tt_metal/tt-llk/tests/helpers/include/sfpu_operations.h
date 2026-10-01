@@ -697,6 +697,14 @@ void call_unary_sfpu_operation_init()
             _init_topk();
         }
     }
+    else if constexpr (OPERATION == SfpuType::abs)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
+        if constexpr (!is_fp32_dest_acc_en)
+        {
+            ckernel::sfpu::init_abs_bf16();
+        }
+    }
     else
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();

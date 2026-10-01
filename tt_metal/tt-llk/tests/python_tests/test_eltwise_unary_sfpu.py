@@ -1492,17 +1492,19 @@ def test_exponential_clamp_negative(clamp_negative: bool):
 
 
 # Every finite BF16 value through the BF16 kernel (FP32 DEST off), in the approximation
-# mode whose instance the BF16 kernel replaces. Subnormal inputs and
-# NaN lanes are outside a step count (see helpers/ulp_sweep.py); finite/non-finite
-# disagreements on normal inputs are failures in their own right.
+# mode whose instance the BF16 kernel replaces. Subnormal inputs and NaN lanes are
+# outside a step count (see helpers/ulp_sweep.py); finite/non-finite disagreements on
+# normal inputs are failures in their own right. The step metric ranks -0 with +0, so
+# the specials are judged apart, by output class and sign. max_ulp is 0 for an exact fit.
 _BF16_EXHAUSTIVE_OPS = [
-    (MathOperation.Abs, ApproximationMode.No),
+    (MathOperation.Abs, ApproximationMode.No, 0),
 ]
 
 
 @pytest.mark.nightly
-@pytest.mark.parametrize("mathop,approx_mode", _BF16_EXHAUSTIVE_OPS)
-def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode):
+@pytest.mark.parametrize("mathop,approx_mode,max_ulp", _BF16_EXHAUSTIVE_OPS)
+def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
+    from helpers.ulp import ulp_distance
     from helpers.ulp_sweep import measurable_mask, nonfinite_failures, sweep_spec
 
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -1515,6 +1517,19 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode):
         input_dimensions_B=dimensions,
         spec_A=sweep_spec(),
     )
+    # The sweep pads with +0 and drops -0. The specials go in that padding, under the
+    # edge sweep's gates for what the golden defines and the pipeline delivers.
+    specials = [0.0]
+    if negative_zero_delivered(formats.input_format, dest_acc):
+        specials.append(-0.0)
+    nonfinite = mathop in SPECIALS_READY_OPS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc
+    )
+    if _gate_unspecified_nan_sign(mathop, formats, dest_acc, nonfinite):
+        specials += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
+    # Through the bit pattern: a float-to-bfloat16 cast drops a NaN's sign.
+    bits = torch.tensor(specials, dtype=torch.float32).view(torch.int32) >> 16
+    src_A[-len(specials) :] = bits.to(torch.int16).view(torch.bfloat16).to(src_A.dtype)
     golden = get_golden_generator(UnarySFPUGolden)(
         mathop, src_A, formats.output_format, dest_acc, formats.input_format, dimensions
     )
@@ -1557,6 +1572,31 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode):
     result = torch.tensor(
         configuration.run().result, dtype=format_dict[formats.output_format]
     )
-    assert not nonfinite_failures(src_A, golden, result, formats.input_format).any()
+    failures = nonfinite_failures(src_A, golden, result, formats.input_format)
+    assert (
+        not failures.any()
+    ), f"{mathop.name}: {int(failures.sum())} lanes disagree on finiteness"
+
+    def output_class(values):
+        values = values.float()
+        return torch.stack(
+            [
+                values.isnan(),
+                values.isinf(),
+                values == 0,
+                values.signbit() & ~values.isnan(),
+            ]
+        )
+
+    wrong = (
+        output_class(golden[-len(specials) :]) != output_class(result[-len(specials) :])
+    ).any(0)
+    assert not wrong.any(), (
+        f"{mathop.name}: {int(wrong.sum())} of {len(specials)} special inputs "
+        f"{specials} change output class or sign"
+    )
     mask = measurable_mask(src_A, golden, result, formats.input_format)
-    assert passed_test(golden, result, formats.output_format, max_ulp=1, mask=mask)
+    over = int(((ulp_distance(golden.to(result.dtype), result) > max_ulp) & mask).sum())
+    assert passed_test(
+        golden, result, formats.output_format, max_ulp=max_ulp, mask=mask
+    ), f"{mathop.name}: {over} lanes over the {max_ulp}-ULP budget"
