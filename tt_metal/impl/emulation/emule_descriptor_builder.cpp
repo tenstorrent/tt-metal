@@ -325,6 +325,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             k.process_tensor_binding_sequences([&kd](const std::string& name, const std::vector<std::string>& members) {
                 kd.bindings.tensor_sequences.push_back(TensorBindingSequence{name, members});
             });
+            k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
+                kd.bindings.pipe.push_back(PipeBinding{name, prefetcher_pipe_id});
+            });
             kd.bindings.compile_time_vararg_count = k.get_compile_time_vararg_count();
             for (const auto& r : k.core_range_set().ranges()) {
                 kd.core_ranges.push_back(
