@@ -210,6 +210,8 @@ class DistributedRMSNorm(Module):
         dynamic_weight=None,
         dynamic_bias=None,
         per_head_norm=False,
+        dynamic_weight_includes_static=False,
+        dynamic_tile_row_map=None,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
         # head-split (num_heads_per_device > 1):
@@ -233,7 +235,10 @@ class DistributedRMSNorm(Module):
         # elementwise scale op the caller would otherwise need. RMSNorm has no bias term.
         weight = self.weight.data if self.weight is not None else None
         if dynamic_weight is not None:
-            weight = dynamic_weight if weight is None else ttnn.multiply(weight, dynamic_weight)
+            if weight is None or dynamic_weight_includes_static:
+                weight = dynamic_weight
+            else:
+                weight = ttnn.multiply(weight, dynamic_weight)
         weight_key = tuple(weight.shape) if weight is not None else None
 
         # dynamic_bias is the additive half of an adaLN modulation (the `shift`), folded into the same
@@ -244,6 +249,8 @@ class DistributedRMSNorm(Module):
         if dynamic_bias is not None and weight is None:
             msg = "dynamic_bias requires a weight: pass dynamic_weight or build the norm with affine=True"
             raise ValueError(msg)
+
+        extra = {} if dynamic_tile_row_map is None else {"affine_tile_row_map": dynamic_tile_row_map}
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).
@@ -287,6 +294,7 @@ class DistributedRMSNorm(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             dtype=dtype,
+            **extra,
         )
 
 

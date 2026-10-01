@@ -366,6 +366,8 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const auto& rope_cos = tensor_args.rope_cos;
     const auto& rope_sin = tensor_args.rope_sin;
     const auto& reciprocals = tensor_args.reciprocals;
+    const auto& tile_row_map = tensor_args.affine_tile_row_map;
+    const bool use_tile_row_map = tile_row_map.has_value();
 
     Program program = CreateProgram();
 
@@ -611,6 +613,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // welford_zero_cb (LayerNorm warm-row accumulator reset): 2 resident fp32 tiles, always present
     // for LN. Counted in the resident budget so wide LN shards correctly choose block-major.
     const uint32_t welford_zero_bytes = is_layernorm ? 2u * fp32_tile_size : 0u;
+    const uint32_t tile_row_map_bytes = use_tile_row_map ? tile_row_map->buffer()->aligned_page_size() : 0u;
 
     // Streaming low-L1 fallback: when the resident input_cb + row-sized
     // intermediate/rotated/output CBs would overflow L1, stream input_cb in
@@ -626,7 +629,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         has_weight,
         weight_tile_sz,
         args.per_head_norm,
-        (use_recip_lut ? recip_lut_bytes : 0u) + welford_zero_bytes);
+        (use_recip_lut ? recip_lut_bytes : 0u) + welford_zero_bytes + tile_row_map_bytes);
     // Block-major POST: even input-streaming leaves intermediate/rotated/output
     // whole-row, which overflows L1 on wide low-TP shards. When so, shrink those
     // CBs to block-local + run the fused per-block POST. Margin below l1_size_per_core
@@ -656,6 +659,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     }
     // welford_zero_cb is resident for LN regardless of layout; reserve it from the cap too.
     l1_cap_bytes -= welford_zero_bytes;
+    l1_cap_bytes -= tile_row_map_bytes;
     // weight/bias CB tile counts — MUST match the create_cb sizing below. All modes hold ONE
     // row (num_tile_cols): broadcast resident, per-token / per-batch streamed per row.
     const uint32_t weight_cb_tiles_est = has_weight ? num_tile_cols : 0u;
@@ -812,6 +816,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // copy_tile is an unpredicated L1->DST read, so it resets every token lane — unlike
     // welford_init's SFPLOADI clear, which a prior row's combine can leave CC-predicated (ISSUE 3A).
     constexpr uint32_t welford_zero_cb_id = tt::CBIndex::c_21;
+    constexpr uint32_t tile_row_map_cb_id = tt::CBIndex::c_22;
 
     // Double-buffer input_cb: reader can fill chunk N+1 while compute is in
     // chunk N's post phase. The cumulative wait_front in compute pairs
@@ -905,6 +910,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Recip LUT CB: one contiguous page of reduce_width fp32 (== recip_lut_bytes). A 4 B
     // stub when unused (the reader/compute gate on use_recip and never touch it).
     create_cb(recip_lut_cb_id, program, worker_core_set, use_recip_lut ? recip_lut_bytes : 4u, 1u, fp32_format);
+    if (use_tile_row_map) {
+        create_cb(tile_row_map_cb_id, program, worker_core_set, tile_row_map_bytes, 1u, tt::DataFormat::UInt32);
+    }
 
     // Zeroed welford-state scratch (LayerNorm only): 2 fp32 tiles (mean, M2). 1-tile stub otherwise.
     create_cb(welford_zero_cb_id, program, worker_core_set, fp32_tile_size, is_layernorm ? 2u : 1u, fp32_format);
@@ -1114,13 +1122,19 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     } else {
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
     }
+    std::map<std::string, std::string> reader_defines;
+    if (use_tile_row_map) {
+        reader_defines["AFFINE_TILE_ROW_MAP"] = "1";
+        reader_compile_args.push_back(tile_row_map_cb_id);
+        TensorAccessorArgs(tile_row_map->buffer()).append_to(reader_compile_args);
+    }
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
         "dit_rmsnorm_fused_reader.cpp",
         worker_core_set,
-        ReaderDataMovementConfig(reader_compile_args));
+        ReaderDataMovementConfig(reader_compile_args, reader_defines));
 
     // ------------------------------------------------------------------------
     // Writer kernel (on worker cores). Two variants:
@@ -1391,8 +1405,12 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // ------------------------------------------------------------------------
     // Buffer bindings are uniform across workers; keep row ranges and forwarder
     // routing in per-core args so a cache hit updates each binding only once.
-    SetCommonRuntimeArgs(
-        program, reader_kernel_id, {input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt});
+    std::vector<uint32_t> reader_common_args = {
+        input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt};
+    if (use_tile_row_map) {
+        reader_common_args.push_back(tile_row_map->buffer()->address());
+    }
+    SetCommonRuntimeArgs(program, reader_kernel_id, reader_common_args);
     if (use_mux) {
         SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt, stats_dram_addr});
     } else {
@@ -1472,7 +1490,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         .writer_common_args = &GetCommonRuntimeArgs(program, writer_kernel_id),
         .forwarder_runtime_args = {},
     };
-    TT_ASSERT(shared.reader_common_args->size() == 6);
+    TT_ASSERT(shared.reader_common_args->size() == (use_tile_row_map ? 7u : 6u));
     TT_ASSERT(shared.writer_common_args->size() == (use_mux ? 3 : 2));
     shared.forwarder_runtime_args.reserve(forwarder_kernel_ids.size());
     for (size_t f = 0; f < forwarder_kernel_ids.size(); ++f) {
@@ -1541,6 +1559,7 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
     // Recip LUT tensor is also a regular (caller-owned) device tensor; refresh its addr.
     const uint32_t recip_addr =
         tensor_args.reciprocals.has_value() ? tensor_args.reciprocals.value().buffer()->address() : 0u;
+    const auto& tile_row_map = tensor_args.affine_tile_row_map;
 
     const uint32_t out_ready_sem_addr = operation_attributes.multi_device_global_semaphore.empty()
                                             ? 0u
@@ -1555,6 +1574,9 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
         reader_common[3] = rope_cos_addr;
         reader_common[4] = rope_sin_addr;
         reader_common[5] = recip_addr;
+        if (tile_row_map.has_value()) {
+            reader_common[6] = tile_row_map->buffer()->address();
+        }
 
         auto* writer_common = shared.writer_common_args->data();
         writer_common[0] = output_addr;

@@ -165,8 +165,10 @@ template <
     bool APPROXIMATION_MODE /*maybe_unused*/,
     uint32_t scale /*maybe_unused*/ = 0x3F800000,
     bool CLAMP_NEGATIVE /*maybe_unused*/ = true,
-    bool EN_32BIT_DEST /*maybe_unused*/>
+    bool EN_32BIT_DEST /*maybe_unused*/,
+    uint32_t offset = 0>
 void exp_init() {
+    static_assert(offset == 0, "the exp input offset is only implemented on Blackhole");
     static_assert(scale == 0x3F800000, "Non-default scale not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
     llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>();

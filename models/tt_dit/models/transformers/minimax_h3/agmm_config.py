@@ -21,6 +21,11 @@ these shapes need an entry rather than falling back.
 
 from __future__ import annotations
 
+import os
+import re
+
+from ....utils.matmul import register_matmul_configs
+
 # M parallelizes over 12 cores when transposed (M > N) and 10 otherwise (the op reserves the mux axis).
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
@@ -52,6 +57,7 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (5376, 5376, 10): (6, 6, 16),
     (5376, 5376, 11): (4, 6, 16),
     (5376, 5376, 12): (4, 6, 16),
+    (5376, 5376, 36): (6, 6, 10),
     (5376, 7168, 1): (2, 21, 6),
     (5376, 7168, 2): (2, 6, 12),
     (5376, 7168, 3): (4, 3, 14),
@@ -64,6 +70,7 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (5376, 7168, 10): (6, 3, 16),
     (5376, 7168, 11): (6, 3, 16),
     (5376, 7168, 12): (4, 3, 16),
+    (5376, 7168, 36): (6, 6, 14),
     (7168, 1344, 1): (2, 14, 6),
     (7168, 1344, 2): (2, 8, 6),
     (7168, 1344, 3): (6, 7, 4),
@@ -76,13 +83,34 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (7168, 1344, 10): (10, 8, 6),
     (7168, 1344, 11): (6, 8, 6),
     (7168, 1344, 12): (6, 8, 8),
+    (7168, 1344, 36): (6, 8, 8),
 }
+
+
+def _env_agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
+    """MINIMAX_H3_AGMM_BLOCKS="K,N:Mb,Kb,Nb[,sub_h,sub_w];..." (";" or "/" between entries) for the listed (K, N)
+    linears; a 5-value entry registers a 12x9 table hit (subblock included) and returns None so the table wins."""
+    for entry in re.split(r"[;/]", os.environ.get("MINIMAX_H3_AGMM_BLOCKS", "")):
+        if ":" not in entry:
+            continue
+        shape, blocks = entry.split(":")
+        if tuple(int(v) for v in shape.split(",")) != (k, n):
+            continue
+        values = tuple(int(v) for v in blocks.split(","))
+        if len(values) == 3:
+            return values
+        register_matmul_configs({"12x9": {(m, k, n): (*values[:3], (values[3], values[4]))}})
+        return None
+    return "default"
 
 
 def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     """Block sizes for an all-gather matmul of this `(K, N)` at sequence length `M`, or None to let
     the generic path decide. Uses the largest swept `per_core_M` that divides the runtime one.
     """
+    override = _env_agmm_block_size(k, n, m)
+    if override != "default":
+        return override
     per_core_m = _per_core_m(m, n)
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]

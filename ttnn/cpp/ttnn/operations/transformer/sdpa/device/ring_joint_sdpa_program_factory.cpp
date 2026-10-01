@@ -23,6 +23,8 @@
 #include <map>
 #include <optional>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <deque>
 #include <limits>
@@ -1255,6 +1257,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
+    const auto qk_math_fidelity =
+        args.program_config.has_value() ? args.program_config->qk_math_fidelity.value_or(math_fidelity) : math_fidelity;
+    const auto pv_math_fidelity =
+        args.program_config.has_value() ? args.program_config->pv_math_fidelity.value_or(math_fidelity) : math_fidelity;
+    const bool fixed_offset_softmax = args.program_config.has_value() && args.program_config->fixed_offset_softmax;
+    const float fixed_offset = args.program_config.has_value() ? args.program_config->fixed_offset : 0.0f;
 
     CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                           : mesh_device->compute_with_storage_grid_size();
@@ -1832,6 +1840,41 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    defines["QK_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(qk_math_fidelity));
+    defines["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(pv_math_fidelity));
+    if (fixed_offset_softmax) {
+        TT_FATAL(
+            use_streaming_compute, "fixed_offset_softmax requires the streaming compute path (fp32_dest_acc_en=false)");
+        defines["SDPA_FIXED_OFFSET_SOFTMAX"] = "1";
+        if (fixed_offset != 0.0f) {
+            TT_FATAL(
+                mesh_device->arch() == tt::ARCH::BLACKHOLE, "fixed_offset is folded into the Blackhole exp macro only");
+            TT_FATAL(!use_attention_sink, "fixed_offset does not shift the attention-sink term");
+            defines["SDPA_FIXED_OFFSET_BITS"] = std::to_string(std::bit_cast<uint32_t>(fixed_offset));
+        }
+    } else {
+        TT_FATAL(fixed_offset == 0.0f, "fixed_offset requires fixed_offset_softmax");
+    }
+    if (std::getenv("TT_SDPA_PROFILE_ZONES") != nullptr) {
+        defines["SDPA_PROFILE_ZONES"] = "1";
+        if (const char* window = std::getenv("TT_SDPA_PROFILE_WINDOW"); window != nullptr) {
+            std::array<int, 4> bounds{};
+            char trailing = 0;
+            const int parsed =
+                std::sscanf(window, "%d,%d,%d,%d%c", &bounds[0], &bounds[1], &bounds[2], &bounds[3], &trailing);
+            TT_FATAL(
+                parsed == 4 && std::ranges::all_of(bounds, [](int b) { return b >= -1; }),
+                "TT_SDPA_PROFILE_WINDOW must be \"iter,q,klo,khi\" with each value >= -1, got \"{}\"",
+                window);
+            defines["SDPA_PROFILE_ITER"] = std::to_string(bounds[0]);
+            defines["SDPA_PROFILE_QCHUNK"] = std::to_string(bounds[1]);
+            defines["SDPA_PROFILE_KCHUNK_LO"] = std::to_string(bounds[2]);
+            defines["SDPA_PROFILE_KCHUNK_HI"] = std::to_string(bounds[3]);
+            if (std::getenv("TT_SDPA_PROFILE_FINE") != nullptr) {
+                defines["SDPA_PROFILE_FINE"] = "1";
+            }
+        }
+    }
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
 
@@ -2966,6 +3009,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
 

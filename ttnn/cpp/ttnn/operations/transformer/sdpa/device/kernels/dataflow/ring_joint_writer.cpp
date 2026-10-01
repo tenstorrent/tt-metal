@@ -17,6 +17,7 @@
 #include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sdpa_profile_zones.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -1040,6 +1041,7 @@ void kernel_main() {
                 const uint32_t q_chunk = decoded_q.q_chunk;
 
                 const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
+                [[maybe_unused]] const bool prof_win = sdpa_profile::iter_q_hit(ring_iter, q_index);
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
@@ -1053,6 +1055,7 @@ void kernel_main() {
                     if (balanced_skip_q && !is_last_ring_iter) {
                         noc.async_read_barrier();
                     } else {
+                        MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "WR_RESTORE", prof_win);
                         complete_restore(noc, cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
                     }
                 }
@@ -1080,6 +1083,7 @@ void kernel_main() {
                            q_slots.prefetch_targets(q_index, deferred.flat_q, q_per_core, is_last_ring_iter))
                         : flush_before_prefetch;
                 if (deferred.pending && early_flush) {
+                    MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "WR_FLUSH_EARLY", prof_win);
                     flush_deferred_save();
                 }
 
@@ -1098,6 +1102,7 @@ void kernel_main() {
                                                              q_slots.next_iter_first() == q_slots.at(q_index);
                 const bool defer_prefetch = balanced_skip_q && is_last_ring_iter;
                 if (!single_q_chunk && !is_first_active_iter && !defer_prefetch) {
+                    MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "WR_PREFETCH", prof_win);
                     prefetch_intra_ring(q_index + 1);
                 }
                 // Cross-ring: Q[N-1] -> Q[0] of next ring iter.
@@ -1109,6 +1114,7 @@ void kernel_main() {
                 // 4. Late flush (>= 2 valid K chunks, q_per_core >= 3): drain during K-loop
                 // window after prefetch, spreading DRAM writes to reduce bank contention.
                 if (deferred.pending) {
+                    MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "WR_FLUSH_LATE", prof_win);
                     flush_deferred_save();
                 }
 
@@ -1125,6 +1131,7 @@ void kernel_main() {
                 // Wait for compute to signal last K-chunk start (multi-Q only).
                 // Normalize-only path also pushes this signal.
                 if (!single_q_chunk) {
+                    MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "WR_SIG_WAIT", prof_win);
                     CircularBuffer cb_sig(cb_signal);
                     cb_sig.wait_front(1);
                     cb_sig.pop_front(1);

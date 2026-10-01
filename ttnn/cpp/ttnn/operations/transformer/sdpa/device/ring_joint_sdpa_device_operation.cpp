@@ -578,13 +578,19 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool is_chunked = tensor_args.is_chunked();
 
     const auto dtype = input_tensor_q.dtype();
-    if ((!args.is_causal && !is_chunked) || args.is_cross) {
-        for (const auto& tensor : sdpa_input_tensors) {
+    if (((!args.is_causal && !is_chunked) || args.is_cross) && has_joint_tensors) {
+        const auto k_dtype = gathered_input_tensor_k.dtype();
+        const auto v_dtype = has_gathered_v ? tensor_args.gathered_v->dtype() : k_dtype;
+        const std::array<std::pair<DataType, DataType>, 3> pairs = {
+            std::pair{tensor_args.joint_q->dtype(), dtype},
+            std::pair{tensor_args.joint_k->dtype(), k_dtype},
+            std::pair{tensor_args.joint_v->dtype(), v_dtype}};
+        for (const auto& [joint_dtype, main_dtype] : pairs) {
             TT_FATAL(
-                tensor.dtype() == dtype,
-                "All tensors must have the same dtype. Expected {}, got {}",
-                dtype,
-                tensor.dtype());
+                joint_dtype == main_dtype,
+                "Joint tensors must match the dtype of their Q/K/V stream. Expected {}, got {}",
+                main_dtype,
+                joint_dtype);
         }
     }
 

@@ -724,8 +724,10 @@ template <
     bool APPROXIMATION_MODE,
     std::uint32_t scale,
     bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
+    bool is_fp32_dest_acc_en,
+    std::uint32_t offset = 0>
 void exp_init() {
+    static_assert(offset == 0, "the exp input offset is only implemented on Blackhole");
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
     // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).

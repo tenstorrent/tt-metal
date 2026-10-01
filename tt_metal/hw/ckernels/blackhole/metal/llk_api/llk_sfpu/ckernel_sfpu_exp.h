@@ -735,12 +735,11 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-template <
-    bool APPROXIMATION_MODE,
-    uint32_t scale,
-    bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
+// offset (fp32 bits): approximate modes compute exp(scale * x - offset) by folding -A * offset into the
+// (B-C) constant (and the clamp threshold), so the shift costs nothing per element.
+template <bool APPROXIMATION_MODE, uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en, uint32_t offset = 0>
 void exp_init() {
+    static_assert(offset == 0 || APPROXIMATION_MODE, "the exp input offset is only folded into the approximate modes");
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
     // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
@@ -772,9 +771,11 @@ void exp_init() {
         constexpr float THRESHOLD = -88.5f;
 
         constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
+        constexpr float offset_fp32 = __builtin_bit_cast(float, offset);
 
         constexpr float A_scaled = A * scale_fp32;
-        constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
+        constexpr float THRESHOLD_scaled = (THRESHOLD + offset_fp32) / scale_fp32;
+        constexpr float B_minus_C_shifted = B_minus_C - A * offset_fp32;
 
         TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
         TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
@@ -784,8 +785,8 @@ void exp_init() {
         TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
         TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C_shifted));
+        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C_shifted));
         TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 
 #ifndef DISABLE_SFPLOADMACRO
@@ -949,7 +950,9 @@ void exp_init() {
         constexpr float B_minus_C = 32500.818359375f;
 
         constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
+        constexpr float offset_fp32 = __builtin_bit_cast(float, offset);
         constexpr float A_scaled = A * scale_fp32;
+        constexpr float B_minus_C_shifted = B_minus_C - A * offset_fp32;
 
         // Load constant A into LREG[12]
         TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
@@ -957,8 +960,8 @@ void exp_init() {
         TTI_SFPCONFIG(0, 12, 0);
 
         // Load constant (B-C) into LREG[13]
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C_shifted));
+        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C_shifted));
         TTI_SFPCONFIG(0, 13, 0);
 
         // Load shift amount (15) into LREG[14] for SFPSHFT2

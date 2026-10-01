@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -201,11 +202,22 @@ class MiniMaxH3Attention(Module):
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
+        self.sdpa_fixed_offset = False
+        self.sdpa_fixed_offset_value = 0.0
+        sdpa_fidelity = ttnn.MathFidelity.HiFi2
+        self.sdpa_chunks_override: tuple[int, int] | None = None
+        if self.use_ring:
+            if os.environ.get("MINIMAX_H3_SDPA_FIDELITY"):
+                sdpa_fidelity = getattr(ttnn.MathFidelity, os.environ["MINIMAX_H3_SDPA_FIDELITY"])
+            if os.environ.get("MINIMAX_H3_SDPA_CHUNKS"):
+                q_chunk, k_chunk = (int(v) for v in os.environ["MINIMAX_H3_SDPA_CHUNKS"].split(","))
+                self.sdpa_chunks_override = (q_chunk, k_chunk)
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=sdpa_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
+            dst_full_sync_en=self.use_ring and os.environ.get("MINIMAX_H3_SDPA_DST_FULL_SYNC") == "1",
         )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -290,7 +302,7 @@ class MiniMaxH3Attention(Module):
 
         `windowed` caps k at 256 so the on-device mask CB fits in L1.
         """
-        key = (seq_local, ring, windowed)
+        key = (seq_local, ring, windowed, self.sdpa_fixed_offset, self.sdpa_fixed_offset_value)
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
@@ -299,16 +311,29 @@ class MiniMaxH3Attention(Module):
             else:
                 q_chunk = max(tile, min(256, (seq_local // tile) * tile))
                 k_chunk = max(tile, min(512, (seq_local // tile) * tile))
+            if ring and self.sdpa_chunks_override is not None:
+                q_chunk, k_chunk = self.sdpa_chunks_override
             if windowed:
                 k_chunk = min(k_chunk, 256)
             grid = (
                 ttnn.CoreCoord(*self.sdpa_worker_grid) if ring else ttnn.CoreCoord(self.full_grid.x, self.full_grid.y)
             )
+            phase_fidelity = {}
+            if ring:
+                for field, var in (
+                    ("qk_math_fidelity", "MINIMAX_H3_SDPA_QK_FIDELITY"),
+                    ("pv_math_fidelity", "MINIMAX_H3_SDPA_PV_FIDELITY"),
+                ):
+                    if os.environ.get(var):
+                        phase_fidelity[field] = getattr(ttnn.MathFidelity, os.environ[var])
             self._sdpa_program_configs[key] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
                 exp_approx_mode=False,  # NOTE: False is more correct
+                fixed_offset_softmax=ring and self.sdpa_fixed_offset,
+                **({"fixed_offset": self.sdpa_fixed_offset_value} if (ring and self.sdpa_fixed_offset) else {}),
+                **phase_fidelity,
             )
         return self._sdpa_program_configs[key]
 

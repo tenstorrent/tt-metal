@@ -18,6 +18,7 @@
 #include "ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sdpa_profile_zones.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -225,6 +226,13 @@ inline void materialize_v_prefix_from_k(Noc noc, uint32_t kt_base_addr, uint32_t
     }
     noc.async_read_barrier();
     cb_v.push_back(v_cb_entry_tiles);
+}
+
+// Waits for this ring iteration's K/V shard: the only place the all-gather can stall the SDPA.
+template <typename Receiver>
+FORCE_INLINE uint32_t ring_sync(Receiver& receiver, uint32_t ring_iter) {
+    MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "RING_SYNC", sdpa_profile::iter_hit(ring_iter));
+    return receiver.get_next_ring_id_and_sync();
 }
 
 void kernel_main() {
@@ -802,7 +810,7 @@ void kernel_main() {
             has_sliding_window
                 ? ring_index
                 : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                      fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+                      ring_sync(fused_op_receiver, ring_iter), mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (!ring_iter_is_active) {
@@ -1002,6 +1010,7 @@ void kernel_main() {
             // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
             for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
+                [[maybe_unused]] const bool prof_win = sdpa_profile::window_hit(ring_iter, q_iter, k_chunk);
                 const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
                 const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
                 const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
@@ -1112,19 +1121,23 @@ void kernel_main() {
                     // Ensures that compute has completed with the previous K chunk before we overwrite the buffer with
                     // the next K chunk for mcast.
                     const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
+                    MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "K_RESERVE", prof_win);
                     cb_k.reserve_back(reserve_tiles);
                 } else {
+                    MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "K_RESERVE", prof_win);
                     cb_k.reserve_back(k_chunk_tiles);
                 }
                 uint32_t cb_k_start_address = cb_k.get_write_ptr();
                 bool received_k_from_chain = false;
                 if constexpr (!has_sliding_window) {
                     if (k_chain.should_receive(k_chain_head)) {
+                        MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "K_RECV", prof_win);
                         k_chain.receive(noc);
                         received_k_from_chain = true;
                     }
                 }
                 if (!received_k_from_chain) {
+                    MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "K_FETCH", prof_win);
                     // Injector or non-participant: read K from DRAM. Dispatch directly so
                     // local and gathered tensors may use different accessor types.
                     const auto fetch_k = [&](const auto& k_gen) {
@@ -1155,6 +1168,7 @@ void kernel_main() {
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if constexpr (!has_sliding_window) {
                     if (k_chain.should_forward(k_chain_head, q_iter_local)) {
+                        MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "K_FWD", prof_win);
                         k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
                     }
                 }
@@ -1259,16 +1273,21 @@ void kernel_main() {
                     const uint32_t nv = nq / q_heads_per_v;
                     const Slice v_slice(k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, 0, vDHt);
                     CircularBuffer cb_v(cb_v_in);
-                    cb_v.reserve_back(v_cb_entry_tiles);
+                    {
+                        MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "V_RESERVE", prof_win);
+                        cb_v.reserve_back(v_cb_entry_tiles);
+                    }
                     uint32_t cb_v_start_address = cb_v.get_write_ptr();
                     bool received_v_from_chain = false;
                     if constexpr (!has_sliding_window) {
                         if (v_chain.should_receive(nv)) {
+                            MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "V_RECV", prof_win);
                             v_chain.receive(noc);
                             received_v_from_chain = true;
                         }
                     }
                     if (!received_v_from_chain) {
+                        MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "V_FETCH", prof_win);
                         const auto fetch_v = [&](const auto& v_gen) {
                             fetch_block(
                                 v_gen,
@@ -1296,6 +1315,7 @@ void kernel_main() {
                     // popping the buffer while the mcast is still reading from it.
                     if constexpr (!has_sliding_window) {
                         if (v_chain.should_forward(nv, q_iter_local)) {
+                            MaybeDeviceZoneScopedNWindow(sdpa_profile::zones, "V_FWD", prof_win);
                             v_chain.forward(noc, cb_v_start_address);
                         }
                     }

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::transformer {
@@ -18,6 +19,15 @@ struct SDPAProgramConfig {
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
+    // Streaming kernels' QK^T and PV matmul fidelity; nullopt falls back to the compute kernel config.
+    std::optional<tt::tt_metal::MathFidelity> qk_math_fidelity;
+    std::optional<tt::tt_metal::MathFidelity> pv_math_fidelity;
+    // Streaming SDPA kernels: softmax with a constant zero row max (no reduce, subtract or rescale). Only
+    // valid when the caller bounds scale * QK^T so bf16 exp stays finite (|scale * S| well below ~80).
+    bool fixed_offset_softmax = false;
+    // Fixed-offset softmax shift: P = exp(scale * S - fixed_offset). Set it at/above the block's max scaled
+    // logit; rows whose max is below fixed_offset - 80 underflow to a zero output row (Blackhole only).
+    float fixed_offset = 0.0f;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

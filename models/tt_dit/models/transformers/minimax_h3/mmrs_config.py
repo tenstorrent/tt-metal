@@ -42,6 +42,8 @@ at every duration.
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 
 from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, resolves_fused_mmrs_config
@@ -61,6 +63,7 @@ _N = 5376
 # 12x9. Mt_per_core = 107/12 -> 9, so M_block=8 leaves 2 blocks and the window rotates.
 _SWEPT_BLOCKINGS = {
     3424: FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 2, 8, 2, 2, None, 1),
+    13664: FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 14, 2, 2, None, 1),
 }
 
 _DEVICE_GRID = ttnn.CoreCoord(12, 10)
@@ -116,6 +119,23 @@ def register_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> N
     if not has_mmrs_config(m, k, n, core_grid):
         msg = f"No fused MMRS blocking for (M, K, N) = ({m}, {k}, {n}); gate on has_mmrs_config first"
         raise ValueError(msg)
+    env = os.environ.get("MINIMAX_H3_MMRS_BLOCKING")
+    if env:
+        v = [int(x) for x in env.split(",")]
+        cfg = FusedMMRSConfig(
+            ttnn.CoreCoord(v[0], v[1]),
+            v[2],
+            v[3],
+            v[4],
+            v[5],
+            v[6],
+            None,
+            1,
+            num_workers_per_link=v[7] if len(v) > 7 else None,
+            mm_window_blocks=v[8] if len(v) > 8 else 2,
+        )
+        register_fused_mmrs_configs({core_grid: {(m, _K, _N): cfg}})
+        return
     # The swept blocking hardcodes a 12x8 matmul grid, so it is only meaningful on the grid it was
     # swept on -- registering it under any other key would hand that device a blocking off the end
     # of its own core grid.

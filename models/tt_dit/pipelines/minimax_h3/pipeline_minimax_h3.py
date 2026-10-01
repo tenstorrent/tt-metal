@@ -73,7 +73,9 @@ from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
+from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ...models.transformers.minimax_h3.quant_config import apply_env_quant_config
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -93,6 +95,7 @@ from .packing import (
     MINIMAX_H3_FPS,
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
     MINIMAX_H3_MAX_DURATION,
+    MINIMAX_H3_MODALITY_NUM,
     MINIMAX_H3_TEXT_TAG,
     MINIMAX_H3_VIDEO_TAG,
     MiniMaxH3PackedSequence,
@@ -261,6 +264,8 @@ class _BucketState:
     adaln: StateTensor = field(default_factory=StateTensor)
     tsi: StateTensor = field(default_factory=StateTensor)
     assembly_idx: StateTensor = field(default_factory=StateTensor)
+    adaln_tile_map: StateTensor = field(default_factory=StateTensor)
+    adaln_expanded: StateTensor = field(default_factory=StateTensor)
     warm: bool = False
 
 
@@ -476,7 +481,7 @@ class MiniMaxH3Pipeline:
         )
         self.coresident = coresident
         self.trace_denoise = self.trace_denoise and self.coresident
-        self.bucket_denoise = self.trace_denoise or bool(bucket_denoise)
+        self.bucket_denoise = self.trace_denoise if bucket_denoise is None else bool(bucket_denoise)
         self._log_generation = True
         self._buckets: dict[int, _BucketState] = {}
         self._force_bucket: int | None = None
@@ -1246,6 +1251,12 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
+        apply_env_quant_config(self._transformer)
+        if os.environ.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS") is None and is_blackhole():
+            self._transformer._set_fixed_softmax_blocks("auto")
+        if os.environ.get("MINIMAX_H3_ADALN_GATHER") is None and is_blackhole():
+            for block in self._transformer.transformer_blocks:
+                block._adaln_gather = "tilerow"
         return self._transformer
 
     @property
@@ -2093,6 +2104,8 @@ class MiniMaxH3Pipeline:
         try:
             self(prompt, num_inference_steps=num_inference_steps, **generation_kwargs)
             if not self.bucket_denoise:
+                if self.trace_denoise:
+                    self(prompt, num_inference_steps=2, **generation_kwargs)
                 return
             natural = self.last_seq_len.padded
 
@@ -2393,7 +2406,7 @@ class MiniMaxH3Pipeline:
 
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
-        state = self._buckets.setdefault(rung if self.bucket_denoise else 0, _BucketState())
+        state = self._buckets.setdefault(rung if (self.bucket_denoise or self.trace_denoise) else 0, _BucketState())
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             self.release_traces()
@@ -2433,7 +2446,28 @@ class MiniMaxH3Pipeline:
             traced=traced,
         )
 
-        state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
+        row_adaln = adaln_indices(layout.token_tags, row_slot)
+        state.adaln.update(self._row_indices(row_adaln, rung), traced=traced)
+        tilerow_kwargs = {}
+        if transformer.adaln_tilerow:
+            padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
+            try:
+                tile_map, expanded = tilerow_remap(
+                    padded_adaln,
+                    num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
+                    sp_factor=self.sp_factor,
+                    max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
+                )
+            except ValueError as err:
+                self._log(f"adaLN tile-row map not used for this request ({err}); per-token gather instead")
+                tile_map = None
+            if tile_map is not None:
+                state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
+                state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
+                tilerow_kwargs = {
+                    "adaln_tile_map": state.adaln_tile_map.value,
+                    "adaln_expanded_indices": state.adaln_expanded.value,
+                }
         state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
         state.assembly_idx.update(
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
@@ -2459,6 +2493,23 @@ class MiniMaxH3Pipeline:
 
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
+
+        def step_levels(i: int) -> torch.Tensor:
+            t = float(timesteps[i])
+            level_kwargs = {"video_timestep": t, "audio_timestep": float(audio_timesteps[i])}
+            if "condition_video" in slot_roles:
+                level_kwargs["condition_video_timestep"] = max(t, MINIMAX_H3_KEYFRAME_NOISE_AUG)
+            if "condition_audio" in slot_roles:
+                level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
+            return slot_levels(slot_roles, **level_kwargs)
+
+        def upload_levels(levels: torch.Tensor) -> None:
+            self._tt_timestep.update(
+                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+            )
+
+        levels = step_levels(0)
+        upload_levels(levels)
         if _is_host_rank():
             _tqdm_spacer()
         for i, t in enumerate(
@@ -2471,19 +2522,6 @@ class MiniMaxH3Pipeline:
             )
         ):
             t_step = time.time()
-            level_kwargs = {
-                "video_timestep": float(t),
-                "audio_timestep": float(audio_timesteps[i]),
-            }
-            if "condition_video" in slot_roles:
-                level_kwargs["condition_video_timestep"] = max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG)
-            if "condition_audio" in slot_roles:
-                level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
-            levels = slot_levels(slot_roles, **level_kwargs)
-            self._tt_timestep.update(
-                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
-            )
-
             video_velocity, audio_velocity = transformer(
                 video_1BVC=self._tt_video.value,
                 audio_1BAC=self._tt_audio.value,
@@ -2498,15 +2536,20 @@ class MiniMaxH3Pipeline:
                 logical_n=self._tt_logical_n.value,
                 pad_to=rung,
                 traced=traced,
+                timestep_key=None if traced else tuple(float(v) for v in levels.reshape(-1).tolist()),
+                **tilerow_kwargs,
             )
 
-            ttnn.synchronize_device(self.mesh_device)
-            if ttnn.using_distributed_env():
-                ttnn.distributed_context_barrier()
             ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_video.value, video_velocity)
             ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_audio.value, audio_velocity)
+            if i + 1 < len(timesteps):
+                levels = step_levels(i + 1)
+                upload_levels(levels)
+            ttnn.synchronize_device(self.mesh_device)
+            if ttnn.using_distributed_env():
+                ttnn.distributed_context_barrier()
             t_step = time.time() - t_step
             if i == 0:
                 t_first = t_step

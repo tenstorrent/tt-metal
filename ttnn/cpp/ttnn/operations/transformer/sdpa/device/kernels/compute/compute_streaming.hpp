@@ -14,14 +14,37 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_profile_zones.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
+
+// Per-phase matmul fidelity (integer MathFidelity from the host); -1 falls back to MATH_FIDELITY.
+#ifndef QK_MATH_FIDELITY
+#define QK_MATH_FIDELITY -1
+#endif
+#ifndef PV_MATH_FIDELITY
+#define PV_MATH_FIDELITY -1
+#endif
+// Fixed-offset softmax (SDPAProgramConfig::fixed_offset_softmax): P = exp(scale * S) with a constant zero row
+// max: no reduce, subtract or SALAD rescale; O and the row sum L1-accumulate in place across K chunks.
+#ifndef SDPA_FIXED_OFFSET_SOFTMAX
+#define SDPA_FIXED_OFFSET_SOFTMAX 0
+#endif
+constexpr bool sdpa_fixed_offset_softmax = SDPA_FIXED_OFFSET_SOFTMAX == 1;
+// Fixed-offset softmax shift c (fp32 bits): P = exp(scale * S - c), folded into the pack exp's constants.
+// The approximate exp is exact-range limited to scale * S - c in about [-87, +0.7]; below, P underflows to 0.
+#ifndef SDPA_FIXED_OFFSET_BITS
+#define SDPA_FIXED_OFFSET_BITS 0
+#endif
+// Row-sum seed for fixed mode (bf16 min normal): a row whose every P underflowed normalizes to 0, not 0/0.
+constexpr float sdpa_fixed_sum_epsilon = 1.1754944e-38f;
 
 // reduce_trigger uses a packer->unpacker semaphore handshake to start the reduce early and skip the
 // input CB wait. Quasar has no such handshake, so it stays disabled there and the normal CB
@@ -30,29 +53,6 @@
 constexpr bool reduce_trigger_supported = false;
 #else
 constexpr bool reduce_trigger_supported = true;
-#endif
-
-// Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
-// When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
-// When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
-#if defined(PROFILE_STREAMING)
-// Not supported by the streaming profiler: these template-gated zones use the DRAM profiler's hash ids.
-#define MaybeDeviceZoneScopedN(ENABLED, name)
-#elif defined(PROFILE_KERNEL)
-template <bool Enabled, uint32_t timer_id>
-struct MaybeProfileScope {
-    inline __attribute__((always_inline)) MaybeProfileScope() {}
-    inline __attribute__((always_inline)) ~MaybeProfileScope() {}
-};
-template <uint32_t timer_id>
-struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_id> {};
-
-#define MaybeDeviceZoneScopedN(ENABLED, name)                                  \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    MaybeProfileScope<ENABLED, hash> zone;
-#else
-#define MaybeDeviceZoneScopedN(ENABLED, name)
 #endif
 
 // --- Outlined out-of-order pack (code-size) ---
@@ -189,6 +189,15 @@ ALWI void sdpa_maybe_pack_reconfig_data_format() {
 }
 
 template <uint32_t old_cb, uint32_t new_cb>
+constexpr bool sdpa_pack_format_changed() {
+#ifdef TRISC_PACK
+    return pack_dst_format[old_cb] != pack_dst_format[new_cb];
+#else
+    return false;
+#endif
+}
+
+template <uint32_t old_cb, uint32_t new_cb>
 constexpr bool sdpa_unpack_format_changed() {
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     return unpack_src_format[old_cb] != unpack_src_format[new_cb] ||
@@ -314,6 +323,92 @@ ALWI void pack_contiguous_rows(
     pack_contiguous_rows_nocfg(out_cb, row_base, row_count, row_stride, col_base, pack_width);
 }
 
+// Fixed-offset softmax: copy num_tiles tiles in_cb[in_base..] -> out_cb[out_base..] through DEST
+// (absolute pack offsets, no push/pop). Leaves srcA in in_cb's format and the math in datacopy state.
+ALWI void sdpa_copy_tiles(
+    uint32_t in_cb, uint32_t in_base, uint32_t out_cb, uint32_t out_base, uint32_t num_tiles, uint32_t dst_size) {
+    reconfig_data_format_srca(in_cb);
+    copy_init(in_cb);
+    configure_single_tile_pack(out_cb);
+    for (uint32_t base = 0; base < num_tiles; base += dst_size) {
+        const uint32_t n = (num_tiles - base < dst_size) ? (num_tiles - base) : dst_size;
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; i++) {
+            copy_tile(in_cb, in_base + base + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; i++) {
+            sdpa_pack_tile_ooo(i, out_cb, out_base + base + i);
+        }
+        tile_regs_release();
+    }
+}
+
+// Fixed-offset softmax: pack num_tiles tiles filled with value into out_cb (no push). MATH SFPU fill.
+ALWI void sdpa_fill_tiles(uint32_t out_cb, uint32_t num_tiles, float value, uint32_t dst_size) {
+    fill_tile_init();
+    configure_single_tile_pack(out_cb);
+    for (uint32_t base = 0; base < num_tiles; base += dst_size) {
+        const uint32_t n = (num_tiles - base < dst_size) ? (num_tiles - base) : dst_size;
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; i++) {
+            fill_tile(i, value);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; i++) {
+            sdpa_pack_tile_ooo(i, out_cb, base + i);
+        }
+        tile_regs_release();
+    }
+}
+
+// Fixed-offset softmax: L1-accumulate chunk_cb's tiles (this chunk's row sums, pushed by the caller) onto the running
+// total in sum_cb (absolute offsets, no push) and consume them. Leaves srcA on chunk_cb, math in datacopy state.
+ALWI void sdpa_fold_chunk_sum(uint32_t chunk_cb, uint32_t sum_cb, uint32_t num_tiles, uint32_t dst_size) {
+    CircularBuffer(chunk_cb).wait_front(num_tiles);
+    reconfig_data_format_srca(chunk_cb);
+    copy_init(chunk_cb);
+    configure_single_tile_pack(sum_cb);
+    PACK((llk_pack_reconfig_l1_acc(1)));
+    for (uint32_t base = 0; base < num_tiles; base += dst_size) {
+        const uint32_t n = (num_tiles - base < dst_size) ? (num_tiles - base) : dst_size;
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; i++) {
+            copy_tile(chunk_cb, base + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; i++) {
+            sdpa_pack_tile_ooo(i, sum_cb, base + i);
+        }
+        tile_regs_release();
+    }
+    PACK((llk_pack_reconfig_l1_acc(0)));
+    CircularBuffer(chunk_cb).pop_front(num_tiles);
+}
+
+// Fixed-offset softmax: pack num_tiles zero tiles (x - x of src_cb's finite tile 0) into out_cb (no push).
+ALWI void sdpa_pack_zero_tiles(uint32_t src_cb, uint32_t out_cb, uint32_t num_tiles, uint32_t dst_size) {
+    reconfig_data_format(src_cb, src_cb);
+    sub_init(src_cb, src_cb);
+    configure_single_tile_pack(out_cb);
+    for (uint32_t base = 0; base < num_tiles; base += dst_size) {
+        const uint32_t n = (num_tiles - base < dst_size) ? (num_tiles - base) : dst_size;
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; i++) {
+            sub_tiles(src_cb, src_cb, 0, 0, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; i++) {
+            sdpa_pack_tile_ooo(i, out_cb, base + i);
+        }
+        tile_regs_release();
+    }
+}
+
 /**
  * Blocked subblock matmul with absolute offset packing.
  * Always uses pack_tile<true> at row-major positions in out_cb.
@@ -321,7 +416,7 @@ ALWI void pack_contiguous_rows(
  * noinline on Wormhole: keeps sdpa_inner_loop_step's frame off the TR0 stack to stay within budget
  * for the ring cases (it would otherwise overflow). WH-only to avoid the call overhead elsewhere.
  */
-template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols>
+template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols, int fidelity = -1>
 #if defined(ARCH_WORMHOLE)
 __attribute__((noinline))
 #endif
@@ -343,7 +438,7 @@ void blocked_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-        matmul_block_no_mop(
+        matmul_block_no_mop<fidelity>(
             in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
         in0_index++;
         in1_index += in1_stride;
@@ -359,6 +454,80 @@ void blocked_matmul_and_pack(
     tile_regs_release();
 }
 
+// Fixed-offset QK^T subblock: matmul, PACK-SFPU exp(scale * S - c), pack P, L1-accumulate row sums (caller's ReLU on).
+// !sums_first enters (L1-acc off, out_cb row MOP) and leaves (acc on, sum_cb tile MOP); sums_first is the reverse.
+template <bool profiling_enabled, uint32_t in1_stride, uint32_t out_num_cols, int fidelity>
+void blocked_matmul_exp_pack(
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t out_cb,
+    uint32_t sum_cb,
+    uint32_t in0_index_start,
+    uint32_t in1_index_start,
+    uint32_t row_subblock_idx,
+    uint32_t out_col_offset,
+    uint32_t subblock_w,
+    uint32_t subblock_h,
+    uint32_t inner_dim,
+    uint32_t matmul_stride,
+    bool sums_first,
+    [[maybe_unused]] bool prof_win) {
+    tile_regs_acquire();
+    uint32_t dst_index = 0;
+    uint32_t in0_index = in0_index_start;
+    uint32_t in1_index = in1_index_start;
+    for (uint32_t inner = 0; inner < inner_dim; ++inner) {
+        matmul_block_no_mop<fidelity>(
+            in0_cb, in1_cb, in0_index, in1_index, dst_index, true, subblock_w, subblock_h, matmul_stride);
+        in0_index++;
+        in1_index += in1_stride;
+    }
+    tile_regs_commit();
+
+    tile_regs_wait();
+    const uint32_t num_tiles = subblock_h * subblock_w;
+    const uint32_t row_base = row_subblock_idx * subblock_h;
+    sdpa_profile::fine_sync(prof_win);
+    {
+        MaybeDeviceZoneScopedNFine(profiling_enabled, "QK_EXP", prof_win);
+        for (uint32_t i = 0; i < num_tiles; i++) {
+            exp_packthread_tile<true, false, InputClamping::None, 32>(i, VectorMode::None);
+        }
+        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+        sdpa_profile::fine_sync(prof_win);
+    }
+    {
+        MaybeDeviceZoneScopedNFine(profiling_enabled, "QK_PACK", prof_win);
+        if (!sums_first) {
+            pack_contiguous_rows_nocfg(out_cb, row_base, subblock_h, out_num_cols, out_col_offset, subblock_w);
+            configure_single_tile_pack(sum_cb);
+        }
+        const bool fresh = out_col_offset == 0;
+#pragma GCC unroll 1
+        for (uint32_t pass = fresh ? 0 : 1; pass < 2; pass++) {
+            if (pass == 1 && !sums_first) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+            const uint32_t col_lo = (pass == 1 && fresh) ? 1 : 0;
+            const uint32_t col_hi = pass == 0 ? 1 : subblock_w;
+#pragma GCC unroll 1
+            for (uint32_t i = 0; i < subblock_h; i++) {
+#pragma GCC unroll 1
+                for (uint32_t j = col_lo; j < col_hi; ++j) {
+                    pack_tile<true>(i * subblock_w + j, sum_cb, row_base + i);
+                }
+            }
+        }
+        if (sums_first) {
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            configure_row_pack_width(out_cb, subblock_w);
+            pack_contiguous_rows_nocfg(out_cb, row_base, subblock_h, out_num_cols, out_col_offset, subblock_w);
+        }
+        sdpa_profile::fine_sync(prof_win);
+    }
+    tile_regs_release();
+}
+
 /**
  * Matmul + pack of scores against in-place latent V (V read from K^T: V[sk][vd] == K^T[vd][sk]).
  * Each output column vd is its own matmul chain over K^T row vd (in1 base vd*KT_stride, inner
@@ -369,7 +538,7 @@ void blocked_matmul_and_pack(
  * Loops: outer walks columns in DST-sized batches; middle does one column (= one matmul chain) per
  * DST tile; inner accumulates that chain over inner_dim tiles. Each batch is packed out in one go.
  */
-template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h>
+template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h, int fidelity = -1>
 void inplace_v_matmul_pack_batched(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -391,7 +560,7 @@ void inplace_v_matmul_pack_batched(
             uint32_t in0_index = in0_index_start;
             uint32_t in1_index = (vs0 + c) * KT_stride;
             for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-                matmul_block_no_mop(
+                matmul_block_no_mop<fidelity>(
                     in0_cb, in1_cb, in0_index, in1_index, c * subblock_h, false, 1, subblock_h, KT_stride);
                 in0_index++;
                 in1_index++;
@@ -402,6 +571,22 @@ void inplace_v_matmul_pack_batched(
         configure_row_pack_width(out_cb, cols);
         pack_contiguous_rows_nocfg(out_cb, 0, subblock_h, vDHt, vs0, cols);
         tile_regs_release();
+    }
+}
+
+// PV-phase matmul re-entry: full init when the replay image differs from the recorded one (fidelity change, or
+// LoFi, whose image bakes the init's ct/rt); rerecord = false says the replay already holds this PV image.
+ALWI void pv_mm_no_mop_reinit_short(
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim, bool rerecord = true) {
+    constexpr bool pv_lofi = PV_MATH_FIDELITY == 0;
+    if constexpr (PV_MATH_FIDELITY != QK_MATH_FIDELITY || pv_lofi) {
+        if (rerecord) {
+            mm_no_mop_init_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
+        } else {
+            mm_no_mop_reinit_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
+        }
+    } else {
+        mm_no_mop_reinit_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
     }
 }
 
@@ -493,7 +678,7 @@ void sub_exp_block_bcast_cols(
     const uint32_t max_row_base = q_subblock * tiles_per_row;
 
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
+        MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "SUB_EXP_BLOCK_INIT");
         sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
     }
 
@@ -502,7 +687,7 @@ void sub_exp_block_bcast_cols(
 
     tile_regs_acquire();
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
+        MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "SUB");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
@@ -516,7 +701,7 @@ void sub_exp_block_bcast_cols(
     tile_regs_wait();
     PACK((llk_pack_relu_config(ReluConfig::zero())));
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
+        MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "EXP");
         uint32_t dst_index = 0;
         constexpr int iterations = 32;
         constexpr VectorMode vector_mode_exp = VectorMode::None;
@@ -529,7 +714,7 @@ void sub_exp_block_bcast_cols(
     }
 
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
+        MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "PACK SUB_EXP");
         // Pack back to inout_cb at the same absolute positions.
         // In Phase 1, the caller pre-configures (cb_qkt_im, actual_sbw) before the kt loop
         // and blocked_matmul_and_pack restores it after each sub_exp. Skip the redundant
@@ -725,7 +910,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     for (uint32_t s = 0; s < sbh; s++) {
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
         {
-            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+            MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
             matmul_block_init(cur_sum_cb, col_identity_cb, 0, N, 1, N);
             sdpa_maybe_reconfig_data_format<normalized_out_cb, col_identity_cb, normalized_out_cb, scratch_cb>();
@@ -780,7 +965,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
         // Process in batches of up to dst_size tiles (DST capacity).
         {
-            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+            MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "NORM_MUL_BCAST");
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
             mul_bcast_cols_init(cur_out_cb, scratch_cb);
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
@@ -1303,7 +1488,14 @@ static void sdpa_inner_loop_step(
     const KVPadRotationContext& kv_pad_rotation = {},
     // Tile offset of this call's Q chunk from the front of cb_q_in. Non-zero only for head-serial
     // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
-    const uint32_t q_base_tiles = 0) {
+    const uint32_t q_base_tiles = 0,
+    // Fixed-offset softmax only: seed the accumulators from prev on this chunk (staging restore), the staging
+    // CB receiving the row sum on a ring iter's last K chunk, and the scratch CB for each chunk's row sums.
+    const bool seed_from_prev = false,
+    const uint32_t save_sum_cb = INVALID_CB,
+    const uint32_t chunk_sum_cb = INVALID_CB,
+    // Profiling window: this chunk records its zones (always true without SDPA_PROFILE_ITER/QCHUNK/KCHUNK_*).
+    [[maybe_unused]] const bool prof_win = true) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1319,77 +1511,122 @@ static void sdpa_inner_loop_step(
     uint32_t q_wait_tiles = (has_q_base_tiles ? q_base_tiles : 0) + q_subblock_num_tiles;
     uint32_t q_index_offset = has_q_base_tiles ? q_base_tiles : 0;
     uint32_t kt_index_offset = 0;
+    constexpr bool fixed = sdpa_fixed_offset_softmax;
+    const bool acc_overwrite = !fixed || (is_first_iter && !seed_from_prev);
+    const uint32_t step_sum_cb = fixed ? chunk_sum_cb : cur.sum;
 
-    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    if constexpr (!fixed) {
+        exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    }
 
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
     CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);
 
-    CircularBuffer(cur.sum).reserve_back(Sq_chunk_t);
+    if (!fixed || is_first_iter) {
+        CircularBuffer(cur.sum).reserve_back(Sq_chunk_t);
+    }
+    if constexpr (fixed) {
+        CircularBuffer(chunk_sum_cb).reserve_back(Sq_chunk_t);
+    }
     if (save_max_cb != INVALID_CB) {
         CircularBuffer(save_max_cb).reserve_back(Sq_chunk_t);
     }
+    if constexpr (fixed) {
+        if (is_first_iter) {
+            sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
+            CircularBuffer(cb_col_identity).wait_front(1);
+            CircularBuffer(cur.max).reserve_back(Sq_chunk_t);
+            sdpa_pack_zero_tiles(cb_col_identity, cur.max, Sq_chunk_t, dst_size);
+            CircularBuffer(cur.max).push_back(Sq_chunk_t);
+            if (seed_from_prev) {
+                CircularBuffer(prev.sum).wait_front(Sq_chunk_t);
+                sdpa_copy_tiles(prev.sum, 0, cur.sum, 0, Sq_chunk_t, dst_size);
+            } else {
+                sdpa_fill_tiles(cur.sum, Sq_chunk_t, sdpa_fixed_sum_epsilon, dst_size);
+            }
+            reconfig_data_format(cb_qkt_im, cb_qkt_im);
+        }
+        exp_packthread_tile_init<true, scale_fp32, InputClamping::None, DST_ACCUM_MODE, SDPA_FIXED_OFFSET_BITS>();
+    }
+
+    constexpr bool uses_lightweight_mask =
+        sdpa_uses_lightweight_mask<ring_mode, is_causal_sdpa, use_padded_mask, sliding_window_size>();
+    const bool should_apply_lightweight_mask = sdpa_lightweight_mask_stamped(
+        kv_pad_rotation_enabled,
+        is_causal_sdpa && apply_causal,
+        apply_sliding_window,
+        apply_mask && lw_partial_tile_idx > 0);
+    const bool no_mask_this_iter = !use_provided_mask && !(uses_lightweight_mask && should_apply_lightweight_mask);
+    const bool dest_exp = fixed && no_mask_this_iter;
 
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
-    CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
+    {
+        MaybeDeviceZoneScopedNWindow(profiling_enabled, "K_WAIT", prof_win);
+        CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
+    }
+    if constexpr (fixed) {
+        if (dest_exp) {
+            PACK((llk_pack_relu_config(ReluConfig::zero())));
+        }
+    }
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
-        MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+        MaybeDeviceZoneScopedNIf(profiling_enabled, "Softmax(Q@KT)", prof_win);
         CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
         kt_index_offset = 0;
 
         sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
         sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_identity_scale_in, cb_q_in>();
-        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+        mm_no_mop_init_short<QK_MATH_FIDELITY>(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
         // Configure pack once before the kt loop for cb_qkt_im. Both sub_exp
         // and blocked_matmul_and_pack skip their internal configure (same cb+width).
         // sub_exp's configure_single_tile_pack(reduce_cb) clobbers the global to 1,
         // so blocked_matmul_and_pack must reconfigure when q_subblock > 0.
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
-        configure_row_pack_width(cb_qkt_im, actual_sbw);
-
-        // Mask plan for this q_subblock (single source of truth; reused by the mask stamp below).
-        constexpr bool uses_lightweight_mask =
-            sdpa_uses_lightweight_mask<ring_mode, is_causal_sdpa, use_padded_mask, sliding_window_size>();
-        const bool should_apply_lightweight_mask = sdpa_lightweight_mask_stamped(
-            kv_pad_rotation_enabled,
-            is_causal_sdpa && apply_causal,
-            apply_sliding_window,
-            apply_mask && lw_partial_tile_idx > 0);
-        const bool no_mask_this_iter = !use_provided_mask && !(uses_lightweight_mask && should_apply_lightweight_mask);
+        const bool row_mop_kept = dest_exp && q_subblock > 0 && kt_num_full_subblocks % 2 == 0 &&
+                                  !sdpa_pack_format_changed<cb_normalized_out, cb_qkt_im>();
+        if (!row_mop_kept) {
+            configure_row_pack_width(cb_qkt_im, actual_sbw);
+        }
 
         // run()#1 (the reduce's first half) may overlap the second-half pack only if no masked
         // column lands in [0, active_Sk/2) — see sdpa_first_half_unmasked.
-        const bool overlap_first_half = reduce_trigger && sdpa_first_half_unmasked<
-                                                              is_causal_sdpa,
-                                                              kv_pad_rotation_enabled,
-                                                              sliding_window_size,
-                                                              use_provided_mask,
-                                                              Sk_chunk_t>(
-                                                              no_mask_this_iter,
-                                                              apply_causal,
-                                                              apply_sliding_window,
-                                                              apply_mask,
-                                                              lw_partial_tile_idx,
-                                                              mask_straddle_col,
-                                                              mask_q_start_tile,
-                                                              mask_k_start_tile,
-                                                              q_subblock * qkt_subblock_h,
-                                                              active_Sk);
+        const bool overlap_first_half = !fixed && reduce_trigger &&
+                                        sdpa_first_half_unmasked<
+                                            is_causal_sdpa,
+                                            kv_pad_rotation_enabled,
+                                            sliding_window_size,
+                                            use_provided_mask,
+                                            Sk_chunk_t>(
+                                            no_mask_this_iter,
+                                            apply_causal,
+                                            apply_sliding_window,
+                                            apply_mask,
+                                            lw_partial_tile_idx,
+                                            mask_straddle_col,
+                                            mask_q_start_tile,
+                                            mask_k_start_tile,
+                                            q_subblock * qkt_subblock_h,
+                                            active_Sk);
         // PACK posts the first-half token after the subblock covering the last first-half column
         // [active_Sk/2 - 1]; committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
 
+        if constexpr (fixed) {
+            if (!dest_exp && q_subblock > 0) {
+                CircularBuffer(cb_qkt_im).wait_front(q_subblock * row_tiles);
+            }
+        }
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
-            if (q_subblock > 0) {
+            if (q_subblock > 0 && !dest_exp) {
                 uint32_t prev_q_subblock = q_subblock - 1;
                 sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
                 sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                     cb_qkt_im,
                     cur.max,
-                    cur.sum,
+                    step_sum_cb,
                     KT_stride,
                     prev_q_subblock,
                     kt_subblock * actual_sbw,
@@ -1398,29 +1635,55 @@ static void sdpa_inner_loop_step(
                     /*skip_pack_configure=*/true);
                 sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
                 sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
-                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+                mm_no_mop_reinit_short<QK_MATH_FIDELITY>(
+                    cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
             }
             {
-                MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
-                blocked_matmul_and_pack<true, KT_stride, KT_stride>(
-                    cb_q_in,
-                    cb_kt_in,
-                    cb_qkt_im,
-                    q_index_offset,
-                    kt_index_offset,
-                    q_subblock,
-                    kt_subblock * actual_sbw,
-                    actual_sbw,
-                    qkt_subblock_h,
-                    in0_block_w,
-                    in0_block_w,
-                    /*skip_pack_configure=*/q_subblock == 0);
+                MaybeDeviceZoneScopedNIf(profiling_enabled, "Q@KT MM+Pack", prof_win);
+                if (dest_exp) {
+                    if constexpr (fixed) {
+                        blocked_matmul_exp_pack<profiling_enabled, KT_stride, KT_stride, QK_MATH_FIDELITY>(
+                            cb_q_in,
+                            cb_kt_in,
+                            cb_qkt_im,
+                            chunk_sum_cb,
+                            q_index_offset,
+                            kt_index_offset,
+                            q_subblock,
+                            kt_subblock * actual_sbw,
+                            actual_sbw,
+                            qkt_subblock_h,
+                            in0_block_w,
+                            in0_block_w,
+                            /*sums_first=*/(kt_subblock & 1) != 0,
+                            prof_win);
+                    }
+                } else {
+                    blocked_matmul_and_pack<true, KT_stride, KT_stride, QK_MATH_FIDELITY>(
+                        cb_q_in,
+                        cb_kt_in,
+                        cb_qkt_im,
+                        q_index_offset,
+                        kt_index_offset,
+                        q_subblock,
+                        kt_subblock * actual_sbw,
+                        actual_sbw,
+                        qkt_subblock_h,
+                        in0_block_w,
+                        in0_block_w,
+                        /*skip_pack_configure=*/q_subblock == 0);
+                }
                 // Signal the first half is committed so run()#1 overlaps the second-half
                 // pack. STALL_PACK drains the L1 writes before the token retires.
                 if (overlap_first_half && kt_subblock == first_half_last_sb) {
                     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::UNPACK_MATH_DONE)));
                 }
                 kt_index_offset += actual_sbw;
+            }
+        }
+        if constexpr (fixed) {
+            if (dest_exp && kt_num_full_subblocks % 2 == 1) {
+                PACK((llk_pack_reconfig_l1_acc(0)));
             }
         }
         // Restore float16b for mask/reduce after Q@KT.
@@ -1496,13 +1759,15 @@ static void sdpa_inner_loop_step(
         // reduce_trigger barrier. Posted after pack + mask + push so it dominates every
         // cb_qkt_im writer; gates run()#2 (and run()#1 on the non-overlap path). STALL_PACK drains
         // the writes; one post / one uninit get stays balanced (wait_on_zero is non-consuming).
-        if (reduce_trigger) {
-            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::FPU_SFPU)));
+        if constexpr (!fixed) {
+            if (reduce_trigger) {
+                PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::FPU_SFPU)));
+            }
         }
 
         // Max reduce: reads from cb_qkt_im at q_subblock position
-        {
-            MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
+        if constexpr (!fixed) {
+            MaybeDeviceZoneScopedNIf(profiling_enabled, "Reduce max", prof_win);
             CircularBuffer(cur.max).reserve_back(qkt_subblock_h);
             configure_single_tile_pack(cur.max);
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
@@ -1525,6 +1790,11 @@ static void sdpa_inner_loop_step(
 
         q_index_offset += qkt_subblock_h * in0_block_w;
         q_wait_tiles += q_subblock_num_tiles;
+    }
+    if constexpr (fixed) {
+        if (dest_exp) {
+            PACK((llk_pack_relu_config(ReluConfig::none())));
+        }
     }
 
     // In-place latent-V reads K^T again in Phase 2, so defer the K^T pop until after the
@@ -1573,15 +1843,36 @@ static void sdpa_inner_loop_step(
 
         // When save_out_cb is set, V matmul + SALAD write to save_out_cb (cb_out) instead of cur.out.
         // Writer drains save_out_cb row-by-row to DRAM during SALAD. cur.out stays empty.
-        const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
+        const uint32_t out_cb = (!fixed && save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
 
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
-        CircularBuffer(out_cb).reserve_back(qktv_output_num_tiles);
+        if (!fixed || is_first_iter) {
+            CircularBuffer(out_cb).reserve_back(qktv_output_num_tiles);
+        }
+        if constexpr (fixed) {
+            if (is_first_iter && seed_from_prev) {
+                CircularBuffer(prev.out).wait_front(qktv_output_num_tiles);
+                sdpa_copy_tiles(prev.out, 0, out_cb, 0, qktv_output_num_tiles, dst_size);
+                CircularBuffer(prev.out).pop_front(qktv_output_num_tiles);
+                reconfig_data_format_srca(cb_qkt_im);
+                mm_no_mop_init_short<PV_MATH_FIDELITY>(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+            }
+            if (!dest_exp) {
+                CircularBuffer(cb_qkt_im).wait_front(Sq_chunk_t * KT_stride);
+            }
+        }
+
+        const bool split_group0 = !(fixed && dest_exp);
+        const uint32_t first_pv_group = split_group0 ? 1 : 0;
+        if (!split_group0) {
+            MaybeDeviceZoneScopedNWindow(profiling_enabled, "V_WAIT", prof_win);
+            CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+        }
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
-        {
-            MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+        if (split_group0) {
+            MaybeDeviceZoneScopedNIf(profiling_enabled, "Softmax(Q@KT)@V", prof_win);
             const uint32_t matmul_inner = actual_sbw;
 
             // sub_exp_block_bcast_cols softmaxes the last Q row in place, one column-subblock at a
@@ -1592,15 +1883,17 @@ static void sdpa_inner_loop_step(
                 // Split-drain (common, materialized-V path): interleave each column-subblock's
                 // sub_exp with its partial V matmul; partial products accumulate across kt_sub via L1.
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
-                        cb_qkt_im,
-                        cur.max,
-                        cur.sum,
-                        KT_stride,
-                        q_num_subblocks - 1,
-                        kt_sub * actual_sbw,
-                        qkt_subblock_h,
-                        actual_sbw);
+                    if (!dest_exp) {
+                        sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                            cb_qkt_im,
+                            cur.max,
+                            step_sum_cb,
+                            KT_stride,
+                            q_num_subblocks - 1,
+                            kt_sub * actual_sbw,
+                            qkt_subblock_h,
+                            actual_sbw);
+                    }
                     if constexpr (qktv_first_group_reads_inplace_row) {
                         // PACK half only; SEMGET head-of-line-blocks the unpack thread, so the
                         // UNPACK half waits just before the matmul instead of stalling the setup
@@ -1609,21 +1902,22 @@ static void sdpa_inner_loop_step(
                     }
                     if (kt_sub == 0) {
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                        MaybeDeviceZoneScopedNWindow(profiling_enabled, "V_WAIT", prof_win);
                         CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
                     }
-                    if (kt_sub > 0) {
+                    if (kt_sub > 0 || !acc_overwrite) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
 
                     {
-                        MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                        MaybeDeviceZoneScopedNIf(profiling_enabled, "QKT@V MM+Pack", prof_win);
                         uint32_t v_index_offset = 0;
                         sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                             out_cb, out_cb);
                         // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
-                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                        pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, qktv_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         if constexpr (qktv_first_group_reads_inplace_row) {
                             // UNPACK half of the rendezvous posted above.
@@ -1632,7 +1926,7 @@ static void sdpa_inner_loop_step(
                         }
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
-                            blocked_matmul_and_pack<false, vDHt, vDHt>(
+                            blocked_matmul_and_pack<false, vDHt, vDHt, PV_MATH_FIDELITY>(
                                 cb_qkt_im,
                                 cb_v_in,
                                 out_cb,
@@ -1650,7 +1944,7 @@ static void sdpa_inner_loop_step(
                         sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                     }
 
-                    if (kt_sub > 0) {
+                    if (kt_sub > 0 || !acc_overwrite) {
                         PACK((llk_pack_reconfig_l1_acc(0)));
                     }
                 }
@@ -1660,15 +1954,17 @@ static void sdpa_inner_loop_step(
                 // group). Vs split-drain this drops the L1-acc and the per-kt_sub packs/barriers.
                 // active_Sk == kt_num_full_subblocks * actual_sbw exactly, so one pass covers the row.
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
-                        cb_qkt_im,
-                        cur.max,
-                        cur.sum,
-                        KT_stride,
-                        q_num_subblocks - 1,
-                        kt_sub * actual_sbw,
-                        qkt_subblock_h,
-                        actual_sbw);
+                    if (!dest_exp) {
+                        sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                            cb_qkt_im,
+                            cur.max,
+                            step_sum_cb,
+                            KT_stride,
+                            q_num_subblocks - 1,
+                            kt_sub * actual_sbw,
+                            qkt_subblock_h,
+                            actual_sbw);
+                    }
                 }
                 if constexpr (qktv_first_group_reads_inplace_row) {
                     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
@@ -1677,17 +1973,23 @@ static void sdpa_inner_loop_step(
                 }
                 CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
                 {
-                    MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                    MaybeDeviceZoneScopedNIf(profiling_enabled, "QKT@V MM+Pack", prof_win);
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                         out_cb, out_cb);
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
-                    inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
+                    pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, qktv_h, KT_stride);
+                    if (!acc_overwrite) {
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                    }
+                    inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h, PV_MATH_FIDELITY>(
                         cb_qkt_im,
                         cb_v_in,
                         out_cb,
                         qktv_in0_index_offset,
                         /*inner_dim=*/kt_num_full_subblocks * matmul_inner,
                         KT_stride);
+                    if (!acc_overwrite) {
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                    }
                     sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                 }
             }
@@ -1695,20 +1997,41 @@ static void sdpa_inner_loop_step(
             qktv_in0_wait_tiles += qktv_in0_row_tiles;
         }
 
+        const bool pv_early = fixed && dest_exp;
+        if constexpr (fixed) {
+            CircularBuffer(chunk_sum_cb).push_back(Sq_chunk_t);
+        }
+
         // Pack→unpack barrier between Phase 2's q_sub=0 drain and the main V-matmul loop.
         // The drain runs sub_exp in-place on cb_qkt_im at the last q_subblock's positions
         // (PACK writes); the upcoming V matmul (UNPACK reads) targets those same positions.
         // Without an explicit handshake, UNPACK can see stale L1 bytes — observed as wildly
         // wrong V matmul output (rmse > 1) on small-DHt + small-chunk causal shapes.
-        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        {
+            MaybeDeviceZoneScopedNWindow(profiling_enabled, "PV_BARRIER", prof_win);
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+            if (!pv_early) {
+                UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+            }
+        }
+
+        [[maybe_unused]] auto fold_chunk_sum = [&]() {
+            MaybeDeviceZoneScopedNWindow(profiling_enabled, "FOLD", prof_win);
+            sdpa_fold_chunk_sum(chunk_sum_cb, cur.sum, Sq_chunk_t, dst_size);
+            reconfig_data_format_srca(cb_qkt_im);
+        };
+        if constexpr (fixed) {
+            if (!pv_early) {
+                fold_chunk_sum();
+            }
+        }
 
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
         [[maybe_unused]] uint32_t sink_row_offset = 0;
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
-            MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+            MaybeDeviceZoneScopedNIf(profiling_enabled, "ROW_NORM", prof_win);
             CircularBuffer(cur.sum).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt);
             normalize_row_streaming<
@@ -1731,36 +2054,40 @@ static void sdpa_inner_loop_step(
         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
-            PACK((llk_pack_reconfig_l1_acc(1)));
-            {
-                MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
-                // ob_q_subblock=0: prev.out and cb_exp_max_diff are popped row-by-row (read from front).
-                // sum_q_subblock=salad_row: prev.sum uses cumulative indexing (not popped per-row).
-                if constexpr (has_qktv_remainder) {
-                    if (sbh == qktv_remainder_h) {
-                        salad_correct_fused<qktv_remainder_h, vDHt, dst_size>(
-                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+            if constexpr (!fixed) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+                {
+                    MaybeDeviceZoneScopedNIf(profiling_enabled, "S_CORR_FUSED", prof_win);
+                    // ob_q_subblock=0: prev.out and cb_exp_max_diff are popped row-by-row (read from front).
+                    // sum_q_subblock=salad_row: prev.sum uses cumulative indexing (not popped per-row).
+                    if constexpr (has_qktv_remainder) {
+                        if (sbh == qktv_remainder_h) {
+                            salad_correct_fused<qktv_remainder_h, vDHt, dst_size>(
+                                prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                        } else {
+                            salad_correct_fused<qktv_h, vDHt, dst_size>(
+                                prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                        }
                     } else {
                         salad_correct_fused<qktv_h, vDHt, dst_size>(
                             prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
                     }
-                } else {
-                    salad_correct_fused<qktv_h, vDHt, dst_size>(
-                        prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
                 }
+                CircularBuffer(cb_exp_max_diff).pop_front(sbh);
+                CircularBuffer(prev.out).pop_front(sbh * vDHt);
+                PACK((llk_pack_reconfig_l1_acc(0)));
             }
-            CircularBuffer(cb_exp_max_diff).pop_front(sbh);
-            CircularBuffer(prev.out).pop_front(sbh * vDHt);
-            PACK((llk_pack_reconfig_l1_acc(0)));
         };
 
         // q_subblock 1..N-1 (+ optional remainder): SALAD(prev) overlapped with matmul(cur)
         // When Sq_chunk_t is not divisible by qktv_h, the last iteration handles the
         // remainder row(s) with a smaller V matmul height.
         constexpr uint32_t total_v_row_groups = qktv_q_num_subblocks + (has_qktv_remainder ? 1 : 0);
-        exp_packthread_tile_init<EXP_APPROX_MODE>();
-        for (uint32_t q_subblock = 1; q_subblock < total_v_row_groups; ++q_subblock) {
-            MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+        if constexpr (!fixed) {
+            exp_packthread_tile_init<EXP_APPROX_MODE>();
+        }
+        for (uint32_t q_subblock = first_pv_group; q_subblock < total_v_row_groups; ++q_subblock) {
+            MaybeDeviceZoneScopedNIf(profiling_enabled, "Softmax(Q@KT)@V", prof_win);
             const bool is_remainder_iter = has_qktv_remainder && (q_subblock == qktv_q_num_subblocks);
             const uint32_t cur_h = is_remainder_iter ? qktv_remainder_h : qktv_h;
             uint32_t salad_row = q_subblock - 1;
@@ -1772,11 +2099,13 @@ static void sdpa_inner_loop_step(
                 is_remainder_iter ? (qktv_q_num_subblocks - pushed_rows) * qktv_h : (q_subblock - pushed_rows);
 
             // SALAD for previous group (always a full group, h=qktv_h)
-            if (!is_first_iter) {
-                CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
-                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                    prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
-                CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
+            if constexpr (!fixed) {
+                if (!is_first_iter) {
+                    CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                        prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
+                    CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
+                }
             }
 
             // V matmul for current row group — cur_h adapts for remainder
@@ -1786,15 +2115,28 @@ static void sdpa_inner_loop_step(
                 CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
             }
             {
-                MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                MaybeDeviceZoneScopedNIf(profiling_enabled, "QKT@V MM+Pack", prof_win);
                 uint32_t v_index_offset = 0;
                 sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                     out_cb, out_cb);
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
-                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
+                constexpr bool remainder_new_image =
+                    has_qktv_remainder && ((qktv_subblock_w >= qktv_remainder_h) != (qktv_subblock_w >= qktv_h));
+                const bool pv_rerecord = !fixed || q_subblock == 0 || (is_remainder_iter && remainder_new_image);
+                pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, cur_h, KT_stride, pv_rerecord);
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
+                if (!acc_overwrite) {
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+                if constexpr (fixed) {
+                    if (pv_early && q_subblock == total_v_row_groups - 1) {
+                        MaybeDeviceZoneScopedNWindow(profiling_enabled, "PV_BARRIER_LAST", prof_win);
+                        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                    }
+                }
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above.
                     // kt_inplace_v is constexpr-true only when Sq_chunk_t == 1, which yields a
@@ -1802,7 +2144,7 @@ static void sdpa_inner_loop_step(
                     // path and kt_inplace_v is effectively false here. The ternary is kept symmetric
                     // with the q_subblock-0 site so the addressing forms stay paired.
                     const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride) : v_index_offset;
-                    blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
+                    blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt, PV_MATH_FIDELITY>(
                         cb_qkt_im,
                         cb_v_in,
                         out_cb,
@@ -1817,11 +2159,18 @@ static void sdpa_inner_loop_step(
                         /*skip_pack_configure=*/true);
                     v_index_offset += qktv_subblock_w;
                 }
+                if (!acc_overwrite) {
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
             }
 
             // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
-            if (!is_first_iter) {
+            if constexpr (fixed) {
+                if (pv_early && q_subblock == 0) {
+                    fold_chunk_sum();
+                }
+            } else if (!is_first_iter) {
                 // Last main-loop iteration: hoist drain's sub_exp so both salads
                 // (current row and drain row) chain back-to-back with one FPU init.
                 if (q_subblock == total_v_row_groups - 1) {
@@ -1875,8 +2224,32 @@ static void sdpa_inner_loop_step(
             qktv_in0_wait_tiles += cur_h * KT_stride;
         }
 
-        // Pipeline drain: SALAD for the last group
-        {
+        if constexpr (fixed) {
+            if (is_last_iter) {
+                normalize_row(pushed_rows, Sq_chunk_t);
+            } else if (save_out_cb != INVALID_CB) {
+                CircularBuffer(cur.sum).push_back(Sq_chunk_t);
+                CircularBuffer(out_cb).push_back(qktv_output_num_tiles);
+                CircularBuffer(cur.sum).wait_front(Sq_chunk_t);
+                CircularBuffer(out_cb).wait_front(qktv_output_num_tiles);
+                sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_normalized_out>();
+                CircularBuffer(save_out_cb).reserve_back(qktv_output_num_tiles);
+                for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+                    sdpa_copy_tiles(out_cb, row * vDHt, save_out_cb, 0, vDHt, dst_size);
+                    CircularBuffer(save_out_cb).push_back(vDHt);
+                }
+                sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
+                sdpa_copy_tiles(cur.max, 0, save_max_cb, 0, Sq_chunk_t, dst_size);
+                CircularBuffer(save_max_cb).push_back(Sq_chunk_t);
+                CircularBuffer(save_sum_cb).reserve_back(Sq_chunk_t);
+                sdpa_copy_tiles(cur.sum, 0, save_sum_cb, 0, Sq_chunk_t, dst_size);
+                CircularBuffer(save_sum_cb).push_back(Sq_chunk_t);
+                CircularBuffer(cur.sum).pop_front(Sq_chunk_t);
+                CircularBuffer(out_cb).pop_front(qktv_output_num_tiles);
+                reconfig_data_format_srca(cb_qkt_im);
+            }
+        } else {
+            // Pipeline drain: SALAD for the last group
             constexpr uint32_t drain_h = has_qktv_remainder ? qktv_remainder_h : qktv_h;
             if constexpr (total_v_row_groups == 1) {
                 // Single row group: the main loop never ran, so the drain must
@@ -2148,7 +2521,14 @@ void sdpa_standard_v2(
                 lw_mask.sliding_leading_prev_tile_idx,
                 lw_mask.sliding_leading_tile_idx,
                 lw_mask.sliding_trailing_next_tile_idx,
-                apply_sliding_window);
+                apply_sliding_window,
+                0,
+                0,
+                {},
+                0,
+                false,
+                INVALID_CB,
+                cb_sum_A);
         };
 
         for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {
@@ -2228,15 +2608,21 @@ void sdpa_standard_v2(
 
             // Post-iteration cleanup
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
-            if (!is_first) {
-                sdpa_cb_pop_front_out_of_line(prev.max, Sq_chunk_t);
-                sdpa_cb_pop_front_out_of_line(prev.sum, Sq_chunk_t);
-            }
-
-            if (is_last) {
-                sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
+            if constexpr (sdpa_fixed_offset_softmax) {
+                if (is_last) {
+                    sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
+                }
             } else {
-                std::swap(prev, cur);
+                if (!is_first) {
+                    sdpa_cb_pop_front_out_of_line(prev.max, Sq_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(prev.sum, Sq_chunk_t);
+                }
+
+                if (is_last) {
+                    sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
+                } else {
+                    std::swap(prev, cur);
+                }
             }
         }
         // Q already popped inside sdpa_inner_loop_step after Phase 1 of the last K chunk.
@@ -2379,6 +2765,8 @@ void sdpa_ring_v2(
     [[maybe_unused]] const RotatedQSlots& rotated_slots = {}) {
     init_sdpa_streaming_semaphores();
 
+    constexpr bool fixed = sdpa_fixed_offset_softmax;
+    static_assert(!(fixed && use_l1_state_fifo), "fixed-offset softmax: head-serial L1 state FIFO unsupported");
     constexpr bool has_sliding_window = sliding_window_size > 0;
     static_assert(!has_sliding_window || chunked_enabled, "Sliding windows require chunked prefill");
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
@@ -2436,6 +2824,10 @@ void sdpa_ring_v2(
         AccumulatorHalf q_prev_norm = acc_state.prev;
         if (q_per_core > 1 && ring_iter > 0) {
             q_prev_norm = {cb_sum_in, cb_max_in, cb_prev_out};
+        } else if constexpr (fixed) {
+            q_prev_norm = acc_state.cur;
+            CircularBuffer(q_prev_norm.sum).push_back(Sq_chunk_t);
+            CircularBuffer(q_prev_norm.out).push_back(Sq_chunk_t * vDHt);
         }
         constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
         normalize_row_streaming<
@@ -2772,11 +3164,16 @@ void sdpa_ring_v2(
             const bool fifo_exit = use_l1_state_fifo && is_last_k && !is_last_ring_iter;
             const uint32_t step_save_out_cb = save_to_staging ? cb_out : (fifo_exit ? cb_prev_out : INVALID_CB);
             const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : (fifo_exit ? cb_max_in : INVALID_CB);
-            if (save_to_staging) {
+            uint32_t step_save_sum_cb = INVALID_CB;
+            if constexpr (fixed) {
+                step_save_sum_cb = save_to_staging ? cb_sum_out : INVALID_CB;
+            } else if (save_to_staging) {
                 q_cur.sum = cb_sum_out;
             } else if (fifo_exit) {
                 q_cur.sum = cb_sum_in;
             }
+            const bool step_seed_from_prev = fixed && restore_from_staging && KV_chunks_processed == 1;
+            const bool step_is_first = is_first || step_seed_from_prev;
 
             // K start tile fed to diag stamp must share Q's coord frame (local for is_causal, global for chunked).
             const uint32_t step_k_start_tile_local = [&]() {
@@ -2830,9 +3227,10 @@ void sdpa_ring_v2(
             step_kv_pad_rotation.k_local_start_tile = source_k_chunk * Sk_chunk_t;
             step_kv_pad_rotation.ring_id = source_ring_id;
             step_kv_pad_rotation.logical_tile_count = logical_nt;
+            [[maybe_unused]] const bool prof_win = sdpa_profile::window_hit(ring_iter, q - global_q_start, k_chunk);
 
             sdpa_inner_loop_step<
-                false,  // profiling_enabled
+                SDPA_PROFILE_ZONES == 1,
                 Sq_chunk_t,
                 Sk_chunk_t,
                 Skt,
@@ -2872,7 +3270,7 @@ void sdpa_ring_v2(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,
-                is_first,
+                step_is_first,
                 apply_mask,
                 lw_partial_tile_idx,
                 active_Sk_param,
@@ -2892,24 +3290,39 @@ void sdpa_ring_v2(
                 step_straddle_col,
                 step_straddle_jump,
                 step_kv_pad_rotation,
-                q_base_tiles);
+                q_base_tiles,
+                step_seed_from_prev,
+                step_save_sum_cb,
+                acc_state.prev.sum,
+                prof_win);
 
-            // Post-iteration cleanup: pop previous values and swap aliases
-            // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
-            if (!is_first) {
-                sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
-                sdpa_cb_pop_front_out_of_line(q_prev.sum, Sq_chunk_t);
-            }
-
-            if (is_last_k_of_last_ring_iter) {
-                // Normalization consumed cur.sum and cur.out; pop cur.max.
-                sdpa_cb_pop_front_out_of_line(q_cur.max, Sq_chunk_t);
+            if constexpr (fixed) {
+                if (step_seed_from_prev) {
+                    CircularBuffer(q_prev.max).wait_front(Sq_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(q_prev.sum, Sq_chunk_t);
+                }
+                if (is_last_k_of_last_ring_iter) {
+                    sdpa_cb_pop_front_out_of_line(q_cur.max, Sq_chunk_t);
+                }
             } else {
-                std::swap(q_prev, q_cur);
-                // After K0's swap, q_cur holds the staging/FIFO buffers. Reset to the scratch
-                // accumulator CBs so the rest of the pass ping-pongs between scratch halves.
-                if ((restore_from_staging || fifo_entry) && KV_chunks_processed == 1) {
-                    q_cur = {original_prev.sum, original_prev.max, original_prev.out};
+                // Post-iteration cleanup: pop previous values and swap aliases
+                // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
+                if (!is_first) {
+                    sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(q_prev.sum, Sq_chunk_t);
+                }
+
+                if (is_last_k_of_last_ring_iter) {
+                    // Normalization consumed cur.sum and cur.out; pop cur.max.
+                    sdpa_cb_pop_front_out_of_line(q_cur.max, Sq_chunk_t);
+                } else {
+                    std::swap(q_prev, q_cur);
+                    // After K0's swap, q_cur holds the staging/FIFO buffers. Reset to the scratch
+                    // accumulator CBs so the rest of the pass ping-pongs between scratch halves.
+                    if ((restore_from_staging || fifo_entry) && KV_chunks_processed == 1) {
+                        q_cur = {original_prev.sum, original_prev.max, original_prev.out};
+                    }
                 }
             }
         }
@@ -2946,7 +3359,7 @@ void sdpa_ring_v2(
             // Pop the accumulator CB for max — dual-write doesn't replace the alias,
             // so the accumulator CB still has tiles from the last K-chunk's reduce.
             // (Sum doesn't need this because planting replaced the alias entirely.)
-            sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
+            sdpa_cb_pop_front_out_of_line(fixed ? q_cur.max : q_prev.max, Sq_chunk_t);
         }
         // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
     }

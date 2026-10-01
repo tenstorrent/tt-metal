@@ -24,6 +24,9 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
             across `cluster_axis`, then finalize x * rsqrt(E[x^2] + eps) with optional head
             split, RoPE, and output-dtype cast. `cluster_axis=None` normalizes locally on
             every device (no gather), for tensors that are replicated or independent per device.
+
+            `affine_tile_row_map` (row-major uint32 [1, 1, 1, T], one entry per input tile row): per-token
+            weight/bias tile row r is read from row map[r], so weight/bias can be a small table of tile rows.
         )doc",
         &ttnn::experimental::dit_fused_distributed_rmsnorm,
         nb::arg("input_tensor"),
@@ -45,7 +48,8 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("num_preferred_links") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("affine_tile_row_map") = nb::none());
 
     ttnn::bind_function<"dit_fused_distributed_layernorm", "ttnn.experimental.">(
         mod,

@@ -27,6 +27,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
+from ....models.transformers.minimax_h3.quant_config import apply_env_quant_config
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
@@ -206,8 +207,10 @@ def _prepare_tt_inputs(
     rope_freq_dim: int,
     rope_theta: float,
     B: int = 1,
+    host_inputs: dict | None = None,
 ) -> SimpleNamespace:
-    """Build packed metadata, rope tables, random host inputs and the TT forward kwargs -- inputs only, no model, no asserts."""
+    """Build packed metadata, rope tables, random host inputs and the TT forward kwargs -- inputs only, no model, no asserts.
+    `host_inputs` (video/audio/prompt inputs, timestep) replaces the random draws (tools/cpu_reference_forward.py)."""
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
     cond_blocks = per_modality["cond_blocks"]
@@ -248,6 +251,11 @@ def _prepare_tt_inputs(
         width = video_patch_dim if block["modality"] == "video" else audio_channels
         block["input"] = torch.randn((B, block["rows"], width), dtype=torch.float32)
     timestep = torch.rand((num_timesteps,), dtype=torch.float32)
+    if host_inputs is not None:
+        video_input = host_inputs["video_input"].to(torch.float32).reshape(B, num_video, video_patch_dim)
+        audio_input = host_inputs["audio_input"].to(torch.float32).reshape(B, num_audio, audio_channels)
+        prompt_input = host_inputs["prompt_input"].to(torch.float32).reshape(B, num_text, text_dim)
+        timestep = host_inputs["timestep"].to(torch.float32).reshape(num_timesteps)
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = DiTParallelConfig(
@@ -1112,6 +1120,7 @@ def test_minimax_h3_transformer_block_perf(
         is_fsdp=is_fsdp,
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
+    apply_env_quant_config(tt_block)
     del torch_block
 
     tt_spatial = bf16_tensor_2dshard(
