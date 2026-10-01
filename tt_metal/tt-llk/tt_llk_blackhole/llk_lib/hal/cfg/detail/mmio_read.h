@@ -15,7 +15,7 @@ namespace hal::cfg::detail
 {
 
 template <ThreadTarget Target>
-inline constexpr std::uint32_t thread_target_index()
+inline constexpr std::uint32_t compute_thread_index()
 {
     if constexpr (Target == ThreadTarget::Current)
     {
@@ -36,7 +36,7 @@ inline constexpr std::uint32_t thread_target_index()
 template <ThreadTarget Target, std::uint32_t Addr>
 inline __attribute__((always_inline)) std::uint32_t read_thread_word_mmio()
 {
-    constexpr std::uint32_t thread_index = thread_target_index<Target>();
+    constexpr std::uint32_t thread_index = compute_thread_index<Target>();
     constexpr std::uint32_t creg_addr    = ThreadCfgBase + thread_index * ThreadCfgWordCount + Addr;
     static_assert(creg_addr <= 0x7ffu, "thread CFG address exceeds the RISC CREG selector");
 

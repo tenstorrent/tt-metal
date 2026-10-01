@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -49,8 +50,8 @@ inline constexpr ConstantFieldAssignment<F, S, Value> set()
  * @brief Prepare a write from a Tensix GPR to the state-CFG register word identified by F and S.
  *
  * The returned operation can be combined with @ref set assignments in one
- * @ref write call. Field assignments are grouped separately before and after
- * each GPR transfer. The transfer occurs when write() consumes the operation.
+ * @ref write call. Field grouping can span GPR transfers. The transfer occurs
+ * when write() consumes the operation.
  *
  * @tparam F Field descriptor identifying the first destination register word; the field must start at bit zero.
  * @tparam S Register section; must be within F.count.
@@ -88,15 +89,18 @@ inline __attribute__((always_inline)) std::uint32_t read_word()
     static_assert(A == Access::MMIO, "value-returning CFG reads require Access::MMIO");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
 
+    constexpr std::uint64_t addr       = std::uint64_t {F.addr32(S)} + WordOffset;
+    constexpr std::uint32_t word_count = F.scope == RegisterScope::Thread ? detail::ThreadCfgWordCount : detail::StateCfgWordCount;
+    static_assert(addr < word_count, "CFG word offset crosses the selected bank");
+
     if constexpr (F.scope == RegisterScope::Thread)
     {
-        static_assert(F.addr32(S) + WordOffset < detail::ThreadCfgWordCount, "thread CFG word offset crosses the selected thread bank");
-        return detail::read_thread_word_mmio<Target, F.addr32(S) + WordOffset>() & 0xffffu;
+        return detail::read_thread_word_mmio<Target, addr>() & 0xffffu;
     }
     else
     {
         static_assert(Target == ThreadTarget::Current, "ThreadTarget applies only to thread CFG reads");
-        return detail::read_state_word_mmio<F.addr32(S) + WordOffset>();
+        return detail::read_state_word_mmio<addr>();
     }
 }
 
@@ -138,6 +142,7 @@ inline __attribute__((always_inline)) void read(hal::Gpr<GprIndex>)
     static_assert(F.width <= 32, "field wider than 32b cannot be selected through a single CFG word");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(F.shamt(S) + F.width <= 32, "field crosses a CFG word boundary");
+    static_assert(F.addr32(S) < detail::StateCfgWordCount, "CFG read source lies outside the state bank");
 
     TTI_RDCFG(GprIndex, F.addr32(S));
 }
@@ -222,16 +227,14 @@ inline __attribute__((always_inline)) void write()
 }
 
 /**
- * @brief Group field assignments and emit ordered GPR transfers.
+ * @brief Group field assignments across one write batch and emit GPR transfers.
  *
- * Within each consecutive run of field assignments, assignments with the same
- * CFG scope and register word address are combined, even when not adjacent.
- * Register words are written in the order their addresses first appear.
+ * Assignments with the same CFG scope and register word address are combined
+ * across the entire call, including assignments separated by @ref from_gpr.
+ * Field groups and individual GPR transfers are emitted in first-occurrence order.
  * With Access::TensixCfgUnit, each register-word group uses TTI instructions
  * when all its assignments are compile-time constants; otherwise it uses TT instructions.
  * Use separate calls when hardware programming order matters.
- * Grouping never crosses a @ref from_gpr operation; its transfer and completion
- * policy are emitted between the surrounding assignment runs.
  *
  * @code
  * write<Access::TensixCfgUnit>(
@@ -253,14 +256,7 @@ template <
     std::enable_if_t<detail::is_write_operation_v<First> && (detail::is_write_operation_v<Rest> && ...), int> = 0>
 inline __attribute__((always_inline)) void write(const First& first, const Rest&... rest)
 {
-    if constexpr (detail::is_field_assignment_v<First> && (detail::is_field_assignment_v<Rest> && ...))
-    {
-        detail::write_assignments<A>(first, rest...);
-    }
-    else
-    {
-        detail::write_mixed_operations<A>(first, rest...);
-    }
+    detail::write_operations<A>(first, rest...);
 }
 
 /**
@@ -289,7 +285,7 @@ inline __attribute__((always_inline)) void write(const hal::Gpr<GprIndex> source
 }
 
 /**
- * @brief Write Count consecutive state-CFG register words through MMIO.
+ * @brief Write Count consecutive state-CFG register words from a std::array through MMIO.
  *
  * @tparam A Access path; must be Access::MMIO.
  * @tparam F Field descriptor identifying the first destination register word.
@@ -299,7 +295,7 @@ inline __attribute__((always_inline)) void write(const hal::Gpr<GprIndex> source
  * @param values Complete 32-bit register word values; the field's mask and bit position are ignored.
  */
 template <Access A, const Field& F, Sec S, std::uint32_t Count, std::size_t ArrayCount>
-inline __attribute__((always_inline)) void write(const std::uint32_t (&values)[ArrayCount])
+inline __attribute__((always_inline)) void write(const std::array<std::uint32_t, ArrayCount>& values)
 {
     static_assert(A == Access::MMIO, "array writes require Access::MMIO");
     detail::write_array_mmio<F, S, Count>(detail::state_cfg_bank(), values);

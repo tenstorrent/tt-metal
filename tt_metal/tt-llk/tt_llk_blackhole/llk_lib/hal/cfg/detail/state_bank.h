@@ -13,7 +13,7 @@ namespace hal::cfg::detail
 {
 
 // This duplicates ckernel::get_cfg_pointer.
-// TODO(njokovic): Remove ckernel:: implementation when HAL is applied to all kernels.
+// TODO(njokovic) issue #58443: Remove ckernel:: implementation when HAL is applied to all kernels.
 
 /**
  * @brief Base of the state-CFG bank selected by the current CFG_STATE_ID.
