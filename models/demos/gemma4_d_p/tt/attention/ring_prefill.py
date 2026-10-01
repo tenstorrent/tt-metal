@@ -187,7 +187,10 @@ def global_ring_prefill_attention(
     """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM."""
     mesh_device = mesh_config.device
     if program_config is None:
-        q_chunk, k_chunk, k_splits = ring_sdpa_chunk_sizes(tt_q.shape[-2], sliding=False)
+        sdpa_grid = ccl_manager.compute_grid_size
+        q_chunk, k_chunk, k_splits, segmented = ring_sdpa_chunk_sizes(
+            tt_q.shape[-2], sliding=False, num_heads=tt_q.shape[1], num_cores=(sdpa_grid.x - 1) * sdpa_grid.y
+        )
         program_config = ring_prefill_program_config(
             mesh_device,
             ccl_manager,
@@ -198,7 +201,7 @@ def global_ring_prefill_attention(
             # Global attention only: sliding attention gains nothing from LoFi, so it keeps HiFi2.
             matmul_math_fidelity=ttnn.MathFidelity.LoFi,
             # Global attention's bf16 running sums span the whole prefix; the op ignores this where K is split.
-            segmented_accumulation=True,
+            segmented_accumulation=segmented,
         )
     # Dense attention gathers each device's whole shard, so the buffer spans the full cache capacity. Sizing it to
     # logical_n survives a 2-chunk run and then fails "gather dim 2 too small".
@@ -237,20 +240,30 @@ def global_ring_prefill_attention(
     return out
 
 
-def ring_sdpa_chunk_sizes(q_slab_tokens, sliding):
-    """(q_chunk_size, k_chunk_size, max_k_splits) for the ring SDPA, chosen by the per-rank Q slab (chunk / CP).
+# Whole-tile q chunks tried, smallest first, for unsplit global attention. q 160 overflows L1 beside k 256.
+_GLOBAL_Q_CHUNKS = (96, 128)
+
+
+def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110):
+    """(q_chunk_size, k_chunk_size, max_k_splits, segmented_accumulation) for the ring SDPA, chosen by the per-rank
+    Q slab (chunk / CP), the local heads and the SDPA cores.
 
     Sliding layers use q 128 / k 128; the sliding path accepts q in {64, 128} and k == 128, and k also sets
     the halo granularity. Global layers use k 256. Slabs up to 512 tokens take q = slab / 4 (one tile when that
     is not whole tiles), giving 8 local heads x 4 Q chunks = 32 units, too few to fill the grid, so the K split
-    spreads them over three bands. Larger slabs fill the grid unsplit at q 96.
+    spreads them over three bands. Larger slabs run unsplit with segmented accumulation, which needs one Q chunk
+    per core: q 96, or the smallest larger q whose chunks fit on the cores. A slab too long for any of them keeps
+    q 96 without segments.
     """
     if sliding:
-        return 128, 128, 1
+        return 128, 128, 1, False
     if q_slab_tokens <= 512:
         q_chunk = q_slab_tokens // 4
-        return (q_chunk if q_chunk % TILE_HEIGHT == 0 else TILE_HEIGHT), 256, 3
-    return 96, 256, 1
+        return (q_chunk if q_chunk % TILE_HEIGHT == 0 else TILE_HEIGHT), 256, 3, True
+    for q_chunk in _GLOBAL_Q_CHUNKS:
+        if -(-q_slab_tokens // q_chunk) * num_heads <= num_cores:
+            return q_chunk, 256, 1, True
+    return _GLOBAL_Q_CHUNKS[0], 256, 1, False
 
 
 def ring_prefill_program_config(
@@ -364,7 +377,7 @@ def sliding_ring_prefill_attention(
     """
     mesh_device = mesh_config.device
     if program_config is None:
-        q_chunk, k_chunk, k_splits = ring_sdpa_chunk_sizes(tt_q.shape[-2], sliding=True)
+        q_chunk, k_chunk, k_splits, _ = ring_sdpa_chunk_sizes(tt_q.shape[-2], sliding=True)
         program_config = ring_prefill_program_config(
             mesh_device, ccl_manager, head_dim, q_chunk_size=q_chunk, k_chunk_size=k_chunk, max_k_splits=k_splits
         )
