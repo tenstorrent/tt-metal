@@ -24,6 +24,7 @@ from models.demos.mimo_v2_d_p.tt.attention.attention import cache_v_dim, kv_head
 from models.demos.mimo_v2_d_p.tt.attention.kv_cache import allocate_kv_cache
 from models.demos.mimo_v2_d_p.tt.ccl import CCLManager, resolve_num_links
 from models.demos.mimo_v2_d_p.tt.decoder import TtDecoderLayer
+from models.demos.mimo_v2_d_p.tt.ffn import all_gather_tp, partition_tp
 from models.demos.mimo_v2_d_p.tt.lm_head import TtLMHead
 from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import build_indexed_rope, build_transformation_mat
@@ -179,10 +180,17 @@ class TtMiMoModel:
     def forward_device(
         self, x, kv_actual: int, *, user: int = 0, valid_end: int | None = None, on_layer_complete=None, capture=None
     ):
-        """Run this rank's layers on hidden ``x``; ``on_layer_complete(global_layer_idx)`` fires once per layer, in order."""
+        """Run this rank's layers on hidden ``x``; ``on_layer_complete(global_layer_idx)`` fires once per layer, in order.
+        ``x`` and the result are [1,1,S_local,H] replicated over TP; with the sequence-parallel residual the layers chain
+        on this col's S_local/TP rows in between (one partition in, one all-gather out; ``capture`` sees full rows)."""
+        sp = bool(self.layers) and self.layers[0].sp
+        if sp:
+            xs = partition_tp(x, self.mesh_device)
+            x.deallocate(True)
+            x = xs
         for layer in self.layers:
             t = layer.kind
-            y = layer(
+            y = (layer.forward_sp if sp else layer)(
                 x,
                 self.rope[t],
                 self.trans_mat,
@@ -195,9 +203,18 @@ class TtMiMoModel:
             x.deallocate(True)
             x = y
             if capture is not None:
-                capture(layer.layer_idx, x, kv_actual)
+                if sp:
+                    full = all_gather_tp(x, self.mesh_device)
+                    capture(layer.layer_idx, full, kv_actual)
+                    full.deallocate(True)
+                else:
+                    capture(layer.layer_idx, x, kv_actual)
             if on_layer_complete is not None:
                 on_layer_complete(layer.layer_idx)
+        if sp:
+            out = all_gather_tp(x, self.mesh_device)
+            x.deallocate(True)
+            x = out
         return x
 
     def prefill_chunk(self, ids_chunk: torch.Tensor, kv_actual: int, user: int = 0, capture=None, valid_end=None):

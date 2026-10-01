@@ -53,7 +53,12 @@ def build_indexed_rope(mesh_device, spec: AttnSpec, *, max_seq_len, chunk_size, 
     dims[sp_axis] = 2
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=tuple(dims))
     to_dev = lambda t: ttnn.from_torch(
-        t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mapper
+        t,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
     )
     return [to_dev(cos), to_dev(sin)]
 

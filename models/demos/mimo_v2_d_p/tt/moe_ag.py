@@ -321,7 +321,7 @@ class MoeAgBlock:
                 tot += n * esize[t.dtype]
         return tot / 1e6
 
-    def reduce(self, y):
+    def reduce(self, y, scatter=False):
         """y [rows, H] (the experts' outputs at their flat rows: row-major bf16, or bfp8 TILE without y_rm) -> a fresh
         [1, 1, S, H] bf16 TILE tensor, summed over every chip's experts, replicated over the mesh columns."""
         if y.layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -343,12 +343,18 @@ class MoeAgBlock:
         else:  # > 2 rows: reduce-scatter of the [T, H] partials over the rows (tiles)
             part = self.lreduce(y_rm, self.plan_op.y_slot, self.gw)  # bf16 tiles (LocalReduce tiled)
             col = ttnn.reduce_scatter(part, dim=2, cluster_axis=0, topology=self.sp_topo, num_links=self.rs_links)
-        return self._tp_allreduce(col)
+        return self._tp_allreduce(col, scatter)
 
-    def _tp_allreduce(self, col):
+    def _tp_allreduce(self, col, scatter=False):
         """[1, 1, S, H] column partial (row major, or tiles after a reduce-scatter) -> fresh TILE, summed over cols."""
         if self.cols == 1:
             return ttnn.to_layout(col, ttnn.TILE_LAYOUT) if col.layout != ttnn.TILE_LAYOUT else col
+        if scatter:  # sequence-parallel residual: this col's rows of the sum only
+            t = ttnn.to_layout(col, ttnn.TILE_LAYOUT) if col.layout != ttnn.TILE_LAYOUT else col
+            rs = ttnn.reduce_scatter(t, dim=2, cluster_axis=1, topology=self.tp_topo, num_links=self.rs_links)
+            if t is not col:
+                ttnn.deallocate(t)
+            return rs
         if self.tp_mode == "rsag":
             t = ttnn.to_layout(col, ttnn.TILE_LAYOUT) if col.layout != ttnn.TILE_LAYOUT else col
             rs = ttnn.reduce_scatter(t, dim=3, cluster_axis=1, topology=self.tp_topo, num_links=self.rs_links)

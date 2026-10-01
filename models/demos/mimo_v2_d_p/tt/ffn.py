@@ -65,6 +65,40 @@ class TtRMSNorm:
         return ttnn.rms_norm(x, epsilon=self.eps, weight=self.w, compute_kernel_config=self.cfg)
 
 
+def _tp_topology():
+    from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+
+    return per_axis_topology()[1]
+
+
+def reduce_scatter_tp(x, mesh_device, num_links=None):
+    """Sum over the TP (col) axis, rows scattered: [1,1,S,H] partials -> [1,1,S/TP,H] (col c: rows c S/TP ..); deallocates
+    ``x``. The sequence-parallel residual's end of a block (MiMoRuntimeOptions.sp_residual)."""
+    if mesh_device.shape[1] == 1:
+        return x
+    out = ttnn.reduce_scatter(
+        x, dim=2, cluster_axis=1, topology=_tp_topology(), num_links=num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    x.deallocate(True)
+    return out
+
+
+def all_gather_tp(x, mesh_device, num_links=None):
+    """[1,1,S/TP,H] row slices over the TP axis -> [1,1,S,H] replicated (the sequence-parallel residual's block input)."""
+    if mesh_device.shape[1] == 1:
+        return x
+    return ttnn.all_gather(
+        x, dim=2, cluster_axis=1, topology=_tp_topology(), num_links=num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+
+def partition_tp(x, mesh_device):
+    """[1,1,S,H] replicated over TP -> this col's [1,1,S/TP,H] row slice (local, no transfer)."""
+    if mesh_device.shape[1] == 1:
+        return x
+    return ttnn.mesh_partition(x, dim=2, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
 def all_reduce_tp(x, mesh_device, num_links=None):
     """Sum over the TP (col) axis; deallocates ``x``. ``num_links``: MiMoRuntimeOptions.ar_links (None: op default)."""
     if mesh_device.shape[1] == 1:
@@ -98,7 +132,8 @@ class TtDenseMLP:
         )
         self._pcs = {}
 
-    def __call__(self, x):
+    def __call__(self, x, tp_out="replicated"):
+        """``tp_out``: "replicated" (all-reduce over TP) or "scattered" (reduce-scatter of the rows)."""
         M, K = x.shape[2], x.shape[3]
         if M not in self._pcs:
             self._pcs[M] = (
@@ -113,6 +148,8 @@ class TtDenseMLP:
         up.deallocate(True)
         out = ttnn.linear(h, self.w_down, dtype=ttnn.bfloat16, compute_kernel_config=self.cfg, program_config=pc_down)
         h.deallocate(True)
+        if tp_out == "scattered":
+            return reduce_scatter_tp(out, self.mesh_device, self.options.ar_links)
         return all_reduce_tp(out, self.mesh_device, self.options.ar_links)
 
 
@@ -424,8 +461,9 @@ class TtMoE:
             hybrid_token_threshold=self.options.re_hybrid_threshold,
         )
 
-    def _call_ag(self, x):
-        """All-gather block: x [1,1,S,H] TILE -> [1,1,S,H] TILE (replicated over TP)."""
+    def _call_ag(self, x, tp_out="replicated"):
+        """All-gather block: x [1,1,S,H] TILE -> [1,1,S,H] TILE (replicated over TP; ``tp_out="scattered"``: this col's
+        [1,1,S/TP,H] rows)."""
         tiles = self.ag.tile_topk and self.ag.rows > 1
         idx4, w_rm = self.gate(x, row_major=not tiles, tiles=tiles)
         x_rm = self.ag.to_rm(x)
@@ -436,7 +474,7 @@ class TtMoE:
             ttnn.deallocate(w_rm)
         counts, regions, token_index, _ = self.ag.plan(self.lmap)
         y = self.expert_indexed(gx, counts, regions, token_index)
-        out = self.ag.reduce(y)
+        out = self.ag.reduce(y, scatter=tp_out == "scattered")
         ttnn.deallocate(y)
         if not gathered:
             ttnn.deallocate(x_rm)
@@ -458,10 +496,15 @@ class TtMoE:
             gx2, counts, regions, token_index=token_index, x_pages_per_row=self.ag.xppr, y_row_major=self.ag.y_rm
         )
 
-    def __call__(self, x):
-        """x [1,1,S,H] (post-attention-normed, replicated over TP) -> [1,1,S,H]."""
+    def __call__(self, x, tp_out="replicated"):
+        """x [1,1,S,H] (post-attention-normed, replicated over TP) -> [1,1,S,H] (``tp_out="scattered"``: [1,1,S/TP,H])."""
         if self.ag is not None:
-            return self._call_ag(x)
+            return self._call_ag(x, tp_out)
+        if tp_out == "scattered":
+            full = self.__call__(x)
+            out = partition_tp(full, self.mesh_device)
+            full.deallocate(True)
+            return out
         idx, w = self.gate(x)
         offsets, counts, regions, _ = self.routing_setup(
             ttnn_top_k_experts_indices=idx, num_routed_experts=self.E, num_experts_per_tok=self.K

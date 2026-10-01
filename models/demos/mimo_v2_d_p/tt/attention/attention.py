@@ -23,7 +23,7 @@ import torch
 
 import ttnn
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
-from models.demos.mimo_v2_d_p.tt.ffn import all_reduce_tp
+from models.demos.mimo_v2_d_p.tt.ffn import all_reduce_tp, reduce_scatter_tp
 from models.demos.mimo_v2_d_p.tt.mm_configs import best_mm_config
 from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import permute_heads
@@ -161,8 +161,9 @@ class TtAttention:
         kv_actual: int,
         user: int = 0,
         valid_end: int | None = None,
+        tp_out: str = "replicated",
     ):
-        """x [1,1,S_local,H] -> [1,1,S_local,H] (replicated over TP)."""
+        """x [1,1,S_local,H] -> [1,1,S_local,H] (replicated over TP; ``tp_out="scattered"``: [1,1,S_local/TP,H])."""
         S_local = x.shape[2]
         sp = self.mesh_device.shape[self.sp_axis]
         xqkv = ttnn.linear(
@@ -247,4 +248,6 @@ class TtAttention:
             program_config=self._pc("o", oc, self.w.wo),
         )
         oc.deallocate(True)
+        if tp_out == "scattered":
+            return reduce_scatter_tp(out, self.mesh_device, self.options.ar_links)
         return all_reduce_tp(out, self.mesh_device, self.options.ar_links)
