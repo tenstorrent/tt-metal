@@ -8,6 +8,7 @@
 /* All Gather Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 using matmul_device_operation_t = ttnn::experimental::prim::MinimalMatmulDeviceOperation;
 
@@ -124,6 +125,39 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
         outputs.push_back(t);
     }
     return outputs;
+}
+
+std::vector<tt::tt_metal::TensorTopology> StridedAllGatherMinimalMatmulAsync::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // [0] the all_gather output, delegated to StridedAllGatherAsync over the attributes and inputs it is created
+    // from; then one matmul chunk per entry compute_output_specs adds after it. Every chunk is a column slice of the
+    // same matmul of the gathered activation by the weight, so each takes the union-default label of {gathered
+    // activation, weight, bias} (what launch() gives a plain matmul; the fused addcmul is elementwise). No honest
+    // all_gather label (already warned about): {} keeps the union default for every slot.
+    const auto gathered = StridedAllGatherAsync::compute_output_topologies(
+        attributes.strided_all_gather_async_struct,
+        StridedAllGatherAsyncInputs{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
+    if (gathered.empty()) {
+        return {};
+    }
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(gathered.front()), std::cref(tensor_args.weight_tensor.tensor_topology())};
+    if (tensor_args.bias.has_value()) {
+        operands.emplace_back(tensor_args.bias->tensor_topology());
+    }
+    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
+    const TensorTopology matmul_topology(
+        std::move(shape), std::move(placements), tensor_args.input_tensor.tensor_topology().mesh_coords());
+
+    const size_t num_outputs = compute_output_specs(attributes, tensor_args).size();
+    std::vector<TensorTopology> topologies;
+    topologies.reserve(num_outputs);
+    topologies.push_back(gathered.front());
+    while (topologies.size() < num_outputs) {
+        topologies.push_back(matmul_topology);
+    }
+    return topologies;
 }
 
 }  // namespace ttnn::experimental::prim

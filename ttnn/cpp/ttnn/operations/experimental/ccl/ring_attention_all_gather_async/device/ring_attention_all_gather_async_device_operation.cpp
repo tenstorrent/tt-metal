@@ -10,6 +10,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 namespace ttnn::experimental::prim {
 void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
@@ -152,6 +153,34 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
         output_tensors.emplace_back(create_device_tensor(output_spec, input_tensors[0].device()));
     }
     return output_tensors;
+}
+
+std::vector<tt::tt_metal::TensorTopology> RingAttentionAllGatherAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // One output per input (or the caller's persistent buffers, which ARE those outputs when all are given), each
+    // input gathered along `dim` on `cluster_axis`: Replicate on the cluster axis, that input's placements elsewhere;
+    // a collapsed 1-D label is expanded per mesh axis first (all_gather_async convention). The count must match
+    // create_output_tensors, which takes the persistent buffers when the first is present; a count that differs from
+    // the inputs is rejected by validation right after this hook, so return {} rather than a partial label. No honest
+    // label for any input (nullopt, already warned about): {} for all.
+    const auto& inputs = tensor_args.input_tensor;
+    const auto& persistent = tensor_args.persistent_output_buffer;
+    const size_t num_outputs =
+        (!persistent.empty() && persistent.front().has_value()) ? persistent.size() : inputs.size();
+    if (num_outputs != inputs.size()) {
+        return {};
+    }
+    std::vector<tt::tt_metal::TensorTopology> topologies;
+    topologies.reserve(inputs.size());
+    for (const auto& input : inputs) {
+        const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
+            input, operation_attributes.cluster_axis, operation_attributes.dim);
+        if (!output_topology.has_value()) {
+            return {};
+        }
+        topologies.push_back(*output_topology);
+    }
+    return topologies;
 }
 
 std::tuple<RingAttentionAllGatherAsyncParams, RingAttentionAllGatherAsyncInputs>

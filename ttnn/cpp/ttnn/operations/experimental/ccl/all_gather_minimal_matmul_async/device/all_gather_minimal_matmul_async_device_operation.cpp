@@ -11,6 +11,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 #include <tt-metalium/hal.hpp>
 
@@ -428,6 +430,56 @@ AllGatherMinimalMatmulAsyncOp::tensor_return_value_t AllGatherMinimalMatmulAsync
     }
 
     return output_tensors;
+}
+
+std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // Slot layout follows compute_output_specs: [0] the activation gather buffer (the caller's persistent buffer when
+    // given), [1] with FSDP the gathered weight buffer, then one matmul chunk per remaining spec. The activation is
+    // gathered along its last dim on `cluster_axis`, the FSDP weight along its second-to-last (K) dim on
+    // `fsdp_cluster_axis`: Replicate on that axis, the tensor's placements elsewhere. Every chunk is a column slice of
+    // the matmul of the gathered activation by the (gathered) weight, so each takes the union-default label of
+    // {gathered activation, (gathered) weight, bias} (what launch() gives a plain matmul; the fused addcmul and
+    // SwiGLU are elementwise). No honest gather label (nullopt, already warned about): {} keeps the union default
+    // for every slot.
+    const auto activation_topology = ttnn::operations::ccl::common::all_gather_output_topology(
+        tensor_args.input_tensor, attributes.cluster_axis, /*gathered_dim=*/-1);
+    if (!activation_topology.has_value()) {
+        return {};
+    }
+    const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
+    std::optional<TensorTopology> weight_topology;
+    if (fsdp_fused) {
+        weight_topology = ttnn::operations::ccl::common::all_gather_output_topology(
+            tensor_args.weight_tensor, attributes.fsdp_cluster_axis, /*gathered_dim=*/-2);
+        if (!weight_topology.has_value()) {
+            return {};
+        }
+    } else {
+        weight_topology = tensor_args.weight_tensor.tensor_topology();
+    }
+
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(*activation_topology), std::cref(*weight_topology)};
+    if (tensor_args.bias_tensor.has_value()) {
+        operands.emplace_back(tensor_args.bias_tensor->tensor_topology());
+    }
+    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
+    const TensorTopology matmul_topology(
+        std::move(shape), std::move(placements), tensor_args.input_tensor.tensor_topology().mesh_coords());
+
+    const size_t num_outputs = compute_output_specs(attributes, tensor_args).size();
+    std::vector<TensorTopology> topologies;
+    topologies.reserve(num_outputs);
+    topologies.push_back(*activation_topology);
+    if (fsdp_fused) {
+        topologies.push_back(*weight_topology);
+    }
+    while (topologies.size() < num_outputs) {
+        topologies.push_back(matmul_topology);
+    }
+    return topologies;
 }
 
 }  // namespace ttnn::experimental::prim

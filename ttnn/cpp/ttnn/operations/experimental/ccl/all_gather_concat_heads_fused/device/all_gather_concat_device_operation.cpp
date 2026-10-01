@@ -9,6 +9,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include <algorithm>
 
 using namespace tt::tt_metal;
@@ -76,6 +77,27 @@ AllGatherConcatDeviceOperation::tensor_return_value_t AllGatherConcatDeviceOpera
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(spec, tensor_args.input_tensor.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> AllGatherConcatDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    // The heads are gathered along `dim` on `cluster_axis` and concatenated into [seq, 1, batch, heads * head_dim]:
+    // Replicate on the cluster axis. That reshape renumbers the output's dims, so a Shard any other axis still holds
+    // would name an input dim the output no longer has in that position -- {} (union default) then, rather than a
+    // label this hook cannot vouch for. `buffer_tensor` is caller-owned scratch outside the return value. No honest
+    // gather label (nullopt, already warned about): {}.
+    const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
+        tensor_args.input_tensor, args.cluster_axis, static_cast<int32_t>(args.dim));
+    if (!output_topology.has_value()) {
+        return {};
+    }
+    for (const auto& placement : output_topology->placements()) {
+        if (std::holds_alternative<Shard>(placement)) {
+            return {};
+        }
+    }
+    return {*output_topology};
 }
 
 ttsl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
