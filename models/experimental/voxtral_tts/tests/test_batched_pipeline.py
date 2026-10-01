@@ -154,9 +154,14 @@ def test_a4_ms_per_frame_at_b_users(pipe):
     pipe.generate_batch(reqs, verbose=True)
     t = dict(pipe.last_timings)
     ms = t["decode_ms_per_frame"]
-    _record(a4_timings=t, a4_ms_per_frame=ms, a4_rtf_per_user=ms / REAL_TIME_MS)
+    dev_ms = pipe.frame_graph_ms()
+    _record(a4_timings=t, a4_ms_per_frame=ms, a4_rtf_per_user=ms / REAL_TIME_MS, a4_device_only_ms_per_frame=dev_ms)
     print(
         f"\n[phaseA] A4 B={B}: prefill {t['prefill_s']:.2f}s for {B} users, {t['steps']} traced steps, "
         f"{ms:.1f} ms/frame for all users ({REAL_TIME_MS / ms:.2f}x real time per user), traced={t['traced']}"
+    )
+    print(
+        f"[phaseA] A4 device-only frame graph: {dev_ms:.1f} ms/frame; host work per frame: {ms - dev_ms:.1f} ms "
+        f"(what Phase B removes)"
     )
     assert ms < REAL_TIME_MS, f"{ms:.1f} ms/frame is slower than real time ({REAL_TIME_MS} ms)"

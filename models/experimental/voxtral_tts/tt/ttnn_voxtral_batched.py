@@ -213,11 +213,36 @@ class TtVoxtralBatchedPipeline:
         emit(f"[batched] warmup: total {self.warmed['seconds']:.1f}s")
         return self
 
+    def frame_graph_ms(self, replays=32, cfg_alpha=CFG_ALPHA, n_steps=N_DECODING_STEPS):
+        """Device-only ms per frame: the traced frame graph (backbone step, semantic head, flow
+        solve) replayed with no host work in between. The gap to generate_batch's ms/frame is
+        the host work per frame (reads, copies, gathers, argmax, FSQ) that Phase B moves on device.
+        Writes K/V at slot PREFILL_MULTIPLE in every row; the next prefill overwrites it."""
+        import models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt as gpt
+
+        self._trace_capture(torch.full((self.B,), gpt.PREFILL_MULTIPLE, dtype=torch.int32), cfg_alpha, n_steps)
+        try:
+            tid = self._tr[0]
+            for _ in range(3):
+                ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(self.device)
+            t0 = time.perf_counter()
+            for _ in range(replays):
+                ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(self.device)
+            return (time.perf_counter() - t0) / replays * 1e3
+        finally:
+            self._trace_release()
+
     @staticmethod
     def noise_for(seed, n_frames):
-        """[n_frames, 36]: the x0 sequence TtVoxtralPipeline's request with `seed` would draw."""
+        """[n_frames, 36]: the x0 sequence TtVoxtralPipeline's request with `seed` would draw.
+
+        One randn of 36 values per frame, as the single-user pipeline draws them: torch's CPU
+        normal sampler fills in blocks of 16 and recomputes the tail of a tensor whose size is
+        not a multiple of 16, so randn(n_frames, 36)[t] is NOT the same as the t-th randn(1, 36)."""
         g = torch.Generator().manual_seed(int(seed))
-        return torch.randn(n_frames, N_ACOUSTIC_CODEBOOK, generator=g)
+        return torch.cat([torch.randn(1, N_ACOUSTIC_CODEBOOK, generator=g) for _ in range(n_frames)], dim=0)
 
     @torch.no_grad()
     def generate_batch(self, requests, max_frames=None, cfg_alpha=CFG_ALPHA, n_steps=N_DECODING_STEPS, verbose=False):
