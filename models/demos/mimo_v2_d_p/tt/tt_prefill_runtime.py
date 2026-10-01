@@ -160,7 +160,9 @@ class MiMoPrefillRuntime:
                 f"ring groups). In tt-d-gen set runtime.kv_block_size == chunk_size so prefix reuse resumes on chunk boundaries."
             )
         self._bind(kv_caches)
-        x = self.model.embed_device(input_tensor) if c.is_first_rank else input_tensor
+        # pad ids (0xFFFFFFFF) only ever fill the tail past actual_end
+        padded = actual_end < actual_start + c.chunk_size
+        x = self.model.embed_device(input_tensor, padded=padded) if c.is_first_rank else input_tensor
         if c.is_first_rank:
             ttnn.deallocate(input_tensor)
         cb = None

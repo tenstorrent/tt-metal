@@ -59,6 +59,11 @@ def test_model_chunk_perf(mesh_device, device_params):
         options=MiMoRuntimeOptions.from_env(),
     )
     ids = hf.tokenize_prompt(CHUNK)
+    if os.environ.get("MIMO_PERF_GC_FREEZE"):  # move everything built so far out of the cyclic GC's reach
+        import gc
+
+        gc.collect()
+        gc.freeze()
     tag = f"{mesh_id(mesh_device)} L{N_LAYERS} chunk {CHUNK} @ {KV_ACTUAL}"
 
     host, wall = [], []

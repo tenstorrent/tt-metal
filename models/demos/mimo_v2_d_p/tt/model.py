@@ -167,8 +167,11 @@ class TtMiMoModel:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(self.sp, self.tp), dims=(0, None)),
         )
 
-    def embed_device(self, tok):
-        tok = clamp_pad_tokens(tok, self.vocab)
+    def embed_device(self, tok, padded: bool = True):
+        """``padded``: the chunk may hold pad (out-of-vocab) ids; False skips the 4-op clamp (a full chunk: the device
+        is otherwise idle while the host enqueues it, at the start of every eager chunk)."""
+        if padded:
+            tok = clamp_pad_tokens(tok, self.vocab)
         tok = ttnn.reshape(tok, (1, self.chunk_local))
         e = ttnn.embedding(tok, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         return ttnn.reshape(e, (1, 1, self.chunk_local, self.cfg.hidden_size))
@@ -200,7 +203,8 @@ class TtMiMoModel:
     def prefill_chunk(self, ids_chunk: torch.Tensor, kv_actual: int, user: int = 0, capture=None, valid_end=None):
         """ids_chunk [chunk_size] (natural order) at global offset kv_actual -> hidden [1,1,S_local,H] (device, block-cyclic)."""
         idx = block_cyclic_index(kv_actual, self.sp, self.chunk_local) - kv_actual
-        x = self.embed_device(self.tokens_to_device(ids_chunk[idx]))
+        padded = bool(((ids_chunk < 0) | (ids_chunk >= self.vocab)).any())
+        x = self.embed_device(self.tokens_to_device(ids_chunk[idx]), padded=padded)
         return self.forward_device(x, kv_actual, user=user, capture=capture, valid_end=valid_end)
 
     def next_token_logits(self, x, kv_actual: int, pos: int) -> torch.Tensor:
