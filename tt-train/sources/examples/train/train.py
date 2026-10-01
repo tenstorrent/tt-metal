@@ -206,6 +206,15 @@ def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[Causal
     return CausalLMDataset(tokens, seq_len), tokenizer
 
 
+# ── Data parallelism ──────────────────────────────────────────────────────────
+
+
+def resolve_data_parallel_axes(mesh: Any) -> tuple[list[str], int]:
+    """Return the mesh axes the batch is sharded over and the total data-parallel size."""
+    data_axes = [a for a in ("dp", "fsdp") if mesh.has_axis(a) and mesh.axis_size(a) > 1]
+    return data_axes, int(np.prod([mesh.axis_size(a) for a in data_axes]))
+
+
 # ── LR schedule ───────────────────────────────────────────────────────────────
 
 
@@ -502,9 +511,7 @@ def run_training(
     mesh = ttml.mesh()
     # Shard the batch across the data-parallel axes (dp and/or fsdp): one axis → shard along it;
     # HSDP (both) → each device gets a unique B/(D*F) slice; HSDP+TP is unsupported.
-    data_axes = [a for a in ("dp", "fsdp") if mesh.has_axis(a) and mesh.axis_size(a) > 1]
-    # Each device sees batch_size / data_parallel_size samples.
-    data_parallel_size = int(np.prod([mesh.axis_size(a) for a in data_axes]))
+    data_axes, data_parallel_size = resolve_data_parallel_axes(mesh)
     if len(data_axes) == 1:
         mapper = mesh.axis_mapper(data_axes[0], tdim=0)
     elif len(data_axes) >= 2:

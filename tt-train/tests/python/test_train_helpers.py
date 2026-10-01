@@ -31,6 +31,7 @@ from callbacks import EpochCallback  # noqa: E402
 from train import (  # noqa: E402
     TrainingConfig,
     build_lr_schedule,
+    resolve_data_parallel_axes,
     resolve_effective_max_steps,
     resolve_warmup_steps,
 )
@@ -166,3 +167,26 @@ def test_multiple_epochs_in_one_step_are_all_reported(capsys):
     callback = EpochCallback(steps_per_epoch=0.5)
     _run_steps(callback, [1])
     assert capsys.readouterr().out.splitlines() == ["Epoch 1 completed", "Epoch 2 completed"]
+
+
+# ── resolve_data_parallel_axes ────────────────────────────────────────────────
+
+
+def _mesh(**axes):
+    return types.SimpleNamespace(has_axis=lambda a: a in axes, axis_size=lambda a: axes[a])
+
+
+@pytest.mark.parametrize(
+    ("axes", "expected_axes", "expected_size"),
+    [
+        ({}, [], 1),
+        ({"dp": 8}, ["dp"], 8),
+        ({"fsdp": 8}, ["fsdp"], 8),
+        ({"dp": 2, "fsdp": 4}, ["dp", "fsdp"], 8),
+        ({"fsdp": 4, "tp": 2}, ["fsdp"], 4),
+        ({"dp": 1, "fsdp": 8}, ["fsdp"], 8),
+    ],
+    ids=["single_device", "ddp", "fsdp", "hsdp", "fsdp_tp", "size_one_dp"],
+)
+def test_data_parallel_size_counts_only_batch_sharding_axes(axes, expected_axes, expected_size):
+    assert resolve_data_parallel_axes(_mesh(**axes)) == (expected_axes, expected_size)
