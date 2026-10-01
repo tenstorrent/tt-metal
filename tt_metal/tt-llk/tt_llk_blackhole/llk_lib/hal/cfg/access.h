@@ -13,6 +13,7 @@
 #include "ckernel.h" // RDCFG, SETC16
 #include "detail/mmio_read.h"
 #include "detail/state_bank.h"
+#include "detail/word_anchor.h"
 #include "detail/write_backend.h"
 #include "detail/write_operands.h"
 #include "registers.h"
@@ -47,23 +48,24 @@ inline constexpr ConstantFieldAssignment<F, S, Value> set()
 }
 
 /**
- * @brief Prepare a write from a Tensix GPR to the state-CFG register word identified by F and S.
+ * @brief Prepare a write from a Tensix GPR to the state-CFG register word identified by Anchor and S.
  *
  * The returned operation can be combined with @ref set assignments in one
  * @ref write call. Field grouping can span GPR transfers. The transfer occurs
  * when write() consumes the operation.
  *
- * @tparam F Field descriptor identifying the first destination register word; the field must start at bit zero.
- * @tparam S Register section; must be within F.count.
+ * @tparam Anchor Field, or field group with a Raw anchor, identifying the first destination
+ *         register word; it must start at bit zero, and a multi-word anchor must cover the transfer.
+ * @tparam S Register section; must be within the anchor's count.
  * @tparam Size Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
  * @tparam Completion WRCFG completion policy; defaults to WrcfgCompletion::Wait.
  * @tparam GprIndex GPR index deduced from source.
  * @param source Source GPR operand created with hal::gpr<Index>() or hal::gpr(index).
  */
-template <const Field& F, Sec S, GprTransferSize Size = GprTransferSize::Bits32, WrcfgCompletion Completion = WrcfgCompletion::Wait, std::uint32_t GprIndex>
+template <const auto& Anchor, Sec S, GprTransferSize Size = GprTransferSize::Bits32, WrcfgCompletion Completion = WrcfgCompletion::Wait, std::uint32_t GprIndex>
 inline constexpr auto from_gpr(const hal::Gpr<GprIndex> source)
 {
-    return GprWrite<F, S, GprIndex, Size, Completion> {source};
+    return GprWrite<detail::word_anchor<Anchor>, S, GprIndex, Size, Completion> {source};
 }
 
 /*************************************************************************************************
@@ -76,18 +78,21 @@ inline constexpr auto from_gpr(const hal::Gpr<GprIndex> source)
  * The field's mask and bit position are ignored.
  *
  * @tparam A Access path; must be Access::MMIO.
- * @tparam F Field descriptor identifying the source register word.
- * @tparam S Register section; must be within F.count.
- * @tparam WordOffset Word offset relative to the register word containing the field.
+ * @tparam Anchor Field, or field group with a Raw anchor, identifying the source register word.
+ * @tparam S Register section; must be within the anchor's count.
+ * @tparam WordOffset Word offset relative to the register word containing the anchor;
+ *         must stay within a multi-word anchor.
  * @tparam Target Thread-CFG bank: Current selects the issuing TRISC; BRISC requires
  *         an explicit T0, T1, or T2. Must be Current for state CFG.
  * @return The 32-bit state-CFG register word or zero-extended 16-bit thread-CFG register word.
  */
-template <Access A, const Field& F, Sec S, std::uint32_t WordOffset = 0, ThreadTarget Target = ThreadTarget::Current>
+template <Access A, const auto& Anchor, Sec S, std::uint32_t WordOffset = 0, ThreadTarget Target = ThreadTarget::Current>
 inline __attribute__((always_inline)) std::uint32_t read_word()
 {
+    constexpr const Field& F = detail::word_anchor<Anchor>;
     static_assert(A == Access::MMIO, "value-returning CFG reads require Access::MMIO");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
+    static_assert(WordOffset < detail::anchor_word_limit(F, S), "CFG word offset extends past its anchor field");
 
     constexpr std::uint64_t addr       = std::uint64_t {F.addr32(S)} + WordOffset;
     constexpr std::uint32_t word_count = F.scope == RegisterScope::Thread ? detail::ThreadCfgWordCount : detail::StateCfgWordCount;
@@ -263,8 +268,9 @@ inline __attribute__((always_inline)) void write(const First& first, const Rest&
  * @brief Transfer one or four GPR words to complete state-CFG register words.
  *
  * @tparam A Access path: Access::TensixCfgUnit or Access::TensixScalarUnit.
- * @tparam F Field descriptor identifying the first destination register word; the field must start at bit zero.
- * @tparam S Register section; must be within F.count.
+ * @tparam Anchor Field, or field group with a Raw anchor, identifying the first destination
+ *         register word; it must start at bit zero, and a multi-word anchor must cover the transfer.
+ * @tparam S Register section; must be within the anchor's count.
  * @tparam Size Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
  * @tparam Completion WRCFG completion policy used by Access::TensixCfgUnit; defaults to WrcfgCompletion::Wait.
  * @tparam GprIndex GPR index deduced from source.
@@ -274,31 +280,35 @@ inline __attribute__((always_inline)) void write(const First& first, const Rest&
  */
 template <
     Access A,
-    const Field& F,
+    const auto& Anchor,
     Sec S,
     GprTransferSize Size       = GprTransferSize::Bits32,
     WrcfgCompletion Completion = WrcfgCompletion::Wait,
     std::uint32_t GprIndex>
 inline __attribute__((always_inline)) void write(const hal::Gpr<GprIndex> source)
 {
-    detail::write_gpr<A>(from_gpr<F, S, Size, Completion>(source));
+    detail::write_gpr<A>(from_gpr<Anchor, S, Size, Completion>(source));
 }
 
 /**
  * @brief Write Count consecutive state-CFG register words from a std::array through MMIO.
  *
+ * @code
+ * write<Access::MMIO, Thcon[Reg0].TileDescriptor, Sec::S0, TILE_DESC_SIZE>(descriptor_words);
+ * @endcode
+ *
  * @tparam A Access path; must be Access::MMIO.
- * @tparam F Field descriptor identifying the first destination register word.
- * @tparam S Register section; must be within F.count.
- * @tparam Count Number of register words to write; must not exceed ArrayCount.
+ * @tparam Anchor Field, or field group with a Raw anchor, identifying the first destination register word.
+ * @tparam S Register section; must be within the anchor's count.
+ * @tparam Count Number of register words to write; must not exceed ArrayCount or a multi-word anchor.
  * @tparam ArrayCount Source array length, deduced from values.
  * @param values Complete 32-bit register word values; the field's mask and bit position are ignored.
  */
-template <Access A, const Field& F, Sec S, std::uint32_t Count, std::size_t ArrayCount>
+template <Access A, const auto& Anchor, Sec S, std::uint32_t Count, std::size_t ArrayCount>
 inline __attribute__((always_inline)) void write(const std::array<std::uint32_t, ArrayCount>& values)
 {
     static_assert(A == Access::MMIO, "array writes require Access::MMIO");
-    detail::write_array_mmio<F, S, Count>(detail::state_cfg_bank(), values);
+    detail::write_array_mmio<detail::word_anchor<Anchor>, S, Count>(detail::state_cfg_bank(), values);
 }
 
 } // namespace hal::cfg

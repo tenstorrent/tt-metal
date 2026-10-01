@@ -13,6 +13,7 @@
 #include "../access_types.h"
 #include "../field.h"
 #include "register_layout.h"
+#include "word_anchor.h"
 
 namespace hal::cfg
 {
@@ -81,6 +82,7 @@ public:
 
     static_assert(addr < detail::StateCfgWordCount, "CFG write destination lies outside its register scope");
     static_assert(words <= detail::StateCfgWordCount - addr, "GPR write crosses the end of its CFG bank");
+    static_assert(words <= detail::anchor_word_limit(F, S), "GPR write extends past its anchor field");
 
     hal::Gpr<GprIndex> source;
 };
