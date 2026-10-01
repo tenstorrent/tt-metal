@@ -255,6 +255,9 @@ def main(argv=None):
     ap.add_argument("--exit-code", type=int, default=0)
     ap.add_argument("--comparison-finished", default="true")
     ap.add_argument("--measure-result", default="")
+    ap.add_argument(
+        "--measure-complete", default="", help="true/false; overrides --measure-result"
+    )
     ap.add_argument("--channel", required=True, help="Slack channel id")
     ap.add_argument("--pr-number", default="?")
     ap.add_argument("--pr-url", default="")
@@ -280,7 +283,11 @@ def main(argv=None):
         have_baseline=have_baseline,
         report_written=report_written,
         comparison_finished=a.comparison_finished.strip().lower() != "false",
-        measure_failed=not _measure_complete(a.measure_result),
+        measure_failed=(
+            a.measure_complete.strip().lower() == "false"
+            if a.measure_complete.strip()
+            else not _measure_complete(a.measure_result)
+        ),
     )
     rows = read_regressions(a.regressions) if status == "regressed" else []
 

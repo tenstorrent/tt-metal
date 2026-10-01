@@ -224,3 +224,54 @@ def test_one_change_on_many_points_is_one_finding():
     text = build_text("regressed", rows, _CTX)
     assert "4 point(s) regressed, in 1 finding(s)" in text
     assert "×4 points" in text
+
+
+def _status_with(tmp_path, monkeypatch, *extra):
+    have_baseline = tmp_path / "have_baseline.txt"
+    have_baseline.write_text("true")
+    output = tmp_path / "out.txt"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    main(
+        [
+            "--have-baseline",
+            str(have_baseline),
+            "--report",
+            str(have_baseline),
+            "--channel",
+            "C0TEST",
+            "--out",
+            str(tmp_path / "payload.json"),
+            *extra,
+        ]
+    )
+    return output.read_text()
+
+
+def test_measure_complete_overrides_the_job_results(tmp_path, monkeypatch):
+    out = _status_with(
+        tmp_path,
+        monkeypatch,
+        "--measure-result",
+        "failure",
+        "--measure-complete",
+        "true",
+    )
+    assert "status=clean" in out
+
+
+def test_measure_complete_false_is_a_skip(tmp_path, monkeypatch):
+    out = _status_with(
+        tmp_path,
+        monkeypatch,
+        "--measure-result",
+        "success",
+        "--measure-complete",
+        "false",
+    )
+    assert "status=skipped" in out
+
+
+def test_without_measure_complete_the_job_results_decide(tmp_path, monkeypatch):
+    assert "status=skipped" in _status_with(
+        tmp_path, monkeypatch, "--measure-result", "failure"
+    )

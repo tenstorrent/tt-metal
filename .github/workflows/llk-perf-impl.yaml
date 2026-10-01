@@ -207,7 +207,13 @@ jobs:
     # and partial coverage is real data. Publishing it is safe because the
     # merged run_id carries no attempt, so re-running the failed shards and
     # re-uploading replays over the partial night instead of adding a second.
-    if: ${{ always() && inputs.upload-to-warehouse }}
+    # A baseline is different: a gate compares against it, and a missing shard
+    # means those points are not compared. So a baseline or a merge baseline is
+    # uploaded only when every shard passed.
+    if: >-
+      ${{ always() && inputs.upload-to-warehouse
+          && ((inputs.pipeline != 'baseline' && inputs.pipeline != 'merge_baseline')
+              || needs.llk-perf-exec.result == 'success') }}
     runs-on: ubuntu-latest
     # The merge lives in helpers.perf.core, whose imports reach the device
     # libraries, so it needs the LLK python env. The test image has it.
