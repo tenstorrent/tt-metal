@@ -6,11 +6,16 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <core/xtensor_utils.hpp>
+#include <stdexcept>
 #include <umd/device/cluster.hpp>
+#include <variant>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "test_utils/random_data.hpp"
@@ -416,4 +421,137 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     EXPECT_EQ(grad_xtensor[0], grad_xtensor[1]);
     EXPECT_TRUE(xt::allclose(grad_data, grad_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(grad_data, grad_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
+}
+
+// synchronize_gradients decides per mesh axis whether a gradient is reduced by reading the parameter's label through
+// is_sharded_on_axis, and trusts the all_reduce result's own label afterwards (the relabel-by-index it used to apply
+// is gone). On the 1x2 mesh axis 1 is the only axis with more than one device.
+namespace {
+
+using MeshMapperConfig = ttnn::distributed::MeshMapperConfig;
+
+bool all_replicate(const ttnn::Tensor& tensor) {
+    const auto& placements = tensor.tensor_topology().placements();
+    return std::all_of(placements.begin(), placements.end(), [](const MeshMapperConfig::Placement& placement) {
+        return std::holds_alternative<MeshMapperConfig::Replicate>(placement);
+    });
+}
+
+// A replicated [1, 1, 32, 32] parameter (created without a mapper) whose gradient is `grad_data` ([2, 1, 32, 32])
+// distributed by `mapper`, so every device holds a different [1, 1, 32, 32] gradient.
+ttml::autograd::TensorPtr parameter_with_gradient(
+    const xt::xarray<float>& grad_data, const ttnn::distributed::TensorToMesh& mapper) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    xt::xarray<float> value = xt::zeros<float>({1U, 1U, 32U, 32U});
+    auto parameter = ttml::autograd::create_tensor(
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(value, device, ttnn::Layout::TILE),
+        /* requires_grad */ true);
+    parameter->set_grad(
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, &mapper));
+    return parameter;
+}
+
+xt::xarray<float> mean_of_the_two_slices(const xt::xarray<float>& grad_data) {
+    return (xt::view(grad_data, xt::range(0, 1), xt::all(), xt::all(), xt::all()) +
+            xt::view(grad_data, xt::range(1, 2), xt::all(), xt::all(), xt::all())) *
+           0.5F;
+}
+
+}  // namespace
+
+TEST_F(N300CommOpsTest, SynchronizeGradientsCollapsedGradientIsAveragedAndReadsReplicate) {
+    // The gradient carries the collapsed {2}, [Shard{0}] label of the whole-mesh 1-D mapper. It must read as sharded
+    // on axis 1 (negative control: it read as not sharded there before, the one placement sat at index 0), be averaged
+    // along axis 1, and come back labelled Replicate on every axis by the collective itself.
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto& rng = ttml::autograd::ctx().get_generator();
+    xt::xarray<float> grad_data =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2U, 1U, 32U, 32U}, 0.0F, 1.0F, rng());
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+    auto parameter = parameter_with_gradient(grad_data, *mapper);
+
+    // A parameter created without a mapper carries one placement per mesh axis.
+    EXPECT_EQ(parameter->get_value().tensor_topology().placements().size(), 2U);
+    EXPECT_TRUE(all_replicate(parameter->get_value()));
+    EXPECT_EQ(parameter->get_grad().tensor_topology().placements().size(), 1U);
+    EXPECT_TRUE(ttml::core::distributed::is_sharded_on_axis(parameter->get_grad(), 1U));
+    EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(parameter->get_grad(), 0U));
+    EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(parameter->get_value(), 1U));
+
+    ttml::serialization::NamedParameters parameters{{"weight", parameter}};
+    ttml::core::distributed::synchronize_gradients(parameters, std::vector<uint32_t>{1U});
+
+    const auto& synced = parameter->get_grad();
+    EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(synced, 0U));
+    EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(synced, 1U));
+    EXPECT_TRUE(all_replicate(synced));
+    auto shards = ttml::core::to_xtensor<float>(synced, ttml::core::IdentityComposer{});
+    const xt::xarray<float> expected = mean_of_the_two_slices(grad_data);
+    ASSERT_EQ(shards.size(), 2U);
+    EXPECT_TRUE(xt::allclose(expected, shards[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+    EXPECT_TRUE(xt::allclose(expected, shards[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+}
+
+TEST_F(N300CommOpsTest, SynchronizeGradientsNDGradientIsAveragedAndReadsReplicate) {
+    // The same with an N-D [Replicate, Shard{0}] gradient label: averaged along axis 1, [Replicate, Replicate] out.
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto& rng = ttml::autograd::ctx().get_generator();
+    xt::xarray<float> grad_data =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2U, 1U, 32U, 32U}, 0.0F, 1.0F, rng());
+    const auto mapper = ttnn::distributed::create_mesh_mapper(
+        *device, MeshMapperConfig{.placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{0}}});
+    auto parameter = parameter_with_gradient(grad_data, *mapper);
+
+    EXPECT_EQ(parameter->get_grad().tensor_topology().placements().size(), 2U);
+    EXPECT_TRUE(ttml::core::distributed::is_sharded_on_axis(parameter->get_grad(), 1U));
+    EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(parameter->get_grad(), 0U));
+
+    ttml::serialization::NamedParameters parameters{{"weight", parameter}};
+    ttml::core::distributed::synchronize_gradients(parameters, std::vector<uint32_t>{1U});
+
+    const auto& synced = parameter->get_grad();
+    EXPECT_EQ(synced.tensor_topology().placements().size(), 2U);
+    EXPECT_TRUE(all_replicate(synced));
+    auto shards = ttml::core::to_xtensor<float>(synced, ttml::core::IdentityComposer{});
+    const xt::xarray<float> expected = mean_of_the_two_slices(grad_data);
+    ASSERT_EQ(shards.size(), 2U);
+    EXPECT_TRUE(xt::allclose(expected, shards[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+    EXPECT_TRUE(xt::allclose(expected, shards[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+}
+
+TEST_F(N300CommOpsTest, IsShardedOnAxisReadsTensorParallelShardsPerAxis) {
+    // A TP weight sharded on dim 3 along axis 1, spelled N-D and collapsed, reads as sharded on axis 1 only; the
+    // collapsed spelling read as not sharded on axis 1 before this change. A label that does not cover the mesh is
+    // refused rather than guessed. A reduction request over the size-1 axis 0 is a no-op (synchronize_tensor's early
+    // return) and leaves the TP shard alone.
+    auto* device = &ttml::autograd::ctx().get_device();
+    xt::xarray<float> weight = xt::zeros<float>({1U, 1U, 32U, 64U});
+    const auto nd_mapper = ttnn::distributed::create_mesh_mapper(
+        *device, MeshMapperConfig{.placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}}});
+    auto nd =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight, device, ttnn::Layout::TILE, nd_mapper.get());
+    EXPECT_TRUE(ttml::core::distributed::is_sharded_on_axis(nd, 1U));
+    EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(nd, 0U));
+
+    const auto collapsed_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto collapsed = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        weight, device, ttnn::Layout::TILE, collapsed_mapper.get());
+    EXPECT_EQ(collapsed.tensor_topology().placements().size(), 1U);
+    EXPECT_TRUE(ttml::core::distributed::is_sharded_on_axis(collapsed, 1U));
+    EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(collapsed, 0U));
+
+    auto forged = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight, device, ttnn::Layout::TILE);
+    const auto coords = forged.tensor_topology().mesh_coords();
+    forged.update_tensor_topology(tt::tt_metal::TensorTopology(
+        tt::tt_metal::distributed::MeshShape(1U),
+        ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{0}},
+        std::vector<tt::tt_metal::distributed::MeshCoordinate>{coords.front()}));
+    EXPECT_THROW(ttml::core::distributed::is_sharded_on_axis(forged, 1U), std::runtime_error);
+    EXPECT_THROW(ttml::core::distributed::is_sharded_on_axis(nd, 2U), std::runtime_error);
+
+    auto parameter = ttml::autograd::create_tensor(nd, /* requires_grad */ true);
+    parameter->set_grad(nd);
+    ttml::serialization::NamedParameters parameters{{"weight", parameter}};
+    ttml::core::distributed::synchronize_gradients(parameters, std::vector<uint32_t>{0U});
+    EXPECT_TRUE(ttml::core::distributed::is_sharded_on_axis(parameter->get_grad(), 1U));
 }

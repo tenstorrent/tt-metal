@@ -11,6 +11,7 @@ output tensor's placement matches the op's semantics:
   * **all_reduce** — output is replicated on the collective axis.
   * **reduce_scatter** — output is sharded on the collective axis.
   * **all_gather** — output is replicated on the collective axis.
+  * **mesh_partition** — output is sharded on the collective axis (no collective runs).
 
 In all cases, placements on mesh axes *other* than ``cluster_axis`` must
 be preserved unchanged.
@@ -594,6 +595,93 @@ class TestCollapsedInputs:
         _assert_replicated(result, OTHER_AXIS, "untouched axis")
         _assert_replicated(result, CLUSTER_AXIS, "all_reduce output")
         assert np.array_equal(_compose_by_label(result), data * self.COLS)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# mesh_partition (the all_gather backward for a replicated output gradient)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+class TestMeshPartitionTopology:
+    """mesh_partition keeps each device's own slice of `dim` along `cluster_axis`: no collective, but the output is
+    sharded on that axis and its label must say so (MeshPartitionDeviceOperation::compute_output_topologies). Before
+    that hook the output kept the input's label: a replicated input came out labelled Replicate while being sharded,
+    which the serialiser dedups to one slice. The bytes are checked by composing the shards the way the label says."""
+
+    ROWS, COLS = MESH_SHAPE_2X2
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, ccl_mesh):
+        self.mesh = ccl_mesh
+
+    def test_replicated_input_becomes_sharded_on_the_axis(self):
+        tensor = _replicated_tensor((1, 1, 64, 128), seed=40)
+        data = _compose_by_label(tensor)
+
+        result = ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=CLUSTER_AXIS)
+
+        _assert_replicated(result, OTHER_AXIS, "untouched axis")
+        _assert_shard(result, CLUSTER_AXIS, 3, "mesh_partition output")
+        assert list(result.shape) == [1, 1, 64, 128 // self.COLS]
+        assert np.array_equal(_compose_by_label(result), data)
+
+    def test_other_axis_sharding_preserved(self):
+        placements = [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
+        placements[OTHER_AXIS] = ttnn.PlacementShard(2)
+        tensor = _make_tensor((1, 1, 64, 128), placements, seed=41)
+        data = _compose_by_label(tensor)
+
+        result = ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=CLUSTER_AXIS)
+
+        _assert_shard(result, OTHER_AXIS, 2, "other axis preserved")
+        _assert_shard(result, CLUSTER_AXIS, 3, "mesh_partition output")
+        assert np.array_equal(_compose_by_label(result), data)
+
+    def test_negative_dim_is_normalised(self):
+        tensor = _replicated_tensor((1, 1, 64, 128), seed=42)
+
+        result = ttml.core.distributed.mesh_partition(tensor, -1, cluster_axis=CLUSTER_AXIS)
+
+        _assert_shard(result, CLUSTER_AXIS, 3, "negative dim")
+
+    def test_whole_mesh_partition_is_the_collapsed_label(self):
+        """cluster_axis=None: device k (row-major) keeps slice k of dim 3 -- Shard(3) on every axis, which only the
+        collapsed `{4}, [Shard(3)]` can state (the N-D composer rejects a dim sharded twice)."""
+        tensor = _replicated_tensor((1, 1, 64, 128), seed=43)
+        data = _compose_by_label(tensor)
+
+        result = ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=None)
+
+        _assert_collapsed(result, 3, "whole-mesh mesh_partition")
+        assert tuple(int(d) for d in result.tensor_topology().distribution_shape()) == (self.ROWS * self.COLS,)
+        assert np.array_equal(_compose_by_label(result), data)
+
+    def test_collapsed_replicate_input_is_expanded(self):
+        """`{4}, [Replicate]` (ttnn's default replicate mapper) partitioned on dim 3 along axis 1: the label is expanded
+        to the mesh shape, Shard(3) on the partitioned axis only, and composes back to the data. Negative control:
+        before the hook the output kept `{4}, [Replicate]`, claiming all four devices hold the same bytes."""
+        tensor, data = _collapsed_tensor((1, 1, 64, 128), ttnn.replicate_tensor_to_mesh_mapper, seed=44)
+        assert len(tensor.tensor_topology().placements()) == 1, "input sanity check"
+
+        result = ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=CLUSTER_AXIS)
+
+        _assert_replicated(result, OTHER_AXIS, "untouched axis")
+        _assert_shard(result, CLUSTER_AXIS, 3, "mesh_partition output")
+        assert tuple(int(d) for d in result.tensor_topology().distribution_shape()) == MESH_SHAPE_2X2
+        assert np.array_equal(_compose_by_label(result), data)
+
+    def test_collapsed_shard_input_keeps_the_input_label(self):
+        """`{4}, [Shard(2)]` partitioned on dim 3 along one axis: device (r, c) keeps column c of its own row chunk, a
+        layout no TensorTopology states (Shard(2) on both axes plus Shard(3) on one). The hook falls back to the
+        input's label, so this pins the documented fallback and the per-device shape; the bytes are not composable
+        by that label and are not checked."""
+        tensor, _ = _collapsed_tensor((1, 1, 64, 128), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 2), seed=45)
+        assert list(tensor.shape) == [1, 1, 64 // (self.ROWS * self.COLS), 128]
+
+        result = ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=CLUSTER_AXIS)
+
+        _assert_collapsed(result, 2, "fallback keeps the input label")
+        assert list(result.shape) == [1, 1, 64 // (self.ROWS * self.COLS), 128 // self.COLS]
 
 
 if __name__ == "__main__":
