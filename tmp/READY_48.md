@@ -17,7 +17,7 @@ based on t36 `16ba9a383dc` (LTX-2.5 port + blx03 setup), with:
 | t40 Gemma encode trace captured after gen #0 | 9e336c44b71 | encoder 1.91 s -> ~0.2-0.3 s for a new prompt |
 | t13 yuv420p/x264 export: ultrafast crf 20, zero-copy frames, AAC beside video | eee3baf7c0d | host bench: video encode 0.65 -> 0.15 s, export 0.35-0.40 -> 0.19 s |
 | t18 video encode on a worker under the device audio decode | 63902277007 | export 0.9 -> 0.3 s on g15blx02 (job 610, mp4 byte-identical) |
-| t44 `LTX_VAE_FOLD_TIME_PAD=1` (opt-in, default off) | 1968790b040 | estimate 25-70 ms of the 0.70 s decode; unmeasured on device |
+| t44/t66 `LTX_VAE_FOLD_TIME_PAD` (default on; `=0` turns it off) | 1968790b040 | -44 ms per conv decode at 1080p/145f, bit-identical (#46, blx03 2x4 jobs 000/008) |
 | t8 ltx_eval harness | t8 tip | eval tooling only |
 
 Conflicts resolved: t13 and t40 both moved the Gemma trace capture; t40's `capture_trace()` (guarded by
@@ -52,8 +52,8 @@ capture, plus the Gemma encode capture at its end; not a timing number), then #1
 (`LTX_FRESH_PROMPTS=1`, so the text encoder is on the measured path). `LTX_TIME_STAGES=1` logs per-stage times.
 Output: `blx03:~/fasth3/out/t48/t48_e2e/{run.log, ltx_av_fast_1920x1088_{0,1,2,3}.mp4}`.
 
-Optional second job, only after the first passes (fold A/B, same everything else):
-`ssh g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 1800 bash /home/smarton/fasth3/t48/tmp/blx03/run48.sh t48_fold LTX_VAE_FOLD_TIME_PAD=1"`.
+Optional second job, only after the first passes (fold A/B with the fold off, same everything else):
+`ssh g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 1800 bash /home/smarton/fasth3/t48/tmp/blx03/run48.sh t48_nofold LTX_VAE_FOLD_TIME_PAD=0"`.
 Expect bit-identical frames: `cmp` the two runs' mp4s for gens 1-3; any difference means the fold is not exact on device.
 
 Check: `ssh g14blx03 tt-device-mcp status -j <id>`; pass = run.log has ` passed` and `RUN_EXIT[t48_e2e]=0`.
