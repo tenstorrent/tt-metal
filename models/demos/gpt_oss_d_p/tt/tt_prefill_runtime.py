@@ -400,8 +400,8 @@ class TtPrefillRuntime:
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
         """One ``KvCacheStage`` anchored on K, for the runner's device-map / stage-layout gather.
 
-        K and V are separate configs of the table, but the builder resolves each tensor's own
-        ``buffer_address()``, so one anchor stage describes the pair."""
+        Single-rank, so ``build_kv_chunk_table`` ignores the gathered layouts and resolves each K/V
+        config's own ``buffer_address()``; this one stage only satisfies the runner's gather."""
         from models.demos.common.prefill.runners.migration import KvCacheStage
 
         kv = self._resolve_kv(kv_caches)

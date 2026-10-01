@@ -164,7 +164,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         `build_kv_chunk_table` as `stage_layouts`. A single-cache model returns a one-element list
         anchored on whichever tensor it migrates, since the engine treats `kv_cache` as opaque and
         cannot pick for you. Number a stage in its own space when that is not the model's global layer
-        numbering (a cache only some layers write), and map it back with `kv_table_layer_rows`."""
+        numbering (a cache only some layers write), and map it back to model layers in your
+        `build_kv_chunk_table` (see DeepSeek's `kv_table_layer_rows`)."""
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
