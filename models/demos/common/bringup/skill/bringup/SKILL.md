@@ -141,17 +141,6 @@ each with its commit and your verdict: fork changes (ttnn/ttnn/bringup: what, wh
 knowledge edits, departures from the plan or from owner rules and the reason the gates forced them, the checks you ran
 and their results, and anything you rejected or reverted. The person approves these after the fact, not during the run.
 
-### Framework changes go through the framework agent
-
-When the run exposes a framework gap (a wrong brief, a missing gate, a check that lets a mistake through), never patch
-it by hand and never brief an ad-hoc subagent. Write the change as an F-entry in
-`models/demos/common/bringup/dev/BREADCRUMBS.md` (incident, goal, requirements, what to leave alone), then run the
-`framework-engineer` agent (`models/demos/common/bringup/agents/framework-engineer.md`) with only "do F<n>". Review
-its commit against the entry. If it got something wrong, fix the entry or the agent's instructions (its Lessons list
-gets one line per incident) and run it again. The lesson must outlive the session: in the entry and the agent file,
-not in memory or a prompt. Model code is never fixed by hand either: the framework's own agents fix it through the
-gates.
-
 ### Keep the session's context small
 
 A run takes hours and dozens of gates; the supervising session must not fill its context with logs.
