@@ -351,7 +351,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                 )
             # Size the config to the GLOBAL layer total, summed over the gathered stages: the KVPE cache's
             # every layer, and the index cache's full-indexer layers only (GLM-5.3 cross-layer reuse — the
-            # shared layers own no indexer slot; GLM-5.1 / dense have one per layer, so it equals num_layers).
+            # shared layers own no indexer slot; dense has one per layer, so it equals num_layers).
             cfg.num_layers = merged_num_layers(stage_layout)
         cfg.max_sequence_length = seq_len
         cfg.num_slots = num_users

@@ -65,7 +65,7 @@ FullDeviceOperation::spec_return_value_t FullDeviceOperation::compute_output_spe
 FullDeviceOperation::tensor_return_value_t FullDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, operation_attributes.mesh_device);
+    return create_device_tensor(output_spec, operation_attributes.mesh_device, operation_attributes.tensor_topology);
 }
 
 }  // namespace ttnn::operations::full
@@ -77,7 +77,8 @@ ttnn::operations::full::FullDeviceOperation::tensor_return_value_t full(
     ttnn::MeshDevice* mesh_device,
     const DataType& dtype,
     const Layout& layout,
-    const MemoryConfig& memory_config) {
+    const MemoryConfig& memory_config,
+    std::optional<tt::tt_metal::TensorTopology> tensor_topology) {
     using OperationType = ttnn::operations::full::FullDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         std::move(shape),
@@ -86,6 +87,7 @@ ttnn::operations::full::FullDeviceOperation::tensor_return_value_t full(
         dtype,
         layout,
         memory_config,
+        std::move(tensor_topology),
     };
     auto tensor_args = OperationType::tensor_args_t{};
 
