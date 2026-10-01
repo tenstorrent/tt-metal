@@ -1,0 +1,8 @@
+# <config> [VAR=val ...]  — one 4x8 run per line; every run is 5 seeds (LTX_SEEDS) of 1080p/145f.
+baseline
+gate LTX_FUSE_GATE_ON_DEVICE=1
+adaln LTX_FUSE_NORM_ADALN=1
+expapprox LTX_SDPA_EXP_APPROX=1
+vaetrace LTX_VIDEO_VAE_TRACE=1
+export_veryfast LTX_EXPORT_PRESET=veryfast
+all LTX_FUSE_GATE_ON_DEVICE=1 LTX_FUSE_NORM_ADALN=1 LTX_SDPA_EXP_APPROX=1 LTX_VIDEO_VAE_TRACE=1
