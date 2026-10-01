@@ -13,6 +13,7 @@ from models.autoports.poolside_laguna_xs_2_1.tt import generator_vllm as generat
 from models.autoports.poolside_laguna_xs_2_1.tt import multichip_decoder as multichip_decoder_module
 from models.autoports.poolside_laguna_xs_2_1.tt.generator_vllm import LagunaForCausalLM, _prefill_rope_capacity
 from models.autoports.poolside_laguna_xs_2_1.tt.model import LagunaModel
+from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import CHECKPOINT_SHAPES
 from models.autoports.poolside_laguna_xs_2_1.tt.multichip_decoder import MultichipDecoder
 
 
@@ -32,8 +33,16 @@ def test_prefix_cache_capabilities_are_fail_closed_by_default():
     assert LagunaForCausalLM.model_capabilities["supports_prefix_caching_with_sliding_window"] is False
 
 
-@pytest.mark.parametrize(("device_count", "expected_rope_capacity"), [(1, 262144), (2, 131072)])
-def test_model_initialization_selects_streaming_rope_capacity_only_on_d2(
+@pytest.mark.parametrize(
+    ("device_count", "expected_rope_capacity"),
+    [
+        (1, 262144),
+        (2, 131072),
+        # D4 streams only for Laguna-S (generator_vllm._STREAMING_PREFILL_TOPOLOGIES).
+        (4, 131072 if generator_vllm_module.MODEL_ID == "poolside/Laguna-S-2.1" else 262144),
+    ],
+)
+def test_model_initialization_selects_streaming_rope_capacity_on_streaming_topologies(
     monkeypatch, device_count, expected_rope_capacity
 ):
     calls = []
@@ -56,8 +65,9 @@ def test_model_initialization_selects_streaming_rope_capacity_only_on_d2(
     monkeypatch.setattr(LagunaForCausalLM, "__init__", fake_init)
     mesh = SimpleNamespace(get_num_devices=lambda: device_count)
 
+    layers, hidden = CHECKPOINT_SHAPES[generator_vllm_module.MODEL_ID]
     bridge = LagunaForCausalLM.initialize_vllm_model(
-        hf_config=None,
+        hf_config=SimpleNamespace(num_hidden_layers=layers, hidden_size=hidden),
         mesh_device=mesh,
         max_batch_size=1,
         max_seq_len=131072,

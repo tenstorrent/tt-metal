@@ -47,7 +47,7 @@ import ttnn
 try:
     from .generator import LagunaGenerator, _replicate
     from .host_sampling import penalties_active, sample_penalized
-    from .model_spec import MODEL_ID, MODEL_MAX_CONTEXT
+    from .model_spec import MODEL_ID, MODEL_MAX_CONTEXT, check_hf_config
     from .kv_grouping import HybridKVLayout, build_laguna_hybrid_kv_layout, validate_per_layer_tensor_aliases
     from .prefill_runtime import (
         PrefillRuntimeOffsets,
@@ -59,7 +59,7 @@ try:
 except ImportError:  # loaded as a standalone module by some tooling
     from models.autoports.poolside_laguna_xs_2_1.tt.generator import LagunaGenerator, _replicate
     from models.autoports.poolside_laguna_xs_2_1.tt.host_sampling import penalties_active, sample_penalized
-    from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MODEL_ID, MODEL_MAX_CONTEXT
+    from models.autoports.poolside_laguna_xs_2_1.tt.model_spec import MODEL_ID, MODEL_MAX_CONTEXT, check_hf_config
     from models.autoports.poolside_laguna_xs_2_1.tt.kv_grouping import (
         HybridKVLayout,
         build_laguna_hybrid_kv_layout,
@@ -506,6 +506,7 @@ class LagunaForCausalLM:
         parity but the precision policy comes from the datatype-sweep selection by default; a
         non-default policy is only used via ``TT_LAGUNA_PRECISION_CONFIG``. ``n_layers`` builds a
         reduced representative target for the minimum-surface bring-up loop."""
+        check_hf_config(hf_config)
         assert tt_data_parallel == 1, (
             f"Laguna uses one 1×D mesh (intra-mesh TP=D/EP=D); tt_data_parallel must be 1, "
             f"got {tt_data_parallel}"

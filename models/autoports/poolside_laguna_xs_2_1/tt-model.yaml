@@ -22,8 +22,10 @@ source:
     - models/autoports/poolside_laguna_xs_2_1/tt/dflash_reference.py
     - models/autoports/poolside_laguna_xs_2_1/tt/generator.py
     - models/autoports/poolside_laguna_xs_2_1/tt/generator_vllm.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/host_sampling.py
     - models/autoports/poolside_laguna_xs_2_1/tt/kv_grouping.py
     - models/autoports/poolside_laguna_xs_2_1/tt/model.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/model_spec.py
     - models/autoports/poolside_laguna_xs_2_1/tt/multichip_decoder.py
     - models/autoports/poolside_laguna_xs_2_1/tt/optimized_decoder.py
     - models/autoports/poolside_laguna_xs_2_1/tt/prefill_page_table.py
@@ -87,6 +89,8 @@ serve:
     tool_parser: poolside_v1
     reasoning_parser: poolside_v1
   env:
+    # This package serves XS; the checkout's default checkpoint is Laguna-S (tt/model_spec.py).
+    TT_LAGUNA_MODEL: poolside/Laguna-XS-2.1
     TT_LAGUNA_PIPE_CHUNK: "2048"
     TT_LAGUNA_HYBRID_KV: "0"
     TT_LAGUNA_DFLASH: "0"

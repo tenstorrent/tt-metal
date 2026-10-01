@@ -30,6 +30,30 @@ MAX_POSITION_EMBEDDINGS: Mapping[str, int] = {
     "poolside/Laguna-XS-2.1": 262144,
 }
 
+# (num_hidden_layers, hidden_size) per checkpoint: enough to tell the two apart from any HF config.
+CHECKPOINT_SHAPES: Mapping[str, tuple[int, int]] = {
+    "poolside/Laguna-S-2.1": (48, 3072),
+    "poolside/Laguna-XS-2.1": (40, 2048),
+}
+
+
+def check_hf_config(hf_config, model_id: str | None = None) -> None:
+    """Fail fast when a caller's HF config is not the checkpoint ``TT_LAGUNA_MODEL`` selects.
+
+    vLLM loads its config from the served model name, while the TTNN code reads weights, references and
+    caches for ``MODEL_ID``. If they disagree (e.g. an XS server without TT_LAGUNA_MODEL, now that S is
+    the default) the model would be built from the wrong checkpoint."""
+    model_id = model_id or MODEL_ID
+    got = (int(hf_config.num_hidden_layers), int(hf_config.hidden_size))
+    want = CHECKPOINT_SHAPES[model_id]
+    if got != want:
+        match = [mid for mid, shape in CHECKPOINT_SHAPES.items() if shape == got]
+        hint = f"; it looks like {match[0]}, so set {MODEL_ENV}={match[0]}" if match else ""
+        raise ValueError(
+            f"{MODEL_ENV} selects {model_id} ({want[0]} layers, hidden {want[1]}) but the served config has "
+            f"{got[0]} layers, hidden {got[1]}{hint}"
+        )
+
 
 def resolve_model_id(environ: Mapping[str, str] | None = None) -> str:
     """Return the selected HF repo id, rejecting anything this port was not built for."""
