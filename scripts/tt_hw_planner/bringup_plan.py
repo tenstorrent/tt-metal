@@ -814,6 +814,12 @@ def render_stub(plan: BringUpPlan, component: Component) -> str:
 # the name.
 BRINGUP_STATUS_FILENAME = "bringup_status.json"
 
+# emit-e2e's routing plan for an assembled e2e demo. Its PRESENCE is the marker that emit-e2e wrote
+# this directory -- the companion to BRINGUP_STATUS_FILENAME, which marks a scaffolded COMPONENT.
+# A composite demo (a diffusers pipeline assembled from components) carries only this one: its
+# graduated stubs live in the component packages the plan names, not in a _stubs/ of its own.
+E2E_PLAN_FILENAME = "e2e_plan.json"
+
 
 def collect_bringup_plan_files(
     *,

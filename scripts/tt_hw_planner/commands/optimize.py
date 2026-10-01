@@ -53,8 +53,30 @@ def _resolve_target(target: str, repo_root: Path):
     return d.resolve() if d else None
 
 
+# What classify_pipeline answers. Named because a branch now DEPENDS on the answer (topology is left
+# to an emitted demo), and a typed string literal at the comparison site is how that silently stops
+# matching if the wording ever changes.
+_EMITTED = "emitted"
+_EXISTING = "existing"
+
+
 def classify_pipeline(demo_dir: Path) -> str:
-    return "emitted" if (Path(demo_dir) / "bringup_status.json").is_file() else "existing"
+    """_EMITTED when the tool wrote this demo, else _EXISTING. Structural, not a flag: the directory
+    either carries one of the tool's own output markers or it does not.
+
+    EITHER marker counts. Keying on the component status file alone missed every ASSEMBLED e2e demo:
+    Qwen-Image-Edit's directory carries e2e_plan.json and no bringup_status.json, because bring-up
+    scaffolded its text encoder / transformer / VAE as separate components and emit-e2e assembled
+    the pipeline over them. It was therefore classified _EXISTING -- a hand-written model -- which
+    is how its graduated 2x4 topology came to be treated as something to overwrite.
+    """
+    from ..bringup_plan import BRINGUP_STATUS_FILENAME, E2E_PLAN_FILENAME
+
+    root = Path(demo_dir)
+    for marker in (BRINGUP_STATUS_FILENAME, E2E_PLAN_FILENAME):
+        if (root / marker).is_file():
+            return _EMITTED
+    return _EXISTING
 
 
 def _stage_untracked_data(repo_root: Path, rel: Path, wt: Path) -> None:
@@ -278,6 +300,27 @@ def _chip_count_from_mesh(mesh_arg) -> int:
         return 0
 
 
+def _mesh_shape_arg(mesh_arg):
+    """The (rows, cols) the operator TYPED, or None when --mesh is absent or not a 2-D shape.
+
+    ONE owner for the pair, because two callers need it and only one of them used to have it:
+    _derive_mesh_device_env parsed it inline for MESH_DEVICE, while _derive_topology_env received
+    only _chip_count_from_mesh's PRODUCT. So `--mesh 2,4` reached the topology export as the scalar
+    8 and was rebuilt there as `1 x chips` -- the shape was read, multiplied away, and replaced by a
+    guess. A --mesh 2,4 run printed `MESH_DEVICE=T3K_2x4` and `mesh 1x8` on consecutive lines.
+    """
+    if not mesh_arg:
+        return None
+    dims = _mesh_dims(mesh_arg)
+    if len(dims) != 2:
+        return None  # a 1-D or >2-D spelling is a chip count, not a topology this exports
+    try:
+        rows, cols = int(dims[0]), int(dims[1])
+    except (TypeError, ValueError):
+        return None
+    return (rows, cols) if rows >= 1 and cols >= 1 else None
+
+
 def _optimize_chip_count(args):
     mesh_chips = _chip_count_from_mesh(getattr(args, "mesh", None))
     if mesh_chips >= 1:
@@ -337,14 +380,11 @@ def _derive_mesh_device_env(args) -> None:
             "name, not the board series tt-smi prints: four 'p300c' Blackhole chips are the box QB2."
             % (box_name, ", ".join(b.name for b in HARDWARE))
         )
-    shape = (1, 1)
     raw = getattr(args, "mesh", None)
-    if raw:
-        try:
-            r, c = _mesh_dims(raw)
-            shape = (int(r), int(c))
-        except (ValueError, AttributeError):
-            return
+    shape = _mesh_shape_arg(raw)
+    if raw and shape is None:
+        return  # an unparseable --mesh leaves the environment exactly as it is, as before
+    shape = shape or (1, 1)
     if "MESH_DEVICE" not in os.environ:
         try:
             label, _note = mesh_device_for(box.arch, shape)
@@ -355,11 +395,32 @@ def _derive_mesh_device_env(args) -> None:
             print(f"  mesh device : --box {box_name} + mesh {shape[0]}x{shape[1]} -> MESH_DEVICE={label}")
 
 
-def _derive_topology_env(args, model_dir):
-    """Reshape topology from --devices/--mesh the SAME way emit-e2e does: chip count -> shared
-    plan_parallelism (kernel-viable TP x DP) -> export TT_PERF_MESH_ROWS/COLS the model's open + the
-    perf skeleton read via perf_adapter.resolve_mesh_shape. Falls back to a 1D 1xN mesh when the model
-    can't be probed (existing --model-dir with no HF id). No-op when chip count is unknown ('all')."""
+def _derive_topology_env(args, model_dir, demo_dir=None):
+    """Reshape topology from --devices/--mesh: chip count -> shared plan_parallelism (kernel-viable
+    TP x DP) -> export TT_PERF_MESH_ROWS/COLS, which the model's open and the perf skeleton read via
+    perf_adapter.resolve_mesh_shape. No-op when chip count is unknown ('all').
+
+    PRECEDENCE, most authoritative first. Only the last of these is a guess, and it used to be the
+    only one that could win:
+
+      1. An explicit --mesh SHAPE. The operator named a topology; it is not a chip count. This
+         function only ever received _chip_count_from_mesh's product, so `--mesh 2,4` arrived as 8
+         and was rebuilt as `1 x 8` -- inverting the axes of the very mesh that was asked for.
+      2. An EMITTED demo's own mesh, by exporting nothing. Such a demo opens a mesh its bring-up
+         graduated and its e2e gate proved, and resolve_mesh_shape defers to that shape only while
+         this pair is unset -- which is exactly why emit-e2e (which exports neither variable) gets
+         this right and optimize did not. The graduated split is also per COMPONENT and the
+         components need not agree: Qwen-Image-Edit recorded tp=4 dp=2 for its text encoder against
+         tp=8 dp=1 for its transformer and VAE, so there is no single manifest to read here -- the
+         demo's own open IS the reconciliation. Overwriting it replaced a proven topology with a
+         derived one and broke the stricter component: a 1x8 export put 8 on the axis the text
+         encoder graduated at 4, and 4 KV heads do not divide 8.
+      3. The shared planner's kernel-viable split.
+      4. A 1D 1xN mesh, when the model cannot be probed. Composite checkpoints (a diffusers
+         pipeline: no root config, submodels instead) can never be probed, so for them this is the
+         only outcome -- and it went unnoticed because every earlier model had 8 KV heads, which 1x8
+         divides.
+    """
     chips = _optimize_chip_count(args)
     if not chips:
         return
@@ -368,16 +429,24 @@ def _derive_topology_env(args, model_dir):
         os.environ["TT_PERF_MESH_COLS"] = "1"
         print("  topology : single chip -> mesh 1x1")
         return
-    rows, cols, tag = 1, chips, "1D default"
-    model_id = None if model_dir else getattr(args, "target", None)
-    try:
-        from ..parallelism import plan_parallelism
+    given = _mesh_shape_arg(getattr(args, "mesh", None))
+    if given is not None:
+        rows, cols, tag = given[0], given[1], "--mesh"
+    elif demo_dir is not None and classify_pipeline(demo_dir) == _EMITTED:
+        # Leave both variables unset: that is how the demo's own shape stays authoritative.
+        print(f"  topology : {chips}-chip -> the demo's own graduated mesh (nothing exported)")
+        return
+    else:
+        rows, cols, tag = 1, chips, "1D default"
+        model_id = None if model_dir else getattr(args, "target", None)
+        try:
+            from ..parallelism import plan_parallelism
 
-        pc = plan_parallelism(model_id, chips)
-    except Exception:  # noqa: BLE001
-        pc = None
-    if pc is not None:
-        rows, cols, tag = pc.dp, pc.tp, "kernel-viable"
+            pc = plan_parallelism(model_id, chips)
+        except Exception:  # noqa: BLE001
+            pc = None
+        if pc is not None:
+            rows, cols, tag = pc.dp, pc.tp, "kernel-viable"
     os.environ["TT_PERF_MESH_ROWS"] = str(rows)
     os.environ["TT_PERF_MESH_COLS"] = str(cols)
     print(f"  topology : {chips}-chip -> mesh {rows}x{cols} (TP={cols} DP={rows}) [{tag}]")
@@ -798,7 +867,7 @@ def cmd_optimize(args) -> int:
             f"Pass a demo/model directory path."
         )
         return 2
-    kind = "existing" if model_dir else classify_pipeline(demo_dir)
+    kind = _EXISTING if model_dir else classify_pipeline(demo_dir)
     engine = getattr(args, "engine", "cc") or "cc"
     if model_dir and engine != "cc":
         print("  [optimize] --model-dir / --pcc-test is supported only on the cc engine.")
@@ -815,7 +884,10 @@ def cmd_optimize(args) -> int:
     if pcc_test:
         print(f"  pcc gate : {pcc_test} (perf test auto-generated from it)")
     _derive_mesh_device_env(args)
-    _derive_topology_env(args, model_dir)
+    # demo_dir, not `kind`: --model-dir makes `kind` _EXISTING for display purposes, but whether the
+    # directory opens its own graduated mesh is a property of the code there, not of the flag used
+    # to name it.
+    _derive_topology_env(args, model_dir, demo_dir=demo_dir)
     if getattr(args, "target_band", False):
         os.environ["PERF_MCP_TARGET_BAND"] = "1"
     if engine == "cc":
