@@ -59,6 +59,7 @@ GN_SHARDED_SHAPES = [
     (2, 64, 1, 32, 2, 1, 1),  # single core height-sharded, 2 batches and 2 groups per core: tests
     #   the case where the per-batch tile stride (block_ht * per_core_Nt) exceeds one group's tile
     #   span (block_ht * block_wt), to validate batches are located by the stride.
+    (1, 800, 16, 32, 16, 1, 8),  # last group narrower than block_wt, 2 tile-rows per core (#51231)
 ]
 
 BLOCK_SHARDED_V2_8X4_SHAPES = [
