@@ -32,7 +32,8 @@ def imbalance(G, gids):
 
 def main():
     d = torch.load(sys.argv[1])
-    C, gids0, layers = d["counts"].double(), d["gids"].tolist(), d["moe_layers"]
+    C, layers = d["counts"].double(), d["moe_layers"]
+    LG = d.get("layer_gids", d["gids"].expand(len(layers), *d["gids"].shape)).tolist()
     n_ch, n_l, n_dev, epc = C.shape
     E = n_dev * epc
     a, b = (int(v) for v in (sys.argv[3] if len(sys.argv) > 3 else f"0-{n_ch // 2 - 1}").split("-"))
@@ -41,6 +42,7 @@ def main():
     out, rows = {}, []
     for m, li in enumerate(layers):
         G = torch.zeros(n_ch, E, dtype=torch.float64)
+        gids0 = LG[m]
         for dv in range(n_dev):
             G[:, gids0[dv]] = C[:, m, dv]
         new = lpt(G[calib].mean(0), n_dev, epc)

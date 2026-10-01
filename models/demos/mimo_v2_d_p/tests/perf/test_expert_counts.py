@@ -70,6 +70,9 @@ def test_expert_counts(mesh_device, device_params):
     gids = torch.tensor([[int(g) for g in table[c, r]] for r in range(rows) for c in range(cols)])  # [n_dev, epc]
     moe_layers = [i for i in range(N_LAYERS) if cfg.is_moe(i)]
     by_layer = {i: model.layers[k].ffn.ag for k, i in enumerate(model.layer_ids) if cfg.is_moe(i)}
+    # each layer's placement (MIMO_EXPERT_PLACEMENT moves experts per layer; else the EP table's): [moe_layer, dev, epc]
+    ffns = [model.layers[k].ffn for k, i in enumerate(model.layer_ids) if cfg.is_moe(i)]
+    layer_gids = torch.stack([torch.tensor(f.gids) if f.gids is not None else gids for f in ffns])
     n_chunks = SEQ // CHUNK
     counts = torch.zeros(n_chunks, len(moe_layers), n_dev, epc, dtype=torch.int32)
     times = torch.full((n_chunks, len(moe_layers), n_dev), float("nan"))
@@ -102,7 +105,7 @@ def test_expert_counts(mesh_device, device_params):
         c, m = kv_actual // CHUNK, moe_layers.index(layer_idx)
         dts = ttnn.get_device_tensors(by_layer[layer_idx].plan_op.counts)
         for d in range(n_dev):
-            counts[c, m, d] = ttnn.to_torch(dts[d]).reshape(-1)[gids[d]].to(torch.int32)
+            counts[c, m, d] = ttnn.to_torch(dts[d]).reshape(-1)[layer_gids[m, d]].to(torch.int32)
 
     ids = hf.tokenize_prompt(SEQ, PROMPT)
     for c in range(n_chunks):
@@ -136,6 +139,7 @@ def test_expert_counts(mesh_device, device_params):
             "counts": counts,
             "times": times,
             "gids": gids,
+            "layer_gids": layer_gids,
             "moe_layers": moe_layers,
             "chunk": CHUNK,
             "mesh": (rows, cols),
