@@ -63,10 +63,16 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     // blocks once per run instead of once per item (the weights were 2/3 of the op's DRAM reads: 4 * block_ct
     // tiles per item vs 2 * block_ct activation tiles). Data movement only: every output tile is computed from
     // the same tiles by the same ops, so the result is bit-identical. TT_KDA_CONV_BLOCK_MAJOR=0 restores the
-    // tile-row-major order.
-    const char* bm_env = std::getenv("TT_KDA_CONV_BLOCK_MAJOR");
-    const uint32_t block_major = (tile_in && num_blocks > 1 && (bm_env == nullptr || bm_env[0] != '0')) ? 1u : 0u;
+    // tile-row-major order. Process-level knob: read once (it is not part of the program hash, so a per-call
+    // read would let an in-process toggle silently reuse a cached program built with the other order).
+    static const bool block_major_env = [] {
+        const char* e = std::getenv("TT_KDA_CONV_BLOCK_MAJOR");
+        return e == nullptr || e[0] != '0';
+    }();
+    const uint32_t block_major = (tile_in && num_blocks > 1 && block_major_env) ? 1u : 0u;
     // Reader + compute CTAs: the TILE kernels also take the work-item order (the ROW_MAJOR ones never reorder).
+    // Mt is compile-time, so each sequence length builds its own kernels; today only full prefill chunks reach this
+    // op (masked KDA is off), i.e. a fixed set of warmed shapes.
     const tt::tt_metal::experimental::KernelSpec::CompileTimeArgs conv_cta =
         tile_in
             ? tt::tt_metal::experimental::KernelSpec::

@@ -133,8 +133,9 @@ struct ScanWorkDist {
     uint32_t Vtl = 1;            // per-core v-block width (tiles) = Vt / NV
     uint32_t NV = 1;             // v-blocks per head
     CoreRangeSet core_set;
-    // Leader-multicast mode (TT_GDN_SCAN_MCAST=1): each head's NV cores form one contiguous row segment; the
-    // leader (vblk == head % NV) reads the V-independent per-step tensors once and multicasts them.
+    // Leader-multicast mode (TT_GDN_SCAN_MCAST=1, groups fit the grid): each head's NV cores form a tight gw x gh
+    // rectangle (a 1 x NV row segment whenever that fits; see distribute_scan); the leader (vblk == head % NV)
+    // reads the V-independent per-step tensors once and multicasts them to the rectangle.
     bool mcast = false;
     std::vector<CoreCoord> leader_phys;  // per core: NoC coords of its head's leader
     std::vector<CoreCoord> rect_start;   // per core: NoC rect of its head group

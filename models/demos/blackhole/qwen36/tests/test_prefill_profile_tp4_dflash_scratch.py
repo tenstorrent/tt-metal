@@ -15,6 +15,7 @@ traced; traced captures the plain chunk trace, so it runs LAST), PROFILE_REPEATS
 PROFILE_B (max_batch_size, default 8), PROFILE_CHUNK_TIMING=1 (per-chunk host stamps: prefill part vs on_chunk part).
 """
 
+import hashlib
 import os
 import time
 
@@ -90,6 +91,7 @@ def test_prefill_profile_tp4_dflash(mesh_device):
         dec.alloc()
     chunk_log = os.environ.get("PROFILE_CHUNK_TIMING") == "1"
 
+    results = {}
     for mode in modes:
         if mode == "traced":
             # The plain B>1 path: the chunk trace bakes the persistent B=1 prefill scratch (bound for capture and for
@@ -148,8 +150,21 @@ def test_prefill_profile_tp4_dflash(mesh_device):
             dump = os.environ.get("PROFILE_DUMP_LOGITS")
             if dump:
                 torch.save(lt, f"{_OUT_DIR}/logits_{dump}_{mode}_{isl}.pt")
+            # Durable numerics record (review F1): hash per (mode, isl), and in-process equality across modes below.
+            print(f"PROFILE_LOGITS_SHA256 mode={mode} isl={isl} {hashlib.sha256(lt.numpy().tobytes()).hexdigest()}")
+            results[(mode, isl)] = lt.clone()
             t2 = torch.topk(lt, 2)
             print(
                 f"PROFILE_RESULT mode={mode} isl={isl} ttft_s={min(times):.4f} mean_s={sum(times) / len(times):.4f} "
                 f"argmax={int(t2.indices[0])} top2gap={float(t2.values[0] - t2.values[1]):.4f}"
             )
+    # Cross-mode logits equality, logged (review F1): e.g. taps (eager prompt prefill) vs traced (plain chunk path).
+    for isl in isls:
+        present = [m for m in modes if (m, isl) in results]
+        for i, a in enumerate(present):
+            for b in present[i + 1 :]:
+                x, y = results[(a, isl)], results[(b, isl)]
+                print(
+                    f"PROFILE_EQUAL isl={isl} {a}_vs_{b} torch_equal={torch.equal(x, y)} "
+                    f"max_abs={float((x - y).abs().max()):.6g}"
+                )

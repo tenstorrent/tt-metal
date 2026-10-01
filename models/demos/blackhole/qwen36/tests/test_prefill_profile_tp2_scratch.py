@@ -29,6 +29,7 @@ prompts the eager chunk loop _prefill_chunked_eager_tp (the forward the tp2-dfla
 drafter taps); used to gate QWEN36_EAGER_FULL_CHUNK_UNMASKED.
 """
 
+import hashlib
 import os
 import time
 
@@ -69,7 +70,8 @@ def _blocks_for(isl):
         pytest.param(8192, "0,1,2,3", 1, id="tp2_8192_L4"),
         pytest.param(16384, "0,1,2,3", 1, id="tp2_16384_L4"),
         pytest.param(32768, "0,1,2,3", 1, id="tp2_32768_L4"),
-        pytest.param(8192, ",".join(str(i) for i in range(16)), 1, id="tp2_8192_L16"),  # lane L: layer-count scaling
+        # lane L: layer-count scaling, walls only (NOPROF); a tracy capture at L16 fills the disk / drops sessions
+        pytest.param(8192, ",".join(str(i) for i in range(16)), 1, id="tp2_8192_L16"),
         pytest.param(32768, ",".join(str(i) for i in range(16)), 1, id="tp2_32768_L16"),
         pytest.param(2048, "all", 1, id="tp2_2048_all"),
         pytest.param(8192, "all", 1, id="tp2_8192_all"),
@@ -187,15 +189,17 @@ def _run_one(model, device, page_table, isl, repeats):
             return r
 
         ttnn.execute_trace, ttnn.synchronize_device = _ex, _sy
-    signpost("start")
-    for _ in range(repeats):
-        t0 = time.time()
-        _ev.append(("0", time.perf_counter()))
-        logits = _prefill(model, token_ids, page_table, isl)
-        ttnn.synchronize_device(device)
-        ttfts.append(time.time() - t0)
-    signpost("stop")
-    ttnn.execute_trace, ttnn.synchronize_device = _orig
+    try:
+        signpost("start")
+        for _ in range(repeats):
+            t0 = time.time()
+            _ev.append(("0", time.perf_counter()))
+            logits = _prefill(model, token_ids, page_table, isl)
+            ttnn.synchronize_device(device)
+            ttfts.append(time.time() - t0)
+        signpost("stop")
+    finally:
+        ttnn.execute_trace, ttnn.synchronize_device = _orig
     if _ev:
         t_prev, line = None, []
         for tag, t in _ev:
@@ -217,6 +221,8 @@ def _run_one(model, device, page_table, isl, repeats):
     if dump:
         torch.save(lt, f"{_OUT_DIR}/logits_{dump}_{isl}.pt")
         logger.info(f"[PROFILE] dumped logits to {_OUT_DIR}/logits_{dump}_{isl}.pt")
+    # Durable numerics record (review F1): cross-process / cross-build logits equality is checked on these hashes.
+    print(f"PROFILE_LOGITS_SHA256 isl={isl} layers={n_layers} {hashlib.sha256(lt.numpy().tobytes()).hexdigest()}")
     top = torch.topk(lt, 2)
     logger.info(
         f"[PROFILE] isl={isl} layers={n_layers} TTFT(s)={['%.3f' % t for t in ttfts]} "

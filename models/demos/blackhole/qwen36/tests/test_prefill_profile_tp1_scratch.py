@@ -20,6 +20,7 @@ Env knobs: PROFILE_REPEATS (default 1), PROFILE_DUMP_LOGITS=<tag> (save the last
 profiles/p1d1_opt/logits_<tag>.pt for before/after numerics checks), PROFILE_REAL_PROMPT=1.
 """
 
+import hashlib
 import os
 import time
 
@@ -36,7 +37,7 @@ _MESH_SHAPE = (1, 1)
 DEVICE_PARAMS = [{"l1_small_size": 24576, "trace_region_size": 512 * 1024 * 1024}]
 BLOCK_SIZE = 64
 CHUNK = 2048
-_OUT_DIR = "/home/ttuser/experiments/qwen36_27b/profiles/p1d1_opt"
+_OUT_DIR = os.environ.get("PROFILE_OUT_DIR", "/home/ttuser/experiments/qwen36_27b/profiles/p1d1_opt")
 
 
 def _blocks_for(isl):
@@ -125,6 +126,8 @@ def test_prefill_profile_tp1(mesh_device, isl, layers, repeats):
     if dump:
         torch.save(lt, f"{_OUT_DIR}/logits_{dump}.pt")
         logger.info(f"[PROFILE] dumped logits to {_OUT_DIR}/logits_{dump}.pt")
+    # Durable numerics record: cross-process / cross-build logits equality is checked on these hashes.
+    print(f"PROFILE_LOGITS_SHA256 isl={isl} layers={n_layers} {hashlib.sha256(lt.numpy().tobytes()).hexdigest()}")
     top = torch.topk(lt, 2)
     logger.info(
         f"[PROFILE] isl={isl} layers={n_layers} TTFT(s)={['%.3f' % t for t in ttfts]} "
