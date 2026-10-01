@@ -8,13 +8,13 @@ PYTHON="$(command -v python3 || command -v python)"
 SKIP_RESET=0
 CONTINUE_ON_FAILURE=0
 RESET_CMD="tt-smi -glx_reset"
-MGD="tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto"
+MGD="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
 usage() {
 	cat << EOF
 Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links] [--mgd <path>]
 
-Run the deployment test suite (Ethernet, DRAM, PCIe read/write).
+Run the deployment test suite (Ethernet, DRAM, PCIe read/write, DIDT).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
@@ -115,7 +115,8 @@ RUN_LOG="$LOGDIR/deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
 
 # Carries a command's exit status out of the tee pipeline
 RCFILE="$(mktemp)"
-trap 'rm -f "$RCFILE"' EXIT HUP INT TERM
+trap 'rm -f "$RCFILE"' EXIT
+trap 'rm -f "$RCFILE"; exit 130' HUP INT TERM
 
 RULE_HEAVY='=============================================================================='
 RULE_LIGHT='------------------------------------------------------------------------------'
@@ -219,7 +220,7 @@ run_test() {
 	return 0
 }
 
-# run_tests: runs one round of every test.
+# run_tests: runs one round of every per-iteration test (DIDT runs once, separately, after all iterations).
 # Sets last_eth_ok, last_dram_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
 # Returns 1 if any test failed, 0 otherwise.
 run_tests() {
@@ -257,7 +258,7 @@ run_tests() {
 emit_banner "DEPLOYMENT TESTS RUN"
 emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
-emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write')"
+emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write (per iteration), DIDT (once, after all iterations)')"
 emit_setup
 emit "$RULE_HEAVY"
 
@@ -308,6 +309,13 @@ do
 	fi
 done
 
+# DIDT runs once, after all iterations, regardless of whether any iteration above failed.
+emit_banner "DIDT (single run after all iterations)"
+failures=0
+passes=0
+run_test 'DIDT tests' sh tests/tt_metal/tt_metal/deployment/didt/test_runner.sh --output "$LOGDIR/didt" --mgd "$MGD" &&
+	didt_ok=1 || didt_ok=0
+
 emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${iterations_run}/${ITERATIONS} iterations ran)"
 emit "$(printf '%-20s %s' 'Host:'            "$(hostname)")"
 emit_setup
@@ -317,12 +325,13 @@ emit "$(printf '%-20s %s' 'Ethernet tests:'  "$eth_pass/$iterations_run iteratio
 emit "$(printf '%-20s %s' 'DRAM tests:'      "$dram_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe write test:' "$pcie_write_pass/$iterations_run iterations passed")"
+emit "$(printf '%-20s %s' 'DIDT tests:'      "$([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
 emit "$RULE_LIGHT"
-if [ "$iteration_failures" -gt 0 ]
+if [ "$iteration_failures" -gt 0 ] || [ "$didt_ok" -eq 0 ]
 then
-	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed")"
+	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed, DIDT $([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
 	emit "$RULE_HEAVY"
 	exit 1
 fi
-emit_bold "$(printf '%-20s %s' 'Overall:' "All $iterations_run iterations passed")"
+emit_bold "$(printf '%-20s %s' 'Overall:' "All $iterations_run iterations passed, DIDT passed")"
 emit "$RULE_HEAVY"
