@@ -26,6 +26,23 @@ from ..utils import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _clamp_to_bounds(
+    values: torch.Tensor, low: float, high: float, dtype: torch.dtype
+) -> torch.Tensor:
+    """Keep *values* inside [low, high] as the format represents them.
+
+    The fp32 draw is rounded to *dtype* last, and rounding can carry a value just past a
+    bound that is not itself representable (0.99 in bfloat16 is 0.98828125, so a draw of
+    0.9899 would land on 0.9921875). The bounds are rounded the same way and clamped to,
+    so no stimulus leaves the interval the spec asked for.
+    """
+    if dtype.is_floating_point:
+        lo = torch.tensor(low, dtype=dtype)
+        hi = torch.tensor(high, dtype=dtype)
+        return values.clamp(min=min(lo, hi), max=max(lo, hi))
+    return values
+
+
 class UniformStrategy:
     """Uniform random sampling. Per-face only."""
 
@@ -60,8 +77,16 @@ class UniformStrategy:
         dtype = _get_dtype_for_format(stimuli_format)
         if spec.intervals:
             return _sample_uniform_intervals(spec.intervals, size, dtype, generator)
-        raw = torch.rand(size, dtype=dtype, generator=generator)
-        return raw * (spec.high - spec.low) + spec.low
+        # Draw in fp32 and cast last, as the interval sampler does. torch.rand in
+        # bfloat16 carries only 8 random bits (256 distinct values in [0, 1), 2048 for
+        # float16), so a 16-bit uniform drawn in its own dtype put every stimulus on a
+        # 1/256 grid whatever the tensor size: Exp over [-100, 80] saw 234 distinct inputs
+        # at a spacing of 0.5-0.78. Drawn in fp32 and rounded, the same draw reaches the
+        # format's full resolution across the range. Clamped to the rounded bounds so the
+        # cast cannot step outside the requested [low, high].
+        raw = torch.rand(size, dtype=torch.float32, generator=generator)
+        values = (raw * (spec.high - spec.low) + spec.low).to(dtype)
+        return _clamp_to_bounds(values, spec.low, spec.high, dtype)
 
     def _generate_integer_face(self, spec, stimuli_format, size, generator):
         dtype = _get_dtype_for_format(stimuli_format)
@@ -185,8 +210,10 @@ class LogUniformStrategy:
             )
         log_low = math.log(spec.low)
         log_high = math.log(spec.high)
-        raw = torch.rand(size, dtype=dtype, generator=generator)
-        return torch.exp(raw * (log_high - log_low) + log_low).to(dtype=dtype)
+        # fp32 draw, cast last: see UniformStrategy._generate_float_face.
+        raw = torch.rand(size, dtype=torch.float32, generator=generator)
+        values = torch.exp(raw * (log_high - log_low) + log_low).to(dtype=dtype)
+        return _clamp_to_bounds(values, spec.low, spec.high, dtype)
 
     def _generate_integer_face(self, spec, stimuli_format, size, generator):
         if spec.low <= 0 or spec.high <= 0:

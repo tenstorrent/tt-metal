@@ -283,10 +283,30 @@ _UNREGISTERED_BINARY_OPS = frozenset(
 _REGISTERED_DEFAULT_STIMULI_OPS: Dict[MathOperation, str] = {
     MathOperation.SfpuElwLeftShift: "driven as Int32 here; the registered float domain "
     "uniform(0, 255) is for the shift *amount* and the value operand needs the full "
-    "int32 range, so crafted stimuli / the format default are what these want",
+    "int32 range, so test_eltwise_binary_sfpu_int crafts both operands itself "
+    "(_SHIFT_RANDOM_SPECS)",
     MathOperation.SfpuElwRightShift: "as SfpuElwLeftShift",
     MathOperation.SfpuElwLogicalRightShift: "as SfpuElwLeftShift",
 }
+
+# The random Int32 shift sweep's operands. Left to the Int32 format default, the amount
+# operand was drawn from [0, 2**30 - 2] and was below 32 with probability 2**-25: 0 of
+# 8192 lanes at the sweep's seed, so every lane asserted the out-of-range -> 0 rule and
+# the in-range shift was never driven by this test. Amounts in [0, 63] put half the lanes
+# in range; the value operand keeps the positive default range, and twos_complement=True
+# is required as in test_eltwise_binary_sfpu_int_shift_edge_cases, since a left shift
+# that sets bit 31 is a two's-complement negative in Dst.
+_SHIFT_RANDOM_OPS = frozenset(
+    {
+        MathOperation.SfpuElwLeftShift,
+        MathOperation.SfpuElwRightShift,
+        MathOperation.SfpuElwLogicalRightShift,
+    }
+)
+_SHIFT_RANDOM_SPECS = (
+    StimuliSpec.uniform(low=0.0, high=float(2**30 - 2), seed=0),
+    StimuliSpec.uniform(low=0.0, high=63.0, seed=1),
+)
 
 # Ops this file tests without going through sfpu_binary(), so no stimulus classification
 # applies to them. Declared rather than merely absent, so that routing one of them onto
@@ -951,6 +971,17 @@ def test_eltwise_binary_sfpu_int(
 ):
     # The random half of the Int32 coverage, on the positive-only tie-free integer default --
     # so it cannot tell SfpuElwLe from SfpuElwLt. The two tests below cover the rest.
+    if mathop in _SHIFT_RANDOM_OPS:
+        spec_A, spec_B = _SHIFT_RANDOM_SPECS
+        sfpu_binary(
+            formats,
+            dest_acc,
+            mathop,
+            spec_A=spec_A,
+            spec_B=spec_B,
+            twos_complement=True,
+        )
+        return
     sfpu_binary(
         formats,
         dest_acc,

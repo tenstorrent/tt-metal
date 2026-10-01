@@ -426,17 +426,14 @@ def calculate_tile_and_face_counts(
         faces_to_generate = num_faces  # Generate exactly the right number of faces
     else:
         # Full tile case - always use 32x32 tiles
-        tile_cnt_A = (
-            input_dimensions_A[0]
-            // DEFAULT_TILE_R_DIM
-            * input_dimensions_A[1]
-            // DEFAULT_TILE_C_DIM
+        # Parenthesised: `a // 32 * b // 32` is `((a // 32) * b) // 32`, which differs
+        # from the tile count for a dimension that is not a multiple of 32 ([64, 48]
+        # gave 3 tiles instead of 2).
+        tile_cnt_A = (input_dimensions_A[0] // DEFAULT_TILE_R_DIM) * (
+            input_dimensions_A[1] // DEFAULT_TILE_C_DIM
         )
-        tile_cnt_B = (
-            input_dimensions_B[0]
-            // DEFAULT_TILE_R_DIM
-            * input_dimensions_B[1]
-            // DEFAULT_TILE_C_DIM
+        tile_cnt_B = (input_dimensions_B[0] // DEFAULT_TILE_R_DIM) * (
+            input_dimensions_B[1] // DEFAULT_TILE_C_DIM
         )
         faces_to_generate = MAX_NUM_FACES
 

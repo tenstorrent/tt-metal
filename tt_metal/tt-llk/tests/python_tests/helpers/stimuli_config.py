@@ -111,7 +111,9 @@ class StimuliConfig:
         self.tile_count_A = tile_count_A
         self.buffer_B = buffer_B
         self.stimuli_B_format = stimuli_B_format
-        self.tile_count_B = tile_count_B
+        # Default to A's count: the None default used to reach `tile_size * None` in
+        # _calculate_tile_sizes as a TypeError.
+        self.tile_count_B = tile_count_B if tile_count_B is not None else tile_count_A
         self.buffer_C = buffer_C
         self.stimuli_C_format = stimuli_C_format
         self.tile_count_C = tile_count_C
@@ -519,6 +521,13 @@ class StimuliConfig:
         for ind in range(tile_count):
             # Always stride at MAX_TILE_ELEMENTS (1024) for backward compatibility
             start_idx = MAX_TILE_ELEMENTS * ind
+            if start_idx + tile_elements > buffer.numel():
+                # A buffer shorter than its declared tile count (a stale stimuli cache,
+                # say) would otherwise be written truncated with nothing to notice.
+                raise ValueError(
+                    f"stimuli buffer holds {buffer.numel()} elements but tile {ind} of "
+                    f"{tile_count} needs elements up to {start_idx + tile_elements}"
+                )
             tile_data = buffer[start_idx : start_idx + tile_elements]
             packed_data = _pack_tile(tile_data)
             addresses.append(base_address + ind * tile_size)
@@ -582,6 +591,11 @@ class StimuliConfig:
 
         for ind in range(tile_count):
             start_idx = tile_elements * ind
+            if start_idx + tile_elements > buffer.numel():
+                raise ValueError(
+                    f"stimuli buffer holds {buffer.numel()} elements but tile {ind} of "
+                    f"{tile_count} needs elements up to {start_idx + tile_elements}"
+                )
             tile_data = buffer[start_idx : start_idx + tile_elements]
             packed_data = _pack_tile(tile_data)
             addresses.append(base_address + ind * tile_size)
