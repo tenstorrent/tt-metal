@@ -43,8 +43,14 @@ def _stimuli(torch_format):
     mask = torch.where(position % 3 == 0, 0, 1).to(torch_format)
     if torch_format.is_floating_point:
         # Different magnitudes on the kept side, so a passthrough of the wrong tile cannot match.
-        data = (data.to(torch.float32) * 0.5 + torch.randint(0, 4, (ELEMENTS_PER_TILE,)).to(torch.float32)).to(torch_format)
-        mask = (mask.to(torch.float32) * torch.randint(1, 5, (ELEMENTS_PER_TILE,)).to(torch.float32)).to(torch_format)
+        data = (
+            data.to(torch.float32) * 0.5
+            + torch.randint(0, 4, (ELEMENTS_PER_TILE,)).to(torch.float32)
+        ).to(torch_format)
+        mask = (
+            mask.to(torch.float32)
+            * torch.randint(1, 5, (ELEMENTS_PER_TILE,)).to(torch.float32)
+        ).to(torch_format)
     return data, mask
 
 
@@ -53,13 +59,19 @@ def _run(formats, dest_acc, data_index, mask_index, posinf):
     data, mask = _stimuli(torch_format)
 
     replacement = float("inf") if posinf else 0.0
-    golden = torch.where(mask.to(torch.float32) == 0.0, torch.tensor(replacement), data.to(torch.float32))
+    golden = torch.where(
+        mask.to(torch.float32) == 0.0, torch.tensor(replacement), data.to(torch.float32)
+    )
 
     configuration = TestConfig(
         "sources/sfpu_mask_test.cpp",
         formats,
         templates=[
-            SFPU_MASK_PLACEMENT(mask_data_dst_index=data_index, mask_mask_dst_index=mask_index, mask_posinf=posinf),
+            SFPU_MASK_PLACEMENT(
+                mask_data_dst_index=data_index,
+                mask_mask_dst_index=mask_index,
+                mask_posinf=posinf,
+            ),
         ],
         runtimes=[TILE_COUNT(1)],
         variant_stimuli=StimuliConfig(
@@ -77,7 +89,9 @@ def _run(formats, dest_acc, data_index, mask_index, posinf):
         compile_time_formats=True,
     )
 
-    res = torch.tensor(configuration.run().result, dtype=format_dict[formats.output_format]).to(torch.float32)
+    res = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    ).to(torch.float32)
     return res, golden
 
 

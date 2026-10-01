@@ -41,7 +41,11 @@ def _run(formats, dest_acc, binary_init_before, probability, scale_bits):
     torch.manual_seed(0)
     torch_format = format_dict[formats.input_format]
     # Non-zero values in [1, 2): a dropped, misplaced or unscaled element shows, the doubling is exact.
-    src_A = torch.empty(ELEMENTS_PER_TILE, dtype=torch.float32).uniform_(1.0, 2.0).to(torch_format)
+    src_A = (
+        torch.empty(ELEMENTS_PER_TILE, dtype=torch.float32)
+        .uniform_(1.0, 2.0)
+        .to(torch_format)
+    )
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
     golden = _golden(src_A, probability, scale_bits)
 
@@ -70,7 +74,9 @@ def _run(formats, dest_acc, binary_init_before, probability, scale_bits):
         unpack_to_dest=False,
     )
 
-    res = torch.tensor(configuration.run().result, dtype=format_dict[formats.output_format]).to(torch.float32)
+    res = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    ).to(torch.float32)
     return res, golden
 
 

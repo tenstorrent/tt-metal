@@ -64,13 +64,21 @@ def _run(formats, dest_acc, indices):
     generator = torch.Generator().manual_seed(3)
     torch_format = format_dict[formats.input_format]
     # Integers in [-4, 4]: 32 accumulations stay below 2^8, so every partial sum is exact in bf16.
-    input_rows = torch.randint(-4, 5, (TILE_DIM, TILE_DIM), generator=generator).to(torch.float32)
-    output_rows = torch.randint(-4, 5, (TILE_DIM, TILE_DIM), generator=generator).to(torch.float32)
+    input_rows = torch.randint(-4, 5, (TILE_DIM, TILE_DIM), generator=generator).to(
+        torch.float32
+    )
+    output_rows = torch.randint(-4, 5, (TILE_DIM, TILE_DIM), generator=generator).to(
+        torch.float32
+    )
     golden_rows = _golden(input_rows, output_rows, indices)
 
-    src_A = tilize_block(input_rows.to(torch_format), TILE_DIMS, stimuli_format=formats.input_format).flatten()
+    src_A = tilize_block(
+        input_rows.to(torch_format), TILE_DIMS, stimuli_format=formats.input_format
+    ).flatten()
     index_tile = _index_tile(indices, torch_format).flatten()
-    accumulator = tilize_block(output_rows.to(torch_format), TILE_DIMS, stimuli_format=formats.input_format).flatten()
+    accumulator = tilize_block(
+        output_rows.to(torch_format), TILE_DIMS, stimuli_format=formats.input_format
+    ).flatten()
     src_B = torch.cat([index_tile, accumulator])
 
     configuration = TestConfig(
@@ -92,8 +100,14 @@ def _run(formats, dest_acc, indices):
         unpack_to_dest=False,
     )
 
-    res = torch.tensor(configuration.run().result, dtype=format_dict[formats.output_format])
-    res_rows = untilize_block(res, formats.output_format, TILE_DIMS).reshape(TILE_DIM, TILE_DIM).to(torch.float32)
+    res = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    )
+    res_rows = (
+        untilize_block(res, formats.output_format, TILE_DIMS)
+        .reshape(TILE_DIM, TILE_DIM)
+        .to(torch.float32)
+    )
     return res_rows, golden_rows
 
 
@@ -106,6 +120,6 @@ def test_sfpu_reshuffle_rows(formats, dest_acc, pattern):
     indices = INDEX_PATTERNS[pattern]
     res_rows, golden_rows = _run(formats, dest_acc, indices)
     bad_rows = (res_rows != golden_rows).any(dim=1).nonzero().flatten().tolist()
-    assert not bad_rows, (
-        f"reshuffle_rows with the {pattern} index pattern: output rows {bad_rows} differ from the golden"
-    )
+    assert (
+        not bad_rows
+    ), f"reshuffle_rows with the {pattern} index pattern: output rows {bad_rows} differ from the golden"

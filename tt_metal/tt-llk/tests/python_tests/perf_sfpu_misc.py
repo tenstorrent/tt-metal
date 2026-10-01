@@ -72,7 +72,9 @@ def test_perf_sfpu_misc(perf_report, row, loop_factor, input_dimensions):
         run_types=ALL_PERF_RUN_TYPES,
         templates=[
             APPROX_MODE(ApproximationMode.No),
-            SFPU_MISC_OP(misc_mathop=op, misc_param=misc_param, misc_init_per_tile=init_per_tile),
+            SFPU_MISC_OP(
+                misc_mathop=op, misc_param=misc_param, misc_init_per_tile=init_per_tile
+            ),
         ],
         runtimes=[
             TILE_COUNT(tile_count),
