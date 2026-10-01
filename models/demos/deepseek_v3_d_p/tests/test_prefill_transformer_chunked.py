@@ -202,31 +202,19 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut three times. Recentered to CI run 36356786056 / job 108828333472: every chunk came
-    # in 2.4-5.2% under the previous centre (run 34492835936 / job 102927415897), with the drop growing
-    # with KV depth.
-    (61, 11, 10): [
-        0.403,
-        0.406,
-        0.440,
-        0.468,
-        0.500,
-        0.532,
-        0.562,
-        0.593,
-        0.638,
-        0.678,
-        0.717,
-    ],
+    # then re-cut four times. Recentered to CI run 36799564244 / job 110172921369: all all-gathers on
+    # ttnn.experimental.fabric_all_gather (was high_bw_all_gather) take every chunk 1.0-2.3% under the
+    # previous centre (run 36356786056 / job 108828333472).
+    (61, 11, 10): [0.393, 0.397, 0.435, 0.461, 0.494, 0.527, 0.554, 0.583, 0.630, 0.665, 0.701],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
     # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
-    # Chunks 0-6 lowered to CI run 36032933534 / job 107749492403: they came in 4-30% under the old
-    # baseline and within 0.3-3% of the traced twin in the same run, i.e. the early-chunk dispatch overhead
-    # is gone (same shape on two local Galaxy runs). Chunks 7-10 were in band above baseline; unchanged.
-    (61, 11, 10): [0.437, 0.435, 0.449, 0.478, 0.513, 0.550, 0.581, 0.61104, 0.65888, 0.69774, 0.73711],
+    # Recentered to CI run 36799564244 / job 110172921307: all all-gathers on ttnn.experimental.fabric_all_gather
+    # (was high_bw_all_gather) take every chunk 2.9-8.9% under the previous centre (CI run 36032933534 / job
+    # 107749492403), within 0.1-1.6% of the traced twin in the same run.
+    (61, 11, 10): [0.398, 0.399, 0.436, 0.463, 0.496, 0.529, 0.556, 0.587, 0.635, 0.674, 0.712],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
