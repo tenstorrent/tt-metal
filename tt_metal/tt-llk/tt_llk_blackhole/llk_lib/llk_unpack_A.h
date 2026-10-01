@@ -350,29 +350,8 @@ inline void _llk_unpack_A_init_(
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces > 0, tensor_shape, unpack_src_format, unpack_dst_format);
 
-    // The plain SrcA path also records the block body of _llk_unpack_A_block_ (the face transpose path uses the replay buffer itself).
+    // The replay buffer holds no block body after an init: _llk_unpack_A_block_ records its own at its first call.
     block_replay_body() = BlockReplayBody::None;
-    if constexpr (BType == BroadcastType::NONE && !acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)
-    {
-        if (transpose_of_faces == 0 && !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
-        {
-            switch (num_faces)
-            {
-                case 1:
-                    llk_unpack_a_detail::load_block_replay<1>();
-                    block_replay_body() = BlockReplayBody::UnpackA_1;
-                    break;
-                case 2:
-                    llk_unpack_a_detail::load_block_replay<2>();
-                    block_replay_body() = BlockReplayBody::UnpackA_2;
-                    break;
-                default:
-                    llk_unpack_a_detail::load_block_replay<4>();
-                    block_replay_body() = BlockReplayBody::UnpackA_4;
-                    break;
-            }
-        }
-    }
 }
 
 /**
@@ -479,8 +458,8 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 }
 
 /**
- * @brief Unpack a block of consecutive tiles (operand A) from L1 into SrcA with one context acquire: the per tile body recorded by
- *        @ref _llk_unpack_A_init_ is replayed once per tile, the base address advanced by the tile stride in the instruction stream.
+ * @brief Unpack a block of consecutive tiles (operand A) from L1 into SrcA with one context acquire: a per tile body, recorded in the
+ *        replay buffer at the first call after an init, is replayed once per tile, the base address advanced by the tile stride in the instruction stream.
  *
  * @tparam BType: Broadcast type, must be NONE.
  * @tparam acc_to_dest: Must be false.
@@ -515,16 +494,32 @@ inline void _llk_unpack_A_block_(
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
     LLK_ASSERT(is_valid_L1_address(address + (num_tiles - 1) * tile_stride_16B), "L1 address of the last tile must be in valid L1 memory region");
 
-    // Unpack to dest and a block whose body the init did not record take the per tile calls.
-    const bool body_recorded = block_replay_body() == static_cast<BlockReplayBody>(num_faces);
-    LLK_ASSERT(body_recorded, "_llk_unpack_A_block_ needs the body recorded by _llk_unpack_A_init_ of the plain path with the same num_faces");
-    if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format) || !body_recorded)
+    // Unpack to dest takes the per tile calls.
+    if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
         for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
         {
             _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(address + tile * tile_stride_16B, unpack_src_format, unpack_dst_format);
         }
         return;
+    }
+
+    // Record the body at the first block call after an init (every init clears the record), not in every kernel's init.
+    if (__builtin_expect(block_replay_body() != static_cast<BlockReplayBody>(num_faces), 0))
+    {
+        switch (num_faces)
+        {
+            case 1:
+                llk_unpack_a_detail::load_block_replay<1>();
+                break;
+            case 2:
+                llk_unpack_a_detail::load_block_replay<2>();
+                break;
+            default:
+                llk_unpack_a_detail::load_block_replay<4>();
+                break;
+        }
+        block_replay_body() = static_cast<BlockReplayBody>(num_faces);
     }
 
     // Tile stride into SCRATCH_SEC0 from the instruction stream, so the write is ordered behind the CFGSHIFTMASKs of an earlier block

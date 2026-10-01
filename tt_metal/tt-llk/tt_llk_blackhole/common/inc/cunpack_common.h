@@ -202,8 +202,8 @@ inline void switch_config_context_from(const std::uint32_t context_used)
     }
 }
 
-// Which block body the replay buffer holds: set by the init that records one, cleared by the other inits, checked by the block
-// calls, which fall back to their per tile calls otherwise. The unpack A values equal the face count the body was recorded for.
+// Which block body the replay buffer holds: the inits clear it (the tilize init records its body and sets it), the unpack A block
+// call records its body when the record is not its own. The unpack A values equal the face count the body was recorded for.
 enum class BlockReplayBody : std::uint8_t
 {
     None      = 0,
