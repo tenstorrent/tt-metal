@@ -390,6 +390,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                             auto rta = kc.rta_offset()[processor_index];
                             ck.rta_offset = rta.rta_offset();
                             ck.crta_offset = rta.crta_offset();
+                            ck.remote_cb_offset = static_cast<uint16_t>(kc.remote_cb_offset());
+                            ck.min_remote_cb_start_index = static_cast<uint32_t>(kc.min_remote_cb_start_index());
                         }
                         const tt::tt_metal::CoreCoord lc(x, y);
                         if (k.cores_with_runtime_args().count(lc) != 0) {
