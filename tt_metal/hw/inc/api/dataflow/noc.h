@@ -125,8 +125,7 @@ private:
     friend struct noc_traits_t<UnicastEndpoint>;
     friend struct noc_traits_t<MulticastEndpoint>;
 
-    // Every NoC transfer path -- async_read/async_write, their DataflowBuffer overloads, set_async_*_state and
-    // *_with_state, multicast, async_write_zeros -- takes its endpoint addresses from these three helpers, so this is
+    // Every NoC transfer path takes its endpoint addresses from these three helpers, so this is
     // where op-to-op R/W inference notes a bound tensor: a source is read, a destination written
     // (api/dataflow/buf_rw_note.h). The notes are section data only: no instructions.
     template <AddressType address_type, typename Src>
