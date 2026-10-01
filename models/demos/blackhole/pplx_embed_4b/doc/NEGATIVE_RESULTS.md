@@ -1639,3 +1639,39 @@ is not free (handshakes only), so the DM floors are upper bounds. The exchange i
 CBs 0 / 1 / 16 / 17 two waves deep (a scratch knob, reverted): bs8 87.8 → 89.4 µs; bs16 / 32 do not fit beside the L1
 operands even standalone (static CBs clash at 423,808). The next wave's add already overlaps the writer, since compute
 runs the stages in order anyway; what is exposed is the per-wave latency of the reads and writes.
+
+## 68. bs1 SwiGLU product: the SiLU was the cost; the single-pass SwiGLU lands, sharding and a LUT sigmoid do not (2026-10-01)
+
+At cdb9143 the bs1 SwiGLU product (`ttnn.mul(a, b, input_tensor_a_activations=[SILU])` on FF1 / FF3's [512, 9728]
+bfp8 outputs, L1 interleaved) took 52.1 µs per call, 1.88 ms of the 15.27 ms replay, with no FPU work and every operand
+in L1. Standalone at the model's placement (chip 5, traced, device kernel µs from the device profiler via
+`perf_tools/device_kernel_us.py`; `perf_tools/bench_bs1_swiglu.py` for the FF1 + FF3 + product chain):
+
+| variant | interleaved L1, 120 cores | block-sharded 12×8 (FF1 / FF3's grid), 96 cores |
+|---|---|---|
+| `ttnn.mul(silu(a), b)` (the model) | 52.1 | 56.9 |
+| `ttnn.mul(a, b)`, no SiLU | 19.5 | 4.0 |
+| `ttnn.silu(a)` | 41.3 | — |
+| `silu_mul` mode 0 (precise `silu_tile`, dest-reuse multiply) | 56.0 | — |
+| `silu_mul` mode 3 (`minimal_matmul`'s single-pass SwiGLU) | **30.2** | 33.6 |
+| mode 3, output writes skipped / output CB aliased on a sharded output | — | 32.9 / 32.8 |
+| mode 3 with the 3-segment LUT sigmoid (`calculate_sigmoid_appx`) | 18.6 | — |
+
+The SiLU costs ~1,400 cycles per tile; the single-pass SwiGLU (one SFPU pass over the gate / up pair, Schraudolph exp
+and a bare SFPARECIP sized for the bfp8 output, §62) ~770, which makes the product SFPU-bound: on the shards the reads
+are gone (inputs stay resident: CBs 0 / 1 alias each core's shard) and the output write costs 0.7 µs, yet 52 tiles per
+core on 96 cores (33.6) lose to 40.5 per core on 120 cores reading interleaved tiles (30.2). The sharded path also
+needs FF1 / FF3 at 1×2 subblocks (`out_subblock_h == 1` for a sharded output with per_core_N 26): 69.8 → 71.2 µs each,
+bit-identical. It stays in `silu_mul` (`supported_sharded`) but nothing uses it.
+
+Accuracy (standalone, against an fp32 torch SwiGLU of the same bfp8 inputs): rel. RMSE stock 0.0176, mode 0 0.0111,
+mode 3 0.0113 (PCC 0.99991 vs 0.99981 stock), LUT sigmoid 0.0785 (max |err| 1.09 vs 0.19): the LUT is at the read
+floor but 7× less accurate, not usable; a finer piecewise sigmoid (`lut2`, 6 segments) is the untried middle, worth at
+most ~10 µs per layer. In-model (`QWEN_SILU_MUL_VERIFY=1`, eager bs1, all 36 calls) mode 3 is closer to torch than the
+stock op in 24 / 36 layers, min PCC 0.99974 against stock's 0.99972.
+
+**Landed** (`QWEN_SILU_MUL_BS1=1`, default; the wrapper routes products below `QWEN_SILU_MUL_MIN_ROWS` = 8192 rows to
+mode 3, larger ones keep mode 0): e2e chip 4, `ab_one.sh` 2 rounds, cold best 15.6 / 15.6 → 14.8 / 14.8 ms (−5.1%);
+`sustained_run.sh` 2 alternating rounds, sustained 15.7 / 15.7 → 14.9 / 15.0 ms (bs1 holds 1350 MHz). STS-B bs1
+bucketed 0.8159 (0.8161 before), fixed-ISL batch 1 0.8117 (0.8121). bs8 / 16 / 32 run the fused-SwiGLU matmul and never
+reach the product.

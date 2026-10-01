@@ -4,6 +4,8 @@
 //   mode 0: copy a -> DST, silu_tile (SFPU, approximation per math_approx_mode), dst *= b (dest-reuse FPU mul)
 //   mode 1: copy a -> DST i and DST CH+i, sigmoid<fast>(DST CH+i), DST i = DST i * DST CH+i (SFPU), dst *= b
 //   mode 2: copy a -> DST i, b -> DST CH+i, clamped_silu_glu_tile(i, CH+i, i)  (clamps at 10)
+//   mode 3: copy a -> DST i, b -> DST CH+i, minimal_matmul's single-pass SwiGLU (sigmoid sized for a bfp8 output:
+//           Schraudolph exp, bare SFPARECIP; NEGATIVE_RESULTS 62) on the math thread
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -14,6 +16,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/swiglu_sfpu.hpp"
 
 namespace {
 constexpr uint32_t cb_a = 0, cb_b = 1, cb_out = 16;
@@ -54,6 +57,16 @@ void kernel_main() {
             for (uint32_t i = 0; i < CH; ++i) {
                 mul_binary_tile(i, CH + i, i);
             }
+        } else if constexpr (mode == 3) {
+            reconfig_data_format_srca(cb_b);
+            copy_tile_init(cb_b);
+            for (uint32_t i = 0; i < CH; ++i) {
+                copy_tile(cb_b, i, CH + i);
+            }
+            MATH((llk_minimal_matmul_swiglu_init()));
+            for (uint32_t i = 0; i < CH; ++i) {
+                MATH((llk_minimal_matmul_swiglu(i, CH + i, i)));
+            }
         } else {
             reconfig_data_format_srca(cb_b);
             copy_tile_init(cb_b);
@@ -65,7 +78,7 @@ void kernel_main() {
                 clamped_silu_glu_tile(i, CH + i, i);
             }
         }
-        if constexpr (mode != 2) {
+        if constexpr (mode < 2) {
             reconfig_data_format_srca(cb_b);
             mul_reuse_dest_init<D2B>(cb_b);
             for (uint32_t i = 0; i < CH; ++i) {
