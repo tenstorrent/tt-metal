@@ -63,6 +63,16 @@ retries and in-flight outputs contribute too. Sympy's late logs show continuous
 46–47 tokens/s decoding, disproving an interpretation of the missing 69 minutes
 as tool time. Exact attribution requires request-level streaming instrumentation.
 
+The completion milestones do not support a "nearly finished" interpretation:
+Astropy is still repeatedly rewriting a patch helper for`SkyCoord.__getattr__`
+and its required subclass-property test fails; Django remains in the300-command
+failed search loop; sklearn's final commands contain hundreds/thousands of
+repeated comments while attempting a patch helper, and its verifier also reports
+pass-to-pass failures; Sympy's last saved action precedes roughly69 minutes of
+unsaved generation. Matplotlib explicitly submits, but its required pickle test
+still fails. These observations concern the tested implementation/trajectory;
+they do not establish an inherent limitation of the HF model.
+
 ## Pre-experiment forecast
 
 For a fixed sequence of actions, use `T = P + D + A + F`, with prefill/request
@@ -363,7 +373,7 @@ deadline during cleanup; artifact totals must not be equated with the exact
 
 This local trial is diagnostic, not a matched speed/reward comparison: it uses
 the local c9ec image, warm persisted kernel caches, and no external warmup
-sweep, which changes engine RNG history versus CI. It uses Harbor
+sweep. Its unseeded requests are not deterministic copies of CI. It uses Harbor
 `1da0bfd8c71cadbff17413fac984b8e391d2afc2` in a separate Python3.12 environment;
 transitive host dependencies can differ from CI. Artifacts are under
 `/home/mvasiljevic/gemma4-eval-speed-evidence/local_matplotlib_guard`.
@@ -389,7 +399,7 @@ preserve the original raw token stream or missing responses, and a command can
 contain useful work after a long repeated segment that the guard would prevent
 from executing. The policy therefore still needs outcome-bearing validation.
 
-The matched thinking-plus-guard CI probe is
+The configuration-matched thinking-plus-guard CI probe is
 [36876743431](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36876743431),
 job110418160465, TTI `35a0fd50e01b8f335761b396149d090f0ce47455`.
 It reuses the preceding CI's image, seed, task,900-second cap and short warmup;
@@ -500,3 +510,87 @@ This does not reproduce a stale sampling-mode/request-state failure in that
 bounded case. It does not prove full long-generation correctness or identify
 the cause of the observed repetitive output. The CPU reference co-runs during
 the second request, so their latency difference is not a performance claim.
+
+## Narrow-guard CI outcome and seed contract
+
+CI36876743431 completes at900 seconds with reward0:31 request starts,30 HTTP
+responses,27 valid tool responses and3 repetition stops. It produces25382 output
+tokens; its longest guarded response is12613 tokens/269.061 seconds. Artifact
+11170759518 is retained under
+`/home/mvasiljevic/gemma4-eval-speed-evidence/guard128_probe_36876743431`.
+
+The initial thinking-only and narrow-guard responses differ **before any guard
+fires**, despite equal1154-token prompts and the same engine seed9472. Scored
+requests do not specify their own seed. In `tt/generator.py`,
+`_reset_sampling_seeds` uses`secrets.randbits(63)` when a request seed is absent;
+the engine seed does not make those draws reproducible. Thus these are
+configuration-matched independent trajectories, not paired request-by-request
+trials.27 versus20 saved actions cannot be attributed causally to the guard.
+The local microreplays explicitly supply request seed9472 and retain matching
+output prefixes, which is why their bounded causal claim is stronger. Future
+paired diagnostics should explicitly pin request seeds and declare that change;
+the current scored CI policy has not silently been changed to do so.
+
+## Wider-guard outcome and bounded reference
+
+CI36880038816 finishes at15:23:43 UTC with an agent timeout at900 seconds and
+reward0. Its telemetry records29 starts,28 responses,21 tool responses and7
+repetition stops,19789 generated tokens and a longest completed request of
+90.138 seconds. Saved valid actions account for4481 tokens; discarded responses
+still matter. This independent stochastic trajectory does not establish a
+task-level speedup or quality recovery. Artifacts are retained under
+`/home/mvasiljevic/gemma4-eval-speed-evidence/guard1024_probe_36880038816`.
+Both narrower and wider guards therefore remain experimental, not a validated
+release-quality fix. All dispatched CI runs are now completed and inspected.
+
+The HF control completes successfully at15:14:20 UTC:2.421-second mmap load,
+1001.174-second CPU generation,128 greedy tokens. Both HF and TT begin coherent
+recaps; neither128-token sample completes an action. This does not identify the
+cause of long repetitive generations or prove a precision failure. The run used
+12GiB memory and four CPUs. A16GiB limit update happened after process exit and
+did not affect the result. Raw completion/token evidence is in
+`readiness_vllm/eval_speed/hf_django_prefix.json`. New progress-streaming support
+was also added after this run, so it is not retroactively attributed to it.
+
+A further local diagnostic raises only BFP4 weight fields to BFP8, leaving all
+activation, KV, CCL and compute-fidelity policy fields unchanged. The complete
+policy and93-field manifest are generated by`tools/prepare_eval_weight_control.py`;
+candidate SHA256 is46389c08f1c99f068669f66e902cc34daf00e54e7c7d8014dc1539b3dd1af954.
+It is an isolated read-only bind mount over the existing image's selected-policy
+path, not a repository default change or image rebuild. Full262144 context and
+the same serving sampling remain intact. It is explicitly unselected and must
+pass full datatype-sweep accuracy/readiness/qualitative gates before adoption.
+The first launch fails before model execution because the image's profiler
+import unconditionally creates an unwritable trace directory; an owned tmpfs
+at that exact directory resolves the launch permission issue without enabling
+profiling or modifying runtime source.
+The first96-field candidate is rejected by the schema because prefill precision
+fields are fixed. The actual93-field control leaves those fixed prefill fields
+unchanged and raises only configurable decode/head weights. This is not an
+all-BFP8 end-to-end model; no validator is weakened to permit it.
+
+## User-requested stop checkpoint — 2026-10-01 15:30 UTC
+
+The user requested immediate shutdown. No further experiments or CI dispatches
+are authorized by this continuation. All five actual CI probes and the earlier
+checkout-only failed dispatch are completed and inspected; no CI job remains
+running. The final wider-guard job
+is110429390062/run36880038816, workflow success but task timeout/reward0.
+The owned local container`gemma4-eval-weight-bfp8-v2` is stopped during model
+loading. It reached layer5 in the last inspected progress log; no request,
+accuracy, speed or quality measurement was obtained for that policy. Its
+configuration remains unselected. HF and previous local serving experiments
+had already exited; no local probe/monitor script remains active.
+
+Measured delivered improvements are warmed async decode at real12K–49K
+contexts (approximately5–6%, identical bounded output hashes) and394.508 seconds
+less diagnostic warmup (79.1%). These are not solved-eval claims. Guards bound
+some pathological requests but every outcome-bearing probe still has reward0.
+The full five-task7200-second release suite was deliberately not rerun.
+
+Resume only on a new user request. Start with the retained artifact directories
+and this report; do not rebuild images merely to rerun. The unfinished precision
+diagnostic requires runtime-policy attestation and short matched replay before
+any accuracy/qualitative adoption gates. Large local artifacts remain under
+`readiness_vllm/eval_speed/` and`/home/mvasiljevic/gemma4-eval-speed-evidence/`;
+they are intentionally not added wholesale to git.
