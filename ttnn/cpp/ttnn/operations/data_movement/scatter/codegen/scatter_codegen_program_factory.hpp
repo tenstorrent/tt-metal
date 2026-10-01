@@ -127,6 +127,17 @@ uint32_t scatter_rm_chunk_elems(
     uint32_t index_elem_size,
     uint32_t src_elem_size);
 
+// Whether a post-transpose, post-4D-fold TILE scatter is cheaper to serve by converting input,
+// index and src to ROW_MAJOR, running the per-stick RM factory, and converting the result back,
+// instead of dispatching the tile-row-parallel interleaved/streaming factories directly. Those
+// factories split work by output tile-ROW (one core per 32-row band), so a shape with few tile-rows
+// leaves most of the device idle; the RM factory splits by individual logical row (one core per
+// row) instead. Below a small tile-row count this trade wins regardless of row width; above it, the
+// tile-row-parallel kernels already keep the device busy and the extra conversion round trip is not
+// worth paying. Reduction is never requested on this branch -- supported_by_codegen() only admits
+// add/multiply reduction on ROW_MAJOR input, so a TILE call here always carries reduction_mode == 0.
+bool scatter_tile_prefers_rm_strategy(const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& src_tensor);
+
 // Assembles the full cache-key/attributes struct for one scatter_codegen() call, branching on
 // input_tensor.layout() to fill either the TILE or the ROW_MAJOR geometry fields (the other side's
 // fields are zero) and computing the shared page map, value_kind and (for ROW_MAJOR) the frontier-
