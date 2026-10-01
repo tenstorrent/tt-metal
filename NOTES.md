@@ -1,22 +1,18 @@
-# t48 notes: all LTX-2.5 wins on one branch
-
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
-
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
-
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
-
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
+# t78 notes
+- Branch ttp/t78-conv3d-halo-only-input-for-ltx-vae-decod @f5b8175bc7b (pushed), based on t48 a613d669eef.
+- LTX_VAE_HALO_ONLY=1 (default off): LTXCausalConv3d calls ccl_manager.neighbor_pad_halo_only (Linear topology)
+  and conv3d(halo_buffer=..., padding=(pT,1,1), logical_h_mask/logical_w_mask, pad_offset_tensor). No neighbor_pad
+  interior copy, no W mask multiply. Only when H and W are both sharded.
+- conv3d: halo mode now accepts padding_mode="replicate" and clamps T (FOLD_TIME_PAD); H/W boundary still comes
+  from the halo buffer. neighbor_pad_halo does NOT mask; conv3d's mask check runs before the halo read, by global
+  coordinate, so halo sticks past logical_h/logical_w are zeroed.
+- CPU: models/tt_dit/tests/models/ltx/test_vae_ltx_halo_only_ref.py (13 pass, --noconftest): gather emulation equals
+  the default path's padded input exactly for 2x4/4x8 shapes, zeros/replicate/causal T pad, masked/unmasked; flag
+  default off; forward wiring. All ltx *_ref.py: 37 pass. Kernel not compiled (JIT on device).
+- Removed test_conv3d.py's rejects_replicate case (now supported); not run (device).
+- Next (device, not submitted): on blx03 build off-device:
+    setsid nohup bash tmp/blx03/setup78.sh > ~/fasth3/t78-setup.log 2>&1 &   # marker "SETUP78_DONE rc=0"
+  then one broker job (full 4x8 open + create_submesh(2,4)):
+    cd ~/fasth3/tt-metal && tmp/blx03/submit.sh 1500 bash /home/smarton/fasth3/t78/tmp/blx03/run78.sh
+  Read /var/tmp/fasth3/t78/run78.log: T78_CMP identical=True and AB min decode_s h0 vs h1 (baseline ~2.05 s).
+- Cleanup after the A/B: git -C ~/fasth3/tt-metal worktree remove --force ~/fasth3/t78; rm -rf /var/tmp/fasth3/t78/jit.
