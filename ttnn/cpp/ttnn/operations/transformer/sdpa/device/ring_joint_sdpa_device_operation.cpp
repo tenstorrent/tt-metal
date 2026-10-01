@@ -378,6 +378,18 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     validate_metadata_tensors(tensor_args);
 
+    // The sliding-window halo and the per-device slab checks below divide by the chunk sizes.
+    TT_FATAL(
+        args.get_q_chunk_size() > 0 && args.get_q_chunk_size() % tt::constants::TILE_WIDTH == 0,
+        "q_chunk_size must be a positive multiple of TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+        args.get_q_chunk_size(),
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        args.get_k_chunk_size() > 0 && args.get_k_chunk_size() % tt::constants::TILE_WIDTH == 0,
+        "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
+        args.get_k_chunk_size(),
+        tt::constants::TILE_WIDTH);
+
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),
         "RingJointSDPA sliding_window_size must be greater than zero when provided");
@@ -594,6 +606,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto B = q_shape[0];
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
+    TT_FATAL(NQH > 0 && NKH > 0, "Q and K num_heads must be greater than 0. Got Q: {}, K: {}", NQH, NKH);
     const auto N_local_q = q_shape[2];
     const auto N_local_kv = tensor_args.local_kv_seq_len();
     const auto gathered_buffer_n = k_shape[2];
@@ -621,8 +634,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         const uint32_t window_size = args.sliding_window_size.value();
         const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
         const bool supported_k_chunk = k_chunk_size == 128;
-        // These are the only ring sizes exercised by the current one-hop compact-halo deployment.
-        // Extend the test matrix before widening this allowlist.
+        // These are the only ring sizes the chunked sliding halo is tested on. Extend the test matrix
+        // (and SlidingQWorkPlan::max_halo_hops) before widening this allowlist.
         TT_FATAL(
             args.ring_size == 4 || args.ring_size == 8,
             "Chunked sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
@@ -681,13 +694,41 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             N_local_q % k_chunk_size == 0,
             "k_chunk_size must divide the per-device Q slab for chunked sliding attention");
+        // A halo wider than the per-device Q slab is delivered by several hops around the CP ring,
+        // one slab tail each (sliding_window_work_plan.hpp), and cannot span more than the ring.
+        const uint32_t halo_hops = ring_joint::chunked_sliding_halo_hop_count(
+            halo_tokens / tt::constants::TILE_HEIGHT, N_local_q / tt::constants::TILE_HEIGHT);
         TT_FATAL(
-            halo_tokens <= N_local_q,
-            "Chunked sliding halo {} (window {}) exceeds the per-device Q slab {}; wider windows need a multi-hop "
-            "halo",
+            halo_hops <= args.ring_size,
+            "Chunked sliding halo {} (window {}) needs {} hops over the per-device Q slab {}, more than the SP{} ring",
             halo_tokens,
             window_size,
-            N_local_q);
+            halo_hops,
+            N_local_q,
+            args.ring_size);
+        // The work plan returns an EMPTY plan past its fixed range count; reject that here instead
+        // of computing no attention.
+        TT_FATAL(
+            halo_hops <= ring_joint::SlidingQWorkPlan::max_halo_hops,
+            "Chunked sliding halo needs {} hops; at most {} are supported",
+            halo_hops,
+            ring_joint::SlidingQWorkPlan::max_halo_hops);
+        // A multi-hop halo lays out one block per hop for a single Q segment. Block-cyclic Q that wraps
+        // has two segments and needs a second halo slot, which the multi-hop layout does not support yet:
+        // reject a two-slot buffer (provisioned for wrapping Q) and a scalar request that wraps.
+        const bool scalar_q_wraps =
+            args.has_kv_pad_rotation() &&
+            ring_joint::chunked_q_wraps(args.kv_actual_isl.value(), args.logical_n, N_local_q, args.ring_size);
+        TT_FATAL(
+            halo_hops == 1 || (gathered_buffer_n < 2 * halo_tokens && !scalar_q_wraps),
+            "Chunked sliding halo {} (window {}) needs {} hops over the per-device Q slab {}; a multi-hop halo does "
+            "not support block-cyclic Q that wraps a slab (gathered rows {}, Q wraps: {})",
+            halo_tokens,
+            window_size,
+            halo_hops,
+            N_local_q,
+            gathered_buffer_n,
+            scalar_q_wraps);
     }
 
     if (args.circular_kv_cache) {
@@ -983,19 +1024,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             NKH,
             NVH);
     }
-
-    // Validate chunk sizes if program config is provided
-
-    TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
-        q_chunk_size,
-        tt::constants::TILE_WIDTH);
-    TT_FATAL(
-        k_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
-        k_chunk_size,
-        tt::constants::TILE_WIDTH);
 
     TT_FATAL(
         N_local_q % tt::constants::TILE_HEIGHT == 0,

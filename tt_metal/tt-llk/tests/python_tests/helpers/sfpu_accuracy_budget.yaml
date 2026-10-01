@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The accuracy contract each SFPU op declares. Read by helpers/sfpu_accuracy_budget.py,
+# which is the only thing that should parse it; see that module for what the fields mean
+# and how a key is matched.
+#
+# One row per (op, variant). A row's key fields are `out`, `approx`, `dest` and `arch`;
+# every one is optional, an omitted field matches any value, and the most specific
+# matching row wins. Two rows that match the same variant equally specifically are an
+# authoring error, not a tie-break, and the loader refuses them.
+#
+# The contract is `max_ulp` (+ optional `near_zero_atol`), or `metric: tolerance` with
+# optional `atol`/`rtol`. A row with neither is refused.
+#
+# `approx` and `dest` are quoted on purpose: YAML 1.1 reads a bare No/Yes as a boolean.
+# The loader accepts both spellings, but quote them so the file says what it means.
+#
+# The trailing comment on a row is the measurement the budget came from, taken on the
+# arch it names. A budget may only be *raised* by re-measuring and updating that comment
+# in the same change -- the whole point of the table is that no number here is a guess.
+#
+# Only declared tolerances live here so far. `max_ulp` is accepted and validated, but a
+# step budget is not enforced until the exhaustive sweep exists to measure one, so the
+# budgets are enrolled there rather than declared here against nothing.
+
+# Moved here from the test body: CUSTOM_TOLERANCES in test_eltwise_unary_sfpu, a coarse
+# 3-segment LUT carrying atol=0.13 so the sweep passes. The clearest argument for this
+# mechanism -- that number makes the test blind to a 10x regression anywhere else in the
+# domain, and equally blind to the improvement a retune would produce. The two share one
+# number because they share one cause, so a retune cannot move SigmoidAppx and leave
+# GeluAppx behind without the diff saying so.
+SigmoidAppx:
+  - &coarse_lut_tolerance {metric: tolerance, atol: 0.13, rtol: 0.05}
+
+GeluAppx:
+  - *coarse_lut_tolerance

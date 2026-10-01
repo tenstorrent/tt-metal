@@ -65,10 +65,43 @@ struct RingAttentionNeighborHaloConfig {
     uint32_t send_to_next_start_Ht;
     uint32_t send_to_next_count_Ht;
     uint32_t send_second_start_Ht = 0;
-    // A linear topology has no physical wrap link. The final device sends its
-    // predecessor tail back to device 0 over the backward fabric direction.
+    // A linear topology has no physical wrap link, so a hop whose destination wraps the ring travels
+    // backward instead. distance is the fabric hop count to the (nearest) receiver.
     bool send_backward = false;
-    uint32_t unicast_hops = 1;
+    uint32_t distance = 1;
+    // Which cyclic predecessor this exchange ships from: 1 = the immediate neighbour. A halo wider than
+    // one Q slab is covered by several exchanges, each shipping one slab tail (tail_tile_rows) into its
+    // own block of the compact buffer, starting at tile row dest_row_base.
+    uint32_t hop = 1;
+    uint32_t tail_tile_rows = 0;  // 0 = halo_tile_rows (one-hop halo)
+    uint32_t dest_row_base = 0;
+    // Non-empty for a line multicast over hops [hop, hop + hop_origin_rows.size()): the source tile row
+    // each hop ships.
+    std::vector<uint32_t> hop_origin_rows;
+    // Fabric link index this exchange starts from. A one-hop halo spreads over every link; with
+    // more hops, each hop uses one link and hops beyond the link count time-share (see below).
+    uint32_t link_base = 0;
+    // Every exchange delivers its per-link ready-increment to the hop-1 exchange's workers
+    // (rendezvous_noc[link]), and only that exchange waits and signals the SDPA: one signaller per
+    // semaphore, since concurrent Semaphore::up from two cores can lose an update. Each collecting worker
+    // expects one arrival per remote predecessor. Empty rendezvous_noc: each worker's own core.
+    uint32_t arrivals_expected = 1;
+    std::vector<CoreCoord> rendezvous_noc;
+    // A halo with more hops than fabric links time-shares a link. An ERISC exposes one worker
+    // sender channel per direction, and concurrent workers on it stall each other, but SEQUENTIAL
+    // reuse is the fabric's own protocol: close() persists the producer cursor and the next open()
+    // adopts it (edm_fabric_worker_adapters.hpp). So a later hop waits on this local semaphore,
+    // which its predecessor on the same link increments after closing its connection.
+    bool waits_for_predecessor = false;
+    bool signals_successor = false;
+    uint32_t chain_semaphore_id = 0;
+    uint32_t successor_noc_x = 0;
+    uint32_t successor_noc_y = 0;
+
+    bool multicast() const { return !hop_origin_rows.empty(); }
+    bool collects_arrivals() const { return hop == 1; }
+    bool has_rendezvous() const { return !rendezvous_noc.empty(); }
+    uint32_t tail_rows() const { return tail_tile_rows != 0 ? tail_tile_rows : halo_tile_rows; }
 
     // Metadata supplies the source tails and cache slot during trace replay.
     const ttnn::Tensor* slot_id = nullptr;
@@ -105,8 +138,7 @@ constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 constexpr uint32_t kValidPagesFieldOffset = 6;
 constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 2;
 constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 8;
-constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount =
-    kNeighborReaderTensorDescriptorFieldCount + 1;
+constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount = kNeighborReaderTensorDescriptorFieldCount + 1;
 constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborReaderInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborReaderInputBatchBaseFieldOffset = 4;
@@ -115,9 +147,14 @@ constexpr uint32_t kNeighborReaderSecondOriginFieldOffset = 6;
 constexpr uint32_t kNeighborReaderHaloPagesFieldOffset = 7;
 
 constexpr uint32_t kNeighborWriterRuntimeArgHeaderCount = 4;
-constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 4;
+constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 5;
 constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
+// First destination page this hop writes in the compact buffer (see sliding_window_work_plan.hpp).
+constexpr uint32_t kNeighborWriterOutputOriginPageFieldOffset = 4;
+// Multicast exchanges append [hop count, one source tile row per hop] after the tensor descriptors, then
+// (reader only) one tile width per input.
+constexpr uint32_t kNeighborMulticastBlockOriginsOffset = 1;
 
 constexpr uint32_t kRingDirectionCount = 2;
 

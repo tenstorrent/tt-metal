@@ -912,7 +912,7 @@ unrepresentable.
    hash (§3.3), without which a cache hit can reuse counts computed for a different grid. The formula alone
    is not sufficient; the hash is what makes it hold.
 2. **Sync mode is atomic per DFB, chosen at compile time** via `#if`, with
-   `DataMovementGen2Config::disable_dfb_implicit_sync_for_all` set consistently. Mixing double-counts the
+   `DataMovement2XXConfig::disable_dfb_implicit_sync_for_all` set consistently. Mixing double-counts the
    16-bit counter → `TILE_COUNTERS` fault, `mtval 0x1`. The existing fallback already passes
    `disable_dfb_implicit_sync_for_all = true`, so the A/B reference has no latent double-count.
 3. **Host `TT_FATAL`s — and two of the six v2 called "new" are not.** The platform already enforces the

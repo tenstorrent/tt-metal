@@ -6,7 +6,12 @@ from itertools import product
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    is_4row_arch,
+)
+from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
@@ -58,12 +63,6 @@ mathop_mapping = {
     ReduceDimension.Scalar: MathOperation.ReduceScalar,
 }
 
-MATH_FIDELITY_MODES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 
 
@@ -114,7 +113,7 @@ def reduce_input_dimensions():
     return [64, 64]
 
 
-def generate_pool_type_and_math_fidelity_combinations(*, is_perf=False):
+def generate_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
     def is_valid_combination(pool_type, math_fidelity):
         # Max pool only supports LoFi
         if pool_type == ReducePool.Max:
@@ -122,22 +121,19 @@ def generate_pool_type_and_math_fidelity_combinations(*, is_perf=False):
         # Sum and Average support all fidelities
         return True
 
-    if is_perf:
-        return [
-            combo
-            for combo in product(POOL_TYPES, [MathFidelity.LoFi])
-            if is_valid_combination(*combo)
-        ]
+    # MX inputs decode to Float16_b in the src registers, so LoFi is already full
+    # precision for them; get_valid_math_fidelities applies that cap.
+    fidelities = [MathFidelity.LoFi] if is_perf else get_valid_math_fidelities(formats)
 
     return [
         combo
-        for combo in product(POOL_TYPES, MATH_FIDELITY_MODES)
+        for combo in product(POOL_TYPES, fidelities)
         if is_valid_combination(*combo)
     ]
 
 
-def reduce_pool_type_and_math_fidelity_combinations(*, is_perf=False):
-    return generate_pool_type_and_math_fidelity_combinations(is_perf=is_perf)
+def reduce_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
+    return generate_pool_type_and_math_fidelity_combinations(formats, is_perf=is_perf)
 
 
 @pytest.mark.quasar
@@ -146,8 +142,8 @@ def reduce_pool_type_and_math_fidelity_combinations(*, is_perf=False):
     tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=False),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
-        is_perf=False
+    pool_type_and_math_fidelity=lambda formats: reduce_pool_type_and_math_fidelity_combinations(
+        formats, is_perf=False
     ),
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
     implied_math_format=lambda formats: reduce_implied_math_formats(
@@ -327,8 +323,8 @@ _ARCH = get_chip_architecture()
 # the FP4 zf mux while srca_fmt_spec is still MXFP4_2x -- producing all-zero Dest.
 @pytest.mark.quasar
 @pytest.mark.skipif(
-    _ARCH != ChipArchitecture.QUASAR,
-    reason="MxFp4_2x GAPOOL reduce is op_mmul-family-only and exists on Quasar. Architecture derivations don't support it.",
+    _ARCH != ChipArchitecture.QUASAR or is_4row_arch(),
+    reason="MxFp4_2x GAPOOL reduce is not implemented on this architecture",
 )
 @parametrize(
     register_format_hint=[DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B],
@@ -347,7 +343,7 @@ _ARCH = get_chip_architecture()
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
-    math_fidelity=MATH_FIDELITY_MODES,
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],

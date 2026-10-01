@@ -278,7 +278,7 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 
 #pragma GCC unroll 0
     for (int face = 0; face < 2; face++) {
-        ckernel::sfpu::calculate_recip_first_column</*legacy_compat=*/true, DST_ACCUM_MODE>();
+        ckernel::sfpu::calculate_recip_first_column<DST_ACCUM_MODE>();
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
@@ -767,8 +767,8 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 add_binary_tile(0, 1, 0);
             }
 #ifdef ARCH_BLACKHOLE
-            recip_tile_init<false>();
-            MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
+            recip_tile_init();
+            MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
 #else
             recip_tile_init();
             MATH((recip_tile_first_column_wh_idst0_direct()));
@@ -2436,6 +2436,10 @@ void sdpa_ring_v2(
         sdpa_dfb_pop_front_out_of_line(q_prev_norm.max, Sq_chunk_t);
         if (q_per_core > 1) {
             DataflowBuffer(dfb_signal).reserve_back(1);
+            // Quasar pack-side drain: reserve_back->push_back needs a real PACR between them (TEN-4746),
+            // else the PUSH credit can race past the reserve's WAIT_FREE. dummy_pack issues a PACR_STRIDE
+            // no-write; no-op on WH/BH.
+            dummy_pack(dfb_signal);
             sdpa_dfb_push_back_out_of_line(dfb_signal, 1);
         }
     };
@@ -2610,6 +2614,10 @@ void sdpa_ring_v2(
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
             if (is_last_k && q_per_core > 1) {
                 DataflowBuffer(dfb_signal).reserve_back(1);
+                // Quasar pack-side drain: reserve_back->push_back needs a real PACR between them (TEN-4746),
+                // else the PUSH credit can race past the reserve's WAIT_FREE. dummy_pack issues a PACR_STRIDE
+                // no-write; no-op on WH/BH.
+                dummy_pack(dfb_signal);
                 sdpa_dfb_push_back_out_of_line(dfb_signal, 1);
             }
 
