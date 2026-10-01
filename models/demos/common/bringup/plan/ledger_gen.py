@@ -229,6 +229,19 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         approval="plan",
     )
 
+    def served_format() -> dict:
+        """F58: with the served KV dtype in the spec (serving.kv_dtype, the owner's answer to SC.1), every ladder
+        rung must run on it: one cache format for the ladder, the contract and serving."""
+        bits = {"bf16": 16, "bfloat16": 16, "bfp8": 8, "bfloat8_b": 8, "fp32": 32}.get(
+            str(spec.get("serving.kv_dtype", ""))
+        )
+        if not bits:
+            return {}
+        names = set(spec.get("state.tensors") or []) | {
+            n for v in (spec.get("state.by_block_type") or {}).values() for n in v
+        }
+        return {f"state_bits_{n}": f"== {bits}" for n in sorted(names)}
+
     def contract_cmds(gate: str) -> str:
         """The serving contract tests a step's gate runs too (contract_tests.yaml, written by SC.1)."""
         return "".join(f" && {SAFE} --no-precompile {t['test']}" for t in SV.tests_for(spec, gate))
@@ -300,7 +313,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     prev = None
     for r in ladder:
         tid = f"L.{r['name']}"
-        m = {"pcc_layer_L*": thr(spec, "layer"), "pcc_state_min": thr(spec, "state")}
+        m = {"pcc_layer_L*": thr(spec, "layer"), "pcc_state_min": thr(spec, "state")} | served_format()
         layers = r.get("layers") or spec.layers()
         if max(layers) == spec.num_layers - 1:
             m.update(pcc_final_hidden=thr(spec, "final_hidden"), top5_overlap=thr(spec, "top5"))

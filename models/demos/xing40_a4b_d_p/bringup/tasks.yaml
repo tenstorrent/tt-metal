@@ -2045,12 +2045,15 @@ tasks:
       pcc_layer_L*: '>= 0.97'
       pcc_final_hidden: '>= 0.97'
       top5_overlap: '>= 0.9'
+      state_bits_kv_latent: == 8
   device: true
   paths: *id005
   brief:
-    details: K.2 made the served cache bfp8_b TILE (tt/runners/kv_contract.py cache_dtype()) but the bring-up harness (hooks.py,
+    details: 'K.2 made the served cache bfp8_b TILE (tt/runners/kv_contract.py cache_dtype()) but the bring-up harness (hooks.py,
       TtMlaAttention geometry caches) still builds a bf16 cache, so the accuracy ladder no longer measures what is served.
       Make the harness build and use the cache in cache_dtype() (same dtype and storage as the runtime), keep XING_KV_CACHE_DTYPE=bf16
       as the switch back. Then the s56320 ladder must pass its thresholds on the bfp8 cache, and every contract test must
       still pass. Do not change thresholds or tests. Report the s56320 numbers (min layer PCC, final hidden, logits, top1,
-      top5) next to the bf16 ones in BREADCRUMBS.
+      top5) next to the bf16 ones in BREADCRUMBS. The ladder now records the format it ran on (state_bits_<name>, from the
+      optional hook state.formats() -> {name: ttnn dtype}); add that hook to the device state, and the gate requires state_bits_kv_latent
+      == 8.'
