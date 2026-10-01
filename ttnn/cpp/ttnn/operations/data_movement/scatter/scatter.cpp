@@ -420,7 +420,7 @@ Tensor scatter_codegen_dispatch(
         final_memory_config,
         sub_core_grid);
     Tensor output = ttnn::prim::scatter_codegen(
-        std::move(params), transformed_input_tensor, transformed_index_tensor, transformed_source_tensor, std::nullopt);
+        params, transformed_input_tensor, transformed_index_tensor, transformed_source_tensor, std::nullopt);
     return post_scatter_transform_tensor(
         output,
         normalized_dim,

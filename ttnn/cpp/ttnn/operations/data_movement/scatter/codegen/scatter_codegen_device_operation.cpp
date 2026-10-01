@@ -83,7 +83,7 @@ ttsl::hash::hash_t ScatterCodegenDeviceOperation::compute_program_hash(
         // Mirrors ScatterCodegenProgramFactoryRowMajor/Bf16ReduceRowMajor's own fixed_bytes exactly, so
         // this cache key never diverges from the chunk depth the matching create_descriptor() call
         // would bake into the program.
-        const uint64_t input_page_bytes = in_t.buffer()->aligned_page_size();
+        const uint64_t input_page_bytes = scatter_rm_stick_page_bytes(in_t, attributes.input_stick_elems);
         const uint64_t output_page_bytes =
             scatter_output_aligned_page_size(in_t, attributes.output_mem_config, tensor_args.output_tensor);
         const uint64_t fixed_bytes = is_bf16_reduce_row_major
@@ -190,13 +190,13 @@ ScatterCodegenDeviceOperation::create_op_performance_model(
 }
 
 Tensor scatter_codegen(
-    ScatterCodegenParams params,
+    const ScatterCodegenParams& params,
     const Tensor& input_tensor,
     const Tensor& index_tensor,
     const Tensor& src_tensor,
     const std::optional<Tensor>& output_tensor) {
     return ttnn::device_operation::launch<ScatterCodegenDeviceOperation>(
-        std::move(params), ScatterCodegenInputs{input_tensor, index_tensor, src_tensor, output_tensor});
+        params, ScatterCodegenInputs{input_tensor, index_tensor, src_tensor, output_tensor});
 }
 
 }  // namespace ttnn::prim
