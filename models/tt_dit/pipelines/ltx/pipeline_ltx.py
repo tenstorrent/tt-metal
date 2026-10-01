@@ -1449,6 +1449,8 @@ class LTXPipeline:
         with Watchdog("vae decode"):
             if output_type == "yuv" and getattr(self.vae_decoder, "trace_yuv_output", False) and self.dynamic_load:
                 raise ValueError("LTX_TRACE_YUV_OUTPUT requires resident weights (dynamic_load=False)")
+            if getattr(self.vae_decoder, "trace_decode", False) and self.dynamic_load:
+                raise ValueError("LTX_VIDEO_VAE_TRACE requires resident weights (dynamic_load=False)")
             log_dram(self.mesh_device, f"before video decode ({type(self.vae_decoder).__name__})")
             video = self.vae_decoder(latent_spatial, output_type=output_type)
             log_dram(self.mesh_device, f"after video decode ({type(self.vae_decoder).__name__})")
