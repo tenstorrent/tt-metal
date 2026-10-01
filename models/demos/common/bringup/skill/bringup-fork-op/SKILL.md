@@ -71,6 +71,9 @@ test layernorm), so pick a reasonable set, not an exhaustive one:
    what each entry covers. For reference, `ttnn.bringup.rms_norm` carries 4 entries (263 tests: the sanity-tier
    interleaved and sharded files, the nightly file, and the rms cases of the nightly ULP file). Recording took about
    6 minutes in all; a check takes about 1 minute.
+   Give an entry whose tests open a mesh its `mesh: [rows, cols]` (otherwise the first `RxC` of its `k:` filter, else
+   1x1): `fork_source` runs each entry with only the cards that form that mesh on the current box visible
+   (`testing/cards.py`), so a selection recorded on one box runs on another. Do not write card ids anywhere.
 4. Complete the `swap:` map. Every Python name the tests reach, including enum types they pass, points at the fork.
    If the tests also hand that enum to original ops, keep it and convert at the fork op instead: a swap value
    `{op: ttnn.bringup.<op>, convert_enums: {ttnn.<Enum>: ttnn.bringup.<Enum>}}` maps each original-enum argument to
