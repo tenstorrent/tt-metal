@@ -84,10 +84,12 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
             grid.y);
         return;
     }
-    // Fused geometry: NP producers + NV receivers per head. Receivers of a head form a 1xNV row
-    // rectangle (the multicast target), so the grid must hold BH such rectangles: BH <= (grid.x / NV) *
-    // grid.y. Producers have no placement constraint. NP / NV come from ChunkGdnFusedProgramConfig::
-    // num_producers / num_receivers, or from the cost model when unset (chunk_gdn below).
+    // Fused geometry: NV receivers per head and NP producers per head (placements 0/1) or a pool of NP
+    // (placement 2). A head's receivers form a dense rectangle (the multicast target). Placement 0 needs
+    // BH 1xNV row rectangles (BH <= (grid.x / NV) * grid.y) and puts the producers anywhere; placement 1
+    // needs a row-local layout (fused_row_local_feasible), placement 2 a pool that fits
+    // (fused_pool_feasible). The fields come from ChunkGdnFusedProgramConfig, or from the cost model when
+    // unset (chunk_gdn below).
     TT_FATAL(attrs.np >= 1, "chunk_gdn_fused: np must be >= 1 (got {})", attrs.np);
     TT_FATAL(attrs.nv >= 1, "chunk_gdn_fused: nv must be >= 1 (got {})", attrs.nv);
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
@@ -214,6 +216,7 @@ constexpr uint32_t kHandoffTiles = 19;       // fp32 tiles per hand-off slot (C=
 constexpr uint32_t kProducerPrepTiles = 48;  // the producer's prep CBs, in fp32-tile units
 constexpr uint32_t kTileBytes = 4096;
 constexpr uint32_t kL1BudgetBytes = 1400u * 1024u;  // Wormhole's 1464 KB less the system map and the small region
+constexpr uint32_t kNvCandidates[] = {1, 2, 4, 8};  // receivers per head the model considers (those dividing Vt)
 // Pipeline fill (first scan step done): 25.0 + 0.88*BH, fitted to BH=4..32.
 constexpr float fill_us(uint32_t BH) { return 25.0f + 0.88f * BH; }
 // Producer item. Load-independent since the solve; the argument stays for load-dependent variants.
@@ -478,7 +481,7 @@ FusedGeometryChoice choose_fused_geometry(
     };
     auto np_ok = [&](uint32_t np) { return fixed_np == 0 || np == std::min(fixed_np, NC); };
     if (candidates != FusedCandidates::Pool) {
-        for (uint32_t nv : {1u, 2u, 4u, 8u}) {
+        for (uint32_t nv : kNvCandidates) {
             if (!nv_ok(nv)) {
                 continue;
             }
@@ -493,7 +496,7 @@ FusedGeometryChoice choose_fused_geometry(
             }
         }
         if (!have) {  // no row-local layout: the row-major fallback, penalised for its shared links
-            for (uint32_t nv : {1u, 2u, 4u, 8u}) {
+            for (uint32_t nv : kNvCandidates) {
                 if (!nv_ok(nv) || nv > grid_x || BH > (grid_x / nv) * grid_y) {
                     continue;
                 }
@@ -507,7 +510,7 @@ FusedGeometryChoice choose_fused_geometry(
     }
     if (candidates != FusedCandidates::PerHead) {
         // Producer pool: P = every core the receivers leave (or the pinned size), at most one per item.
-        for (uint32_t nv : {1u, 2u, 4u}) {
+        for (uint32_t nv : kNvCandidates) {
             if (!nv_ok(nv) || BH * nv >= grid_x * grid_y) {
                 continue;
             }
@@ -620,6 +623,11 @@ std::vector<Tensor> chunk_gdn(
             np_pin,
             pool);
         attrs.nv = nv_pin ? nv_pin : choice.nv;
+        const auto& share = fused_cfg->pool_extra_share;
+        TT_FATAL(
+            !share.has_value() || (*share >= 0.0f && *share <= 1.0f),
+            "chunk_gdn_fused: pool_extra_share must be in [0, 1] (got {})",
+            share.value_or(0.0f));
         if (pool) {
             // The pool size, at most one producer per item; its home producers per head come from the
             // layout (validated), the extras' share from the config or the balanced NX / P.
@@ -628,11 +636,6 @@ std::vector<Tensor> chunk_gdn(
             const uint32_t nph = fused_pool_home_producers(grid0.x, grid0.y, BH, attrs.nv, attrs.np);
             const uint32_t nx = nph >= 1 ? attrs.np - BH * nph : 0;
             if (nx >= 1) {
-                const auto& share = fused_cfg->pool_extra_share;
-                TT_FATAL(
-                    !share.has_value() || (*share >= 0.0f && *share <= 1.0f),
-                    "chunk_gdn_fused: pool_extra_share must be in [0, 1] (got {})",
-                    share.value_or(0.0f));
                 attrs.pool_extra_num = share.has_value() ? static_cast<uint32_t>(std::lround(*share * attrs.np)) : nx;
                 attrs.pool_extra_den = attrs.np;
             }

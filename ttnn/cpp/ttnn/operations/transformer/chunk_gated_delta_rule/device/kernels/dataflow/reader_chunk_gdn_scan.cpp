@@ -110,8 +110,9 @@ void kernel_main() {
 #if defined(GDN_FUSED_RECEIVER)
     const uint32_t s0_addr = get_arg_val<uint32_t>(3);
     // The per-chunk credit goes to the producer the shared map assigns chunk c of this head — a
-    // producer sends chunk c only once every receiver of the head has reserved chunk c's slots, so at
-    // most one hand-off per receiver is in flight and VALIDs cannot interleave.
+    // producer sends chunk c only once every receiver of the head has reserved chunk c's slots. A
+    // receiver keeps up to NBUF-1 hand-offs in flight, each signalled on its own slot's VALID flag, so
+    // the VALIDs of different chunks cannot interleave.
     // N_INIT = init-barrier increments to expect before the first credit: the distinct producers that
     // serve this head. kickoff_wait_cycles holds the initial-state read back, out of chunk 0's
     // input-read burst. Map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp. Common args:

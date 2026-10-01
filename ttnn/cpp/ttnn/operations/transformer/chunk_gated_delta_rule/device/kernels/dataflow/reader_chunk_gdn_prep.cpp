@@ -61,9 +61,7 @@ void kernel_main() {
     const uint32_t NC = get_arg_val<uint32_t>(11);
     const uint32_t HV = get_arg_val<uint32_t>(12);
     const uint32_t Hk = get_arg_val<uint32_t>(13);
-    // Cycles to wait before the first read. The fused factory staggers its producers with it (a producer whose
-    // first chunk is c waits c steps): chunk c is not needed before chunk 0 plus c receiver steps, and a smaller
-    // kickoff burst gets chunk 0's reads served sooner. 0 for the phased prep.
+    // Cycles to wait before the first read: the fused factory's kickoff stagger, 0 for the phased prep.
     const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(15);
 #if defined(GDN_FUSED_PRODUCER)
     // The producer map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp.
