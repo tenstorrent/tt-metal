@@ -568,6 +568,115 @@ class TtVoxtralGPT:
             return ttnn.to_torch(x).float().reshape(1, 1, DIM)
         return ttnn.to_torch(x).float().reshape(1, Sp, DIM)[:, :S]
 
+    # ----------------------------------------------------------------------------
+    # BATCHED PREFILL -- a group of users in one pass (mixed voices and lengths)
+    # ----------------------------------------------------------------------------
+    @staticmethod
+    def batched_prefill_fits(B, Sp, limit_bytes=1 << 30):
+        """Keep a group's attention working set (q/k/v heads [B,32,Sp,128] bf16 and the fused sdpa's
+        scratch) under `limit_bytes`; longer prompts take the per-user path."""
+        return B * N_HEADS * Sp * HEAD_DIM * 2 * 4 <= limit_bytes
+
+    def _layer_batched(self, x, w, B, S, cos, sin, first_row, cache=None):
+        """x [1,B*S,3072] (a group of B users stacked) -> same. Fused causal sdpa over the padded
+        prompts (a pad row only ever attends to real rows before it). Writes the group's K/V into
+        cache rows [first_row, first_row+B) with one concat + copy per tensor; rows above S keep what
+        they held (decode overwrites a row before reading it)."""
+        M = B * S
+        cc = COMPUTE_CONFIG
+        h = self._norm(x, w["an"])
+        qkv = ttnn.linear(h, w["wqkv"], compute_kernel_config=cc)
+        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, [B, 1, S, _QKV_WIDTH]),
+            num_heads=N_HEADS,
+            num_kv_heads=N_KV_HEADS,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # RoPE with the users folded into the heads axis, so the [1,1,S,hd] tables broadcast as on
+        # the batch-1 path (a free view: the last two dims are unchanged).
+        qh = ttnn.reshape(
+            self._rope(ttnn.reshape(qh, [1, B * N_HEADS, S, HEAD_DIM]), cos, sin), [B, N_HEADS, S, HEAD_DIM]
+        )
+        kh = ttnn.reshape(
+            self._rope(ttnn.reshape(kh, [1, B * N_KV_HEADS, S, HEAD_DIM]), cos, sin), [B, N_KV_HEADS, S, HEAD_DIM]
+        )
+        if cache is not None:
+            Bc, L = self.max_batch, self.max_seq_len
+            for t, c in ((kh, cache[0]), (vh, cache[1])):
+                parts = []
+                if first_row > 0:
+                    parts.append(ttnn.slice(c, [0, 0, 0, 0], [first_row, N_KV_HEADS, L, HEAD_DIM]))
+                if S < L:
+                    tail = ttnn.slice(c, [first_row, 0, S, 0], [first_row + B, N_KV_HEADS, L, HEAD_DIM])
+                    parts.append(ttnn.concat([t, tail], dim=2))
+                    ttnn.deallocate(tail)
+                else:
+                    parts.append(t)
+                if first_row + B < Bc:
+                    parts.append(ttnn.slice(c, [first_row + B, 0, 0, 0], [Bc, N_KV_HEADS, L, HEAD_DIM]))
+                full = ttnn.concat(parts, dim=0) if len(parts) > 1 else parts[0]
+                ttnn.copy(full, c)
+                for q in parts + [full]:
+                    if q is not t and q is not c:
+                        ttnn.deallocate(q)
+        a = ttnn.transformer.scaled_dot_product_attention(qh, kh, vh, is_causal=True, compute_kernel_config=cc)
+        a = ttnn.reshape(ttnn.experimental.nlp_concat_heads(a), [1, M, Q_WIDTH])
+        x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=cc))
+        return self._mlp(x, self._norm(x, w["fn"]), w, ttnn.DRAM_MEMORY_CONFIG)
+
+    @torch.no_grad()
+    def prefill_batched(self, embeds_list, first_row=0):
+        """[torch [1,S_b,3072]] (a group of B <= max_batch users) -> hidden of each user's LAST
+        position, torch fp32 [B,3072], with KV-cache rows first_row..first_row+B-1 filled. One pass
+        for the group: prompts right-padded to a common tile multiple, causal attention keeps real
+        positions from seeing the pads, the pads' K/V land above each user's length where decode
+        overwrites them before reading. Mixed voices and lengths. Row-equivalent to
+        prefill(embeds[b], last_only=True, user=first_row+b) (same ops, batched)."""
+        B = len(embeds_list)
+        if not 1 <= B <= self.max_batch - first_row:
+            raise ValueError(f"group of {B} users does not fit rows {first_row}.. of max_batch={self.max_batch}")
+        lens = [int(e.shape[1]) for e in embeds_list]
+        Sp = -(-max(lens) // self.PREFILL_GROUP_MULTIPLE) * self.PREFILL_GROUP_MULTIPLE
+        if self.caches and Sp > self.max_seq_len:
+            raise ValueError(f"prompt pads to {Sp} but the KV cache holds {self.max_seq_len}")
+        xh = torch.zeros(B, Sp, DIM)
+        for b, e in enumerate(embeds_list):
+            xh[b, : lens[b]] = e.reshape(lens[b], DIM)
+        cosb, sinb = rope_tables(Sp)
+        up = lambda t, d=None: ttnn.from_torch(
+            t.contiguous(), dtype=d or self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+        cos = up(cosb.reshape(1, 1, Sp, HEAD_DIM))
+        sin = up(sinb.reshape(1, 1, Sp, HEAD_DIM))
+        x = up(xh.reshape(1, B * Sp, DIM))
+        for i, w in enumerate(self.layers):
+            x = self._layer_batched(x, w, B, Sp, cos, sin, first_row, self.caches[i] if self.caches else None)
+        x = ttnn.reshape(x, [B, Sp, DIM])
+        rows = [ttnn.slice(x, [b, lens[b] - 1, 0], [b + 1, lens[b], DIM]) for b in range(B)]
+        h = ttnn.concat(rows, dim=0) if B > 1 else rows[0]  # [B,1,3072]
+        h = ttnn.rms_norm(h, weight=self.norm, epsilon=NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
+        return ttnn.to_torch(h).float().reshape(B, DIM)
+
+    PREFILL_GROUP_MULTIPLE = 128  # a prompt's padded length is its own bucket, not the batch's
+
+    @staticmethod
+    def prefill_groups(lens):
+        """Users sorted by prompt length and grouped by length bucket (128-token multiples), each
+        group prefilled in one pass padded to its bucket. The padded length is a property of the
+        request, not of the batch, so two identical prompts in one batch land in the same group and
+        get identical results, and a request's prefill does not change with the batch's other prompts
+        (up to matmul blocking, which can vary with the group size). -> (order, bounds): user indices
+        sorted by length, group boundaries in that order."""
+        m = TtVoxtralGPT.PREFILL_GROUP_MULTIPLE
+        order = sorted(range(len(lens)), key=lambda i: lens[i])
+        bounds = [0]
+        for k in range(1, len(order)):
+            if -(-lens[order[k]] // m) != -(-lens[order[k - 1]] // m):
+                bounds.append(k)
+        bounds.append(len(order))
+        return order, bounds
+
     def prefill_last(self, embeds):
         """[1,P,3072] -> hidden of the LAST position [1,1,3072]. The pipeline's entry point; it is
         all the flow model ever sees."""

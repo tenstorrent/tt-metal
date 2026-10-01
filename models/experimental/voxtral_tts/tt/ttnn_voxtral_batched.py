@@ -45,6 +45,7 @@ from models.experimental.voxtral_tts.reference.voxtral_paths import CKPT_NAME, r
 from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flowmod
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_device_loop import DeviceFrameLoop
+from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import TtVoxtralFlow
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TILE, TtVoxtralGPT
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (
@@ -59,6 +60,8 @@ PER_BATCH_TRACE = os.environ.get("VOXTRAL_TRACE_PER_BATCH", "0") == "1"
 # replay per frame, no host work between frames). VOXTRAL_DEVICE_LOOP=0 restores the host loop.
 DEVICE_LOOP = os.environ.get("VOXTRAL_DEVICE_LOOP", "1") != "0"
 CHECK_EVERY = int(os.environ.get("VOXTRAL_STOP_CHECK_EVERY", "8"))
+# One-pass prefill for all users with 2D-multicast matmul configs (VOXTRAL_BATCHED_PREFILL=0: per user).
+BATCHED_PREFILL = os.environ.get("VOXTRAL_BATCHED_PREFILL", "1") != "0"
 
 
 class TtVoxtralBatchedPipeline:
@@ -82,6 +85,7 @@ class TtVoxtralBatchedPipeline:
             self.codec = TtVoxtralCodecDecoder(mesh_device, ckpt_path=ckpt)
             self.loop = None
             self.device_loop = DEVICE_LOOP
+            self.batched_prefill = BATCHED_PREFILL
             if DEVICE_LOOP:
                 self.loop = DeviceFrameLoop(
                     mesh_device,
@@ -239,6 +243,17 @@ class TtVoxtralBatchedPipeline:
         for sp in shapes:
             bb.prefill(torch.zeros(1, sp, DIM), last_only=True, user=0)
         emit(f"[batched] warmup: prefill {len(shapes)} shapes in {time.perf_counter() - t0:.1f}s")
+        if self.batched_prefill and B > 1:
+            t0 = time.perf_counter()
+            gm = gpt.TtVoxtralGPT.PREFILL_GROUP_MULTIPLE
+            sizes = sorted(
+                {B, B // 2, B // 4} - {0}
+            )  # common group sizes; other (users, length) shapes compile on first use
+            for n_users in sizes:
+                for sp in range(gm, 513, gm):  # length buckets up to 512 tokens
+                    if bb.batched_prefill_fits(n_users, sp):
+                        bb.prefill_batched([torch.zeros(1, sp, DIM)] * n_users, first_row=B - n_users)
+            emit(f"[batched] warmup: one-pass prefill shapes in {time.perf_counter() - t0:.1f}s")
         t0 = time.perf_counter()
         self.flow(torch.zeros(B, DIM), x_0=torch.zeros(B, N_ACOUSTIC_CODEBOOK))  # eager flow at B (2B rows)
         bb.step_batched(torch.zeros(1, B, DIM), torch.full((B,), step, dtype=torch.int32))
@@ -350,6 +365,14 @@ class TtVoxtralBatchedPipeline:
 
         t0 = time.perf_counter()
         embeds = [frontend.build_prompt_embeds(t, v, self.wb, model_dir=self.model_dir) for t, v, _ in reqs]
+        # Cache rows follow prompt length (shortest first) so the one-pass prefill can pad in groups;
+        # `row_of[i]` is the row of request i, outputs are put back in request order at the end.
+        order, bounds = gpt.TtVoxtralGPT.prefill_groups([e.shape[1] for e in embeds])
+        row_of = [0] * B
+        for row, i in enumerate(order):
+            row_of[i] = row
+        reqs = [reqs[i] for i in order]
+        embeds = [embeds[i] for i in order]
         lens = torch.tensor([e.shape[1] for e in embeds], dtype=torch.int32)
         caps = []
         for (text, _, _), P in zip(reqs, lens.tolist()):
@@ -358,7 +381,13 @@ class TtVoxtralBatchedPipeline:
                 raise ValueError(f"a {P}-token prompt leaves no room for audio in max_seq_len={bb.max_seq_len}")
             caps.append(min(frame_budget(text) if max_frames is None else int(max_frames), room))
         caps = torch.tensor(caps, dtype=torch.int32)
-        h0 = torch.cat([bb.prefill(embeds[b], last_only=True, user=b) for b in range(B)], dim=1)[0]  # [B,3072]
+        groups = [(bounds[g], bounds[g + 1]) for g in range(len(bounds) - 1)]
+        gm = gpt.TtVoxtralGPT.PREFILL_GROUP_MULTIPLE
+        fits = all(bb.batched_prefill_fits(r1 - r0, -(-int(lens[r1 - 1]) // gm) * gm) for r0, r1 in groups)
+        if self.batched_prefill and B > 1 and fits:
+            h0 = torch.cat([bb.prefill_batched(embeds[r0:r1], first_row=r0) for r0, r1 in groups], dim=0)  # [B,3072]
+        else:
+            h0 = torch.cat([bb.prefill(embeds[b], last_only=True, user=b) for b in range(B)], dim=1)[0]  # [B,3072]
         t_prefill = time.perf_counter() - t0
 
         F = int(caps.max())
@@ -388,6 +417,8 @@ class TtVoxtralBatchedPipeline:
             finally:
                 if PER_BATCH_TRACE or not kept:
                     self._trace_release()
+            frames = [frames[row_of[i]] for i in range(B)]
+            caps = caps[torch.tensor(row_of)]
             return self._finish(frames, steps, t_prefill, time.perf_counter() - t0, caps, n, traced, kept, B, True)
         # Frame 0 from the prefill hidden, eager (TtVoxtralPipeline does the same).
         codes = self.flow(h0, cfg_alpha=cfg_alpha, n_steps=n_steps, x_0=x0[0])
@@ -416,6 +447,8 @@ class TtVoxtralBatchedPipeline:
         finally:
             if PER_BATCH_TRACE or not kept:
                 self._trace_release()
+        frames = [frames[row_of[i]] for i in range(B)]
+        caps = caps[torch.tensor(row_of)]
         return self._finish(frames, steps, t_prefill, time.perf_counter() - t0, caps, n, traced, kept, B, False)
 
     def _finish(self, frames, steps, t_prefill, t_decode, caps, n, traced, kept, B, device_loop):
