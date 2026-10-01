@@ -267,7 +267,9 @@ W_MCAST_PLACEHOLDER_CT = [0, SEM_W_READY, 0xFFFFFFFF, 0, 0x2, 0]  # inactive Mca
 # payload for ablation runs (outputs are then garbage).
 def _kernel_defines():
     defines = []
-    for item in os.environ.get("MHC_PRE_KERNEL_DEFINES", "").split(";"):
+    for item in os.environ.get("MHC_PRE_KERNEL_DEFINES", "").split(
+        ";"
+    ):  # diagnostic: perf/measurement knob, same result
         if item.strip():
             name, _, value = item.partition("=")
             defines.append((name.strip(), value.strip() or "1"))
