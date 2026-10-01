@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/dataflow/semaphore_binding_token.h"  // SemScope + semaphore_detail::always_false
 #include "core_config.h"
@@ -46,11 +47,10 @@
 // Design rationale and measurements: PR #56189.
 //
 // Quasar differences (primitives in semaphore_detail::hw below):
-//  - The Sync Unit applies back-pressure (hardware-confirmed, default chicken bit): up() stalls at Max until
-//    a SEMGET makes room, and down() stalls at 0 until a SEMPOST arrives, holding back the thread's later
-//    instructions (PACR/UNPACR included). Nothing is dropped, unlike Blackhole, so a count mismatch hangs
-//    instead of losing credits. This keeps the count right but cannot replace either wait: it happens after
-//    the slot access.
+//  - The Sync Unit applies back-pressure: up() stalls at Max until a SEMGET makes room, and down() stalls
+//    at 0 until a SEMPOST arrives, holding back the thread's later instructions (PACR/UNPACR included).
+//    Nothing is dropped, unlike Blackhole, so a count mismatch hangs instead of losing credits. This
+//    keeps the count right but cannot replace either wait: it happens after the slot access.
 //  - settle() is a CSR poll of the Sync busy bit (wait_sync_idle()) instead of tensix_sync.
 
 // The compute semaphore's Max: host-baked from SemaphoreAdvancedOptions::max_value when set, else the
@@ -127,8 +127,7 @@ __attribute__((always_inline)) inline void wait_on_max(std::uint8_t idx) {
     _llk_sync_wait_<kBlock, ckernel::p_stall::STALL_ON_MAX>(idx);
 }
 __attribute__((always_inline)) inline void init(std::uint8_t idx, std::uint8_t value) {
-    TTI_STALLWAIT(ckernel::p_stall::STALL_SYNC, kIdle2, kIdle1, kIdle0);
-    _llk_sync_init_(idx, kComputeSemaphoreMax, value);
+    ckernel::trisc::t6_semaphore_init<kIdle0, kIdle1, kIdle2>(idx, value, kComputeSemaphoreMax);
 }
 // CSR poll of the Sync busy bit: clear once this thread's SEMPOST/SEMGET (queued or in flight) retired.
 __attribute__((always_inline)) inline void settle() { ckernel::wait_sync_idle(); }

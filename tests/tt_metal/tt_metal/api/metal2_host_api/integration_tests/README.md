@@ -16,5 +16,6 @@ Put a test here only if a mock device cannot cover it. Put it elsewhere when:
 | `kernel_args_loopbacks.cpp` | Kernel arguments: named args, varargs, TT_KERNEL kernels and CRTA sections |
 | `scratchpad.cpp` | Scratchpads under slow dispatch |
 | `scratchpad_fast_dispatch.cpp` | Scratchpads under fast dispatch |
+| `compute_semaphore.cpp` | Compute-kernel semaphores (Blackhole) |
 | `llk_operand_mul.cpp` | LLK operands from a DFB, a LocalTensorAccessor and a Scratchpad (Blackhole) |
 | `mesh_workload_factories.cpp` | `MakeMeshWorkloadFromSpec(s)` |

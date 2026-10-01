@@ -7,12 +7,11 @@
 // selected by the compile-time arg `pattern`:
 //
 //   A  single-thread up/down/wait/wait_min/set/value self-check (run once per thread via thread_sel)
-//   D  real LLKOperand datacopy, compute only (no data-movement kernels): the host writes the input
-//      tiles straight into L1; per tile, round 1 copies in[i] -> DST -> mid[slot] (PACK up()s), round 2
-//      copies mid[slot] -> DST -> out[i] (UNPACK wait_min()s before reading, down()s after). The
-//      semaphore is the only thing ordering PACK's write of `mid` before UNPACK's read of it. PACK gates
-//      each pack with wait_not_full() (capacity = kDepth). Host checks out == in bit for bit. `nosync`=1
-//      drops wait_not_full/wait_min/down (and up on Quasar; negative control: must corrupt).
+//   D  two-hop datacopy through a kDepth-slot L1 ring `mid`: in[i] -> mid[slot] (PACK wait_not_full(), up()),
+//      then mid[slot] -> out[i] (UNPACK wait_min() before the read, down() after). The semaphore alone orders
+//      PACK's write of a slot before UNPACK's read. Blackhole: LLKOperand on host-written L1, no DM kernels.
+//      Quasar (PATTERN_D_DFB): DFBs with DM reader/writer; `mid` is never pushed or popped. Host checks
+//      out == in bit for bit. `nosync`=1 drops the waits and down (and up on Quasar): must corrupt.
 //   E  producer back-pressure: PACK produces num_iters credits in up(batch)s, each gated by
 //      wait_not_full(batch); UNPACK is a deliberately slow consumer that records the highest value it ever
 //      observes. With the host's max_value = kDepth that high-water mark stays <= kDepth (batch > 1 takes
@@ -31,21 +30,10 @@
 
 #include "api/compute/common.h"
 #ifdef ARCH_QUASAR
-#if defined(TRISC_UNPACK) || defined(TRISC_PACK)
-#include "llk_bfd_alloc.h"
-#endif
-#ifdef TRISC_UNPACK
-#include "llk_unpack_common.h"
-#include "llk_unpack_unary_operand.h"
-#endif
-#ifdef TRISC_MATH
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
-#endif
-#ifdef TRISC_PACK
-#include "llk_pack.h"
-#include "llk_pack_common.h"
-#endif
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/pack.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
 #include "api/compute/experimental/2_0/hw_startup.h"
 #include "api/compute/experimental/2_0/pack.h"
@@ -216,8 +204,10 @@ void kernel_main() {
         PACK(store_u32(report_addr + 0u, num_iters);)
         UNPACK(store_u32(report_addr + 8u, sem.value());)
     }
-#else
-
+#elif defined(PATTERN_D_DFB)
+    // Quasar: LLKOperand is Blackhole-only, so `in`, `mid` and `out` are dataflow buffers and the Quasar
+    // Compute API addresses them by id.
+    //  - Seed: the id-based compute_kernel_hw_startup does not seed the semaphore; PACK set(0)s it.
     //  - Negative control: nosync=1 also drops PACK's up(). Blackhole posts saturate at 15, so its 8
     //    unconsumed posts are harmless; a Quasar post at Max (kDepth) stalls until a down() that never
     //    comes, so the 5th up() would hang the kernel instead of corrupting the output.
@@ -227,68 +217,58 @@ void kernel_main() {
     //  - Report words: store_u32/load_u32 go through the uncached L1 alias, since UNPACK and PACK write
     //    the same report lines and the TRISC data cache is not coherent between them.
     if constexpr (pattern == PATTERN_D) {
-        using namespace ckernel;
-        using namespace ckernel::trisc;
-        [[maybe_unused]] constexpr TensorShape shape = DEFAULT_TENSOR_SHAPE;  // UNPACK and PACK only
-        constexpr auto fmt = DataFormat::Float16_b;
+        DataflowBuffer dfb_in(dfb::in);
+        DataflowBuffer dfb_out(dfb::out);
+        const std::uint32_t in_id = dfb_in.get_id();
+        const std::uint32_t mid_id = DataflowBuffer(dfb::mid).get_id();
+        const std::uint32_t out_id = dfb_out.get_id();
 
-#ifdef TRISC_UNPACK
-        bfd_alloc_and_program<BfdResource::Unp0>(
-            shape, (report_addr + kDInOffset) >> 4, static_cast<std::uint32_t>(fmt));
-        _llk_unpack_configure_unary_<p_unpacr::UNP_A>(fmt);
-        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, false>(bfd_current<BfdResource::Unp0>(), shape, 1);
-        for (std::uint32_t i = 0; i < num_iters; ++i) {
-            _llk_unpack_unary_operand_<p_unpacr::UNP_A>(i, shape);  // in[i]
-            if constexpr (!nosync) {
-                sem.wait_min(1);
-            }
-            _llk_unpack_unary_operand_<p_unpacr::UNP_A>(kDMaxTiles + i % kDepth, shape);  // mid[slot]
-            if constexpr (!nosync) {
-                sem.down(1);
-            }
-        }
-        store_u32(report_addr + 8u, sem.value());
-#endif
-#ifdef TRISC_MATH
-        _llk_math_srcAB_hw_configure_<true, false, false>(fmt, fmt);
-        _llk_math_pack_sync_init_<DstSync::SyncHalf>();
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, false>(64, 1);
-        for (std::uint32_t i = 0; i < 2 * num_iters; ++i) {
-            _llk_math_wait_for_dest_available_();
-            _llk_math_eltwise_unary_datacopy_(0);
-            _llk_math_dest_section_done_<DstSync::SyncHalf, false>();
-        }
-#endif
-#ifdef TRISC_PACK
-        sem.set(0);  // no 2.0 hw_startup on Quasar: seed on the producer
-        bfd_alloc_and_program<BfdResource::Pack0>(
-            shape, (report_addr + kDMidOffset) >> 4, static_cast<std::uint32_t>(fmt));
-        _llk_pack_hw_configure_<p_pacr::PACK0, false>(fmt, ReluConfig::none());
-        _llk_pack_init_(bfd_current<BfdResource::Pack0>(), shape, 1);
-        _llk_pack_dest_init_<p_pacr::PACK0, DstSync::SyncHalf>();
-        for (std::uint32_t i = 0; i < num_iters; ++i) {
-            // Round 1: DST -> mid[slot], then publish. The delay holds the packer back in both the positive
-            // and the negative run, so an early ring read by UNPACK is always visible without the semaphore.
-            if constexpr (!nosync) {
-                sem.wait_not_full();
-            }
-            for (volatile std::uint32_t d = 0; d < kPackSkewSpins; ++d) {
-            }
-            _llk_packer_wait_for_math_done_();
-            _llk_pack_(0, i % kDepth, shape);
-            _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DstSync::SyncHalf, false>();
-            if constexpr (!nosync) {
-                // Without a consumer down(), a Quasar post at capacity can stall forever.
-                sem.up(1);
-            }
+        compute_kernel_hw_startup(in_id, out_id);
+        PACK(sem.set(0);)
 
-            // Round 2: DST -> out[i].
-            _llk_packer_wait_for_math_done_();
-            _llk_pack_(0, kDepth + i, shape);
-            _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DstSync::SyncHalf, false>();
+        for (std::uint32_t i = 0; i < num_iters; ++i) {
+            const std::uint32_t slot = i % kDepth;
+
+            // Round 1: in[i] -> DST[0] -> mid[slot], then PACK publishes the slot.
+            dfb_in.wait_front(1);
+            tile_regs_acquire();
+            copy_init(in_id);
+            copy_tile(in_id, /*tile_index=*/0, /*dst_index=*/0);
+            tile_regs_commit();
+            tile_regs_wait();
+            if constexpr (!nosync) {
+                PACK(sem.wait_not_full();)
+            }
+            PACK(for (volatile std::uint32_t d = 0; d < kPackSkewSpins; ++d){})
+            pack_init(mid_id);
+            pack_tile<true>(/*dst_index=*/0, mid_id, slot);
+            if constexpr (!nosync) {
+                PACK(sem.up(1);)
+            }
+            tile_regs_release();
+            dfb_in.pop_front(1);
+
+            // Round 2: mid[slot] -> DST[0] -> out[i]; UNPACK waits for the slot, reads it, releases it.
+            dfb_out.reserve_back(1);
+            tile_regs_acquire();
+            if constexpr (!nosync) {
+                UNPACK(sem.wait_min(1);)
+            }
+            copy_init(mid_id);
+            copy_tile(mid_id, slot, /*dst_index=*/0);
+            if constexpr (!nosync) {
+                UNPACK(sem.down(1);)
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_init(out_id);
+            pack_tile(/*dst_index=*/0, out_id);
+            tile_regs_release();
+            dfb_out.push_back(1);
         }
-        store_u32(report_addr + 0u, num_iters);
-#endif
+
+        PACK(store_u32(report_addr + 0u, num_iters);)
+        UNPACK(store_u32(report_addr + 8u, sem.value());)
     }
 #endif
 
