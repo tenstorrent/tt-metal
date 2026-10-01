@@ -1154,7 +1154,6 @@
       python3 models/demos/gemma4_d_p/demo/layer_perf_report.py --profiler-dir generated/profiler
     '
   test_type: gemma4_d_p_layer_perf
-  test_tags: [gemma4_d_p, transformer]
   test_group: gemma4_d_p_layer_perf
   budget_type: demo
   skus:

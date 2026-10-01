@@ -253,16 +253,24 @@ def main(argv=None):
     parser.add_argument("--root", type=Path, default=None, help="Summaries root (default: PREFILL_SUMMARIES)")
     parser.add_argument("--top", type=int, default=0, help="Limit ops listed per cell; 0 lists the full table")
     args = parser.parse_args(argv)
+    if not is_primary_rank():
+        return 0
 
     root = args.root or summaries_root()
     out_dir = root / MANIFEST_DIR
-    manifests = [json.loads(p.read_text()) for p in sorted(out_dir.glob("manifest_*.json"))]
+    manifest_paths = sorted(out_dir.glob("manifest_*.json"))
+    manifests = [json.loads(p.read_text()) for p in manifest_paths]
     if not manifests:
         print(f"error: no manifest_*.json under {out_dir}; did the layer-perf test run?", file=sys.stderr)
         return 1
     ops_csv = find_ops_csv(args.profiler_dir)
     if ops_csv is None:
         print(f"error: no reports/**/ops_perf_results_*.csv under {args.profiler_dir}", file=sys.stderr)
+        return 1
+    # Tracy writes the ops CSV after the test writes its manifest; an older CSV is from another run.
+    newest_manifest = max(manifest_paths, key=lambda p: p.stat().st_mtime)
+    if ops_csv.stat().st_mtime < newest_manifest.stat().st_mtime:
+        print(f"error: {ops_csv} is older than {newest_manifest.name}; it is from an earlier run", file=sys.stderr)
         return 1
     shutil.copy2(ops_csv, out_dir / ops_csv.name)
     print(f"ops CSV: {ops_csv}")
