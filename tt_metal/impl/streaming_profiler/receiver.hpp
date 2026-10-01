@@ -13,9 +13,9 @@
 #include <thread>
 #include <vector>
 
-#include "impl/streaming_profiler/streaming_profiler_decode.hpp"
-#include "impl/streaming_profiler/streaming_profiler_device.hpp"
-#include "impl/streaming_profiler/streaming_profiler_service.hpp"
+#include "impl/streaming_profiler/decode.hpp"
+#include "impl/streaming_profiler/device_programs.hpp"
+#include "impl/streaming_profiler/service.hpp"
 
 namespace tt::tt_metal {
 

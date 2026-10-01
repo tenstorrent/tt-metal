@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/streaming_profiler/streaming_profiler_zone_csv.hpp"
+#include "impl/streaming_profiler/zone_csv.hpp"
 
 #include <unistd.h>
 

@@ -14,7 +14,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "impl/streaming_profiler/spsc_marker_decode.hpp"
-#include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/capture_context.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
