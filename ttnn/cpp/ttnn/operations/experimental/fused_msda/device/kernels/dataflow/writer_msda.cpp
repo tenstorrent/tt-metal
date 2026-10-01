@@ -19,16 +19,20 @@
 // Nothing model-specific happens here: no SCA scatter, no rebatch, no residual.
 //
 // With SPLIT_GATHER the writer also gathers rows [SPLIT_ROW, 32) of every
-// point the reader stages (msda_gather_rows.hpp): it waits for the reader's
-// `ready` count, gathers from the point it posted to the mailbox, and bumps
-// `done`. The data-movement RISC here is otherwise idle for all but the last
-// few microseconds of each block, and it issues its reads on its own NoC.
+// point the reader stages, into the input-CB block the reader reserved (the
+// handshake is in msda_gather_rows.hpp). This RISC has spare issue capacity
+// and its own NoC, and the reader is bound by decode and read issue.
 //
 // Tile face layout (bf16, 32x32 = 4 faces of 16x16, 2048 B) is documented in
 // ../msda_tile_layout.hpp. D-tile k holds value columns [k*32, k*32+31].
 //
-// Per-tile runtime args (3 per tile): (base_page, head, v_rows), where
-// base_page = b * Q + q_start; rows 0..v_rows-1 go to consecutive pages.
+// Runtime args:
+//   [0]        output buffer address
+//   [1]        num_output_tiles
+//   [2]        value buffer address (read only with SPLIT_GATHER)
+//   [3 ...]    per output tile: base_page, head, v_rows, where
+//              base_page = b * Q + q_start; rows 0..v_rows-1 go to consecutive pages
+// Compile-time arg order is fixed by fused_msda_program_factory.cpp (writer_ct).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -75,6 +79,7 @@ constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
 constexpr uint32_t N_D_TILES = (STICK_WORDS + WORDS_PER_TILE_ROW - 1) / WORDS_PER_TILE_ROW;
 constexpr uint32_t HEAD_NBYTES = D * sizeof(uint16_t);
 static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
+static_assert(!SPLIT_GATHER || value_stick_nbytes == D * 2u, "the split gather packs unpadded D*2-byte sticks");
 
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -110,16 +115,18 @@ void kernel_main() {
             // The block's output cannot exist before its last point is
             // gathered, so helping with every point first costs no overlap.
             for (uint32_t j = 0; j < POINTS_PER_BLOCK; ++j) {
-                ++gather_seq;
-                while (*gather_ready != gather_seq) {
-                }
+                // noc_semaphore_wait invalidates the RISC L1 data cache on
+                // every poll, so the mailbox and the x0/y0 tiles read after it
+                // are the reader's and compute's current writes.
+                noc_semaphore_wait(gather_ready, ++gather_seq);
                 const auto pt = fused_msda_gather::fetch_point(gather_mailbox_l1);
                 fused_msda_gather::gather_rows<WriterGatherCfg>(
                     noc, value_acc, pt, fused_msda_gather::SPLIT_ROW, fused_msda_tile_layout::TILE_MAX_ROWS);
                 noc.async_read_barrier();
-                // Plain zero stores above; keep them ahead of the release.
+                // Plain zero stores above: a compiler barrier keeps them ahead
+                // of the done store, and L1 stores from one RISC are in order.
                 asm volatile("" ::: "memory");
-                *gather_done = gather_seq;
+                noc_semaphore_set(gather_done, gather_seq);
             }
         }
 

@@ -133,6 +133,11 @@ constexpr uint32_t kFracCbPages = 2;    // compute -> compute, one point at a ti
 constexpr uint32_t kScalarCbPages = 8;  // two points of four corners each
 constexpr uint32_t kInputCbGroups = 8;  // ditto, in corner groups of n_d_tiles
 
+// One split-gather point's arguments, reader -> writer. Must equal
+// GATHER_MAILBOX_NBYTES in kernels/dataflow/msda_gather_rows.hpp, which
+// static_asserts that PointArgs fits.
+constexpr uint32_t kGatherMailboxNbytes = 64;
+
 }  // namespace
 
 ProgramDescriptor FusedMSDAOperation::create_descriptor(
@@ -273,10 +278,12 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     // compute tilizes it on the unpacker, so the reader copies nothing. Other
     // D fall back to the reader scattering sticks into tile faces.
     const bool rm_staging = s.head_dim % TILE_WIDTH == 0;
-    // Split gather: the writer RISC, idle but for each block's output rows,
-    // gathers half of every row-major block on its own NoC (see
-    // msda_gather_rows.hpp). The scatter path keeps the reader-only gather.
-    const bool split_gather = rm_staging;
+    // Split gather: the writer RISC gathers half of every row-major block on its
+    // own NoC (see msda_gather_rows.hpp), since one RISC's decode and read issue
+    // bound the reader. Measured on Blackhole only, with value in L1 and in DRAM
+    // (both faster); Wormhole keeps the reader-only gather until it is measured.
+    // The scatter path (D % 32 != 0) is always reader-only.
+    const bool split_gather = rm_staging && device->arch() == tt::ARCH::BLACKHOLE;
 
     auto push_cb = [&](uint8_t idx, uint32_t pages, uint32_t page_size, tt::DataFormat fmt) {
         descriptor.cbs.push_back(CBDescriptor{
@@ -334,8 +341,9 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     // Writer-only scratch.
     push_cb(output_scratch_cb, 1, head_stick_aligned, output_fmt);
     if (split_gather) {
-        // Reader -> writer, one point's gather arguments at a time.
-        push_cb(gather_mailbox_cb, 1, 64, value_fmt);
+        // Reader -> writer, one point's gather arguments at a time. Raw uint32
+        // words; the format only satisfies the CB config.
+        push_cb(gather_mailbox_cb, 1, kGatherMailboxNbytes, tt::DataFormat::UInt32);
         descriptor.semaphores.push_back(SemaphoreDescriptor{
             .id = gather_ready_sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
         descriptor.semaphores.push_back(SemaphoreDescriptor{
@@ -441,6 +449,7 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     compute_desc.config = compute_cfg;
 
     // ---- writer (shared by V1 and V2) ----
+    // Compile-time arg order is fixed by writer_msda.cpp.
     KernelDescriptor::CompileTimeArgs writer_ct{
         output_tile_cb,
         output_scratch_cb,

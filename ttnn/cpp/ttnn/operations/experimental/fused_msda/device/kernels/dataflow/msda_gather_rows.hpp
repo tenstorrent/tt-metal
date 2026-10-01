@@ -71,8 +71,27 @@ struct PointArgs {
 };
 constexpr uint32_t POINT_ARGS_WORDS = sizeof(PointArgs) / sizeof(uint32_t);
 
-// Split gather: the reader takes rows [0, SPLIT_ROW), the writer the rest.
-constexpr uint32_t SPLIT_ROW = 16;
+// Size of the gather_mailbox CB page; kGatherMailboxNbytes in
+// fused_msda_program_factory.cpp allocates it and must stay equal.
+constexpr uint32_t GATHER_MAILBOX_NBYTES = 64;
+static_assert(sizeof(PointArgs) <= GATHER_MAILBOX_NBYTES, "PointArgs no longer fits the gather mailbox");
+
+// Split gather: the reader takes rows [0, SPLIT_ROW), the writer the rest. A
+// tail block with v_rows <= SPLIT_ROW leaves the writer only zeroing.
+constexpr uint32_t SPLIT_ROW = fused_msda_tile_layout::TILE_MAX_ROWS / 2;
+
+// Split-gather handshake. Per point, in the same (tile, level, point) order on
+// both RISCs:
+//   reader: post_point(pt); ready = ++seq; gather rows [0, SPLIT_ROW); barrier;
+//           wait done == seq; pop x0/y0; push the block.
+//   writer: wait ready == ++seq; fetch_point; gather rows [SPLIT_ROW, 32);
+//           barrier; done = seq.
+// Both sides must post or consume exactly NUM_LEVELS * NUM_POINTS points per
+// output tile, every tile: a skipped post hangs the other side. The mailbox is
+// rewritten only after done == seq, so one page is enough. These are counters
+// rather than a CB because the writer fills part of a block the reader
+// reserved, and x0/y0 must stay at the reader's front until the writer has
+// decoded them.
 
 inline void post_point(uint32_t mailbox_l1, const PointArgs& a) {
     const uint32_t* src = reinterpret_cast<const uint32_t*>(&a);

@@ -226,6 +226,11 @@ reader  -> compute   4 x input_tiles            the gathered bilinear corners
 compute -> compute   4 x scalar_tile            attn * corner coefficient
 ```
 
+With the split gather (§8) a fourth, reader <-> writer, runs beside them:
+`gather_mailbox` plus the `ready` / `done` semaphores, one point at a time. The
+writer then also decodes `x0` / `y0`, so the reader keeps them at its CB front
+until `done` rather than releasing them after its own decode.
+
 | CB | Role | Pages | Page size |
 | --- | --- | --- | --- |
 | `c_0` `value_scratch` | reader-only L1 arena, one staged `D`-stick per row | 32 | `align(D*2)` |
@@ -267,8 +272,8 @@ Deriving `px`, `x0`, `dx` and the four corner weights is per-point float work
 over 32 query rows, and the dataflow RISC has no FPU — every float operation
 there costs ~140 cycles of soft-float emulation. The SFPU does it instead: the
 reader ships the bf16 operands as column-0 tiles and gets `floor(px)` back, and
-the only arithmetic left in the reader is the integer decode, the bounds test
-and the page index.
+the only arithmetic left on the data-movement RISCs is the integer decode, the
+bounds test and the page index.
 
 Both sides run **one sampling point ahead** of the work they feed — the reader
 pushes point `j+1`'s operand tiles before waiting for point `j`'s corners, and
@@ -299,7 +304,8 @@ a meaningful column 0 — so a query occupies one lane of a 32x32 tile throughou
   every emission; rows `>= v_rows` get bf16 `0`. A zero attn lane is what makes
   a tail row's scalar zero. Columns 1..31 are zeroed once per CB slot at reader
   startup, so an uninitialised L1 bit pattern never reaches the SFPU as a NaN.
-* **input tile** (reader → compute): rows that are in range **and** in bounds
+* **input tile** (reader → compute; reader + writer with the split gather, each
+  for its own rows): rows that are in range **and** in bounds
   hold the gathered value stick; every other row is explicitly zeroed. In the
   row-major block the same holds per corner slot: an in-range, in-bounds slot
   holds its stick, every other slot and every row `>= v_rows` is zeroed.
@@ -351,6 +357,9 @@ is a different formula, not a different layout.
 reader_msda_v1.cpp ─┐                                      compute_msda.cpp
                     ├─> fused_msda_reader_common.hpp <──>  + msda_geometry.hpp  ─> writer_msda.cpp
 reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, reduction)
+                                 │                                                    │
+                                 └──── msda_gather_rows.hpp (row-major gather) ───────┘
+                                       rows 0-15 on the reader, 16-31 on the writer
 ```
 
 **Reader** (both variants). Per output tile `(b, h, q_start, v_rows)`:
@@ -364,7 +373,9 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, 
 4. when `D % 32 == 0`: reserve one block for all four corners and land each
    corner's `D`-wide stick straight in its slot of row `r`
    (`r * 4*D*2 + c * D*2`), zero the skipped slots while the reads are in
-   flight, barrier, and push once. The reader copies no value data. Other `D`:
+   flight, barrier, and push once. The reader copies no value data; with the
+   split gather it does this for rows 0-15 only and waits for the writer's
+   rows before the push. Other `D`:
    for each corner, read the sticks into `value_scratch`, scatter them into
    `n_d_tiles` tile rows, zero the rows it skipped, and push. The stick is at
    page `(b*S + level_start[l] + cy*W_l + cx) * H + h` (canonical) or
@@ -392,17 +403,26 @@ step 2 calls the primary and which the secondary.
 **Writer** (shared). Waits on `n_d_tiles` accumulated tiles, gathers each query
 row's `D` values across them into a stick, and writes it at
 `page_id = b*Q + q`, `offset_bytes = h*D*2`. No SCA/BEV scatter logic, ever.
+With the split gather it first gathers rows 16-31 of every point of the block,
+so it also takes the `value` accessor and address.
 
-**Split gather** (`D % 32 == 0`). The reader's gather is bound by how fast one
-RISC can decode corners and issue 64 B reads, and the writer RISC is idle but
-for each block's output rows. So both take half of every row-major block:
-the reader rows `0-15`, the writer rows `16-31`, each on its own NoC, through
-`fused_msda_gather::gather_rows` (`msda_gather_rows.hpp`). Per point the
-reader posts the point's arguments to `gather_mailbox` and bumps the `ready`
-semaphore; the writer gathers its rows, barriers and bumps `done`; the reader
-waits for `done` before it pops the corner tiles and pushes the block. Both
-counters only grow. At nuscenes base with `value` in L1 this takes the op from
-1055 to 737 us on Blackhole.
+**Split gather** (`D % 32 == 0`, Blackhole). The reader's gather is bound by how
+fast one RISC can decode corners and issue `D*2`-byte reads, and the writer RISC
+has spare issue capacity and its own NoC. So both take half of every row-major
+block: the reader rows `0-15`, the writer rows `16-31`, through
+`fused_msda_gather::gather_rows` (`msda_gather_rows.hpp`, which also documents
+the handshake). Per point the reader posts the point's arguments to
+`gather_mailbox` and bumps the `ready` semaphore; the writer gathers its rows,
+barriers and bumps `done`; the reader waits for `done` before it pops `x0` /
+`y0` and pushes the block. Both counters only grow, and launch restarts them
+from their initial value.
+
+The split is by rows of one block rather than the per-RISC-CB split reader of
+`grid_sample` or conv (each RISC its own CBs, compute alternating between them),
+because it leaves compute and the CB plan unchanged: splitting by point would
+duplicate the input, `x0` / `y0` and geometry pipes and make compute alternate
+between them. Wormhole keeps the reader-only gather until the split is measured
+there.
 
 ---
 

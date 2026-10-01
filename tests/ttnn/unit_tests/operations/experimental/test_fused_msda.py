@@ -127,6 +127,13 @@ def _to_device(t: torch.Tensor, device) -> ttnn.Tensor:
     return ttnn.from_torch(t.to(torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
+def _to_device_in(t: torch.Tensor, device, memory: str) -> ttnn.Tensor:
+    memory_config = ttnn.L1_MEMORY_CONFIG if memory == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.from_torch(
+        t.to(torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config
+    )
+
+
 def _bf16(t: torch.Tensor) -> torch.Tensor:
     """Round-trip through bf16 so the reference sees exactly what the device sees."""
     return t.to(torch.bfloat16).to(torch.float32)
@@ -279,24 +286,33 @@ def test_fused_msda_v1_packed_equivalence(device, B, Q, H, L, P, D):
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), packed)
 
 
-@pytest.mark.parametrize("B,Q,H,L,P,D", [(1, 64, 2, 2, 4, 32)])
-def test_fused_msda_v1_packed_value_equivalence(device, B, Q, H, L, P, D):
+@pytest.mark.parametrize("memory", ["dram", "l1"])
+@pytest.mark.parametrize(
+    "B,Q,H,L,P,D,spatial_shapes",
+    [
+        (1, 64, 2, 2, 4, 32, [(12, 9), (6, 5)]),
+        # More (batch, head, query-block) units than cores, so every core runs
+        # several blocks of the split gather back to back at D = 64.
+        (2, 900, 8, 4, 4, 64, [(16, 20), (8, 10), (4, 5), (2, 3)]),
+    ],
+    ids=["small_d32", "multiblock_d64"],
+)
+def test_fused_msda_v1_packed_value_equivalence(device, B, Q, H, L, P, D, spatial_shapes, memory):
     """Packed rank-3 value (B, S, H*D) must match canonical (B, S, H, D) exactly.
 
-    The two layouts are the same bytes; only the DRAM page size and the reader's
-    (page, offset) addressing differ. A mismatch is an addressing bug, not bf16
-    rounding.
+    The two layouts are the same bytes; only the page size and the (page,
+    offset) addressing of both gathering RISCs differ. A mismatch is an
+    addressing bug, not bf16 rounding.
     """
-    spatial_shapes = [(12, 9), (6, 5)]
     value, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes)
 
     loc_t = _to_device(_pack_locations(loc), device)
     attn_t = _to_device(_pack_weights(attn), device)
     canonical = ttnn.to_torch(
-        ttnn.experimental.fused_msda(_to_device(value, device), loc_t, attn_t, spatial_shapes)
+        ttnn.experimental.fused_msda(_to_device_in(value, device, memory), loc_t, attn_t, spatial_shapes)
     ).to(torch.float32)
     packed = ttnn.to_torch(
-        ttnn.experimental.fused_msda(_to_device(_pack_value(value), device), loc_t, attn_t, spatial_shapes)
+        ttnn.experimental.fused_msda(_to_device_in(_pack_value(value), device, memory), loc_t, attn_t, spatial_shapes)
     ).to(torch.float32)
 
     torch.testing.assert_close(canonical, packed, rtol=0, atol=0)
@@ -336,9 +352,7 @@ def test_fused_msda_v1_grid_space(device, align_corners):
     # 2*loc-1 is not exact in bf16, so this is close-but-not-equal by construction.
     _assert_close(unit, grid_space, pcc=0.999)
     _assert_close(
-        _msda_reference(
-            value, grid, attn, spatial_shapes, align_corners=align_corners, locations_in_grid_space=True
-        ),
+        _msda_reference(value, grid, attn, spatial_shapes, align_corners=align_corners, locations_in_grid_space=True),
         grid_space,
     )
 
@@ -457,7 +471,10 @@ def test_fused_msda_v1_partially_out_of_bounds(device):
     _assert_close(ref, out)
 
 
-def test_fused_msda_v1_masks_out_of_bounds_corners(device):
+@pytest.mark.parametrize("memory", ["dram", "l1"])
+@pytest.mark.parametrize("D", [32, 64])
+@pytest.mark.parametrize("Q", [129, 16, 17, 48, 49])
+def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
     """An out-of-bounds corner must contribute nothing, element by element.
 
     Regression gate for the input-tile mask. The compute kernel builds the
@@ -474,11 +491,13 @@ def test_fused_msda_v1_masks_out_of_bounds_corners(device):
     The case is built so that both halves matter: enough corners are outside
     the map to exercise the mask, and enough are inside that a slot the reader
     skips has just been written with a real value stick by an earlier point.
-    `Q = 129` also gives every (batch, head) a partial trailing block, so the
-    `r >= v_rows` half of the zeroing predicate is taken as well.
+    Every Q leaves a partial trailing block, so the `r >= v_rows` half of the
+    zeroing predicate is taken as well. With the gather split between the two
+    data-movement RISCs at row 16, v_rows = 16 / 17 sit on the split: the writer
+    only zeroes, or gathers exactly one row.
     """
     spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
-    B, Q, H, L, P, D = 1, 129, 4, 4, 4, 32
+    B, H, L, P = 1, 4, 4, 4
     value, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes, loc_range=(-0.25, 1.25))
 
     oob = _oob_corner_fraction(loc, spatial_shapes)
@@ -487,7 +506,7 @@ def test_fused_msda_v1_masks_out_of_bounds_corners(device):
     ref = _msda_reference(value, loc, attn, spatial_shapes)
     out = ttnn.to_torch(
         ttnn.experimental.fused_msda(
-            _to_device(value, device),
+            _to_device_in(value, device, memory),
             _to_device(_pack_locations(loc), device),
             _to_device(_pack_weights(attn), device),
             spatial_shapes,
@@ -502,6 +521,44 @@ def test_fused_msda_v1_masks_out_of_bounds_corners(device):
         f"{high_error_ratio:.2%} of output elements are off by more than {abs_tol:.4f}. "
         "An unmasked out-of-bounds corner reads a stale input row and multiplies it by a live weight"
     )
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("memory", ["dram", "l1"])
+def test_fused_msda_v1_repeated_calls_hit_program_cache(device, memory):
+    """Repeated calls reuse one program and stay exact while value moves.
+
+    The writer RISC now reads value too, through its own buffer binding, and
+    the reader/writer handshake counts points with semaphores that must restart
+    on every launch. Alternating two value tensors, with an allocation in
+    between so the second lands elsewhere, catches a stale address binding; a
+    handshake that drifted across launches hangs (hence the timeout) or breaks
+    bit-exactness between identical calls.
+    """
+    spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
+    B, Q, H, L, P, D = 2, 900, 8, 4, 4, 32
+    value_a, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes, seed=1, loc_range=(-0.25, 1.25))
+    value_b = _bf16(torch.randn_like(value_a))
+
+    loc_t = _to_device(_pack_locations(loc), device)
+    attn_t = _to_device(_pack_weights(attn), device)
+    value_a_t = _to_device_in(_pack_value(value_a), device, memory)
+    spacer = _to_device_in(torch.zeros(1, 4096), device, memory)
+    value_b_t = _to_device_in(_pack_value(value_b), device, memory)
+
+    def run(value_t):
+        return ttnn.to_torch(ttnn.experimental.fused_msda(value_t, loc_t, attn_t, spatial_shapes)).to(torch.float32)
+
+    entries_before = device.num_program_cache_entries()
+    first = {"a": run(value_a_t), "b": run(value_b_t)}
+    _assert_close(_msda_reference(value_a, loc, attn, spatial_shapes), first["a"])
+    _assert_close(_msda_reference(value_b, loc, attn, spatial_shapes), first["b"])
+    for i in range(10):
+        key = "a" if i % 2 == 0 else "b"
+        out = run(value_a_t if key == "a" else value_b_t)
+        torch.testing.assert_close(out, first[key], rtol=0, atol=0)
+    assert device.num_program_cache_entries() - entries_before == 1
+    ttnn.deallocate(spacer)
 
 
 # ---------------------------------------------------------------------------
@@ -581,9 +638,7 @@ def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed, alig
     # SFPU from the unrounded reference point and offset, so the two differ by
     # the rounding of the intermediate location only.
     _assert_close(v1, v2, pcc=0.999)
-    _assert_close(
-        _msda_reference(value, loc, attn, spatial_shapes, align_corners=align_corners), v2, pcc=0.99
-    )
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes, align_corners=align_corners), v2, pcc=0.99)
 
 
 def test_fused_msda_v2_bevformer_pillar_shape(device):

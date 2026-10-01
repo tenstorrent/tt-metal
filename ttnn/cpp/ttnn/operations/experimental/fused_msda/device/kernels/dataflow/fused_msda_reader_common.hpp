@@ -9,6 +9,8 @@
 // from. Everything else — staging, the hand-off of the geometry to the SFPU, the
 // NoC gather of the four bilinear neighbours, the tile scatter and the input-tile
 // contract with the compute kernel — lives here and is compiled once per reader.
+// The row-major gather itself is msda_gather_rows.hpp, which the writer also
+// runs for its half of each block when the gather is split.
 //
 // No float arithmetic happens in this file, by design: the dataflow RISC has no
 // FPU, so every float operation here would cost ~140 cycles of soft-float
@@ -59,7 +61,9 @@
 //     annihilate a stale row.
 //   * with RM_STAGING the four corners of a point go over as one row-major
 //     block (row r = [NW | NE | SW | SE], D bf16 each) that compute tilizes;
-//     the same rule applies per corner slot.
+//     the same rule applies per corner slot. With SPLIT_GATHER the reader
+//     produces rows [0, SPLIT_ROW) and the writer rows [SPLIT_ROW, 32) of the
+//     same block; the reader pushes it once both are done.
 //
 // Runtime-arg layout (identical for both readers):
 //   [0]                 value buffer address
@@ -286,6 +290,7 @@ inline void write_col0(uint32_t tile_l1, uint32_t r, uint16_t value) {
 // itself is fused_msda_gather::gather_rows.
 static_assert(!RM_STAGING || D % 32 == 0, "row-major staging needs D to be a multiple of the tile width");
 static_assert(!SPLIT_GATHER || RM_STAGING, "the split gather is a row-major staging path");
+static_assert(!RM_STAGING || value_stick_nbytes == D * 2u, "row-major staging packs unpadded D*2-byte sticks");
 
 // The input-tile writes below are plain, not volatile, so the compiler can
 // batch the loads and stores: a volatile word copy costs ~14 cycles, and the
@@ -478,11 +483,8 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
 
             const uint32_t l = j / NUM_POINTS;
             const LevelGeom& g = levels[l];
-            [[maybe_unused]] const int32_t w_i = static_cast<int32_t>(g.width);
-            [[maybe_unused]] const int32_t h_i = static_cast<int32_t>(g.height);
-
-            // Corners solved on the SFPU. Only the decode, the bounds test and
-            // the page index stay here, all in integer arithmetic.
+            // Corners solved on the SFPU; only integer decode, bounds tests and
+            // page indices are left to the data-movement RISCs.
             x0_cb.wait_front(1);
             y0_cb.wait_front(1);
             const uint32_t x0_l1 = x0_cb.get_read_ptr();
@@ -503,14 +505,13 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                 };
                 if constexpr (SPLIT_GATHER) {
                     fused_msda_gather::post_point(gather_mailbox_l1, pt);
-                    *gather_ready = ++gather_seq;
+                    noc_semaphore_set(gather_ready, ++gather_seq);
                     fused_msda_gather::gather_rows<ReaderGatherCfg>(
                         noc, value_acc, pt, 0, fused_msda_gather::SPLIT_ROW);
                     noc.async_read_barrier();
-                    // The writer reads the corner tiles too, so they are popped
-                    // only once it is done with this point.
-                    while (*gather_done != gather_seq) {
-                    }
+                    // The writer also decodes this point's x0/y0 tiles, so
+                    // x0_cb/y0_cb are popped only after done.
+                    noc_semaphore_wait(gather_done, gather_seq);
                 } else {
                     fused_msda_gather::gather_rows<ReaderGatherCfg>(noc, value_acc, pt, 0, TILE_MAX_ROWS);
                     noc.async_read_barrier();
@@ -521,6 +522,8 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                 y0_cb.pop_front(1);
                 input_tile_cb.push_back(4 * N_D_TILES);
             } else {
+                const int32_t w_i = static_cast<int32_t>(g.width);
+                const int32_t h_i = static_cast<int32_t>(g.height);
                 for (uint32_t r = 0; r < v_rows; ++r) {
                     const uint32_t col0 = fused_msda_tile_layout::tile_col0_offset(r);
                     CoreLocalMem<volatile uint16_t> x0_src(x0_l1 + col0);
