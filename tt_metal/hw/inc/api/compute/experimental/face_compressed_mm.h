@@ -244,7 +244,7 @@ ALWI void face_compressed_mm_block_uninit(const std::uint32_t in0_cb_id, const s
 // against a hardware mutex. PackMode::Default only.
 //
 // Arm the packer through pack_init_mutex_ADC only, in place of any other pack init, and pack every tile
-// with pack_tile_mutex_ADC. pack_tile, pack_block, pack_untilize and pack_rows are not covered.
+// with pack_tile_mutex_ADC. pack_tile, pack_block, pack_untilize and pack_rows_to_addr are not covered.
 
 // clang-format off
 /**

@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Stage 1 of 3 -- Text -> Semantic Speech Tokens (~1.24 GB FP32).
+# Verified: 6 Conformer blocks / 16 heads / d=1024 (tests/pcc/test_llm.py:210);
+# 14-block AR decoder (scripts/export_weights.py); head 1024 -> 4097.
+
+direction: down
+
+classes: {
+  host: { style: { fill: "#f6f8fa"; stroke: "#8b949e"; stroke-dash: 4; font-color: "#57606a" } }
+  dev: { style: { fill: "#eef6ff"; stroke: "#0969da" } }
+  onnx: { shape: hexagon; style: { fill: "#fff8c5"; stroke: "#9a6700" } }
+}
+
+from_host: "From the host front-end" {
+  class: host
+  tok: "Whisper-family\ntext tokenizer"
+  st: "speech_tokenizer_v1.onnx" { class: onnx }
+  cp: "campplus.onnx" { class: onnx }
+}
+
+llm: "1. Text → Semantic Speech Tokens\n~1.24 GB FP32" {
+  class: dev
+
+  text_embedding: "Text embedding\n51,866 × 512"
+
+  text_encoder: "Causal Conformer\n6 blocks · 16 heads · d=1024" {
+    class: dev
+    blocks: "6 × Conformer blocks"
+    affine: "1024 → 1024"
+    blocks -> affine
+  }
+
+  speaker: "Speaker embedding" {
+    class: dev
+    normalize: "L2 normalize"
+    affine: "192 → 1024"
+    normalize -> affine
+  }
+
+  prompt_speech: "Prompt speech tokens\n4096 × 1024 embedding"
+
+  prefix: "AR prefix" {
+    grid-columns: 5
+    class: dev
+    sos: "SOS"
+    spk: "speaker\n(optional)"
+    encoded_text: "encoded text"
+    task: "task ID"
+    prompt: "prompt speech tokens\n(optional)"
+    sos -> spk -> encoded_text -> task -> prompt
+  }
+
+  decoder: "Autoregressive decoder\n14 blocks · KV cache" {
+    class: dev
+    ar: "Transformer / AR decoder"
+    kv: "Fixed-width KV cache"
+    head: "Output head\n1024 → 4097 logits"
+    ar -> kv -> head
+  }
+
+  sampling: "Sampling" {
+    class: dev
+    ras: "RAS sampling\n(top-p = 0.8, top-k = 25)"
+    token: "Next semantic token"
+    ras -> token
+  }
+
+  text_embedding -> text_encoder
+  text_encoder -> prefix.encoded_text
+  speaker -> prefix.spk
+  prompt_speech -> prefix.prompt
+  prefix -> decoder.ar
+  decoder.head -> sampling.ras
+  sampling.token -> decoder.ar: "feed token back"
+}
+
+from_host.tok -> llm.text_embedding: "text token IDs"
+from_host.st -> llm.prompt_speech: "prompt speech tokens"
+from_host.cp -> llm.speaker: "x-vector"
+
+to_flow: "→ Stage 2: flow decoder" { style: { fill: "#f6f8fa"; stroke: "#8b949e" } }
+llm.sampling.token -> to_flow: "semantic token IDs"

@@ -88,6 +88,36 @@ def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torc
     return affine_a.float(), affine_b.float()
 
 
+def segmented_summary_oracle(
+    host_inputs: tuple[torch.Tensor, ...], groups_per_head: int, chunks_per_group: int, wrap_chunk: int
+) -> tuple[torch.Tensor, ...]:
+    folded_heads = host_inputs[0].shape[0]
+    dim = host_inputs[1].shape[-1]
+    expected_parts: list[list[torch.Tensor]] = [[], [], [], []]
+    identity_a = torch.eye(dim, dtype=torch.float32).unsqueeze(0)
+    identity_b = torch.zeros((1, dim, dim), dtype=torch.float32)
+    for folded_head in range(folded_heads):
+        group = folded_head % groups_per_head
+        group_start = group * chunks_per_group
+        group_end = group_start + chunks_per_group
+        head_count = max(min(wrap_chunk, group_end) - group_start, 0)
+        tail_start = min(max(wrap_chunk - group_start, 0), chunks_per_group)
+        for segment_start, segment_end, destination in (
+            (0, head_count, 0),
+            (tail_start, chunks_per_group, 2),
+        ):
+            if segment_start == segment_end:
+                affine_a, affine_b = identity_a, identity_b
+            else:
+                segment = tuple(
+                    tensor[folded_head : folded_head + 1, segment_start:segment_end] for tensor in host_inputs
+                )
+                affine_a, affine_b = summary_oracle(segment)
+            expected_parts[destination].append(affine_a)
+            expected_parts[destination + 1].append(affine_b)
+    return tuple(torch.cat(parts, dim=0) for parts in expected_parts)
+
+
 def assert_summary_reconstructs_state(
     protocol: Sequence[torch.Tensor], affine_a: torch.Tensor, affine_b: torch.Tensor
 ) -> None:
@@ -118,6 +148,8 @@ def run_recurrent(
     protocol: Sequence[ttnn.Tensor],
     state: ttnn.Tensor,
     *,
+    actual_start: ttnn.Tensor,
+    groups_per_head: int = 1,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> list[ttnn.Tensor]:
@@ -125,6 +157,9 @@ def run_recurrent(
         return ttnn.experimental.kda.recurrent_chunk_scan(
             *protocol,
             state,
+            tail_entry_states=state,
+            actual_start=actual_start,
+            groups_per_head=groups_per_head,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )
@@ -133,15 +168,25 @@ def run_recurrent(
 def run_summary(
     protocol: Sequence[ttnn.Tensor],
     *,
+    actual_start: ttnn.Tensor,
+    groups_per_head: int = 1,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> list[ttnn.Tensor]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        return ttnn.experimental.kda.summarize_chunk_recurrence(
+        outputs = ttnn.experimental.kda.summarize_chunk_recurrence(
             *protocol,
+            actual_start=actual_start,
+            groups_per_head=groups_per_head,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )
+
+    assert len(outputs) == 4
+    assert all(t.dtype == ttnn.bfloat16 for t in outputs)
+    for tensor in outputs[2:]:
+        ttnn.deallocate(tensor)
+    return outputs[:2]
 
 
 def assert_runtime_contract(
@@ -179,7 +224,7 @@ def assert_runtime_contract(
 
     for name, golden, first_tt, traced_tt in zip(names, expected, first, traced, strict=True):
         actual = ttnn.to_torch(first_tt)
-        assert_accurate(golden, actual, name=name, pcc_threshold=pcc_threshold)
+        assert_accurate(golden.float(), actual.float(), name=name, pcc_threshold=pcc_threshold)
         assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
     for index, (snapshot, tensor) in enumerate(zip(snapshots, inputs, strict=True)):
         assert_bit_identical(snapshot, ttnn.to_torch(tensor), name=f"input {index} immutability")
@@ -194,9 +239,16 @@ def assert_outputs_accurate(
     names: Sequence[str],
     context: str,
     pcc_threshold: float = 0.999,
+    linf_threshold: float | None = None,
 ) -> None:
     for name, golden, actual_tt in zip(names, expected, actual, strict=True):
-        assert_accurate(golden, ttnn.to_torch(actual_tt), name=f"{context} {name}", pcc_threshold=pcc_threshold)
+        assert_accurate(
+            golden.float(),
+            ttnn.to_torch(actual_tt).float(),
+            name=f"{context} {name}",
+            pcc_threshold=pcc_threshold,
+            linf_threshold=linf_threshold,
+        )
 
 
 def one_core_height_sharded(shape: tuple[int, int]) -> ttnn.MemoryConfig:

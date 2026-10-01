@@ -22,14 +22,24 @@ namespace tt::tt_metal {
 namespace {
 
 #if defined(TRACY_ENABLE)
+// Synthetic core for the real-time profiler's Tracy lanes: programs go on BRISC, sync checks on NCRISC.
+constexpr uint32_t kRealtimeProfilerCore_X = 100;
+constexpr uint32_t kRealtimeProfilerCore_Y = 100;
+
+uint32_t lane_thread_id(uint32_t chip_id, tracy::RiscType risc) {
+    tracy::TTDeviceMarker lane{};
+    lane.chip_id = chip_id;
+    lane.core_x = kRealtimeProfilerCore_X;
+    lane.core_y = kRealtimeProfilerCore_Y;
+    lane.risc = risc;
+    return lane.get_thread_id();
+}
+
 tracy::TTDeviceMarker make_marker(
     const tt::ProgramRealtimeRecord& record,
     uint64_t timestamp,
     tracy::TTDeviceMarkerType type,
     const std::string& file_str) {
-    constexpr uint32_t kRealtimeProfilerCore_X = 100;
-    constexpr uint32_t kRealtimeProfilerCore_Y = 100;
-
     tracy::TTDeviceMarker marker;
     marker.chip_id = record.chip_id;
     marker.core_x = kRealtimeProfilerCore_X;
@@ -113,6 +123,10 @@ void RealtimeProfilerTracyHandler::AddDevice(
     TracyTTContextPopulate(ctx, host_start, first_timestamp, frequency);
     std::string name = fmt::format("Device {}:", chip_id);
     TracyTTContextName(ctx, name.c_str(), name.size());
+
+    // The GUI labels a lane with the thread name registered for its id; register before the first zone.
+    tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::BRISC), "Programs");
+    tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::NCRISC), "Sync check");
 
     tracy_contexts_[chip_id] = ctx;
 #endif
@@ -246,11 +260,8 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
         return;
     }
 
-    // Sync-check zones go on a dedicated Tracy lane (RiscType::SYNC) so they don't have to
+    // Sync-check zones go on a dedicated Tracy lane (NCRISC) so they don't have to
     // strictly nest with program zones — overlap there caused zones to disappear or duplicate.
-    constexpr uint32_t kRealtimeProfilerCore_X = 100;
-    constexpr uint32_t kRealtimeProfilerCore_Y = 100;
-
     tracy::TTDeviceMarker start_marker;
     start_marker.chip_id = chip_id;
     start_marker.core_x = kRealtimeProfilerCore_X;

@@ -79,6 +79,7 @@ DIM_PARAMS = [
 
 DEVICE_PARAMS = [
     {
+        "l1_small_size": 16384,
         "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,

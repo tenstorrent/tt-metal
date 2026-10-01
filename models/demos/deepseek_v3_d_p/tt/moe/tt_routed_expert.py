@@ -17,11 +17,10 @@ from typing import Optional
 
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 
@@ -43,22 +42,24 @@ def _fused_compute_config(config):
 
 
 # Model configs are torch-only and so name their activation as a string; this is the one place
-# that maps those names onto the kernel enum. Keys match the HF ``hidden_act`` spelling.
+# that maps those names onto the kernel enum. Keys are the TT activation name, not the HF
+# ``hidden_act``: DeepSeek-V4's ``hidden_act`` is "silu", with the clamp on ``swiglu_limit``.
 ROUTED_EXPERT_ACTIVATION_BY_NAME = {
     "silu": ttnn.RoutedExpertActivation.Silu,
     "swiglu_oai": ttnn.RoutedExpertActivation.SwiGluOai,
     "situ": ttnn.RoutedExpertActivation.SituGlu,
+    "clamped_silu_glu": ttnn.RoutedExpertActivation.ClampedSiluGlu,
 }
 
-# Activations whose fused kernel path carries the bias branch (gate/up bias before the
-# activation, down bias after the down matmul). SiLU has no bias branch.
+# Activations allowed to carry expert biases. ClampedSiluGlu is excluded because
+# DeepSeek-V4's experts are bias-free, not because the kernel lacks a bias branch.
 _BIAS_CAPABLE_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.SwiGluOai,
     ttnn.RoutedExpertActivation.SituGlu,
 )
 
-# Activations moe_fused_swiglu implements; its own validation rejects the rest. Both ops now cover
-# all three, so this only constrains which experts a hybrid split may hand to the fused op.
+# Activations moe_fused_swiglu implements; its own validation rejects the rest. ClampedSiluGlu is
+# absent (only unified_routed_expert_moe has it), so a hybrid split cannot hand it to the fused op.
 _FUSED_OP_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.Silu,
     ttnn.RoutedExpertActivation.SituGlu,
@@ -83,6 +84,47 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 # carries a literal and whose four call sites do not override it; changing this constant leaves that
 # loader on the old dtype. That file belongs to another PR in this split, so it is a follow-up.
 DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE = ttnn.bfloat4_b
+
+
+def routed_expert_weight_memory_config(mesh_device, n_dim: int, dram_nd_sharded: bool) -> ttnn.MemoryConfig:
+    """DRAM placement of one routed-expert weight tensor whose N (the free dim) is ``n_dim``.
+
+    ``dram_nd_sharded=False`` is the DRAM-interleaved placement both routed-expert ops accept.
+
+    ``True`` is the DRAM ND-sharded placement that lets the FFN fetch a whole per-core N weight
+    slice in ONE NoC request instead of one per tile: the slice is exactly one shard, hence
+    contiguous in a single bank. The WIDTH is not a free choice. unified_routed_expert_moe rejects
+    any shard whose width is not exactly its own per_core_N, because a wider or narrower shard
+    splits or straddles the slice and loses the point; per_core_N = ceil(n_tiles / GRID_X) mirrors
+    that split, so this is the one spec the op accepts, and GRID_X is read from the op rather than
+    restated. moe_fused_swiglu reads whatever width it is handed (it only warns when the width
+    splits its chunk walk), so one placement serves both halves of a hybrid forward.
+
+    The HEIGHT stays at one tile-row. Shards distribute ROUND_ROBIN_1D, so consecutive K-rows land
+    in different banks and a core's requests within a K-block rotate across the DRAM banks. That
+    rotation is what buys the bandwidth (a bank-pinned core saturates near 30 GB/s against ~370 GB/s
+    rotating), so a taller shard, which trades rotation for fewer requests, loses.
+
+    n_tiles need not be a multiple of per_core_N: the last shard is partially valid, its phantom
+    columns are dropped by the ops' N-bounds guards, and the buffer pads N up to per_core_N * GRID_X
+    tiles -- a few percent of the weight footprint at the production shapes.
+    """
+    if not dram_nd_sharded:
+        return ttnn.DRAM_MEMORY_CONFIG
+    grid_x = ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID.x
+    n_tiles = n_dim // ttnn.TILE_SIZE
+    per_core_n = (n_tiles + grid_x - 1) // grid_x
+    dram_grid = mesh_device.dram_grid_size()
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=ttnn.Shape([ttnn.TILE_SIZE, per_core_n * ttnn.TILE_SIZE]),
+            grid=ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid.x - 1, dram_grid.y - 1))]
+            ),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
 
 
 class TtRoutedExpert(LightweightModule):
@@ -129,6 +171,7 @@ class TtRoutedExpert(LightweightModule):
         *,
         emb_dim: int | None = None,
         hidden_dim: int | None = None,
+        weights_dram_nd_sharded: bool = False,
     ):
         """
         Shared logic for converting expert weights to ttnn with caching.
@@ -144,6 +187,10 @@ class TtRoutedExpert(LightweightModule):
             device: None for cache-only, mesh_device for cache+load
             emb_dim: Required when torch_weights is None
             hidden_dim: Required when torch_weights is None
+            weights_dram_nd_sharded: Place the device weights DRAM ND-sharded rather than
+                DRAM-interleaved (see routed_expert_weight_memory_config). A device-side choice
+                only: the cache holds the plain host tensor either way, so one cache serves both
+                placements and check_cache_complete needs no placement in its key.
 
         Returns:
             (gate_projs, up_projs, down_projs) if device is not None, else None
@@ -154,6 +201,19 @@ class TtRoutedExpert(LightweightModule):
             if cache_path is None or cache_name_prefix is None:
                 return None
             return str(cache_path / f"{cache_name_prefix}.{name}")
+
+        def _to_device(host_tt):
+            # Per device (1, 1, K, N) -> (K, N) while still on host, where a squeeze is a pure spec
+            # change; the placement is then applied to the final 2D shape rather than carried
+            # through a device-side view.
+            host_tt = ttnn.squeeze(ttnn.squeeze(host_tt, dim=0), dim=0)
+            return ttnn.to_device(
+                host_tt,
+                device,
+                memory_config=routed_expert_weight_memory_config(
+                    device, host_tt.shape[-1], dram_nd_sharded=weights_dram_nd_sharded
+                ),
+            )
 
         mesh_rows, mesh_cols = mesh_device.shape
         gate_tensors, up_tensors, down_tensors = [], [], []
@@ -182,46 +242,41 @@ class TtRoutedExpert(LightweightModule):
                 stacked_up = torch.empty(mesh_rows, mesh_cols, emb_dim, hidden_dim)
                 stacked_down = torch.empty(mesh_rows, mesh_cols, hidden_dim, emb_dim)
 
-            mem = ttnn.DRAM_MEMORY_CONFIG if device else None
             mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device)
 
+            # Host-side in every mode, with the device placement applied afterwards by _to_device.
+            # as_tensor cannot apply it itself: on a cache hit it places the tensor with the memory
+            # config STORED in the tensorbin and ignores the one requested, so an ND-sharded
+            # placement could never reach a cached weight that way. Keeping the cache host-only also
+            # keeps it placement-agnostic, so flipping the layout invalidates nobody's cache.
             gate_tt = ttnn.as_tensor(
                 stacked_gate,
                 mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
                 dtype=weights_dtype,
-                memory_config=mem,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_gate"),
             )
             up_tt = ttnn.as_tensor(
                 stacked_up,
                 mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
                 dtype=weights_dtype,
-                memory_config=mem,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_up"),
             )
             down_tt = ttnn.as_tensor(
                 stacked_down,
                 mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
                 dtype=weights_dtype,
-                memory_config=mem,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_down"),
             )
 
             if device is None:
                 del gate_tt, up_tt, down_tt
             else:
-                gate_tt = ttnn.squeeze(ttnn.squeeze(gate_tt, dim=0), dim=0)
-                up_tt = ttnn.squeeze(ttnn.squeeze(up_tt, dim=0), dim=0)
-                down_tt = ttnn.squeeze(ttnn.squeeze(down_tt, dim=0), dim=0)
-                gate_tensors.append(gate_tt)
-                up_tensors.append(up_tt)
-                down_tensors.append(down_tt)
+                gate_tensors.append(_to_device(gate_tt))
+                up_tensors.append(_to_device(up_tt))
+                down_tensors.append(_to_device(down_tt))
 
         return (gate_tensors, up_tensors, down_tensors) if device else None
 
@@ -305,6 +360,9 @@ class TtRoutedExpert(LightweightModule):
     Weight Layout:
         - Each expert has gate_proj, up_proj, down_proj
         - Weights are NOT sharded across devices (each device has full local expert weights)
+        - On device each weight is DRAM-interleaved or, by default on Blackhole, DRAM ND-sharded
+          one tile-row tall and per_core_N wide (weights_dram_nd_sharded); see
+          routed_expert_weight_memory_config. Biases stay interleaved.
         - gate_proj, up_proj: (emb_dim, hidden_dim)
         - down_proj: (hidden_dim, emb_dim)
     """
@@ -327,6 +385,7 @@ class TtRoutedExpert(LightweightModule):
         *,
         activation: "ttnn.RoutedExpertActivation",
         hybrid_token_threshold: Optional[int] = None,
+        weights_dram_nd_sharded: Optional[bool] = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -358,9 +417,14 @@ class TtRoutedExpert(LightweightModule):
                           MiniMax-M3 / gpt-oss clamped swigluoai activation, or
                           RoutedExpertActivation.SituGlu for Kimi K3's SiTU-GLU. Keyword-only
                           and without a default so the caller must choose explicitly.
+            weights_dram_nd_sharded: DRAM placement of the expert weights. None (default) picks
+                          the arch default: ND-sharded on Blackhole, interleaved elsewhere. True
+                          forces ND-sharded (Blackhole only), False forces interleaved. See
+                          routed_expert_weight_memory_config for the placement itself.
         """
         super().__init__()
         self.mesh_device = mesh_device
+        self._is_blackhole = mesh_device.arch() == ttnn.Arch.BLACKHOLE
         self.experts_per_chip = experts_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
@@ -376,12 +440,13 @@ class TtRoutedExpert(LightweightModule):
         # Required RoutedExpertActivation, chosen explicitly by the caller (no
         # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
         # path (byte-identical), .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
-        # swigluoai activation, or .SituGlu for Kimi K3's SiTU-GLU. Enforcing presence
-        # avoids silently running the wrong activation when a caller forgets to set it.
+        # swigluoai activation, .SituGlu for Kimi K3's SiTU-GLU, or .ClampedSiluGlu for
+        # DeepSeek-V4's clamped SiLU-GLU. Enforcing presence avoids silently running the
+        # wrong activation when a caller forgets to set it.
         if activation is None:
             raise ValueError(
                 "TtRoutedExpert requires an explicit `activation` "
-                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai or .SituGlu)"
+                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai, .SituGlu or .ClampedSiluGlu)"
             )
         self.activation = activation
         # Hybrid routed-expert dispatch. None keeps the single-op path. An int T splits the
@@ -391,7 +456,7 @@ class TtRoutedExpert(LightweightModule):
         # tensor, no eltwise mask and no host sync. Measured crossover is per model -- compare the
         # two ops' perf gates at the shape -- so the caller supplies the number.
         if hybrid_token_threshold is not None:
-            if not is_blackhole():
+            if not self._is_blackhole:
                 raise NotImplementedError("hybrid_token_threshold requires the Blackhole fused path")
             if hybrid_token_threshold < 0:
                 raise ValueError(f"hybrid_token_threshold must be >= 0, got {hybrid_token_threshold}")
@@ -405,22 +470,35 @@ class TtRoutedExpert(LightweightModule):
                 )
         self.hybrid_token_threshold = hybrid_token_threshold
 
+        # DRAM placement of the expert weights. The Blackhole default is ND-sharded: both fused
+        # routed-expert ops then read a per-core weight slice as ONE NoC transaction per K-row
+        # instead of one per tile (see routed_expert_weight_memory_config). Elsewhere the
+        # fallback routed_expert_ffn reads DRAM-interleaved weights only, so the default is
+        # interleaved and an explicit True is rejected rather than failing on device.
+        if weights_dram_nd_sharded is None:
+            weights_dram_nd_sharded = self._is_blackhole
+        elif weights_dram_nd_sharded and not self._is_blackhole:
+            raise NotImplementedError(
+                "weights_dram_nd_sharded requires the Blackhole fused path; the fallback "
+                "routed_expert_ffn reads DRAM-interleaved weights only"
+            )
+        self.weights_dram_nd_sharded = weights_dram_nd_sharded
+
         # Every non-SiLU activation lives in the fused Blackhole kernel only; the Wormhole
         # fallback in forward() calls routed_expert_ffn, which has no activation parameter and
         # always computes SiLU. Reject here rather than silently returning SiLU output.
-        if activation != ttnn.RoutedExpertActivation.Silu and not is_blackhole():
+        if activation != ttnn.RoutedExpertActivation.Silu and not self._is_blackhole:
             raise NotImplementedError(
                 f"TtRoutedExpert {activation} is only supported on the Blackhole fused path; "
                 "the fallback path computes SiLU"
             )
 
-        # Optional per-expert projection biases (gpt-oss). Supported by any fused binary
-        # activation (the kernel adds gate/up bias before the activation and down bias
-        # after the down matmul). Converted + distributed like the weights below.
+        # Optional per-expert projection biases (gpt-oss). Converted + distributed like the
+        # weights below.
         if torch_biases is not None and activation not in _BIAS_CAPABLE_ACTIVATIONS:
             raise ValueError(
-                "TtRoutedExpert expert biases require a fused binary activation "
-                "(RoutedExpertActivation.SwiGluOai or .SituGlu); the SiLU path has no bias branch."
+                "TtRoutedExpert expert biases are enabled only for "
+                f"RoutedExpertActivation.SwiGluOai and .SituGlu, not {activation}."
             )
 
         total_experts = self.num_devices * experts_per_chip
@@ -452,6 +530,7 @@ class TtRoutedExpert(LightweightModule):
                 self.weight_cache_path,
                 self.cache_name_prefix,
                 device=self.mesh_device,
+                weights_dram_nd_sharded=self.weights_dram_nd_sharded,
             )
         elif weight_cache_path is not None:
             logger.debug(f"Loading weights from cache ({experts_per_chip} local experts)")
@@ -463,6 +542,7 @@ class TtRoutedExpert(LightweightModule):
                 self.weight_cache_path,
                 self.cache_name_prefix,
                 device=self.mesh_device,
+                weights_dram_nd_sharded=self.weights_dram_nd_sharded,
                 emb_dim=emb_dim,
                 hidden_dim=hidden_dim,
             )
@@ -485,6 +565,7 @@ class TtRoutedExpert(LightweightModule):
                 None,
                 None,
                 device=self.mesh_device,
+                weights_dram_nd_sharded=self.weights_dram_nd_sharded,
             )
 
         assert result is not None, "Expected weight tensors to be returned when device is provided"
@@ -590,9 +671,10 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
         """
-        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
-        if is_blackhole():
+        if self._is_blackhole:
             # Fused path. The composite op selects its strategy from the input
             # layout: a ROW_MAJOR bf16 buffer is consumed directly (x tilized and
             # bf8-packed internally, fresh output); a TILE buffer takes the
@@ -625,7 +707,7 @@ class TtRoutedExpert(LightweightModule):
 
             expert_outputs = None
             if not fused_only:
-                signpost(header="UnifiedRoutedExpertMoe")
+                ttnn.tracy_message("`TT_SIGNPOST: UnifiedRoutedExpertMoe`")
                 expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
                     composite_input,
                     expert_region_offsets,
@@ -654,7 +736,7 @@ class TtRoutedExpert(LightweightModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             if threshold is not None:
-                signpost(header="MoeFusedSwiGlu")
+                ttnn.tracy_message("`TT_SIGNPOST: MoeFusedSwiGlu`")
                 ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
                     dispatched_buffer,
                     self.gate_projs,
@@ -677,7 +759,8 @@ class TtRoutedExpert(LightweightModule):
                     up_biases=self.up_biases,
                     down_biases=self.down_biases,
                 )
-            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
 
         if self.gate_biases is not None:
@@ -696,7 +779,7 @@ class TtRoutedExpert(LightweightModule):
             dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=self.activations_dtype)
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
+            ttnn.tracy_message(f"`TT_SIGNPOST: Expert {local_expert+1}/{self.experts_per_chip}`")
 
             tokens = ttnn.experimental.deepseek_prefill.extract(
                 dispatched_buffer,
@@ -706,7 +789,8 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
                 max_dispatched_tokens_per_expert=self.max_tokens,
             )
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
             output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
                 tokens,
@@ -716,7 +800,8 @@ class TtRoutedExpert(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
                 output=None,
             )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
             expert_outputs = ttnn.experimental.deepseek_prefill.insert(
                 expert_outputs,
@@ -727,5 +812,6 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
             )
 
-        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
         return expert_outputs

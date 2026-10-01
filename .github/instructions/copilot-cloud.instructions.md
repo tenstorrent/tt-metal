@@ -73,21 +73,25 @@ you pass go straight through to `build_metal.sh`:
 `--enable-ccache` is always applied for you. Build the narrowest thing that
 actually exercises your change; do not reach for `--build-all`.
 
-If the wrapper warns that Garage credentials are missing, you are building
-against a cold cache and it will most likely not finish. Say so in the PR
-rather than burning the session on it.
 
 ## What to do about a build
 
-- **Builds clean** — say so explicitly in the PR description, including the
-  exact command you ran.
+Put the result under the **`### Verification`** heading in the PR description
+(`.github/pull_request_template.md`) — that section exists specifically for
+this. Text that is not under that heading is routinely lost: the description
+is written by a separate summarization step after your session ends, and it
+follows the PR template's structure, not your own scratch notes.
+
+- **Builds clean** — say so explicitly under `### Verification`, including the
+  exact command you ran. `copilot-build.sh` prints a closing
+  `[copilot-build] RESULT: success (Ns) cmd: ...` line; paste that line as-is.
 - **Fails to build** — fix it and rebuild. Do not open the PR and let CI find
   a compile error you could have caught.
 - **Did not need a build** (see the table above) — say which check you ran
   instead, e.g. that it is a docs-only change.
-- **Genuinely cannot build** (cold cache, docker unavailable, environment
-  problem) — open the PR anyway, and state in the description that the change
-  is **unverified**, and why.
+- **Cannot complete a build** (Docker unavailable, an environment failure,
+  or an observed timeout or resource limit) — open the PR anyway, and state
+  under `### Verification` that the change is **unverified**, and why.
 
 Do not claim you ran anything you did not run.
 

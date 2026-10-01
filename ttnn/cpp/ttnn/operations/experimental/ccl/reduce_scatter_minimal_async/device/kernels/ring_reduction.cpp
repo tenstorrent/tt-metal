@@ -20,11 +20,18 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
     constexpr uint32_t input_tensor_B = get_named_compile_time_arg_val("input_tensor_B");
     constexpr uint32_t slice_C = get_named_compile_time_arg_val("slice_C");
+    constexpr uint32_t fuse_op = get_named_compile_time_arg_val("fuse_op");
 
     uint32_t arg_idx = 0;
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
+    // (batch, channel) units this worker owns, as [unit_start, unit_end) with u = b * slice_C + c. All of
+    // them are processed inside every ring step. The page-major split gives every worker every unit and
+    // a fraction of the pages in each; the unit-major split gives it a contiguous group of units and
+    // every page within them.
+    const uint32_t unit_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t unit_end = get_arg_val<uint32_t>(arg_idx++);
 
     CircularBuffer cb_input(cb_input_id);
     CircularBuffer cb_interm(cb_interm_id);
@@ -33,7 +40,18 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_interm_id, cb_input_id, cb_compute_output_id);
 
-    for (uint32_t b = 0; b < input_tensor_B; ++b) {
+    // Ring step outermost, batches inside, mirroring the reader and writer: every (batch, channel)
+    // unit this worker owns is reduced within each ring step.
+    // Fused with a batched producer (fuse_op, B > 1): one ring traversal per batch, so the reduce-scatter
+    // of batch b overlaps the matmul producing batch b+1, which is what the fused op batches for. In every
+    // other case a single traversal carries all of the worker's units, one ring step at a time.
+    constexpr uint32_t num_traversals = (fuse_op && input_tensor_B > 1) ? input_tensor_B : 1;
+    for (uint32_t t = 0; t < num_traversals; ++t) {
+        // Units of this traversal: the worker's whole range, or its intersection with batch t.
+        const uint32_t t_unit_start =
+            num_traversals == 1 ? unit_start : (unit_start > t * slice_C ? unit_start : t * slice_C);
+        const uint32_t t_unit_end =
+            num_traversals == 1 ? unit_end : (unit_end < (t + 1) * slice_C ? unit_end : (t + 1) * slice_C);
         constexpr uint32_t ring_size_by_2 = ring_size / 2;
         uint32_t num_iters = ring_size_by_2 + 1;
         for (uint32_t i = 0; i < num_iters; ++i) {
@@ -66,7 +84,7 @@ void kernel_main() {
                 reduce_output = false;
             }
 
-            for (uint32_t c = 0; c < slice_C; ++c) {
+            for (uint32_t u = t_unit_start; u < t_unit_end; ++u) {
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t total_tiles_to_read = start_tiles_to_read;
 
@@ -123,7 +141,7 @@ void kernel_main() {
 
                     }  // if skip or process
                 }  // while total_tiles_to_read
-            }  // for slice_C
+            }  // for units
         }  // for num_iters
-    }  // for input_tensor_B
+    }  // for traversals
 }

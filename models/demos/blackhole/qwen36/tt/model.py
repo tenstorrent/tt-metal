@@ -38,9 +38,10 @@ class Qwen36Model:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
         self.sampling_dp = 1
-        # RoPE is host-recomputed each step, so refresh all decode trace inputs.
-        self._tt_vllm_always_refresh_decode_trace_inputs = True
-        # On-device sampling: allowlist 1x4/1x8 TP only — vocab/TP must fit Top-K's 64K shard limit (TP=2 does not).
+        # Rope is host-recomputed each step, so callers explicitly request a
+        # full input reload. Sampling does not alias the decode token input.
+        self._tt_supports_decode_token_feedback = False
+        # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
         mesh_shape = tuple(int(dim) for dim in mesh_device.shape)
         self._supports_on_device_sampling = (
             mesh_shape in ((1, 4), (1, 8))
@@ -120,11 +121,12 @@ class Qwen36Model:
         # LM head [in,out]. Mesh: vocab-sharded (dim=-1); _lm_head all-gathers logits.
         # M=1 decode is weight-read-bound (~1.3GB/token), so sharding cuts bandwidth;
         # gather moves only the logit row. REPLICATED fallback if vocab indivisible.
-        lm_head_weight = state_dict["output.weight"].T.contiguous()  # [dim, vocab_size]
-        self._lmhead_vocab_sharded = self.num_devices > 1 and lm_head_weight.shape[-1] % self.num_devices == 0
+        lm_head_weight = state_dict["output.weight"]  # [vocab_size, dim]; transposed on cache miss only
+        vocab_rows = lm_head_weight.shape[0]
+        self._lmhead_vocab_sharded = self.num_devices > 1 and vocab_rows % self.num_devices == 0
         if self.num_devices > 1 and not self._lmhead_vocab_sharded:
             logger.warning(
-                f"LM-head vocab {lm_head_weight.shape[-1]} not divisible by num_devices "
+                f"LM-head vocab {vocab_rows} not divisible by num_devices "
                 f"{self.num_devices}; falling back to replicated LM head."
             )
         if self._lmhead_vocab_sharded:
@@ -136,6 +138,7 @@ class Qwen36Model:
             lm_cache = tensor_cache_path / "output.weight" if tensor_cache_path else None
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
+            preprocess=lambda t: t.T.contiguous(),  # [dim, vocab_size]
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -3031,7 +3034,7 @@ class Qwen36Model:
                     ttnn.deallocate(x)
                     ttnn.deallocate(attn_out)
                     ff_in = layer.ffn_norm(h, mode=Mode.PREFILL)
-                    ff_out = layer.feed_forward.forward(ff_in)
+                    ff_out = layer.feed_forward.forward(ff_in, mode="prefill")
                     ttnn.deallocate(ff_in)
                     x = ttnn.add(h, ff_out)
                     ttnn.deallocate(h)

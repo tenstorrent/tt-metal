@@ -547,3 +547,21 @@ def test_gather_codegen_trace_capture_under_pressure(device, pin_before_warmup):
             _best_effort(lambda: ttnn.release_trace(device, trace_id))
         if resident is not None:
             ttnn.deallocate(resident)
+
+
+def test_gather_codegen_invalid_index_public_reproduction(device):
+    # Keep the public #55819 hang witness in the pre-merge `-k codegen` selection;
+    # the exhaustive reader/dtype/cache matrix remains in the nightly suite.
+    torch.manual_seed(55819)
+    x = torch.randn(64, 128, dtype=torch.bfloat16)
+    index = torch.randint(0, 64, (32, 128), dtype=torch.int64)
+    index[0, 0] = 0x800000
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    it = ttnn.from_torch(index.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.gather(xt, 0, it)
+    ttnn.synchronize_device(device)
+    actual = ttnn.to_torch(out)
+    valid = index < x.shape[0]
+    expected = torch.gather(x, 0, index.masked_fill(~valid, 0))
+    assert actual.shape == expected.shape, f"Public gather reproduction returned shape {actual.shape}"
+    assert torch.equal(actual[valid], expected[valid]), "Invalid index corrupted valid BF16 gather positions"

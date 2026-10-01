@@ -394,6 +394,7 @@ SKIP_LIST = [
     [
         pytest.param(
             {
+                "l1_small_size": 16384,
                 "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "trace_region_size": 500_000,
@@ -402,6 +403,7 @@ SKIP_LIST = [
         ),
         pytest.param(
             {
+                "l1_small_size": 16384,
                 "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "trace_region_size": 500_000,

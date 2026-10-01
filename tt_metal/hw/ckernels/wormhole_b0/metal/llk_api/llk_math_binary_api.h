@@ -33,11 +33,21 @@ inline void llk_math_eltwise_binary_init(
     const std::uint32_t operand_A,
     [[maybe_unused]] const std::uint32_t operand_B,
     const std::uint32_t acc_to_dest = 0) {
-    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+
+    SAN_HOOK(init<OperationFpuEltwiseBinary>(
+        StateVal<OperationFpuEltwiseBinary::EltwiseBinaryType>(to_underlying(eltwise_binary_type)),
+        StateVal<OperationFpuEltwiseBinary::BroadcastType>(to_underlying(src_b_bcast_type)),
+        StateVal<OperationFpuEltwiseBinary::MathFidelity>(to_underlying(effective_math_fidelity)),
+        StateVal<OperationFpuEltwiseBinary::ReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationFpuEltwiseBinary::AccToDest>(acc_to_dest),
+        StateVal<OperationFpuEltwiseBinary::FaceHeight>(tensor_shape.face_r_dim),
+        StateVal<OperationFpuEltwiseBinary::NumFaces>(tensor_shape.total_num_faces()),
+        StateVal<OperationFpuEltwiseBinary::NumFacesCDim>(tensor_shape.num_faces_c_dim)));
+
     _llk_math_eltwise_binary_init_<eltwise_binary_type, src_b_bcast_type, effective_math_fidelity, binary_reuse_dest>(
         tensor_shape, acc_to_dest);
 }
@@ -49,7 +59,6 @@ template <
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
-    SAN_HOOK(unsupported());
     // DPRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
     //     dst_index,
     //     get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>());
@@ -60,6 +69,15 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
         "block above and enable DPRINT support to inspect the dst index and max dest tile values.");
 
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+
+    SAN_HOOK(execute<OperationFpuEltwiseBinary>(
+        StateVal<OperationFpuEltwiseBinary::EltwiseBinaryType>(to_underlying(eltwise_binary_type)),
+        StateVal<OperationFpuEltwiseBinary::BroadcastType>(to_underlying(src_b_bcast_type)),
+        StateVal<OperationFpuEltwiseBinary::MathFidelity>(to_underlying(effective_math_fidelity)),
+        StateVal<OperationFpuEltwiseBinary::ReuseDest>(to_underlying(binary_reuse_dest)),
+        StateDiscard<std::uint32_t>(dst_index),
+        StateDiscard<bool>(clear_fp32_dst_acc)));
+
     _llk_math_eltwise_binary_<
         eltwise_binary_type,
         src_b_bcast_type,
@@ -80,7 +98,6 @@ inline void llk_math_eltwise_binary(
     const std::uint32_t operand_B,
     uint dst_index,
     const bool clear_fp32_dst_acc = true) {
-    SAN_HOOK(unsupported());
     // DPRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
     //     dst_index,
     //     get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>());
@@ -94,6 +111,18 @@ inline void llk_math_eltwise_binary(
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+
+    SAN_HOOK(execute<OperationFpuEltwiseBinary>(
+        StateVal<OperationFpuEltwiseBinary::EltwiseBinaryType>(to_underlying(eltwise_binary_type)),
+        StateVal<OperationFpuEltwiseBinary::BroadcastType>(to_underlying(src_b_bcast_type)),
+        StateVal<OperationFpuEltwiseBinary::MathFidelity>(to_underlying(effective_math_fidelity)),
+        StateVal<OperationFpuEltwiseBinary::ReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationFpuEltwiseBinary::FaceHeight>(tensor_shape.face_r_dim),
+        StateVal<OperationFpuEltwiseBinary::NumFaces>(tensor_shape.total_num_faces()),
+        StateVal<OperationFpuEltwiseBinary::NumFacesCDim>(tensor_shape.num_faces_c_dim),
+        StateDiscard<std::uint32_t>(dst_index),
+        StateDiscard<bool>(clear_fp32_dst_acc)));
+
     _llk_math_eltwise_binary_<
         eltwise_binary_type,
         src_b_bcast_type,
