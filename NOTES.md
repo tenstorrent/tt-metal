@@ -24,8 +24,12 @@ Fix 54771db51fb: split prints drift instead of asserting. run83.sh now takes ARM
 blx03 job 062: `ARMS=1 bash ~/fasth3/t83/run83.sh` (-w /home/smarton -t 590), chain=1 arm + T83_CMP vs saved chain0 wave.
 Log: g14blx03:~/fasth3/t83/run83.log. Copies: tt-project/t83/.
 
-Next: read run83.log for `AUDIO chain=1 replay_ms`, `T83_CMP`, `T83_EXIT`; check for drops during 062 (stop ALL device
-work if one started during it). Then submit `ARMS=0` (job ~2 min, warm cache) for the split timings.
-If chain=1 is bit-identical and faster: report the saving (flag exists, default 0). If not identical: STFT device_framing
-(set only for the chain) is the likely source; compare device vs host framing.
-After: copy logs to tt-project/t83/, `rm -rf ~/fasth3/t83 /var/tmp/fasth3/t83` on blx03.
+## Results (jobs 062, 064 on blx03 2x4 submesh; no drop during either)
+chain=0 (prod default) replay min 553.3 ms/decode (6 s clip); chain=1 min 546.3 ms; waveforms bit-identical (max_abs_diff 0).
+Split of the chain=0 decode (ms): mel_h2d 1.4, mel_trace 27.2, mel_d2h 3.5, voc_h2d 2.2, voc_trace 166.8, voc_d2h 8.3,
+stft_eager 26.2, bwe_h2d 1.9, bwe_trace 261.6, bwe_d2h 23.0, resample_eager 31.0, host_mix 1.1 (sum 554.2).
+=> Vocoder + BWE device compute = 428 ms (77%). Host<->device bridges total ~40 ms; chain=1 removes most of them but saves
+only ~7 ms (about 1%, near noise), because the eager STFT/resampler are device-bound anyway.
+Verdict: no exact change here gives a real saving. LTX_AUDIO_DEVICE_CHAIN stays opt-in (default 0).
+Real savings need faster vocoder/BWE kernels (op-level profile) or audio on a chip set disjoint from the VAE decode.
+Logs: tt-project/t83/run83_job062.log, run83_job064.log. blx03 dirs ~/fasth3/t83 and /var/tmp/fasth3/t83 removed.
