@@ -35,6 +35,7 @@ void kernel_main() {
     // 0 = legacy unbounded behavior; nonzero = wrap update_idx mod this value before
     // page_table lookup (bounded sliding-window cache support).
     constexpr auto cache_position_modulo = get_arg(args::cache_position_modulo);
+    constexpr auto input_is_row_major = get_arg(args::input_is_row_major);
 
     constexpr uint32_t head_offset_t = Wt * St;
 
@@ -47,9 +48,10 @@ void kernel_main() {
     DataflowBuffer dfb_page_table(dfb::page_table);
 #endif
 
-    // Kick off compute
-    dfb_input.reserve_back(Wt);
-    dfb_input.push_back(Wt);
+    // Kick off compute. Tiled input is Wt tiles; row-major is one shard page.
+    constexpr uint32_t input_cb_pages = input_is_row_major ? 1 : Wt;
+    dfb_input.reserve_back(input_cb_pages);
+    dfb_input.push_back(input_cb_pages);
 
     const uint32_t cache_tile_bytes = dfb_cache.get_tile_size();
 

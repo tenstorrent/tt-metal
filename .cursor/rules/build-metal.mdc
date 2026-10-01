@@ -1,0 +1,14 @@
+---
+description: Always rebuild tt-metal via ./build_metal.sh (never ninja directly)
+alwaysApply: true
+---
+
+# Building tt-metal
+
+Always rebuild with `./build_metal.sh` from the repo root. Do not use `ninja -C build install`, `cmake --build`, or any other direct build tool — `build_metal.sh` sets up the correct environment (build type, install layout, `_ttnn.so` placement for the Python bindings, etc.) and skipping it produces stale or broken installs that silently break Python-side tests.
+
+```bash
+cd /home/tt-admin/smanoj/metal_1 && ./build_metal.sh
+```
+
+Kernel `.cpp` files under `tt_metal/**/kernels/` and `ttnn/**/kernels/` are JIT-compiled at runtime and do **not** need a rebuild — just rerun the test.

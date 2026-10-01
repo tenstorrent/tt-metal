@@ -36,6 +36,7 @@ void kernel_main() {
     // 0 = legacy unbounded behavior; nonzero = wrap update_idx mod this value before
     // page_table lookup (bounded sliding-window cache support).
     constexpr auto cache_position_modulo = get_arg(args::cache_position_modulo);
+    constexpr auto input_is_row_major = get_arg(args::input_is_row_major);
 
     constexpr uint32_t head_offset_t = Wt * St;
 
@@ -112,7 +113,8 @@ void kernel_main() {
     }
 #endif
 
-    dfb_untilized_input.wait_front(Wt);  // input tensor
+    constexpr uint32_t input_cb_pages = input_is_row_major ? 1 : Wt;
+    dfb_untilized_input.wait_front(input_cb_pages);  // input tensor
 #ifndef ARCH_QUASAR
     // Gen1 patches the new row into the untilized cache block with a NoC loopback read from our own
     // L1; Quasar copies directly (see the ARCH_QUASAR branch below), so these are Gen1-only.
@@ -188,7 +190,7 @@ void kernel_main() {
         cache_id += head_offset_t;
     }
 
-    dfb_untilized_input.pop_front(Wt);
+    dfb_untilized_input.pop_front(input_cb_pages);
 
     if (send_signal) {
         // send signal to receiver core that we are done using the input buffer

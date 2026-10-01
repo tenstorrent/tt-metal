@@ -45,6 +45,7 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/fused_partial_rope/fused_partial_rope_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/copy/typecast/typecast_nanobind.hpp"
@@ -85,6 +86,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/combine_fabric2d_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/fused_experts_prefill/fused_experts_prefill_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/moe_fused_swiglu_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/hybrid_routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
@@ -108,6 +110,13 @@
 #include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/attn_res_gather_softmax_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/moe/fused_experts/fused_experts_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/hyperconnection/fused_hyperconnection_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/mix_streams/mix_streams_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/csa_pool/csa_pool_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/fused_lightning_select_kv/fused_lightning_select_kv_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/all_gather_for_matmul/all_gather_for_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/width_sharded_all_reduce/width_sharded_all_reduce_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -140,6 +149,7 @@ void py_module(nb::module_& mod) {
     transformer::bind_rotary_embedding_hf(mod);
     transformer::bind_rotary_embedding_llama(mod);
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
+    transformer::bind_fused_partial_rope(mod);
     transformer::bind_rotate_half(mod);
 
     create_qkv_heads::detail::bind_create_qkv_heads(mod);
@@ -169,6 +179,7 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_attn_matmul_from_cache(mod);
     matmul::detail::bind_group_attn_matmul(mod);
     matmul_decode::detail::bind_matmul_decode_operation(mod);
+    matmul_decode::detail::bind_matmul_decode_descriptor(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     high_bw_all_gather::detail::bind_experimental_high_bw_all_gather_operation(mod);
     deepseek_prefill::combine_fabric2d::detail::bind_experimental_combine_fabric2d_operation(mod);
@@ -218,6 +229,13 @@ void py_module(nb::module_& mod) {
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::moe::detail::bind_deepseek_moe_gate(mod);
     deepseek::moe::detail::bind_generalized_moe_gate(mod);
+    deepseek::moe::detail::bind_fused_experts(mod);
+    deepseek::detail::bind_fused_hyperconnection(mod);
+    deepseek::detail::bind_mix_streams(mod);
+    deepseek::detail::bind_csa_pool_window(mod);
+    deepseek::detail::bind_fused_lightning_select_kv(mod);
+    deepseek::detail::bind_all_gather_for_matmul(mod);
+    deepseek::detail::bind_width_sharded_all_reduce(mod);
     topk_large_indices::detail::bind_topk_large_indices(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
@@ -230,6 +248,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_combine(mod);
     deepseek_prefill::detail::bind_routed_expert_ffn(mod);
     deepseek_prefill::detail::bind_unified_routed_expert_ffn(mod);
+    deepseek_prefill::detail::bind_fused_experts_prefill(mod);
     deepseek_prefill::detail::bind_moe_fused_swiglu(mod);
     deepseek_prefill::detail::bind_hybrid_routed_expert_ffn(mod);
     deepseek_prefill::detail::bind_extract(mod);

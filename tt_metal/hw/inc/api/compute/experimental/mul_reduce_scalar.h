@@ -51,7 +51,8 @@ template <
     MathFidelity reduce_fidelity,
     bool accumulate_in_one_tile,
     bool is_fp32_dest_acc_en>
-ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler) {
+ALWI void mul_reduce_scalar_tile_impl(
+    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler, uint32_t tile_start) {
     MATH(constexpr MathFidelity mul_f = program_fidelity ? MATH_FIDELITY : mul_fidelity);
     MATH(constexpr MathFidelity reduce_f = program_fidelity ? MATH_FIDELITY : reduce_fidelity);
     constexpr uint32_t dest_capacity =
@@ -66,7 +67,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication. ELWMUL accumulates
     // into DEST, so with accumulate_in_one_tile every product lands in dest[0].
     for (uint32_t i = 0; i < num_tiles; i++) {
-        UNPACK((llk_unpack_AB(icb0, icb1, i, i)));
+        UNPACK((llk_unpack_AB(icb0, icb1, tile_start + i, tile_start + i)));
         MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, mul_f>(accumulate_in_one_tile ? 0 : i, icb0)));
     }
 
@@ -147,6 +148,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
  * | Function   | ocb                    | Output circular buffer (used to program packer face_r_dim) | uint32_t | 0 to 31     | True     |
  * | Function   | num_tiles              | Number of tiles to process                                 | uint32_t | 1 to the DEST tile capacity (4 in fp32 half-sync), or any with accumulate_in_one_tile | True |
  * | Function   | scalar                 | Scalar multiplier for reduction (default: 1.0)             | float    | Any float   | False    |
+ * | Function   | tile_start             | Index of the first input tile, relative to the CB front    | uint32_t | 0 to 31     | False    |
  *
  * Return value: None
  */
@@ -155,14 +157,15 @@ template <
     PoolType reduce_type = PoolType::SUM,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool accumulate_in_one_tile = false>
-ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
+ALWI void mul_reduce_scalar_tile(
+    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f, uint32_t tile_start = 0) {
     // The two fidelity arguments are placeholders: program_fidelity=true reads MATH_FIDELITY instead.
     detail::mul_reduce_scalar_tile_impl<
         true,
         MathFidelity::LoFi,
         MathFidelity::LoFi,
         accumulate_in_one_tile,
-        is_fp32_dest_acc_en>(icb0, icb1, ocb, num_tiles, scaler);
+        is_fp32_dest_acc_en>(icb0, icb1, ocb, num_tiles, scaler, tile_start);
 }
 
 #if defined(ARCH_BLACKHOLE)
@@ -209,10 +212,10 @@ template <
     PoolType reduce_type = PoolType::SUM,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_reduce_scalar_tile_fidelity(
-    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
+    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f, uint32_t tile_start = 0) {
     detail::
         mul_reduce_scalar_tile_impl<false, mul_fidelity, reduce_fidelity, accumulate_in_one_tile, is_fp32_dest_acc_en>(
-            icb0, icb1, ocb, num_tiles, scaler);
+            icb0, icb1, ocb, num_tiles, scaler, tile_start);
 }
 
 #endif  // ARCH_BLACKHOLE
