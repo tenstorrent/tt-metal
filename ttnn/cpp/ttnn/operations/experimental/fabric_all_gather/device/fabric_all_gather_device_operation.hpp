@@ -4,61 +4,21 @@
 
 #pragma once
 
-#include <tuple>
 #include <variant>
-#include <tt-metalium/sub_device_types.hpp>
-#include "ttnn/device_operation.hpp"
-#include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/high_bw_all_gather/device/high_bw_all_gather_device_operation.hpp"
 #include "fabric_all_gather_device_operation_types.hpp"
 #include "fabric_all_gather_factory.hpp"
 
 namespace ttnn::operations::experimental::fabric_all_gather {
 
-struct FabricAllGatherDeviceOperation {
-    using operation_attributes_t = FabricAllGatherParams;
-    using tensor_args_t = FabricAllGatherInputs;
-    using spec_return_value_t = tt::tt_metal::TensorSpec;
-    using tensor_return_value_t = Tensor;
-    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
+// high_bw_all_gather's operation (validation, program hash, output spec and topology) with this op's program. The
+// operation type is part of the program-cache key, so the two ops never share a cached program.
+struct FabricAllGatherDeviceOperation : high_bw_all_gather::HighBwAllGatherDeviceOperation {
     using program_factory_t = std::variant<FabricAllGatherFactory>;
 
-    // The selected batch slot and valid prefix are patched into kernel runtime arguments. Hash only
-    // their presence, so a serving loop reuses one compiled program as either value changes.
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-
-    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
-    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
+        return FabricAllGatherFactory{};
+    }
 };
 
 }  // namespace ttnn::operations::experimental::fabric_all_gather
-
-namespace ttnn::prim {
-
-Tensor fabric_all_gather(
-    const Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor,
-    int32_t dim,
-    std::optional<uint32_t> cluster_axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
-    std::optional<uint32_t> num_links = std::nullopt,
-    std::optional<uint32_t> input_batch_index = std::nullopt,
-    std::optional<uint32_t> gathered_dim_size = std::nullopt,
-    // Trace-safe slot select: 1-element uint32 tensor holding the USER id, recomposed on-device as
-    // user_id * batch_slot_num_layers + batch_slot_layer_idx. Mutually exclusive with input_batch_index.
-    const std::optional<Tensor>& input_batch_index_tensor = std::nullopt,
-    uint32_t batch_slot_num_layers = 1,
-    uint32_t batch_slot_layer_idx = 0,
-    // Trace-safe active extent: 1-element uint32 tensor holding this chunk's start position in the
-    // gathered dim; the reader derives the extent from it. Mutually exclusive with gathered_dim_size.
-    const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
-    uint32_t gathered_slab_global = 0,
-    const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt);
-
-}  // namespace ttnn::prim

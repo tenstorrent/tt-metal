@@ -20,6 +20,7 @@ struct ShardPageGeometry {
     uint32_t stripe_pages = 0;
     uint32_t pages_per_slot = 0;         // input pages of one batch slot (selected-batch gathers)
     uint32_t local_gather_dim_size = 0;  // this chip's (input) extent of the gather dim
+    uint32_t gather_dim_elements_per_page = 1;  // tile height / width when gathering a tile dim, else 1
     uint32_t num_ranks = 0;
     uint32_t pages_per_slab = 0;  // active pages per stripe per block-cyclic slab (prefix metadata path)
 };
@@ -30,10 +31,9 @@ struct FabricAllGatherFactory {
         tt::tt_metal::KernelHandle link_worker_sender_kernel_id{};
         tt::tt_metal::KernelHandle copy_core_reader_kernel_id{};
         tt::tt_metal::KernelHandle copy_core_writer_kernel_id{};
-        bool has_copy_cores = false;
         tt::tt_metal::GlobalSemaphore ready_counter;
         tt::tt_metal::GlobalSemaphore arrival_counter;
-        CoreRangeSet all_op_cores;
+        CoreRangeSet link_worker_cores;  // the cores that use the ready / arrival counters
         ShardPageGeometry shard_page_geometry;
     };
 

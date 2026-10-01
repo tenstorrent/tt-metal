@@ -25,7 +25,7 @@ EMULE = bool(os.environ.get("TT_METAL_EMULE_MODE"))
 COMPARE_HIGH_BW = os.environ.get("FABRIC_ALL_GATHER_COMPARE_HIGH_BW", "0" if EMULE else "1") == "1"
 ROWS = int(os.environ.get("FABRIC_ALL_GATHER_ROWS", "640"))  # per-chip tokens, as GLM's 5k chunk over SP=8
 KV_ROWS = int(os.environ.get("FABRIC_ALL_GATHER_KV_ROWS", "480"))  # per-chip sparse-KV cache rows (the padded 15k job)
-SLOTS = 3
+SLOTS = 4
 
 
 def _router(payload):
@@ -164,6 +164,44 @@ def test_axis_gather_matches_high_bw(mesh_device, cluster_axis, case):
         _check(new_out, host, ref_out, f"{name} axis {cluster_axis}")
 
 
+@pytest.mark.parametrize("device_params", _FABRICS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [_system_mesh()], indirect=True)
+@pytest.mark.parametrize("cluster_axis", [1, None])
+def test_pages_larger_than_payload(mesh_device, cluster_axis):
+    """16 KiB ROW_MAJOR rows: every page is split over several packets (3 at a 6 KiB payload, the last one partial)."""
+    torch.manual_seed(2)
+    rows, width = 64, 8192
+    if cluster_axis is None:
+        G = mesh_device.get_num_devices()
+        host = _random((1, 1, rows * G, width), ttnn.bfloat16)
+        mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    else:
+        G = mesh_device.shape[cluster_axis]
+        host = _random((1, 1, rows * G, width), ttnn.bfloat16)
+        dims = (None, 2) if cluster_axis == 1 else (2, None)
+        mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+    inp = _device_tensor(mesh_device, host, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mapper)
+    ref_out, new_out, _ = _prefilled_pair(mesh_device, (1, 1, rows * G, width), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+    _both(mesh_device, inp, ref_out, new_out, dim=2, cluster_axis=cluster_axis, num_links=2)
+    _check(new_out, host, ref_out, f"16 KiB rows, cluster_axis {cluster_axis}")
+
+
+@pytest.mark.parametrize("device_params", _FABRICS[:1], indirect=True)
+@pytest.mark.parametrize("mesh_device", [_system_mesh()], indirect=True)
+def test_tile_extent_must_be_tile_aligned(mesh_device, expect_error):
+    """A partial extent of a TILE gather dim that is not a whole number of tiles is rejected (as high_bw_all_gather
+    does), not rounded to whole tiles."""
+    G = mesh_device.shape[1]
+    host = _random((1, 1, 64 * G, 64), ttnn.bfloat16)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 2))
+    inp = _device_tensor(mesh_device, host, ttnn.bfloat16, ttnn.TILE_LAYOUT, mapper)
+    _, new_out, _ = _prefilled_pair(mesh_device, (1, 1, 64 * G, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "tile alignment"):
+        ttnn.experimental.fabric_all_gather(
+            inp, dim=2, output_tensor=new_out, cluster_axis=1, num_links=2, gathered_dim_size=16 * G
+        )
+
+
 def _kv_setup(mesh_device, nd_sharded, dtype=ttnn.bfloat16):
     torch.manual_seed(1)
     G = mesh_device.get_num_devices()
@@ -245,13 +283,24 @@ def test_full_mesh_kv_prefix_on_top_two_rows(mesh_device, nd_sharded):
 @pytest.mark.parametrize("device_params", _FABRICS[:1], indirect=True)
 @pytest.mark.parametrize("mesh_device", [_system_mesh()], indirect=True)
 def test_full_mesh_kv_prefix_metadata_traced_matches_high_bw(mesh_device):
-    """The trace-safe form: slot and extent read on device, captured once, replayed with new metadata."""
+    """The trace-safe form: slot and extent read on device. Each op is captured ONCE; between replays only the user and
+    prefix tensors change in place (different slots, growing and shrinking extents), so a replay that used the captured
+    metadata would gather the wrong slot or extent."""
     inp, ref_out, new_out, G, host, fill = _kv_setup(mesh_device, nd_sharded=True)
-    num_layers, layer_idx = SLOTS, 2  # slot = user * num_layers + layer_idx
-    user = _meta_scalar(mesh_device, 0)
+    num_layers, layer_idx = 2, 1  # slot = user * num_layers + layer_idx
     slab = 32 * G
+    user = _meta_scalar(mesh_device, 0)
+    prefix = _meta_scalar(mesh_device, 0)
 
-    def issue(op, out, prefix):
+    def host_scalar(value):
+        return ttnn.from_torch(
+            torch.tensor([[[[value]]]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    def issue(op, out):
         op(
             inp,
             dim=2,
@@ -265,23 +314,32 @@ def test_full_mesh_kv_prefix_metadata_traced_matches_high_bw(mesh_device):
             gathered_slab_global=slab,
         )
 
-    for start in [0, slab, 3 * slab]:
-        prefix = _meta_scalar(mesh_device, start)
-        ops = [(ttnn.experimental.fabric_all_gather, new_out)]
-        if COMPARE_HIGH_BW:
-            ops.insert(0, (ttnn.experimental.high_bw_all_gather, ref_out))
-        for op, out in ops:
-            issue(op, out, prefix)  # warm (compiles)
-            ttnn.synchronize_device(mesh_device)
-            tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            issue(op, out, prefix)
-            ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
-            ttnn.release_trace(mesh_device, tid)
+    ops = [(ttnn.experimental.fabric_all_gather, new_out)]
+    if COMPARE_HIGH_BW:
+        ops.insert(0, (ttnn.experimental.high_bw_all_gather, ref_out))
+    traces = []
+    for op, out in ops:
+        issue(op, out)  # compile (user 0, start 0)
         ttnn.synchronize_device(mesh_device)
-        extent = min(((start + slab + slab - 1) // slab) * slab, KV_ROWS * G)
-        fill = _kv_expected(host, fill, G, layer_idx, extent)  # user 0: slot = layer_idx
-        _check(new_out, fill, ref_out, f"traced metadata start {start}")
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        issue(op, out)
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        traces.append(tid)
+    ttnn.synchronize_device(mesh_device)
+    fill = _kv_expected(host, fill, G, layer_idx, slab)  # the warm-up and capture calls
+    try:
+        for u, start in [(1, slab), (0, 3 * slab), (1, 0), (0, KV_ROWS * G - slab)]:
+            ttnn.copy_host_to_device_tensor(host_scalar(u), user)
+            ttnn.copy_host_to_device_tensor(host_scalar(start), prefix)
+            for tid in traces:
+                ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+            ttnn.synchronize_device(mesh_device)
+            extent = min(((start + slab + slab - 1) // slab) * slab, KV_ROWS * G)
+            fill = _kv_expected(host, fill, G, u * num_layers + layer_idx, extent)
+            _check(new_out, fill, ref_out, f"traced replay user {u} start {start}")
+    finally:
+        for tid in traces:
+            ttnn.release_trace(mesh_device, tid)
 
 
 @pytest.mark.skipif(EMULE, reason="trace capture / sub-device managers need fast dispatch (hardware)")
