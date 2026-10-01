@@ -144,3 +144,21 @@ Build fixes after fork_op.py (no behaviour change):
 - Needed by: xing40_a4b_d_p C.dense.attention (`tt/attention.py`; `XING_MLA_SDPA=source` keeps ttnn.transformer.ring_mla
   at bf16 DEST)
 - Files: `device/ring_joint_sdpa_program_factory.cpp`, `tests/unit/test_ring_mla_fp32_dest.py`
+
+### ring_mla / ring joint: host kv_actual_isl=0 on a single-chunk cache runs (was TT_FATAL)
+- What: `RingJointSDPA` invoke drops a host `kv_actual_isl` of 0 when the input is not chunk-shaped (per-device
+  Q.seq == K.seq, causal, not cross), so the op takes the full-prefill causal path instead of failing validate with
+  "KV-pad rotation (host kv_actual_isl or metadata) requires chunked-prefill input". kv_actual_isl=0 has no prefix to
+  rotate past; the metadata path already treats the non-chunked case the same way (`kv_pad_from_metadata` needs
+  `is_chunked`). No new argument.
+- Default behaviour: bug-fix exception (skill section 3): only an input the fork (and the source) refused changes;
+  every accepted input keeps its attributes, hash and program. Unit suite 38 passed (35 + 3 new); source-test check
+  210 tests, 0 regressions; the model cases in `tests/test_sdpa.py` (1x4 / 2x2) still fail to open their mesh on the
+  4x2 box (fabric router sync, environment, as recorded above); none of them calls ring_mla.
+- Why: xing40_a4b_d_p always passes `kv_actual_isl=start`. test_positions runs one chunk at start 0 with
+  max_seq = chunk = 5120, so the latent cache is 1280 rows per SP row, equal to Q, and every layer hit the TT_FATAL.
+- Tests: `tests/unit/test_ring_mla_single_chunk.py` (3 cases, 4x2 mesh, FABRIC_2D, ring over axis 0, Xing geometry,
+  cache = chunk = 2048): fp32 / bf16 DEST bit-identical to the same call without kv_actual_isl, accuracy vs float32
+  torch (rel 0.018 / worst row 0.031 at fp32 DEST, 0.023 / 0.058 at bf16 DEST); the source op still refuses it.
+- Needed by: xing40_a4b_d_p X.3 (test_positions, `tt/attention.py:_ring_attend`)
+- Files: `device/ring_joint_sdpa_device_operation.cpp`, `tests/unit/test_ring_mla_single_chunk.py`
