@@ -99,8 +99,7 @@ def main():
                 stamp = epoch(year + "-" + match[1].replace(" ", "T") + "+00:00")
                 server_samples.append((stamp, float(match[2]), float(match[3])))
     rows = [
-        analyze(p, server_samples)
-        for p in sorted(args.artifact_root.glob("**/swe_bench*/*/agent/mini-swe-agent.trajectory.json"))
+        analyze(p, server_samples) for p in sorted(args.artifact_root.glob("**/agent/mini-swe-agent.trajectory.json"))
     ]
     if args.summary_only:
         for row in rows:

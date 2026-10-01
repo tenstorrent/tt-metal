@@ -16,5 +16,7 @@
   "shared_qualitative": {"prompts": 6, "concurrency": 1, "thinking": false, "max_tokens": 256, "exact_text_matches_selected_policy": false, "manual_review": "All six coherent; no visible degeneracy; different text is not an accuracy-gate pass"},
   "raw_artifacts": "readiness_vllm/eval_speed/weight_control/",
   "outcome_trial": "/home/mvasiljevic/gemma4-eval-speed-evidence/local_django_weight_bfp8_seed9472",
-  "outcome_status": "running_900_second_diagnostic_seeded_trial"
+  "outcome_status": "reward1_resolved_but_agent_timeout_900_seconds",
+  "outcome": {"reward": 1.0, "resolved": true, "agent_seconds": 900.01963, "required_test_passed": "test_simplecol_query (queries.test_query.TestQuery)", "existing_regression_tests_passed": 103, "verifier_finished_at": "2026-10-01T18:48:18.015749Z"},
+  "limitations": "No clean submission within900seconds. Selected-policy seeded control and full readiness accuracy still pending. Previous unseeded failed trials are not a paired causal baseline."
 }

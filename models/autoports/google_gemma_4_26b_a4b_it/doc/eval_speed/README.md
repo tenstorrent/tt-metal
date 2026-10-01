@@ -654,3 +654,14 @@ Short replay tools now enforce a real wall deadline across blocked first-token
 and stream reads, preserving partial evidence on expiry. Seven host invariants
 pass, including timer restoration and complete policy isolation. A client abort
 does not reset or forcibly terminate the serving engine.
+
+At18:48:18 the capped Django trial finishes with reward1 and`resolved=true`:
+the required`test_simplecol_query` and all103 existing regression tests pass.
+The agent nevertheless reaches900.020 seconds without clean submission, so its
+`AgentTimeoutError` remains. It produced and locally checked the source fix
+before the deadline; this is a verified patch-quality improvement, not proof
+of clean agent completion or a paired8x speedup over the old failed7200-second
+run. The explicit request seed and other previously disclosed differences
+prevent attributing all improvement to precision. The next gates are the existing
+100-token traced readiness reference and a same-host selected-policy seeded
+trial, followed by scoped CI validation. The full five-task run remains gated.

@@ -8,12 +8,15 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from probe_context_dedup import compact
 from probe_loop_recovery import wall_deadline
+from replay_eval_requests import post
 
 
 def turn(call_id, command, output):
@@ -104,6 +107,29 @@ class DiagnosticDeadlineTests(unittest.TestCase):
         with wall_deadline(0.1, next_state):
             pass
         self.assertFalse(next_state["expired"])
+
+    def test_interrupts_http_before_response_headers(self):
+        class SlowHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                time.sleep(0.15)
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        with HTTPServer(("127.0.0.1", 0), SlowHandler) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                state = {"expired": False}
+                with wall_deadline(0.02, state):
+                    with post(f"http://127.0.0.1:{server.server_port}", "/", {}) as response:
+                        response.read()
+                self.assertTrue(state["expired"])
+            finally:
+                server.shutdown()
+                thread.join()
 
 
 if __name__ == "__main__":
