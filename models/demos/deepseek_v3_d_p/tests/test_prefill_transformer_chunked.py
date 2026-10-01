@@ -1961,8 +1961,9 @@ def run_chunked_transformer_updated(
             topk_cores = {resources.topk_core_grid.num_cores() for _, resources in active}
             gather_cores = {resources.gather_core_grid.num_cores() for _, resources in active}
             assert profiles == {expected_overlap_profile}, profiles
-            assert topk_cores == {80}, topk_cores
-            assert gather_cores == {40}, gather_cores
+            gather_rows = 2  # tt_ccl._SPARSE_MLA_OVERLAP_GATHER_ROWS: the two worker rows below the Ethernet row
+            assert topk_cores == {worker_grid.x * (worker_grid.y - gather_rows)}, topk_cores
+            assert gather_cores == {worker_grid.x * gather_rows}, gather_cores
             observed_profile = next(iter(profiles))
             observed_topk_cores = next(iter(topk_cores))
             observed_gather_cores = next(iter(gather_cores))
