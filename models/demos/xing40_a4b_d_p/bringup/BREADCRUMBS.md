@@ -467,3 +467,29 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Found: the runner SIGFPEs at FABRIC_PAYLOAD_SIZE 3584; the runner child needs TT_METAL_OPERATION_TIMEOUT_SECONDS
   above 5 s (H2D waits); prefill_producer differs from the server (no reshuffle, real-token pad, 32-aligned follow-ups,
   no pull-back). Known-issues and repo-map proposals added.
+
+## K.2 contract (run1, attempt 1)
+- Built the serving contract (bringup/serving_contract.md) on the existing ops; no fork changed.
+  - tt/attention.py: any 32-aligned start (the chunk-aligned assert is gone); `__call__(x, qr, start, end=None)`.
+    `end` = actual_end: `update_padded_kv_cache(valid_global=end)`, then `zero_padded_kv_cache(..., pad_align=32)`
+    when end % 32. `end == start + chunk` becomes None, so the ladder runs the same programs as before.
+    update_padded_kv_cache, rotary_embedding_indexed and ring_mla(kv_actual_isl=start) already derived the server's
+    row placement from the start. `prepare_cache(cache)` (load time) builds a gather scratch in the engine cache's
+    dtype (bfp8), and `drop_own_cache()` frees the geometry's bf16 cache in the runtime (16 MB per layer and chip).
+  - tt/model.py: `TtXingBlock(x, start, end=None)`; `TtEmbedding.clamp_ids` (pad id -> V-1 on the device), used by
+    the runtime and the hooks. tt/layout.py: `server_order(start, chunk, sp)` = the server's reshuffle.
+  - hooks.py: `embed(tokens, start=0)` reorders on the host (harness boundary) with server_order, then clamp_ids.
+    `layer(i, h, start, state, end=None)`. The bring-up harness keeps the bf16 geometry cache, so ladder accuracy is
+    unchanged (final hidden 0.998407, top5 1.0).
+  - tt/runners/kv_contract.py: engine cache bfp8_b TILE (record 19584 B; XING_KV_CACHE_DTYPE=bf16 keeps K.1).
+    The table takes the runner's stage_layout (base, banks, chips, host tag) and global layer ids. read_cache picks
+    the bfp8 or bf16 decoder by record size.
+  - tt/runners/adapter.py: FABRIC_PAYLOAD_SIZE 4352. Every layer is served (no spec subset), so
+    num_kv_cache_layers(n) = n. `build_kv_chunk_table(kv, path, *, first_layer_idx, num_my_layers, stage_layout,
+    stage_layouts)`. Per layer: D2H `outbound_socket_service_sync` on the CQ if d2h_service is set, else an event
+    sync, then sink. compile() warms 3 chunks in slot 0: (0, full), (2944, 6064) and (max_seq - chunk, full).
+- Contract tests: cache_starts KV pcc >= 0.99998; pulled_back passes (layer-0 rewrite bit-identical); adapter_acks
+  bfp8 pcc 0.99995; runner_contract passes (40 layers, 17 chunks, D2H acks; worst KV channel pcc 0.9927, a deep-layer nope channel).
+- Gate: rc 0 (serving --run all 4/4, ladder s56320 PASS, test_contract PASS).
+- Re-run: the brief's gate command; one test: `scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/xing40_a4b_d_p/tests/bringup/contract/test_runner_contract.py` (3.5 min).

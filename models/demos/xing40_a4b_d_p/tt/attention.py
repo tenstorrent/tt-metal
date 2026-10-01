@@ -79,7 +79,7 @@ def sdpa_impl() -> str:
     return impl
 
 
-_KV_BUFS: dict = {}  # (id(mesh), max_seq, width) -> the shared ring_mla gather scratch
+_KV_BUFS: dict = {}  # (id(mesh), max_seq, width[, dtype]) -> the shared ring_mla gather scratch
 _SEMAPHORES: dict = {}  # id(mesh) -> (ring_mla global semaphores, ccl core offset, sdpa grid)
 
 
@@ -147,6 +147,7 @@ class _Geometry:
             layout=ttnn.TILE_LAYOUT,
         )
         self._topology = self.cache.tensor_topology()
+        self.cache_shape, self.cache_dtype = tuple(self.cache.shape), self.cache.dtype
         # ring_mla's gathered-KV scratch: replicated [1, 1, max_seq, 576], one per (mesh, max_seq) shared by every
         # layer (ring_mla rewrites the gathered prefix each call; layers run one after another). plan.md: 65 MB.
         key = (id(mesh), max_seq, att.kv_width)
@@ -160,6 +161,7 @@ class _Geometry:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
         self.kv_buf = _KV_BUFS[key]
+        self.kv_bufs = {self.cache_dtype: self.kv_buf}  # cache dtype -> the ring_mla gather scratch of that dtype
         cl = self.chunk_local
         q_chunk, k_chunk = _largest_divisor_chunk(cl, sdpa_q_chunk()), _largest_divisor_chunk(cl, K_CHUNK)
         _, _, grid = _ring_ccl(mesh)
@@ -202,7 +204,7 @@ class _Geometry:
 
 class TtMlaAttention:
     """One layer's dense causal MLA. ``setup(chunk, max_seq)`` once per geometry, then
-    ``__call__(attn_norm, q_resid, start)`` per chunk (start a multiple of the chunk). Writes the chunk's latent rows
+    ``__call__(attn_norm, q_resid, start, end=None)`` per chunk (start any multiple of 32, end = actual_end). Writes the chunk's latent rows
     into the layer's device cache and returns attn_out [1, 1, S/4, hidden/2] fp32 (column split)."""
 
     def __init__(
@@ -309,19 +311,47 @@ class TtMlaAttention:
             if self.geom is g:
                 self.geom = None
             for t in (g.cache, g.cos, g.sin, g.trans):
-                ttnn.deallocate(t)
-        kb = _KV_BUFS.pop((id(self.mesh), max_seq, self.kv_width), None)
-        if kb is not None:
-            ttnn.deallocate(kb)
+                if t.is_allocated():
+                    ttnn.deallocate(t)
+        for k in [k for k in _KV_BUFS if k[0] == id(self.mesh) and k[1] == max_seq and k[2] == self.kv_width]:
+            ttnn.deallocate(_KV_BUFS.pop(k))
+
+    def prepare_cache(self, cache) -> None:
+        """Load time (serving): make ``cache`` bindable. A cache whose dtype differs from the geometry's (the
+        engine's bfp8_b cache, tt/runners/kv_contract.py) needs a gather scratch of its own dtype; it is allocated
+        here once per (mesh, max_seq, dtype) and shared by every layer."""
+        g = self.geom
+        assert tuple(cache.shape)[1:] == g.cache_shape[1:], (cache.shape, g.cache_shape)
+        if cache.dtype == g.cache_dtype:
+            return
+        key = (id(self.mesh), g.max_seq, self.kv_width, cache.dtype)
+        if key not in _KV_BUFS:
+            _KV_BUFS[key] = ttnn.from_torch(
+                torch.zeros(1, 1, g.max_seq, self.kv_width),
+                dtype=cache.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        g.kv_bufs[cache.dtype] = _KV_BUFS[key]
 
     def bind_cache(self, cache, slot: int, row: int, rows: int) -> None:
         """Serving option: write / gather this layer's latent rows in an external multi-slot cache (the prefill
         engine's, tt/runners/kv_contract.py) instead of the geometry's own. ``cache`` is laid out like the geometry's
-        (init_kvpe_cache, tp_axis None, same max_seq and chunk) with batch = slot * rows + row. ``unbind_cache``
-        (the default) restores the geometry cache at batch 0."""
-        assert tuple(cache.shape)[1:] == tuple(self.geom.cache.shape)[1:], (cache.shape, self.geom.cache.shape)
+        (init_kvpe_cache, tp_axis None, same max_seq and chunk) with batch = slot * rows + row; its dtype may differ
+        (bfp8_b) once ``prepare_cache`` ran. ``unbind_cache`` (the default) restores the geometry cache at batch 0."""
+        assert tuple(cache.shape)[1:] == self.geom.cache_shape[1:], (cache.shape, self.geom.cache_shape)
         assert 0 <= row < rows and (slot + 1) * rows <= cache.shape[0], (slot, row, rows, cache.shape)
+        assert cache.dtype in self.geom.kv_bufs, f"call prepare_cache first for a {cache.dtype} cache"
         self.slot = (cache, int(slot), int(row), int(rows))
+
+    def drop_own_cache(self) -> None:
+        """Serving: free the geometry's own single-sequence latent cache (the engine's cache replaces it; 16 MB per
+        layer and chip). The RoPE tables and scratch stay; load_state / read_state / the unbound forward then fail."""
+        g = self.geom
+        if g is not None and g.cache is not None and g.cache.is_allocated():
+            ttnn.deallocate(g.cache)
 
     def unbind_cache(self) -> None:
         self.slot = None
@@ -351,8 +381,14 @@ class TtMlaAttention:
             compute_kernel_config=self.ckc,
         )
 
-    def _kv_stem(self, x, start: int) -> None:
-        """kv = [kv_a_layernorm(latent) | RoPE(k_rope)] for this chunk -> the latent cache (this row's window)."""
+    def _kv_stem(self, x, start: int, end: int | None) -> None:
+        """kv = [kv_a_layernorm(latent) | RoPE(k_rope)] for this chunk -> the latent cache (this row's window).
+
+        ``start``: any multiple of 32; the chunk's tokens sit on the SP rows as the server places them (absolute
+        position g on row (g // (chunk / sp)) % sp, rising within a row), which update_padded_kv_cache /
+        rotary_embedding_indexed / ring_mla derive from ``start`` on the device (ttMLA._chunked_attn).
+        ``end`` (actual_end, None = the whole chunk is real): the write is clamped to the 32-row records holding
+        real tokens (valid_global), and the rows [end, ceil32(end)) of the last record are zeroed after it."""
         dram, s_loc = ttnn.DRAM_MEMORY_CONFIG, x.shape[2]
         part = ttnn.linear(x, self.kv_a, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=dram)
         kv = ttnn.all_reduce(part, cluster_axis=self.tp_axis, memory_config=dram)  # [1, 1, S/4, 576] fp32
@@ -374,6 +410,10 @@ class TtMlaAttention:
         ttnn.deallocate(nb)
         ttnn.deallocate(rr)
         cache, slot, row, rows = self._cache()
+        if kvpe.dtype != cache.dtype:  # the engine's bfp8_b cache (update_padded_kv_cache needs equal dtypes)
+            packed = ttnn.typecast(kvpe, cache.dtype, memory_config=dram)
+            ttnn.deallocate(kvpe)
+            kvpe = packed
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache,
             kvpe,
@@ -382,8 +422,15 @@ class TtMlaAttention:
             num_layers=rows,
             kv_actual_global=start,
             cluster_axis=self.sp_axis,
+            valid_global=end,
         )
         ttnn.deallocate(kvpe)
+        if end is not None and end % TILE:
+            # The last record ships whole: its rows past actual_end hold pad-token KV until zeroed here
+            # (deepseek_v3_d_p/tt/kv_ack.py). pad_align 32 = the 32-token record, so no later row is touched.
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                cache, slot, row, rows, end, self.geom.chunk, self.sp_axis, pad_align=TILE
+            )
 
     def _q_stem(self, qr, start: int):
         """Absorbed q [1, 16, S/4, 576] bf16: q_b_proj -> heads -> q_nope @ W_uk | RoPE(q_rope)."""
@@ -402,11 +449,16 @@ class TtMlaAttention:
         ttnn.deallocate(q_rr)
         return q_abs
 
-    def __call__(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, end: int | None = None) -> ttnn.Tensor:
+        """start: any multiple of 32 (the server's actual_start); end: actual_end (None = start + chunk)."""
         dram, g = ttnn.DRAM_MEMORY_CONFIG, self.geom
         assert g is not None, "call setup(chunk, max_seq) first"
-        assert start % g.chunk == 0, f"start {start} must be chunk ({g.chunk}) aligned"
-        self._kv_stem(x, start)
+        assert start % TILE == 0, f"start {start} must be a multiple of {TILE}"
+        if end is not None:
+            assert start < end <= min(start + g.chunk, g.max_seq), (start, end, g.chunk, g.max_seq)
+            if end == start + g.chunk:
+                end = None  # the whole chunk is real: no clamp, no pad (same programs as the ladder)
+        self._kv_stem(x, start, end)
         q_abs = self._q_stem(qr, start)
         o = self._ring_attend(q_abs, start)
         ttnn.deallocate(q_abs)
@@ -428,7 +480,7 @@ class TtMlaAttention:
         o, stats = self.ring_mla(
             q_abs,
             cache,
-            persistent_output_buffer_kv=g.kv_buf,
+            persistent_output_buffer_kv=g.kv_bufs[cache.dtype],
             head_dim_v=self.lat,
             logical_n=min(start + g.chunk, g.max_seq),
             program_config=g.sdpa_pc,
