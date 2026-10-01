@@ -2546,11 +2546,16 @@ class ModelArgs:
                 untilize_out=True,
             )
         else:
+            # More readers per DRAM bank: LM head is compute-bound on 8 cores (1 worker per bank).
+            lm_head_tiles_per_bank = math.ceil(split_size / (ttnn.TILE_SIZE * self.dram_grid_size.x))
             return self.dram_matmul_config(
                 self.tile_padded_batch_rows,
                 self.dim,
                 split_size,
                 self.lm_head_core_grid.num_cores,
+                num_workers_per_dram_bank=(
+                    3 if self.device_name == "P150" and lm_head_tiles_per_bank % 3 == 0 else 1
+                ),
             )
 
     @lru_cache(maxsize=None)
