@@ -1,45 +1,29 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The ONE shared chained TTNN pipeline for `mistralai/Voxtral-4B-TTS-2603`.
+"""The ONE shared chained TTNN pipeline for `mistralai/Voxtral-4B-TTS-2603`: text -> 24 kHz speech.
 
 Both `demo/` and `tests/e2e/` import and call the functions here, so a passing test guarantees a
 working demo -- there is exactly one copy of the wiring.
 
-TWO TASK HEADS, and between them they route all 31 graduated modules from Source B:
+`build_pipeline` builds three sections on the device, each from the HF reference's own weights:
 
-  Call 1  text_to_speech    -- the model card's own `pipeline_tag`. Text -> 24 kHz waveform.
-                               28 graduated modules (the text decoder composed from its leaves,
-                               the flow-matching acoustic sampler, and the neural codec).
-  Call 2  text_continuation -- the checkpoint's causal-LM half. Text -> greedy tokens.
-                               3 graduated modules (encoder_stack, mistral_model, decoder_head),
-                               and the ONLY consumer of `decoder_head`: the TTS chain reads its
-                               next token from the acoustic transformer's semantic head, never
-                               from `lm_head`.
+  text      `text_stack.TextStack`        the 26-layer Mistral decoder, KV-cached; every layer is
+                                          the fused `tt/modules/layer.py` block
+  acoustic  `acoustic_stage.AcousticStage` the flow-matching sampler: one hidden state -> one frame
+                                          of 37 codes (7 Euler steps with classifier-free guidance)
+  vocode    `vocode_stage.VocodeStage`     the codec decoder: all codes -> the waveform, every row
+                                          through `tt/modules/voxtral_t_t_s_audio_tokenizer.py`
 
-The two sets are DISJOINT and 28 + 3 = 31, so every graduated module lands in exactly one call.
-`tests/e2e/test_gates.py` asserts that against `bringup_status.json` rather than against a list
-typed here.
+`VoxtralTTSPipeline.run_text_to_speech` chains them: prefill the voiced prompt, then per frame one
+acoustic step and one decode step fed the frame's own audio-token embedding, until every row emits
+`end_audio`, then one vocode pass.
 
-ALIASES. Four of Source B's 31 entries are the same graduated work product recorded twice -- once
-under the sibling-registry tag, once under the model's own class name -- and `common.alias_pairs()`
-DETECTS them rather than listing them. Nothing is dropped for being an alias; the real work is
-split so both members sit in the forward path doing a disjoint share of it:
-
-  * interchangeable bodies inside one repeated stack are split BY LAYER INDEX (the 26 text layers
-    are built from four identical block kinds, layer i taking kind i % 4), and
-  * whole-section bodies that duplicate each other or a composed part-chain are split BY BATCH
-    ROW (rows [0:16] through one, rows [16:32] through the other, halves concatenated).
-
-Both splits process every sample exactly once, so no arithmetic is duplicated, and both are
-covered by the per-sample PCC gate because the gate compares each of the 32 samples to its own
-golden.
-
-STAGES. Source A's reference is a `MistralForCausalLM` subclass with `is_encoder_decoder=False`,
-which gives `[prefill, decode]`; the model card's `pipeline_tag: text-to-speech` adds `[vocode]`.
+STAGES. The reference is a `MistralForCausalLM` subclass with `is_encoder_decoder=False`, which
+gives `[prefill, decode]`; the model card's `pipeline_tag: text-to-speech` adds `[vocode]`.
 `acoustic` is the fourth because `params.json` carries
 `multimodal.audio_model_args.acoustic_transformer_args` as its OWN sub-config with its OWN
-repeated stack -- without a stage of its own there would be nowhere to put that stack's depth
-knob, and one number cannot describe a three-section model.
+repeated stack. Each stage has a trace contract (`<stage>_trace_inputs/setup/step/items`) that the
+perf test and `trace_capture_selftest` drive.
 """
 from __future__ import annotations
 
@@ -52,26 +36,15 @@ from models.demos.voxtral_4b_tts_2603.tt import common
 
 PIPELINE_STAGES = ["prefill", "decode", "acoustic", "vocode"]
 
-TASK_HEADS = ("text_to_speech", "text_continuation")
-
-# The head -> the section attributes it needs, so `build_pipeline(heads=...)` builds only what is
-# asked for. This matters on one chip: Call 1's composed text stack and Call 2's two whole-stack
-# alias bodies are ~6.9 GB each, and building all three at once would be 21 GB of the 29.2 GB
-# registered usable at TP=1 before any activation.
-_HEAD_SECTIONS = {
-    "text_to_speech": ("text", "acoustic", "vocode"),
-    "text_continuation": ("continuation",),
-}
-
 # The pinned trace capacity for the sequence axis. The VARIABLE dim is the sequence length, whose
 # bound is `config.max_position_embeddings` (128000) -- far past anything a trace region holds, so
 # the stage pins it instead. 256 is tile-aligned and covers the real voiced speech request (the
 # default voice's 147-token block + 18-token text + controls = 170 tokens; the longest preset, it_male,
-# gives 191). Shrunk with a PRINTED fallback if a capture overflows the region, never silently.
+# gives 191). A longer prompt is refused by `prefill_trace_setup`.
 DEFAULT_TRACE_CAPACITY = int(os.environ.get("VOXTRAL_TRACE_C", "256"))
 
 # Frames the `vocode` stage is captured at. The codec upsamples 8x, so 32 frames become 256 rows,
-# inside the stub's prebuilt ALiBi mask.
+# inside the codec's prebuilt ALiBi mask.
 DEFAULT_VOCODE_CAPACITY = int(os.environ.get("VOXTRAL_TRACE_VOCODE_C", "32"))
 
 # Classifier-free guidance strength. `params.json` sets `p_uncond: 0.0` and ships no sampling
@@ -86,13 +59,11 @@ def _tile_ceil(value: int) -> int:
 
 
 class VoxtralTTSPipeline:
-    """The resident pipeline object: both task heads plus the per-stage trace contract.
+    """The resident pipeline object: the text-to-speech chain plus the per-stage trace contract.
 
-    Every repeated stack is reachable as a plain Python list of SAME-TYPED elements
-    (`self.stacks()`), and the HF reference stays on `.reference_model` -- it is ground truth for
-    how many sections the model has and how deep each is, and it is cheaper than any marker.
-    No block class uses `__slots__`: the structural walk that sizes and caps stacks decides "is
-    this a block" with `hasattr(obj, "__dict__")`, so a slotted block reports zero stacks.
+    Every repeated stack is reachable as a plain Python list (`self.stacks()`), and the HF reference
+    stays on `.reference_model` -- it is ground truth for how many sections the model has and how
+    deep each is.
     """
 
     PIPELINE_STAGES = PIPELINE_STAGES
@@ -104,8 +75,6 @@ class VoxtralTTSPipeline:
         text=None,
         acoustic=None,
         vocode=None,
-        continuation=None,
-        counter=None,
         batch=None,
         trace_capacity=None,
         vocode_capacity=None,
@@ -116,8 +85,6 @@ class VoxtralTTSPipeline:
         self.text = text
         self.acoustic = acoustic
         self.vocode = vocode
-        self.continuation = continuation
-        self.counter = counter if counter is not None else common.InvocationCounter()
         self.batch = common.DEFAULT_BATCH if batch is None else int(batch)
         self.tokenizer = common.load_tokenizer()
         self.trace_capacity = DEFAULT_TRACE_CAPACITY if trace_capacity is None else int(trace_capacity)
@@ -158,13 +125,7 @@ class VoxtralTTSPipeline:
             out["acoustic"] = self.acoustic.blocks
         if self.vocode is not None:
             out["vocode"] = self.vocode.blocks
-        if self.continuation is not None and self.text is None:
-            out["prefill"] = getattr(self.continuation, "blocks", [])
-            out["decode"] = getattr(self.continuation, "blocks", [])
         return out
-
-    def invoked(self) -> dict:
-        return dict(self.counter.counts)
 
     # ---- helpers -----------------------------------------------------------------------
 
@@ -206,9 +167,10 @@ class VoxtralTTSPipeline:
         """The real TTS input for this pipeline's batch -- see module-level `speech_inputs`."""
         return speech_inputs(texts=texts, voice=voice, batch=self.batch if batch is None else batch)
 
-    def stage_voice(self, audio_mask, voice_embedding, input_ids=None):
+    def stage_voice(self, audio_mask, voice_embedding, input_ids):
         """Upload the voice once, as persistent device constants, OUTSIDE the forward. `input_ids`
-        (host) lets the prefill run the prompt prefix every row shares once instead of per row."""
+        (host) lets the prefill run the prompt prefix every row shares once instead of per row; the
+        staged voice is then valid for exactly those ids."""
         return self.text.stage_voice(audio_mask, voice_embedding, input_ids=input_ids)
 
     def noise(self, max_frames: int, batch=None, seed: int = 0):
@@ -221,7 +183,7 @@ class VoxtralTTSPipeline:
 
         return golden.draw_noise(self.batch if batch is None else int(batch), self.n_acoustic, max_frames, seed=seed)
 
-    # ---- Call 1: text to speech --------------------------------------------------------
+    # ---- text to speech ----------------------------------------------------------------
 
     def run_text_to_speech(
         self,
@@ -234,7 +196,7 @@ class VoxtralTTSPipeline:
     ):
         """THE REAL TASK: tokenized text -> a 24 kHz waveform, all on device.
 
-        An EXPLICIT chain over the graduated stubs. Each stage is fed the PREVIOUS TT stage's real
+        An EXPLICIT chain over the three sections. Each stage is fed the PREVIOUS TT stage's real
         output; no reference tensor is ever spliced in at a joint, because that would hide exactly
         the wiring bugs this path exists to catch.
 
@@ -246,13 +208,24 @@ class VoxtralTTSPipeline:
         reference) once every row has emitted it, bounded by a derived safety cap.
         """
         if self.text is None or self.acoustic is None or self.vocode is None:
-            raise RuntimeError("pipeline was built without the text_to_speech head")
+            raise RuntimeError("pipeline was built without its text, acoustic and vocode sections")
 
         if input_ids is None:
             input_ids, _ = self.default_inputs()
         batch, prompt_len = int(input_ids.shape[0]), int(input_ids.shape[1])
         if max_frames is None:
             max_frames, _ = common.resolve_max_frames(self.reference_model)
+        if int(max_frames) > self.vocode.max_frames:
+            # Checked BEFORE the decode: the codec's mask is a build-time constant, so a longer run would
+            # decode every frame and then fail in `vocode.decode`, losing the whole output.
+            raise ValueError(
+                f"max_frames {max_frames} exceeds the codec's {self.vocode.max_frames}-frame limit "
+                f"({self.vocode.max_frames_provenance})"
+            )
+        if voice is not None and not torch.equal(voice["ids"], input_ids):
+            # The shared-prefix prefill was laid out for the staged ids (how many leading tokens every
+            # row shares); other texts would silently run on that layout.
+            raise ValueError("`voice` was staged for different input_ids; call stage_voice with these ids")
         if x0 is None:
             x0 = self.noise(max_frames, batch=batch)
 
@@ -286,8 +259,8 @@ class VoxtralTTSPipeline:
         self.text.reset_cache()
         ids_tt = self.prepare_prompt(input_ids)
 
-        # --- prefill: the prompt through the composed 26-layer stack, seeding the KV cache.
-        # NO EXPLICIT POSITIONS. A prefill's positions ARE 0..S-1, which is the rotary stub's own
+        # --- prefill: the prompt through the 26-layer stack, seeding the KV cache.
+        # NO EXPLICIT POSITIONS. A prefill's positions ARE 0..S-1, which is the rotary module's own
         # default branch -- and that branch slices a float32 table, where handing it the same
         # positions explicitly takes the `ttnn.embedding` GATHER instead, which `ttnn` requires to
         # be bfloat16. Rope was then the only bfloat16 term in a float32 residual stream and the
@@ -391,29 +364,6 @@ class VoxtralTTSPipeline:
             "diagnostics": diagnostics,
         }
 
-    # ---- Call 2: text continuation -----------------------------------------------------
-
-    def run_text_continuation(self, input_ids=None):
-        """Teacher-forced causal-LM continuation over the whole-stack bodies and the graduated LM head.
-
-        One forward over the real text; `logits[:, s]` is the next-token distribution after tokens
-        `0..s` and `next_tokens[:, s]` its greedy pick (argmax on device).
-        """
-        if self.continuation is None:
-            raise RuntimeError("pipeline was built without the text_continuation head")
-        if input_ids is None:
-            input_ids, _ = common.build_batch_inputs(batch=self.batch, seq_len=common.full_prompt_len(self.batch))
-        batch = int(input_ids.shape[0])
-
-        ids_tt = self.prepare_prompt(input_ids)
-        picks, logits = self.continuation.score(ids_tt)
-        return {
-            "input_ids": input_ids,
-            "next_tokens": ttnn.to_torch(picks).to(torch.int64).reshape(batch, -1),
-            "logits": ttnn.to_torch(logits).to(torch.float32),
-            "batch": batch,
-        }
-
     # ------------------------------------------------------------------------------------
     # Trace contract -- one set of hooks per stage in PIPELINE_STAGES
     # ------------------------------------------------------------------------------------
@@ -455,7 +405,7 @@ class VoxtralTTSPipeline:
         The STANDARD, model-agnostic seam the perf engine calls to obtain a stage's inputs with no
         per-model knowledge: all the model-specific assembly lives here, behind this fixed name.
         The REAL speech request the e2e test and demo drive: the voiced prompt from the model's
-        own tokenizer layout and Source A's preset voice embedding.
+        own tokenizer layout and the checkpoint's preset voice embedding.
         """
         input_ids, audio_mask, voice_embedding, _ = self.speech_inputs()
         return {"input_ids": input_ids, "audio_mask": audio_mask, "voice_embedding": voice_embedding}
@@ -534,7 +484,7 @@ class VoxtralTTSPipeline:
         self.text.reset_cache()
         ids_tt = self.prepare_prompt(input_ids)
         voice = self.stage_voice(inputs["audio_mask"], inputs["voice_embedding"], input_ids=input_ids)
-        # Contiguous 0..S-1 -- the rotary stub's float32 default branch; see run_text_to_speech.
+        # Contiguous 0..S-1 -- the rotary module's float32 default branch; see run_text_to_speech.
         _, last = self.text.prefill_voiced(ids_tt, voice, need_hidden=False)
         self._stage_buffers["decode"] = {
             "llm_hidden": last,
@@ -689,8 +639,8 @@ def speech_inputs(texts=None, voice=None, batch=None):
     """THE REAL TTS INPUT, encoded exactly as the model's own tokenizer lays a speech request out.
 
     `[BOS] [BEGIN_AUDIO] [AUDIO]*N [NEXT_AUDIO_TEXT] <text> [REPEAT_AUDIO_TEXT] [BEGIN_AUDIO]`,
-    with the `[AUDIO]` rows to be replaced by the speaker's voice embedding (Source A ships 20
-    presets as `voice_embedding/<id>.pt`). Returns ``(input_ids, audio_mask, voice_embedding,
+    with the `[AUDIO]` rows to be replaced by the speaker's voice embedding (the checkpoint repo
+    ships 20 presets as `voice_embedding/<id>.pt`). Returns ``(input_ids, audio_mask, voice_embedding,
     texts)``, all host tensors -- this is ENCODING, done before the forward. Module-level so a
     caller can size the KV cache from the prompt BEFORE building the pipeline.
     """
@@ -771,21 +721,22 @@ def build_pipeline(
     model=None,
     kv_capacity=None,
     layers=None,
-    heads=None,
     prefill_layers=None,
     decode_layers=None,
     acoustic_layers=None,
     vocode_layers=None,
     batch=None,
-    counter=None,
-    **kwargs,
+    trace_capacity=None,
+    vocode_capacity=None,
 ):
     """CONSTRUCT AND RETURN the resident pipeline object. Never runs the model.
 
-    This is the SINGLE entry the perf harness, `trace_capture_selftest` and both demos use to
-    obtain the object carrying `PIPELINE_STAGES` and the per-stage trace hooks. Returning a
-    one-shot result instead would expose none of the hooks and make the trace engine skip the
-    model entirely.
+    This is the SINGLE entry the perf test, `trace_capture_selftest`, the demo and the accuracy
+    tests use to obtain the object carrying `PIPELINE_STAGES` and the per-stage trace hooks.
+
+    `kv_capacity` is the resident KV cache length (default: `default_tts_kv_capacity`, enough for
+    any preset voice at the full safety cap). `trace_capacity` / `vocode_capacity` override the
+    pinned trace capacities (`DEFAULT_TRACE_CAPACITY`, `DEFAULT_VOCODE_CAPACITY`).
 
     `layers` is the DEFAULT depth for EVERY repeated block. Each stage that OWNS a stack also
     takes its own override, named after the stage:
@@ -796,18 +747,10 @@ def build_pipeline(
         acoustic_layers                  the 3 acoustic transformer blocks
         vocode_layers                    the codec's blocks-per-group (4 groups x 2)
 
-    A single number cannot describe a three-section model: `optimize` sizes a coverage depth PER
-    stack -- the smallest window in which every distinct op of that stack appears -- and those
-    numbers differ. With one parameter the tool has nowhere to put the second, so it collapses
-    them to the max and every section is profiled at the deepest one.
-
-    Demo kwargs (text, texts, voice, prompt, language, out_dir, ...) are ACCEPTED AND IGNORED for
-    call-signature compatibility: the resident build derives its shapes from the config, not a
-    prompt.
+    A single number cannot describe a three-section model: a profiler that sizes a coverage depth
+    PER stack needs somewhere to put each one.
     """
-    from models.demos.voxtral_4b_tts_2603.tt import acoustic_stage
-    from models.demos.voxtral_4b_tts_2603.tt import continuation as continuation_mod
-    from models.demos.voxtral_4b_tts_2603.tt import text_stack, vocode_stage
+    from models.demos.voxtral_4b_tts_2603.tt import acoustic_stage, text_stack, vocode_stage
 
     if prefill_layers is not None and decode_layers is not None and prefill_layers != decode_layers:
         raise ValueError(
@@ -816,29 +759,22 @@ def build_pipeline(
         )
 
     hf_model = common.load_reference_model() if model is None else model
-    counter = common.InvocationCounter() if counter is None else counter
-    heads = tuple(TASK_HEADS) if heads is None else tuple(heads)
-    for head in heads:
-        if head not in TASK_HEADS:
-            raise ValueError(f"unknown head {head!r}; known heads are {TASK_HEADS}")
-    wanted = {section for head in heads for section in _HEAD_SECTIONS[head]}
 
     text_depth = _resolve_depth(
         "text",
         decode_layers if decode_layers is not None else prefill_layers,
         layers,
         full=len(hf_model.model.layers),
-        floor=4,
-        reason="the four interchangeable block kinds must all stay present, and the structural "
-        "stack walk needs >= 3 same-typed members",
+        floor=1,
+        reason="a stack needs at least one layer",
     )
     acoustic_depth = _resolve_depth(
         "acoustic",
         acoustic_layers,
         layers,
         full=len(hf_model.acoustic_transformer.layers),
-        floor=3,
-        reason="3 is both this stack's full depth and the structural-walk floor",
+        floor=1,
+        reason="a stack needs at least one block",
     )
     vocode_depth = _resolve_depth(
         "vocode",
@@ -850,23 +786,13 @@ def build_pipeline(
         "different sliding window (2/4/8/16)",
     )
 
-    text = acoustic = vocode = cont = None
-    if "text" in wanted and kv_capacity is None and "text_to_speech" in heads:
+    if kv_capacity is None:
         kv_capacity = default_tts_kv_capacity(hf_model)
-    if "text" in wanted:
-        # SIZED FOR THE WORKLOAD, not for a constant. The resident cache was 64 prefill + 64
-        # decode slots whatever the caller asked for, so a prompt longer than 64 -- which any
-        # voice-conditioned prompt is, the voice block alone being 67-218 tokens -- refused to
-        # prefill, and the codec's own 256-frame ceiling was unreachable at any prompt length.
-        text = text_stack.build_text_stack(
-            device, hf_model, layers=text_depth, counter=counter, kv_capacity=kv_capacity
-        )
-    if "acoustic" in wanted:
-        acoustic = acoustic_stage.build_acoustic_stage(device, hf_model, layers=acoustic_depth, counter=counter)
-    if "vocode" in wanted:
-        vocode = vocode_stage.build_vocode_stage(device, hf_model, layers=vocode_depth, counter=counter)
-    if "continuation" in wanted:
-        cont = continuation_mod.build_continuation(device, hf_model, layers=text_depth, counter=counter)
+    # SIZED FOR THE WORKLOAD, not for a constant: any voice-conditioned prompt is longer than a
+    # fixed 64-slot cache (the voice block alone is 67-218 tokens).
+    text = text_stack.build_text_stack(device, hf_model, layers=text_depth, kv_capacity=kv_capacity)
+    acoustic = acoustic_stage.build_acoustic_stage(device, hf_model, layers=acoustic_depth)
+    vocode = vocode_stage.build_vocode_stage(device, hf_model, layers=vocode_depth)
 
     return VoxtralTTSPipeline(
         device,
@@ -874,29 +800,26 @@ def build_pipeline(
         text=text,
         acoustic=acoustic,
         vocode=vocode,
-        continuation=cont,
-        counter=counter,
         batch=batch,
+        trace_capacity=trace_capacity,
+        vocode_capacity=vocode_capacity,
     )
 
 
 # ----------------------------------------------------------------------------------------
-# Selftests -- MODULE-LEVEL, because the bring-up observers call them with no arguments
+# Selftest -- module-level, so it can run with no arguments in a fresh process
 # ----------------------------------------------------------------------------------------
 #
-# `scripts/tt_hw_planner/_host_op_probe.py` and `_trace_capture_probe.py` import this module in a
-# FRESH process with no device open and call these by name; a method on the pipeline class does
-# not count. Opening a device is forbidden anywhere under `tt/`, so the opener lives in
-# `device_session.py` at the demo root (only `tt/` is scanned) -- the same carve-out a
-# `__main__` selftest gets.
+# Nothing under `tt/` opens a device; with no `device` the selftest borrows one from
+# `device_session.py` at the package root.
 
 
 def trace_capture_selftest(device=None, verbose: bool = True, pipe=None) -> bool:
     """Capture, replay and PCC-check ONE step of EACH stage in `PIPELINE_STAGES`.
 
-    Stage traces must NOT co-reside: each is released before the next stage is captured. The
-    trace region is sized from the LARGEST stage (prefill at the pinned C x 26 layers); if a
-    capture overflows it, C is shrunk and the fallback is PRINTED, never silently dropped.
+    Stage traces must NOT co-reside: each is released before the next stage is captured, so the
+    trace region only has to hold the LARGEST stage. A capture that fails is reported as a failed
+    stage, not retried at a smaller capacity.
     """
     if device is None:
         from models.demos.voxtral_4b_tts_2603 import device_session
@@ -904,10 +827,8 @@ def trace_capture_selftest(device=None, verbose: bool = True, pipe=None) -> bool
         with device_session.selftest_device() as opened:
             return trace_capture_selftest(opened, verbose=verbose, pipe=pipe)
 
-    # REUSE THE CALLER'S PIPELINE WHEN THERE IS ONE. The weights are ~4.19 GB of the 4.25 GB of
-    # DRAM, so building a second copy beside a caller's live one is an outright
-    # `Out of Memory: Not enough space to allocate ... DRAM buffer`. The observers call this with
-    # no pipeline and get their own build, as before.
+    # REUSE THE CALLER'S PIPELINE WHEN THERE IS ONE: a second copy of the weights beside a caller's
+    # live build is DRAM it does not need. Called with no pipeline, it builds its own.
     if pipe is None:
         pipe = build_pipeline(device)
     ok = True
@@ -922,10 +843,13 @@ def trace_capture_selftest(device=None, verbose: bool = True, pipe=None) -> bool
         reference_host = ttnn.to_torch(reference).to(torch.float32).clone()
 
         trace_id = None
+        capturing = False
         try:
             trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            capturing = True
             captured = step()
             ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            capturing = False
             ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
             replay = ttnn.to_torch(captured).to(torch.float32)
             score = common.pcc(replay, reference_host)
@@ -938,6 +862,8 @@ def trace_capture_selftest(device=None, verbose: bool = True, pipe=None) -> bool
             ok = False
         finally:
             if trace_id is not None:
+                if capturing:  # a step that raised mid-capture left the capture open
+                    ttnn.end_trace_capture(device, trace_id, cq_id=0)
                 ttnn.release_trace(device, trace_id)
     return ok
 

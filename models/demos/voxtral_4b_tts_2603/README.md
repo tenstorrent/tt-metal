@@ -21,8 +21,12 @@ Code layout:
 ```
 models/demos/voxtral_4b_tts_2603/
   tt/            the pipeline: pipeline.py (run_text_to_speech, build_pipeline, trace hooks),
-                 text_stack.py, acoustic_stage.py, vocode_stage.py, common.py
-  tt/modules/    the 31 TTNN model parts the pipeline is composed from, and bringup_status.json (their list)
+                 text_stack.py (26 KV-cached decoder layers), acoustic_stage.py (flow-matching sampler),
+                 vocode_stage.py (codec decoder), common.py (tokenizer, prompts, reference loading)
+  tt/modules/    the 7 TTNN modules the stages are built from: layer.py (one fused text decoder layer),
+                 token_embed.py, mistral_rotary_embedding.py, mistral_r_m_s_norm.py, multi_vocab_embeddings.py,
+                 flow_matching_audio_transformer.py (the acoustic velocity field),
+                 voxtral_t_t_s_audio_tokenizer.py (the codec decoder)
   reference/     reference_loader.py (the PyTorch reference model, built from the native checkpoint),
                  golden.py (CPU reference chains), quality.py (speech scoring: Whisper WER, UTMOS MOS)
   demo/          demo_text_to_speech.py
@@ -56,8 +60,8 @@ every chip on the host). The CPU reference results are cached in `~/.cache/voxtr
 
 | # | Test | What it checks | Time | Pass criteria |
 |---|---|---|---|---|
-| 0 | `pytest models/demos/voxtral_4b_tts_2603/tests/e2e/test_text_to_speech_ci.py -s` | **Short accuracy check (CI-sized).** The full pipeline on device for 8 frames, for two voices (`casual_male`, and `ar_male`, whose shared prompt prefix runs past a tile edge), each stage compared with the teacher-forced PyTorch reference; no WER/MOS | ~10 min first run, a few minutes after (cached reference) | both pass: every stage PCC >= 0.99, >= 98% acoustic and >= 99% semantic codes equal |
-| 1 | `pytest models/demos/voxtral_4b_tts_2603/tests/e2e/test_e2e_text_to_speech.py -s` | **Full accuracy.** 32 sentences generated on device to their own stop, compared with the PyTorch reference on CPU: per-stage PCC, discrete codes, waveform PCC, and the audio scored for intelligibility (Whisper WER) and naturalness (UTMOS MOS) | ~50 min on a first run (CPU reference, ~16 GB RAM), ~15-20 min after | all 11 tests pass |
+| 0 | `pytest models/demos/voxtral_4b_tts_2603/tests/e2e/test_text_to_speech_ci.py -s` | **Short accuracy check (CI-sized).** The full pipeline on device for 8 frames, in three cases (`casual_male`; `ar_male`, whose shared prompt prefix runs past a tile edge; and one 203-token text repeated in all 32 rows, as the demo does with a single `--text`), each stage compared with the teacher-forced PyTorch reference; no WER/MOS | ~15 min first run, a few minutes after (cached reference) | all three pass: every stage PCC >= 0.99, >= 98% acoustic and >= 99% semantic codes equal |
+| 1 | `pytest models/demos/voxtral_4b_tts_2603/tests/e2e/test_e2e_text_to_speech.py -s` | **Full accuracy.** 32 sentences generated on device to their own stop, compared with the PyTorch reference on CPU: per-stage PCC, discrete codes, waveform PCC, and the audio scored for intelligibility (Whisper WER) and naturalness (UTMOS MOS) | ~50 min on a first run (CPU reference, ~16 GB RAM), ~15-20 min after | all 10 tests pass |
 | 2 | `pytest models/demos/voxtral_4b_tts_2603/tests/e2e/test_text_to_speech_perf.py -s` | **Performance.** Each stage traced and replayed on one command queue; prints per-stage ms, ms per audio frame, frames/s | ~2-3 min | every stage and the per-frame time within 10% of *Expected performance* (`TT_PERF_MARGIN` adjusts) |
 | 3 | `python -m models.demos.voxtral_4b_tts_2603.demo.demo_text_to_speech --device-id 0 --out-dir <dir> --score` | **Listen.** Writes one WAV per sentence (cut at its own end) and prints each clip's WER and MOS | ~3 min | corpus WER / mean MOS as in *Expected accuracy* |
 
@@ -79,7 +83,6 @@ comparison measures the device's arithmetic rather than the drift between two in
 | Test | Checks |
 |---|---|
 | `test_golden_is_the_references_own_arithmetic` | the reference chain equals the reference model's own code |
-| `test_gate2_every_call_1_stub_was_invoked` | all 28 model parts on the TTS path ran on device |
 | `test_run_ended_on_the_models_stop_rule` | every sentence ended on the model's end-of-audio code, not the 256-frame cap |
 | `test_shapes_and_real_task_output` | the output is real 24 kHz audio (finite, in range, not constant) |
 | `test_batch_is_32_independent_samples` | 32 inputs give 32 distinct waveforms |
@@ -92,24 +95,25 @@ comparison measures the device's arithmetic rather than the drift between two in
 
 ## Expected performance
 
-Measured with test 2 on **one Blackhole p300c chip** (QuietBox 2), batch 32, trace + 1 command queue:
+Measured with test 2 on **one Blackhole chip** (a p150 card; the previous build measured within 1% of a p300c
+chip of a QuietBox 2 on every stage), batch 32, trace + 1 command queue:
 
 | Stage | Time per step |
 |---|---|
-| prefill (once per request) | 88.7 ms |
-| decode (every frame) | 37.1 ms |
-| acoustic (every frame) | 41.9 ms |
-| vocode (32-frame chunk, 2.56 s of audio per row) | 80.1 ms |
+| prefill (once per request) | 85.6 ms |
+| decode (every frame) | 37.2 ms |
+| acoustic (every frame) | 25.8 ms |
+| vocode (32-frame chunk, 2.56 s of audio per row) | 75.3 ms |
 
 | Throughput | Value |
 |---|---|
-| ms per audio frame (decode + acoustic), all 32 users | **79.0 ms** |
-| frames/s per user (real time = 12.5) | **12.7** (1.01x real time) |
-| frames/s total | **405** (~32 s of audio per second) |
+| ms per audio frame (decode + acoustic), all 32 users | **63.0 ms** |
+| frames/s per user (real time = 12.5) | **15.9** (1.27x real time) |
+| frames/s total | **508** (~41 s of audio per second) |
 
 These are traced, steady-state stage times. A request additionally pays prefill before its first frame and
-vocode after its last. Chips differ slightly: another chip in the same QuietBox 2 measured decode 38.0 and
-acoustic 43.0 ms (81.0 ms per frame) -- inside the perf test's 10% margin.
+vocode after its last. Chips differ slightly (two p300c chips of one QuietBox 2 measured ~2.5% apart), which
+the perf test's 10% margin covers.
 
 ## Expected accuracy
 
@@ -144,18 +148,19 @@ undoes all of them:
 | block-sharded `ttnn.rms_norm` (bfloat16 reduction scaler) | the exact spelled-out RMSNorm |
 | bfloat16 norm, q/k/v, attention-context, gate/up, SiLU-product and o_proj outputs | float32 |
 | 8-tile K blocks on the qkv projection (more bfloat16 partial-sum roundings) | widest K blocks |
-| C++ SwiGLU kernel (bfloat8_b weight, bfloat16 output) | off unless `VOXTRAL_CPP_SWIGLU=1` |
+| C++ SwiGLU kernel (bfloat8_b weight, bfloat16 output) | removed; stock ttnn matmuls |
 
 The exact-math optimizations (batch folded into the matmul rows, compact layouts, fused ops, program configs,
-L1 placement) are kept. Cost: acoustic 21.9 -> 41.8 ms per frame.
+L1 placement) are kept. Cost: acoustic 21.9 -> 41.8 ms per frame; running all 32 rows (64 with guidance)
+through one body instead of two 16-row halves later brought it to 25.8 ms at the same precision.
 
 One change outside the acoustic stage: the prefill's fused gate/up weight is bfloat8_b instead of
 bfloat4_b. At 4 bits the prefill hidden state fell to 0.980 PCC for some voices (e.g. `ar_male`); at 8 bits
 it is 0.991-0.997, and the decode hidden that reads the prefill's KV cache improves from 0.993 to 0.999.
 Cost: prefill +1.9 ms, once per request.
 
-A cheaper middle point restores only the two bfloat4_b weights to bfloat8_b and the SwiGLU kernel to HiFi2:
-60.7 ms per frame, MOS 3.62 and WER pass, but it fails `test_per_stage_pcc` (acoustic worst PCC ~0.85).
+A cheaper middle point restores only the two bfloat4_b weights to bfloat8_b and the (since removed) C++ SwiGLU
+kernel to HiFi2: 60.7 ms per frame, MOS 3.62 and WER pass, but it fails `test_per_stage_pcc` (acoustic worst PCC ~0.85).
 
 ## Limitations
 
@@ -169,8 +174,8 @@ A cheaper middle point restores only the two bfloat4_b weights to bfloat8_b and 
   whole prompt into one PCC, which passes (>= 0.99). Looked at one position at a time, a few text positions
   deviate much more (worst position PCC ~0.4-0.6 across 32 sentences). This is not weight precision -- it
   persists with every text-stack weight in bfloat16 -- but the bfloat16 accumulation in the tall prefill
-  matmuls (fp32 accumulation does not fit their current block configuration). Only the last position's
-  hidden state is consumed (decode starts from it, PCC >= 0.997), and the decode, code and audio checks all
-  pass.
+  matmuls (fp32 accumulation does not fit their current block configuration). Decode reads every prompt
+  position's keys and values from the KV cache, so these positions do feed the output; the checks downstream of
+  them (decode hidden states, codes, waveform, WER and MOS) all pass.
 - **Single segment.** Long-form multi-segment TTS (as in vLLM-Omni) is not implemented; the safety cap is 256
   frames (20.5 s).

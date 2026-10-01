@@ -61,7 +61,6 @@ def _zeros_like_buf(device, shape, dtype):
     return buf
 
 
-_SHARD_HEIGHT = 32
 _MASK_MAX_SEQ = 2048
 _MASK_NEG = -1.0e9
 
@@ -159,7 +158,7 @@ def _fold_linear(x, w, **kwargs):
     A `[B, 1, T, K]` activation against a 2-D weight runs as B separate matmuls that each re-read
     the whole weight; `[1, 1, B*T, K]` is one matmul. A T that is not tile-aligned makes the fold a
     real relayout each way, still far cheaper than re-reading the weight B times. Tall results get
-    the same hand-sized full-grid config the part-chain stubs' `_lin` uses.
+    a hand-sized full-grid program config.
     """
     shape = [int(d) for d in x.shape]
     lead = 1
@@ -191,8 +190,8 @@ def _alibi_window_mask(slopes, window, seq):
     """`[1, H, seq, seq]`: ALiBi bias `slope[h] * (j - i)`, blocked where `j > i` or `j < i - window`.
 
     Depends only on `j - i`, so the top-left `[S, S]` corner is exactly the mask for a length-`S`
-    sequence -- which is what lets the forward stay free of torch calls (the runtime native probe
-    graduates only at zero torch ops, so a per-call rebuild is not an option).
+    sequence -- which is what lets the forward stay free of torch calls (a per-call rebuild could
+    not be captured in a trace).
     """
     pos = torch.arange(seq)
     rel = pos.unsqueeze(0) - pos.unsqueeze(1)
@@ -241,9 +240,7 @@ def _compile_codec_block(device, blk, mask):
             k = _rms_norm(k, k_gamma, k_eps)
         # SDPA rejects float32 outright (`sdpa_device_operation.cpp:43`) -- so this does not call
         # it. Spelling the attention out as two matmuls and a softmax keeps Q/K/V, the ALiBi mask
-        # and the whole reduction in FLOAT32, which SDPA cannot do at any fidelity. Matches the
-        # part-chain stubs (`codec_transformer`, `codec_transformer_block`, `codec_attention`)
-        # exactly, so the two halves of the batch run the same arithmetic.
+        # and the whole reduction in FLOAT32, which SDPA cannot do at any fidelity.
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
             ttnn.concat([q, k, v], dim=-1),
             num_heads=n_heads,
@@ -448,7 +445,12 @@ def _bmm(a, b, transpose_b=False):
     return ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=_COMPUTE)
 
 
-def build(device, torch_module):
+def build(device, torch_module, layers=None):
+    """The codec decoder as one callable, `codes [B, 37, T]` (unshifted) -> `[B, 1, T * 1920]`.
+
+    `layers` caps the blocks PER TRANSFORMER GROUP (None = every block). The compiled blocks are
+    exposed as `.blocks`, a list of `(group, layer_id, window, block)` in forward order.
+    """
     codec = torch_module
     quant = codec.quantizer
     semantic = quant.semantic_codebook
@@ -465,6 +467,8 @@ def build(device, torch_module):
     table = _split_table(semantic.embedding.detach(), device)
 
     stages = []
+    codec_blocks = []
+    group = 0
     for blk in codec.decoder_blocks:
         name = type(blk).__name__
         if name == "CausalConv1d":
@@ -481,7 +485,11 @@ def build(device, torch_module):
                 device,
                 dtype=ttnn.float32,
             )
-            blocks = [_compile_codec_block(device, blk.layers[str(i)], mask) for i in blk.layers_ids]
+            window = int(blk.args.attn_sliding_window_size)
+            layer_ids = list(blk.layers_ids) if layers is None else list(blk.layers_ids)[: int(layers)]
+            blocks = [_compile_codec_block(device, blk.layers[str(i)], mask) for i in layer_ids]
+            codec_blocks.extend((group, int(i), window, b) for i, b in zip(layer_ids, blocks))
+            group += 1
 
             def _stack(x4, _blocks=blocks):
                 for b in _blocks:
@@ -529,4 +537,5 @@ def build(device, torch_module):
         out_frames = int(h.shape[-2])
         return ttnn.reshape(h, [batch, 1, out_frames * patch_size])
 
+    voxtral_t_t_s_audio_tokenizer.blocks = codec_blocks
     return voxtral_t_t_s_audio_tokenizer

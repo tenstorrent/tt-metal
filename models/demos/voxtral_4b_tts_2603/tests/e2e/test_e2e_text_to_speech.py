@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Call 1, end to end: real text + a preset voice -> a real 24 kHz waveform, against Source A.
+"""Text to speech, end to end: real text + a preset voice -> a real 24 kHz waveform, against the reference.
 
 THE CHAIN UNDER TEST IS THE ONE THE DEMO RUNS. Both call `pipeline.run_text_to_speech`, so there
 is one copy of the wiring and a green test cannot coexist with a broken demo.
 
 THE INPUT is the model's own speech-request layout,
 `[BOS] [BEGIN_AUDIO] [AUDIO]*N [NEXT_AUDIO_TEXT] <text> [REPEAT_AUDIO_TEXT] [BEGIN_AUDIO]`, with the
-`casual_male` voice embedding (Source A, `voice_embedding/casual_male.pt`) substituted into the N
+`casual_male` voice embedding (the checkpoint's `voice_embedding/casual_male.pt`) substituted into the N
 placeholders -- 32 distinct texts, one per row.
 
 THE HORIZON is the model's own stop rule: each row runs until its semantic head emits
@@ -57,6 +57,7 @@ E2E_CORRECTNESS_GATE = "test_discrete_codes_equal_the_teacher_forced_reference"
 # The TT output may be at most this much worse than the HF golden on the same 32 prompts.
 WER_MARGIN = 0.05  # absolute corpus word error rate
 MOS_MARGIN = 0.20  # mean UTMOS22, on its 1-5 scale
+CLIP_MOS_FLOOR = 2.0  # no single clip below this where the HF golden's same clip is above it
 
 # A reference decision is DECIDABLE when its own margin clears this many standard deviations of
 # the error the device's arithmetic puts on it; codes inside that band are ties and are counted,
@@ -97,7 +98,7 @@ def sigma_upper_bound(sample_std, n: int, alpha: float = 0.05):
 def measure_matmul_floor(device) -> float:
     """Relative RMS error of ONE device matmul, measured here, against float64.
 
-    The configuration the acoustic stubs run: a float32 activation against a weight that is exactly
+    The configuration the acoustic modules run: a float32 activation against a weight that is exactly
     bfloat16-representable (this checkpoint's acoustic weights are), HiFi4 + fp32 DEST
     accumulation. M=32 x K=3072 x N=3072 -- the width of the acoustic transformer.
     """
@@ -116,11 +117,6 @@ def measure_matmul_floor(device) -> float:
     return float((out - ref).pow(2).mean().sqrt() / ref.pow(2).mean().sqrt())
 
 
-def routed_modules(call_name: str) -> set:
-    """The graduated modules this call routes, read from `common.ROUTED_MODULES` rather than typed here."""
-    return set(common.ROUTED_MODULES[call_name])
-
-
 @pytest.fixture(scope="module")
 def evidence(device, hf_model):
     """Run the TT pipeline once, then BOTH reference arms, and hand all of it to every assertion."""
@@ -130,7 +126,6 @@ def evidence(device, hf_model):
     pipe = pipeline.build_pipeline(
         device,
         model=hf_model,
-        heads=("text_to_speech",),
         kv_capacity=pipeline.tts_kv_capacity(input_ids.shape[-1], max_frames),
     )
     batch = pipe.batch
@@ -227,16 +222,6 @@ def test_golden_is_the_references_own_arithmetic(hf_model):
         "the golden's Euler loop is NOT the reference's arithmetic:\n"
         f"  module {from_module[0, :8].tolist()}\n  helper {from_helper[0, :8].tolist()}"
     )
-
-
-def test_gate2_every_call_1_stub_was_invoked(evidence):
-    """Gate 2: each routed stub really ran, inside the real forward path."""
-    invoked = evidence["pipe"].invoked()
-    expected = routed_modules("text_to_speech")
-    missing = sorted(expected - set(invoked))
-    print(f"\ninvoked {len(invoked)} stubs; counts: {dict(sorted(invoked.items()))}")
-    assert not missing, f"graduated modules routed to Call 1 but never invoked: {missing}"
-    assert all(count >= 1 for count in invoked.values())
 
 
 def test_run_ended_on_the_models_stop_rule(evidence):
@@ -373,7 +358,7 @@ def calibrate_stage_noise(pipe, hf_model, floor_eps):
     Matmul rounding is not the stage's only error source (the activation x activation attention
     matmuls, the elementwise exp/rsqrt/silu), so the measured single-matmul floor under-predicts the
     stage. The scale is therefore calibrated on a HELD-OUT input -- the stage's own
-    `acoustic_trace_inputs()`, assembled from Source B's captured tensors, not from this run -- by
+    `acoustic_trace_inputs()`, the reference backbone's hidden state for other prompts, not this run -- by
     running the TT stage and the torch reference on it, and scaling the noise model until its
     x_final spread matches the TT deviation. Never below the measured matmul floor.
     """
@@ -526,6 +511,11 @@ def test_signal_quality_wer_and_mos(evidence):
     print(f"mean MOS:   TT={tt_mos:.3f} HF={hf_mos:.3f} (margin {MOS_MARGIN})")
     assert tt_wer <= hf_wer + WER_MARGIN, f"TT wer {tt_wer:.4f} is worse than the HF golden's {hf_wer:.4f}"
     assert tt_mos >= hf_mos - MOS_MARGIN, f"TT mos {tt_mos:.3f} is worse than the HF golden's {hf_mos:.3f}"
+    # PER CLIP: one unintelligible or broken row moves the corpus scores by only ~0.03 WER / ~0.08 MOS.
+    # Naturalness is the per-clip signal (dead or garbled audio scores ~1-2; this build's weakest real
+    # clips ~2.7); WER per clip is not used, because Whisper sometimes collapses a correct clip to one word.
+    dead = [i for i in range(evidence["batch"]) if tt_scores["mos"][i] < CLIP_MOS_FLOOR <= hf_scores["mos"][i]]
+    assert not dead, f"clips {dead} score MOS below {CLIP_MOS_FLOOR} where the HF golden's do not"
 
 
 def test_free_running_divergence_is_reported(evidence):
@@ -543,13 +533,15 @@ def test_free_running_divergence_is_reported(evidence):
     lo_tt = tt["diagnostics"][0]["semantic_logits"]
     lo_hf = free["diagnostics"][0]["semantic_logits"]
     finite = torch.isfinite(lo_hf)
-    ldev = (lo_tt[finite] - lo_hf[finite]).pow(2).mean().sqrt()
+    # The FIXED logit band, as in the teacher-forced codes test: a band read off this run's own deviation
+    # would widen exactly when the logits are wrong.
+    ldev = SEMANTIC_LOGIT_RMS
     top2 = lo_hf.topk(2, dim=1).values
     decidable = (top2[:, 0] - top2[:, 1]) > TIE_SIGMA * ldev
     wrong = ~frame0 & decidable
     print(
         f"frame-0 semantic code (no feedback in it): {int(frame0.sum())}/{batch} exact; "
-        f"{int((~frame0 & ~decidable).sum())} ties (band {TIE_SIGMA} x RMS {float(ldev):.3e}), "
+        f"{int((~frame0 & ~decidable).sum())} ties (band {TIE_SIGMA} x RMS {ldev:.3e}), "
         f"{int(wrong.sum())} decidable mismatches"
     )
     assert not bool(wrong.any()), "a DECIDABLE frame-0 semantic code disagrees, before any feedback exists"

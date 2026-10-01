@@ -16,7 +16,7 @@ state came back at PCC 0.9971, and a 21-level acoustic quantiser (code edges 0.1
 a fifth of all values landing within 0.01 of one) turned that into ~26% wrong audio codes. Every
 other term is already smaller -- the float32-activation x bfloat16-weight matmul sits at a 4.9e-4
 hardware floor per linear, and the bfloat16 Q/K/V cast SDPA forces is 5.7e-4 end to end.
-`mistral_model.py::_rms_norm` is the same four ops, for the same reason.
+`layer.py::_rms_norm` is the same four ops, for the same reason.
 
 Tile padding on an off-tile sequence is safe: a padded row is all zeros, so `mean(x^2)` is 0 and
 `0 * rsqrt(eps)` stays 0 -- no NaN, and nothing leaks into a real row.
@@ -27,7 +27,7 @@ against, rather than the `[1, 1, dim // 32, 32]` ROW_MAJOR that only existed to 
 (`layernorm_device_operation.cpp:106`).
 
 THE LEADING BOUND IS READ OFF THE TENSOR. This was `ttnn.reshape(hidden_states, [1, 1, seq, dim])`
--- correct at the batch of 1 the per-component harness feeds, and wrong for every batched caller:
+-- correct at a batch of 1, and wrong for every batched caller:
 at B=32 that reshape either raises on volume or, once a leading 1 is folded in elsewhere, keeps
 row 0 and silently drops samples 1..31. An RMS norm reduces over the LAST dim only, so collapsing
 every leading axis into one bound is exact for `[B, S, D]`, `[B, 1, S, D]` and the decode stream's

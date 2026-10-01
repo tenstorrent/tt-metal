@@ -55,7 +55,6 @@ def pipe(device, hf_model):
     return pipeline.build_pipeline(
         device,
         model=hf_model,
-        heads=("text_to_speech",),
         kv_capacity=pipeline.tts_kv_capacity(longest, FRAMES),
     )
 

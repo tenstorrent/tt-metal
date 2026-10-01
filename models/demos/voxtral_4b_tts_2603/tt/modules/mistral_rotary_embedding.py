@@ -13,7 +13,7 @@ the reference's own output rather than a re-derivation that has to guess whether
 at `config.rope_theta` (transformers 4.x) or inside `config.rope_parameters` (5.x) -- getting that
 wrong silently runs at the default 1e4 instead of 1e6. `position_ids` then gathers rows with
 `ttnn.embedding`, which keeps arbitrary (non-contiguous, decode-style) positions working while the
-forward makes no torch call at all: the runtime native probe graduates only at zero torch ops.
+forward makes no torch call at all, so it can be captured in a trace.
 
 The `x` argument is positional-first and the reference only reads its dtype/device off it, so it is
 accepted and unused here too.
@@ -59,7 +59,6 @@ def build(device, torch_module):
     # bfloat16 term in an otherwise float32 residual stream. That is ~0.4% (one bfloat16 ulp)
     # per rotated q/k, and it compounds: over a 26-layer prefill the last hidden state lands at
     # PCC 0.9971 instead of 0.9999, which a 21-level acoustic quantiser turns into wrong codes.
-    # `mistral_model.py` builds this same pair float32 for the same reason.
     cos_tiled = _from_torch(cos.reshape(1, _MAX_POSITIONS, head_dim).contiguous(), device, dtype=ttnn.float32)
     sin_tiled = _from_torch(sin.reshape(1, _MAX_POSITIONS, head_dim).contiguous(), device, dtype=ttnn.float32)
     # ROW_MAJOR float32, for the SINGLE-POSITION path below. A decode step's positions are one

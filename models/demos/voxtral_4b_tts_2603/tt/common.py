@@ -2,15 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared plumbing for the `mistralai/Voxtral-4B-TTS-2603` end-to-end TTNN package.
 
-Everything here is SETUP, never forward-path compute: the HF reference loader,
-the real tokenizer, the 32-sample batch builder, a PCC helper, the graduated
-stub importer and the Gate-2 invocation counter.
+Everything here is SETUP, never forward-path compute: the PyTorch reference loader, the real
+tokenizer, the speech-prompt and batch builders, the decode safety cap, a PCC helper and the
+on-disk cache for the CPU reference results.
 
-Source A (the hub repo) ships `params.json`, `consolidated.safetensors` and
-`tekken.json` -- no `config.json`, so `AutoConfig`/`AutoModel` raise. Source B
-ships the verified reconstruction of the reference
-(`reference/reference_loader.py`), which is what `load_reference_model()`
-delegates to.
+The hub repo ships `params.json`, `consolidated.safetensors` and `tekken.json` -- no
+`config.json`, so `AutoConfig`/`AutoModel` raise. `reference/reference_loader.py` rebuilds the
+reference model from the native checkpoint, and `load_reference_model()` delegates to it.
 """
 from __future__ import annotations
 
@@ -18,7 +16,6 @@ import base64
 import importlib
 import json
 import os
-import re
 from functools import lru_cache
 
 import torch
@@ -32,61 +29,17 @@ def _revision(model_id: str):
     return HF_REVISION if model_id == HF_MODEL_ID else None
 
 
-# The TTNN component ports and the component list (`bringup_status.json`) live in `tt/modules/`.
-STUB_PKG = "models.demos.voxtral_4b_tts_2603.tt.modules"
-STUB_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules")
-
-
-# The graduated components each task head routes through (test_gate2 checks every one is invoked).
-ROUTED_MODULES = {
-    "text_to_speech": (
-        "acoustic_codebook",
-        "acoustic_transformer_block",
-        "attention",
-        "bidirectional_attention",
-        "causal_conv1d",
-        "causal_conv_transpose1d",
-        "codec_attention",
-        "codec_transformer",
-        "codec_transformer_block",
-        "feed_forward",
-        "flow_matching_audio_transformer",
-        "layer",
-        "mistral_attention",
-        "mistral_audio_codebook",
-        "mistral_decoder_layer",
-        "mistral_m_l_p",
-        "mistral_r_m_s_norm",
-        "mistral_rotary_embedding",
-        "mlp",
-        "multi_vocab_embeddings",
-        "parametrization_list",
-        "parametrized_conv1d",
-        "parametrized_conv_transpose1d",
-        "semantic_codebook",
-        "time_embedding",
-        "token_embed",
-        "voxtral_t_t_s_audio_tokenizer",
-        "weight_norm",
-    ),
-    "text_continuation": (
-        "decoder_head",
-        "encoder_stack",
-        "mistral_model",
-    ),
-}
-
 # BATCH=32: 32 independent samples per pipeline call. A single sample wastes 31/32 of a
 # 32-row matmul tile; filling it raises aggregate throughput ~32x at unchanged per-sample latency.
 DEFAULT_BATCH = 32
 
-# Real tokens per prompt. Short on purpose: the graduated blocks carry no KV cache, so every
-# decode step recomputes the whole (grown) sequence.
+# Real tokens per prompt for `build_batch_inputs` -- the plain-text prompts the acoustic and vocode
+# trace hooks and the golden self-check feed the reference backbone (not the speech requests).
 DEFAULT_SEQ_LEN = 32
 
 
 # --------------------------------------------------------------------------------------
-# Source A: the reference model and its config
+# The reference model and its config
 # --------------------------------------------------------------------------------------
 
 
@@ -96,7 +49,7 @@ def _reference_loader_module():
 
 
 def load_reference_model(model_id: str = HF_MODEL_ID):
-    """The HF golden: `MistralForCausalLM` rebuilt from the native checkpoint (Source A+B)."""
+    """The HF golden: `MistralForCausalLM` rebuilt from the native checkpoint."""
     return _reference_loader_module().load_reference_model(model_id)
 
 
@@ -119,7 +72,7 @@ def load_params(model_id: str = HF_MODEL_ID) -> dict:
 
 
 # --------------------------------------------------------------------------------------
-# Source A: the real tokenizer (tekken.json -> tiktoken)
+# The real tokenizer (tekken.json -> tiktoken)
 # --------------------------------------------------------------------------------------
 
 
@@ -358,17 +311,6 @@ def build_batch_inputs(batch: int = DEFAULT_BATCH, seq_len: int = DEFAULT_SEQ_LE
     return input_ids, texts
 
 
-def full_prompt_len(batch: int = DEFAULT_BATCH, model_id: str = HF_MODEL_ID) -> int:
-    """The longest UNPADDED rectangular length the first `batch` prompts support: the shortest of them.
-
-    Read off the prompt set, not chosen: every row stays genuine content (no pad token, which the
-    whole-stack bodies' `is_causal` cannot mask), and no prompt is truncated further than the
-    shortest one forces.
-    """
-    tok = load_tokenizer(model_id)
-    return min(len(tok.encode(text, bos=True)) for text in PROMPT_TEXTS[:batch])
-
-
 # --------------------------------------------------------------------------------------
 # Decode horizon: each row runs until its semantic head emits end_audio (`resolve_max_frames` is only a cap)
 # --------------------------------------------------------------------------------------
@@ -416,7 +358,7 @@ def resolve_max_frames(hf_model) -> tuple:
     The horizon is the model's own stop rule (`audio_stop_token_id`, per row). This only bounds a
     run that never emits it, and a correctness run that ends HERE is a failure, not a pass: the e2e
     test asserts the run ended on the stop rule. The cap is the tighter of the model's own context
-    (`max_position_embeddings`) and the port's real ceiling, the codec stub's prebuilt ALiBi mask
+    (`max_position_embeddings`) and the port's real ceiling, the codec's prebuilt ALiBi mask
     (2048 rows / 8x upsampling = 256 frames = 20.5 s of audio).
     """
     env = os.environ.get("VOXTRAL_MAX_FRAMES")
@@ -431,9 +373,9 @@ def resolve_max_frames(hf_model) -> tuple:
     )
 
 
-# The codec stub prebuilds its sliding-window ALiBi mask to 2048 rows and the decoder upsamples
-# 8x, so the widest input it can take is 2048 / 8 frames. Raising this means raising
-# `_MASK_MAX_SEQ` in the stub -- the mask cannot be rebuilt inside the forward.
+# The codec (`tt/modules/voxtral_t_t_s_audio_tokenizer.py`) prebuilds its sliding-window ALiBi mask
+# to 2048 rows and the decoder upsamples 8x, so the widest input it can take is 2048 / 8 frames.
+# Raising this means raising `_MASK_MAX_SEQ` there -- the mask cannot be rebuilt inside the forward.
 CODEC_MAX_FRAMES = 2048 // 8
 
 
@@ -445,180 +387,6 @@ def eos_token_id(hf_model):
     if isinstance(eos, (list, tuple)):
         return int(eos[0])
     return None if eos is None else int(eos)
-
-
-@lru_cache(maxsize=1)
-def bringup_status() -> dict:
-    """Source B's `bringup_status.json` -- the authority on which components exist."""
-    with open(os.path.join(STUB_ROOT, "bringup_status.json")) as f:
-        return json.load(f)
-
-
-@lru_cache(maxsize=1)
-def graduated_modules() -> tuple:
-    """The graduated component names, READ FROM Source B rather than typed here.
-
-    A component is graduated when `bringup_status.json` lists it and its live `tt/modules/<name>.py`
-    exists. (The bring-up tool's `.py.last_good_native` snapshots are not shipped.) Reading the set
-    instead of listing it is what keeps Gate 2 from drifting: a component the bring-up tool adds
-    appears in the gate's expected set immediately, so the pipeline cannot silently leave one out.
-    """
-    names = []
-    for comp in bringup_status()["components"]:
-        name = comp["name"]
-        if os.path.exists(os.path.join(STUB_ROOT, f"{name}.py")):
-            names.append(name)
-    return tuple(sorted(names))
-
-
-@lru_cache(maxsize=1)
-def submodule_paths() -> dict:
-    """component name -> the `named_modules()` path it was captured and PCC-verified against."""
-    return {c["name"]: c.get("submodule_path") for c in bringup_status()["components"]}
-
-
-@lru_cache(maxsize=1)
-def _stub_sources() -> dict:
-    """component name -> ``(canonical source, self-naming identifiers)``.
-
-    Source B records some components twice, and the two copies are the same work product under a
-    second name. Telling that apart from a genuinely different port needs the comparison to ignore
-    three things that carry no arithmetic:
-
-    * the module DOCSTRING -- the two copies name themselves in it, and the differing name length
-      re-wraps the following lines,
-    * every identifier spelled after the component -- the local `build` binds `torch_module` to
-      and the closure it returns (`mlp` binds `mlp` and returns `mlp_forward`; its twin
-      `mistral_m_l_p` binds `mlp` but returns `mistral_m_l_p`), and
-    * comments and line breaks.
-
-    Round-tripping through `ast.unparse` drops the comments and normalises the formatting, and the
-    docstring is dropped explicitly. The self-naming identifiers are returned alongside rather
-    than masked here, because masking is only well defined for a PAIR: each file has to be masked
-    against the union of both names or the two come out asymmetric.
-    """
-    import ast
-
-    out = {}
-    for name in graduated_modules():
-        with open(os.path.join(STUB_ROOT, f"{name}.py")) as f:
-            src = f.read()
-        tree = ast.parse(src)
-        if ast.get_docstring(tree) is not None:
-            tree.body = tree.body[1:]
-        # What the module calls itself: the component name, whatever `build` returns, and the
-        # local it binds `torch_module` to.
-        own = {name}
-        own.update(re.findall(r"^    return (\w+)$", src, re.M))
-        own.update(re.findall(r"^    (\w+) = torch_module$", src, re.M))
-        out[name] = (ast.unparse(tree), frozenset(own))
-    return out
-
-
-@lru_cache(maxsize=1)
-def alias_pairs() -> tuple:
-    """Graduated stubs that are the SAME work product recorded under two names.
-
-    Source B's 31 components include four such pairs -- one member tagged from the sibling
-    registry (REUSE/ADAPT), the other under the model's own class name. They are DETECTED (same
-    `submodule_path`, identical canonical body once both names are masked out of both files)
-    rather than listed, so the routing notes in `tt/pipeline.py` and the README cannot go stale
-    against Source B.
-
-    Nothing is dropped for being an alias: the pipeline splits the real work between the two
-    members of each pair so both sit in the forward path doing a disjoint share of it.
-    """
-    import itertools
-
-    sources = _stub_sources()
-    paths = submodule_paths()
-
-    def same_body(a: str, b: str) -> bool:
-        src_a, own_a = sources[a]
-        src_b, own_b = sources[b]
-
-        # Word boundaries matter: a bare `replace` would rewrite the name inside unrelated
-        # identifiers -- `attention` inside `num_attention_heads`, `layer` inside
-        # `input_layernorm` -- and make two identical bodies look different.
-        def mask(text: str) -> str:
-            for token in sorted(own_a | own_b, key=len, reverse=True):
-                text = re.sub(rf"\b{re.escape(token)}\b", "<SELF>", text)
-            return text
-
-        return mask(src_a) == mask(src_b)
-
-    return tuple(
-        (a, b)
-        for a, b in itertools.combinations(graduated_modules(), 2)
-        if paths.get(a) and paths.get(a) == paths.get(b) and same_body(a, b)
-    )
-
-
-def import_stub(name: str):
-    """Import a graduated stub module from Source B by component name."""
-    if name not in graduated_modules():
-        raise KeyError(f"{name!r} is not a graduated module; graduated = {graduated_modules()}")
-    return importlib.import_module(f"{STUB_PKG}.{name}")
-
-
-def build_stub(name: str, device, torch_module, counter=None):
-    """Build a graduated stub through its own `build(device, torch_module)` constructor.
-
-    The body that runs is the LIVE `tt/modules/<name>.py` -- the graduated work product, composed
-    as-is. When a `counter` is supplied the returned callable is wrapped so Gate 2 can observe
-    that it really ran; the wrapper adds nothing to the forward but the count.
-    """
-    stub = import_stub(name).build(device, torch_module)
-    return stub if counter is None else counter.wrap(name, stub)
-
-
-# --------------------------------------------------------------------------------------
-# Gate 2: invocation counting
-# --------------------------------------------------------------------------------------
-
-
-class InvocationCounter:
-    """Counts how many times each graduated stub's `__call__` actually ran.
-
-    This is instrumentation on stubs that are already inside the real forward path -- it is NOT a
-    coverage sweep. Nothing calls a stub for the sake of the counter.
-    """
-
-    def __init__(self) -> None:
-        self.counts: dict[str, int] = {}
-
-    def wrap(self, name: str, stub):
-        counter = self
-
-        class _Counted:
-            __slots__ = ("_stub",)
-
-            def __init__(self, inner):
-                object.__setattr__(self, "_stub", inner)
-
-            def __call__(self, *a, **kw):
-                counter.counts[name] = counter.counts.get(name, 0) + 1
-                return object.__getattribute__(self, "_stub")(*a, **kw)
-
-            def __getattr__(self, item):
-                return getattr(object.__getattribute__(self, "_stub"), item)
-
-            @property
-            def graduated_stub(self):
-                return object.__getattribute__(self, "_stub")
-
-        return _Counted(stub)
-
-    def reset(self) -> None:
-        self.counts = {}
-
-    def __repr__(self) -> str:
-        return f"InvocationCounter({self.counts})"
-
-
-def unwrap(obj):
-    """The underlying graduated stub instance behind an InvocationCounter wrapper (or `obj`)."""
-    return getattr(obj, "graduated_stub", obj)
 
 
 # --------------------------------------------------------------------------------------
@@ -679,8 +447,25 @@ def golden_key(**parts) -> str:
 
     loader = _reference_loader_module()
     parts["loader_contract"] = getattr(loader, "REFERENCE_LOADER_CONTRACT", 0)
+    # The weights and the reference CODE are inputs too: a different checkpoint revision, or a fix on
+    # the reference side alone (which leaves the TT codes and hiddens bit-identical), must not be served
+    # a golden computed before it.
+    parts["hf_revision"] = HF_REVISION
+    parts["reference_source"] = _reference_source_hash()
     blob = json.dumps({k: _hashable(v) for k, v in sorted(parts.items())}, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:24]
+
+
+@lru_cache(maxsize=1)
+def _reference_source_hash() -> str:
+    import hashlib
+
+    ref_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reference")
+    digest = hashlib.sha256()
+    for name in ("golden.py", "reference_loader.py"):
+        with open(os.path.join(ref_dir, name), "rb") as fh:
+            digest.update(fh.read())
+    return digest.hexdigest()[:24]
 
 
 def _hashable(value):
@@ -701,5 +486,9 @@ def cached_golden(key: str, compute):
     if os.path.exists(path) and not os.environ.get("VOXTRAL_GOLDEN_REFRESH"):
         return torch.load(path, weights_only=True)
     value = compute()
-    torch.save(value, path)
+    # Written to a temporary name and moved into place, so an interrupted save (Ctrl-C, a timeout) or a
+    # second process never leaves a truncated file that every later run would fail to load.
+    tmp = f"{path}.{os.getpid()}.tmp"
+    torch.save(value, tmp)
+    os.replace(tmp, path)
     return value

@@ -7,11 +7,10 @@
 A 131072 x 3072 `nn.Embedding`, tied to `lm_head`. In the checkpoint it is
 `mm_audio_embeddings.tok_embeddings` (402.65 M of the 430.57 M under `mm_audio_embeddings`; the
 remaining 27.92 M is the separate audio codebook table ported in
-`_stubs/multi_vocab_embeddings.py`).
+`multi_vocab_embeddings.py`).
 
 `ttnn.embedding` requires the table in bfloat16 (`embedding_device_operation.cpp:36`) and takes the
-ids as an integer tensor; the harness marshals integer args as uint32 ROW_MAJOR, which is exactly
-what the op wants.
+ids as a uint32 ROW_MAJOR tensor, which is how the pipeline uploads the prompt.
 """
 
 from __future__ import annotations

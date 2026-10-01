@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Call 1 demo: text -> speech on Tenstorrent hardware.
+"""Demo: text -> speech on Tenstorrent hardware.
 
     python -m models.demos.voxtral_4b_tts_2603.demo.demo_text_to_speech \
         --text "Paris is a beautiful city!" --out-dir /tmp/voxtral_wav
@@ -8,7 +8,7 @@
 Runs the SAME `pipeline.run_text_to_speech` the e2e test asserts on -- there is one copy of the
 wiring, so a green test guarantees this demo works.
 
-The prompt is the model's own speech-request layout with a preset voice (Source A ships 20 as
+The prompt is the model's own speech-request layout with a preset voice (the checkpoint ships 20 as
 `voice_embedding/<id>.pt`) substituted into its `[AUDIO]` placeholders. Decoding stops on the
 model's own `end_audio` token, per row; each WAV is cut at its own row's end.
 """
@@ -57,8 +57,10 @@ def main(argv=None):
     # DEFAULT_BATCH rows per call, and a bad request should fail in a second, not after minutes.
     if not 1 <= args.batch <= common.DEFAULT_BATCH:
         parser.error(f"--batch must be between 1 and {common.DEFAULT_BATCH}, got {args.batch}")
-    if args.max_frames is not None and args.max_frames < 1:
-        parser.error(f"--max-frames must be at least 1, got {args.max_frames}")
+    if args.max_frames is not None and not 1 <= args.max_frames <= common.CODEC_MAX_FRAMES:
+        parser.error(
+            f"--max-frames must be between 1 and {common.CODEC_MAX_FRAMES} (the codec's limit), got {args.max_frames}"
+        )
     texts = list(args.text or [])
     if args.texts_file:
         with open(args.texts_file) as handle:
@@ -77,6 +79,13 @@ def main(argv=None):
     else:
         requested = len(texts)
 
+    # Tokenize here, before the checkpoint loads and the device opens: the rows must all have the same
+    # length (the prefill has no per-row padding mask), and `build_voice_prompt` says so in a second.
+    try:
+        input_ids, audio_mask, voice_embedding = common.build_voice_prompt(texts, args.voice)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     common.use_all_cpu_threads()
     hf_model = common.load_reference_model()
     max_frames, provenance = common.resolve_max_frames(hf_model)
@@ -91,11 +100,9 @@ def main(argv=None):
         num_command_queues=1,
     )
     try:
-        input_ids, audio_mask, voice_embedding = common.build_voice_prompt(texts, args.voice)
         pipe = pipeline.build_pipeline(
             device,
             model=hf_model,
-            heads=("text_to_speech",),
             layers=args.layers,
             batch=len(texts),
             kv_capacity=pipeline.tts_kv_capacity(input_ids.shape[-1], max_frames),
@@ -108,6 +115,8 @@ def main(argv=None):
 
         result = pipe.run_text_to_speech(input_ids=input_ids, max_frames=max_frames, voice=voice)
         print(f"frames decoded: {result['frames_decoded']}  ({result['stop_reason']})")
+        if not result["stop_reason"].startswith("every row emitted end_audio"):
+            print(f"WARNING: the {max_frames}-frame cap ended the run; rows that had not finished are cut off")
 
         os.makedirs(args.out_dir, exist_ok=True)
         waves = pipeline.trim_to_end(result)
@@ -119,12 +128,21 @@ def main(argv=None):
         if args.score:
             from models.demos.voxtral_4b_tts_2603.reference import quality
 
-            scores = quality.score(waves[:requested], result["sampling_rate"], texts[:requested])
-            for i in range(requested):
+            empty = [i for i in range(requested) if waves[i].numel() == 0]
+            if empty:
+                print(f"rows {empty} ended at frame 0 and produced no audio; they are not scored")
+            keep = [i for i in range(requested) if i not in empty]
+            if not keep:
+                return 0
+            scores = quality.score([waves[i] for i in keep], result["sampling_rate"], [texts[i] for i in keep])
+            scores = {
+                k: ({i: v[j] for j, i in enumerate(keep)} if isinstance(v, list) else v) for k, v in scores.items()
+            }
+            for i in keep:
                 print(
                     f"  [{i:02d}] WER={scores['wer'][i]:.3f} MOS={scores['mos'][i]:.2f}  {scores['transcripts'][i]!r}"
                 )
-            print(f"corpus WER={scores['corpus_wer']:.4f}  mean MOS={sum(scores['mos']) / requested:.3f}")
+            print(f"corpus WER={scores['corpus_wer']:.4f}  mean MOS={sum(scores['mos'].values()) / len(keep):.3f}")
         return 0
     finally:
         ttnn.close_device(device)

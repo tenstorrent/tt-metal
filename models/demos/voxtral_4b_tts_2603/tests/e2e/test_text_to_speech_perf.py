@@ -39,7 +39,7 @@ TRACE_REGION_SIZE = int(os.environ.get("TT_PERF_TRACE_REGION", str(200 * 1024 * 
 REAL_TIME_FRAMES_PER_S = 12.5
 # The README's expected numbers (one Blackhole chip, batch 32, trace + 1 CQ), in ms per traced step. A
 # run fails when any stage, or the per-frame cost, is more than PERF_MARGIN slower than this.
-EXPECTED_MS = {"prefill": 88.7, "decode": 37.1, "acoustic": 41.9, "vocode": 80.1}
+EXPECTED_MS = {"prefill": 85.6, "decode": 37.2, "acoustic": 25.8, "vocode": 75.3}
 PERF_MARGIN = float(os.environ.get("TT_PERF_MARGIN", "0.10"))
 
 
@@ -72,7 +72,7 @@ def test_text_to_speech_perf():
         num_command_queues=1,
     )
     try:
-        pipe = build_pipeline(device, model=common.load_reference_model(), heads=("text_to_speech",))
+        pipe = build_pipeline(device, model=common.load_reference_model())
         batch = pipe.batch
         ms = {stage: _time_stage(device, pipe, stage) for stage in PIPELINE_STAGES}
     finally:

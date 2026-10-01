@@ -46,7 +46,6 @@ import math
 import torch
 
 import ttnn
-from models.demos.voxtral_4b_tts_2603.tt import cpp_down, cpp_swiglu, ttl_down
 
 _TILE = 32
 _MASK_NEG = -1.0e9
@@ -69,11 +68,6 @@ def _weight(linear, device):
     return _from_torch(linear.weight.detach().transpose(0, 1).contiguous(), device)
 
 
-def _gamma(norm, device):
-    """A norm's gamma as a `[1, 1, 1, dim]` float32 tile tensor, for `_rms_norm`."""
-    return _from_torch(norm.weight.detach().reshape(1, 1, 1, -1).contiguous(), device, dtype=ttnn.float32)
-
-
 def _rms_norm(x, gamma, eps, dtype=None):
     """RMSNorm in float32: `x * rsqrt(mean(x^2) + eps) * gamma`.
 
@@ -87,102 +81,6 @@ def _rms_norm(x, gamma, eps, dtype=None):
     if gamma is None:  # folded into the consuming weights
         return ttnn.multiply(x, inv, dtype=dtype or ttnn.float32)
     return ttnn.multiply(ttnn.multiply(x, inv), gamma, dtype=dtype or ttnn.float32)
-
-
-_NORM_COMPUTE = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
-)
-_NORM_COLS = 8
-
-
-def _norm_layout(device, rows, dim):
-    """Block-sharded layout for a `[rows, dim]` RMSNorm: one row tile per grid row, 8 cores across."""
-    grid = device.compute_with_storage_grid_size()
-    ht, wt = rows // _TILE, dim // _TILE
-    if rows % _TILE or dim % (_TILE * _NORM_COLS) or ht > int(grid.y) or _NORM_COLS > int(grid.x):
-        return None
-    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_NORM_COLS - 1, ht - 1))})
-    mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(cores, [_TILE, dim // _NORM_COLS], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(_NORM_COLS, ht),
-        subblock_w=1,
-        block_h=1,
-        block_w=wt // _NORM_COLS,
-        inplace=False,
-    )
-    return mem, cfg
-
-
-def _sharded_rms_norm(x, eps, dtype, gamma=None, memory_config=None):
-    """`x * rsqrt(mean(x^2) + eps)` on the block-sharded layout, or None when the shape has none.
-
-    The interleaved reduction deals one work unit per row tile, so a 96-row norm ran on 3 cores
-    (23 us for the reduce alone). Sharded 8 cores across, each core reduces its own column block
-    and the partial sums are combined over the row. The op's reduction scaler is a bfloat16
-    rounding of `8 / dim`, a constant relative error that `_norm_scale` measures once and the
-    consuming weights absorb.
-    """
-    shape = [int(d) for d in x.shape]
-    rows = 1
-    for d in shape[:-1]:
-        rows *= d
-    layout = _norm_layout(x.device(), rows, shape[-1])
-    if layout is None:
-        return None
-    mem, cfg = layout
-    y = ttnn.rms_norm(
-        ttnn.to_memory_config(ttnn.reshape(x, [1, 1, rows, shape[-1]]), mem),
-        epsilon=eps,
-        weight=gamma,
-        memory_config=mem,
-        program_config=cfg,
-        compute_kernel_config=_NORM_COMPUTE,
-    )
-    out_mem = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
-    return ttnn.reshape(ttnn.sharded_to_interleaved(y, out_mem, output_dtype=dtype), shape)
-
-
-# The SwiGLU kernel reads its activation from L1 on every core: land the norm output there.
-_FFN_IN_MEM = ttnn.L1_MEMORY_CONFIG
-
-_NORM_SCALE = {}
-
-
-def _norm_scale(device, dim, eps):
-    """The factor that makes `_sharded_rms_norm` exact: `exact / measured` on a row of ones."""
-    # Accuracy: the block-sharded ttnn.rms_norm reduces through a bf16 scaler (~1e-3 relative error per
-    # value, not only the constant factor measured here), which the 21-level acoustic grid cannot absorb.
-    # None routes every in-block norm through the exact spelled-out _rms_norm.
-    return None
-    key = (id(device), dim, eps)
-    if key not in _NORM_SCALE:
-        ones = _from_torch(torch.ones(1, 1, _TILE, dim), device, dtype=ttnn.float32)
-        got = _sharded_rms_norm(ones, eps, ttnn.float32)
-        if got is None:
-            _NORM_SCALE[key] = None
-        else:
-            if device.__class__.__name__ == "MeshDevice":
-                host = ttnn.to_torch(got, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
-            else:
-                host = ttnn.to_torch(got)
-            measured = host.double().mean().item()
-            _NORM_SCALE[key] = (1.0 / math.sqrt(1.0 + eps)) / measured
-    return _NORM_SCALE[key]
-
-
-def _block_norm(h, eps, scale, dtype, memory_config=None):
-    """The in-block RMSNorm whose output feeds weights pre-multiplied by `scale` (see `_norm_scale`)."""
-    if scale is not None:
-        y = _sharded_rms_norm(h, eps, dtype, memory_config=memory_config)
-        if y is not None:
-            return y
-        sq = ttnn.multiply(ttnn.mean(ttnn.square(h), dim=-1, keepdim=True), scale * scale)
-        return ttnn.multiply(h, ttnn.add(sq, eps * scale * scale, activations=[ttnn.UnaryOpType.RSQRT]), dtype=dtype)
-    return _rms_norm(h, None, eps, dtype=dtype)
 
 
 _COMPUTE = ttnn.WormholeComputeKernelConfig(
@@ -316,12 +214,20 @@ def _bmm(a, b, per_core_m=None, transpose_b=False, dtype=None):
     """
     m, k, n = int(a.shape[-2]) // 32, int(a.shape[-1]) // 32, int(b.shape[-2 if transpose_b else -1]) // 32
     grid = a.device().compute_with_storage_grid_size()
+    # At most one (batch, head, M-block) work unit per core: with more units than cores this config
+    # returns WRONG values (192 units on the 130-core grid gave PCC 0.80 against torch; 96 is exact).
+    lead = 1
+    for d in list(a.shape)[:-2]:
+        lead *= int(d)
+    per_core_m = per_core_m or m
+    while m % per_core_m or lead * (m // per_core_m) > int(grid.x) * int(grid.y):
+        per_core_m += 1
     cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
         in0_block_w=k,
         out_subblock_h=1,
-        out_subblock_w=min(n, 4),
-        per_core_M=per_core_m or m,
+        out_subblock_w=max(d for d in range(1, min(n, 4) + 1) if n % d == 0),
+        per_core_M=per_core_m,
         per_core_N=n,
     )
     return ttnn.matmul(a, b, transpose_b=transpose_b, program_config=cfg, compute_kernel_config=_COMPUTE, dtype=dtype)
@@ -501,10 +407,8 @@ def _compile_block(device, blk, mask):
     # Each norm's gamma is folded into the weights that consume it: `(x * s * g) @ W` is
     # `(x * s) @ (g[:, None] * W)`, one full-width multiply fewer per norm.
     eps = float(blk.attention_norm.eps)
-    norm_scale = _norm_scale(device, int(blk.attention_norm.weight.shape[0]), eps)
-    fold = 1.0 if norm_scale is None else norm_scale
-    g_attn_t = blk.attention_norm.weight.detach().float().reshape(-1, 1) * fold
-    g_ffn_t = blk.ffn_norm.weight.detach().float().reshape(-1, 1) * fold
+    g_attn_t = blk.attention_norm.weight.detach().float().reshape(-1, 1)
+    g_ffn_t = blk.ffn_norm.weight.detach().float().reshape(-1, 1)
     wqkv = _from_torch(
         torch.cat(
             [
@@ -524,18 +428,14 @@ def _compile_block(device, blk, mask):
     # bfloat16 FFN weights at HiFi4: the 8-bit / HiFi2 variant was faster but cost the stage its accuracy.
     w1_t, w3_t = ((m.weight.detach().float().transpose(0, 1) * g_ffn_t).contiguous() for m in (ff.w1, ff.w3))
     w1, w3 = (_from_torch(t, device, dtype=ttnn.bfloat16) for t in (w1_t, w3_t))
-    w13 = cpp_swiglu.fuse(w1_t, w3_t, device)
     # The down projection stays bfloat16: bf8_b weights here cost the acoustic stage its accuracy.
     w2 = _from_torch(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat16)
-    w2_ttl = ttl_down.weight(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, _from_torch)
-    w2_cpp = cpp_down.shard(ff.w2.weight.detach().transpose(0, 1).contiguous(), device)
     for rows in _COMPACT_ROWS:
         _compact_mask(device, rows, 3, n_heads // n_kv_heads)
         _compact_mask(device, rows, 3, n_heads // n_kv_heads, rows // 3)
 
     def run(h, tokens=None, readout=False):
-        # qkv's input lands in L1, not DRAM: it is read once, by the next op.
-        xn = _block_norm(h, eps, norm_scale, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        xn = _rms_norm(h, None, eps, dtype=ttnn.float32)
         if tokens:
             attn_out = _compact_attention(xn, wqkv, wo, n_heads, n_kv_heads, None, tokens, readout)
         else:
@@ -544,23 +444,7 @@ def _compile_block(device, blk, mask):
             h = ttnn.slice(h, [0, 0, 0, 0], [1, 1, int(h.shape[-2]) // tokens, int(h.shape[-1])])
         h = _residual_add(h, attn_out)
 
-        hn = _block_norm(h, eps, norm_scale, ttnn.float32, memory_config=_FFN_IN_MEM if w13 is not None else None)
-        if cpp_swiglu.serves(hn, w13):
-            gated = cpp_swiglu.apply(hn, w13)
-            if cpp_down.serves(gated, w2_cpp):
-                return _residual_add(h, cpp_down.apply(gated, w2_cpp))
-            if ttl_down.supports(gated, w2_ttl):
-                return _residual_add(h, ttl_down.apply(gated, w2_ttl))
-            return _residual_add(
-                h,
-                _lin(
-                    gated,
-                    w2,
-                    dtype=ttnn.float32,
-                    compute_kernel_config=_TALL_COMPUTE,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                ),
-            )
+        hn = _rms_norm(h, None, eps, dtype=ttnn.float32)
         gated = ttnn.multiply(
             _lin(hn, w1, dtype=ttnn.float32, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG),
             _lin(hn, w3, dtype=ttnn.float32, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG),
@@ -579,7 +463,7 @@ def _compile_block(device, blk, mask):
     return run
 
 
-def build(device, torch_module, batch=None):
+def build(device, torch_module, batch=None, layers=None):
     at = getattr(torch_module, "inner", torch_module)
     args = at.acoustic_transformer_args
     dim = int(args.dim)
@@ -626,7 +510,7 @@ def build(device, torch_module, batch=None):
     if batch is not None:
         _pad_for(int(batch))
 
-    blocks = [_compile_block(device, at.layers[str(i)], mask) for i in at.layers_ids]
+    blocks = [_compile_block(device, at.layers[str(i)], mask) for i in at.layers_ids[:layers]]
     g_final = None
     eps_final = float(at.norm.eps)
 

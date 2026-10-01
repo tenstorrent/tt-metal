@@ -1,18 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The HF golden chains for `mistralai/Voxtral-4B-TTS-2603` -- Source A's reference output.
+"""The HF golden chains for `mistralai/Voxtral-4B-TTS-2603` -- the reference model's output.
 
 THIS MODULE IS NOT THE PIPELINE. It is the reference side of the PCC comparison, and nothing in
-`tt/pipeline.py`'s forward path imports it. It is the one place HF submodules may be called
-(allowed usage 3: "HF calls inside a `_hf_reference_<task>()` helper").
+`tt/pipeline.py`'s forward path imports it.
 
-WHY NOT `model.generate()`. Source A ships no generation loop for the TTS chain: the serving
-loop lives in vLLM-Omni, which is not one of this run's two permitted sources. And
-`generate()` on this checkpoint would drive the TIED TEXT head, which cannot emit audio codes at
-all -- it is not the model's task. So the golden runs the reference's OWN submodules
+WHY NOT `model.generate()`. The checkpoint ships no generation loop for the TTS chain: the
+serving loop lives in vLLM-Omni. And `generate()` on this checkpoint would drive the TIED TEXT
+head, which cannot emit audio codes at all -- it is not the model's task. So the golden runs the reference's OWN submodules
 (`hf.model.layers`, `hf.acoustic_transformer.*`, `hf.audio_tokenizer.*`) through the chain the
-checkpoint's architecture dictates, and the TT pipeline runs the identical chain in ttnn. Call 2's
-golden is one plain causal-LM forward, `hf(input_ids).logits`.
+checkpoint's architecture dictates, and the TT pipeline runs the identical chain in ttnn.
 
 WHY THE NOISE IS AN ARGUMENT. `FlowMatchingAudioTransformer.decode_one_frame` draws
 `x_0 = torch.randn(...)` INSIDE the module, so its output is a function of the RNG rather than of
@@ -42,7 +39,7 @@ def _new_cache(hf_model):
 
 
 # ----------------------------------------------------------------------------------------
-# Call 1 -- text to speech
+# Text to speech
 # ----------------------------------------------------------------------------------------
 
 
@@ -214,7 +211,7 @@ def hf_reference_text_to_speech(
     voice_embedding=None,
     prefill=None,
 ):
-    """Source A's golden for Call 1: tokenized text -> a 24 kHz waveform.
+    """The reference golden for text to speech: tokenized text -> a 24 kHz waveform.
 
     Runs the real chain -- text backbone (KV-cached), then per frame the acoustic sampler, the
     audio-token feedback embedding, and one more backbone step -- and finally the codec. Stops on
@@ -324,20 +321,3 @@ def hf_reference_text_to_speech(
         "end_frame": end_frame,
         "sampling_rate": int(codec.sampling_rate),
     }
-
-
-# ----------------------------------------------------------------------------------------
-# Call 2 -- text continuation
-# ----------------------------------------------------------------------------------------
-
-
-def hf_reference_text_continuation(hf_model, input_ids):
-    """Source A's golden for Call 2: the causal LM's teacher-forced next-token prediction.
-
-    ONE plain `hf_model(input_ids)` forward -- not `generate()`. `logits[:, s]` is the reference's
-    next-token distribution after tokens `0..s`, `next_tokens[:, s]` its greedy pick: the same
-    quantities `pipeline.run_text_continuation` returns, over every position of every row.
-    """
-    with torch.no_grad():
-        logits = hf_model(input_ids=input_ids).logits.float()
-    return {"logits": logits, "next_tokens": logits.argmax(dim=-1)}

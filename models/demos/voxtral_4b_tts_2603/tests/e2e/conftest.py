@@ -39,7 +39,7 @@ def device():
 
 @pytest.fixture(scope="session")
 def hf_model():
-    """Source A's reference, rebuilt from the native checkpoint by Source B's reference loader."""
+    """The PyTorch reference model, rebuilt from the native checkpoint by `reference/reference_loader.py`."""
     common.use_all_cpu_threads()
     torch.manual_seed(0)
     return common.load_reference_model()

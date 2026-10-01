@@ -9,24 +9,22 @@
 
 GQA 32 query heads over 8 KV heads, head_dim **128** (explicitly 128, not 3072/32=96), hidden_dim
 9216, `norm_eps` 1e-5, no biases. RoPE is `rotate_half` against the `(cos, sin)` the caller passes;
-the harness marshals them onto the device, because the runtime native probe counts every torch call
-the forward makes and graduates only at zero -- a `ttnn.from_torch` in here alone costs three.
+the text stack stages them on the device, so the forward makes no torch call and can be captured in a
+trace.
 
 Causality comes from SDPA's `is_causal`, so the additive `attention_mask` argument is accepted and
 ignored. That matches the reference for an unpadded batch; a mask carrying real PADDING would need
 to be fed through as an `attn_mask` instead.
 
-TWO phases, one set of weights. With no `kv_cache` this is exactly the graduated prefill body.
-Given one it ALSO seeds it from its own post-RoPE k/v, and `decode=True` then runs the cached
-single-token path, which reads the resident history instead of recomputing it. The no-cache path is
-untouched, so the per-component PCC test still measures the same arithmetic it graduated on."""
+TWO phases, one set of weights. With no `kv_cache` this is a plain causal prefill. Given one it ALSO
+seeds it from its own post-RoPE k/v, and `decode=True` then runs the cached single-token path, which
+reads the resident history instead of recomputing it."""
 
 from __future__ import annotations
 
 import torch
 
 import ttnn
-from models.demos.voxtral_4b_tts_2603.tt import ttl_swiglu
 
 # SDPA takes bfloat16 and nothing wider (`sdpa_device_operation.cpp:43`), and the KV cache is read
 # by the same op family, so q/k/v and the cache are bf16 while the residual stream stays float32.
@@ -35,9 +33,8 @@ _SDPA_DTYPE = ttnn.bfloat16
 _CACHE_DTYPE = ttnn.bfloat8_b
 
 # `ttnn.linear` on its DEFAULTS leaves `fp32_dest_acc_en` off, which rounds the matmul
-# accumulator to bfloat16 at every step even though the activations are float32. Every linear
-# here passes this instead; `mistral_model.py` carries the identical config for the identical
-# arithmetic, and without it the two ports of the same layer do not agree with each other.
+# accumulator to bfloat16 at every step even though the activations are float32. The decode linears
+# pass this instead (the tall prefill linears take `_TALL_COMPUTE` below).
 _COMPUTE = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )
@@ -198,16 +195,6 @@ def _from_torch(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device)
 
 
-def _weight(linear, device):
-    """A `[in, out]` device tensor for a torch `nn.Linear` (whose weight is `[out, in]`)."""
-    return _from_torch(linear.weight.detach().transpose(0, 1).contiguous(), device)
-
-
-def _norm_weight(norm, device):
-    """Gamma as `[1, 1, 1, dim]` float32 TILE -- the form `_rms_norm`'s final multiply takes."""
-    return _from_torch(norm.weight.detach().reshape(1, 1, 1, -1), device, dtype=ttnn.float32)
-
-
 _STATS_COMPUTE = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
 )
@@ -250,8 +237,8 @@ def _view4(x, dim):
     """`[..., seq, dim]` -> `([lead, 1, seq, dim], lead, seq, rank)`.
 
     THE LEADING BOUND IS READ OFF THE TENSOR. This used to be a literal
-    `ttnn.reshape(x, [1, 1, seq, dim])`, which is right at the batch of 1 the per-component PCC
-    harness feeds and wrong for every batched caller: at B=32 the reshape either raises on volume
+    `ttnn.reshape(x, [1, 1, seq, dim])`, which is right at a batch of 1 and wrong for every batched
+    caller: at B=32 the reshape either raises on volume
     or -- worse, once a leading 1 is folded in elsewhere -- keeps only row 0 and silently drops
     samples 1..31. Everything downstream of here is per-row, so collapsing every leading axis into
     one `lead` is exact for `[B, S, D]`, `[B, 1, S, D]` and the decode stream's `[1, 1, B, D]`.
@@ -496,7 +483,6 @@ def _seed_cache(kv, k, v):
 # negative beyond it. The row comes off the `[C, C]` float32 table the text stack uploaded ONCE at
 # build time and handed to every block in its `kv` dict -- built here it would be a torch call
 # inside the forward, and a host write inside a captured trace.
-_MASK_NEG = -1e9
 
 
 def _decode_mask(kv_cache, position, cap):
@@ -514,25 +500,6 @@ def _decode_mask(kv_cache, position, cap):
     return ttnn.to_layout(ttnn.reshape(row, [1, 1, 1, cap]), ttnn.TILE_LAYOUT)
 
 
-def _softmax(x, dim=-1):
-    """`exp(x - max) / sum(exp(x - max))`, spelled out in three ops.
-
-    NOT `ttnn.softmax`. Measured on this build against a float64 reference, the stock op's rows do
-    not sum to 1: mean 0.9943, worst 0.9611, for ~1.8e-2 relative error -- and NO flag changes it
-    (`numeric_stable=True` and `compute_kernel_config` all return the identical tensor). These
-    three ops sit at 5.5e-8, and renormalising the stock op's output only reaches 2.1e-2, so its
-    per-element values are wrong too, not just its sum.
-
-    A softmax that does not sum to 1 ATTENUATES the attention output it weights. That reads as a
-    NORM RATIO below 1 at a PCC of 0.9999, so a PCC-only gate cannot see it, and it is invisible
-    in any layer whose residual is already large. The acoustic stubs beside this file spell the
-    same three ops out for the same reason.
-    """
-    # The exp rides on the subtract as a post-activation: one pass over x instead of two.
-    e = ttnn.subtract(x, ttnn.max(x, dim=dim, keepdim=True), activations=[ttnn.UnaryOpType.EXP])
-    return ttnn.divide(e, ttnn.sum(e, dim=dim, keepdim=True))
-
-
 def _swiglu_pairs(gate, up, tile=32):
     """`[K, N]` gate and up weights as ONE `[K, 2N]` weight of interleaved column-tile pairs
     `[gate_t0, up_t0, gate_t1, up_t1, ...]` -- the layout `minimal_matmul(fuse_swiglu=True)` reads
@@ -542,17 +509,9 @@ def _swiglu_pairs(gate, up, tile=32):
     return pairs.reshape(rows, 2 * n).contiguous()
 
 
-def _ttl_swiglu_weights(gate, up, device):
-    if not ttl_swiglu.enabled():
-        return None
-    return tuple(_from_torch(w.contiguous(), device, dtype=ttnn.bfloat16) for w in (gate, up))
-
-
-def _fused_swiglu(h, w_gu, w_ttl=None):
+def _fused_swiglu(h, w_gu):
     """Prefill `silu(h @ Wg) * (h @ Wu)` as ONE matmul: no gate/up tensors are written and there
     is no separate multiply pass over them."""
-    if w_ttl is not None and ttl_swiglu.supports(h, w_ttl[0]):
-        return ttl_swiglu.apply(h, *w_ttl)
     grid = h.device().compute_with_storage_grid_size()
     rows = 1
     for d in list(h.shape)[:-1]:
@@ -564,8 +523,11 @@ def _fused_swiglu(h, w_gu, w_ttl=None):
     # The fewest grid rows that keep that share: rows past ceil(M / share) would only compute padding
     # (32 M tiles over 10 rows is 4 each, and rows 8-9 held the pad).
     grid = ttnn.CoreCoord(int(grid.x), -(-(rows // 32) // share))
-    # A share of <= 8 tiles fits one M block, so each core streams its weight columns ONCE.
-    m_blk = share if share <= 8 else -(-share // 2)
+    # A share of <= 8 tiles fits one M block, so each core streams its weight columns ONCE. Longer shares
+    # split into the fewest equal blocks of <= 8 tiles: each M tile of a block costs ~124 KB of L1
+    # circular buffer, so an unbounded block (10 tiles at M = 181 tiles, a ~180-token tail at batch 32)
+    # overflows L1. The split changes only how often the weight is re-read, not the arithmetic.
+    m_blk = -(-share // -(-share // 8))
     # At <= 2 M tiles a core the weight's blocks are small enough for 8-tile K blocks (half the K
     # steps of 4): 8 x 18 bf8_b tiles double-buffered is ~313 KB, within the ~1 MB of L1 that traces.
     wide = m_blk <= 2
@@ -635,11 +597,6 @@ def build(device, torch_module):
         ),
         device,
         dtype=ttnn.bfloat8_b,
-    )
-    w_ttl = _ttl_swiglu_weights(
-        mlp.gate_proj.weight.detach().float().transpose(0, 1) * g_post_t,
-        mlp.up_proj.weight.detach().float().transpose(0, 1) * g_post_t,
-        device,
     )
     # bf8_b halves the weight both the prefill (LoFi) and decode down projections unpack.
     w_down = _from_torch(mlp.down_proj.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat8_b)
@@ -761,6 +718,8 @@ def build(device, torch_module):
         # The cache tail beyond `position` is zeros, and a zero key scores ZERO -- which is a
         # perfectly ordinary logit, not a small one. It has to be masked explicitly.
         scores = ttnn.add(scores, _decode_mask(kv_cache, position, cap))
+        # The softmax is spelled out, not `ttnn.softmax`: measured on this build against float64, the
+        # stock op's rows do not sum to 1 (mean 0.9943, worst 0.9611), which attenuates the output.
         # Normalise AFTER P@V: dividing the [B, n_kv, 32, head_dim] context by the row sums is the
         # same arithmetic as dividing the C/head_dim-times larger [B, n_kv, 32, C] weights first.
         e = ttnn.subtract(scores, ttnn.max(scores, dim=-1, keepdim=True), activations=[ttnn.UnaryOpType.EXP])
@@ -853,10 +812,10 @@ def build(device, torch_module):
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             )
         else:
-            gated = _fused_swiglu(hn, w_gu, w_ttl)
+            gated = _fused_swiglu(hn, w_gu)
         ttnn.deallocate(hn)
-        # Prefill hands the down projection over in bf16, as the composed kinds' mlp and every wo
-        # already do; the residual it is added into stays float32.
+        # Prefill hands the down projection over in bf16, as every wo already does; the residual it is
+        # added into stays float32.
         down_dtype = h.dtype if decode else ttnn.bfloat16
         h = ttnn.add(h, _lin(gated, w_down, dtype=down_dtype, compute_kernel_config=_COMPUTE))
         ttnn.deallocate(gated)
