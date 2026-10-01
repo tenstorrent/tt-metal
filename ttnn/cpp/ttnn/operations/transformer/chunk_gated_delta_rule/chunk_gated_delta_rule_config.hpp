@@ -36,15 +36,23 @@ struct ChunkGdnPhasedProgramConfig {
 // model's pick for (grid, BH, NC, Vt); pinning one of num_producers / num_receivers makes the model
 // fill the other so the pair still fits the grid.
 struct ChunkGdnFusedProgramConfig {
-    std::optional<uint32_t> num_producers;  // NP per head (clamped to the chunk count)
+    std::optional<uint32_t>
+        num_producers;  // NP per head (clamped to the chunk count); the pool size P with producer_pool
     std::optional<uint32_t> num_receivers;  // NV per head; must divide Vt = V / 32
     // Core map. true = row-local: one head per row with its producers east of its receivers, so no
     // two heads share a NoC link; false = row-major 1xNV receiver rectangles with the producers on the
-    // remaining cores. nullopt = row-local whenever the geometry has such a layout.
+    // remaining cores. nullopt = row-local whenever the geometry has such a layout. Ignored with producer_pool.
     std::optional<bool> row_local;
     uint32_t handoff_depth = 2;  // hand-off ring slots per CB, 1..8: how many chunks a producer may run ahead
     bool unicast = true;         // per-receiver unicast writes; false = the linked multicast chain
     bool posted = false;         // posted unicast data writes, VALID ordered by in-order delivery; needs unicast
+    // One producer pool for every head instead of NP producers per head: the receivers and BH*NPH HOME
+    // producers take the row-local layout of the largest NPH the pool size allows, and every other core of
+    // the pool is an EXTRA producer serving all heads. num_producers is then the pool size P (default: every
+    // core the receivers leave free, at most BH*NC).
+    bool producer_pool = false;
+    // Share of every head's chunks the extras take, in [0, 1]; nullopt = NX / P, the balanced load.
+    std::optional<float> pool_extra_share;
 };
 
 using ChunkGdnProgramConfig =

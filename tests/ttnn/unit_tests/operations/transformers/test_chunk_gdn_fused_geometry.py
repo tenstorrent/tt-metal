@@ -7,8 +7,11 @@ No device needed. The fused op's geometry is three pure C++ functions, bound thr
 * ``chunk_gdn_fused_geometry``           — the calibrated cost model (NV, NP, placement) the op picks
                                            when the fused program config leaves those fields free;
 * ``chunk_gdn_fused_row_local_feasible`` — the row-local feasibility predicate;
+* ``chunk_gdn_fused_pool_feasible`` / ``chunk_gdn_fused_pool_home_producers`` — the producer pool's;
 * ``chunk_gdn_fused_placement``          — the core map, computed by the SAME function the program
-                                           factory calls.
+                                           factory calls;
+* ``chunk_gdn_fused_item_map``           — the producer map the factory and the three dataflow kernels
+                                           share (which producer computes chunk c of head h).
 
 The device tests (test_chunk_gdn_fused.py) can only run the geometry of the attached chip. These
 tests take the grid as a parameter, so a geometry tuned for one chip (QB2's 11x10) cannot be baked
@@ -83,40 +86,69 @@ def _row_local_feasible(gx, gy, bh, nv, np_):
     return rem * (nv // rw + -(-np_ // wl)) <= gy
 
 
-def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0):
-    """Over NV | Vt and NP with a feasible row-local layout, minimise
-    T_fused = NC * max(w_p / NP, t_step(Vt / NV)) + fill; ties -> fewer cores, then smaller NV. With no
-    row-local layout, fall back to row-major placement with the same formula."""
+def _pool_home_producers(gx, gy, bh, nv, P):
+    """Placement 2: home producers per head — the largest NPH with BH*NPH <= P that has a row-local layout."""
+    for nph in range(min(P // bh, gx), 0, -1):
+        if _row_local_feasible(gx, gy, bh, nv, nph):
+            return nph
+    return 0
+
+
+def _pool_feasible(gx, gy, bh, nv, P):
+    return nv >= 1 and P >= 1 and bh * nv + P <= gx * gy and _pool_home_producers(gx, gy, bh, nv, P) >= 1
+
+
+PER_HEAD, POOL, BOTH = 0, 1, 2  # chunk_gdn_fused_geometry's `candidates`
+
+
+def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, candidates=PER_HEAD):
+    """Per-head candidates: over NV | Vt and NP with a feasible row-local layout, minimise
+    T_fused = NC * max(w_p(BH*NP) / NP, t_step(Vt / NV)) + fill; with no row-local layout, fall back to
+    row-major placement with the same formula. Pool candidates: NV in {1, 2, 4}, P = every core the receivers
+    leave (or the pinned size), at most BH*NC, T = NC * max(BH * w_p(P) / P, t_step) + fill. Ties -> fewer
+    cores in total, then smaller NV."""
     gx, gy = grid
     best = None
-    for nv in (1, 2, 4, 8):
-        if VT % nv or (fixed_nv and nv != fixed_nv) or (VT // nv) not in _T_STEP_US:
-            continue
-        for np_ in range(1, gx - nv + 1):
-            np_eff = min(np_, nc)
-            if bh * (nv + np_eff) > gx * gy:
-                break
-            if fixed_np and np_eff != min(fixed_np, nc):
-                continue
-            if not _row_local_feasible(gx, gy, bh, nv, np_eff):
-                continue
-            t = nc * max(_w_p_at(bh * np_eff) / np_eff, _T_STEP_US[VT // nv]) + _FILL_US
-            key = (t, nv + np_eff, nv)
-            if best is None or key < best[0]:
-                best = (key, nv, np_eff, 1)
-    if best is None:
+
+    def consider(key, nv, np_, pl):
+        nonlocal best
+        if best is None or key < best[0]:
+            best = (key, nv, np_, pl)
+
+    if candidates != POOL:
         for nv in (1, 2, 4, 8):
-            if VT % nv or (VT // nv) not in _T_STEP_US or (fixed_nv and nv != fixed_nv):
+            if VT % nv or (fixed_nv and nv != fixed_nv) or (VT // nv) not in _T_STEP_US:
                 continue
-            if not _row_major_feasible(gx, gy, bh, nv) or gx * gy - bh * nv < 1:
+            for np_ in range(1, gx - nv + 1):
+                np_eff = min(np_, nc)
+                if bh * (nv + np_eff) > gx * gy:
+                    break
+                if fixed_np and np_eff != min(fixed_np, nc):
+                    continue
+                if not _row_local_feasible(gx, gy, bh, nv, np_eff):
+                    continue
+                t = nc * max(_w_p_at(bh * np_eff) / np_eff, _T_STEP_US[VT // nv]) + _FILL_US
+                consider((t, bh * (nv + np_eff), nv), nv, np_eff, 1)
+        if best is None:
+            for nv in (1, 2, 4, 8):
+                if VT % nv or (VT // nv) not in _T_STEP_US or (fixed_nv and nv != fixed_nv):
+                    continue
+                if not _row_major_feasible(gx, gy, bh, nv) or gx * gy - bh * nv < 1:
+                    continue
+                np_ = min(fixed_np, nc) if fixed_np else min((gx * gy - bh * nv) // bh, nc)
+                if np_ < 1 or bh * (nv + np_) > gx * gy:
+                    continue
+                t = nc * max(_w_p_at(bh * np_) / np_, _T_STEP_US[VT // nv]) + _FILL_US
+                consider((t, bh * (nv + np_), nv), nv, np_, 0)
+    if candidates != PER_HEAD:
+        for nv in (1, 2, 4):
+            if VT % nv or (fixed_nv and nv != fixed_nv) or (VT // nv) not in _T_STEP_US or bh * nv >= gx * gy:
                 continue
-            np_ = min(fixed_np, nc) if fixed_np else min((gx * gy - bh * nv) // bh, nc)
-            if np_ < 1 or bh * (nv + np_) > gx * gy:
+            P = min(fixed_np if fixed_np else gx * gy - bh * nv, bh * nc)
+            if not _pool_feasible(gx, gy, bh, nv, P):
                 continue
-            t = nc * max(_w_p_at(bh * np_) / np_, _T_STEP_US[VT // nv]) + _FILL_US
-            key = (t, nv + np_, nv)
-            if best is None or key < best[0]:
-                best = (key, nv, np_, 0)
+            t = nc * max(bh * _w_p_at(P) / P, _T_STEP_US[VT // nv]) + _FILL_US
+            consider((t, bh * nv + P, nv), nv, P, 2)
     t_ph = _t_phased_us(bh, nc)
     if best is None:
         return {"nv": None, "np": None, "placement": None, "T_fused": None, "T_phased": t_ph, "fused_pays": False}
@@ -168,6 +200,16 @@ def _placement_row_local(gx, gy, bh, nv, np_):
     return rcv, prod
 
 
+def _placement_pool(gx, gy, bh, nv, P):
+    """Placement 2: the row-local map of NPH = _pool_home_producers home producers per head, then the
+    P - BH*NPH extras on the remaining cores row-major."""
+    nph = _pool_home_producers(gx, gy, bh, nv, P)
+    rcv, prod = _placement_row_local(gx, gy, bh, nv, nph)
+    taken = set(rcv) | set(prod)
+    extras = [(x, y) for y in range(gy) for x in range(gx) if (x, y) not in taken]
+    return rcv, prod + extras[: P - bh * nph], nph
+
+
 def _rect(cores):
     xs, ys = [c[0] for c in cores], [c[1] for c in cores]
     return min(xs), min(ys), max(xs), max(ys)
@@ -214,14 +256,16 @@ def _feasible_layouts(gx, gy, bh):
 # ---------------------------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("candidates", [PER_HEAD, POOL, BOTH], ids=["per_head", "pool", "both"])
 @pytest.mark.parametrize("nc", [8, 64])
 @pytest.mark.parametrize("bh", BHS)
 @pytest.mark.parametrize("grid", GRIDS, ids=GRID_IDS)
-def test_cost_model_mirror(grid, bh, nc):
+def test_cost_model_mirror(grid, bh, nc, candidates):
     """The C++ cost model and the oracle pick the same (NV, NP, placement) and agree on T_fused and
-    T_phased — so the op's default dispatch is the documented model on every grid."""
-    nv, np_, pl, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(grid[0], grid[1], bh, nc, VT)
-    o = _choose_geometry(grid, bh, nc)
+    T_phased — so the op's default dispatch (per-head candidates) is the documented model on every grid,
+    and so is the pool geometry producer_pool=True resolves to."""
+    nv, np_, pl, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(grid[0], grid[1], bh, nc, VT, 0, 0, candidates)
+    o = _choose_geometry(grid, bh, nc, candidates=candidates)
     if o["nv"] is None:
         assert nv == 0, f"oracle: no fused geometry fits; C++ picked NV={nv} NP={np_}"
         assert not pays
@@ -239,6 +283,20 @@ def test_row_local_feasibility_mirror(grid, bh):
         for np_ in range(1, grid[0]):
             got = bool(_t.chunk_gdn_fused_row_local_feasible(grid[0], grid[1], bh, nv, np_))
             assert got == _row_local_feasible(grid[0], grid[1], bh, nv, np_), (nv, np_, got)
+
+
+@pytest.mark.parametrize("bh", BHS)
+@pytest.mark.parametrize("grid", GRIDS, ids=GRID_IDS)
+def test_pool_feasibility_mirror(grid, bh):
+    """The C++ pool predicates (feasible, home producers per head) mirror the oracle for every pool size."""
+    gx, gy = grid
+    for nv in (1, 2, 4):
+        for P in range(1, gx * gy - bh * nv + 1):
+            nph = _t.chunk_gdn_fused_pool_home_producers(gx, gy, bh, nv, P)
+            assert nph == _pool_home_producers(gx, gy, bh, nv, P), (nv, P, nph)
+            got = bool(_t.chunk_gdn_fused_pool_feasible(gx, gy, bh, nv, P))
+            assert got == _pool_feasible(gx, gy, bh, nv, P), (nv, P, got)
+            assert got == (nph >= 1), (nv, P, got, nph)
 
 
 @pytest.mark.parametrize("fixed", [(1, 0), (2, 0), (4, 0), (0, 1), (0, 2), (0, 5), (0, 8), (2, 2), (4, 5)])
@@ -296,6 +354,107 @@ def test_factory_placement(grid, bh):
 
 @pytest.mark.parametrize("bh", BHS)
 @pytest.mark.parametrize("grid", GRIDS, ids=GRID_IDS)
+def test_pool_placement(grid, bh):
+    """Placement 2 for every NV and a spread of pool sizes: the factory's core map equals the oracle's
+    (the row-local map of the home producers, then the extras row-major), uses every core at most once,
+    keeps each head's receivers a dense rectangle, and its first BH*NPH producers ARE the row-local
+    map's — the home producers keep their head's traffic in its own row."""
+    gx, gy = grid
+    tested = 0
+    for nv in (1, 2, 4):
+        free = gx * gy - bh * nv
+        for P in sorted({bh, bh + 1, 2 * bh, free // 2, free - 1, free}):
+            if P < 1 or P > free or not _pool_feasible(gx, gy, bh, nv, P):
+                continue
+            tag = f"NV={nv} P={P}"
+            rcv, prod = _t.chunk_gdn_fused_placement(gx, gy, bh, nv, P, 2)
+            rcv, prod = [tuple(c) for c in rcv], [tuple(c) for c in prod]
+            o_rcv, o_prod, nph = _placement_pool(gx, gy, bh, nv, P)
+            assert (rcv, prod) == (o_rcv, o_prod), f"{tag}: the factory's core map differs from the oracle's"
+            assert nph == _t.chunk_gdn_fused_pool_home_producers(gx, gy, bh, nv, P)
+            assert len(rcv) == bh * nv and len(prod) == P, tag
+            assert all(0 <= x < gx and 0 <= y < gy for x, y in rcv + prod), f"{tag}: core outside the grid"
+            assert len(set(rcv + prod)) == len(rcv) + len(prod), f"{tag}: a core is used twice"
+            rl_rcv, rl_prod = _placement_row_local(gx, gy, bh, nv, nph)
+            assert rcv == rl_rcv and prod[: bh * nph] == rl_prod, f"{tag}: home producers are not the row-local map"
+            for h in range(bh):
+                cores = rcv[h * nv : (h + 1) * nv]
+                x0, y0, x1, y1 = _rect(cores)
+                assert (x1 - x0 + 1) * (y1 - y0 + 1) == nv, f"{tag}: head {h} receivers {cores} not a dense rectangle"
+            tested += 1
+    if not tested:
+        pytest.skip(f"no producer pool fits BH={bh} on {gx}x{gy}")
+
+
+def _item_map_properties(bh, nc, nph, nx, num, den):
+    """Every (head, chunk) served exactly once, each producer's chunks non-decreasing, owner[h][c] the
+    producer whose list holds (h, c). Returns the per-producer item counts."""
+    items, owner = _t.chunk_gdn_fused_item_map(bh, nc, nph, nx, num, den)
+    assert len(items) == bh * nph + nx and len(owner) == bh and all(len(row) == nc for row in owner)
+    seen = {}
+    for p, lst in enumerate(items):
+        chunks = [c for _, c in lst]
+        assert chunks == sorted(chunks), f"producer {p}: chunks {chunks} not non-decreasing"
+        for h, c in lst:
+            assert 0 <= h < bh and 0 <= c < nc, (p, h, c)
+            assert (h, c) not in seen, f"({h}, {c}) served by producers {seen[(h, c)]} and {p}"
+            seen[(h, c)] = p
+            assert owner[h][c] == p, f"owner[{h}][{c}] = {owner[h][c]}, but producer {p} lists it"
+    assert len(seen) == bh * nc, f"{bh * nc - len(seen)} items unserved"
+    return [len(lst) for lst in items]
+
+
+@pytest.mark.parametrize(
+    "bh, nc, nph, nx, num, den",
+    [
+        (16, 64, 3, 30, 30, 78),  # BH=16 NV=2 pool of 78 on 11x10, balanced share 30/78
+        (16, 64, 3, 30, 26, 78),  # same pool, the extras at 1/3
+        (12, 64, 7, 2, 2, 86),  # BH=12 NV=2 pool of 86: two extras
+        (8, 64, 9, 22, 22, 94),  # BH=8 NV=2 pool of 94
+        (48, 64, 1, 14, 14, 62),  # BH=48 NV=1 pool of 62
+        (16, 9, 3, 30, 30, 78),  # NC not a multiple of anything
+        (16, 64, 3, 30, 78, 78),  # every chunk to the extras: home producers idle
+        (16, 64, 3, 30, 0, 78),  # no chunk to the extras: they idle
+        (16, 2, 3, 30, 30, 78),  # fewer chunks than home producers: idle producers of both kinds
+        (3, 5, 2, 7, 7, 13),  # small odd sizes
+    ],
+)
+def test_pool_item_map(bh, nc, nph, nx, num, den):
+    """The shared producer map (one formula in the factory and the three kernels): a partition of the
+    items into non-decreasing chunk lists with a consistent owner function, and loads balanced to within
+    one item per producer kind."""
+    counts = _item_map_properties(bh, nc, nph, nx, num, den)
+    home, extras = counts[: bh * nph], counts[bh * nph :]
+    assert max(home) - min(home) <= 1, f"home loads {min(home)}..{max(home)}"
+    if extras:
+        assert max(extras) - min(extras) <= 1, f"extra loads {min(extras)}..{max(extras)}"
+        n_extra_items = (nc * num * bh) // den
+        assert sum(extras) == n_extra_items and sum(home) == nc * bh - n_extra_items
+
+
+def test_pool_item_map_extras_step_chunks():
+    """An extra's successive items step through increasing chunks (phased per head) instead of the same
+    chunk of BH/NX heads: with two extras at BH=12 (pool of 86) each item is ~7 chunks after the previous,
+    so a chunk needed by every head at once is never queued BH/NX deep on one core."""
+    items, _ = _t.chunk_gdn_fused_item_map(12, 64, 7, 2, 2, 86)
+    for lst in items[84:]:
+        chunks = [c for _, c in lst]
+        assert len(chunks) >= 8 and all(5 <= b - a <= 9 for a, b in zip(chunks, chunks[1:])), chunks
+
+
+@pytest.mark.parametrize("bh, nc, np_", [(12, 8, 3), (12, 64, 7), (16, 1, 1), (4, 9, 4)])
+def test_item_map_per_head_form(bh, nc, np_):
+    """NX = 0 is the per-head form: producer h*NP + j owns chunks c = j, j+NP, ... of head h — the mapping
+    placements 0 and 1 have always used."""
+    items, owner = _t.chunk_gdn_fused_item_map(bh, nc, np_, 0, 0, 1)
+    for h in range(bh):
+        for j in range(np_):
+            assert items[h * np_ + j] == [(h, c) for c in range(j, nc, np_)], (h, j)
+        assert [owner[h][c] for c in range(nc)] == [h * np_ + c % np_ for c in range(nc)]
+
+
+@pytest.mark.parametrize("bh", BHS)
+@pytest.mark.parametrize("grid", GRIDS, ids=GRID_IDS)
 def test_chosen_layout_shares_no_links(grid, bh):
     """The layout the cost model picks (at the production chunk count) keeps each head's hand-off
     traffic on its own NoC links. Checked on the factory's actual core map."""
@@ -314,6 +473,8 @@ def test_chosen_layout_shares_no_links(grid, bh):
         ((11, 10), 21, 4, 1, 0, "receiver rectangles do not fit"),  # 105 cores fit; 2 heads/row x 10 rows < 21
         ((11, 10), 16, 4, 2, 1, "leftover heads need"),  # 96 cores fit; 6 leftover heads need 12 rows > 10
         ((11, 10), 11, 4, 4, 1, "not a multiple of the leftover width"),  # 88 cores fit; 3 leftover columns
+        ((11, 10), 16, 2, 79, 2, r"R\+P = "),  # pool: 32 + 79 = 111 cores > 110
+        ((11, 10), 16, 2, 15, 2, "no row-local layout with a home producer per head"),  # pool smaller than BH
     ],
 )
 def test_infeasible_placement_raises(expect_error, grid, bh, nv, np_, placement, message):
@@ -356,3 +517,28 @@ def test_qb2_operating_points():
     assert not pays48
     nv, _, _, _, _, pays = _t.chunk_gdn_fused_geometry(11, 10, 64, 64, VT)
     assert nv == 0 and not pays
+
+
+def test_qb2_pool_operating_points():
+    """The producer pool on QB2 (what producer_pool=True resolves to with the geometry left free): every
+    core the receivers leave, in the row-local map of the largest NPH the pool allows plus the extras.
+    BH=16 NV=2: 78 producers = 3 per head in the rows + 30 extras; BH=12 NV=2: 86 = 7 per head + 2;
+    BH=8 NV=2: 94 = 9 per head + 22. At the per-head constants the pool candidate is predicted faster than
+    the per-head pick everywhere (BH=16 NV=2: 507 vs 592 us) and, production-bound, the model would take
+    NV=1 with 94 producers (435) over NV=2 with 78; the default dispatch keeps the per-head candidates
+    until the pool is calibrated."""
+    for bh, nv, P, nph in ((16, 2, 78, 3), (12, 2, 86, 7), (8, 2, 94, 9), (4, 2, 102, 9), (48, 1, 62, 1)):
+        got_nv, got_np, pl, t_pool, _, pays = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT, nv, 0, POOL)
+        assert (got_nv, got_np, pl) == (nv, P, 2), (bh, nv, got_nv, got_np, pl)
+        assert _t.chunk_gdn_fused_pool_home_producers(11, 10, bh, nv, P) == nph, (bh, nv, P)
+        assert pays
+        _, _, _, t_head, _, _ = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)
+        assert t_pool < t_head, (bh, t_pool, t_head)
+    _, _, _, t_pool, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 2, 0, POOL)
+    assert 495 <= t_pool <= 520, t_pool
+    nv, P, pl, t_pool, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 0, 0, POOL)
+    assert (nv, P, pl) == (1, 94, 2) and 425 <= t_pool <= 445, (nv, P, pl, t_pool)
+    nv, P, pl, _, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 0, 0, BOTH)
+    assert (nv, P, pl) == (1, 94, 2), "the pool wins at BH=16 when the model may consider it"
+    nv, P, pl, _, _, _ = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT)
+    assert pl != 2, "the default dispatch does not consider the pool"
