@@ -47,8 +47,7 @@ constexpr std::uint32_t dest_reuse_dummy_unpack()
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
- * @param tile_dvalid: Dest-reuse form only: one UNPACR of the whole tile for the L1 operand and one dummy publication
- *     for the reused source per tile instead of one of each per face (see @ref unpack_A_tile_dvalid).
+ * @param tile_dvalid: Dest-reuse form only: one UNPACR and one publication per source per tile instead of per face (see @ref unpack_A_tile_dvalid).
  */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
@@ -227,10 +226,7 @@ inline void _llk_unpack_A_mop_config_(
 
                 if (tile_dvalid)
                 {
-                    // Dest reuse, whole tile per publication: the L1 operand is one UNPACR of every face (the datum
-                    // count programmed by the init) into rows 0 to 16 x num_faces - 1 of its bank, and the reused
-                    // source gets one dummy publication; the math thread fills that bank from DEST and releases
-                    // both once per tile.
+                    // One UNPACR of every face for the L1 operand (datum count set by the init), one dummy publication for the reused source
                     static constexpr std::uint32_t unpack_srca_tile =
                         TT_OP_UNPACR(SrcA, 0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
                     static constexpr std::uint32_t unpack_srcb_tile =
@@ -261,11 +257,8 @@ inline void _llk_unpack_A_mop_config_(
 }
 
 /**
- * @brief Whether the dest-reuse unpack hands the L1 operand over as one source bank holding the whole tile.
- *
- * True for @ref SrcDvalid::PerTile on the dest-reuse form (acc_to_dest with a reused source) without broadcast,
- * without transpose and with full 16-row faces; every other form keeps the per-face program. The dest-reuse math
- * init (@ref _llk_math_eltwise_binary_init_) applies the same rule to the same tensor shape.
+ * @brief Whether the dest-reuse unpack hands the L1 operand over as one source bank holding the whole tile: SrcDvalid::PerTile on the
+ *        dest-reuse form, no broadcast, no transpose, full 16-row faces. The math init (@ref _llk_math_eltwise_binary_init_) applies the same rule.
  */
 template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, SrcDvalid src_dvalid>
 inline constexpr bool unpack_A_tile_dvalid(const ckernel::TensorShape tensor_shape, const bool transpose_of_faces, const bool within_face_16x16_transpose)
@@ -284,9 +277,7 @@ inline constexpr bool unpack_A_tile_dvalid(const ckernel::TensorShape tensor_sha
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
- * @tparam src_dvalid: Source bank hand-off of the dest-reuse form, values = <PerFace/PerTile>; PerTile unpacks the
- *     L1 operand with one UNPACR and publishes both sources once per tile (see @ref unpack_A_tile_dvalid for when it
- *     applies) and must be paired with the same value on the math init; ignored by the other forms
+ * @tparam src_dvalid: Source bank hand-off of the dest-reuse form, values = <PerFace/PerTile>; must match the math init (see @ref unpack_A_tile_dvalid)
  * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
@@ -355,7 +346,6 @@ inline void _llk_unpack_A_init_(
         constexpr std::uint32_t UNP_SEL = (reads_srca && reads_srcb) ? p_setadc::UNP_AB : (reads_srca ? p_setadc::UNP_A : p_setadc::UNP_B);
         if (tile_dvalid)
         {
-            // The L1 operand is read with one UNPACR of every face: the datum count is the whole tile.
             const std::uint32_t x_end = num_faces * FACE_R_DIM * FACE_C_DIM - 1;
             TT_SETADCXX(UNP_SEL, x_end, 0x0);
         }

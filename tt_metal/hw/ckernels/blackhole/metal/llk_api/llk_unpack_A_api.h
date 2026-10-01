@@ -19,9 +19,7 @@
 // Unified core, shared by the CB-id API below and the LLKOperand API (experimental/). It takes
 // already-resolved scalar format/geometry + the runtime address; the per-source prologue (resolving
 // these from a CB id, or from an MemDescriptor) lives in the callers.
-// src_dvalid: hand-off of the dest-reuse form (see SrcDvalid in llk_defs.h). PerTile unpacks the L1 operand with one
-// UNPACR and publishes both sources once per tile; the math init of the op must be given the same value. Ignored by
-// the other forms. Default PerFace.
+// src_dvalid applies to the dest-reuse form only and must match the math init of the op (SrcDvalid in llk_defs.h).
 template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,

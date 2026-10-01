@@ -18,21 +18,8 @@
 namespace ckernel {
 
 namespace detail {
-// The unpack and math programs of the standard two-operand and dest-reuse binary ops below must agree on how an
-// operand tile is handed from the unpacker to the math thread. On Blackhole each operand is published as one source
-// bank holding every face of the tile (one UNPACR and one data valid per operand per tile, SrcDvalid::PerTile) and
-// the math consumes it with one MOP run per tile; these helpers pass that choice to both threads. Wormhole and
-// Quasar publish per face and their wrappers take no such argument.
-//
-// A kernel that defines ELTWISE_BINARY_PER_FACE_HANDOFF before including this header, as a constant expression that
-// evaluates to true, keeps the per-face hand-off on Blackhole (one data valid per 16-row face, the program of the
-// other architectures). The per-tile hand-off writes a tile's eight row blocks back to back; a kernel that computes
-// one tile per DEST section at LoFi packs one cycle per tile slower with it, because the packer reads the other DEST
-// half while that burst lands, and gains nothing from it there (its LoFi pipeline is unpack-bound), so such a kernel
-// defines the switch, for example as (get_compile_time_arg_val(0) == 1). The expression is evaluated on all three
-// threads and must use only values every thread has: MATH_FIDELITY is declared for the math and pack threads only,
-// so it cannot be part of the expression. The multiply above LoFi and the dest-reuse ops are faster with the
-// per-tile hand-off in every measured configuration.
+// Blackhole hands each operand tile to math as one source bank (SrcDvalid::PerTile); unpack and math must agree.
+// Defining ELTWISE_BINARY_PER_FACE_HANDOFF (true, evaluated on all three threads) keeps the per-face hand-off.
 #if defined(ARCH_BLACKHOLE)
 #if defined(ELTWISE_BINARY_PER_FACE_HANDOFF)
 constexpr SrcDvalid BINARY_SRC_DVALID = (ELTWISE_BINARY_PER_FACE_HANDOFF) ? SrcDvalid::PerFace : SrcDvalid::PerTile;

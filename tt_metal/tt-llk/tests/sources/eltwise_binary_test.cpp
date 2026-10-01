@@ -18,10 +18,8 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// The unpack and the math thread hand each operand tile over as one source bank (SrcDvalid::PerTile). A transposed
-// SrcA operand keeps the per-face unpack program, so both threads use SrcDvalid::PerFace for it, and the per_face_handoff
-// variant (the switched form behind the compute API's ELTWISE_BINARY_PER_FACE_HANDOFF) uses it for every operand; the
-// broadcast forms and the partial faces fall back to the per-face program inside the LLK for either value.
+// Both threads hand each operand tile over as one source bank (SrcDvalid::PerTile), except for a transposed SrcA and the
+// per_face_handoff variant, which use SrcDvalid::PerFace; broadcasts and partial faces fall back inside the LLK for either value.
 #define ELTWISE_BINARY_PER_FACE_DVALID(params) (per_face_handoff || (params).UNPACK_TRANSPOSE_FACES || (params).UNPACK_TRANSPOSE_WITHIN_FACE)
 
 #ifdef LLK_TRISC_UNPACK
@@ -65,9 +63,7 @@ void run_unpack(RUNTIME_PARAMETERS params)
     _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
 
 #ifdef EN_DEST_REUSE
-    // Dest-reuse path, mirrors the math thread: the first tiles of every accumulation group are the two-operand
-    // seed (both operands unpacked), the remaining ones are folded with the single-operand dest-reuse unpack, which
-    // reads only the operand that does not come from DEST and publishes a dummy valid for the reused source.
+    // Mirrors the math thread: the first tiles of each block are the two-operand seed, the rest the single-operand dest-reuse unpack.
     const std::uint32_t tiles_in_block          = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t num_tiles_accumulations = params.INPUT_NUM_TILES_IN_BLOCK / tiles_in_block;
     const std::uint32_t num_blocks              = params.INPUT_NUM_BLOCKS;

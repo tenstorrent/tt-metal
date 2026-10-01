@@ -24,8 +24,7 @@ using namespace ckernel;
 
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
-// Each operand tile is handed from the unpacker to the math thread as one source bank (one data valid per operand
-// per tile); the isolate mocks below publish and clear the banks at the same rate.
+// One source bank (one data valid) per operand per tile; the isolate mocks publish and clear at that rate.
 static constexpr SrcDvalid SRC_DVALID          = SrcDvalid::PerTile;
 static constexpr std::uint32_t DVALIDS_PER_TILE = 1;
 

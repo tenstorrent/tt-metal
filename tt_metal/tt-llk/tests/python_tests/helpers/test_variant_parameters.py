@@ -745,8 +745,7 @@ class TILIZE(TemplateParameter):
 
 @dataclass
 class PER_FACE_HANDOFF(TemplateParameter):
-    """Blackhole eltwise binary: hand each operand tile over per 16-row face (SrcDvalid::PerFace on both threads, the
-    switched form behind ELTWISE_BINARY_PER_FACE_HANDOFF) instead of as one source bank per tile."""
+    """Blackhole eltwise binary: per-face hand-off, SrcDvalid::PerFace on both threads."""
 
     per_face_handoff: bool = False
 

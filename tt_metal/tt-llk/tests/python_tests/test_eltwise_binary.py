@@ -920,10 +920,7 @@ def test_eltwise_binary_int8_format(
     assert test_passed, "Assert against golden failed"
 
 
-# The switched form of the Blackhole hand-off: both threads publish and consume one source bank per 16-row face
-# (SrcDvalid::PerFace, the program behind the compute API's ELTWISE_BINARY_PER_FACE_HANDOFF, which binary_ng uses for
-# one tile per DEST section at LoFi). The standard two-operand path over the 16-bit and 8-bit format pairs, all ops
-# and fidelities, both DEST modes, 32x32 tiles, no transpose (a transposed SrcA is per-face already).
+# The per-face hand-off (the compute API's ELTWISE_BINARY_PER_FACE_HANDOFF) on the standard two-operand path.
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
@@ -957,8 +954,7 @@ def test_eltwise_binary_per_face_handoff(
     )
 
 
-# The switched form on the dest-reuse path: both reuse directions, all ops, bf16 and fp32, 32x32 tiles, the 8-output
-# tile shape that reaches dst_index 7.
+# The per-face hand-off on the dest-reuse path.
 @parametrize(
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,

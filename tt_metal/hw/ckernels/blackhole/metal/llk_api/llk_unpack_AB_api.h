@@ -18,8 +18,7 @@
 // formats are programmed once at compute_kernel_hw_startup, so the op needs only the two L1 addresses (plus
 // the SrcB source format for the ROW-broadcast path).
 
-// src_dvalid: how each operand tile is handed to the math thread (see SrcDvalid in llk_defs.h). PerTile publishes one
-// source bank holding the whole tile; the math init of the op must be given the same value. Default PerFace.
+// src_dvalid must match the math init of the op (SrcDvalid in llk_defs.h).
 template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_unpack_AB_init_impl(const ckernel::TensorShape& tensor_shape, const ckernel::Transpose transpose) {
     _llk_unpack_AB_init_<BType, src_dvalid>(tensor_shape, transpose);

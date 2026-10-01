@@ -58,11 +58,8 @@ enum class EltwiseBinaryReuseDestType
     DEST_TO_SRCB = 2,
 };
 
-// How an operand tile is handed from the unpacker to the math thread. PerFace publishes one source bank per 16-row
-// face (one UNPACR and one data valid per face), PerTile publishes one source bank holding every face of the tile
-// (one UNPACR and one data valid per operand per tile). The unpack init and the math init of one op must be given
-// the same value; PerTile takes effect only where both sides support it (see the inits) and falls back to PerFace
-// otherwise.
+// Hand-off of an operand tile from the unpacker to the math thread: one source bank and data valid per 16-row face, or one per
+// tile. The unpack init and the math init of an op must be given the same value.
 enum class SrcDvalid : std::uint8_t
 {
     PerFace = 0,

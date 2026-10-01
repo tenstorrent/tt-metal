@@ -139,9 +139,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         }
         else if (tile_dvalid)
         {
-            // One UNPACR per operand moves every face of the tile (the datum count programmed by the init) into one
-            // source bank, rows 0 to 16 x num_faces - 1, and publishes it once; the L1 face counter stays at 0
-            // because the whole tile is one contiguous read from the base address.
+            // One UNPACR per operand reads every face (datum count set by the init) into one source bank and publishes it once
             static constexpr std::uint32_t unpack_srca_tile = TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
             static constexpr std::uint32_t unpack_srcb_tile = TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
             ckernel_template tmp(1, 1, unpack_srca_tile, unpack_srcb_tile);
@@ -156,14 +154,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 }
 
 /**
- * @brief Whether the two-operand unpack hands each operand over as one source bank holding the whole tile.
- *
- * True for @ref SrcDvalid::PerTile without broadcast, without transpose and with full 16-row faces. Every other
- * combination keeps the per-face program: the broadcast forms read SrcB per face, a transposed operand is reordered
- * face by face, and a partial face takes its 16-row spacing in the source register from one UNPACR per face. The
- * math init (@ref _llk_math_eltwise_binary_init_) applies the same rule to the same tensor shape, so the two threads
- * agree whenever they are given the same SrcDvalid; a transposed operand must be paired with SrcDvalid::PerFace on
- * both sides.
+ * @brief Whether the two-operand unpack hands each operand over as one source bank holding the whole tile: SrcDvalid::PerTile, no
+ *        broadcast, no transpose, full 16-row faces. The math init (@ref _llk_math_eltwise_binary_init_) applies the same rule.
  */
 template <BroadcastType BType, SrcDvalid src_dvalid>
 inline constexpr bool unpack_AB_tile_dvalid(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
@@ -179,9 +171,7 @@ inline constexpr bool unpack_AB_tile_dvalid(const ckernel::TensorShape tensor_sh
  * broadcast modes and optional transpose. Sets up number of datums to unpack based on face dimensions.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; PerTile unpacks each operand tile with one
- *     UNPACR and publishes it once (see @ref unpack_AB_tile_dvalid for when it applies) and must be paired with the
- *     same value on the math init
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the math init (see @ref unpack_AB_tile_dvalid)
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
  * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
@@ -203,7 +193,6 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
     const bool tile_dvalid = unpack_AB_tile_dvalid<BType, src_dvalid>(tensor_shape, transpose);
     if (tile_dvalid)
     {
-        // Both unpackers read every face of the tile with one UNPACR: the datum count is the whole tile.
         const std::uint32_t x_end = tensor_shape.total_num_faces() * FACE_R_DIM * FACE_C_DIM - 1;
         TT_SETADCXX(p_setadc::UNP_AB, x_end, 0x0);
     }

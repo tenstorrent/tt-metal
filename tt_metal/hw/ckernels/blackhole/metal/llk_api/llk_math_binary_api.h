@@ -16,9 +16,7 @@
 // math is FORMAT-FREE: it consumes only the tile geometry (from operand A) -- the register formats live in
 // the unpacker/dest config set at compute_kernel_hw_startup. The per-source prologue (resolving the shape
 // from a CB id, or from an LLKMemDescriptor) lives in the callers.
-// src_dvalid: how each operand tile arrives from the unpacker (see SrcDvalid in llk_defs.h). PerTile consumes one
-// source bank holding the whole tile with one MOP run per tile; the unpack init of the op must be given the same
-// value. Default PerFace.
+// src_dvalid must match the unpack init of the op (SrcDvalid in llk_defs.h).
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,

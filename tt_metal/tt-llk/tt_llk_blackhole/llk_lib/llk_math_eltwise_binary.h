@@ -26,8 +26,7 @@ using namespace ckernel;
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @param tile_dvalid: The whole-tile program (see @ref eltwise_binary_tile_dvalid): the fidelity-step and face-step
- *     slots return the three counters to the tile base instead of the face base
+ * @param tile_dvalid: Whole-tile program (see @ref eltwise_binary_tile_dvalid): ADDR_MOD_2 and ADDR_MOD_3 return the counters to the tile base
  */
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, MathFidelity math_fidelity>
 inline void eltwise_binary_configure_addrmod(const bool tile_dvalid = false)
@@ -58,8 +57,6 @@ inline void eltwise_binary_configure_addrmod(const bool tile_dvalid = false)
 
     if (tile_dvalid)
     {
-        // Whole-tile program: one MOP run covers every face, so the end of a fidelity phase (ADDR_MOD_2) and the end of
-        // the last phase (ADDR_MOD_3) both return SrcA, SrcB and DEST to the tile base, row 0.
         addr_mod_t {.srca = {.incr = 0, .clr = 1}, .srcb = {.incr = 0, .clr = 1}, .dest = {.incr = 0, .clr = 1}, .fidelity = {.incr = fidelity_increment}}
             .set(ADDR_MOD_2);
 
@@ -80,11 +77,8 @@ inline void eltwise_binary_configure_addrmod(const bool tile_dvalid = false)
 }
 
 /**
- * @brief Whether the math side consumes each operand tile as one source bank holding the whole tile.
- *
- * True for @ref SrcDvalid::PerTile without broadcast and with full 16-row faces, the same rule the unpack inits
- * apply (@ref unpack_AB_tile_dvalid, @ref unpack_A_tile_dvalid) to the same tensor shape, so the two threads agree
- * whenever they are given the same SrcDvalid. The broadcast forms and partial faces keep the per-face program.
+ * @brief Whether the math side consumes each operand tile as one source bank: SrcDvalid::PerTile, no broadcast, full 16-row faces.
+ *        The unpack inits apply the same rule (@ref unpack_AB_tile_dvalid, @ref unpack_A_tile_dvalid), so the two threads agree.
  */
 template <BroadcastType bcast_type, SrcDvalid src_dvalid>
 inline constexpr bool eltwise_binary_tile_dvalid(const ckernel::TensorShape tensor_shape)
@@ -125,12 +119,8 @@ inline auto eltwise_binary_func(std::uint8_t clr_src, std::uint8_t acc_to_dest, 
 }
 
 /**
- * @brief Configure the MOP that processes a whole tile from one source bank per operand (see @ref eltwise_binary_tile_dvalid).
- *
- * One run covers the tile: num_faces x 2 eight-row instructions walk SrcA, SrcB and DEST from row 0 to the last row,
- * and both source banks are released once, at the end, instead of once per face. For ELWMUL above LoFi the fidelity
- * phase is the outer loop, so phase p of every row block issues before phase p + 1 of the first block: the
- * read-after-write of a row block is num_faces x 2 instructions apart instead of 2.
+ * @brief Configure the MOP that processes a whole tile from one source bank per operand (see @ref eltwise_binary_tile_dvalid):
+ *        num_faces x 2 eight-row instructions per fidelity phase, both source banks released once at the end.
  *
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
@@ -148,8 +138,6 @@ inline void eltwise_binary_configure_mop_tile(const std::uint32_t acc_to_dest, c
 
     if constexpr (is_high_fidelity(math_fidelity))
     {
-        // ADDR_MOD_2 (last instruction of a phase) and ADDR_MOD_3 (last instruction of the last phase) are programmed
-        // for the whole-tile program by eltwise_binary_configure_addrmod: back to the tile base, phase stepped or cleared.
         ckernel_template tmp(
             to_underlying(math_fidelity), innerloop, eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_0));
         tmp.set_last_inner_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_2));
@@ -327,7 +315,7 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape tensor
 
     if (eltwise_binary_tile_dvalid<src_b_bcast_type, src_dvalid>(tensor_shape))
     {
-        // Whole tile per source bank: one MOP run does every face and every fidelity phase and releases both banks.
+        // Whole-tile program: one MOP run per tile
         ckernel_template::run();
         math::clear_dst_reg_addr();
         return;
@@ -435,13 +423,10 @@ inline void eltwise_binary_reuse_dest_as_src()
 }
 
 /**
- * @brief Move one face of the DEST tile into rows 16 x face .. 16 x face + 15 of the reused source bank, no wait.
- *
- * Four 4-row moves; the source row field of the move addresses all 64 rows of a bank. The face index is a template
- * parameter so the instruction words constant-fold (TTI_ operands must be immediates).
+ * @brief Move one face of the DEST tile into rows 16 x face .. 16 x face + 15 of the reused source bank (four 4-row moves, no wait).
  *
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam face: Face of the tile, 0 to 3
+ * @tparam face: Face of the tile, 0 to 3 (a template parameter: TTI_ operands must be immediates)
  */
 template <EltwiseBinaryReuseDestType binary_reuse_dest, std::uint32_t face>
 inline void eltwise_binary_move_dest_face_to_src()
@@ -464,12 +449,7 @@ inline void eltwise_binary_move_dest_face_to_src()
 }
 
 /**
- * @brief Move every face of the DEST tile into the reused source bank with one pipeline drain (whole-tile program).
- *
- * The drain and the bank wait that @ref move_d2a_fixed_face / @ref move_d2b_fixed_face pay before every face are
- * paid once here: the preceding MOP released the bank with its last instruction, the wait sees that release and the
- * dummy publication of the unpack thread, then the 4 x num_faces moves run back to back (moves of the same kind do
- * not stall each other).
+ * @brief Move every face of the DEST tile into the reused source bank with one pipeline drain and bank wait (whole-tile program).
  *
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB>
  * @param num_faces: Faces of the tile, 1, 2 or 4
@@ -531,9 +511,7 @@ inline void zeroacc_face_by_row()
  * @param dst_index: Tile index into the destination register.
  * @param face: Face of the tile, 0 to 3.
  * @param clear_fp32_dst_acc: Clear the FP32 dest accumulator face when FP32 mode is enabled.
- * @param dest_rwc_rows: Value of the DEST read/write counter when the clear issues, in rows from the tile base: the face
- *     base (16 x face) in the per-face program, 0 in the whole-tile program where every face is cleared before the MOP.
- *     It enters the bank-select sum below, and the one-row fallback addresses its rows from it.
+ * @param dest_rwc_rows: DEST read/write counter when the clear issues, in rows from the tile base (16 x face per face, 0 in the whole-tile program).
  */
 template <bool is_fp32_dest_acc_en>
 inline void eltwise_binary_clear_dest_face(const std::uint32_t dst_index, const std::uint32_t face, const bool clear_fp32_dst_acc, const std::uint32_t dest_rwc_rows)
@@ -568,13 +546,10 @@ inline void eltwise_binary_clear_dest_face(const std::uint32_t dst_index, const 
     //   Measured on p150 with a fixed block index of 31: dest row offset 480 -> clears block 31 (right),
     //   offset 488 or 496 -> clears block 63 (wrong half). At offset 496, indices 0..15 still land
     //   correctly and 16..31 do not -- matching the (offset + index) >= 512 boundary exactly.
-    // Here the dest pointer is 64*local_tile + the DEST counter (16*face when the face is cleared right before
-    // its own MOP run, 0 when every face of the tile is cleared before one whole-tile run) while the index is
-    // 4*local_tile + face, so the sum only reaches 512 on the very last face of the last tile of a 16-bit bank
-    // in the per-face program (496 + 31 = 527); the whole-tile program tops out at 448 + 31 and never trips it.
-    // A 32-bit bank tops out at 240 + 15 and never trips it. ZEROACC's one-row mode addresses purely
-    // in rows (dest offset + RWC + index) and has no such mismatch, so use it for that one face; its rows are
-    // relative to the DEST counter, which is why it is only correct with the counter at the face base.
+    // Here the dest pointer is 64*local_tile + dest_rwc_rows while the index is 4*local_tile + face, so the
+    // sum only reaches 512 on the very last face of the last tile of a 16-bit bank (496 + 31 = 527; the whole-tile
+    // program, with the counter at 0, never does). A 32-bit bank tops out at 240 + 15 and never trips it. ZEROACC's
+    // one-row mode addresses rows relative to the DEST counter (dest offset + RWC + index), so use it for that one face.
     // tt-metal#53693.
     // The fallback is restricted to a 16-bit DEST at compile time. A 32-bit CLR_16 block is not 16
     // consecutive DEST rows, so the row-by-row clear would not be equivalent there -- and a 32-bit
@@ -604,8 +579,7 @@ inline void eltwise_binary_clear_dest_face(const std::uint32_t dst_index, const 
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; PerTile moves the whole DEST tile into the
- *     source bank and runs one MOP per tile (see @ref eltwise_binary_tile_dvalid)
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile> (see @ref eltwise_binary_tile_dvalid)
  * @param acc_to_dest: Accumulate result to destination register
  * @param tensor_shape: Tensor shape describing tile dimensions
  */
@@ -773,8 +747,7 @@ inline void eltwise_binary_run_with_dest_reuse_tile(const std::uint32_t num_face
 
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
     {
-        // The moves above read the faces before they are cleared; the multiply accumulates into cleared rows. The
-        // DEST counter is at the tile base (0) for every clear.
+        // ELWMUL accumulates into DEST: clear every face once the moves have read them (the DEST counter is at the tile base, 0)
 #pragma GCC unroll 0
         for (std::uint32_t face = 0; face < num_faces; face++)
         {
@@ -911,9 +884,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>. PerTile consumes each operand tile as one source
- *     bank (one MOP run per tile, both banks released once) where the unpack init publishes it that way (see
- *     @ref eltwise_binary_tile_dvalid); the unpack init of the op must be given the same value.
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the unpack init of the op (see @ref eltwise_binary_tile_dvalid)
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param acc_to_dest: Accumulate result to destination register instead of overwriting
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_init_ which feeds SrcA/SrcB.
