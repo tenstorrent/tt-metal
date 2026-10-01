@@ -85,7 +85,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 attrs.head_dim_v.value() <= k_shape[3],
                 "Head dimension of V must be less than or equal to head dim of K, got {} and {}",
                 attrs.head_dim_v.value(),
-                q_shape[3]);
+                k_shape[3]);
         } else {
             TT_FATAL(
                 k_shape[0] == B && v_shape[0] == B,
@@ -606,9 +606,8 @@ SDPAOperation::create_op_performance_model(
                                                                 : k_shape[2])  // flexible: use K length as upper bound
                             : k_shape[2];
 
-    // Compute DV based on MLA mode
-    // Note: For MLA without V, use K's head dimension; otherwise use V's head dimension
-    const uint32_t DV = (args.use_mla && !has_v) ? k_shape[3] : v_shape[3];
+    // MLA without V reads V from the first head_dim_v columns of K (the kernel's vDHt), not K's full width.
+    const uint32_t DV = has_v ? v_shape[3] : args.head_dim_v.value_or(k_shape[3]);
 
     TT_ASSERT(q_shape[0] == k_shape[0], "ScaledDotProductAttention perf model: Q and K have unequal batch size!");
     TT_ASSERT(q_shape[3] == k_shape[3], "ScaledDotProductAttention perf model: Q and K have unequal hidden dim!");
