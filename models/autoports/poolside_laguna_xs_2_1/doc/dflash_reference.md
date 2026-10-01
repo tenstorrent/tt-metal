@@ -74,6 +74,15 @@ CPU qualification of the S draft (no device):
   capture has target predictions only for that continuation; served acceptance
   can only be higher.
 
+  The same procedure on the hardware-qualified XS draft and XS target (100
+  continuation tokens of XS's own greedy output; the streamed XS target matches the
+  stored readiness top-1 at 98 of 100 positions) gives the scale for these
+  numbers: 0.848 first-proposal agreement and 2.00 mean accepted at layers 1, 13,
+  25, 33, 39, against 0.111 / 0.15 with the slices reversed and 0.101 / 0.10
+  with layer 39 in every slice. The S draft on the S target is at least as good as
+  the XS pair. The test passes at first-proposal agreement >= 0.75, mean accepted
+  >= 1.75, and reversed-order agreement <= 0.25.
+
 The S launcher envelope is `LAGUNA_PROFILE=p150x4`, `LAGUNA_MAX_NUM_SEQS=1`,
 `TT_LAGUNA_HYBRID_KV=0` (the uniform-KV rollback, which caps `max_model_len` at
 32,768), prefix cache off, streaming prefill on, and

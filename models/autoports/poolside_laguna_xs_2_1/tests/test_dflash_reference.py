@@ -498,9 +498,13 @@ def test_draft_proposals_track_real_target_greedy(model_id):
 
     The synthetic fingerprints above lock arithmetic but cannot show the draft reads the right
     target layers.  Here every continuation position of the readiness AIME24 sequence is one
-    served-style round on real layer-streamed target states.  Measured on 2026-10-01 (99 anchors):
-    S first-proposal agreement 0.869, mean teacher-forced acceptance 2.64; the same draft with the
-    six slices in reverse order scores 0.061 / 0.07, and with every slice from layer 47 0.051.
+    served-style round on real layer-streamed target states.  Measured on 2026-10-01 (99 anchors),
+    first-proposal agreement / mean teacher-forced acceptance:
+
+    * S: 0.869 / 2.64 at the published layers; reversed slice order 0.061 / 0.07; layer 47 in
+      every slice 0.051 / 0.05.
+    * XS (the hardware-qualified draft, as calibration): 0.848 / 2.00; reversed 0.111 / 0.15;
+      layer 39 in every slice 0.101 / 0.10.
     """
 
     from models.autoports.poolside_laguna_xs_2_1.tests.dflash_acceptance import (
@@ -510,8 +514,10 @@ def test_draft_proposals_track_real_target_greedy(model_id):
 
     capture = torch.load(_capture_path(model_id))
     assert capture["model"] == model_id
-    # The streamed target reproduces the stored fp32 readiness reference before it is trusted.
-    assert capture["readiness_top1_agreement"] == 1.0
+    # The streamed target reproduces the stored readiness reference before it is trusted. S's
+    # reference came from the same fp32 layer-streamed HF code (1.00); XS's from a whole-model
+    # run (0.98).
+    assert capture["readiness_top1_agreement"] >= 0.95
     reference = LagunaDFlashCheckpoint(_snapshot(model_id)).load_reference()
     embedding, lm_head = load_target_embedding_and_lm_head(model_id)
     prompt_len = int(capture["prompt_len"])
@@ -530,7 +536,7 @@ def test_draft_proposals_track_real_target_greedy(model_id):
         f"reversed_mean_accepted={reversed_order.mean_accepted:.3f}"
     )
     assert published.first_rate >= 0.75
-    assert published.mean_accepted >= 2.0
+    assert published.mean_accepted >= 1.75
     assert reversed_order.first_rate <= 0.25
     assert published.first_rate - reversed_order.first_rate >= 0.5
 
