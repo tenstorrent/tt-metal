@@ -28,9 +28,11 @@ std::vector<ttnn::Tensor> run_qkv_causal_conv1d_silu(
         "qkv_causal_conv1d_silu: input must be an allocated device tensor");
     uint32_t channel_chunk_size = 0;
     bool fused_qk_l2_norm = false;
+    bool qk_early_drain = false;
     if (program_config.has_value()) {
         channel_chunk_size = program_config->channel_chunk_size;
         fused_qk_l2_norm = program_config->fused_qk_l2_norm;
+        qk_early_drain = program_config->qk_early_drain;
     } else {
         TT_FATAL(
             input.layout() == tt::tt_metal::Layout::TILE,
@@ -62,6 +64,7 @@ std::vector<ttnn::Tensor> run_qkv_causal_conv1d_silu(
         output_memory_config,
         kernel_config,
         fused_qk_l2_norm,
+        qk_early_drain,
         conv_state_output);
 }
 

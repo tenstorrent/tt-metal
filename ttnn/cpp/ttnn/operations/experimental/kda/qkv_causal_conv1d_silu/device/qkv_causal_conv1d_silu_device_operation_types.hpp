@@ -35,6 +35,12 @@ struct QkvCausalConv1dSiluParams {
     // and token (q also * 1/sqrt(128); eps 1e-6), as ChunkGdnFused's in-kernel QK norm. q and k are returned as
     // FLOAT32 TILE tensors; v and new_state stay bf16.
     bool fused_qk_l2_norm = false;
+    // fused_qk_l2_norm only: the compute kernel drains the q/k epilogue pipeline once when 3 steps of the core's range
+    // are left, instead of only after the last step. The last steps' fp32 q/k outputs then do not all reach the NoC
+    // at the same moment on every core (the final burst saturates the links into the destination columns and the
+    // writers finish 4-8 us after the last pack). q/k/v are bit-identical; the kernel is ~3 us faster at T=1024,
+    // C=6144.
+    bool qk_early_drain = false;
 };
 
 struct QkvCausalConv1dSiluInputs {

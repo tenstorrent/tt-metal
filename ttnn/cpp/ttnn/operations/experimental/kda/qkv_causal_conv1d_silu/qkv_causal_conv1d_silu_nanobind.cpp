@@ -171,19 +171,25 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
     nb::class_<QkvCausalConv1dSiluProgramConfig>(mod, "QkvCausalConv1dSiluProgramConfig")
         .def(
             "__init__",
-            [](QkvCausalConv1dSiluProgramConfig* self, uint32_t channel_chunk_size, bool fused_qk_l2_norm) {
-                new (self) QkvCausalConv1dSiluProgramConfig{channel_chunk_size, fused_qk_l2_norm};
+            [](QkvCausalConv1dSiluProgramConfig* self,
+               uint32_t channel_chunk_size,
+               bool fused_qk_l2_norm,
+               bool qk_early_drain) {
+                new (self) QkvCausalConv1dSiluProgramConfig{channel_chunk_size, fused_qk_l2_norm, qk_early_drain};
             },
             nb::kw_only(),
             nb::arg("channel_chunk_size").noconvert(),
-            nb::arg("fused_qk_l2_norm").noconvert() = false)
+            nb::arg("fused_qk_l2_norm").noconvert() = false,
+            nb::arg("qk_early_drain").noconvert() = false)
         .def_ro("channel_chunk_size", &QkvCausalConv1dSiluProgramConfig::channel_chunk_size)
         .def_ro("fused_qk_l2_norm", &QkvCausalConv1dSiluProgramConfig::fused_qk_l2_norm)
+        .def_ro("qk_early_drain", &QkvCausalConv1dSiluProgramConfig::qk_early_drain)
         .def("__repr__", [](const QkvCausalConv1dSiluProgramConfig& config) {
             return fmt::format(
-                "QkvCausalConv1dSiluProgramConfig(channel_chunk_size={}, fused_qk_l2_norm={})",
+                "QkvCausalConv1dSiluProgramConfig(channel_chunk_size={}, fused_qk_l2_norm={}, qk_early_drain={})",
                 config.channel_chunk_size,
-                config.fused_qk_l2_norm);
+                config.fused_qk_l2_norm,
+                config.qk_early_drain);
         });
 
     ttnn::bind_function<"qkv_causal_conv1d_silu", "ttnn.experimental.kda.">(
@@ -238,6 +244,11 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 k: ``q = y_q * rsqrt(sum(y_q^2) + 1e-6) / sqrt(128)``,
                 ``k = y_k * rsqrt(sum(y_k^2) + 1e-6)``. q and k are then FLOAT32;
                 v and ``new_state`` stay BFLOAT16. Defaults to False.
+                ``qk_early_drain=True`` (needs ``fused_qk_l2_norm``) drains the
+                q/k epilogue pipeline of the compute kernel when 3 steps of a
+                core's range are left instead of only at the end, so that the last
+                outputs do not all hit the NoC at once; the outputs are
+                bit-identical. Defaults to False.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration for q, k and v. Defaults to DRAM. ``new_state`` is
                 always DRAM interleaved.

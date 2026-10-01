@@ -16,6 +16,8 @@ struct QkvCausalConv1dSiluProgramConfig {
     uint32_t channel_chunk_size;
     // TILE input only; see QkvCausalConv1dSiluParams::fused_qk_l2_norm. false = default kernels.
     bool fused_qk_l2_norm = false;
+    // Needs fused_qk_l2_norm; see QkvCausalConv1dSiluParams::qk_early_drain. Outputs are unchanged. false = default.
+    bool qk_early_drain = false;
 };
 
 // The input layout selects the path:

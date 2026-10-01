@@ -645,6 +645,11 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluTiledProgramFactory:
         compute.compiler_options.defines.emplace(
             "QKV_CONV_QK_BLOCKS", std::to_string((plan.Qt + plan.Kt) / plan.block_tiles));
         compute.compiler_options.defines.emplace("QKV_CONV_QK_EPS", "1e-6f");
+        if (attrs.qk_early_drain) {
+            // Drain the epilogue pipeline when this many steps of the core's range are left (3 = measured best at
+            // T=1024, C=6144: 12 q/k steps per core).
+            compute.compiler_options.defines.emplace("QKV_CONV_QK_EARLY_DRAIN", "3");
+        }
         compute.compiler_options.defines.emplace(
             "QKV_CONV_Q_SCALE", fmt::format("{:.9g}f", 1.0 / std::sqrt(static_cast<double>(head_dim))));
     }

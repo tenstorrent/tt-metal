@@ -47,6 +47,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool fused_qk_l2_norm = false,
+    bool qk_early_drain = false,
     const std::optional<Tensor>& conv_state_out = std::nullopt);
 
 }  // namespace ttnn::experimental::prim

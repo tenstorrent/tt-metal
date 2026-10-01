@@ -1018,3 +1018,62 @@ def test_qkv_causal_conv1d_silu_tiled_l1_tensors_and_state_in_dram(device: ttnn.
         assert output.memory_config() == ttnn.L1_MEMORY_CONFIG
         assert_bit_identical(rm, ttnn.to_torch(output), name=f"L1 {name} tiled vs ROW_MAJOR")
     _assert_new_state(outputs[3], inputs, input_tt, name="L1 outputs")
+
+
+def _run_fused_qk(
+    input_tt: ttnn.Tensor,
+    history_tt: ttnn.Tensor,
+    taps_tt: tuple[ttnn.Tensor, ...],
+    *,
+    widths: tuple[int, int, int],
+    qk_early_drain: bool,
+) -> tuple[ttnn.Tensor, ...]:
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    return ttnn.experimental.kda.qkv_causal_conv1d_silu(
+        input_tt,
+        history_tt,
+        *taps_tt,
+        *widths,
+        program_config=ttnn.QkvCausalConv1dSiluProgramConfig(
+            channel_chunk_size=128, fused_qk_l2_norm=True, qk_early_drain=qk_early_drain
+        ),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("sequence", [128, 256, 1024], ids=lambda sequence: f"T{sequence}")
+def test_qkv_causal_conv1d_silu_fused_qk_early_drain_is_bit_identical(device: ttnn.Device, sequence: int) -> None:
+    """qk_early_drain only reschedules the q/k epilogue pipeline: q, k and v equal the default bit for bit.
+
+    T = 1024 is the SP-die shape (about 12 q/k and 21 v steps per core); the short sequences leave only a few
+    steps per core, so the drain point (3 steps before the end of a core's range) also hits the first steps.
+    """
+    widths = (2048, 2048, 2048)
+    _, (input_tt, history_tt, taps_tt) = _tiled_device_inputs(
+        device, sequence=sequence, widths=widths, with_history=True, seed=8401
+    )
+    default = _run_fused_qk(input_tt, history_tt, taps_tt, widths=widths, qk_early_drain=False)
+    early = _run_fused_qk(input_tt, history_tt, taps_tt, widths=widths, qk_early_drain=True)
+    for name, expected, actual in zip(("q", "k", "v"), default, early, strict=True):
+        assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"qk_early_drain {name}")
+
+
+def test_qkv_causal_conv1d_silu_qk_early_drain_needs_fused_qk_l2_norm(device: ttnn.Device, expect_error) -> None:
+    widths = (512, 256, 128)
+    _, (input_tt, history_tt, taps_tt) = _tiled_device_inputs(
+        device, sequence=32, widths=widths, with_history=True, seed=8402
+    )
+    with expect_error(RuntimeError, "qk_early_drain needs fused_qk_l2_norm"):
+        ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            input_tt,
+            history_tt,
+            *taps_tt,
+            *widths,
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128, qk_early_drain=True),
+        )

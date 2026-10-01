@@ -352,6 +352,19 @@ TT_KERNEL void compute(uint32_t step_start, uint32_t step_count) {
             if (is_qk) {
                 qk_stage0(step);
                 qk_advance(step);
+#ifdef QKV_CONV_QK_EARLY_DRAIN
+                // program_config.qk_early_drain: drain the epilogue pipeline once, when QKV_CONV_QK_EARLY_DRAIN steps
+                // (this one included) of this core's range are left. Without it the last 3 steps' outputs (3 x 16 KB of
+                // fp32 q/k per core) all leave in the final drain, and every core writes them at the same time, which
+                // saturates the NoC links into the destination columns: the writers finish 4-8 us after the last pack.
+                // After an early drain only the last steps' (shorter, restarted) pipeline is left for the end.
+                // Same math in the same order per step; only the schedule differs, so the outputs are unchanged.
+                if (step_end - step == QKV_CONV_QK_EARLY_DRAIN) {
+                    while (qk_npend > 0) {
+                        qk_advance(step_end);
+                    }
+                }
+#endif
                 continue;
             }
             pack_reconfig_data_format(dfb::out);

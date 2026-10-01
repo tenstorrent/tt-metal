@@ -169,6 +169,7 @@ void validate_row_major(const QkvCausalConv1dSiluParams& attrs, const QkvCausalC
     check_allocated_device_tensor(in.input, operation_name, "input");
     check_layout(in.input, Layout::ROW_MAJOR, operation_name, "input");
     TT_FATAL(!attrs.fused_qk_l2_norm, "qkv_causal_conv1d_silu: fused_qk_l2_norm applies to TILE input only");
+    TT_FATAL(!attrs.qk_early_drain, "qkv_causal_conv1d_silu: qk_early_drain applies to TILE input only");
     check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");
     check_interleaved(in.input, operation_name, "input");
     TT_FATAL(
@@ -204,6 +205,9 @@ void validate_tiled(const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1
             attrs.q_width,
             attrs.k_width);
     }
+    TT_FATAL(
+        !attrs.qk_early_drain || attrs.fused_qk_l2_norm,
+        "qkv_causal_conv1d_silu: qk_early_drain needs fused_qk_l2_norm (it schedules the q/k epilogue pipeline)");
     check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");
     check_interleaved(in.input, operation_name, "input");
     check_default_tile_shape(in.input, "input");
@@ -344,6 +348,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool fused_qk_l2_norm,
+    bool qk_early_drain,
     const std::optional<Tensor>& conv_state_out) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
@@ -361,7 +366,8 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .conv_state_inplace = conv_state_inplace,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config,
-            .fused_qk_l2_norm = fused_qk_l2_norm},
+            .fused_qk_l2_norm = fused_qk_l2_norm,
+            .qk_early_drain = qk_early_drain},
         QkvCausalConv1dSiluInputs{
             .input = input,
             .history = history,
