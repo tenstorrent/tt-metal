@@ -239,9 +239,21 @@ ttnn::Tensor narrow(
         }
 
         // Create new core grid
-        // Merge cores into rectangular ranges for both orientations (required for block sharding).
+        // Block sharding requires a single rectangular grid, so merge the cores for it. Height/width sharding keeps
+        // one range per core for COL_MAJOR: merging would change the core order the shard spec walks.
         // Data placement is driven by filtered_cores via BufferDistributionSpec.
-        CoreRangeSet new_core_grid(filtered_cores);
+        CoreRangeSet new_core_grid;
+        if (shard_spec_buffer.orientation() == ShardOrientation::ROW_MAJOR ||
+            sharding_args.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            new_core_grid = CoreRangeSet(filtered_cores);
+        } else {
+            std::vector<CoreRange> core_ranges;
+            core_ranges.reserve(filtered_cores.size());
+            for (const auto& core : filtered_cores) {
+                core_ranges.push_back(CoreRange(core));
+            }
+            new_core_grid = CoreRangeSet(core_ranges);
+        }
 
         // Update tensor shape in pages
         auto narrowed_pages_shape = tensor_pages_shape;
