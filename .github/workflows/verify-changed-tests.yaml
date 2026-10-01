@@ -47,6 +47,7 @@ env:
     bh_sc1
     bh_sc1_high_power
     bh_sc4
+    bh_sc4_high_power
     bh_sc16
 
   # Yamls the gate cannot dispatch, so edits to them go to their code owners for
@@ -305,9 +306,15 @@ jobs:
       # no /dev/tenstorrent, so mounting it makes the job container fail to start. Every
       # deviceless sku contains "cpu" (github_hosted_cpu, cpu_medium, cpu_medium_prio) and
       # no silicon sku does, so a single substring check excludes them all.
+      # -e TT_GH_CI_INFRA forwards the runner host's CI-infra marker into the container,
+      # as the *-impl.yaml pipelines do: conftest.py's is_ci_v2_env is
+      # `"TT_GH_CI_INFRA" in os.environ`, and model_location_generator only downloads
+      # weights from the CIv2 large file cache when it is set. Without it a leg on an
+      # lfc / local-disk SKU falls back to the HF hub id and fails with
+      # LocalEntryNotFoundError against the per-runner cache.
       options: >-
          ${{ (startsWith(matrix.leg.sku, 'sim_') && '--label runner-mode=sim')
-             || (!contains(matrix.leg.sku, 'cpu') && '--device /dev/tenstorrent')
+             || (!contains(matrix.leg.sku, 'cpu') && '--device /dev/tenstorrent -e TT_GH_CI_INFRA')
              || '' }}
     defaults:
       run:
