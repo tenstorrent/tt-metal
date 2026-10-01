@@ -86,8 +86,10 @@ sfpi_inline sfpi::vFloat _calculate_log_series_(const sfpi::vFloat in, const sfp
 /**
  * @brief One row of ln(x) in place in Dest.
  *
- * The zero test is bitwise, so -0.0 is not mapped to -inf: XLOGY turns -0.0 into NaN before
- * calling, _calculate_log_ returns a finite value for it.
+ * The zero test is bitwise, so -0.0 is not mapped to -inf and _calculate_log_, the only
+ * caller, returns a finite value for it. A caller that holds its operand in a register uses
+ * @ref _calculate_log_body_on_reg_ instead, whose biased-exponent test maps +-0 and the
+ * denormals to -inf.
  *
  * @param c: LogPoly::C, bound outside the caller's row loop.
  * @param d: LogPoly::D, bound outside the caller's row loop.

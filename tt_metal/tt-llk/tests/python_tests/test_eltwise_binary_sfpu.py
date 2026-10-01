@@ -433,14 +433,25 @@ def _isclose_nan_stimuli_specs():
 def _xlogy_denormal_stimuli_specs():
     # The log operand (in1) on the biased-exponent-0 lane, which the kernel maps to ln = -inf:
     # +0, the smallest and the largest positive denormal, then FLT_MIN and 1.0 as finite
-    # controls, five lanes per period. in0 is the positive ramp, so the golden is -inf on lanes
-    # 0-2, in0 * ln(FLT_MIN) on lane 3 and 0 on lane 4. This pins the exexp(Biased) == 0 test of
-    # _calculate_log_body_on_reg_: an `in1 == 0.0F` test would return a finite in0 * ~-88 on
-    # lanes 1-2 (see its docstring), and _xlogy's golden flushes a denormal in1 to match the
-    # kernel. Only a 32-bit input into a 32-bit Dest carries a denormal to the SFPU; on the
-    # datacopy path a bf16 denormal is flushed before SFPLOAD.
+    # controls, then the smallest and the largest negative denormal. in0 is the positive ramp,
+    # so the golden is -inf on lanes 0-2, in0 * ln(FLT_MIN) on lane 3, 0 on lane 4 and NaN on
+    # lanes 5-6. Lanes 1-2 pin the exexp(Biased) == 0 test of _calculate_log_body_on_reg_: an
+    # `in1 == 0.0F` test would return a finite in0 * ~-88 there (see its docstring), and
+    # _xlogy's golden flushes a positive denormal in1 to match the kernel. Lanes 5-6 pin the
+    # NaN guard: `in1 < 0.0f` reads the sign bit of the unflushed register, so a negative
+    # denormal is NaN, as log of a negative is, and the golden does not flush it. Only a
+    # 32-bit input into a 32-bit Dest carries a denormal to the SFPU; on the datacopy path a
+    # bf16 denormal is flushed before SFPLOAD.
     lanes = torch.tensor(
-        [0x00000000, 0x00000001, 0x007FFFFF, 0x00800000, 0x3F800000],
+        [
+            0x00000000,
+            0x00000001,
+            0x007FFFFF,
+            0x00800000,
+            0x3F800000,
+            -0x7FFFFFFF,  # 0x80000001
+            -0x7F800001,  # 0x807FFFFF
+        ],
         dtype=torch.int32,
     ).view(torch.float32)
 
@@ -450,7 +461,7 @@ def _xlogy_denormal_stimuli_specs():
 
     def b_face(size, dtype, generator):
         j, _ = _positions_and_ramp(size)
-        return lanes[(j % 5).long()].to(dtype)
+        return lanes[(j % len(lanes)).long()].to(dtype)
 
     return _face_spec(a_face), _face_spec(b_face)
 
@@ -966,12 +977,10 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
-@parametrize(
-    formats=input_output_formats([DataFormat.Float32], same=True),
-    mathop=[MathOperation.SfpuXlogy],
-    dest_acc=[DestAccumulation.Yes],
-)
-def test_eltwise_binary_sfpu_xlogy_denormal(formats, dest_acc, mathop):
+# dest_acc stays an axis: a single-axis `parametrize` hands pytest 1-tuples, which `--op` cannot
+# read, so this is the same shape as test_eltwise_binary_sfpu_int_uniform.
+@parametrize(mathop=[MathOperation.SfpuXlogy], dest_acc=[DestAccumulation.Yes])
+def test_eltwise_binary_sfpu_xlogy_denormal(mathop, dest_acc):
     # xlogy(x, denormal) = x * ln(denormal) = -inf, because the kernel flushes its log operand
     # (see _xlogy_denormal_stimuli_specs). Float32 into a 32-bit Dest is the only pipeline in
     # this harness that delivers a denormal to the SFPU, and the flush is measured on Blackhole.
@@ -980,6 +989,7 @@ def test_eltwise_binary_sfpu_xlogy_denormal(formats, dest_acc, mathop):
             "the denormal flush of the xlogy log operand is measured on Blackhole only"
         )
 
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     spec_A, spec_B = _xlogy_denormal_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 

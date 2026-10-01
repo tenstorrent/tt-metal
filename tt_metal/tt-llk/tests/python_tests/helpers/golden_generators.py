@@ -4089,9 +4089,10 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     # Operation methods are covered by Eltwise Binary Golden
     def _xlogy(self, x, y):
-        # xlogy(x, y) = x * log(y), computed in fp32 to mirror the SFPU log path. Non-finite
-        # edge cases are not consistently modelled across formats, so xlogy is exercised with
-        # strictly-positive stimuli where the result is always finite.
+        # xlogy(x, y) = x * log(y), computed in fp32 to mirror the SFPU log path. The random
+        # sweeps drive strictly-positive y, where the result is always finite; the y = +0 and
+        # y = denormal lanes, where ln is -inf, are driven by test_eltwise_binary_sfpu_edges
+        # and test_eltwise_binary_sfpu_xlogy_denormal.
         xf = (
             x.to(torch.float32)
             if isinstance(x, torch.Tensor)
@@ -4102,11 +4103,13 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             if isinstance(y, torch.Tensor)
             else torch.tensor(float(y))
         )
-        # The kernel's log operand is flushed to zero when it is a denormal (Blackhole: by the
-        # SFPSTORE of the Dest round trip, or by the biased-exponent == 0 test of
-        # _calculate_log_body_on_reg_), so log(denormal) = -inf. Model that flush; the sign of
-        # a denormal survives it (-denormal -> -0.0).
-        yf = torch.where(yf.abs() < torch.finfo(torch.float32).tiny, yf * 0.0, yf)
+        # The kernel's log operand is flushed to zero when it is a positive denormal
+        # (Blackhole: by the SFPSTORE of the Dest round trip, or by the biased-exponent == 0
+        # test of _calculate_log_body_on_reg_), so log(denormal) = -inf. A negative denormal
+        # is not flushed here: the kernel's NaN guard (`in1 < 0.0f`) reads the sign bit of the
+        # unflushed register, so that lane is NaN, which is also log of a negative.
+        denormal = yf.abs() < torch.finfo(torch.float32).tiny
+        yf = torch.where(denormal & ~torch.signbit(yf), 0.0, yf)
         res = xf * torch.log(yf)
         return res.to(x.dtype) if isinstance(x, torch.Tensor) else res.item()
 

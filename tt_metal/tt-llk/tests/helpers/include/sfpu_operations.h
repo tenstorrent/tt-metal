@@ -2138,30 +2138,18 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
-    else if constexpr (BINOP == BinaryOp::MASK)
+    else if constexpr (BINOP == BinaryOp::MASK || BINOP == BinaryOp::MASK_POSINF)
     {
-        // float mask: out = (mask != 0) ? data : 0, with data at in0 and mask at in1.
-        // Driven through the test-only adapter since calculate_mask uses fixed dst
-        // offsets rather than the forwarded indices.
+        // float mask: out = (mask != 0) ? data : fill, with data at in0 and mask at in1; the
+        // fill is 0 for MASK and +inf for MASK_POSINF. Driven through the test-only adapter
+        // since calculate_mask / calculate_mask_posinf use fixed dst offsets rather than the
+        // forwarded indices.
+        constexpr bool POSINF = (BINOP == BinaryOp::MASK_POSINF);
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_mask_binary,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
-            dst_index_in0,
-            dst_index_in1,
-            dst_index_out,
-            vector_mode);
-    }
-    else if constexpr (BINOP == BinaryOp::MASK_POSINF)
-    {
-        // mask_posinf: out = (mask != 0) ? data : +inf, data at in0 and mask at in1. Same
-        // fixed-offset adapter as MASK.
-        SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_mask_posinf_binary,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, POSINF),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,

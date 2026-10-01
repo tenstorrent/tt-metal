@@ -162,57 +162,6 @@ def test_perf_eltwise_binary_sfpu_float_misc(perf_report, formats, mathop, dest_
 @parametrize(
     formats=input_output_formats(
         [
-            DataFormat.Float32,
-            DataFormat.Float16_b,
-        ],
-        same=True,
-    ),
-    approx_mode=[
-        ApproximationMode.No,
-    ],
-    mathop=[
-        MathOperation.SfpuMask,
-        MathOperation.SfpuMaskPosinf,
-        MathOperation.SfpuIsclose,
-        MathOperation.SfpuIscloseEqualNan,
-    ],
-    dest_acc=lambda formats: get_dest_accum_modes(formats),
-    loop_factor=[
-        16,
-    ],
-    iterations=[
-        32,
-    ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],
-)
-def test_perf_eltwise_binary_sfpu_float_misc(
-    perf_report,
-    formats,
-    mathop,
-    approx_mode,
-    dest_acc,
-    loop_factor,
-    iterations,
-    input_dimensions,
-):
-    test_perf_eltwise_binary_sfpu_float(
-        perf_report,
-        formats,
-        mathop,
-        approx_mode,
-        dest_acc,
-        loop_factor,
-        iterations,
-        input_dimensions,
-    )
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [
             DataFormat.Int32,
         ]
     ),
@@ -228,15 +177,9 @@ def test_perf_eltwise_binary_sfpu_float_misc(
         MathOperation.SfpuElwsub,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
-    loop_factor=[
-        16,
-    ],
-    iterations=[
-        32,
-    ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],
+    loop_factor=[PERF_LOOP_FACTOR],
+    iterations=[PERF_ITERATIONS],
+    input_dimensions=[PERF_INPUT_DIMENSIONS],
 )
 def test_perf_eltwise_binary_sfpu_int(
     perf_report,
@@ -308,15 +251,9 @@ def test_perf_eltwise_binary_sfpu_int(
         MathOperation.SfpuAddTopRow,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
-    loop_factor=[
-        16,
-    ],
-    iterations=[
-        32,
-    ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],
+    loop_factor=[PERF_LOOP_FACTOR],
+    iterations=[PERF_ITERATIONS],
+    input_dimensions=[PERF_INPUT_DIMENSIONS],
 )
 def test_perf_eltwise_binary_sfpu_add_top_row(
     perf_report,
