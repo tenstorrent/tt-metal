@@ -455,9 +455,14 @@ class MiMoCPDeviceModel:
         """Recorded in the profile: the active attention / experts / router modes."""
         import os
 
+        from models.demos.mimo_v2_6_d_p_cp4.tt.attention import full_sdpa_chunks
+
         return {
             "sliding_sdpa_cfg": os.environ.get("MIMO_SLIDING_SDPA_CFG", "base"),
             "sliding_qk": os.environ.get("MIMO_SLIDING_QK", "split"),
+            "sliding_heads": os.environ.get("MIMO_SLIDING_HEADS", "split"),
+            "sliding_wlo": os.environ.get("MIMO_SLIDING_WLO", "1") == "1",
+            "full_sdpa_chunks": [int(c) for c in full_sdpa_chunks()],
             "experts_mode": os.environ.get("MIMO_EXPERTS_MODE", "unified"),
             "router_mode": os.environ.get("MIMO_ROUTER_MODE", "fp32"),
             "fuse_residual_norm": os.environ.get("MIMO_FUSE_RESIDUAL_NORM", "1") != "0",

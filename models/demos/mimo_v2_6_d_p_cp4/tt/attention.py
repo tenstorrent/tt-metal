@@ -48,6 +48,14 @@ from .ccl import RingCCL
 
 TILE = 32
 Q_CHUNK, K_CHUNK = 64, 256  # as Gemma-4's global ring layers (q64 optimal there, k256 for non-sliding layers)
+# Full-layer ring SDPA chunks (env MIMO_FULL_SDPA_CHUNKS="q,k"; P.1). "64,256" is the pre-P.1 setting. At 51200 ->
+# 56320 (2 full layers): 64,512 attention 260.8 ms vs 64,256 266.6; q32 / q128 are slower, k1024 overflows L1.
+FULL_SDPA_CHUNKS_DEFAULT = "64,512"
+
+
+def full_sdpa_chunks() -> tuple[int, int]:
+    q, k = os.environ.get("MIMO_FULL_SDPA_CHUNKS", FULL_SDPA_CHUNKS_DEFAULT).split(",")
+    return int(q), int(k)
 
 
 def _hifi4():
@@ -264,8 +272,8 @@ class TtFullAttention:
 
         self.program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ccl.sdpa_grid,
-            q_chunk_size=Q_CHUNK,
-            k_chunk_size=K_CHUNK,
+            q_chunk_size=full_sdpa_chunks()[0],
+            k_chunk_size=full_sdpa_chunks()[1],
             exp_approx_mode=False,
         )
 
@@ -415,6 +423,10 @@ SLIDING_PRESETS = {"S": False, "base": True}
 # [bf16 hi | bf16 lo] against K' = [k | k]; "fp32" the same rounded once to bf16; "bf16" the full-attention path.
 SLIDING_QK_MODES = ("split", "fp32", "bf16")
 SLIDING_Q_CHUNK, SLIDING_K_CHUNK = 128, 128
+# fp32 Q/K head split (env MIMO_SLIDING_HEADS, P.1): "split" (default) nlp_create_q_heads_split on the fp32
+# projections (Q straight into its RoPE / pass parts); "reshape" the pre-P.1 reshape + permute (6.5 ms more per layer
+# at chunk 5120, same values bit for bit).
+SLIDING_HEADS_MODES = ("split", "reshape")
 
 
 def _sliding_compute_config():
@@ -495,6 +507,8 @@ class TtSlidingAttention(TtFullAttention):
         assert self.qk_mode in SLIDING_QK_MODES, self.qk_mode
         self.qk_fp32 = self.qk_mode != "bf16"
         self.q_split = self.qk_mode == "split"
+        self.heads_mode = os.environ.get("MIMO_SLIDING_HEADS", "split")
+        assert self.heads_mode in SLIDING_HEADS_MODES, self.heads_mode
         self.tables32 = {}
         if self.qk_fp32:
             R, h = self.rope_dim, self.rope_dim // 2
@@ -578,24 +592,29 @@ class TtSlidingAttention(TtFullAttention):
 
     def _rope32(self, t, cos, sin, split: bool = False):
         """fp32 rotate-half RoPE on the first R dims of t [1, h, L, D] fp32 -> bf16 [1, h, L, D], or with split
-        [hi | lo] [1, h, L, 2D] bf16 (hi = bf16(t), lo = bf16(t - hi): hi + lo carries ~16 mantissa bits)."""
+        [hi | lo] [1, h, L, 2D] bf16 (hi = bf16(t), lo = bf16(t - hi): hi + lo carries ~16 mantissa bits).
+        t may also be given as its (rope [.., R], pass [.., D - R]) parts."""
         mc = ttnn.DRAM_MEMORY_CONFIG
         R, h = self.rope_dim, self.rope_dim // 2
-        n, L, D = t.shape[1], t.shape[2], t.shape[3]
-        lo = ttnn.slice(t, [0, 0, 0, 0], [1, n, L, h], memory_config=mc)
-        hi = ttnn.slice(t, [0, 0, 0, h], [1, n, L, R], memory_config=mc)
-        rot = ttnn.concat([lo, hi], dim=-1, memory_config=mc)
+        if isinstance(t, tuple):
+            tr, rest = t
+            n, L = tr.shape[1], tr.shape[2]
+        else:
+            n, L, D = t.shape[1], t.shape[2], t.shape[3]
+            tr = ttnn.slice(t, [0, 0, 0, 0], [1, n, L, R], memory_config=mc)
+            rest = ttnn.slice(t, [0, 0, 0, R], [1, n, L, D], memory_config=mc)
+        lo = ttnn.slice(tr, [0, 0, 0, 0], [1, n, L, h], memory_config=mc)
+        hi = ttnn.slice(tr, [0, 0, 0, h], [1, n, L, R], memory_config=mc)
         sw = ttnn.concat([hi, lo], dim=-1, memory_config=mc)
         ttnn.deallocate(lo)
         ttnn.deallocate(hi)
-        a = ttnn.multiply(rot, cos, memory_config=mc)
+        a = ttnn.multiply(tr, cos, memory_config=mc)
         b = ttnn.multiply(sw, sin, memory_config=mc)
-        ttnn.deallocate(rot)
+        ttnn.deallocate(tr)
         ttnn.deallocate(sw)
         r = ttnn.add(a, b, memory_config=mc)
         ttnn.deallocate(a)
         ttnn.deallocate(b)
-        rest = ttnn.slice(t, [0, 0, 0, R], [1, n, L, D], memory_config=mc)
         out = ttnn.concat([r, rest], dim=-1, memory_config=mc)
         ttnn.deallocate(r)
         ttnn.deallocate(rest)
@@ -622,13 +641,25 @@ class TtSlidingAttention(TtFullAttention):
         mc = ttnn.DRAM_MEMORY_CONFIG
         qp = self._proj32(x, self.wq, self.wq_lo)
         kvp = self._proj32(x, self.wkv, self.wkv_lo)
-        q = ttnn.permute(ttnn.reshape(qp, [1, L, self.nq, self.d]), (0, 2, 1, 3), memory_config=mc)
-        kv = ttnn.permute(ttnn.reshape(kvp, [1, L, self.nkv, 2 * self.d]), (0, 2, 1, 3), memory_config=mc)
-        ttnn.deallocate(qp)
-        ttnn.deallocate(kvp)
-        k = ttnn.slice(kv, [0, 0, 0, 0], [1, self.nkv, L, self.d], memory_config=mc)
-        v32 = ttnn.slice(kv, [0, 0, 0, self.d], [1, self.nkv, L, 2 * self.d], memory_config=mc)
-        ttnn.deallocate(kv)
+        if self.heads_mode == "split":
+            q = tuple(
+                ttnn.experimental.nlp_create_q_heads_split(
+                    qp, num_heads=self.nq, split_head_dim=self.rope_dim, memory_config=mc
+                )
+            )
+            k, v32 = ttnn.experimental.nlp_create_q_heads_split(
+                kvp, num_heads=self.nkv, split_head_dim=self.d, memory_config=mc
+            )
+            ttnn.deallocate(qp)
+            ttnn.deallocate(kvp)
+        else:
+            q = ttnn.permute(ttnn.reshape(qp, [1, L, self.nq, self.d]), (0, 2, 1, 3), memory_config=mc)
+            kv = ttnn.permute(ttnn.reshape(kvp, [1, L, self.nkv, 2 * self.d]), (0, 2, 1, 3), memory_config=mc)
+            ttnn.deallocate(qp)
+            ttnn.deallocate(kvp)
+            k = ttnn.slice(kv, [0, 0, 0, 0], [1, self.nkv, L, self.d], memory_config=mc)
+            v32 = ttnn.slice(kv, [0, 0, 0, self.d], [1, self.nkv, L, 2 * self.d], memory_config=mc)
+            ttnn.deallocate(kv)
         v = ttnn.typecast(v32, ttnn.bfloat16)
         ttnn.deallocate(v32)
         r = self.rope_dim
@@ -636,9 +667,9 @@ class TtSlidingAttention(TtFullAttention):
         row = start // self.cp
         cos = ttnn.slice(cos_t, [0, 0, row, 0], [1, 1, row + L, r])
         sin = ttnn.slice(sin_t, [0, 0, row, 0], [1, 1, row + L, r])
-        q16 = self._rope32(q, cos, sin, split=self.q_split)
+        q16 = self._rope32(q, cos, sin, split=self.q_split)  # frees q's parts when given as parts
         k16 = self._rope32(k, cos, sin)
-        for t in (q, k, cos, sin):
+        for t in (k, cos, sin) if isinstance(q, tuple) else (q, k, cos, sin):
             ttnn.deallocate(t)
         return q16, k16, v
 

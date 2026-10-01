@@ -2179,6 +2179,90 @@
   "status": "PASS",
   "waiting": null
  },
+ "P.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "2ac90f25-c1b6-4e1d-a42c-fec2b13b5227"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/briefs/P.1.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/agents/P.1.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 1414.8,
+    "session_id": "2ac90f25-c1b6-4e1d-a42c-fec2b13b5227",
+    "t": "2026-10-01T06:12:07"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 475.2,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T05:48:30"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-01T06:20:13"
+   }
+  ],
+  "last_run": "2026-10-01T06:20:13",
+  "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/logs/P.1.log",
+  "metrics": {
+   "chunk_wall_ms": 436.8,
+   "device_ms_attention": 260.84,
+   "device_ms_total": 427.32,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.9999561083723083,
+   "pcc_layer_L00": 0.9999941532429469,
+   "pcc_layer_L01": 0.9999831011548731,
+   "pcc_layer_L02": 0.9999713133877655,
+   "pcc_layer_L03": 0.9999678692411746,
+   "pcc_layer_L04": 0.9999706791012161,
+   "pcc_layer_L05": 0.9996916799771146,
+   "pcc_state_min": 0.9894468568567575
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-10-01T06:12:18",
+  "status": "PASS",
+  "waiting": null
+ },
  "PL.0": {
   "attempts": 0,
   "duration_s": 12.5,
@@ -3426,7 +3510,8 @@
   "rc": 0,
   "reason": [],
   "started": "2026-10-01T03:23:53",
-  "status": "PASS"
+  "status": "PASS",
+  "waiting": "pick opportunities in models/demos/mimo_v2_6_d_p_cp4/bringup/opportunities.md; each pick becomes a perf task in tasks.yaml"
  },
  "_run": {
   "branch": "sjovic/mimo-llm-perf",

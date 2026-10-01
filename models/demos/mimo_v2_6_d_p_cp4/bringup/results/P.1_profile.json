@@ -1,0 +1,116 @@
+{
+ "rung": "last",
+ "chunk": [
+  51200,
+  56320
+ ],
+ "layers": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "wall_ms": 436.83481216430664,
+ "device_ms": {
+  "attention": 260.835055,
+  "experts": 157.145697,
+  "mlp": 5.17924,
+  "router": 2.443077,
+  "attn_residual": 0.844964,
+  "ffn_residual": 0.648462,
+  "mlp_residual": 0.138464,
+  "attn_norm": 0.083807,
+  "ffn_norm": 0.0
+ },
+ "sections_ms": {
+  "attention": 260.835055,
+  "experts": 157.145697,
+  "mlp": 5.17924,
+  "router": 2.443077,
+  "attn_residual": 0.844964,
+  "ffn_residual": 0.648462,
+  "mlp_residual": 0.138464,
+  "attn_norm": 0.083807,
+  "ffn_norm": 0.0
+ },
+ "sections_ms_per_chip": {
+  "attn_norm": {
+   "1": 0.081924,
+   "0": 0.083807,
+   "3": 0.081307,
+   "2": 0.083765
+  },
+  "attention": {
+   "1": 260.197425,
+   "0": 260.793635,
+   "3": 259.955909,
+   "2": 260.512932
+  },
+  "attn_residual": {
+   "1": 0.833768,
+   "0": 0.83907,
+   "3": 0.834805,
+   "2": 0.833366
+  },
+  "ffn_norm": {},
+  "mlp": {
+   "1": 5.17924,
+   "0": 5.172456,
+   "3": 5.157553,
+   "2": 5.140941
+  },
+  "mlp_residual": {
+   "1": 0.135471,
+   "0": 0.138464,
+   "3": 0.136809,
+   "2": 0.138268
+  },
+  "router": {
+   "1": 2.433448,
+   "0": 2.42635,
+   "3": 2.425876,
+   "2": 2.430207
+  },
+  "experts": {
+   "1": 157.042212,
+   "0": 156.971679,
+   "3": 156.268905,
+   "2": 156.461103
+  },
+  "ffn_residual": {
+   "1": 0.629141,
+   "0": 0.643614,
+   "3": 0.640543,
+   "2": 0.642992
+  }
+ },
+ "programs": {
+  "attn_norm": 4,
+  "attention": 1136,
+  "attn_residual": 24,
+  "ffn_norm": 0,
+  "mlp": 20,
+  "mlp_residual": 4,
+  "router": 340,
+  "experts": 240,
+  "ffn_residual": 20
+ },
+ "settings": {
+  "sliding_sdpa_cfg": "base",
+  "sliding_qk": "split",
+  "sliding_heads": "split",
+  "sliding_wlo": true,
+  "full_sdpa_chunks": [
+   64,
+   512
+  ],
+  "experts_mode": "unified",
+  "router_mode": "fp32",
+  "fuse_residual_norm": true
+ },
+ "full_prefill": null,
+ "bridged_steps": [],
+ "deferred_cpu_ms": 0.0
+}

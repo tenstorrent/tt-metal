@@ -436,3 +436,29 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   - pcc_producer_kv_k 0.99996, pcc_producer_kv_v 0.99990.
   - Test time 78 s.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
+
+## P.1 perf.1 (attention)
+- Per-op profile before any change (`BRINGUP_PROFILE_OPS=1`, rung last, chunk 51200 -> 56320, layers 0-5): attention 297.8 ms.
+  - Full layers 0 and 5: 100 ms each. ring_joint SDPA is 94.2 ms of that, the q/kv/o linears 5 ms.
+  - Sliding layers 1-4: 24.5 ms each. The fp32 `reshape` + `permute` to heads took 5.2 + 0.9 ms (q) and 1.4 + 0.25 ms (kv). Next: the two fp32 q projections (2.6 ms each), the kv projections (0.8 ms each), sliding SDPA 2.75 ms, o_proj 2.2 ms.
+- Change 1 (bit-exact): the sliding fp32 head split now uses `nlp_create_q_heads_split`, which takes fp32. A probe found it bit-equal to reshape + permute, 0.32 ms vs 6.2 ms (q) and 0.16 ms vs 1.6 ms (kv).
+  - Q splits straight into its RoPE (64) and pass (128) parts.
+  - `_rope32` no longer rebuilds `concat([lo, hi])`, which is the input itself, so the math is unchanged.
+  - `MIMO_SLIDING_HEADS=reshape` restores the old path.
+  - Result: attention 266.6 ms, sliding 16.8 ms per layer.
+- Change 2: full-layer ring SDPA chunks are now selectable through `MIMO_FULL_SDPA_CHUNKS="q,k"`. The default is now 64,512; the old setting is 64,256. Attention ms (2 full + 4 sliding layers):
+
+  | Chunks | Attention ms |
+  |---|---|
+  | 64,256 | 266.6 |
+  | 64,512 | 260.8 |
+  | 32,256 | 273.1 |
+  | 32,512 | 264.1 |
+  | 128,256 | 276.7 |
+  | 128,512 | 272.3 |
+  | 64,1024 | L1 overflow |
+
+- Not changed: precision (HiFi4, fp32 dest, W_lo, Q hi/lo split, bf16 caches), the sliding SDPA config and the narrow-V fork idea. The two changes were enough for the threshold.
+- The profile records `sliding_heads`, `sliding_wlo` and `full_sdpa_chunks` (hooks `perf_settings`).
+- Gotcha: I started the gate in the background by mistake (rule 3 asks for the foreground). It ran to completion unattended.
+- Re-run (old behaviour for comparison: `MIMO_SLIDING_HEADS=reshape MIMO_FULL_SDPA_CHUNKS=64,256`): `PYTHONPATH=$PWD TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py` (add `BRINGUP_PROFILE_OPS=1` for the per-op rows).
