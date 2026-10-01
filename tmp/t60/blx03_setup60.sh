@@ -17,7 +17,7 @@ run() {
   [ -d $W ] || git -C $BASE worktree add --detach $W \$REV || return 12
   git -C $W checkout --detach \$REV || return 13
   for n in tracy umd tt-cluster-descriptors; do
-    git -C $W submodule update --init --reference $BASE/.git/modules/tt_metal/third_party/\$n -- tt_metal/third_party/\$n || return 14
+    git -C $W submodule update --init --depth 1 -- tt_metal/third_party/\$n || return 14
   done
   cd $W || return 15
   CPM=; [ -d $BASE/.cpmcache ] && CPM="--cpm-source-cache $BASE/.cpmcache"
