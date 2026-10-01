@@ -252,6 +252,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     // subblock so it never reads in1 tile indices that were not produced for the current block.
     // When no padding occurs (per_core_N_compute == per_core_N_in1_sender) this equals out_subblock_w.
     uint32_t last_subblock_w_valid = out_subblock_w - (per_core_N_compute - per_core_N_in1_sender);
+    // Quasar: the widening above is skipped there, so no padded lane can reach the compute kernel (whose
+    // ARCH_QUASAR static_assert would otherwise fail at JIT time). Catch any future regression on the host.
+    TT_FATAL(
+        !is_quasar || last_subblock_w_valid == out_subblock_w,
+        "DRAM-sharded matmul on Quasar cannot pad per_core_N ({} compute vs {} in1 sender tiles): the Quasar "
+        "matmul LLK bakes ct_dim at init",
+        per_core_N_compute,
+        per_core_N_in1_sender);
 
     uint32_t in1_num_subblocks = (per_core_N_compute / out_subblock_w);
 
@@ -862,6 +870,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     //                      Build KernelSpecs
     ////////////////////////////////////////////////////////////////////////////
 
+    // config_1xx applies on WH/BH; config_2xx on Quasar (each is ignored on the other arch, selected at
+    // program construction). On Quasar these DM kernels manage DFB credits EXPLICITLY (reserve_back /
+    // push_back on in0 / in1, wait_front / pop_front on out); leaving implicit sync ON adds an extra
+    // final-credit ACK on top of the explicit credits -> tile-counter underflow (seen on the 1D-mcast
+    // factory, #58197). Opt every bound DFB out of implicit sync on Quasar, matching the sibling matmul
+    // factories.
     // in0 sender kernel (reader - RISCV_1)
     KernelSpec in0_sender{
         .unique_id = IN0_SENDER,
@@ -924,6 +938,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                     DataMovementHardwareConfig::DataMovement1XXConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1,
                         .noc = in0_noc,
+                    },
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true,
                     },
             },
         .advanced_options = {.num_runtime_varargs = num_in0_sender_varargs},
@@ -1000,6 +1018,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                     DataMovementHardwareConfig::DataMovement1XXConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0,
                         .noc = in1_noc,
+                    },
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true,
                     },
             },
         .advanced_options = {.num_runtime_varargs = num_in1_writer_varargs},

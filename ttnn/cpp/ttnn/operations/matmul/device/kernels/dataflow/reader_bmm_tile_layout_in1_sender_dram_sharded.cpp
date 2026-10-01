@@ -15,19 +15,14 @@
 #include "experimental/kernel_args.h"
 
 #ifdef ARCH_QUASAR
-// Direct RISC L1->L1 copy for a transfer whose source and destination are both this core's L1
-// (a write-back whose storage core is this core). The Quasar emulator does not reliably complete a NoC transfer to
-// itself (recipe: "use a direct L1->L1 RISC copy, not a NoC loopback"). Both sides go through the uncached L1 alias:
-// the source so freshly NoC-written / packed data is seen without a cache invalidate, the destination so the next
-// reader (unpacker, NoC or host) sees it without a flush.
-FORCE_INLINE void local_l1_copy(uint32_t dst_addr, uint32_t src_addr, uint32_t bytes) {
-    const auto uncached = [](uint32_t a) { return a >= MEM_L1_UNCACHED_BASE ? a : a + MEM_L1_UNCACHED_BASE; };
-    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>((uintptr_t)uncached(dst_addr));
-    const volatile tt_l1_ptr uint32_t* src =
-        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>((uintptr_t)uncached(src_addr));
-    for (uint32_t i = 0; i < bytes / sizeof(uint32_t); ++i) {
-        dst[i] = src[i];
-    }
+// Quasar emulator self-loopback workaround: a NoC transfer whose source and destination are both this
+// core's L1 (a write-back whose storage core is this core) is done with the shared RISC copy helper, which also issues
+// the fence that orders the uncached-alias stores ahead of the semaphore / credit that publishes them. The helper takes
+// uncached-alias addresses (what the DFB getters hand out on Quasar DM); a LocalTensorAccessor base is the
+// plain (cached) L1 address, so normalise both operands first.
+#include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
+FORCE_INLINE uint32_t l1_uncached(uint32_t addr) {
+    return addr >= MEM_L1_UNCACHED_BASE ? addr : MEM_L1_UNCACHED_BASE + (addr - MEM_L1_BASE);
 }
 #endif
 
@@ -253,7 +248,8 @@ void kernel_main() {
         for (uint32_t h = 0; h < per_core_M; ++h) {
 #ifdef ARCH_QUASAR
             if (reshard_is_local) {
-                local_l1_copy(reshard_dest_local_addr, l1_read_addr_out, per_core_N_reshard_bytes);
+                local_l1_copy(
+                    l1_uncached(reshard_dest_local_addr), l1_uncached(l1_read_addr_out), per_core_N_reshard_bytes);
             } else
 #endif
             {
