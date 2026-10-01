@@ -35,7 +35,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -339,7 +339,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
                 {"last_chunk_tiles", last_chunk_tiles},
             },
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // Empty on non-Quasar; on Quasar carries the reader's index scratchpad.
@@ -357,11 +357,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
                                : "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp";
 
-    // Legacy compute config left every field at its default; ComputeGen1Config's defaults reproduce
-    // them exactly (HiFi4, precise SFPU, 16-bit dest, double-buffered dest, no unpack-mode entries).
-    // arch_compute_config keeps that Gen1 config on WH/BH and maps it to the equivalent Gen2 config on
-    // Quasar (which rejects a bare ComputeGen1Config on a compute KernelSpec).
-    ComputeHardwareConfig compute_hw = ttnn::arch_compute_config(device->arch(), ComputeGen1Config{});
+    // Legacy compute config left every field at its default. ComputeHardwareConfig's common defaults
+    // reproduce them (HiFi4, precise SFPU, 16-bit dest, double-buffered dest, no unpack-mode entries)
+    // on every generation. A TT-1.x.x-only extra is unused on TT-2.x.x.
+    ComputeHardwareConfig compute_hw{};
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t per_core_block_cnt) {
         Group<DFBBinding> compute_dfb_bindings;
@@ -439,7 +438,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
                     TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "dst"},
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         });
     }
 

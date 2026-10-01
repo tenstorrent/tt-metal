@@ -218,6 +218,24 @@ def global_ring_prefill_attention(
     return out
 
 
+def ring_sdpa_chunk_sizes(q_slab_tokens, sliding):
+    """(q_chunk_size, k_chunk_size) for the ring SDPA, chosen by the per-rank Q slab (prefill chunk / CP).
+
+    Sliding layers use q 128 / k 128; the sliding path accepts q in {64, 128} and k == 128, and k also sets
+    the halo granularity. Global layers use k 256 with a Q chunk that grows with the slab. Measured over a
+    256k prefill at CP8: q 32 at chunk 2048 (21.7 s, against 24.0 s at q 64 and 28.7 s at q 96), q 64 at
+    chunk 4096 (14.1 s, against 17.4 s at q 32 and 16.2 s at q 96), and q 96 at chunk 8192 (11.1 s,
+    against 12.8 s at q 64).
+    """
+    if sliding:
+        return 128, 128
+    if q_slab_tokens <= 256:
+        return 32, 256
+    if q_slab_tokens <= 512:
+        return 64, 256
+    return 96, 256
+
+
 def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size, k_chunk_size):
     """SDPA program config for the ring path.
 
@@ -297,6 +315,7 @@ def sliding_ring_prefill_attention(
     max_seq_len,
     logical_n,
     kv_actual_global,
+    gather_buffer_key,
     sliding_window_size=None,
     scale=1.0,
     compute_kernel_config=None,
@@ -325,6 +344,7 @@ def sliding_ring_prefill_attention(
         layer_idx=layer_idx,
         num_layers=num_layers,
         slot_idx=slot_idx,
+        gather_buffer_key=gather_buffer_key,
     )
 
 
@@ -347,6 +367,7 @@ def _ring_prefill_attention(
     layer_idx=0,
     num_layers=1,
     slot_idx=0,
+    gather_buffer_key=None,
 ):
     """Attend this rank's Q shard over the whole cached prefix, via the CP ring.
 
@@ -359,8 +380,7 @@ def _ring_prefill_attention(
     """
     mesh_device = mesh_config.device
     if program_config is None:
-        # Utilization testing identified these as the best-performing chunk sizes.
-        _q_chunk, _k_chunk = (128, 128) if sliding_window_size else (96, 256)
+        _q_chunk, _k_chunk = ring_sdpa_chunk_sizes(tt_q.shape[-2], bool(sliding_window_size))
         program_config = ring_prefill_program_config(
             mesh_device,
             ccl_manager,
@@ -388,10 +408,10 @@ def _ring_prefill_attention(
     else:
         gather_seq = cache_seq * cp
     buffer_k = ccl_manager.get_ring_gather_buffer(
-        "ring_k", num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
+        (gather_buffer_key, "ring_k"), num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
     )
     buffer_v = ccl_manager.get_ring_gather_buffer(
-        "ring_v", num_local_kv_heads, gather_seq, head_dim, cache_v.dtype, cache_v.memory_config()
+        (gather_buffer_key, "ring_v"), num_local_kv_heads, gather_seq, head_dim, cache_v.dtype, cache_v.memory_config()
     )
 
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(

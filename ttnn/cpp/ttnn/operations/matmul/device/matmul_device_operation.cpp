@@ -2822,7 +2822,7 @@ MatmulParams create_matmul_attributes(
     const Tensor& input_tensor_b,
     const MatmulParams& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
-    tt::tt_metal::IDevice* device = input_tensor_a.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor_a.device();
     TT_FATAL(device != nullptr, "Operand to matmul must be on device");
     auto arch = device->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();

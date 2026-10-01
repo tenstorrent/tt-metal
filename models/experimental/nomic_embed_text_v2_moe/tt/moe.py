@@ -5,10 +5,9 @@
 
 This is the one place the activation layout changes. Blocks pass (B, 1, S, H), because attention
 mixes tokens along S and flattening the batch away would let one text attend to another. The
-expert matmuls need the opposite: ttnn.matmul broadcasts a weight's batch dims only when every
-batch dim of the activation is 1, so (1, 1, T, H) x (1, E, H, F) gives (1, E, T, F) while
-(B, 1, S, H) raises. The flatten therefore lives here, at the same place the reference does its
-own x.view(-1, H), and nowhere else in the encoder.
+expert matmuls need the opposite: they batch over the experts, (1, 1, T, H) x (1, E, H, F) giving
+(1, E, T, F), which takes every token on one axis. The flatten therefore lives here, at the same
+place the reference does its own x.view(-1, H), and nowhere else in the encoder.
 """
 
 from __future__ import annotations

@@ -62,8 +62,14 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MUL:
             return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
         case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
+        // logaddexp and logaddexp2 are fused SFPU kernels templated on the destination
+        // precision, so the 16-bit formats route to them as well as float32. Which body they
+        // get is decided by fp32_dest_acc_en, and binary_ng_program_factory.cpp derives that
+        // from the OUTPUT format as well as the inputs, so bfloat16 operands with an fp32
+        // output take the fp32 body rather than the narrow one. Left on the composed
+        // EXP/ADD/LOG route, all of them overflow exactly where the fused kernels do not.
         case LOGADDEXP:
-        case LOGADDEXP2:
+        case LOGADDEXP2: return a == b && (a == FLOAT32 || a == BFLOAT16 || a == BFLOAT8_B || a == BFLOAT4_B);
         case LDEXP:
         case BIAS_GELU:
         case HYPOT: return (a == FLOAT32 && b == FLOAT32);
@@ -718,6 +724,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         std::nullopt,
         std::nullopt};
 
+    if (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::BIAS_GELU) {
+        operation_attributes.op_params =
+            ttnn::operations::binary::BiasGeluParams{.fast_and_approximate = fast_and_approximate_mode.value_or(false)};
+    }
+
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
     const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
@@ -816,6 +827,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         std::nullopt,
         std::nullopt,
         std::nullopt};
+
+    if (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::BIAS_GELU) {
+        operation_attributes.op_params =
+            ttnn::operations::binary::BiasGeluParams{.fast_and_approximate = fast_and_approximate_mode.value_or(false)};
+    }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     // Skip the output-spec computation on the interleaved fast path. output_tensor is tested separately:

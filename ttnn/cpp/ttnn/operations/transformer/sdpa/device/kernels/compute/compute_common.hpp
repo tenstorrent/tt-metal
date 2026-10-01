@@ -12,6 +12,7 @@
 #include "api/debug/assert.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/binary_max_min.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
@@ -71,6 +72,44 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     cb_in0.pop_front(num_tiles);
     cb_in0.reserve_back(num_tiles);
     cb_in0.push_back(num_tiles);
+}
+
+#ifdef TRISC_MATH
+inline void sdpa_max_sfpi(const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 8
+    for (int d = 0; d < 8; d++) {
+        sfpi::vFloat a = sfpi::dst_reg[in0 * dst_tile_size_sfpi];
+        const sfpi::vFloat b = sfpi::dst_reg[in1 * dst_tile_size_sfpi];
+        v_if(b > a) { a = b; }
+        v_endif;
+        sfpi::dst_reg[out * dst_tile_size_sfpi] = a;
+        sfpi::dst_reg++;
+    }
+}
+#endif
+
+// max_block without SFPLOADMACRO, whose state races the pack thread's exp when a merge follows the K loop.
+void max_block_sfpi(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0);
+    CircularBuffer cb_in1(in1);
+    CircularBuffer cb_out(out_cb);
+    copy_init(in0);
+    add_binary_tile_init();
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        copy_tile(in0, i, 0);
+        copy_tile(in1, i, 1);
+        MATH((_llk_math_eltwise_binary_sfpu_params_(sdpa_max_sfpi, 0, 1, 0, VectorMode::RC)));
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out_cb, i);
+        tile_regs_release();
+    }
+    cb_out.push_back(num_tiles);
 }
 
 /**
@@ -247,15 +286,10 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 }
 
 #ifdef TRISC_MATH
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_recip_first_column,
-        (legacy_compat, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::C);
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_recip_first_column, (is_fp32_dest_acc_en), idst, VectorMode::C);
 }
 #endif
 
@@ -268,7 +302,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles produced
     reconfig_data_format_srca(in_cb);
     copy_init(in_cb);
-    recip_tile_init();
+    // The first-column helper uses SFPI, not full-tile LOADMACRO/replay state.
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::sfpu_reciprocal_init, (APPROX)));
     pack_reconfig_data_format(in_cb);
 
     cb_in.wait_front(num_tiles);
@@ -890,7 +925,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_out.reserve_back(num_tiles);
     sub_init(in0_cb, in1_cb);
     exp_tile_init<false>();
-    // recip_tile_first_column<false>() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
+    // recip_tile_first_column() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
     // needs vConstFloatPrgm0/1/2 loaded with reciprocal polynomial coefficients.
     // This init programs persistent SFPU constants, not per-tile data. It intentionally comes after
@@ -914,8 +949,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
             0 /*dst_index*/,
             VectorMode::C,
             0x3F800000 /*scalar*/));
-        // recip_tile<false>(0, (int)VectorMode::C);
-        MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
+        MATH((recip_tile_first_column(0 /*dst_index*/)));
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_cb);

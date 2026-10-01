@@ -43,6 +43,7 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
@@ -54,6 +55,8 @@ namespace fs = std::filesystem;
 using namespace std;
 
 namespace tt::tt_metal {
+
+void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata);
 
 namespace {
 
@@ -194,11 +197,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         uint16_t id;
         bool is_relay;
         uint8_t prefetcher_pipe_id;
+        std::optional<LLKMetadata> metadata;
     };
     vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
-        [&dfb_entries](const string& name, uint16_t id, bool is_relay, uint8_t prefetcher_pipe_id) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id});
+        [&dfb_entries](
+            const string& name,
+            uint16_t id,
+            bool is_relay,
+            uint8_t prefetcher_pipe_id,
+            const std::optional<LLKMetadata>& metadata) {
+            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata});
         });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
@@ -211,7 +220,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
-    // Gates the cached-pool stub emission below.
+    // Gates the cached-semaphore list below.
     const bool has_cached_sem = std::any_of(
         sem_entries.begin(), sem_entries.end(), [](const auto& e) { return e.scope == SemScope::DM_LOCAL_CACHED; });
 
@@ -222,12 +231,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
+        LLKMetadata metadata;
     };
     vector<TaEntry> ta_entries;
     settings.process_tensor_binding_handles(
-        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset, uint32_t /*num_rt_words*/) {
-            ta_entries.push_back({name, cta_offset, addr_crta_offset});
-        });
+        [&ta_entries](
+            const string& name,
+            uint32_t cta_offset,
+            uint32_t addr_crta_offset,
+            uint32_t /*num_rt_words*/,
+            const LLKMetadata& metadata) { ta_entries.push_back({name, cta_offset, addr_crta_offset, metadata}); });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
@@ -236,12 +249,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t size_bytes;
         uint32_t addr_crta_word;
+        std::optional<LLKMetadata> metadata;
     };
     vector<ScratchEntry> scratch_entries;
-    settings.process_scratchpad_binding_handles(
-        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
-            scratch_entries.push_back({name, size_bytes, addr_crta_word});
-        });
+    settings.process_scratchpad_binding_handles([&scratch_entries](
+                                                    const string& name,
+                                                    uint32_t size_bytes,
+                                                    uint32_t addr_crta_word,
+                                                    const std::optional<LLKMetadata>& metadata) {
+        scratch_entries.push_back({name, size_bytes, addr_crta_word, metadata});
+    });
 
     // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
     // hashes them in binding order; both orders carry the same set, so the cache key is stable).
@@ -309,7 +326,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         // Include for the entry/exit stubs' bodies (get_semaphore + the MEM_ defines),
         // guarded exactly like those bodies (the pool is DM-only).
         content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-        content << "#include \"api/dataflow/dataflow_api.h\"\n";
+        content << "#include \"api/semaphore.h\"\n";
         content << "#endif\n";
     }
 
@@ -348,6 +365,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
             content << "};\n";
+        } else if (entry.metadata.has_value()) {
+            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", ";
+            emit_llk_metadata(content, *entry.metadata);
+            content << "};\n";
         } else {
             content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
         }
@@ -368,60 +389,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Emit Semaphore bindings
     tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
     if (has_cached_sem) {
-        // Cached-pool entry/exit stubs. A cached semaphore's pool row must be seeded
-        // with its init value once per program, by exactly one hart, before anyone
-        // touches it, and is left clean for the next program. Each 8B row is [0] = the
-        // counter, [1] = a bookkeeping word: entered[15:0], exited[30:16], seeded[31]
-        // On entry, each binder hart increments `entered`; whoever got there first
-        // copies the init value from the ring into the pool counter and sets `seeded`;
-        // everyone else waits for that bit. On exit, each hart increments `exited`;
-        // the last one zeroes the bookkeeping word so the next program starts fresh.
-        // Any number of local kernels/threads works.
         content << "#define TT_DM_CACHED_SEM_STUBS 1\n";
-        content << "namespace sem_internal {\n";
-        content << "inline void init_dm_local_cached() {\n";
-        content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-        for (const auto& entry : sem_entries) {
-            if (entry.scope != SemScope::DM_LOCAL_CACHED) {
-                continue;
-            }
-            content << "    {\n";
-            content << "        auto* row = reinterpret_cast<uint32_t*>("
-                    << "static_cast<uintptr_t>(MEM_SEM_CACHED_POOL_BASE) + " << entry.id
-                    << "u * MEM_SEM_CACHED_POOL_ROW);\n";
-            content << "        if ((__atomic_fetch_add(row + 1, 1u, __ATOMIC_ACQ_REL) & 0xFFFFu) == 0u) {\n";
-            content << "            row[0] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>("
-                    << "::get_semaphore<static_cast<ProgrammableCoreType>(PROGRAMMABLE_CORE_TYPE)>(" << entry.id
-                    << "u) + MEM_L1_UNCACHED_BASE);\n";
-            content << "            __atomic_fetch_or(row + 1, 0x80000000u, __ATOMIC_RELEASE);\n";
-            content << "        } else {\n";
-            content << "            while ((__atomic_load_n(row + 1, __ATOMIC_ACQUIRE) & 0x80000000u) == 0u) {\n";
-            content << "            }\n";
-            content << "        }\n";
-            content << "    }\n";
-        }
-        content << "#endif\n";
-        content << "}\n";
-        content << "inline void finish_dm_local_cached() {\n";
-        content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-        for (const auto& entry : sem_entries) {
-            if (entry.scope != SemScope::DM_LOCAL_CACHED) {
-                continue;
-            }
-            content << "    {\n";
-            content << "        auto* row = reinterpret_cast<uint32_t*>("
-                    << "static_cast<uintptr_t>(MEM_SEM_CACHED_POOL_BASE) + " << entry.id
-                    << "u * MEM_SEM_CACHED_POOL_ROW);\n";
-            content << "        if (((__atomic_fetch_add(row + 1, 0x10000u, __ATOMIC_ACQ_REL) >> 16) & "
-                       "0x7FFFu) == "
-                    << entry.total_binder_harts << "u - 1u) {\n";
-            content << "            __atomic_store_n(row + 1, 0u, __ATOMIC_RELEASE);\n";
-            content << "        }\n";
-            content << "    }\n";
-        }
-        content << "#endif\n";
-        content << "}\n";
-        content << "}  // namespace sem_internal\n";
+        tt::tt_metal::emit_cached_semaphore_list(content, sem_entries);
     }
 
     // Emit Tensor bindings
@@ -438,7 +407,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     for (const auto& entry : ta_entries) {
         content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset << "u, "
                 << entry.addr_crta_offset << "u>;\n";
-        content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+        content << "constexpr " << entry.name << "_t " << entry.name << "{";
+        emit_llk_metadata(content, entry.metadata);
+        content << "};\n";
     }
 
     // Unlike other binding token types, TensorBindingToken has meaningful template parameters associated with it.
@@ -463,8 +434,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // The token's members are opaque, so the framework can extend it later without touching
     // kernel source.
     for (const auto& entry : scratch_entries) {
-        content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                << entry.size_bytes << "u};\n";
+        if (entry.metadata.has_value()) {
+            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                    << entry.size_bytes << "u, ";
+            emit_llk_metadata(content, *entry.metadata);
+            content << "};\n";
+        } else {
+            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                    << entry.size_bytes << "u};\n";
+        }
     }
 
     emit_programmatic_binding_token_getter(content, scratch_entries, "ScratchpadBindingToken");
@@ -741,8 +719,8 @@ void jit_build_genfiles_kernel_include(
     const bool is_metal2 = settings.is_metal2_kernel();
     string kernel_header_content;
     if (is_metal2) {
-        // When the kernel binds cached semaphores, the generated header carries the pool
-        // entry/exit stubs; dmk.cc calls them around kernel_main() (TT_DM_CACHED_SEM_STUBS).
+        // When the kernel binds cached semaphores, the generated header lists them and dmk.cc
+        // runs the pool entry/exit around kernel_main() (TT_DM_CACHED_SEM_STUBS).
         write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
         kernel_header_content =
@@ -866,22 +844,24 @@ constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on 
 constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
 constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
 
+hw_format_t host_data_format_to_hw(DataFormat f) {
+    switch (f) {
+        case DataFormat::Int16: return kHwInt16;
+        case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
+        case DataFormat::MxInt8: return kHwMxInt8;
+        case DataFormat::MxInt4: return kHwMxInt4;
+        case DataFormat::MxInt2: return kHwMxInt2;
+        default: return static_cast<hw_format_t>(f);
+    }
+}
+
 void emit_formats_array(
     std::ostream& out,
     std::string_view array_type,
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) -> hw_format_t {
-        switch (f) {
-            case DataFormat::Int16: return kHwInt16;
-            case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
-            case DataFormat::MxInt8: return kHwMxInt8;
-            case DataFormat::MxInt4: return kHwMxInt4;
-            case DataFormat::MxInt2: return kHwMxInt2;
-            default: return static_cast<hw_format_t>(f);
-        }
-    };
+    auto as_int = [](DataFormat f) -> hw_format_t { return host_data_format_to_hw(f); };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 
@@ -890,7 +870,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
-    uint32_t max_cbs) {
+    uint32_t max_dfbs) {
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
@@ -900,8 +880,8 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
         std::move(unpack_to_dest_mode),
         /*int_fpu_en=*/false);
 
-    TT_ASSERT(src_formats.size() == max_cbs);
-    TT_ASSERT(dst_formats.size() == max_cbs);
+    TT_ASSERT(src_formats.size() == max_dfbs);
+    TT_ASSERT(dst_formats.size() == max_dfbs);
 
     return std::make_pair(src_formats, dst_formats);
 }
@@ -910,12 +890,12 @@ void emit_unpack_data_formats(
     std::ostream& out,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
-    uint32_t max_cbs) {
+    uint32_t max_dfbs) {
     // DataFormat values fit in a byte (Invalid==255); emit as uint8_t to save 3B/entry of LDM (the
     // .data region shares the TRISC's 2KB local memory with the stack). Matches pack_src/dst_format
     // and the unpack tile-dim arrays, which are already uint8_t. All consumers read+promote to uint32.
-    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_dfbs, dst_formats_all_cbs);
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
@@ -924,7 +904,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
     const tt::ARCH arch,
-    uint32_t max_cbs) {
+    uint32_t max_dfbs) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
         desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
 
@@ -953,8 +933,8 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
         }
     }
 
-    TT_ASSERT(src_formats.size() == max_cbs);
-    TT_ASSERT(dst_formats.size() == max_cbs);
+    TT_ASSERT(src_formats.size() == max_dfbs);
+    TT_ASSERT(dst_formats.size() == max_dfbs);
 
     return std::make_pair(src_formats, dst_formats);
 }
@@ -963,9 +943,9 @@ void emit_pack_data_formats(
     std::ostream& out,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
-    uint32_t max_cbs) {
-    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_cbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_cbs, dst_formats_all_cbs);
+    uint32_t max_dfbs) {
+    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_dfbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_dfbs, dst_formats_all_cbs);
 }
 
 void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataFormat>& v2) {
@@ -1001,7 +981,7 @@ struct ComputedDataFormats {
     std::vector<DataFormat> unpack_src, unpack_dst, pack_src, pack_dst;
 };
 
-ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARCH arch, uint32_t max_cbs) {
+ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARCH arch, uint32_t max_dfbs) {
     // assuming all cores within a op have the same desc
     const tt_hlk_desc& desc = options.hlk_desc;
 
@@ -1022,10 +1002,10 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_dfbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_dfbs);
 
     // equalize "unpack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
@@ -1106,34 +1086,34 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dim
     return {r_dims, c_dims};
 }
 
-void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_cbs, desc.buf_partial_face_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_face_r_dim", max_cbs, desc.buf_face_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_narrow_tile", max_cbs, desc.buf_narrow_tile_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_r_dim", max_cbs, desc.buf_tile_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
-    emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
+void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_dfbs) {
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_dfbs, desc.buf_num_faces_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_dfbs, desc.buf_partial_face_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_face_r_dim", max_dfbs, desc.buf_face_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_narrow_tile", max_dfbs, desc.buf_narrow_tile_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_r_dim", max_dfbs, desc.buf_tile_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_c_dim", max_dfbs, desc.buf_tile_c_dim_arr);
+    emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_dfbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
         desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_cbs, r_dims);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_cbs, c_dims);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_dfbs, r_dims);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_dfbs, c_dims);
 }
 
-void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_partial_face", max_cbs, desc.buf_partial_face_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_face_r_dim", max_cbs, desc.buf_face_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_narrow_tile", max_cbs, desc.buf_narrow_tile_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_r_dim", max_cbs, desc.buf_tile_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
-    emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
+void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_dfbs) {
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_num_faces", max_dfbs, desc.buf_num_faces_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_partial_face", max_dfbs, desc.buf_partial_face_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_face_r_dim", max_dfbs, desc.buf_face_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_narrow_tile", max_dfbs, desc.buf_narrow_tile_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_r_dim", max_dfbs, desc.buf_tile_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_c_dim", max_dfbs, desc.buf_tile_c_dim_arr);
+    emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_dfbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
         desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_cbs, r_dims);
-    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
+    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_dfbs, r_dims);
+    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_dfbs, c_dims);
 }
 
 void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH arch) {
@@ -1163,7 +1143,7 @@ void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
 }
 
 void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
-    const uint32_t max_cbs = env.get_max_cbs();
+    const uint32_t max_dfbs = env.get_max_dfbs();
     const tt_hlk_desc& desc = options.hlk_desc;
 
     const string descriptors_path = options.path + "chlkc_descriptors.h";
@@ -1173,7 +1153,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
         throw std::runtime_error("Cannot create file: " + descriptors_path);
     }
 
-    auto fmts = compute_data_formats(options, env.get_arch(), max_cbs);
+    auto fmts = compute_data_formats(options, env.get_arch(), max_dfbs);
 
     out << "#pragma once\n\n"
            "#if defined(UCK_CHLKC_MATH)\n"
@@ -1187,17 +1167,17 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_PACK)\n";
-    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_cbs);
-    emit_unpack_tile_dims(out, desc, max_cbs);
+    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_dfbs);
+    emit_unpack_tile_dims(out, desc, max_dfbs);
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
-    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_cbs);
-    emit_pack_tile_dims(out, desc, max_cbs);
+    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_dfbs);
+    emit_pack_tile_dims(out, desc, max_dfbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     out << "#if defined(UCK_CHLKC_PACK)\n";
-    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, fmts.unpack_src);
     out << "#endif\n";    // if pack
     out << "#endif\n\n";  // if not math and not unpack
 
@@ -1219,6 +1199,22 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOption
     TTZoneTextD(JIT, options.name.c_str(), options.name.length());
     fs::create_directories(options.path);
     generate_all_descriptors(env, options);
+}
+
+void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata) {
+    const Tile& tile = metadata.tile;
+    const uint32_t face_r_dim = tile.get_face_shape()[0];
+    const uint32_t num_faces = tile.get_num_faces();
+    const uint32_t num_faces_c_dim = std::min(tile.get_width() / constants::FACE_WIDTH, num_faces);
+    const uint32_t num_faces_r_dim = num_faces / num_faces_c_dim;
+    os << fmt::format(
+        "::binding_details::LLKMetadata{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
+        ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
+        host_data_format_to_hw(metadata.format),
+        face_r_dim,
+        constants::FACE_WIDTH,
+        num_faces_r_dim,
+        num_faces_c_dim);
 }
 // clang-format on
 

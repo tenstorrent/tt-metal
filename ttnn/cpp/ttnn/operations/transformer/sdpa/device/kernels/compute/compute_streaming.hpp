@@ -266,7 +266,7 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 
 #pragma GCC unroll 0
     for (int face = 0; face < 2; face++) {
-        ckernel::sfpu::calculate_recip_first_column</*legacy_compat=*/true, DST_ACCUM_MODE>();
+        ckernel::sfpu::calculate_recip_first_column<DST_ACCUM_MODE>();
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
@@ -761,8 +761,8 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 add_binary_tile(0, 1, 0);
             }
 #ifdef ARCH_BLACKHOLE
-            recip_tile_init<false>();
-            MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
+            recip_tile_init();
+            MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
 #else
             recip_tile_init();
             MATH((recip_tile_first_column_wh_idst0_direct()));
@@ -2347,6 +2347,8 @@ template <
     // Rotated Q split: map q-loop positions through the fixed base range and moving remainder.
     // Off by default (position is the flat id).
     bool rotated_q_split_enabled = false,
+    // Dense chunked prefill: skip K chunks past this device's last Q row (the reader mirrors it).
+    bool causal_k_skip = false,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2376,7 +2378,10 @@ void sdpa_ring_v2(
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
     const uint32_t q_base_tiles = 0,
     // Rotated Q split only: fixed base range plus this iteration's remainder unit.
-    [[maybe_unused]] const RotatedQSlots& rotated_slots = {}) {
+    [[maybe_unused]] const RotatedQSlots& rotated_slots = {},
+    // K split only: the local K chunks this core attends to (the reader skips the same).
+    const uint32_t k_split_begin = 0,
+    const uint32_t k_split_end = 0xFFFFFFFFu) {
     init_sdpa_streaming_semaphores();
 
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -2471,6 +2476,17 @@ void sdpa_ring_v2(
 
     // ---- K-loop helpers ---------------------------------------------------
 
+    [[maybe_unused]] const uint32_t causal_end_nt =
+        !causal_k_skip ? 0
+                       : chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
+                             logical_nt,
+                             chunked.ring_index,
+                             ring_size,
+                             chunked.kv_pad_rotation.q_pre_wrap_start_tile,
+                             chunked.kv_pad_rotation.q_pre_wrap_tile_count,
+                             chunked.kv_pad_rotation.q_post_wrap_start_tile,
+                             chunked.kv_pad_rotation.q_valid_tile_count);
+
     // Skip KV chunks beyond the logical sequence length (padding tiles).
     auto try_skip_oob_kv = [&](uint32_t source_ring_id, uint32_t k_chunk, bool kv_chunk_is_joint) -> bool {
         if (kv_chunk_is_joint) {
@@ -2481,6 +2497,17 @@ void sdpa_ring_v2(
                 return joint_global_start_tile >= logical_lt;
             }
             return false;
+        }
+        if (k_chunk < k_split_begin || k_chunk >= k_split_end) {
+            return true;
+        }
+        if constexpr (chunked_enabled && !has_sliding_window && causal_k_skip) {
+            return !chunked_kv_chunk_is_live<
+                kv_pad_rotation_enabled,
+                chunked_enabled,
+                local_padded_Nt,
+                chunk_size_t,
+                q_local_padded_Nt>(source_ring_id, k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
         }
         return !kv_chunk_starts_before_logical_end<
             kv_pad_rotation_enabled,

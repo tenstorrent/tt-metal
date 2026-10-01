@@ -67,7 +67,6 @@ void kernel_main() {
     // gamma, otherwise immediately after normalization.
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
     constexpr bool FLOAT32_REDUCTION = get_arg(args::float32_reduction) == 1;
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto W = get_arg(args::W);
     constexpr auto tile_width = get_arg(args::tile_width);
 
@@ -309,7 +308,7 @@ void kernel_main() {
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_ex2_id),
                 ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
-            ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(dfb_ex2pe_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>{});
 
         // broadcasts the tile since dfb_ex2pe is a column vector that contains the important data
