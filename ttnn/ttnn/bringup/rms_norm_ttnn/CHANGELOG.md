@@ -130,3 +130,29 @@
   when `program_config.inplace` is set; the Python path refuses it. `test_refuses_memory_config_disagreeing_under_inplace`
   failed on it and is skipped until `validate()` in `rms_norm_ttnn.cpp` gets the same check. No model passes
   `inplace` with a disagreeing `memory_config`, so no bring-up result is affected.
+
+### Port to the new multicast helpers (#57547; kernel helper library @ `73027b6e6ff`, 2026-10-01)
+- What: `kernel_lib/host/mcast_host.hpp` and `kernel_lib/mcast_pipe.hpp` were replaced by
+  `kernel_lib/mcast/{host,kernel}/` with a new wire (CT block 11 words with a FAMILY / ABSENT tag, RT block with
+  sender coords + rectangle records + a role word) and attach()-only host queries. Host and kernels move together:
+  - host (C++ factory and Python builder): `device/mcast_wire.hpp` / `_McastWire` attach each family to a scratch
+    data-movement kernel and read the blocks back, so the wire still sits at the same positional bases
+    (writer `McastArgs<18, 12>`, reader `McastArgs<PC_CT + 1, 13>`); constructors use `Mcast1DFixedSenderConfig`
+    (Uniform / Diagonal) / `Mcast2DFixedSenderConfig` / `Mcast2DRotatingSenderConfig`; the old Mcast2D `num_active`
+    is `McastConfig::ack_count_override`; `is_sender` reads the role word. The old per-kernel `pre_handshake` override
+    (single-round combine) is kept by setting / clearing the wire's PRE_HANDSHAKE flag: semaphore ids unchanged.
+    A non-combine writer gets the one-word ABSENT block (was 6 zeros).
+  - kernels: pipes are `optional_sender` / `optional_receiver` (empty off-role or absent); the root's coordinates come
+    through small templates so the combine-only code compiles with an absent block. The pipe no longer counts
+    Counter signals itself (`receive(round)` waits for round + 1), so the per-channel receive passes the absolute
+    signal count; a rotating Counter sender now counts its own send, so the split path waits for the total.
+  - tests: the writer's pre-handshake flag word moved from CT 22 to 23 (combine_knobs / perf tests).
+- Default behaviour: unchanged (same transfers, same semaphores). Tests (2026-10-01): unit 1327 passed / 47 skipped
+  (incl. C++ vs Python program parity and bit-identical outputs); model cases 12 passed (4x2 box, 1x4 on cards
+  0-3, 2x2 on cards 0,1,4,5). Known: the unshipped Python `PC_MCAST_MODE="split"` knob uses the rotating Counter
+  sender, whose self-count is a non-atomic local `+=` racing remote increments (see mhc_pre_ttnn change 5); not
+  used by any plan.
+- Needed by: rebase onto origin/malimpic/llk_helper_library_rebased_0110_2 (the fork no longer compiled)
+- Files: `device/mcast_wire.hpp` (new), `device/rms_norm_ttnn_program_factory.cpp`, `rms_norm_ttnn_program_descriptor.py`,
+  `kernels/rms_norm_ttnn_reader.cpp`, `kernels/rms_norm_ttnn_writer.cpp`, `tests/unit/test_rms_norm_ttnn_combine_knobs.py`,
+  `tests/unit/test_rms_norm_ttnn_perf.py`

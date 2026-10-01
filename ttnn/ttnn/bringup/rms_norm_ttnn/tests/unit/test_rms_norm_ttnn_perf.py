@@ -375,7 +375,7 @@ _BLOCK_READER_CT = (4, 20)  # BLOCK_ROWS and its per-core row count -- D41 / D42
 #             tile; this op multicasts faces 0..2 (3 kB, ONE transaction) on the IDENTITY
 #             path, where the only reader of the landing CB is pass B's column broadcast.
 #             The compact path is untouched (its un-permute matmul needs every column).
-#   index 22  the mcast flags word's PRE_HANDSHAKE bit.  Elided when the combine runs
+#   index 23  the mcast flags word's PRE_HANDSHAKE bit (22 before #57547's 11-word wire).  Elided when the combine runs
 #             exactly one round, which is every BLOCK_ROWS == 1 decode shape.
 #
 # MEASURED (blackhole p150b 1350 MHz, in-process profiler, median of 5, min over 3 reps,
@@ -393,7 +393,7 @@ _BLOCK_READER_CT = (4, 20)  # BLOCK_ROWS and its per-core row count -- D41 / D42
 # i.e. 1.035x on the op's ONE remaining perf-group miss (ratio-to-ceiling 1.042 -> 1.007),
 # 1.013-1.015x on two more, and no cell below the noise floor.  Output is bit-identical:
 # pcc and rel-RMS agree to every printed digit across all four sweep variants.
-_MCAST_WRITER_CT = (15, 22)  # packed face counts; mcast flags (pre-handshake bit)
+_MCAST_WRITER_CT = (15, 23)  # packed face counts; mcast flags (pre-handshake bit), McastArgs<18> + FLAGS (5)
 _TREE_WRITER_CT = (16, 17) + _MCAST_WRITER_CT  # TREE_F0, TREE_F1 in rms_norm_ttnn_writer.cpp
 
 
