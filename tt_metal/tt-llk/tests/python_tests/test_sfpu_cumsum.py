@@ -13,7 +13,13 @@ import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM
-from helpers.llk_params import ApproximationMode, DestAccumulation, FastMode, MathOperation, format_dict
+from helpers.llk_params import (
+    ApproximationMode,
+    DestAccumulation,
+    FastMode,
+    MathOperation,
+    format_dict,
+)
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -46,20 +52,31 @@ TILE_CNT = 2
 )
 def test_sfpu_cumsum(formats, dest_acc, chain):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("a Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST")
+        pytest.skip(
+            "a Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST"
+        )
 
     torch.manual_seed(0)
     torch_format = format_dict[formats.input_format]
 
     # Up to 64 adds per column; |x| <= 1 keeps every partial sum inside the formats.
-    src_A = torch.empty((TILE_CNT * ELEMENTS_PER_TILE,), dtype=torch.float32).uniform_(-1.0, 1.0).to(torch_format)
+    src_A = (
+        torch.empty((TILE_CNT * ELEMENTS_PER_TILE,), dtype=torch.float32)
+        .uniform_(-1.0, 1.0)
+        .to(torch_format)
+    )
     src_B = torch.zeros_like(src_A)
     x = src_A.view(INPUT_DIMENSIONS[0], INPUT_DIMENSIONS[1]).to(torch.float32)
     if chain:
         golden = torch.cumsum(x, dim=0)
     else:
-        golden = torch.cat([torch.cumsum(x[:TILE_DIM], dim=0), torch.cumsum(x[TILE_DIM:], dim=0)], dim=0)
-    src_A_tilized = tilize_block(src_A, INPUT_DIMENSIONS, stimuli_format=formats.input_format).flatten()
+        golden = torch.cat(
+            [torch.cumsum(x[:TILE_DIM], dim=0), torch.cumsum(x[TILE_DIM:], dim=0)],
+            dim=0,
+        )
+    src_A_tilized = tilize_block(
+        src_A, INPUT_DIMENSIONS, stimuli_format=formats.input_format
+    ).flatten()
 
     configuration = TestConfig(
         "sources/sfpu_cumsum_test.cpp",
@@ -89,13 +106,20 @@ def test_sfpu_cumsum(formats, dest_acc, chain):
     res_from_L1 = configuration.run().result
 
     res = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-    res = untilize_block(res, formats.output_format, INPUT_DIMENSIONS).reshape(INPUT_DIMENSIONS[0], INPUT_DIMENSIONS[1])
+    res = untilize_block(res, formats.output_format, INPUT_DIMENSIONS).reshape(
+        INPUT_DIMENSIONS[0], INPUT_DIMENSIONS[1]
+    )
 
     dump = os.environ.get("LLK_CUMSUM_DUMP")
     if dump:
         with open(dump, "a") as fh:
             for i, v in enumerate(res.flatten().to(torch.float32).tolist()):
                 b = struct.unpack(">I", struct.pack(">f", float(v)))[0]
-                fh.write("%s\t%s\t%d\t%d\t0x%08x\n" % (formats.input_format.name, dest_acc.name, int(chain), i, b))
+                fh.write(
+                    "%s\t%s\t%d\t%d\t0x%08x\n"
+                    % (formats.input_format.name, dest_acc.name, int(chain), i, b)
+                )
 
-    assert passed_test(golden, res.to(torch.float32), formats.output_format), "cumsum result does not match golden"
+    assert passed_test(
+        golden, res.to(torch.float32), formats.output_format
+    ), "cumsum result does not match golden"
