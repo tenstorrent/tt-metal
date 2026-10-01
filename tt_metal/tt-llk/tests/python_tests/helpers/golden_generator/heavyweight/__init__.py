@@ -3,6 +3,28 @@
 
 """Heavyweight golden generators: block-by-block models of the hardware pipeline.
 
-Each subpackage is one category of block. :mod:`.data_transfer` covers the
-L1 <-> register-file moves (unpack and pack).
+A golden here does not compute its operation. It declares the sequence of
+transfers the hardware performs -- L1 to src register, src to Dest, Dest to L1
+-- and the result is whatever falls out of the end, with precision lost at each
+boundary because that is where silicon loses it.
+
+Two subpackages, each with a README:
+
+* :mod:`.operations` -- the pipelines, and the engine that runs them.
+* :mod:`.data_transfer_blocks` -- what each transfer does to a buffer.
+
+:mod:`.mismatch` sits alongside them and is for failures only. It answers the
+two questions a value dump cannot -- *how badly*, in lattice steps rather than
+absolute error, and *which stage*, by printing the golden's pre-pack Dest beside
+the packed result. ``passed_test`` already prints the failing tiles with the bad
+datums highlighted, so use the two together.
+
+Writing a test touches only the first. Pick the golden for your architecture and
+hand it tensors::
+
+    from helpers.golden_generator.heavyweight.operations.quasar_operations import (
+        QuasarDataCopyGolden,
+    )
+
+    result = QuasarDataCopyGolden().run(stimuli, in_format, out_format)
 """
