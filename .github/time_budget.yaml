@@ -83,7 +83,7 @@ ttnn:
     # sit at 60 or 65. bh_p100 does not run the helper group.
     wh_n300_civ2: 685
     bh_p100: 585
-    bh_p150b_civ2: 645
+    bh_p150b_civ2: 650
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
