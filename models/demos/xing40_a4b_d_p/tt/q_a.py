@@ -23,6 +23,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
+from models.demos.xing40_a4b_d_p.tt.settings import settings
 
 TILE = 32
 
@@ -50,7 +51,7 @@ class TtQa:
         self.mesh, self.rank, self.eps, self.cluster_axis, self.dtype = mesh, rank, float(eps), cluster_axis, dtype
         self.ckc = ttnn.init_device_compute_kernel_config(
             mesh.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY")),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
