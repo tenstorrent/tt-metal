@@ -296,6 +296,19 @@ problem. All inference images are reused; no rebuild has been requested.
 
 ## Remaining eval-focused work
 
+User-requested shutdown checkpoint,2026-10-01~15:30 UTC: the Astra evidence
+window was12:43–15:30 (about2h47m). All dispatched CI probes are complete and
+inspected, including guard128/run36876743431 and guard1024/run36880038816;
+both time out at900 seconds with reward0. The final wider guard has21 valid
+tool responses,7 repetition stops and only2.48 seconds of tool execution.
+No solved-task speedup is claimed. The local BFP8 configurable-weight control
+was stopped during loading at the user's request, before measurements; it is
+unselected and does not change the release precision policy. HF128-token
+reference completed with a coherent recap but does not diagnose long-loop
+causality. No CI remains to monitor. All local probes are stopped; retained
+artifacts and exact next-step limits are in`eval_speed/README.md`. The full
+five-task release suite has not been rerun. Resume requires a new user request.
+
 - Analyze why standard and agentic evals take so long.
 - Measure their TTFT and TSU.
 - Separate model/device performance from eval-framework overhead.

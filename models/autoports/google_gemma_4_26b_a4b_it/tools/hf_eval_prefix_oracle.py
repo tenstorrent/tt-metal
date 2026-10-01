@@ -16,9 +16,41 @@ from pathlib import Path
 import torch
 from replay_eval_requests import TOOLS
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.generation.streamers import BaseStreamer
 
 MODEL = "google/gemma-4-26B-A4B-it"
 REVISION = "4d7ae4984b7db7de8f8457170b3f1a419ee76d52"
+
+
+class ProgressStreamer(BaseStreamer):
+    def __init__(self, tokenizer, path, started):
+        self.tokenizer, self.path, self.started = tokenizer, path, started
+        self.prompt_seen = False
+        self.tokens = []
+
+    def put(self, value):
+        if not self.prompt_seen:
+            self.prompt_seen = True
+            return
+        self.tokens.extend(value.reshape(-1).tolist())
+        if len(self.tokens) == 1 or len(self.tokens) % 16 == 0:
+            self.save()
+
+    def save(self):
+        report = {
+            "event": "hf_generation_progress",
+            "tokens": len(self.tokens),
+            "seconds": time.monotonic() - self.started,
+            "output_token_ids": self.tokens,
+            "completion": self.tokenizer.decode(self.tokens, skip_special_tokens=False),
+            "scope": "partial diagnostic output, not a completed reference",
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(report, indent=2) + "\n")
+        print(json.dumps({k: report[k] for k in ("event", "tokens", "seconds")}), flush=True)
+
+    def end(self):
+        self.save()
 
 
 def main():
@@ -60,7 +92,11 @@ def main():
     print(json.dumps({"event": "model_loaded", "seconds": loaded - started, "dtype": str(model.dtype)}), flush=True)
     with torch.inference_mode():
         output = model.generate(
-            torch.tensor([tokens]), max_new_tokens=args.max_new_tokens, do_sample=False, use_cache=True
+            torch.tensor([tokens]),
+            max_new_tokens=args.max_new_tokens,
+            do_sample=False,
+            use_cache=True,
+            streamer=ProgressStreamer(tokenizer, args.output.with_suffix(".progress.json"), loaded),
         )
     generated = output[0, len(tokens) :].tolist()
     report = {
