@@ -15,8 +15,17 @@ namespace sfpu {
 
 inline void abs_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <int ITERATIONS>
+void calculate_abs_bf16();
+void init_abs_bf16();
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en>
 inline void calculate_abs() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        init_abs_bf16();
+        calculate_abs_bf16<ITERATIONS>();
+        return;
+    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
@@ -39,3 +48,5 @@ inline void calculate_abs_int32() {
 }
 }  // namespace sfpu
 }  // namespace ckernel
+
+#include "ckernel_sfpu_abs_bf16.h"

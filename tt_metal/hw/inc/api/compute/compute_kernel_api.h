@@ -444,7 +444,13 @@ ALWI void signbit_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void abs_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_abs,
+        (APPROX, DST_ACCUM_MODE ? 8 : 32, DST_ACCUM_MODE),
+        idst,
+        DST_ACCUM_MODE ? VectorMode::RC : VectorMode::None));
 }
 
 /**
