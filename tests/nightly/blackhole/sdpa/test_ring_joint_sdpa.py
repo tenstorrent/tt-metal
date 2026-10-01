@@ -7312,20 +7312,22 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 # Symmetric +/- band, same as the ring joint perf check.
 if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
-        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 8-device ring (Galaxy, sp=8 tp=4)
         # Three-run medians with compute optimizations and blocking K multicast: 5.676 / 8.599 ms.
-        ("kimi50k", 32, 640, 8, 69.39),
-        ("kimi_k3", 32, 640, 8, 68.71),
+        ("kimi50k", 32, 640, 8, 69.39, RING_JOINT_PERF_MARGIN),
+        ("kimi_k3", 32, 640, 8, 68.71, RING_JOINT_PERF_MARGIN),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
-        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 4-device ring (QuietBox, 100 SDPA cores)
-        # Four-run bh_quietbox_2 (p300c) CI medians with compute optimizations: 2.720 / 4.659 ms.
-        # A p150b QuietBox runs kimi_k3 ~1% faster (4.607 ms), so targets track the CI SKU.
-        ("kimi50k", 32, 640, 4, 69.70),
-        ("kimi_k3", 32, 640, 4, 69.75),
+        # Three-run median with compute optimizations and blocking K multicast: 2.726 ms.
+        ("kimi50k", 32, 640, 4, 69.54, RING_JOINT_PERF_MARGIN),
+        # kimi_k3 is bimodal on QuietBox: observed runs span 4.600-4.695 ms (~69.2-70.6% util,
+        # QB and QB2 alike), well beyond the default +/-1% band. Center on the span and widen
+        # to +/-1.5% so the gate tracks regressions without flagging this case's normal variance.
+        ("kimi_k3", 32, 640, 4, 69.9, 0.015),
     ]
 
 
@@ -7345,7 +7347,7 @@ else:
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
-    "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util",
+    "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin",
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_MLA_CHUNKED_PERF_CHECK_CONFIGS],
 )
@@ -7357,10 +7359,10 @@ else:
     MESH_CONFIG.is_galaxy and not is_high_power(),
     reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
 )
-def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
+def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
     chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via realtime profiler and assert
-    within +/- RING_JOINT_PERF_MARGIN.
+    within +/- its margin.
 
     RING_JOINT_CHUNKED_CHUNK_ID isolates the final chunk so only its iteration is profiled;
     each chunk rebuilds its K/V cache from scratch, so it reproduces the full-sequence kernel.
@@ -7398,8 +7400,8 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
 
-    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
-    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+    lower = expected_util * (1 - margin)
+    upper = expected_util * (1 + margin)
 
     logger.info(
         f"ring_mla chunked 50k+5k perf check {config_id}: "
@@ -7410,7 +7412,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+        f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
     )
 
 
