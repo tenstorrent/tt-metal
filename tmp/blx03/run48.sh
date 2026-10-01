@@ -24,7 +24,7 @@ PYTEST_TIMEOUT=${PYTEST_TIMEOUT:-1500}
 for kv in "$@"; do export "$kv"; done
 mkdir -p $OUT/$label
 export LTX_OUT_DIR=$OUT/$label
-echo "[run48] host=$(hostname) tree=$W commit=$(git -C $W rev-parse --short HEAD) base=$(git -C $BASE rev-parse --short HEAD) label=$label fold=${LTX_VAE_FOLD_TIME_PAD:-0}"
+echo "[run48] host=$(hostname) tree=$W commit=$(git -C $W rev-parse --short HEAD) base=$(git -C $BASE rev-parse --short HEAD) label=$label fold=${LTX_VAE_FOLD_TIME_PAD:-1}"
 (while true; do echo "[hb] $(date +%T)"; sleep 45; done) & HB=$!
 python -u -m pytest -sv --timeout=$PYTEST_TIMEOUT \
   "models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled" \

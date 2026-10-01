@@ -142,12 +142,12 @@ class LTXCausalConv3d(Module):
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 
-        # Opt-in: conv3d repeats the edge frames itself, replacing the slice+concat copy of the whole
+        # On by default (LTX_VAE_FOLD_TIME_PAD=0 turns it off): conv3d repeats the edge frames itself, replacing the slice+concat copy of the whole
         # activation. Its "replicate" mode clamps every dim, so this is exact only when H/W carry no
         # internal pad (both sharded: the halo exchange pads them). Symmetric T pad only, so causal
         # calls keep the concat.
         self.fold_time_pad = (
-            os.environ.get("LTX_VAE_FOLD_TIME_PAD", "0") == "1"
+            os.environ.get("LTX_VAE_FOLD_TIME_PAD", "1") != "0"
             and self.time_pad > 0
             and self.time_pad % 2 == 0
             and internal_padding[1] == 0
