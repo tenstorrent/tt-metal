@@ -158,6 +158,21 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     return tw
 
 
+def _sdpa_pin_min_width(n_dev):
+    """QWEN36_DECODE_SDPA_PIN_MIN_WIDTH as a width (see TPAttention.forward_decode): unset = 16 on a 2-device mesh,
+    else 0; a non-negative integer as given ("0" or "" = off). Anything else raises."""
+    v = os.environ.get("QWEN36_DECODE_SDPA_PIN_MIN_WIDTH")
+    if v is None:
+        return 16 if n_dev == 2 else 0
+    try:
+        w = int(v.strip() or 0)
+    except ValueError:
+        raise ValueError(f"QWEN36_DECODE_SDPA_PIN_MIN_WIDTH must be a non-negative integer, got {v!r}") from None
+    if w < 0:
+        raise ValueError(f"QWEN36_DECODE_SDPA_PIN_MIN_WIDTH must be a non-negative integer, got {v!r}")
+    return w
+
+
 class TPAttention:
     """Standalone TP full-attention with internal per-head KV caches (decode)."""
 
@@ -1001,19 +1016,21 @@ class TPAttention:
         # iteration. Base-model layers leave it None and are byte-identical to before.
         _sdpa_grid = self.mesh.compute_with_storage_grid_size()
         _sdpa_max_cores = self.decode_sdpa_max_cores
-        # QWEN36_DECODE_SDPA_PIN_MIN_WIDTH=W (unset = 16 at TP=2, 0 elsewhere; "0" off): decode widths B >= W take the
-        # KV split of the full width Bmax (cores_per_head = min(grid, 16 * B * NKV) / B / NKV in
-        # sdpa_decode_program_factory.cpp: at TP=2, Bmax=32 that is 1 core per KV head, while width 16 gets 3). Decode
-        # bucketing picks the width per step from the number of active requests (and a slot remap forces Bmax), so without
-        # the pin a row's attention reduction order, hence its bits, depended on how many requests shared that step:
-        # the TP=2 run-to-run drift of concurrent decoders (profiles/opt_round5/FASTSLOT.md). Widths below W keep their
-        # wider split (it matters for 1..8-user long-context TPOT); at W=16 the pin is free (2k/8k x 16 users ITL p50
-        # unchanged within 0.5 ms).
-        _pin_env = os.environ.get("QWEN36_DECODE_SDPA_PIN_MIN_WIDTH")
-        try:
-            _pin_w = (16 if self.mesh.get_num_devices() == 2 else 0) if _pin_env is None else int(_pin_env or 0)
-        except ValueError:
-            _pin_w = 0
+        # QWEN36_DECODE_SDPA_PIN_MIN_WIDTH=W (unset = 16 at TP=2, 0 elsewhere; "0" off): decode widths B >= W take
+        # the KV split of the full width Bmax (cores_per_head = min(grid, 16 * B * NKV) / B / NKV in
+        # sdpa_decode_program_factory.cpp: at TP=2 on the 110-core grid, Bmax=32 gives 1 core per KV head, while
+        # width 16 gets 3; the pin itself holds for any grid). Decode bucketing picks the width per step from the
+        # number of active requests (and a slot remap forces Bmax), so without the pin a row's attention reduction
+        # order, hence its bits, depended on how many requests shared that step: the TP=2 run-to-run drift of
+        # concurrent decoders (profiles/opt_round5/FASTSLOT.md). Widths below W keep their wider split (it matters
+        # for 1..8-user long-context TPOT). Cost at W=16 (steps at width 9..16 only): none at 2k/8k x 16 users (ITL
+        # p50 within 0.5 ms), +2..8 ms per step (+2-9%) at 32k x 16 users and +2.9 ms (+3%) at 64k x 9 users
+        # (served, fresh-server pairs, profiles/opt_round5/REMAP.md); a long-context throughput profile may set 0
+        # and give up run-to-run identity of its long decoders. No narrower W keeps the invariance: width 32 has
+        # 1 core per head on 110 cores, and the rows the pin slows (KV > one chunk) are the rows whose bits depend
+        # on the split. Base-model decode calls outside spec verify only (a spec seed step at B >= W would be pinned
+        # too; no shipped spec profile runs B >= 16).
+        _pin_w = _sdpa_pin_min_width(self.mesh.get_num_devices())
         if _pin_w and _sdpa_max_cores is None and not spec_verify_mode and B >= _pin_w and self.B >= _pin_w:
             _grid_n, _bmax = _sdpa_grid.x * _sdpa_grid.y, self.B
             _sdpa_max_cores = max(1, (min(_grid_n, 16 * _bmax * NKV) // _bmax) // NKV)

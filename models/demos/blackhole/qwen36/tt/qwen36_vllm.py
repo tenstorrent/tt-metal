@@ -661,10 +661,19 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             # Compile the device-side slot-write programs (QWEN36_GDN_SLOT_DEVICE_COPY=2: fill_cache + masked where) and
             # upload the per-slot row masks now, so the first real request does not pay ~450 ms for it.
             model.warmup_gdn_slot_write()
+            # Same for the fast GDN slot remap (QWEN36_GDN_REMAP_FAST): a first-seen remap program costs ~300 ms of JIT.
+            if self._warm_gdn_remap():
+                model.warmup_gdn_remap()
         # Steady-state view: weights + KV pool + GDN slot state + the persistent prefill buffers are all allocated
         # (the decode traces are captured earlier by warmup_model_decode). The free DRAM here, minus a margin for
         # the transient prefill activations, is the headroom QWEN36_MAX_TOKENS_ALL_USERS can grow into.
         _log_device_memory(self.mesh_device, "after prefill warmup")
+
+    def _warm_gdn_remap(self):
+        """Whether warmup_model_prefill compiles the fast GDN slot-remap programs: yes for every class whose decode
+        applies the plugin's slot_remap to the device GDN state (this one). Subclasses that never remap on device
+        (the speculative DFlash decode composes slot_remap into a row indirection) return False."""
+        return True
 
     def warmup_model_decode(self, *args, **kwargs):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.

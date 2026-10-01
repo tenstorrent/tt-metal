@@ -309,3 +309,49 @@ def test_plain_trace_tripwire_blocks_the_plain_fallbacks(expect_error):
         o.prefill_forward(torch.zeros(1, 8, dtype=torch.int32), torch.zeros(1, 4), None, torch.tensor([8]))
     with expect_error(RuntimeError, "hang class"):
         o.decode_forward(tokens=torch.zeros(1, 1, dtype=torch.int32))
+
+
+# ---- lane R review R1: speculative DFlash serving never warms (or runs) the fast GDN slot remap ----
+class _FakeWarmModel:
+    def __init__(self):
+        self.use_tp = True
+        self.args = type("A", (), {"max_batch_size": 4})()
+        self.calls = []
+
+    def _bind_gdn_prefill_scratch(self):
+        return []
+
+    def _unbind_gdn_prefill_scratch(self, prev):
+        pass
+
+    def ensure_gdn_park_buffer(self):
+        pass
+
+    def capture_prefill_trace_chunked(self, *a, **kw):
+        self.calls.append("capture")
+
+    def warmup_gdn_slot_write(self):
+        self.calls.append("slot_write")
+
+    def warmup_gdn_remap(self):
+        self.calls.append("remap")
+
+
+@pytest.mark.parametrize("W, expect_remap", [(32, False), (1, True)], ids=["spec_W32", "plain_W1"])
+def test_dflash_prefill_warmup_skips_gdn_remap_when_speculative(monkeypatch, W, expect_remap):
+    """With _W > 1 (tp2-dflash2 / batch8-dflash2 serving) warmup_model_prefill must not call model.warmup_gdn_remap:
+    spec decode composes slot_remap into _phys and never runs remap_slots, and the warmup would run 4 remaps on the
+    B=4 state after the spec traces exist. _W == 1 (plain decode, which does remap) keeps it. The plain class always
+    warms it."""
+    from models.demos.blackhole.qwen36.tt import qwen36_vllm as Q
+
+    monkeypatch.setattr(D, "_W", W)
+    monkeypatch.setattr(Q, "_log_device_memory", lambda *a, **kw: None)
+    for cls, want in ((D.Qwen36DFlashForCausalLM, expect_remap), (Q.Qwen36ForCausalLM, True)):
+        obj = object.__new__(cls)
+        fake = _FakeWarmModel()
+        obj.model = [fake]
+        obj.mesh_device = None
+        obj.warmup_model_prefill(None, True)
+        assert fake.calls[0] == "capture" and "slot_write" in fake.calls, fake.calls
+        assert ("remap" in fake.calls) == want, (cls.__name__, W, fake.calls)

@@ -3463,12 +3463,12 @@ class Qwen36Model:
         # slot u with a new recurrent row and stale taps. The exception propagates to the caller; the slot must not be
         # decoded before it is admitted again (a re-admission rewrites the recurrent row, every tap and the packed
         # history of that slot, so it repairs the state).
-        # Served determinism (lane S2, profiles/opt_round5/FASTSLOT.md): the M1 rider probe drifted run to run with this
-        # knob on and not with it off, but the slot write is exact (decode bucketing off: knob 1 and knob 0 servers give
-        # identical streams and logprob gaps, 45/45). The cause was decode bucketing: the SDPA-decode KV split depends on
-        # the step's width, and the faster hand-off moved request arrivals across step boundaries, so the width of some
-        # decode steps changed from run to run. QWEN36_DECODE_SDPA_PIN_MIN_WIDTH (attention/tp.py) removes that for
-        # widths >= 16.
+        # Served determinism (lane S2, profiles/opt_round5/FASTSLOT.md): the M1 rider probe drifted run to run with
+        # this knob on and not with it off, but the slot write is exact (decode bucketing off: knob 1 and knob 0
+        # servers give identical streams and logprob gaps, 45/45). The cause was decode bucketing: the SDPA-decode KV
+        # split depends on the step's width, and the faster hand-off moved request arrivals across step boundaries, so
+        # the width of some decode steps changed from run to run. QWEN36_DECODE_SDPA_PIN_MIN_WIDTH (attention/tp.py)
+        # removes that for widths >= 16.
         _fsenv = os.environ.get("QWEN36_PLAIN_GDN_SLOT_FAST")
         _fast_slot = (not _dev_copy) and ((self.num_devices == 2) if _fsenv is None else (_fsenv == "1"))
         lens = [int(valid_lens[u]) if valid_lens is not None else int(token_ids_list[u].shape[1]) for u in range(N)]
@@ -3897,10 +3897,46 @@ class Qwen36Model:
         (device-side; slot i takes the state at slot remap[i]). Mirrors seed_manager.apply_slot_remap
         for GDN's per-slot recurrent+conv state, which the plugin's slot_remap does not itself move.
         No-op for an identity remap. ``timing``: optional dict, per-phase seconds summed over the GDN
-        layers (GDNTP.remap_slots; perf triage only, it synchronizes the device between phases)."""
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                layer.attention.remap_slots(remap, timing=timing)
+        layers (GDNTP.remap_slots; perf triage only, it synchronizes the device between phases).
+
+        QWEN36_GDN_REMAP_FAST (unset = on at TP=2 only, "1" on at any TP, "0" = the slice/concat path): move only the
+        rows whose slot changed, with the index tensors uploaded once for all layers (gdn.tp.RemapCtx) and the packed
+        conv history's cross-parity re-tag done on device. Measured at TP=2 (lane R, profiles/opt_round5/REMAP.md): the
+        old path rebuilt all 5 state buffers of every GDN layer from 32 single-row slices (~380 ms, host-dispatch
+        bound) plus one host round trip per cross-parity row per layer (~16 ms per row); the result is bit-identical
+        on every row (tests/test_gdn_remap_fast_tp2_scratch.py)."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import RemapCtx, gdn_remap_fast_enabled
+
+        ctx = (
+            RemapCtx(self.mesh_device, [int(remap[i]) for i in range(len(remap))])
+            if gdn_remap_fast_enabled(self.mesh_device)
+            else None
+        )
+        try:
+            for layer in self.layers:
+                if not layer.is_full_attention:
+                    layer.attention.remap_slots(remap, timing=timing, ctx=ctx)
+        finally:
+            if ctx is not None:
+                ctx.close()
+
+    def warmup_gdn_remap(self):
+        """Compile every QWEN36_GDN_REMAP_FAST program before the first request (no-op when the knob is off or the
+        batched GDN state is B <= 1): a full cyclic shift (every source slot, all cross parity), its inverse, and a
+        same-parity pair swap twice. The programs have one shape each (only the slice start varies, one per slot), so
+        this covers every served remap; the four remaps compose to the identity, so the state is left as it was."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import gdn_remap_fast_enabled
+
+        dns = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        if not dns or dns[0].rec_state is None or dns[0].B <= 1 or not gdn_remap_fast_enabled(self.mesh_device):
+            return
+        B = dns[0].B
+        t0 = time.perf_counter()
+        pair = [i ^ 2 if (i ^ 2) < B else i for i in range(B)]
+        for remap in ([(i + 1) % B for i in range(B)], [(i - 1) % B for i in range(B)], pair, pair):
+            self._remap_gdn_slots(remap)
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"[decode] warmed the fast GDN slot-remap programs (B={B}) in {time.perf_counter() - t0:.1f} s")
 
     def set_gdn_fused_decode(self, enabled: bool) -> None:
         """Select the GDN decode recurrence for EVERY GDN layer: the single fused device op

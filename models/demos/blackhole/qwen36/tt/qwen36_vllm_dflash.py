@@ -586,6 +586,14 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             self._in_warmup = False
         return out
 
+    def _warm_gdn_remap(self):
+        """Speculative serving (_W > 1) never runs remap_slots: decode_forward composes the plugin's slot_remap into
+        _phys, and plain decode is not used once the spec traces exist (the _forbid_plain tripwire). So
+        warmup_model_prefill must not compile the fast-remap programs either: at TP=2 (tp2-dflash2, B=4) that would
+        run 4 remaps on the B=4 GDN state after the spec traces were captured, shapes no test or served run exercised
+        (lane R review R1). _W == 1 is the plain decode path, which does remap."""
+        return _W <= 1
+
     def warmup_model_prefill(self, *args, **kwargs):
         self._in_warmup = True
         try:
