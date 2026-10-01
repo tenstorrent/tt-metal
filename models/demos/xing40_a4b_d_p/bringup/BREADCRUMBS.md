@@ -389,3 +389,31 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Not profiled (accuracy failed). The default is back on HiFi4, so the tree runs the previous path; HiFi2 stays
   opt-in for the owner.
 - Re-run: `PYTHONPATH=$PWD XING_EXPERTS_FIDELITY=hifi2 scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_experts.py`
+
+## X.3 fix (run1, attempt 1): test_positions
+- The gate's ladder s56320 and profile passed earlier; test_positions failed at `new_state(5120)`:
+  `hooks.py:_chunks_for` only knows ladder/target seqs, and positions.py asks for start + 5120 at every position.
+- With a temporary hooks.py fallback (`_chunks_for` -> [target.chunk] when no rung matches; reverted, hooks.py is
+  outside this step's paths), the first position hit a TT_FATAL in the sdpa fork: kv_actual_isl=0 with cache length
+  == chunk (1280 == 1280 per SP row). Fixed in the fork (`ring_joint_sdpa_device_operation.cpp` invoke: drop host
+  kv_actual_isl=0 when Q.seq == K.seq; CHANGELOG entry, `tests/unit/test_ring_mla_single_chunk.py`). Rebuilt.
+- With both, the collect pass ran all five positions (0, 51200, ..., 204800). The real pass then ran 0, 204800,
+  409600, 614400 (positions.py raises spec target.seq in memory and the module-level spec is shared by the
+  precompile collect pass and the real pass) and timed out building the geometry at 819200: every
+  (chunk, max_seq) `_Geometry` stays in `TtMlaAttention._geoms` (no free), so the caches accumulate.
+  Timings seen in the real pass: 0->5120 586 ms, 204800->209920 3132 ms, 409600 5677 ms, 614400 8256 ms.
+- Still needed (outside this step's paths): hooks.py `_chunks_for` fallback to target.chunk, a `_DeviceState.free()`
+  that drops the attention geometries (needs a free in tt/attention.py), and either a harness fix in positions.py
+  or `perf.positions: [0, 51200, 102400, 153600, 204800]` in spec.yaml.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py`;
+  fork: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_ring_mla_single_chunk.py`.
+
+## X.3 fix 1 (test_positions)
+- Failure: test_positions calls `new_state(start + chunk)` for starts 0, 51200, ..., 204800 (max_seq 5120 .. 209920);
+  `_chunks_for` only knew ladder/target seqs, so `_DeviceState` asserted "no ladder rung / target runs seq 5120".
+- Fix (hooks.py): `_chunks_for` falls back to `target.chunk` when no rung matches and max_seq is a multiple of it.
+  `_DeviceState.free()` calls new `TtMlaAttention.release(max_seq)` (tt/attention.py), which pops and deallocates
+  every geometry for that max_seq (latent cache, cos/sin/trans) and the shared ring_mla kv scratch, so the five
+  position geometries do not pile up in DRAM. Forward path untouched; ladder/profile do not call free().
+- Positions alone: passed, 204800->209920 one chunk 3138 ms.
+- Re-run: the X.3 gate command (ladder s56320 && profile && positions).
