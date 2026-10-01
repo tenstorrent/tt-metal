@@ -8,6 +8,7 @@ the init). Formats follow the ttnn ops, in a 32-bit Dest.
 """
 
 import pytest
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, PerfRunType, Transpose
 from helpers.param_config import parametrize
@@ -31,13 +32,16 @@ _QUANT_FORMATS = {
 
 
 @pytest.mark.perf
+@skip_for_wormhole
 @parametrize(
     quant_op=["quant", "requant", "dequant"],
     scale_form=["tile", "scalar"],
     loop_factor=[16],
     input_dimensions=[[128, 64]],  # tile_cnt: 8
 )
-def test_perf_sfpu_quant_scalar(perf_report, quant_op, scale_form, loop_factor, input_dimensions):
+def test_perf_sfpu_quant_scalar(
+    perf_report, quant_op, scale_form, loop_factor, input_dimensions
+):
     formats = _QUANT_FORMATS[quant_op]
 
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(

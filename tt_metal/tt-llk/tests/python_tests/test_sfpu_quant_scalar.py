@@ -10,6 +10,7 @@ results (``exact``) and fractions, ties and both saturation ends. Int32 buffers 
 import struct
 
 import torch
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM
 from helpers.llk_params import DestAccumulation, format_dict
@@ -44,7 +45,13 @@ def _stimuli(quant_op: str, exact: bool, seed: int) -> torch.Tensor:
     if quant_op == "quant":
         x = values.to(torch.float32)
         if not exact:
-            x = x + torch.randint(0, 4, (ELEMENTS_PER_TILE,), generator=g).to(torch.float32) * 0.5
+            x = (
+                x
+                + torch.randint(0, 4, (ELEMENTS_PER_TILE,), generator=g).to(
+                    torch.float32
+                )
+                * 0.5
+            )
         return x
     return values.to(torch.int32)
 
@@ -71,7 +78,12 @@ def _run(quant_op: str, scale_form: str, src_A: torch.Tensor) -> torch.Tensor:
         "sources/sfpu_quant_scalar_test.cpp",
         formats,
         templates=[
-            QUANT_SCALAR_CFG(quant_op=quant_op, scale_form=scale_form, zero_point=_ZERO_POINT, scale=_SCALE),
+            QUANT_SCALAR_CFG(
+                quant_op=quant_op,
+                scale_form=scale_form,
+                zero_point=_ZERO_POINT,
+                scale=_SCALE,
+            ),
         ],
         runtimes=[TILE_COUNT(1)],
         variant_stimuli=StimuliConfig(
@@ -94,6 +106,7 @@ def _run(quant_op: str, scale_form: str, src_A: torch.Tensor) -> torch.Tensor:
     return untilize_block(res, out_fmt, dims).flatten()
 
 
+@skip_for_wormhole
 @parametrize(
     quant_op=["quant", "requant", "dequant"],
     scale_form=["tile", "scalar"],
@@ -104,7 +117,10 @@ def test_sfpu_quant_scalar(quant_op, scale_form, exact):
     res = _run(quant_op, scale_form, src_A)
     golden = _reference(quant_op, src_A)
     if golden.dtype == torch.float32:
-        diff = (res.view(torch.int32).to(torch.int64) - golden.view(torch.int32).to(torch.int64)).abs()
+        diff = (
+            res.view(torch.int32).to(torch.int64)
+            - golden.view(torch.int32).to(torch.int64)
+        ).abs()
     else:
         diff = (res.to(torch.int64) - golden.to(torch.int64)).abs()
     assert int((diff != 0).sum()) == 0, (
