@@ -148,6 +148,7 @@ inline __attribute__((always_inline)) void write_array_mmio(volatile std::uint32
     constexpr std::uint32_t addr = F.addr32(S);
     static_assert(addr < StateCfgWordCount, "CFG array write starts outside the state bank");
     static_assert(Count <= StateCfgWordCount - addr, "CFG array write crosses the end of the state bank");
+    static_assert(Count <= anchor_word_limit(F, S), "CFG array write extends past its anchor field");
 
     for (std::uint32_t i = 0; i < Count; ++i)
     {
