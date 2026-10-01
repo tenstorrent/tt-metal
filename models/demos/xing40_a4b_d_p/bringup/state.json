@@ -3559,6 +3559,7 @@
   ],
   "attempt": 1,
   "attempts": 2,
+  "commit": "5703be51bd9",
   "duration_s": 22.9,
   "history": [
    {
@@ -3588,6 +3589,11 @@
    {
     "status": "REJECTED",
     "t": "2026-09-30T23:27:12"
+   },
+   {
+    "by": "owner decision (5703be51bd9)",
+    "status": "PASS",
+    "t": "2026-10-01T15:09:12"
    }
   ],
   "last_run": "2026-09-30T22:16:08",
@@ -3633,11 +3639,11 @@
   },
   "rc": 1,
   "reason": [
-   "rejected by the owner on the A/B report /localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/ab/P.3/table.md; reverted 2 files (old path)"
+   "owner decision 2026-10-01: HiFi2 routed experts accepted with the bfp8 KV cache (overrides the earlier rejection); s56320 top5 1.0, final hidden 0.99803, experts 242.4 ms"
   ],
   "role": "perf",
   "started": "2026-09-30T22:15:45",
-  "status": "REJECTED",
+  "status": "PASS",
   "waiting": null
  },
  "PL.0": {
