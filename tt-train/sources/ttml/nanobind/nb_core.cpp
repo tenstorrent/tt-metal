@@ -145,11 +145,13 @@ void py_module(nb::module_& m) {
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
 
+        // One Replicate per mesh axis (not ttnn's collapsed `{N}, [Replicate]`), the label every tensor created
+        // without a mapper carries, so a parameter's placement can be read per mesh axis.
         py_distributed.def(
             "replicate_tensor_to_mesh_mapper",
-            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(ttnn::distributed::MeshDevice&)>(
-                &ttnn::distributed::replicate_tensor_to_mesh_mapper),
-            nb::arg("device"));
+            &ttml::core::replicate_to_mesh_mapper,
+            nb::arg("device"),
+            "Mapper replicating a tensor on every mesh axis, with one placement per axis.");
 
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(

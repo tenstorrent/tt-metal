@@ -6,6 +6,7 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <memory>
 #include <ttnn/distributed/distributed_tensor.hpp>
 #include <vector>
 
@@ -29,6 +30,14 @@ ttnn::Tensor zeros(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype = ttnn::DataType::BFLOAT16);
 ttnn::Tensor ones(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype = ttnn::DataType::BFLOAT16);
+
+// Mapper that replicates a tensor over `device`'s mesh with one Replicate per mesh axis, the label a fresh device
+// tensor gets from create_device_tensor. ttnn::distributed::replicate_tensor_to_mesh_mapper (and a plain host tensor
+// moved to the mesh) produce the collapsed `{N}, [Replicate]` instead, a single placement for the whole mesh that
+// cannot be indexed by mesh axis; every tensor created without a mapper goes through this one so a parameter's
+// placement can always be read per axis (FSDP, synchronize_gradients, checkpointing).
+[[nodiscard]] std::unique_ptr<ttnn::distributed::TensorToMesh> replicate_to_mesh_mapper(
+    ttnn::distributed::MeshDevice& device);
 
 template <class VectorType = float, ttnn::DataType TensorType = ttnn::DataType::BFLOAT16>
 [[nodiscard]] ttnn::Tensor from_vector(

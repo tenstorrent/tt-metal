@@ -97,6 +97,13 @@ ttnn::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* devi
 ttnn::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
     return core::full(shape, 1.F, device, dtype);
 }
+std::unique_ptr<ttnn::distributed::TensorToMesh> replicate_to_mesh_mapper(ttnn::distributed::MeshDevice& device) {
+    ttnn::distributed::MeshMapperConfig config;
+    config.placements = ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement>(
+        device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
+    return ttnn::distributed::create_mesh_mapper(device, config);
+}
+
 template <class VectorType, ttnn::DataType TensorType>
 ttnn::Tensor from_vector(
     const std::vector<VectorType>& buffer,
@@ -118,13 +125,15 @@ ttnn::Tensor from_vector(
     const auto tensor_layout =
         tt::tt_metal::TensorLayout(TensorType, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
 
-    ttnn::Tensor output;
-    if (mesh_mapper != nullptr) {
-        output = ttnn::distributed::create_distributed_tensor(
-            ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper);
-    } else {
-        output = ttnn::Tensor::from_vector(buffer, tt::tt_metal::TensorSpec(shape, tensor_layout));
+    // Without a mapper the tensor is replicated with one placement per mesh axis (a 1x1 mesh included), so its label
+    // can be read per axis; a plain host tensor would reach the mesh under the collapsed `{N}, [Replicate]`.
+    std::unique_ptr<ttnn::distributed::TensorToMesh> replicate;
+    if (mesh_mapper == nullptr) {
+        replicate = replicate_to_mesh_mapper(*device);
+        mesh_mapper = replicate.get();
     }
+    ttnn::Tensor output =
+        ttnn::distributed::create_distributed_tensor(ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper);
 
     /* Workaround necessary due to the issue #38186.*/
     if constexpr (TensorType == ttnn::DataType::FLOAT32) {
