@@ -328,13 +328,13 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("fixed_nv") = 0,
         nb::arg("fixed_np") = 0,
         nb::arg("fixed_nbuf") = 0,
-        nb::arg("candidates") = 0,
+        nb::arg("candidates") = static_cast<uint32_t>(ttnn::prim::FusedCandidates::Both),
         R"doc(Fused prep->scan geometry the op picks for (grid_x, grid_y, BH, NC, Vt) when the fused
         program config leaves it free (fixed_nv / fixed_np / fixed_nbuf = a pinned num_receivers /
         num_producers / handoff_depth, 0 = free): (nv, np, placement, handoff_depth, T_fused_us,
         T_phased_us, fused_pays). nv == 0 means no fused geometry fits the grid. candidates: 0 = NP
-        producers per head (the op's default dispatch), 1 = the producer pool (placement 2, np = the
-        pool size; what producer_pool=True resolves to), 2 = both.)doc");
+        producers per head (what producer_pool=False resolves to), 1 = the producer pool (placement 2,
+        np = the pool size; what producer_pool=True resolves to), 2 = both (the op's default dispatch).)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,

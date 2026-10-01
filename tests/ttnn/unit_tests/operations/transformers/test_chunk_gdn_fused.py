@@ -265,13 +265,14 @@ def test_fused_bit_exact_vs_phased(device, with_initial_state):
 
 
 def _cost_model_path(device, bh, nc):
-    """The op's default path per its calibrated geometry cost model: fused iff a
-    fused geometry fits the grid and its predicted time beats the phased reference."""
+    """The op's default path per its calibrated geometry cost model: fused iff a fused geometry fits the
+    grid and its predicted time beats the phased reference. Returns (path, pooled): pooled says whether
+    that geometry is the producer pool."""
     from ttnn._ttnn.operations import transformer as _t
 
     grid = device.compute_with_storage_grid_size()
     nv, np_, pl, nbuf, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(grid.x, grid.y, bh, nc, VDIM // 32)
-    return "fused" if (nv >= 1 and pays) else "phased"
+    return ("fused", pl == 2) if (nv >= 1 and pays) else ("phased", False)
 
 
 @pytest.mark.parametrize("nc", [8, 64], ids=["NC8", "NC64"])
@@ -279,18 +280,20 @@ def _cost_model_path(device, bh, nc):
     "num_k_heads, num_v_heads",
     [
         (16, 48),  # BH=48: the single-device shape
+        (4, 16),  # BH=16: the producer pool's shape
         (4, 12),  # BH=12: the 27B TP-4 shape
         (1, 4),  # BH=4: chain-bound
         (16, 64),  # BH=64: no fused geometry on a 110-core grid (needs >= 128 cores) -> phased
     ],
-    ids=["bh48", "bh12", "bh4", "bh64"],
+    ids=["bh48", "bh16", "bh12", "bh4", "bh64"],
 )
 def test_fused_default_dispatch(device, num_k_heads, num_v_heads, nc):
     """With NO program config, the dispatcher must pick what the calibrated cost model says: fused
     iff a fused geometry fits this grid and beats the phased reference. The choice depends on NC (the
     fill cost is amortized over the chunks), so both a short and the production chunk count run: on
-    QB2 (11x10) the model picks fused for BH in {12, 48} at NC=8 and for BH in {4, 12, 48} at NC=64, and
-    phased for the rest. Since fused and phased are bit-exact, torch.equal cannot discriminate paths: the
+    QB2 (11x10) the model picks fused for BH in {12, 16, 48} at NC=8 and for BH in {4, 12, 16, 48} at NC=64
+    (the producer pool at BH=16 and 48), and phased for the rest. Since fused and phased are bit-exact,
+    torch.equal cannot discriminate paths: the
     proof that the default took the expected path is a program-cache delta of ZERO after warming
     exactly that path with an explicit config (any other path would compile at least one new prim
     program)."""
@@ -299,8 +302,8 @@ def test_fused_default_dispatch(device, num_k_heads, num_v_heads, nc):
     grid = device.compute_with_storage_grid_size()
     if BH > grid.x * grid.y:
         pytest.skip(f"BH={BH} exceeds the {grid.x}x{grid.y} compute grid (scan needs a core per head)")
-    expected_path = _cost_model_path(device, BH, nc)
-    explicit = _fused() if expected_path == "fused" else _phased()
+    expected_path, pooled = _cost_model_path(device, BH, nc)
+    explicit = _fused(producer_pool=pooled) if expected_path == "fused" else _phased()
 
     _, tensors, s0 = _make_inputs(device, B, nc * CHUNK, num_k_heads, num_v_heads, True, seed=20260821)
     const_tiles = _const_tiles(device)
@@ -804,7 +807,7 @@ def test_fused_default_geometry_repeats(device, hk, hv):
 
     o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased())
     n_phased = device.num_program_cache_entries()
-    o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused())
+    o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused(producer_pool=placement == 2))
     assert device.num_program_cache_entries() - n_phased == 1, "the fused run did not compile the fused prim"
     geom = f"BH={hv} NV={nv} NP={np_producers} placement={placement} depth={nbuf}"
     bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
@@ -831,11 +834,17 @@ def test_fused_config_pinned_geometry_matches_free(device):
         pytest.skip(f"no fused geometry for BH={hv} on the {grid.x}x{grid.y} grid")
     _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20260933)
     const_tiles = _const_tiles(device)
-    o_pin, fs_pin = _run_op(
-        device, tensors, const_tiles, s0, _fused(nv, np_producers, row_local=bool(placement), handoff_depth=nbuf)
+    pooled = placement == 2
+    pinned = _fused(
+        nv,
+        np_producers,
+        row_local=None if pooled else bool(placement),
+        handoff_depth=nbuf,
+        producer_pool=pooled,
     )
+    o_pin, fs_pin = _run_op(device, tensors, const_tiles, s0, pinned)
     n_pin = device.num_program_cache_entries()
-    o_free, fs_free = _run_op(device, tensors, const_tiles, s0, _fused())
+    o_free, fs_free = _run_op(device, tensors, const_tiles, s0, _fused(producer_pool=pooled))
     assert (
         device.num_program_cache_entries() == n_pin
     ), "a free fused config compiled a new program after its own pinned geometry: the model's pick is not the default"

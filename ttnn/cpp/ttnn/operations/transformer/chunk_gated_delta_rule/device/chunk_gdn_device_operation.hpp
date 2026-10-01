@@ -142,10 +142,10 @@ struct ChunkGdnDeviceOperation {
 // ---------------------------------------------------------------------------------------------------
 // Fused geometry: the row-local cost model, calibrated on QB2:
 //   T_fused(NV, NP, depth) = fill(BH) + NC * pace + tail,  pace = max(supply, t_step(Vt / NV, depth))
-//   plus the depth-2 jitter margin, with supply = w_p / NP for NP producers per head and BH * w_p / P for
-//   a pool of P serving every head, over (NV | Vt, NP, depth in {2, 3}) with a feasible layout (the
-//   row-major fallback carries a link-sharing penalty); ties -> fewer cores, then smaller NV, then the
-//   shallower ring. T_phased(BH) from the measured table.
+//   plus the depth-2 jitter margin, with supply = w_p / NP for NP producers per head, over (NV | Vt, NP,
+//   depth in {2, 3}) with a feasible layout (the row-major fallback carries a link-sharing penalty); for a
+//   pool of P serving every head (placement 2) pace = max(BH * w_p / P, t_step) * kPoolJitter at depth 2.
+//   Ties -> fewer cores, then smaller NV, then the shallower ring. T_phased(BH) from the measured table.
 // The op host uses it for whichever of num_receivers / num_producers / row_local / handoff_depth the
 // fused program config leaves free, and to decide fused vs phased when no program config is given;
 // test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.
@@ -160,7 +160,7 @@ struct FusedGeometryChoice {
     bool fused_pays = false;
 };
 // Which geometries the model considers: NP producers per head (placements 0/1), the producer pool
-// (placement 2: P = every core the receivers leave, supply BH * w_p / P), or both.
+// (placement 2: P = every core the receivers leave), or both (the default dispatch).
 enum class FusedCandidates : uint8_t { PerHead = 0, Pool = 1, Both = 2 };
 bool fused_row_local_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP);
 // Producer pool of P for NV receivers per head: the home producers per head — the largest NPH with
@@ -179,7 +179,7 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t fixed_nv = 0,
     uint32_t fixed_np = 0,
     uint32_t fixed_nbuf = 0,
-    FusedCandidates candidates = FusedCandidates::PerHead);
+    FusedCandidates candidates = FusedCandidates::Both);
 
 // Design D9: the fused program's core map, a pure function of its arguments (no device), shared by
 // the program factory and the nanobind geometry oracle. placement 0 = row-major 1xNV receiver
