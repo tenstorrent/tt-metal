@@ -30,6 +30,7 @@ GRID_DTYPE = ttnn.float32
 INVERSE_SIGMOID_EPS = 1e-5
 # inverse_sigmoid's range: its eps clamp bounds the logits to +-log(1 / eps).
 LOGIT_BOUND = math.log(1.0 / INVERSE_SIGMOID_EPS)
+CLAMP_LOGITS = [ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -LOGIT_BOUND, LOGIT_BOUND)]
 
 
 class TtMultiheadAttention:
@@ -139,13 +140,12 @@ class TtDetectionTransformerDecoder:
         logits = ttnn.logit(reference_points, eps=INVERSE_SIGMOID_EPS)
         intermediate = []
         intermediate_reference_points = []
-        for index, (layer, branch) in enumerate(zip(self.layers, reg_branches, strict=True)):
+        for layer, branch in zip(self.layers, reg_branches, strict=True):
             # The cross-attention's single level is the new axis 2.
             output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
-            if index:
-                logits = ttnn.clamp(logits, min=-LOGIT_BOUND, max=LOGIT_BOUND)
-            logits = ttnn.add(self._reg_branch(output, branch), logits)
+            # The clamp (a no-op on the first layer's logit output) runs inside the add.
+            logits = ttnn.add(self._reg_branch(output, branch), logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)
 
             intermediate.append(output)
