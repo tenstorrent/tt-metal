@@ -1683,7 +1683,7 @@
   test_tags: [kimi_k2_7, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc4:
+    bh_sc4_high_power:
       # Mesh bringup, weight load and the staggered device teardown dominate the step; the chunk loop
       # is a couple of minutes of it. Budget covers those plus the up-to-120s producer connect.
       # Must match the shield/demo budget.
@@ -1714,7 +1714,7 @@
   test_tags: [glm_5_3, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc4:
+    bh_sc4_high_power:
       # 1M at 28 users reaches a PCC verdict in ~16.5 min -- 215 chunks at ~2.3s each, since the
       # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
       # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
@@ -1794,7 +1794,7 @@
   test_tags: [kimi_k2_7, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 70
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
@@ -1815,7 +1815,7 @@
   test_tags: [glm_5_3, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 80
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
@@ -1903,7 +1903,7 @@
   test_tags: [kimi_k3, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc4:
+    bh_sc4_high_power:
       # Weight load dominates and it is NFS-bandwidth-bound, not compute-bound: the TTNN cache is
       # 1.5 TB of tensorbins on the models share and all four ranks stream their slice of it at once,
       # so the phase runs at roughly line rate and its cost swings with whatever else is on the mount.
@@ -1912,8 +1912,8 @@
       # After that comes the producer connect, 11 chunks of 5120, the KV read-back and a ~7 min mesh
       # unwind. 45 min cut this off mid-bringup and 70 min cut it off six minutes after bringup.
       # 100 was still too tight: run 34831600450 was killed at 106 min with the leg live. Doubled,
-      # matching the 2x pass #56135 applied to the rest of this pipeline. shield/demo bh_sc4 is a
-      # SUM over the team's legs on that SKU, not a per-leg cap: 40 (Kimi-K2.7) + 60 (GLM-5.3) + 200.
+      # matching the 2x pass #56135 applied to the rest of this pipeline. shield/demo bh_sc4_high_power
+      # is a SUM over the team's legs on that SKU, not a per-leg cap: 40 (Kimi-K2.7) + 60 (GLM-5.3) + 200.
       timeout: 200
       tier: 1
       release_ready: false
@@ -1942,7 +1942,7 @@
   test_tags: [kimi_k3, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       # 30 killed the leg at 38 min on run 34831600450, mid-bringup.
       timeout: 60
   owner_id: U0ACLAM77PS  # Kosta Grujcic
