@@ -50,6 +50,20 @@ std::pair<std::vector<CoreCoord>, std::vector<CoreCoord>> gdn_split_layout(
     if (extra > 0 && (xw == 0 || xw * per < half * extra)) {
         return out;
     }
+    // The 4th ("extra") producer of every head, tuned for the P300 SP dies (11x10 grid, BH 16, NV 2, NP 4), where the
+    // extras' hand-off is the critical path of the op. An extra's writes cross the row from its zone column to the
+    // head's column (and, from rows below the receivers, climb the head's column through the producers' routers):
+    // measured per item, 136 KB take 1.7-2.0 us from a producer next to the receivers but 5.7-7.7 us from the default
+    // zone cores. So: heads whose own column has a free core past their producers (upper heads 0-2: the rows below,
+    // lower heads 5-7: the rows above) put the extra there, a straight line into the receivers; every other head takes
+    // a zone core on or next to its receivers' rows (upper: rows 1-2, lower: rows 8-7), the heads whose zone cores are
+    // nearest on the receiver row. Positions are {x, y} per head of the half (upper heads march east, lower heads west
+    // of the zone). Any other shape keeps the zone order below. Placement only: every head, chunk and accumulation
+    // order is unchanged.
+    static constexpr uint32_t kSpExtra[2][8][2] = {
+        {{0, 5}, {1, 5}, {2, 5}, {8, 2}, {9, 2}, {8, 1}, {9, 1}, {10, 1}},
+        {{2, 8}, {1, 8}, {0, 8}, {1, 7}, {2, 7}, {8, 4}, {9, 4}, {10, 4}}};
+    const bool sp_tuned = grid_x == 11 && grid_y == 10 && BH == 16 && NV == 2 && NP == 4;
     std::vector<CoreCoord> rcv(BH * NV), prod;
     prod.reserve(BH * NP);
     for (uint32_t h = 0; h < BH; h++) {
@@ -67,8 +81,13 @@ std::pair<std::vector<CoreCoord>, std::vector<CoreCoord>> gdn_split_layout(
         }
         for (uint32_t e = 0; e < extra; e++) {
             const uint32_t k = i * extra + e;
-            const uint32_t ex = up ? half + k % xw : k % xw;
-            prod.push_back(CoreCoord{ex, y_p0 + k / xw});
+            uint32_t ex = up ? half + k % xw : k % xw;
+            uint32_t ey = y_p0 + k / xw;
+            if (sp_tuned) {
+                ex = kSpExtra[up ? 0 : 1][i][0];
+                ey = kSpExtra[up ? 0 : 1][i][1];
+            }
+            prod.push_back(CoreCoord{ex, ey});
         }
     }
     out.first = std::move(rcv);
