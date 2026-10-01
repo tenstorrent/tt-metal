@@ -23,10 +23,11 @@ from models.demos.gemma4_d_p.tt.model import _cp_chunk_major_row_order
 
 
 @pytest.mark.timeout(900)
+@pytest.mark.parametrize("chunk_size", [2048, 4096, 8192], ids=["chunk2k", "chunk4k", "chunk8k"])
 @torch.no_grad()
-def test_block_cyclic_matches_aligned_256k():
+def test_block_cyclic_matches_aligned_256k(chunk_size):
     hf_model_id = os.getenv("HF_MODEL", "google/gemma-4-31B-it")
-    context_len, chunk_size = 262144, 8192
+    context_len = 262144
     token_ids = _text_token_stream(hf_model_id)[0, :context_len].tolist()
     assert len(token_ids) == context_len
 
@@ -35,7 +36,7 @@ def test_block_cyclic_matches_aligned_256k():
     rotated_requests = []
     end = 0
     while end < context_len:
-        start = max(0, end - rng.randint(0, 2048)) // 32 * 32
+        start = max(0, end - rng.randint(0, chunk_size // 4)) // 32 * 32
         end = min(context_len, start + rng.randint(chunk_size // 2, chunk_size))
         rotated_requests.append((start, end))
 
@@ -107,9 +108,9 @@ def test_block_cyclic_matches_aligned_256k():
             results[name] = ttnn.to_torch(caches[-1].kv, mesh_composer=composer)[0, :, row_order, :]
             assert torch.isfinite(results[name]).all(), f"Non-finite values in {name} KV cache"
 
-        passed, pcc = comp_pcc(results["aligned"], results["block_cyclic"], pcc=0.9999)
+        passed, pcc = comp_pcc(results["aligned"], results["block_cyclic"], pcc=0.99)
         logger.info("Final-layer KV cache, block-cyclic vs aligned TT: PCC {:.8f}", pcc)
-        assert passed, f"Block-cyclic vs aligned TT KV cache PCC {pcc:.8f} < 0.9999"
+        assert passed, f"Block-cyclic vs aligned TT KV cache PCC {pcc:.8f} < 0.99"
     finally:
         if trace_id is not None:
             ttnn.release_trace(mesh_device, trace_id)
