@@ -19,7 +19,7 @@
 // Templated on the message version (see layer_completion_message.hpp):
 //   LayerCompletionQueue   — v1 (24B messages, magic 'LCQ1'), the frozen
 //                            count-protocol format.
-//   LayerCompletionQueueV2 — v2 (40B self-describing messages, magic
+//   LayerCompletionQueueV2 — v2 (48B self-describing messages, magic
 //                            'LCQ2'), the structured protocol.
 // Only these two instantiations exist (extern template below); the magic
 // check in connect() rejects a cross-version attach.

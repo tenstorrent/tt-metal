@@ -19,7 +19,7 @@
 // binds each message version to a magic (the on-disk version key that
 // connect() validates) and a cell alignment. V1 cells stay naturally
 // packed (32B, two per cache line — frozen wire format). V2 cells are
-// padded to a full cache line: a packed 48B cell would straddle lines,
+// padded to a full cache line: a packed 56B cell would straddle lines,
 // so every v2 push/pop would touch two lines for half the cells and
 // adjacent-cell false sharing would stop being a boundary-only case.
 

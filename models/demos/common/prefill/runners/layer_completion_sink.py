@@ -25,8 +25,8 @@ format:
 
 * v2 (StructuredLayerCompletionSink) — the structured protocol (issue
   #54632): ONE self-describing message per span, {seq, source_rank,
-  request_id, slot_id, pos_start, pos_end, layer_start, layer_end}, which the
-  master forwards as-arrived (no reorder → no per-request head-of-line
+  request_id, slot_id, pos_start, pos_end, layer_start, layer_end,
+  host_ts_ns}, which the master forwards as-arrived (no reorder → no per-request head-of-line
   blocking). seq is diagnostic only in v2.
 
   TODO(#54632): the span policy on a HYBRID stack is still open; see
@@ -152,7 +152,7 @@ class CountedLayerCompletionSink(LayerCompletionSink):
 
 
 class StructuredLayerCompletionSink(LayerCompletionSink):
-    """v2 — structured protocol: ONE self-describing 40B message per span, carrying
+    """v2 — structured protocol: ONE self-describing 48B message per span, carrying
     the chunk's slot and position range alongside the layer range, forwarded
     as-arrived to the scheduler-facing ring. seq is diagnostic only.
 
@@ -183,6 +183,7 @@ class StructuredLayerCompletionSink(LayerCompletionSink):
             pos_end=actual_end,
             layer_start=layer_start,
             layer_end=layer_end,
+            host_ts_ns=time.time_ns(),
         )
         if self._producer.try_push(**fields):
             return

@@ -47,6 +47,7 @@ void bind_layer_completion_api(nb::module_& mod) {
     using tt::tt_metal::internal::LayerCompletionQueueV2;
     using tt::tt_metal::internal::LayerCompletionRouter;
     using tt::tt_metal::internal::LayerCompletionRouterConfig;
+    using tt::tt_metal::internal::layer_completion_host_ts_ns;
 
     mod.doc() = "Pipelined-prefill layer-completion ring/router/consumer.";
 
@@ -120,9 +121,19 @@ void bind_layer_completion_api(nb::module_& mod) {
                uint32_t pos_start,
                uint32_t pos_end,
                uint32_t layer_start,
-               uint32_t layer_end) {
+               uint32_t layer_end,
+               std::optional<uint64_t> host_ts_ns) {
                 return self.try_push(LayerCompletionMessageV2{
-                    seq, source_rank, request_id, slot_id, pos_start, pos_end, layer_start, layer_end, 0u});
+                    seq,
+                    source_rank,
+                    request_id,
+                    slot_id,
+                    pos_start,
+                    pos_end,
+                    layer_start,
+                    layer_end,
+                    0u,
+                    host_ts_ns.value_or(layer_completion_host_ts_ns())});
             },
             nb::arg("seq"),
             nb::arg("source_rank"),
@@ -132,23 +143,32 @@ void bind_layer_completion_api(nb::module_& mod) {
             nb::arg("pos_end"),
             nb::arg("layer_start"),
             nb::arg("layer_end"),
-            "Producer push of a self-describing v2 completion (position + layer ranges). "
+            nb::arg("host_ts_ns") = nb::none(),
+            "Producer push of a self-describing v2 completion (position + layer ranges). host_ts_ns is the "
+            "source host's wall-clock completion time (ns since the Unix epoch); None stamps the push time. "
             "Returns False (no write) when the ring is full.")
         .def(
             "try_pop",
             [](LayerCompletionQueueV2& self)
                 -> std::optional<
-                    std::tuple<uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>> {
+                    std::tuple<uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t>> {
                 LayerCompletionMessageV2 m{};
                 if (!self.try_pop(m)) {
                     return std::nullopt;
                 }
                 return std::make_tuple(
-                    m.seq, m.source_rank, m.request_id, m.slot_id, m.pos_start, m.pos_end, m.layer_start,
-                    m.layer_end);
+                    m.seq,
+                    m.source_rank,
+                    m.request_id,
+                    m.slot_id,
+                    m.pos_start,
+                    m.pos_end,
+                    m.layer_start,
+                    m.layer_end,
+                    m.host_ts_ns);
             },
             "Consumer pop. Returns (seq, source_rank, request_id, slot_id, pos_start, pos_end, layer_start, "
-            "layer_end) or None when empty.");
+            "layer_end, host_ts_ns) or None when empty.");
 
     nb::class_<LayerCompletionRouter>(mod, "LayerCompletionRouter")
         .def(

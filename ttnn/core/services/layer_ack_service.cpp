@@ -192,7 +192,16 @@ void LayerAckService::reader_loop() {
             // proposal that would remove the question entirely:
             // models/demos/common/prefill/docs/LAYER_COMPLETION_OPENS.md
             const internal::LayerCompletionMessageV2 msg{
-                seq, source_rank_, chunk, slot_id, pos_start, pos_end, layer, layer + 1, /*flags=*/0};
+                seq,
+                source_rank_,
+                chunk,
+                slot_id,
+                pos_start,
+                pos_end,
+                layer,
+                layer + 1,
+                /*flags=*/0,
+                internal::layer_completion_host_ts_ns()};
             if (!push_blocking(producer_v2_, msg)) {
                 return;
             }
