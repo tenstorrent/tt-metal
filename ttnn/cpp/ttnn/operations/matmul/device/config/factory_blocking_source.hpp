@@ -180,8 +180,8 @@ private:
 };
 
 // A candidate's K-depth neighbours: the same candidate at the next deeper and the next shallower in0_block_w
-// dividing K that pass check(). Interleaved problems only (a sharded layout constrains K depth); empty
-// otherwise.
+// dividing K within the factory limits (factory_limit_error; select() then checks every proposal in full).
+// Interleaved problems only (a sharded layout constrains K depth); empty otherwise.
 std::vector<Candidate> k_depth_neighbours(const MatmulDesc& matmul, const HardwareDesc& hw, const Candidate& candidate);
 
 }  // namespace ttnn::operations::matmul::auto_config

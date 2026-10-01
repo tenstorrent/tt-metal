@@ -12,10 +12,11 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/matmul_validation.hpp"
 
 // A matmul's inputs described as plain data: shapes in tiles, tiles, formats, compute settings, and where each
-// tensor lives. Built once from the tensors (describe_matmul); the program config selection reads only this.
+// tensor lives. Built once from the matmul's specs (describe_matmul); the program config selection's rules read
+// only this.
 namespace ttnn::operations::matmul {
 
 enum class MemoryLayout { Interleaved, HeightSharded, WidthSharded, BlockSharded, NdSharded };
@@ -71,15 +72,8 @@ struct MatmulDesc {
     bool global_cb = false;          // B streamed through a global circular buffer
 };
 
-// Describes matmul(a, b). Fails, with the reason in `why`, only for inputs no matmul runs: a rank below 2, a K
-// tile side other than 32, or no compute kernel config.
-std::optional<MatmulDesc> describe_matmul(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    bool transpose_a,
-    bool transpose_b,
-    uint32_t bias_single_tile_size,
-    const ttnn::prim::MatmulParams& attributes,
-    std::string& why);
+// Describes the matmul. Fails, with the reason in `why`, only for inputs no matmul runs: a rank below 2, a K tile
+// side other than 32, or no compute kernel config.
+std::optional<MatmulDesc> describe_matmul(const ttnn::prim::MatmulSpecs& specs, std::string& why);
 
 }  // namespace ttnn::operations::matmul

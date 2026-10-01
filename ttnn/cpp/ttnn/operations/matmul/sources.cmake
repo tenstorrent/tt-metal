@@ -9,6 +9,7 @@ set(TTNN_OP_MATMUL_SRCS
     device/matmul_desc.cpp
     device/config/matmul_program_config.cpp
     device/matmul_device_operation.cpp
+    device/matmul_validation.cpp
     device/utilities/matmul_utilities.cpp
     device/factory/matmul_multicore_program_factory.cpp
     device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp

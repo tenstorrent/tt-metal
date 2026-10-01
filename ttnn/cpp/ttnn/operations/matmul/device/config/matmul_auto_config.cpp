@@ -5,12 +5,12 @@
 #include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 
 #include <algorithm>
-#include <iterator>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "ttnn/operations/matmul/device/config/auto_config_common.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/matmul/device/config/factory_blocking_source.hpp"
 #include "ttnn/operations/matmul/device/config/roofline_estimator.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -148,8 +148,7 @@ MatmulProgramConfig to_program_config(const MatmulDesc& p, const Candidate& c) {
     };
 }
 
-std::string check(const MatmulDesc& p, const HardwareDesc& hw, const MatmulProgramConfig& config) {
-    const uint32_t cores = hw.grid.x * hw.grid.y;
+std::string factory_limit_error(const MatmulDesc& p, const HardwareDesc& hw, const MatmulProgramConfig& config) {
     return std::visit(
         [&](const auto& c) -> std::string {
             using T = std::decay_t<decltype(c)>;
@@ -157,117 +156,75 @@ std::string check(const MatmulDesc& p, const HardwareDesc& hw, const MatmulProgr
             constexpr bool two_d = std::is_same_v<T, MatmulMultiCoreReuseMultiCastProgramConfig>;
             constexpr bool one_d = std::is_same_v<T, MatmulMultiCoreReuseMultiCast1DProgramConfig>;
             if constexpr (!reuse && !two_d && !one_d) {
-                return "not a config type the selector emits";
+                return "";  // the configs the selector doesn't emit have no limits beyond validation here
             } else {
-                if (c.in0_block_w == 0 || p.Kt % c.in0_block_w != 0) {
-                    return fmt::format("Kt {} is not a multiple of in0_block_w {}", p.Kt, c.in0_block_w);
-                }
-                if (c.per_core_M == 0 || c.per_core_N == 0 || c.out_subblock_h == 0 || c.out_subblock_w == 0) {
+                // Sizes the buffer model divides by (validation rejects zero sizes too)
+                if (c.in0_block_w == 0 || c.per_core_M == 0 || c.per_core_N == 0 || c.out_subblock_h == 0 ||
+                    c.out_subblock_w == 0) {
                     return "zero block size";
                 }
-                // Block-float B with A tiles under 16 rows: the mcast kernels can't unpack it, and Reuse computes
-                // wrong values unless K is a single block
-                if (needs_single_k_reuse(p)) {
-                    if (!reuse) {
-                        return "block-float B with A tiles under 16 rows needs Reuse";
+                Family family = Family::Reuse;
+                Blocking b{
+                    c.per_core_M,
+                    c.per_core_N,
+                    c.in0_block_w,
+                    c.per_core_M,
+                    c.per_core_N,
+                    c.out_subblock_h,
+                    c.out_subblock_w};
+                bool fuse_batch = true;
+                if constexpr (!reuse) {
+                    if (c.out_block_h == 0 || c.out_block_w == 0) {
+                        return "zero block size";
                     }
-                    if (c.in0_block_w != p.Kt) {
-                        return "block-float B with A tiles under 16 rows needs a single K block";
-                    }
-                }
-                if constexpr (reuse) {
-                    if (c.out_subblock_h * c.out_subblock_w > max_subblock_area(p, Family::Reuse)) {
-                        return "subblock exceeds DST";
-                    }
-                    if (c.per_core_N != p.Nt) {
-                        return "Reuse needs per_core_N == Nt";
-                    }
-                    const bool divides = p.Mt % c.per_core_M == 0;
-                    const bool whole_batches = c.per_core_M % p.Mt == 0 && (p.batch_a * p.Mt) % c.per_core_M == 0;
-                    if (!divides && !whole_batches) {
-                        return "Reuse per_core_M neither divides Mt nor covers whole batches";
-                    }
-                    if (c.per_core_M % c.out_subblock_h != 0 || c.per_core_N % c.out_subblock_w != 0 ||
-                        p.Mt % c.out_subblock_h != 0) {
-                        return "Reuse subblock doesn't divide the block";
-                    }
-                    const Blocking b{
-                        c.per_core_M,
-                        c.per_core_N,
-                        c.in0_block_w,
-                        c.per_core_M,
-                        c.per_core_N,
-                        c.out_subblock_h,
-                        c.out_subblock_w};
-                    if (circular_buffer_bytes(p, hw, Family::Reuse, b, true) > hw.l1_cb_budget) {
-                        return "circular buffers exceed L1";
-                    }
-                    return "";
-                } else {
-                    Family family = Family::Mcast2D;
+                    family = Family::Mcast2D;
                     if constexpr (one_d) {
                         family = c.mcast_in0 ? Family::Mcast1DIn0 : Family::Mcast1DIn1;
                     }
-                    if (c.out_subblock_h * c.out_subblock_w > max_subblock_area(p, family)) {
-                        return "subblock exceeds DST";
-                    }
-                    if (c.out_block_h == 0 || c.out_block_w == 0 || c.per_core_M % c.out_block_h != 0 ||
-                        c.per_core_N % c.out_block_w != 0 || c.out_block_h % c.out_subblock_h != 0 ||
-                        c.out_block_w % c.out_subblock_w != 0) {
-                        return "blocks don't divide";
-                    }
-                    if (c.fuse_batch && p.batch_b > 1) {
-                        return "fuse_batch with a batched B";
-                    }
-                    const uint32_t M = output_rows(p, c.fuse_batch);
-                    const uint32_t blocks_y = div_up(M, c.per_core_M);
-                    const uint32_t blocks_x = div_up(p.Nt, c.per_core_N);
-                    if constexpr (two_d) {
-                        if (c.per_core_M > M || blocks_y > hw.grid.y || blocks_x > hw.grid.x) {
-                            return "2D blocks exceed the grid";
-                        }
-                    } else {
-                        if (blocks_x * blocks_y > cores) {
-                            return "1D blocks exceed the core count";
-                        }
-                        if (c.mcast_in0 && blocks_y != 1) {
-                            return "1D in0-mcast needs one row of blocks";
-                        }
-                        if (!c.mcast_in0) {
-                            if (c.per_core_N != p.Nt || c.per_core_M > M) {
-                                return "1D in1-mcast needs per_core_N == Nt";
-                            }
-                            if (blocks_y == 1 && M % c.out_block_h != 0 && c.per_core_M != c.out_block_h) {
-                                return "1D in1-mcast single row block";
-                            }
-                        }
-                    }
-                    const Blocking b{
-                        c.per_core_M,
-                        c.per_core_N,
-                        c.in0_block_w,
-                        c.out_block_h,
-                        c.out_block_w,
-                        c.out_subblock_h,
-                        c.out_subblock_w};
-                    if (circular_buffer_bytes(p, hw, family, b, c.fuse_batch) > hw.l1_cb_budget) {
-                        return "circular buffers exceed L1";
-                    }
-                    return "";
+                    b.out_block_h = c.out_block_h;
+                    b.out_block_w = c.out_block_w;
+                    fuse_batch = c.fuse_batch;
                 }
+                if (c.out_subblock_h * c.out_subblock_w > max_subblock_area(p, family)) {
+                    return "subblock exceeds the DST capacity the factory computes correctly with";
+                }
+                // Reuse computes wrong values when it splits K for block-float B with A tiles under 16 rows
+                if (reuse && needs_single_k_reuse(p) && c.in0_block_w != p.Kt) {
+                    return "block-float B with A tiles under 16 rows needs a single K block";
+                }
+                if (circular_buffer_bytes(p, hw, family, b, fuse_batch) > hw.l1_cb_budget) {
+                    return "circular buffers exceed L1";
+                }
+                return "";
             }
         },
         config);
 }
 
-const Candidate& best_by_estimate(
+std::string check(
+    const ttnn::prim::MatmulSpecs& specs,
+    const MatmulDesc& p,
+    const HardwareDesc& hw,
+    const MatmulProgramConfig& config) {
+    MatmulProgramConfig normalized = config;
+    normalize_program_config(normalized, specs.device.grid);
+    if (auto error = ttnn::prim::program_config_error(specs, normalized); !error.empty()) {
+        return error;
+    }
+    return factory_limit_error(p, hw, config);
+}
+
+std::vector<const Candidate*> rank_by_estimate(
     const MatmulDesc& p,
     const HardwareDesc& hw,
     std::span<const Candidate> options,
     std::span<const std::shared_ptr<const Estimator>> estimators) {
-    TT_FATAL(!options.empty(), "best_by_estimate needs at least one option");
-    const Candidate* best = &options.front();
-    std::optional<Estimate> best_estimate;
+    struct Ranked {
+        const Candidate* candidate;
+        std::optional<Estimate> estimate;
+    };
+    std::vector<Ranked> ranked;
+    ranked.reserve(options.size());
     for (const auto& option : options) {
         std::optional<Estimate> chosen;
         for (const auto& estimator : estimators) {
@@ -276,12 +233,20 @@ const Candidate& best_by_estimate(
                 chosen = e;
             }
         }
-        if (chosen && (!best_estimate || chosen->cycles < best_estimate->cycles)) {
-            best = &option;
-            best_estimate = chosen;
-        }
+        ranked.push_back({&option, chosen});
     }
-    return *best;
+    std::stable_sort(ranked.begin(), ranked.end(), [](const Ranked& x, const Ranked& y) {
+        if (x.estimate.has_value() != y.estimate.has_value()) {
+            return x.estimate.has_value();
+        }
+        return x.estimate.has_value() && x.estimate->cycles < y.estimate->cycles;
+    });
+    std::vector<const Candidate*> result;
+    result.reserve(ranked.size());
+    for (const auto& r : ranked) {
+        result.push_back(r.candidate);
+    }
+    return result;
 }
 
 const Selector& default_selector() {
@@ -292,28 +257,19 @@ const Selector& default_selector() {
     return selector;
 }
 
-std::optional<Candidate> select(const MatmulDesc& p, const HardwareDesc& hw, const Selector& selector) {
+std::optional<Candidate> select(
+    const ttnn::prim::MatmulSpecs& specs, const MatmulDesc& p, const HardwareDesc& hw, const Selector& selector) {
     std::vector<Candidate> options;
     for (const auto& source : selector.sources) {
         auto proposed = source->propose(p, hw);
-        options.insert(
-            options.end(), std::make_move_iterator(proposed.begin()), std::make_move_iterator(proposed.end()));
+        options.insert(options.end(), proposed.begin(), proposed.end());
     }
-    if (options.empty()) {
-        return std::nullopt;
+    for (const Candidate* candidate : rank_by_estimate(p, hw, options, selector.estimators)) {
+        if (check(specs, p, hw, to_program_config(p, *candidate)).empty()) {
+            return *candidate;
+        }
     }
-    return best_by_estimate(p, hw, options, selector.estimators);
-}
-
-std::optional<MatmulProgramConfig> select_program_config(const MatmulDesc& p, const HardwareDesc& hw) {
-    if (p.Mt == 0 || p.Kt == 0 || p.Nt == 0 || hw.grid.x == 0 || hw.grid.y == 0) {
-        return std::nullopt;
-    }
-    const auto chosen = select(p, hw);
-    if (!chosen) {
-        return std::nullopt;
-    }
-    return to_program_config(p, *chosen);
+    return std::nullopt;
 }
 
 namespace {
@@ -373,14 +329,60 @@ std::string unsupported_reason(const MatmulDesc& p) {
     return "";
 }
 
+// The config for a matmul with no layout issue (unsupported_reason is empty): the selected candidate, else, when
+// nothing blocked fits, the non-reusing factory if it can run the inputs; nullopt with the reason otherwise.
+std::optional<MatmulProgramConfig> choose_config(
+    const ttnn::prim::MatmulSpecs& specs, const MatmulDesc& p, const HardwareDesc& hw, std::string& why) {
+    if (p.Mt == 0 || p.Kt == 0 || p.Nt == 0 || hw.grid.x == 0 || hw.grid.y == 0) {
+        why = "empty matmul or grid";
+        return std::nullopt;
+    }
+    if (const auto chosen = select(specs, p, hw)) {
+        return to_program_config(p, *chosen);
+    }
+    // Nothing blocked fits: the non-reusing factory still runs all-interleaved 32x32 inputs on the device grid
+    const bool all_interleaved = !p.a.sharded() && !p.b.sharded() && !p.out.sharded();
+    const bool full_tiles = p.in0_tile_h == TILE_DIM && p.in1_tile_w == TILE_DIM;
+    if (all_interleaved && full_tiles && !hw.pinned_origin && !broadcasts_a(p)) {
+        MatmulProgramConfig multi_core = MatmulMultiCoreProgramConfig{};
+        why = ttnn::prim::program_config_error(specs, multi_core);
+        return why.empty() ? std::optional(multi_core) : std::nullopt;
+    }
+    if (sharded_layout(p)) {
+        why = "unsupported sharded layout combination, or it doesn't fit L1";
+    } else if (needs_single_k_reuse(p) && p.batch_a != p.batch_b) {
+        why = "block-float B with A tiles under 16 rows needs Reuse, which can't broadcast B over A's batch";
+    } else {
+        why = "no config fits L1";
+    }
+    return std::nullopt;
+}
+
 }  // namespace
+
+std::optional<MatmulProgramConfig> select_program_config(
+    const ttnn::prim::MatmulSpecs& specs, const HardwareDesc& hw, std::string* unsupported) {
+    std::string why;
+    auto config = [&]() -> std::optional<MatmulProgramConfig> {
+        const auto described = describe_matmul(specs, why);
+        if (!described) {
+            return std::nullopt;
+        }
+        if (why = unsupported_reason(*described); !why.empty()) {
+            return std::nullopt;
+        }
+        return choose_config(specs, *described, hw, why);
+    }();
+    if (!config && unsupported != nullptr) {
+        *unsupported = std::move(why);
+    }
+    return config;
+}
 
 std::optional<MatmulProgramConfig> select_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool transpose_a,
-    const bool transpose_b,
-    const uint32_t bias_single_tile_size,
+    const std::optional<const Tensor>& bias,
     const ttnn::prim::MatmulParams& attributes,
     std::string* unsupported) {
     auto reject = [&](std::string reason) -> std::optional<MatmulProgramConfig> {
@@ -389,9 +391,9 @@ std::optional<MatmulProgramConfig> select_program_config(
         }
         return std::nullopt;
     };
+    const auto specs = ttnn::prim::matmul_specs({input_tensor_a, input_tensor_b}, bias, attributes);
     std::string why;
-    const auto described = describe_matmul(
-        input_tensor_a, input_tensor_b, transpose_a, transpose_b, bias_single_tile_size, attributes, why);
+    const auto described = describe_matmul(specs, why);
     if (!described) {
         return reject(why);
     }
@@ -437,22 +439,11 @@ std::optional<MatmulProgramConfig> select_program_config(
     auto hw = HardwareDesc::for_arch(device->arch(), grid, budget);
     hw.origin = origin;
     hw.pinned_origin = on_sub_device;
-    if (auto config = select_program_config(p, hw)) {
-        return config;
+    auto config = choose_config(specs, p, hw, why);
+    if (!config) {
+        return reject(why);
     }
-    // Nothing blocked fits: the non-reusing factory still runs all-interleaved 32x32 inputs on the device grid
-    const bool all_interleaved = !p.a.sharded() && !p.b.sharded() && !p.out.sharded();
-    const bool full_tiles = p.in0_tile_h == TILE_DIM && p.in1_tile_w == TILE_DIM;
-    if (all_interleaved && full_tiles && !on_sub_device && !broadcasts_a(p)) {
-        return MatmulMultiCoreProgramConfig{};
-    }
-    if (sharded_layout(p)) {
-        return reject("unsupported sharded layout combination, or it doesn't fit L1");
-    }
-    if (needs_single_k_reuse(p) && p.batch_a != p.batch_b) {
-        return reject("block-float B with A tiles under 16 rows needs Reuse, which can't broadcast B over A's batch");
-    }
-    return reject("no config fits L1");
+    return config;
 }
 
 }  // namespace ttnn::operations::matmul::auto_config

@@ -1031,18 +1031,20 @@ MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_b,
     const bool transpose_a,
     const bool transpose_b,
-    const uint32_t bias_single_tile_size,
+    const std::optional<const Tensor>& bias,
     const ttnn::prim::MatmulParams& attributes) {
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }
+    const uint32_t bias_single_tile_size =
+        bias.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(bias->dtype())) : 0;
     std::optional<MatmulProgramConfig> auto_config;
     if (ttnn::CONFIG.get<"matmul_auto_config_v2">()) {
         // The new selector is the only one: inputs it has no config for are inputs matmul can't run (legacy fails
         // on each of them too), so they are an error here rather than a fallback to the legacy selection
         std::string unsupported;
-        auto_config = auto_config::select_program_config(
-            input_tensor_a, input_tensor_b, transpose_a, transpose_b, bias_single_tile_size, attributes, &unsupported);
+        auto_config =
+            auto_config::select_program_config(input_tensor_a, input_tensor_b, bias, attributes, &unsupported);
         TT_FATAL(auto_config.has_value(), "matmul: no program config for these inputs: {}", unsupported);
     }
     auto config = auto_config.has_value() ? std::move(auto_config.value())

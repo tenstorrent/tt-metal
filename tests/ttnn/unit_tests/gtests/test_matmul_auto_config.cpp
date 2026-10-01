@@ -20,6 +20,9 @@
 #include "ttnn/operations/matmul/device/config/factory_blocking_source.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 #include "ttnn/operations/matmul/device/config/roofline_estimator.hpp"
+#include "ttnn/operations/matmul/device/matmul_validation.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace {
 
@@ -72,12 +75,174 @@ MatmulDesc make_matmul(
     p.fp32_dest_acc_en = fp32_acc;
     p.bias_tile_bytes = bias ? tt::tile_size(tt::DataFormat::Float16_b) : 0;
     p.transpose_a = transpose_a;
+    p.in0_tile_transposed = transpose_a;  // A's tiles as the matmul reads them
+    p.rank_a = p.rank_b = (batch_a > 1 || batch_b > 1) ? 3 : 2;
     return p;
 }
 
-// The library's legality check (empty if valid, else the first violated rule)
+tt::tt_metal::DataType data_type(tt::DataFormat format) {
+    switch (format) {
+        case tt::DataFormat::Bfp8_b: return tt::tt_metal::DataType::BFLOAT8_B;
+        case tt::DataFormat::Bfp4_b: return tt::tt_metal::DataType::BFLOAT4_B;
+        case tt::DataFormat::Float32: return tt::tt_metal::DataType::FLOAT32;
+        default: return tt::tt_metal::DataType::BFLOAT16;
+    }
+}
+
+tt::tt_metal::TensorMemoryLayout memory_layout(MemoryLayout layout) {
+    using tt::tt_metal::TensorMemoryLayout;
+    switch (layout) {
+        case MemoryLayout::HeightSharded: return TensorMemoryLayout::HEIGHT_SHARDED;
+        case MemoryLayout::WidthSharded: return TensorMemoryLayout::WIDTH_SHARDED;
+        case MemoryLayout::BlockSharded: return TensorMemoryLayout::BLOCK_SHARDED;
+        default: return TensorMemoryLayout::INTERLEAVED;
+    }
+}
+
+// The memory config of a placement whose shards are tile_h x tile_w tiles
+tt::tt_metal::MemoryConfig memory_config(const Placement& pl, uint32_t tile_h, uint32_t tile_w) {
+    const auto buffer = pl.in_l1 ? tt::tt_metal::BufferType::L1 : tt::tt_metal::BufferType::DRAM;
+    std::optional<tt::tt_metal::ShardSpec> shard_spec;
+    if (pl.has_shard_spec) {
+        shard_spec = tt::tt_metal::ShardSpec(
+            CoreRangeSet(pl.shard_grid),
+            {pl.shard_h * tile_h, pl.shard_w * tile_w},
+            pl.col_major ? tt::tt_metal::ShardOrientation::COL_MAJOR : tt::tt_metal::ShardOrientation::ROW_MAJOR);
+    }
+    return tt::tt_metal::MemoryConfig(memory_layout(pl.layout), buffer, shard_spec);
+}
+
+tt::tt_metal::TensorSpec tile_spec(
+    ttnn::Shape shape, tt::DataFormat format, tt::tt_metal::Tile tile, tt::tt_metal::MemoryConfig memory) {
+    return tt::tt_metal::TensorSpec(
+        std::move(shape),
+        tt::tt_metal::TensorLayout(
+            data_type(format), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, tile), std::move(memory)));
+}
+
+// A description's fields, each as text
+std::vector<std::pair<std::string, std::string>> fields(const MatmulDesc& p) {
+    auto placement = [](const Placement& t) {
+        return fmt::format(
+            "layout {} l1 {} spec {} whole {} grid {} cores {} shard {}x{} col_major {}",
+            static_cast<int>(t.layout),
+            t.in_l1,
+            t.has_shard_spec,
+            t.shard_whole_tiles,
+            t.shard_grid.str(),
+            t.shard_cores,
+            t.shard_h,
+            t.shard_w,
+            t.col_major);
+    };
+    return {
+        {"batches", fmt::format("{} {}", p.batch_a, p.batch_b)},
+        {"ranks", fmt::format("{} {}", p.rank_a, p.rank_b)},
+        {"tiles", fmt::format("Mt {} Kt {} Nt {}", p.Mt, p.Kt, p.Nt)},
+        {"tile shapes", fmt::format("{} {} {} {}", p.in0_tile_h, p.in1_tile_w, p.out_tile_h, p.out_tile_w)},
+        {"formats",
+         fmt::format(
+             "{} {} {}",
+             static_cast<int>(p.in0_format),
+             static_cast<int>(p.in1_format),
+             static_cast<int>(p.out_format))},
+        {"bias_tile_bytes", fmt::format("{}", p.bias_tile_bytes)},
+        {"transposes", fmt::format("{} {}", p.transpose_a, p.in0_tile_transposed)},
+        {"untilize_out", fmt::format("{}", p.untilize_out)},
+        {"compute",
+         fmt::format(
+             "{} {} {} {}",
+             static_cast<int>(p.math_fidelity),
+             p.fp32_dest_acc_en,
+             p.packer_l1_acc,
+             p.dst_full_sync_en)},
+        {"activation", fmt::format("{}", p.activation.has_value())},
+        {"a", placement(p.a)},
+        {"b", placement(p.b)},
+        {"out", placement(p.out)},
+        {"b_shard_matches_a", fmt::format("{}", p.b_shard_matches_a)},
+        {"global_cb", fmt::format("{}", p.global_cb)},
+    };
+}
+
+// The first field where two descriptions differ, or empty
+std::string desc_mismatch(const MatmulDesc& x, const MatmulDesc& y) {
+    const auto a = fields(x);
+    const auto b = fields(y);
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (a[i].second != b[i].second) {
+            return fmt::format("{}: {} vs {}", a[i].first, a[i].second, b[i].second);
+        }
+    }
+    return "";
+}
+
+// The specs of the matmul `p` describes, on a device with hw's grid: describe_matmul of them gives back `p`
+ttnn::prim::MatmulSpecs specs_of(const MatmulDesc& p, const HardwareDesc& hw) {
+    const tt::tt_metal::Tile a_tile({p.transpose_a ? 32u : p.in0_tile_h, p.transpose_a ? p.in0_tile_h : 32u});
+    const tt::tt_metal::Tile b_tile({32, p.in1_tile_w});
+    auto batched = [](uint32_t batch, uint32_t rank, uint32_t rows, uint32_t cols) {
+        return rank > 2 ? ttnn::Shape({batch, rows, cols}) : ttnn::Shape({rows, cols});
+    };
+    const uint32_t M = p.Mt * p.in0_tile_h;
+    const uint32_t K = p.Kt * 32;
+    const uint32_t N = p.Nt * p.in1_tile_w;
+    ttnn::prim::MatmulSpecs specs;
+    specs.inputs.push_back(tile_spec(
+        p.transpose_a ? batched(p.batch_a, p.rank_a, K, M) : batched(p.batch_a, p.rank_a, M, K),
+        p.in0_format,
+        a_tile,
+        memory_config(p.a, p.in0_tile_h, 32)));
+    specs.inputs.push_back(
+        tile_spec(batched(p.batch_b, p.rank_b, K, N), p.in1_format, b_tile, memory_config(p.b, 32, p.in1_tile_w)));
+    if (p.bias_tile_bytes != 0) {
+        specs.bias = tile_spec(
+            ttnn::Shape({1, p.in0_tile_h, N}),
+            tt::DataFormat::Float16_b,
+            tt::tt_metal::Tile({p.in0_tile_h, p.in1_tile_w}),
+            tt::tt_metal::MemoryConfig());
+    }
+    auto& attributes = specs.attributes;
+    attributes.bcast_batch = p.batch_b == 1;
+    attributes.output_mem_config = memory_config(p.out, p.in0_tile_h, p.in1_tile_w);
+    attributes.output_dtype = data_type(p.out_format);
+    attributes.compute_kernel_config = ttnn::WormholeComputeKernelConfig{
+        .math_fidelity = p.math_fidelity,
+        .math_approx_mode = false,
+        .fp32_dest_acc_en = p.fp32_dest_acc_en,
+        .packer_l1_acc = p.packer_l1_acc,
+        .dst_full_sync_en = p.dst_full_sync_en};
+    attributes.untilize_out = p.untilize_out;
+    attributes.user_fused_activation = p.activation;
+    attributes.transpose_a = p.transpose_a;
+    attributes.output_tile = tt::tt_metal::Tile({p.out_tile_h, p.out_tile_w});
+    specs.device.arch = hw.arch;
+    specs.device.grid = CoreCoord(hw.origin.x + hw.grid.x, hw.origin.y + hw.grid.y);
+    if (hw.pinned_origin) {
+        attributes.sub_device_id = tt::tt_metal::SubDeviceId{0};
+        specs.device.has_sub_devices = true;
+        specs.device.sub_device_workers =
+            CoreRangeSet(CoreRange(hw.origin, CoreCoord(hw.origin.x + hw.grid.x - 1, hw.origin.y + hw.grid.y - 1)));
+    }
+    std::string why;
+    const auto described = describe_matmul(specs, why);
+    EXPECT_TRUE(described.has_value()) << why;
+    if (described) {
+        EXPECT_EQ(desc_mismatch(*described, p), "") << "the test's specs don't describe its MatmulDesc";
+    }
+    return specs;
+}
+
+// The selector's choice, config and legality check for the matmul `p` describes
+std::optional<Candidate> choose(
+    const MatmulDesc& p, const HardwareDesc& hw, const Selector& selector = default_selector()) {
+    return select(specs_of(p, hw), p, hw, selector);
+}
+std::optional<MatmulProgramConfig> config_for(const MatmulDesc& p, const HardwareDesc& hw) {
+    return select_program_config(specs_of(p, hw), hw);
+}
 std::string check_config(const MatmulDesc& p, const HardwareDesc& hw, const MatmulProgramConfig& config) {
-    return check(p, hw, config);
+    return check(specs_of(p, hw), p, hw, config);
 }
 
 struct Shape {
@@ -133,7 +298,7 @@ TEST(MatmulAutoConfig, EmittedConfigsAreValid) {
                             static_cast<int>(in1),
                             fp32_acc,
                             bias);
-                        const auto config = select_program_config(p, hw);
+                        const auto config = config_for(p, hw);
                         ASSERT_TRUE(config.has_value()) << label;
                         EXPECT_EQ(check_config(p, hw, *config), "") << label << "\n" << fmt::format("{}", *config);
                     }
@@ -149,7 +314,7 @@ TEST(MatmulAutoConfig, TransposeAFitsL1) {
         for (const auto& s : shapes()) {
             const auto p = make_matmul(
                 s.batch_a, s.batch_b, s.M, s.K, s.N, tt::DataFormat::Float16_b, false, false, /*transpose_a=*/true);
-            const auto config = select_program_config(p, hw);
+            const auto config = config_for(p, hw);
             ASSERT_TRUE(config.has_value());
             EXPECT_EQ(check_config(p, hw, *config), "") << arch.name << " M=" << s.M << " K=" << s.K << " N=" << s.N;
         }
@@ -158,7 +323,7 @@ TEST(MatmulAutoConfig, TransposeAFitsL1) {
 
 TEST(MatmulAutoConfig, BatchedBUsesReuse) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    const auto config = select_program_config(make_matmul(384, 384, 256, 256, 64), hw);
+    const auto config = config_for(make_matmul(384, 384, 256, 256, 64), hw);
     ASSERT_TRUE(config.has_value());
     EXPECT_TRUE(std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(*config));
 }
@@ -166,7 +331,7 @@ TEST(MatmulAutoConfig, BatchedBUsesReuse) {
 TEST(MatmulAutoConfig, UsesWholeGridForLargeMatmul) {
     for (const auto& arch : kArchs) {
         const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
-        const auto config = select_program_config(make_matmul(1, 1, 4096, 4096, 4096), hw);
+        const auto config = config_for(make_matmul(1, 1, 4096, 4096, 4096), hw);
         ASSERT_TRUE(config.has_value());
         ASSERT_TRUE(std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(*config)) << arch.name;
         const auto& c = std::get<MatmulMultiCoreReuseMultiCastProgramConfig>(*config);
@@ -181,14 +346,14 @@ TEST(MatmulAutoConfig, BlockingIgnoresOutputPrecision) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     for (auto [M, K, N] : {std::tuple{64u, 128u, 64u}, std::tuple{1024u, 160u, 256u}, std::tuple{32u, 1024u, 1000u}}) {
         auto base = make_matmul(1, 1, M, K, N, tt::DataFormat::Bfp8_b);
-        const auto reference = select(base, hw);
+        const auto reference = choose(base, hw);
         ASSERT_TRUE(reference.has_value());
         for (auto out : {tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp4_b}) {
             for (bool l1_acc : {true, false}) {
                 auto p = base;
                 p.out_format = out;
                 p.packer_l1_acc = l1_acc;
-                const auto chosen = select(p, hw);
+                const auto chosen = choose(p, hw);
                 ASSERT_TRUE(chosen.has_value());
                 EXPECT_EQ(chosen->blocking.in0_block_w, reference->blocking.in0_block_w) << M << "x" << K << "x" << N;
             }
@@ -200,11 +365,11 @@ TEST(MatmulAutoConfig, BlockingIgnoresOutputPrecision) {
 TEST(MatmulAutoConfig, SubblockShape) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     auto p = make_matmul(1, 1, 8192, 8192, 8192);
-    auto chosen = select(p, hw);
+    auto chosen = choose(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_GE(std::min(chosen->blocking.out_subblock_h, chosen->blocking.out_subblock_w), 2u);
     p = make_matmul(1, 1, 8192, 8192, 8192, tt::DataFormat::Bfp8_b);  // bf16 A, bfp8 B
-    chosen = select(p, hw);
+    chosen = choose(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(chosen->blocking.out_subblock_h, 1u);
     EXPECT_EQ(chosen->blocking.out_subblock_w, 8u);
@@ -214,13 +379,13 @@ TEST(MatmulAutoConfig, SubblockShape) {
 TEST(MatmulAutoConfig, OneDOutputBlockSplit) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     auto p = make_matmul(1, 1, 32, 2560, 262144);
-    auto chosen = select(p, hw);
+    auto chosen = choose(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn0));
     EXPECT_EQ(chosen->blocking.per_core_N, 128u);
     EXPECT_EQ(chosen->blocking.out_block_w, 8u);
     p = make_matmul(1, 1, 32, 4544, 11 * 32 * 64);  // per_core_N = 11 has no divisor in 2..8
-    chosen = select(p, hw);
+    chosen = choose(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(chosen->blocking.out_block_w, chosen->blocking.per_core_N);
 }
@@ -231,7 +396,7 @@ TEST(MatmulAutoConfig, LargeBlockKDepth) {
     auto p = make_matmul(1, 1, 2048, 8192, 3584, tt::DataFormat::Bfp4_b);
     p.math_fidelity = MathFidelity::LoFi;
     auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), 1377056);
-    auto chosen = select(p, hw);
+    auto chosen = choose(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
     EXPECT_GT(
@@ -240,7 +405,7 @@ TEST(MatmulAutoConfig, LargeBlockKDepth) {
     // 1x4 blocks: max_in0_block_w would give 8, but 2D goes no shallower than legacy's Kt / grid width = 16
     p = make_matmul(1, 1, 256, 4096, 1024, tt::DataFormat::Bfp8_b);
     hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    chosen = select(p, hw);
+    chosen = choose(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
     EXPECT_EQ(chosen->blocking.in0_block_w, 16u);
@@ -291,7 +456,7 @@ TEST(MatmulAutoConfig, OneDAvoidsSingleTileK) {
     auto p = make_matmul(1, 1, 1024, 1024, 16384, tt::DataFormat::Bfp8_b);
     p.out.in_l1 = true;
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), 820000);
-    const auto chosen = select(p, hw);
+    const auto chosen = choose(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn0));
     EXPECT_GE(chosen->blocking.in0_block_w, 2u);
@@ -378,7 +543,7 @@ TEST(MatmulAutoConfig, ShardedLayouts) {
         cases.push_back({"height out with spec", p, Family::Mcast1DIn1, 4, 16});
     }
     for (const auto& c : cases) {
-        const auto chosen = select(c.p, hw);
+        const auto chosen = choose(c.p, hw);
         ASSERT_TRUE(chosen.has_value()) << c.name;
         const auto& b = chosen->blocking;
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(c.family)) << c.name;
@@ -403,7 +568,7 @@ TEST(MatmulAutoConfig, ShardedLayouts) {
     auto p = make_matmul(1, 1, 2048, 2048, 2048);
     p.a = sharded(MemoryLayout::BlockSharded, CoreCoord(8, 8), 8, 8);
     p.out = sharded_output(MemoryLayout::HeightSharded);
-    EXPECT_FALSE(select(p, hw).has_value()) << "sharded output must be laid out like A";
+    EXPECT_FALSE(choose(p, hw).has_value()) << "sharded output must be laid out like A";
 }
 
 // Family choices of the heuristics, from the Wormhole config sweep (tests/ttnn/unit_tests/benchmarks/matmul_oob)
@@ -432,7 +597,7 @@ TEST(MatmulAutoConfig, FamilyChoice) {
     };
     for (const auto& e : expected) {
         const auto& s = e.shape;
-        const auto chosen = select(make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, e.in1), hw);
+        const auto chosen = choose(make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, e.in1), hw);
         ASSERT_TRUE(chosen.has_value());
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(e.family))
             << "b=" << s.batch_a << "/" << s.batch_b << " M=" << s.M << " K=" << s.K << " N=" << s.N;
@@ -457,7 +622,7 @@ TEST(MatmulAutoConfig, TinyTiles) {
                         p.Nt = s.N / tile_w;
                         const auto label = fmt::format(
                             "{} tile {}x{} in1={} M={}", arch.name, tile_h, tile_w, static_cast<int>(in1), s.M);
-                        const auto chosen = select(p, hw);
+                        const auto chosen = choose(p, hw);
                         const bool reuse_only = in1 == tt::DataFormat::Bfp8_b && tile_h < 16;
                         if (!chosen.has_value()) {
                             // Only possible when no factory can run it: Reuse is the only one, and its single K
@@ -489,7 +654,7 @@ TEST(MatmulAutoConfig, BroadcastA) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     for (const auto& s : std::vector<Shape>{{1, 7, 128, 2048, 256}, {1, 5, 64, 768, 192}, {1, 8, 2048, 4096, 1024}}) {
         const auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N);
-        const auto chosen = select(p, hw);
+        const auto chosen = choose(p, hw);
         ASSERT_TRUE(chosen.has_value()) << s.M;
         // Only 1D in1-mcast reuses a single A across B's batches, looping over them
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn1)) << s.M;
@@ -500,7 +665,7 @@ TEST(MatmulAutoConfig, BroadcastA) {
             circular_buffer_bytes(p, hw, Family::Mcast1DIn1, chosen->blocking, chosen->fuse_batch),
             chosen->blocking.per_core_M * p.Kt * tt::tile_size(p.in0_format))
             << s.M;
-        const auto config = select_program_config(p, hw);
+        const auto config = config_for(p, hw);
         ASSERT_TRUE(config.has_value());
         EXPECT_FALSE(std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(*config).fused_activation.has_value());
     }
@@ -509,7 +674,7 @@ TEST(MatmulAutoConfig, BroadcastA) {
 TEST(MatmulAutoConfig, TransposeAOverBatchIsNotFused) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     const auto p = make_matmul(8, 1, 512, 256, 512, tt::DataFormat::Float16_b, false, false, /*transpose_a=*/true);
-    const auto chosen = select(p, hw);
+    const auto chosen = choose(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_NE(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse));  // Reuse can't broadcast B
     EXPECT_FALSE(chosen->fuse_batch);
@@ -517,12 +682,18 @@ TEST(MatmulAutoConfig, TransposeAOverBatchIsNotFused) {
 
 TEST(MatmulAutoConfig, NoOneDWhenExcluded) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    auto p = make_matmul(1, 1, 32, 4096, 14336);  // decode: 1D in0-mcast otherwise
-    p.global_cb = true;
+    auto p = make_matmul(1, 1, 32, 4096, 12288);  // decode: 1D in0-mcast otherwise
+    // B width-sharded over the 12 DRAM banks: only 2D reads it in place (a global CB rules 1D out the same way)
+    p.b.layout = MemoryLayout::WidthSharded;
+    p.b.has_shard_spec = true;
+    p.b.shard_grid = CoreRange({0, 0}, {11, 0});
+    p.b.shard_cores = 12;
+    p.b.shard_h = p.Kt;
+    p.b.shard_w = p.Nt / 12;
     for (const auto& c : candidates(p, hw)) {
         EXPECT_TRUE(c.family == Family::Mcast2D || c.family == Family::Reuse);
     }
-    EXPECT_TRUE(select(p, hw).has_value());
+    EXPECT_TRUE(choose(p, hw).has_value());
 }
 
 TEST(MatmulAutoConfig, SubDeviceGrid) {
@@ -530,7 +701,7 @@ TEST(MatmulAutoConfig, SubDeviceGrid) {
     hw.origin = CoreCoord(0, 1);
     hw.pinned_origin = true;
     for (const auto& s : std::vector<Shape>{{1, 1, 128, 512, 512}, {1, 1, 32, 4096, 4096}, {48, 48, 256, 256, 64}}) {
-        const auto config = select_program_config(make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N), hw);
+        const auto config = config_for(make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N), hw);
         ASSERT_TRUE(config.has_value()) << s.M;
         std::visit(
             [&](const auto& c) {
@@ -553,7 +724,7 @@ TEST(MatmulAutoConfig, ShardedEdgeLayouts) {
     {  // block-sharded A on one column of cores, column-major: 2D with transposed mcast
         auto p = make_matmul(1, 1, 4096, 32, 128);
         p.a = sharded(MemoryLayout::BlockSharded, CoreCoord(8, 1), 16, 1, /*col_major=*/true);
-        const auto chosen = select(p, hw);
+        const auto chosen = choose(p, hw);
         ASSERT_TRUE(chosen.has_value());
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
         EXPECT_TRUE(chosen->transpose_mcast);
@@ -563,7 +734,7 @@ TEST(MatmulAutoConfig, ShardedEdgeLayouts) {
     {  // one-core block shard spec for a 5-batch output: keep the shard shape, derive the grid
         auto p = make_matmul(5, 1, 416, 32, 416);
         p.out = sharded(MemoryLayout::BlockSharded, CoreCoord(1, 1), 13, 13);
-        const auto chosen = select(p, hw);
+        const auto chosen = choose(p, hw);
         ASSERT_TRUE(chosen.has_value());
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
         EXPECT_EQ(chosen->blocking.per_core_M, 13u);
@@ -591,9 +762,9 @@ TEST(MatmulAutoConfig, CandidatesAndNeighboursPassCheck) {
                         static_cast<int>(in1),
                         fp32_acc);
                     for (const auto& c : candidates(p, hw)) {
-                        EXPECT_EQ(check(p, hw, to_program_config(p, c)), "") << label;
+                        EXPECT_EQ(check_config(p, hw, to_program_config(p, c)), "") << label;
                         for (const auto& n : k_depth_neighbours(p, hw, c)) {
-                            EXPECT_EQ(check(p, hw, to_program_config(p, n)), "") << label;
+                            EXPECT_EQ(check_config(p, hw, to_program_config(p, n)), "") << label;
                             EXPECT_NE(n.blocking.in0_block_w, c.blocking.in0_block_w) << label;
                             auto same = n;
                             same.blocking.in0_block_w = c.blocking.in0_block_w;
@@ -618,8 +789,8 @@ TEST(MatmulAutoConfig, DefaultEstimatorsKeepHeuristicChoice) {
             for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp4_b}) {
                 for (bool fp32_acc : {false, true}) {
                     const auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, in1, fp32_acc);
-                    const auto heuristic = select(p, hw, heuristics_only());
-                    const auto chosen = select(p, hw);
+                    const auto heuristic = choose(p, hw, heuristics_only());
+                    const auto chosen = choose(p, hw);
                     ASSERT_EQ(heuristic.has_value(), chosen.has_value());
                     if (chosen) {
                         EXPECT_EQ(
@@ -646,7 +817,7 @@ TEST(MatmulAutoConfig, EstimatorsRefineKDepth) {
     };
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     const auto p = make_matmul(1, 1, 1024, 8192, 1024);
-    const auto seed = select(p, hw, heuristics_only());
+    const auto seed = choose(p, hw, heuristics_only());
     ASSERT_TRUE(seed.has_value());
     const auto neighbours = k_depth_neighbours(p, hw, *seed);
     ASSERT_FALSE(neighbours.empty());
@@ -656,7 +827,7 @@ TEST(MatmulAutoConfig, EstimatorsRefineKDepth) {
     }
     ASSERT_LT(shallowest, seed->blocking.in0_block_w);
 
-    const auto by_default = select(p, hw);
+    const auto by_default = choose(p, hw);
     ASSERT_TRUE(by_default.has_value());
     EXPECT_EQ(by_default->blocking.in0_block_w, seed->blocking.in0_block_w);
 
@@ -664,13 +835,13 @@ TEST(MatmulAutoConfig, EstimatorsRefineKDepth) {
     const Selector confident_first{
         .sources = default_selector().sources,
         .estimators = {roofline_estimator, std::make_shared<PreferShallow>(1.0)}};
-    const auto refined = select(p, hw, confident_first);
+    const auto refined = choose(p, hw, confident_first);
     ASSERT_TRUE(refined.has_value());
     EXPECT_EQ(refined->blocking.in0_block_w, shallowest);
     const Selector doubtful_first{
         .sources = default_selector().sources,
         .estimators = {roofline_estimator, std::make_shared<PreferShallow>(-1.0)}};
-    const auto kept = select(p, hw, doubtful_first);
+    const auto kept = choose(p, hw, doubtful_first);
     ASSERT_TRUE(kept.has_value());
     EXPECT_EQ(kept->blocking.in0_block_w, seed->blocking.in0_block_w);
 }
@@ -693,11 +864,11 @@ TEST(MatmulAutoConfig, FamilyPolicyIsReplaceable) {
             std::make_shared<HeuristicSubblock>(),
             std::make_shared<LastFamily>())},
         .estimators = {}};
-    const auto chosen = select(p, hw, last_family);
+    const auto chosen = choose(p, hw, last_family);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(chosen->family, all.back().family);
-    EXPECT_NE(select(p, hw)->family, all.back().family);
-    EXPECT_TRUE(check(p, hw, to_program_config(p, *chosen)).empty());
+    EXPECT_NE(choose(p, hw)->family, all.back().family);
+    EXPECT_TRUE(check_config(p, hw, to_program_config(p, *chosen)).empty());
 }
 
 // Prints every family's candidate for the test shapes; run with --gtest_also_run_disabled_tests when tuning.
@@ -706,7 +877,7 @@ TEST(MatmulAutoConfig, DISABLED_PrintSelections) {
     const char* names[] = {"2D", "1D-in0", "1D-in1", "Reuse"};
     for (const auto& s : shapes()) {
         const auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N);
-        const auto chosen = select(p, hw);
+        const auto chosen = choose(p, hw);
         fmt::print("b={}/{} M={} K={} N={}\n", s.batch_a, s.batch_b, s.M, s.K, s.N);
         for (const auto& c : candidates(p, hw)) {
             const auto& b = c.blocking;
@@ -728,16 +899,29 @@ TEST(MatmulAutoConfig, DISABLED_PrintSelections) {
 }  // namespace
 
 // Block-float B with A tiles under 16 rows only runs on Reuse with a single K block
+// check() applies the device op's validation: a config it rejects is rejected with its message
+TEST(MatmulAutoConfig, CheckUsesDeviceValidation) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    const auto p = make_matmul(1, 1, 1024, 2048, 1024);
+    const auto chosen = choose(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(check_config(p, hw, to_program_config(p, *chosen)), "");
+    auto uneven = *chosen;
+    uneven.blocking.in0_block_w = 3;  // doesn't divide Kt = 64
+    EXPECT_NE(
+        check_config(p, hw, to_program_config(p, uneven)).find("must be divisible by in0_block_w"), std::string::npos);
+}
+
 TEST(MatmulAutoConfig, CheckTinyTileBlockFloatB) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     auto p = make_matmul(4, 4, 128, 256, 256, tt::DataFormat::Bfp8_b);
     p.in0_tile_h = p.out_tile_h = 8;
     p.Mt = 128 / 8;
-    const auto chosen = select(p, hw);
+    const auto chosen = choose(p, hw);
     ASSERT_TRUE(chosen.has_value());
     ASSERT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse));
-    EXPECT_EQ(check(p, hw, to_program_config(p, *chosen)), "");
+    EXPECT_EQ(check_config(p, hw, to_program_config(p, *chosen)), "");
     auto split = *chosen;
     split.blocking.in0_block_w = p.Kt / 2;
-    EXPECT_NE(check(p, hw, to_program_config(p, split)), "");
+    EXPECT_NE(check_config(p, hw, to_program_config(p, split)), "");
 }

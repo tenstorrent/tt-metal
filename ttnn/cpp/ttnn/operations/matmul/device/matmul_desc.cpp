@@ -50,14 +50,12 @@ Placement placement_of(
 
 }  // namespace
 
-std::optional<MatmulDesc> describe_matmul(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const bool transpose_a,
-    const bool transpose_b,
-    const uint32_t bias_single_tile_size,
-    const ttnn::prim::MatmulParams& attributes,
-    std::string& why) {
+std::optional<MatmulDesc> describe_matmul(const ttnn::prim::MatmulSpecs& specs, std::string& why) {
+    const auto& input_tensor_a = specs.a();
+    const auto& input_tensor_b = specs.b();
+    const auto& attributes = specs.attributes;
+    const bool transpose_a = attributes.transpose_a;
+    const bool transpose_b = attributes.transpose_b;
     // Tiles: A's are in0_tile_h x 32, B's 32 x in1_tile_w
     const auto in0_tile = utilities::get_matmul_tile(input_tensor_a, transpose_a);
     const auto in1_tile = utilities::get_matmul_tile(input_tensor_b, transpose_b);
@@ -92,25 +90,29 @@ std::optional<MatmulDesc> describe_matmul(
     p.Nt = b_shape[-1] / p.in1_tile_w;
 
     const auto& output_mem_config = attributes.output_mem_config;
-    p.a = placement_of(input_tensor_a.memory_config(), input_tensor_a.shard_spec(), in0_tile.get_height(), TILE_DIM);
-    p.b = placement_of(input_tensor_b.memory_config(), input_tensor_b.shard_spec(), TILE_DIM, in1_tile.get_width());
+    const auto& a_memory = input_tensor_a.memory_config();
+    const auto& b_memory = input_tensor_b.memory_config();
+    p.a = placement_of(a_memory, a_memory.shard_spec(), in0_tile.get_height(), TILE_DIM);
+    p.b = placement_of(b_memory, b_memory.shard_spec(), TILE_DIM, in1_tile.get_width());
     p.out =
         placement_of(output_mem_config, output_mem_config.shard_spec(), in0_tile.get_height(), in1_tile.get_width());
     if (p.a.has_shard_spec && p.b.has_shard_spec) {
-        const auto& sa = input_tensor_a.shard_spec().value();
-        const auto& sb = input_tensor_b.shard_spec().value();
+        const auto& sa = a_memory.shard_spec().value();
+        const auto& sb = b_memory.shard_spec().value();
         p.b_shard_matches_a = p.a.layout == p.b.layout && sa.grid == sb.grid && sa.orientation == sb.orientation;
     }
     p.global_cb = attributes.global_cb.has_value();
 
-    const auto arch = input_tensor_a.device()->arch();
+    const auto arch = specs.device.arch;
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, attributes.compute_kernel_config.value());
-    p.in0_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
-    p.in1_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
+    p.in0_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.data_type());
+    p.in1_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.data_type());
     p.out_format =
-        tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value_or(input_tensor_a.dtype()));
-    p.bias_tile_bytes = bias_single_tile_size;
+        tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value_or(input_tensor_a.data_type()));
+    p.bias_tile_bytes = specs.bias.has_value()
+                            ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(specs.bias->data_type()))
+                            : 0;
     p.transpose_a = transpose_a;
     p.in0_tile_transposed = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     p.untilize_out = attributes.untilize_out;

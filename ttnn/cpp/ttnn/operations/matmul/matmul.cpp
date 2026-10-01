@@ -16,6 +16,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 
 #include "ttnn/config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -265,18 +266,24 @@ static ttnn::Tensor bound_matmul(
     auto matmul_struct =
         ttnn::prim::create_matmul_attributes(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor});
 
-    uint32_t bias_single_tile_size = 0;
-    if (bias.has_value()) {
-        auto bias_data_format = datatype_to_dataformat_converter(bias.value().dtype());
-        bias_single_tile_size = tt::tile_size(bias_data_format);
+    // The new default selector (ttnn.CONFIG.matmul_auto_config_v2) only chooses configs that can fuse the bias it
+    // is given. A bias no config can fuse (batched, or taller than one tile row without a full-block Reuse config)
+    // is added after the matmul, so the config is chosen without it.
+    const bool use_chosen_config = ttnn::CONFIG.get<"matmul_auto_config_v2">();
+    std::optional<MatmulProgramConfig> bias_fusing_config;
+    if (use_chosen_config && bias.has_value() && !matmul_struct.program_config.has_value()) {
+        bias_fusing_config = auto_config::select_program_config(input_tensor_a, input_tensor_b, bias, matmul_struct);
     }
-    MatmulProgramConfig chosen_program_config = get_program_config(
-        input_tensor_a,
-        input_tensor_b,
-        parameters.transpose_a,
-        parameters.transpose_b,
-        bias_single_tile_size,
-        matmul_struct);
+    const bool bias_fusable = !use_chosen_config || !bias.has_value() || matmul_struct.program_config.has_value() ||
+                              bias_fusing_config.has_value();
+    MatmulProgramConfig chosen_program_config = bias_fusing_config.has_value() ? bias_fusing_config.value()
+                                                                               : get_program_config(
+                                                                                     input_tensor_a,
+                                                                                     input_tensor_b,
+                                                                                     parameters.transpose_a,
+                                                                                     parameters.transpose_b,
+                                                                                     bias_fusable ? bias : std::nullopt,
+                                                                                     matmul_struct);
     //----------------------------------------------------------------------------------------------
 
     // Decide if we need to manually transpose or if the program config will handle it
@@ -309,20 +316,19 @@ static ttnn::Tensor bound_matmul(
 
     // The new default selector (ttnn.CONFIG.matmul_auto_config_v2) decides bias and activation fusion from
     // the config it actually chose; the legacy path guesses what the auto-selection will pick.
-    const bool use_chosen_config = ttnn::CONFIG.get<"matmul_auto_config_v2">();
     std::optional<const MatmulProgramConfig> bias_decision_config = parameters.program_config;
     if (use_chosen_config) {
         bias_decision_config.emplace(chosen_program_config);
     }
-    bool post_process_bias = get_post_process_bias(
-        bias,
-        bias_decision_config,
-        parameters.user_core_coord,
-        parameters.output_mem_config,
-        input_tensor_a_adjusted,
-        input_tensor_b_adjusted,
-        parameters.transpose_a,
-        parameters.transpose_b);
+    bool post_process_bias = !bias_fusable || get_post_process_bias(
+                                                  bias,
+                                                  bias_decision_config,
+                                                  parameters.user_core_coord,
+                                                  parameters.output_mem_config,
+                                                  input_tensor_a_adjusted,
+                                                  input_tensor_b_adjusted,
+                                                  parameters.transpose_a,
+                                                  parameters.transpose_b);
 
     auto attributes = ttnn::prim::create_matmul_attributes(
         input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});

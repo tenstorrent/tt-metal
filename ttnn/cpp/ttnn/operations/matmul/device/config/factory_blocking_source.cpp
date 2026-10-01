@@ -752,7 +752,7 @@ std::vector<Candidate> k_depth_neighbours(const MatmulDesc& p, const HardwareDes
     auto legal_at = [&](uint32_t k) -> std::optional<Candidate> {
         Candidate n = c;
         n.blocking.in0_block_w = k;
-        if (check(p, hw, to_program_config(p, n)).empty()) {
+        if (factory_limit_error(p, hw, to_program_config(p, n)).empty()) {
             return n;
         }
         return std::nullopt;
