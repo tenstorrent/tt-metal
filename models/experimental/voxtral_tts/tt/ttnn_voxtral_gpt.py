@@ -130,15 +130,17 @@ def decode_grid(device_grid):
     raise RuntimeError(f"device grid {device_grid.x}x{device_grid.y} has no rectangle of {_MM_CORES} cores")
 
 
-def _mm1d(grid, in0_block_w, per_core_n, activation=None):
-    """1D multicast: split N across the grid, broadcast in0. The batch-1 decode shape."""
+def _mm1d(grid, in0_block_w, per_core_n, activation=None, per_core_m=1):
+    """1D multicast: split N across the grid, broadcast in0. The batch-1 decode shape at
+    per_core_m=1; `per_core_m` tiles of rows per core when the input carries more than one tile
+    (the flow model at B users folds 2*B*3 rows)."""
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=in0_block_w,
         out_subblock_h=1,
         # largest legal width: osh*osw <= 4 and per_core_N % osw == 0, both TT_FATAL.
         out_subblock_w=next(s for s in (4, 3, 2, 1) if per_core_n % s == 0),
-        per_core_M=1,
+        per_core_M=per_core_m,
         per_core_N=per_core_n,
         fuse_batch=True,
         fused_activation=activation,
@@ -156,9 +158,10 @@ _DECODE_SPLIT = {
 }
 
 
-def decode_program_configs(grid):
-    """-> {matmul name: program config} on `grid` (see decode_grid)."""
-    return {name: _mm1d(grid, *split) for name, split in _DECODE_SPLIT.items()}
+def decode_program_configs(grid, m_tiles=1):
+    """-> {matmul name: program config} on `grid` (see decode_grid). `m_tiles` is the number of
+    32-row tiles the input carries: 1 for decode (unchanged), more for the flow model at B users."""
+    return {name: _mm1d(grid, *split, per_core_m=int(m_tiles)) for name, split in _DECODE_SPLIT.items()}
 
 
 def _pc(prg, key):

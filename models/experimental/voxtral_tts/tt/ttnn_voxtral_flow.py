@@ -88,7 +88,9 @@ class TtVoxtralFlow:
 
     def __init__(self, device, ckpt_path=DEFAULT_CKPT):
         self.device = device
-        self.decode_prg = decode_program_configs(decode_grid(device.compute_with_storage_grid_size()))
+        self._grid = decode_grid(device.compute_with_storage_grid_size())
+        self.decode_prg = decode_program_configs(self._grid)
+        self._prg_by_tiles = {1: self.decode_prg}  # folded-row tiles -> matmul program configs
         self.dtype = DTYPE
         w = load_flow_state(ckpt_path)
         self.inv_freq = w["time_embedding.inv_freq"]  # host: time_embedding
@@ -147,11 +149,21 @@ class TtVoxtralFlow:
         """RMSNorm, width-sharded (the backbone's `sharded_norm`)."""
         return sharded_norm(x, gamma, FM_NORM_EPS, _L1)
 
+    def _prg(self, rows):
+        """Matmul program configs for `rows` folded rows: the backbone's decode configs for one tile
+        (B=1: 6 rows), per_core_M = tiles otherwise (B users: 2*B*3 rows). Built once per tile count."""
+        m = -(-int(rows) // 32)
+        prg = self._prg_by_tiles.get(m)
+        if prg is None:
+            prg = self._prg_by_tiles[m] = decode_program_configs(self._grid, m_tiles=m)
+        return prg
+
     def _block(self, x, w, B):
         """x [1,B*3,3072] -> same. Pre-norm, GQA 32/8, unmasked attention, SwiGLU."""
+        prg = self._prg(B * 3)
         h = self._norm(x, w["an"])
         # q, k and v in one matmul, on the backbone's program config.
-        qkv = ttnn.linear(h, w["wqkv"], program_config=self.decode_prg["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
+        qkv = ttnn.linear(h, w["wqkv"], program_config=prg["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
         # hand-rolled head split
         qh, kh, vh = _split_heads(qkv, B)
         # sdpa handles GQA natively. scale=1.0 is mandatory: SCALE is already folded into wqkv's
@@ -167,22 +179,20 @@ class TtVoxtralFlow:
             ttnn.linear(
                 a,
                 w["wo"],
-                program_config=self.decode_prg["wo"],
+                program_config=prg["wo"],
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=_L1,
             ),
         )
         h = self._norm(x, w["fn"])
         # SiLU is fused by the w1 program config, not by an activation kwarg.
-        g = ttnn.linear(
-            h, w["w1"], program_config=self.decode_prg["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1
-        )
+        g = ttnn.linear(h, w["w1"], program_config=prg["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
         u = ttnn.multiply_(
             g,
             ttnn.linear(
                 h,
                 w["w3"],
-                program_config=self.decode_prg["w3"],
+                program_config=prg["w3"],
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=_L1,
             ),
@@ -192,7 +202,7 @@ class TtVoxtralFlow:
             ttnn.linear(
                 u,
                 w["w2"],
-                program_config=self.decode_prg["w2"],
+                program_config=prg["w2"],
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=_L1,
             ),
