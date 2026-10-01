@@ -1242,6 +1242,9 @@ PY
     ss FORMATTED            false    --json   # true if pre-commit formatting ran
     ss FORMATS_TESTED_JSON   '[]'    --json
     ss FORMATS_EXCLUDED_JSON '{}'    --json
+    ss COVERAGE_JSON         '{}'    --json   # tester: {"covered": [...], "not_covered": {row: reason}}
+    ss TEST_FILE_USED       ""                # tester: test file it ran (optimizer/prettifier re-run it)
+    ss TEST_K               ""                # tester: --k token it scoped runs with
     ss TOKENS_JSON '{"input":0,"output":0,"cache_read":0,"cache_creation":0,"total":0,"cost_usd":0}' --json
     ss OBSTACLE             ""
     ss PERF_ENABLED         false    --json   # perf comparison vs the original kernel (Step 2a decides)
@@ -1271,7 +1274,7 @@ execute_step_verify_analysis() {
     [ -f "$f" ] || { echo "MISSING: $f does not exist"; return 1; }
     for h in "Problem Statement" "Target Pattern Survey" "Available Instructions" \
              "Semantic.*Instruction Mapping" "Solution Approach" "Format Applicability" \
-             "Complexity & Phases"; do
+             "Complexity & Phases" "Production Callers" "Code-Path Coverage Matrix"; do
         grep -qiE "^#{1,4}.*${h}" "$f" || missing="${missing}; ${h}"
     done
     [ -z "$missing" ] || { echo "INCOMPLETE: $f missing sections${missing}"; return 1; }
@@ -1637,6 +1640,7 @@ execute_step_finalize_run() {
     export END_TIME GIT_COMMIT CYCLE MAX_CYCLES REFINEMENT_COUNT PHASES_TOTAL PHASES_COMPLETED
     export COMPILATION_ATTEMPTS DEBUG_CYCLES TESTS_TOTAL TESTS_PASSED LINES_GENERATED TESTS_GENERATED
     export OPTIMIZED OPTIMIZATION_TYPE FORMATS_TESTED_JSON FORMATS_EXCLUDED_JSON TOKENS_JSON OBSTACLE
+    export COVERAGE_JSON TEST_FILE_USED
     export PRETTIFIED FORMATTED OPTIMIZED_KERNEL_FILE PERF_JSON
     export STATUS FINAL_RESULT KERNEL_NAME TARGET_ARCH LOG_DIR WORKTREE_BRANCH
     END_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1650,6 +1654,7 @@ execute_step_finalize_run() {
     TESTS_TOTAL="$(sg TESTS_TOTAL)"; TESTS_PASSED="$(sg TESTS_PASSED)"; LINES_GENERATED="$(sg LINES_GENERATED)"
     TESTS_GENERATED="$(sg TESTS_GENERATED)"; OPTIMIZED="$(sg OPTIMIZED)"; OPTIMIZATION_TYPE="$(sg OPTIMIZATION_TYPE)"
     FORMATS_TESTED_JSON="$(sg FORMATS_TESTED_JSON)"; FORMATS_EXCLUDED_JSON="$(sg FORMATS_EXCLUDED_JSON)"
+    COVERAGE_JSON="$(sg COVERAGE_JSON)"; TEST_FILE_USED="$(sg TEST_FILE_USED)"
     TOKENS_JSON="$(sg TOKENS_JSON)"; OBSTACLE="$(sg OBSTACLE)"
     PRETTIFIED="$(sg PRETTIFIED)"; FORMATTED="$(sg FORMATTED)"
     OPTIMIZED_KERNEL_FILE="$(sg OPTIMIZED_KERNEL_FILE)"
@@ -1679,6 +1684,10 @@ patch = {
     "optimization_type": os.environ.get("OPTIMIZATION_TYPE", "none"),
     "formats_tested": json.loads(os.environ.get("FORMATS_TESTED_JSON", "[]")),
     "formats_excluded": json.loads(os.environ.get("FORMATS_EXCLUDED_JSON", "{}")),
+    # Code paths the tester ran vs skipped (analysis Code-Path Coverage Matrix); the PR
+    # body must quote this rather than a bare "N/N tests passing".
+    "coverage": json.loads(os.environ.get("COVERAGE_JSON") or "{}"),
+    "test_file": os.environ.get("TEST_FILE_USED") or None,
     "obstacle": os.environ.get("OBSTACLE") or None,
     # Derived from steps_completed in run.json (always current, written
     # atomically by run_json_writer.py) rather than tracked as a separate value.

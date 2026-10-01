@@ -128,6 +128,16 @@ Grep: pattern="\\bvoid\\s+\\w*calculate\\w*\\s*\\(", path="<REFERENCE_PATH>", ou
 
 Then read each hit to classify it as a top-level entry point vs. an internal `_sfp_rows_`/helper. Record the full list of entry points in the Problem Statement and keep every one in scope. Only a genuine hardware gap on the target removes an entry point from scope — call that out explicitly; do **NOT** silently drop it. A missing golden, `MathOperation`/`SfpuType` enum entry, or dispatcher wiring does **NOT** put an operation out of scope — the writer and tester create that infrastructure. Keep the operation in scope and add a bullet in §6e stating that its golden and any missing test infrastructure must be implemented in the plan.
 
+#### Find the production callers (MANDATORY)
+
+The kernel is only useful if production code can reach it on the target. Grep every entry-point and init name across the layers above tt-llk:
+
+```
+Grep: pattern="<entry>|<init>|<compute-API wrapper name>", path="tt_metal/hw/inc ttnn models", output_mode="content"
+```
+
+Write a `## Production Callers` section listing, for each hit: file:line, the template arguments and runtime values it binds (layout, row counts, accumulate/mode flags, `VectorMode`), and any `#if[n]def ARCH_{TARGET}` guard that excludes the target from the include or wrapper. A target-arch caller (e.g. `ttnn/.../experimental/quasar/...`) is the strongest signal of which paths matter. If the compute-API wrapper is gated out for the target, say so — the writer un-gates it (see §6e). "None found" is a valid answer; guessing is not.
+
 ---
 
 ## Step 2: Survey the Target — Existing Kernels First
@@ -287,10 +297,21 @@ inline void calculate_{KERNEL_NAME}([runtime_args]);
 - For every **runtime parameter**: name it, give its type (usually `uint32_t`), and cite how it is consumed.
 - Explicitly list any reference-only parameter to DROP (e.g. Blackhole's `template <int ITERATIONS>` → Quasar's runtime `int iterations`).
 - If you drop a whole behavior rather than folding it into a template param, justify it in §6e Risks — silent scope narrowing is a defect.
+- **Document effective semantics, not accepted ranges.** When a parameter quantises (e.g. `num_rows <= 9` runs a fixed 9-row network, `10..32` a 32-row one), state what the code actually does for each value. The writer and prettifier copy this into the docstrings.
+
+#### Code-path coverage matrix (MANDATORY)
+
+Write a `## Code-Path Coverage Matrix` section: one row per distinct code path reachable from the public entry — every `if constexpr` / template-parameter branch and every runtime mode that changes the instruction stream (e.g. `chunk == 0` vs `chunk > 0`). Columns: path, the parameter values that select it, the production callers that reach it (from `## Production Callers`), and **REQUIRED / optional**. Mark a row REQUIRED when a production caller reaches it; if no caller exists, every row is REQUIRED. The tester must run every REQUIRED row, so a path that ships untested is a defect you create here by omitting it.
+
+Then cover the **cross-product** of path-selecting template parameters: state for each combination whether it is implemented, rejected by `static_assert`, or silently ignored. "Silently ignored" (e.g. `accumulate=true` on a path that never reads it) must become a `static_assert` in §6b unless a production caller relies on it — even when the reference has the same gap.
 
 ### 6b: Instruction sequence pseudocode
 
 Mark any 2-cycle instructions and the hazard-avoidance strategy (implicit stall or explicit `NOP` instruction).
+
+**Every NOP needs a cited hazard.** For each padding NOP name the producer→consumer instruction pair and the ISA / errata line that requires it (e.g. "SFPSWAP is 2-cycle on Quasar; TEN-4581: the SFPU misses the hazard of a 2-cycle op followed by SFPSWAP"), and put that citation in the code comment the writer emits. Do not write "conservative, may be over-padded" and hand it off — resolve it through `llk-arch-lookup` now. In-tree code is not proof either way: an existing kernel that omits the NOP may itself be wrong, and one that has it may cite a bug that does not exist on the target.
+
+**Keep the reference's record-once structure.** If the reference records a replay buffer or MOP in its init (`grep -n 'load_replay_buf\|lltt::record' ` on the init body) and replays it from compute, specify the same split for the target: record in init, replay in compute — for every layout / mode the reference records, not just the first one. Dropping a reference replay needs a target constraint that applies to the record-and-replay form (TEN-4690 bans only `execute_while_loading=1`, not recording). If the init's recording would be clobbered by another math-thread op, keep it in init and document the re-init contract instead.
 
 **Immediate-value convention in pseudocode.** When an instruction takes a hex immediate that encodes a *semantic* quantity — a mathematical coefficient, a format bit-pattern, a round-to-nearest-even bias... Any constant that will need naming
 
@@ -314,6 +335,8 @@ Surface every uncertainty, if exists, before handing off:
 - Reference-only features being explicitly dropped (call them out so the next agent doesn't resurrect them).
 - Hardware constraints you're unsure about (pipeline hazards, 2-cycle ops, LOADMACRO rules).
 - Every in-scope operation lacking a golden, `MathOperation`/`SfpuType` enum entry, or dispatcher wiring — state that its golden and missing test infrastructure must be implemented in the plan.
+- Every compute-API include or wrapper that `## Production Callers` shows gated out for the target (`#ifndef ARCH_{TARGET}`) — the writer must un-gate it, with the `VectorMode` the target kernel needs (a kernel that addresses the whole tile itself runs under `VectorMode::None`, not the per-face `RC`).
+- Every hand-off must name the agent that will act on it (writer / tester / optimizer). "The optimizer may later ..." with no matching instruction in that agent's prompt is a dead end — resolve it here instead.
 
 ---
 
@@ -409,8 +432,14 @@ Write `codegen/artifacts/{KERNEL_NAME}_analysis.md` with these sections, in orde
 ## Instruction Encoding Constraints
 [Findings from Step 5]
 
+## Production Callers
+[Step 1 — file:line, bound template args / VectorMode, arch guards; or "None found"]
+
 ## Solution Approach
 [Findings from Step 6]
+
+## Code-Path Coverage Matrix
+[Step 6a — one row per path, REQUIRED / optional, plus the template cross-product table]
 
 ## Format Applicability
 [Findings from Step 7]
@@ -433,13 +462,14 @@ You are done when the analysis document:
 6. Gives the writer a concrete instruction sequence they can implement without going back to the reference
 7. Lists format applicability with technical rationale for every exclusion
 8. Surfaces risks explicitly rather than hiding assumptions.
+9. Lists the production callers and a code-path matrix whose REQUIRED rows cover every path those callers reach.
 
 Report on return:
 ```
 Problem: {one-line statement}
 Complexity: {Simple | Medium | Complex | No Direct Equivalent}
 Instructions to use: {count} mapped
-Phases: {count}
+Required paths: {count of REQUIRED rows in the Code-Path Coverage Matrix}
 Analysis complete: codegen/artifacts/{KERNEL_NAME}_analysis.md
 Ready for: llk-kernel-writer agent
 ```
