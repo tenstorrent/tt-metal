@@ -44,7 +44,13 @@ inline void calculate_sdpa_exp_correction() {
 template <uint32_t scale_fp32>
 inline void init_sdpa_exp_grid() {
     constexpr float a = 1024.0f * 1.4426950408889634f * __builtin_bit_cast(float, scale_fp32);
+#ifdef SDPA_PROTO_PA32
+    // Reference-max headroom (perf research): 8 whole octaves (1024 grid steps each), so P is 2^-8 times
+    // the unshifted grid value with the same mantissa; saturation moves to ~5.5 nats above the reference.
+    constexpr float b = 31.0f * 1024.0f - 4.0f * (32512.0f - 32500.818359375f) - 8.0f * 1024.0f;
+#else
     constexpr float b = 31.0f * 1024.0f - 4.0f * (32512.0f - 32500.818359375f);
+#endif
     TTI_SFPLOADI(0, 0xA, sdpa_lo16(a));
     TTI_SFPLOADI(0, 0x8, sdpa_hi16(a));
     TTI_SFPCONFIG(0, 12, 0);

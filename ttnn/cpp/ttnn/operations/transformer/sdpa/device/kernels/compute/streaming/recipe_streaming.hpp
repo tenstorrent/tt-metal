@@ -455,17 +455,23 @@ void reduce_c_row_group(
 #endif
     tile_regs_acquire();
 
-#ifdef SDPA_PA
+#if defined(SDPA_PA) || (defined(SDPA_PROTO_PA32) && defined(SDPA_RECIPE_FP32))
     if (do_eltwise_max) {
         // Reference max: carry the previous maximum unchanged (bitwise), skipping the reduce. A plain copy:
         // the reduce's seeding copy transposes within faces for the reduce's dest layout.
         CircularBuffer(prev_cb).wait_front(cumulative_prev_tiles);
+#ifdef SDPA_RECIPE_FP32
+        sdpa_stream_reconfig_srca(prev_cb);
+#endif
         copy_init(prev_cb);
         for (uint32_t i = 0; i < group_size; i++) {
             copy_tile(prev_cb, row_start + i, i);
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef SDPA_RECIPE_FP32
+        configure_single_tile_pack(out_cb);
+#endif
         for (uint32_t i = 0; i < group_size; i++) {
             pack_tile<false>(i, out_cb);
         }
@@ -1363,7 +1369,8 @@ static void sdpa_inner_loop_step(
     constexpr uint32_t KT_stride = Sk_chunk_t;
     constexpr uint32_t active_Sk = Sk_chunk_t;
     constexpr uint32_t actual_sbw = qkt_subblock_w;
-#if defined(SDPA_KO_REDUCE) || defined(SDPA_KO_NOSPLIT) || defined(SDPA_PA)
+#if defined(SDPA_KO_REDUCE) || defined(SDPA_KO_NOSPLIT) || defined(SDPA_PA) || \
+    (defined(SDPA_PROTO_PA32) && defined(SDPA_RECIPE_FP32))
     constexpr bool reduce_trigger = false &&
 #else
     constexpr bool reduce_trigger = reduce_trigger_supported && Sk_chunk_t % qkt_subblock_w == 0 &&
