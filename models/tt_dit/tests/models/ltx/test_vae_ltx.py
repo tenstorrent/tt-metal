@@ -31,6 +31,7 @@ from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import conv_pad_in_channels
+from models.tt_dit.utils.tensor import typed_tensor_2dshard
 
 from .ltx_mesh_params import (
     LTX_VAE_DECODER_MESH_PARAMS,
@@ -449,6 +450,57 @@ def test_ltx_causal_conv3d(
     logger.info(f"PyTorch out: {torch_out.shape}, TT out: {tt_out_torch.shape}")
     assert_quality(torch_out, tt_out_torch, pcc=0.999)
     logger.info(f"PASSED: LTXCausalConv3d ({in_c}->{out_c}) matches reference")
+
+
+@pytest.mark.parametrize(
+    "in_c, out_c, T, H, W",
+    [
+        (128, 128, 21, 34, 60),  # s0 res conv, 544x960/145f latent grid
+        (512, 512, 39, 68, 120),  # s1 res conv after compress_space
+    ],
+    ids=["s0_res", "s1_res"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_ltx_conv3d_fold_time_pad(mesh_device, device_params, monkeypatch, in_c, out_c, T, H, W):
+    """LTX_VAE_FOLD_TIME_PAD=1 (conv3d replicate T pad) must match the slice+concat path bit for bit.
+
+    Opens the full galaxy mesh and runs on a 2x4 submesh: a bare 2x4 open fails fabric init on BH galaxy.
+    """
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    vae_mods = _require_diffusers_ltx_vae()
+    torch.manual_seed(42)
+    torch_model = vae_mods["causal_conv"](in_channels=in_c, out_channels=out_c, kernel_size=3, stride=1).eval()
+    x = torch.randn(1, in_c, T, H, W)
+    with torch.no_grad():
+        torch_out = _run_diffusers_causal_conv(torch_model, x, causal=False, ltx2=vae_mods["ltx2"])
+
+    x_tt = typed_tensor_2dshard(
+        conv_pad_in_channels(x.permute(0, 2, 3, 4, 1)),
+        mesh_device,
+        shard_mapping={0: 2, 1: 3},
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 3])
+
+    outs = {}
+    for fold in ("0", "1"):
+        monkeypatch.setenv("LTX_VAE_FOLD_TIME_PAD", fold)
+        tt_model = LTXCausalConv3d(
+            in_channels=in_c,
+            out_channels=out_c,
+            kernel_size=3,
+            stride=1,
+            mesh_device=mesh_device,
+            **_vae_parallel_kwargs(mesh_device),
+        )
+        assert tt_model.fold_time_pad == (fold == "1")
+        tt_model.load_torch_state_dict(torch_model.state_dict())
+        tt_out = tt_model(x_tt, causal=False, logical_h=H, logical_w=W)
+        outs[fold] = ttnn.to_torch(tt_out, mesh_composer=composer)[..., :out_c].permute(0, 4, 1, 2, 3)
+
+    assert torch.equal(outs["0"], outs["1"])
+    assert_quality(torch_out, outs["1"], pcc=0.999)
 
 
 @pytest.mark.parametrize(
