@@ -77,6 +77,9 @@ NOISE_DRAWS = 4
 ACOUSTIC_NOISE_SCALE = 1.648e-3  # relative Linear-output noise the per-element spread is drawn at
 ACOUSTIC_BASELINE_RMS = 4.195e-3  # the stage's held-out x_final RMS error, the band's floor
 SEMANTIC_LOGIT_RMS = 1.6e-3  # RMS semantic-logit deviation the semantic tie band is built on
+# RMS frame-0 semantic-logit deviation, TT vs the FREE-running reference (which runs its own prefill), so it
+# includes the prefill hidden state's deviation, not only the semantic head's: 6.09e-2 measured on a p150.
+FRAME0_LOGIT_RMS = 6.1e-2
 # Absolute limits on the stage itself, so a degraded stage fails here instead of only widening ties.
 MAX_HELDOUT_RMS = 2.0 * ACOUSTIC_BASELINE_RMS  # held-out x_final RMS deviation, TT vs reference
 MIN_ACOUSTIC_AGREEMENT = 0.98  # fraction of live acoustic codes equal to the teacher-forced reference
@@ -185,9 +188,11 @@ def evidence(device, hf_model):
     )
     dump = os.environ.get("VOXTRAL_DUMP_EVIDENCE")
     if dump:
-        # Opt-in, for offline analysis of a failure: the TT run's own outputs and the two goldens'
-        # cache keys, so nothing has to be re-run on the device to study it.
-        torch.save({"tt": tt, "input_ids": input_ids, "x0": x0, "cfg_alpha": cfg_alpha}, dump)
+        # Opt-in, for offline analysis of a failure: the TT run's own outputs and the reference
+        # teacher-forced on them, so nothing has to be re-run on the device to study it.
+        torch.save(
+            {"tt": tt, "hf": aligned, "free": free, "input_ids": input_ids, "x0": x0, "cfg_alpha": cfg_alpha}, dump
+        )
     return {
         "pipe": pipe,
         "tt": tt,
@@ -273,8 +278,15 @@ def test_batch_is_32_independent_samples(evidence):
     assert len(waves) == batch, f"only {len(waves)} of {batch} waveforms are distinct"
 
 
-def test_per_stage_pcc(evidence):
-    """EVERY joint of the chain, against the reference driven by this pipeline's own trajectory."""
+def test_per_stage_pcc(hf_model, evidence):
+    """EVERY joint of the chain, against the reference driven by this pipeline's own trajectory.
+
+    The acoustic output `x_final` is checked POOLED (one PCC over every row and frame) plus PER FRAME
+    against that frame's own sensitivity. A worst-of-2656 PCC is not a well-posed gate there: some
+    frames are ill-conditioned (CFG 3.0 over 7 Euler steps), and the reference's own x_final moves by
+    RMS ~0.13 at such a frame under one device matmul's rounding, while a typical frame's TT error is
+    ~0.0013 (measured on a p150, where the worst frame then reads PCC 0.976).
+    """
     tt, hf, batch = evidence["tt"], evidence["hf"], evidence["batch"]
     frames = tt["frames_decoded"]
     diag_tt, diag_hf = tt["diagnostics"], hf["diagnostics"]
@@ -306,19 +318,46 @@ def test_per_stage_pcc(evidence):
         for i in range(batch)
     )
     print(f"stage PCC  semantic logits (min over {batch} x {frames}) = {semantic:.6f}")
-    x_final = min(
-        common.pcc(diag_tt[t]["x_final"][i].clamp(-1, 1), diag_hf[t]["x_final"][i])
-        for t in range(frames)
-        for i in range(batch)
+    x_tt = torch.stack([diag_tt[t]["x_final"].clamp(-1, 1) for t in range(frames)], dim=-1)  # [B, 36, F]
+    x_hf = torch.stack([diag_hf[t]["x_final"] for t in range(frames)], dim=-1)
+    x_final = common.pcc(x_tt, x_hf)
+    frame_rms = (x_tt - x_hf).pow(2).mean(dim=1).sqrt()  # [B, F]
+    print(
+        f"stage PCC  x_final         (pooled over {batch} x {frames}) = {x_final:.6f}; per-frame RMS error "
+        f"median {float(frame_rms.median()):.2e}, max {float(frame_rms.max()):.2e}"
     )
-    print(f"stage PCC  x_final         (min over {batch} x {frames}) = {x_final:.6f}")
+    # A frame above the baseline band is checked against ITS OWN spread: the reference's x_final
+    # under the device's measured matmul noise (the same per-element model the codes test uses).
+    tt_hidden = torch.stack([d["llm_hidden"] for d in diag_tt], dim=-1)
+    over = []
+    for f in sorted(set(torch.nonzero(frame_rms > TIE_SIGMA * ACOUSTIC_BASELINE_RMS)[:, 1].tolist())):
+        rows = sorted(set(torch.nonzero(frame_rms[:, f] > TIE_SIGMA * ACOUSTIC_BASELINE_RMS)[:, 0].tolist()))
+        h, x0f, cfg = tt_hidden[rows, :, f], evidence["x0"][f][rows], evidence["cfg_alpha"][rows]
+        spread_rows = common.cached_golden(
+            common.golden_key(
+                arm="spread-rowrms", hidden=h, x0=x0f, cfg=cfg, eps=round(ACOUSTIC_NOISE_SCALE, 5), draws=NOISE_DRAWS
+            ),
+            lambda: golden.acoustic_spread_under_matmul_noise(
+                hf_model, h, x0f, cfg, ACOUSTIC_NOISE_SCALE, draws=NOISE_DRAWS
+            ),
+        )
+        spread_rms = sigma_upper_bound(spread_rows, NOISE_DRAWS).pow(2).mean(dim=-1).sqrt()
+        for k, b in enumerate(rows):
+            limit = TIE_SIGMA * max(float(spread_rms[k]), ACOUSTIC_BASELINE_RMS)
+            err = float(frame_rms[b, f])
+            print(
+                f"           x_final f{f} row{b}: RMS error {err:.4f}, own spread {float(spread_rms[k]):.4f}, limit {limit:.4f}"
+            )
+            if err > limit:
+                over.append((f, b, err, limit))
     assert prefill >= PCC_TARGET, f"the text stack is below target at {prefill:.6f}"
     assert hidden >= PCC_TARGET, (
         f"the decode step drifts: frame-wise hidden PCC {hidden:.6f}. The reference is fed THIS "
         f"pipeline's own codes, so a drop here is the KV cache, positions or the audio-token embedding"
     )
     assert semantic >= PCC_TARGET, f"the semantic head is at {semantic:.6f}"
-    assert x_final >= PCC_TARGET, f"the acoustic flow sampler is at {x_final:.6f}"
+    assert x_final >= PCC_TARGET, f"the acoustic flow sampler is at pooled PCC {x_final:.6f}"
+    assert not over, f"x_final frames off by more than their own spread allows: {over}"
 
 
 def test_discretization_is_the_references_own_rule(evidence):
@@ -530,20 +569,24 @@ def test_free_running_divergence_is_reported(evidence):
     # Frame 0's semantic code is decidable wherever the reference's own top-2 margin clears the
     # measured logit deviation; a closer call is a tie, counted, and cannot fail the check.
     frame0 = tt["codes"][:, 0, 0] == free["codes"][:, 0, 0]
-    lo_tt = tt["diagnostics"][0]["semantic_logits"]
-    lo_hf = free["diagnostics"][0]["semantic_logits"]
-    finite = torch.isfinite(lo_hf)
-    # The FIXED logit band, as in the teacher-forced codes test: a band read off this run's own deviation
-    # would widen exactly when the logits are wrong.
-    ldev = SEMANTIC_LOGIT_RMS
+    lo_tt = tt["diagnostics"][0]["semantic_logits"].float()
+    lo_hf = free["diagnostics"][0]["semantic_logits"].float()
+    # Masked entries (-inf / -1e30 on either side) carry no deviation.
+    real = torch.isfinite(lo_hf) & torch.isfinite(lo_tt) & (lo_hf > -1e20) & (lo_tt > -1e20)
+    measured = float((lo_tt - lo_hf)[real].pow(2).mean().sqrt())
+    # The FIXED logit band: a band read off this run's own deviation would widen exactly when the logits are
+    # wrong. Its size is the PREFILL-inclusive deviation (FRAME0_LOGIT_RMS), because the free reference runs
+    # its own prefill; the semantic head's own band (SEMANTIC_LOGIT_RMS) is ~40x narrower than that.
+    ldev = FRAME0_LOGIT_RMS
     top2 = lo_hf.topk(2, dim=1).values
     decidable = (top2[:, 0] - top2[:, 1]) > TIE_SIGMA * ldev
     wrong = ~frame0 & decidable
     print(
         f"frame-0 semantic code (no feedback in it): {int(frame0.sum())}/{batch} exact; "
         f"{int((~frame0 & ~decidable).sum())} ties (band {TIE_SIGMA} x RMS {ldev:.3e}), "
-        f"{int(wrong.sum())} decidable mismatches"
+        f"{int(wrong.sum())} decidable mismatches; logit RMS deviation {measured:.3e} (limit {2 * ldev:.3e})"
     )
+    assert measured <= 2 * ldev, f"frame-0 semantic logits deviate by RMS {measured:.3e}: the prefill drifted"
     assert not bool(wrong.any()), "a DECIDABLE frame-0 semantic code disagrees, before any feedback exists"
 
 

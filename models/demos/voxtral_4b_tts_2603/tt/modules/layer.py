@@ -509,6 +509,10 @@ def _swiglu_pairs(gate, up, tile=32):
     return pairs.reshape(rows, 2 * n).contiguous()
 
 
+# Prefill rows up to which the SwiGLU input and output sit in L1 (2048 rows: 12.6 MB in, 37.7 MB out).
+_SWIGLU_L1_ROWS = 2048
+
+
 def _fused_swiglu(h, w_gu):
     """Prefill `silu(h @ Wg) * (h @ Wu)` as ONE matmul: no gate/up tensors are written and there
     is no separate multiply pass over them."""
@@ -797,13 +801,19 @@ def build(device, torch_module):
                 return None
             h, decode = kept, True
 
-        # Prefill's norm output is read only by the fused SwiGLU, once per N block: it lands in L1.
+        # Prefill's norm output is read only by the fused SwiGLU, once per N block: it lands in L1 when
+        # it fits. The SwiGLU output inherits its placement and is 3x as wide, so a long compact tail
+        # (32 rows x 246 tokens: 145 MB of output against ~187 MB of L1 on the whole chip) stays in DRAM.
+        rows = 1
+        for d in list(h.shape)[:-1]:
+            rows *= int(d)
+        in_l1 = not decode and rows <= _SWIGLU_L1_ROWS
         hn = _rms_norm(
             h,
             g_post,
             eps_post,
             dtype=None if decode else ttnn.bfloat16,
-            memory_config=None if decode else ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG if in_l1 else None,
         )
         if decode:
             gated = ttnn.multiply(
