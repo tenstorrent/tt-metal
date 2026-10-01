@@ -758,9 +758,10 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             return;
         }
         error_msg = fmt::format(
-            "Watcher unexpected noc debug state on core {}, partially written record noc{}{{0x{:08x}, {} }} return "
-            "code {}",
+            "Watcher unexpected noc debug state on core {}, partially written record noc{} risc {} {{0x{:08x}, {} }} "
+            "return code {}",
             virtual_coord_.str(),
+            noc,
             san.which_risc(),
             san.noc_addr(),
             san.len(),
