@@ -299,8 +299,12 @@ class TtVoxtralFlow:
     def _solve(self, x, h, B, n_steps, cfg_alpha):
         """(x0 fp32 [B,1,36], cond++uncond [2B,3072]) -> x fp32 [B,1,36]. PURE DEVICE GRAPH.
 
-        No host ops in here, so it stays traceable.
+        No host ops in here, so it stays traceable. VOXTRAL_FLOW_TM=1 routes B > 1 to the
+        token-major solve (`_solve_tm`, 1.9x faster at B=32, attention not yet exact); B = 1 keeps
+        this path, bit for bit.
         """
+        if B > 1 and os.environ.get("VOXTRAL_FLOW_TM", "0") == "1":  # opt-in until its attention is exact
+            return self._solve_tm(x, h, B, n_steps, cfg_alpha)
         B2 = 2 * B
         # the llm conditioning is constant across the solve: project and reshape it once per frame
         p2 = ttnn.reshape(
@@ -316,6 +320,108 @@ class TtVoxtralFlow:
             v = ttnn.typecast(self._trunk(p0, p1s[i], p2, B2), ttnn.float32)
             v_cond = ttnn.slice(v, [0, 0, 0], [B, 1, N_ACOUSTIC_CODEBOOK])
             v_unc = ttnn.slice(v, [B, 0, 0], [B2, 1, N_ACOUSTIC_CODEBOOK])
+            v_cfg = ttnn.add(ttnn.multiply(v_cond, cfg_alpha), ttnn.multiply(v_unc, 1.0 - cfg_alpha))
+            x = ttnn.add(x, ttnn.multiply(v_cfg, dt))
+        return x
+
+    # ----------------------------------------------------------------------------------
+    # Token-major solve for B > 1 users.
+    #
+    # The 3-token sequence per CFG row pads to 32 rows per head in tile layout, so at 2B = 64 rows
+    # the batch-major `_block` spends most of its time moving padded head tensors (measured: 17.9 of
+    # 35.7 ms per frame in the blocks at B=32, plus 8.2 ms of padded reshapes in the per-step glue,
+    # against 1.5 ms of attention arithmetic). Here the folded rows are ordered token-major
+    # (row = token * 2B + cfg_row), so the sequence is a plain concat of three [1, 2B, 3072]
+    # tensors, attention runs ONCE over all 3*2B rows with a block-diagonal mask through the fused
+    # head ops the backbone prefill uses, and the solver state stays [1, B, 36]. Same math as
+    # `_block`/`_trunk`; only the row order and the op choice differ.
+    # ----------------------------------------------------------------------------------
+    def _tm_mask(self, B2):
+        """[1, 1, 3*B2, 3*B2] additive mask: 0 where two rows belong to the same CFG row, -1e9
+        elsewhere. Built once per B2."""
+        key = ("mask", B2)
+        m = self._sched.get(key)
+        if m is None:
+            rows = 3 * B2
+            r = torch.arange(rows)
+            same = (r.reshape(-1, 1) % B2) == (r.reshape(1, -1) % B2)
+            m = ttnn.from_torch(
+                torch.where(same, 0.0, -1e9).reshape(1, 1, rows, rows).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            self._sched[key] = m
+        return m
+
+    def _schedule_tm(self, B2, n_steps):
+        """The time tokens of `_schedule`, as [1, B2, 3072] rows (reshaped once, at build)."""
+        key = ("tm", B2, n_steps)
+        if key not in self._sched:
+            p1s, dts = self._schedule(B2, n_steps)
+            self._sched[key] = ([ttnn.reshape(p, [1, B2, FM_INPUT_DIM]) for p in p1s], dts)
+        return self._sched[key]
+
+    def _block_tm(self, x, w, B2):
+        """x [1, 3*B2, 3072] token-major -> same. Pre-norm, GQA 32/8 masked to each CFG row's own
+        3 tokens, SwiGLU. The fused head ops keep the rows unpadded (3*B2 is a tile multiple)."""
+        rows = 3 * B2
+        prg = self._prg(rows)
+        h = self._norm(x, w["an"])
+        qkv = ttnn.linear(h, w["wqkv"], program_config=prg["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
+        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, [1, 1, rows, _QKV_WIDTH]),
+            num_heads=FM_N_HEADS,
+            num_kv_heads=FM_N_KV_HEADS,
+            transpose_k_heads=False,
+            memory_config=_L1,
+        )
+        a = ttnn.transformer.scaled_dot_product_attention(
+            qh, kh, vh, attn_mask=self._tm_mask(B2), is_causal=False, scale=1.0, compute_kernel_config=COMPUTE_CONFIG
+        )
+        a = ttnn.reshape(ttnn.experimental.nlp_concat_heads(a, memory_config=_L1), [1, rows, FM_N_HEADS * FM_HEAD_DIM])
+        x = ttnn.add_(
+            x,
+            ttnn.linear(a, w["wo"], program_config=prg["wo"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1),
+        )
+        h = self._norm(x, w["fn"])
+        g = ttnn.linear(h, w["w1"], program_config=prg["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
+        u = ttnn.multiply_(
+            g,
+            ttnn.linear(h, w["w3"], program_config=prg["w3"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1),
+        )
+        return ttnn.add_(
+            x,
+            ttnn.linear(u, w["w2"], program_config=prg["w2"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1),
+        )
+
+    def _trunk_tm(self, p0, p1, p2, B2):
+        """three [1, B2, 3072] projections -> velocity [1, B2, 36] (token 0's rows)."""
+        seq = ttnn.concat([p0, p1, p2], dim=1, memory_config=_L1)  # [1, 3*B2, 3072], token-major
+        for w in self.layers:
+            seq = self._block_tm(seq, w, B2)
+        seq = self._norm(seq, self.norm)
+        out = ttnn.linear(seq, self.proj["acoustic_codebook_output"], compute_kernel_config=COMPUTE_CONFIG)
+        return ttnn.slice(out, [0, 0, 0], [1, B2, N_ACOUSTIC_CODEBOOK])
+
+    def _solve_tm(self, x, h, B, n_steps, cfg_alpha):
+        """(x0 fp32 [B,1,36] or [1,B,36], cond++uncond [2B,...,3072]) -> x fp32 [1, B, 36]. Pure device
+        graph, token-major rows. Callers reshape the result to [B, 36] on the host."""
+        B2 = 2 * B
+        if tuple(x.shape) != (1, B, N_ACOUSTIC_CODEBOOK):
+            x = ttnn.reshape(x, [1, B, N_ACOUSTIC_CODEBOOK])
+        if tuple(h.shape) != (1, B2, FM_INPUT_DIM):
+            h = ttnn.reshape(h, [1, B2, FM_INPUT_DIM])
+        p2 = ttnn.linear(h, self.proj["llm_projection"], compute_kernel_config=COMPUTE_CONFIG)  # [1, B2, 3072]
+        p1s, dts = self._schedule_tm(B2, n_steps)
+        for i, dt in enumerate(dts):
+            x2 = ttnn.concat([x, x], dim=1)  # [1, B2, 36]: cond rows then uncond rows
+            p0 = ttnn.linear(
+                ttnn.typecast(x2, self.dtype), self.proj["input_projection"], compute_kernel_config=COMPUTE_CONFIG
+            )
+            v = ttnn.typecast(self._trunk_tm(p0, p1s[i], p2, B2), ttnn.float32)  # [1, B2, 36]
+            v_cond = ttnn.slice(v, [0, 0, 0], [1, B, N_ACOUSTIC_CODEBOOK])
+            v_unc = ttnn.slice(v, [0, B, 0], [1, B2, N_ACOUSTIC_CODEBOOK])
             v_cfg = ttnn.add(ttnn.multiply(v_cond, cfg_alpha), ttnn.multiply(v_unc, 1.0 - cfg_alpha))
             x = ttnn.add(x, ttnn.multiply(v_cfg, dt))
         return x
