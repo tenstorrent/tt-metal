@@ -24,6 +24,8 @@ static constexpr std::uint32_t MAX_TILES_DEST = ckernel::get_dest_max_tiles<dest
 
 #ifdef LLK_TRISC_UNPACK
 
+#include <type_traits>
+
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common.h"
 
@@ -48,6 +50,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B           = params.buffer_B;
 #endif
 
+#ifdef ARCH_BLACKHOLE
+    // An 8-bit streamed operand is streamed at its data rate; the choice is made once here and the unpack loop below runs
+    // one copy per choice, so it costs nothing per call. Wormhole's init and execute have no such argument.
+    const bool stream_narrow = _llk_unpack_AB_matmul_stream_narrow_(CT_DIM, RT_DIM, formats.unpack_A_src, formats.unpack_B_src);
+#define MATMUL_STREAM_NARROW_ARG(narrow) , narrow
+#else
+#define MATMUL_STREAM_NARROW_ARG(narrow)
+#endif
+
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -61,8 +72,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
-#ifdef ARCH_BLACKHOLE
-        // the operand formats pick the streamed operand's address advance (8-bit formats stream at their data rate)
         _llk_unpack_AB_matmul_init_<>(
             UNPACK_TRANSPOSE_FACES,
             CT_DIM,
@@ -73,12 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_A,
             num_faces_B,
             false,
-            false,
-            formats.unpack_A_src,
-            formats.unpack_B_src);
-#else
-        _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, FACE_R_DIM, FACE_R_DIM, num_faces_A, num_faces_B, false, false);
-#endif
+            false MATMUL_STREAM_NARROW_ARG(stream_narrow));
         PROFILER_SYNC();
     }
     {
@@ -94,45 +98,58 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            auto unpack_blocks = [&]([[maybe_unused]] const auto narrow)
             {
-                for (std::uint32_t j = 0; j < KT_DIM; j++)
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    // Golden (LOOP_FACTOR==1) reads unique stimuli tiles. Perf
-                    // (LOOP_FACTOR>1) programs the PERF_ADDRESS ring base with tile
-                    // index 0. That only removes the caller-side offset;
-                    // _llk_unpack_AB_matmul_ still MOP-strides the THCON base (A by
-                    // kt per extra output row, B by 1 per extra output column). The
-                    // sweep keeps that walk inside PERF_RING_TILES.
-                    const bool perf_ring       = LOOP_FACTOR > 1;
-                    const std::uint32_t addr_a = perf_ring ? PERF_ADDRESS(PERF_INPUT_A, 0) : L1_ADDRESS(buffer_A[0]);
-                    const std::uint32_t addr_b = perf_ring ? PERF_ADDRESS(PERF_INPUT_B, 0) : L1_ADDRESS(buffer_B[0]);
-                    const std::uint32_t tile_a = perf_ring ? 0 : j;
-                    const std::uint32_t tile_b = perf_ring ? 0 : j * CT_DIM;
-                    const std::uint32_t last_a = tile_a + (RT_DIM - 1) * KT_DIM;
-                    const std::uint32_t last_b = tile_b + CT_DIM - 1;
-                    if (perf_ring)
+                    for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        LLK_ASSERT(last_a < PERF_RING_TILES && last_b < PERF_RING_TILES, "unpack MOP walk exceeds the 16-tile PERF_ADDRESS ring");
+                        // Golden (LOOP_FACTOR==1) reads unique stimuli tiles. Perf
+                        // (LOOP_FACTOR>1) programs the PERF_ADDRESS ring base with tile
+                        // index 0. That only removes the caller-side offset;
+                        // _llk_unpack_AB_matmul_ still MOP-strides the THCON base (A by
+                        // kt per extra output row, B by 1 per extra output column). The
+                        // sweep keeps that walk inside PERF_RING_TILES.
+                        const bool perf_ring       = LOOP_FACTOR > 1;
+                        const std::uint32_t addr_a = perf_ring ? PERF_ADDRESS(PERF_INPUT_A, 0) : L1_ADDRESS(buffer_A[0]);
+                        const std::uint32_t addr_b = perf_ring ? PERF_ADDRESS(PERF_INPUT_B, 0) : L1_ADDRESS(buffer_B[0]);
+                        const std::uint32_t tile_a = perf_ring ? 0 : j;
+                        const std::uint32_t tile_b = perf_ring ? 0 : j * CT_DIM;
+                        const std::uint32_t last_a = tile_a + (RT_DIM - 1) * KT_DIM;
+                        const std::uint32_t last_b = tile_b + CT_DIM - 1;
+                        if (perf_ring)
+                        {
+                            LLK_ASSERT(last_a < PERF_RING_TILES && last_b < PERF_RING_TILES, "unpack MOP walk exceeds the 16-tile PERF_ADDRESS ring");
+                        }
+                        else
+                        {
+                            LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_A[last_a])), "unpack A real-buffer top address is outside L1");
+                            LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_B[last_b])), "unpack B real-buffer top address is outside L1");
+                        }
+                        _llk_unpack_AB_matmul_<>(
+                            addr_a,
+                            addr_b,
+                            tile_a,
+                            tile_b,
+                            TILE_SIZE_UNPACK_A,
+                            TILE_SIZE_UNPACK_B,
+                            /* partial face */ false,
+                            /* partial face */ false,
+                            CT_DIM,
+                            RT_DIM,
+                            KT_DIM MATMUL_STREAM_NARROW_ARG(narrow.value));
                     }
-                    else
-                    {
-                        LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_A[last_a])), "unpack A real-buffer top address is outside L1");
-                        LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_B[last_b])), "unpack B real-buffer top address is outside L1");
-                    }
-                    _llk_unpack_AB_matmul_<>(
-                        addr_a,
-                        addr_b,
-                        tile_a,
-                        tile_b,
-                        TILE_SIZE_UNPACK_A,
-                        TILE_SIZE_UNPACK_B,
-                        /* partial face */ false,
-                        /* partial face */ false,
-                        CT_DIM,
-                        RT_DIM,
-                        KT_DIM);
                 }
+            };
+#ifdef ARCH_BLACKHOLE
+            if (stream_narrow)
+            {
+                unpack_blocks(std::true_type {});
+            }
+            else
+#endif
+            {
+                unpack_blocks(std::false_type {});
             }
         }
         PROFILER_SYNC();

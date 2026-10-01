@@ -53,8 +53,8 @@ inline void llk_unpack_AB_matmul_init(
         IN0_DESC.shape.total_num_faces(),
         IN1_DESC.shape.total_row_dim() < ckernel::TILE_R_DIM,  // partial_face_a (SrcA <- IN1)
         IN0_DESC.shape.total_row_dim() < ckernel::TILE_R_DIM,  // partial_face_b (SrcB <- IN0)
-        static_cast<std::uint32_t>(IN1_DESC.format),           // unpA_src_format (SrcA <- IN1)
-        static_cast<std::uint32_t>(IN0_DESC.format));          // unpB_src_format (SrcB <- IN0)
+        _llk_unpack_AB_matmul_stream_narrow_(
+            ct_dim, rt_dim, static_cast<std::uint32_t>(IN1_DESC.format), static_cast<std::uint32_t>(IN0_DESC.format)));
 }
 
 template <ckernel::experimental::LLKMemDescriptor IN0_DESC, ckernel::experimental::LLKMemDescriptor IN1_DESC>
@@ -80,5 +80,7 @@ inline void llk_unpack_AB_matmul(
         IN0_DESC.shape.total_row_dim() < ckernel::TILE_R_DIM,  // partial_face_b (SrcB <- IN0)
         ct_dim,
         rt_dim,
-        kt_dim);
+        kt_dim,
+        _llk_unpack_AB_matmul_stream_narrow_(
+            ct_dim, rt_dim, static_cast<std::uint32_t>(IN1_DESC.format), static_cast<std::uint32_t>(IN0_DESC.format)));
 }

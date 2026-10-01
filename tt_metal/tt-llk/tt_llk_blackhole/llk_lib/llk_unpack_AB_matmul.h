@@ -32,20 +32,12 @@ inline void _llk_unpack_AB_matmul_set_in1_column_stride_(const std::uint32_t til
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size * stride_tiles), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
 }
 
-// Which per-tile address advance the replay holds for the streamed operand, and for the CFGSHIFTMASK advance the stride it
-// adds: MATMUL_UNP_GPR_ADVANCE when the replay advances through a GPR (the body before this change, 16-bit and 32-bit
-// formats), otherwise the RISC-side copy of SCRATCH_SEC0_val (16-byte words), MATMUL_UNP_UNKNOWN after an init since
-// another op may have written the register.
-constexpr std::uint32_t MATMUL_UNP_GPR_ADVANCE = 0;
-constexpr std::uint32_t MATMUL_UNP_UNKNOWN     = 0xFFFFFFFF;
-static std::uint32_t matmul_unp_stream_stride  = MATMUL_UNP_GPR_ADVANCE;
-
 /**
  * @brief Whether a format holds 8 bits per datum or less (block float, fp8 and 8-bit integer formats).
  *
  * The unpacker moves such a tile in half the time of a 16-bit one, so the GPR address advance of the streamed operand
  * (RDCFG, ADDDMAREG, STALLWAIT, WRCFG) would set the rate; these formats get the CFGSHIFTMASK advance instead. 16-bit and
- * 32-bit formats, and a format the caller does not pass, keep the GPR advance.
+ * 32-bit formats keep the GPR advance.
  *
  * @param unpack_src_format: Unpacker input (L1) data format.
  */
@@ -67,6 +59,24 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
         default:
             return false;
     }
+}
+
+/**
+ * @brief Whether the operand a matmul streams holds 8 bits per datum or less: the value of the stream_narrow argument of
+ *        @ref _llk_unpack_AB_matmul_init_ and @ref _llk_unpack_AB_matmul_ (pass the same value to both).
+ *
+ * The streamed operand is in1 (unpacked into SrcA) when ct_dim >= rt_dim and in0 (SrcB) otherwise.
+ *
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param unpA_src_format: Unpacker input (L1) data format of in1, the operand unpacked into SrcA, as given to
+ *                         @ref _llk_unpack_hw_configure_.
+ * @param unpB_src_format: Unpacker input (L1) data format of in0, the operand unpacked into SrcB.
+ */
+inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
+    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format)
+{
+    return _llk_unpack_AB_matmul_narrow_format_((ct_dim >= rt_dim) ? unpA_src_format : unpB_src_format);
 }
 
 /**
@@ -207,8 +217,8 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @brief Initialize the unpacker for a matmul (A x B) operation.
  *
  * Re-enables within-face transpose if needed, programs per-unpacker datum counts (full-tile or
- * face-by-face for partial faces), stashes kt_dim into a GPR for tile-size scaling, picks the address advance of
- * the streamed operand from its format, and programs the matmul MOP.
+ * face-by-face for partial faces), stashes kt_dim into a GPR for tile-size scaling, and programs the matmul MOP
+ * with the address advance the streamed operand's format calls for.
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
@@ -222,9 +232,10 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @param unpB_num_faces: Number of faces for operand B, valid values = <1, 2, 4>.
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
- * @param unpA_src_format: Unpacker input (L1) data format of the operand unpacked into SrcA (operand B), as given to
- *                         @ref _llk_unpack_hw_configure_. Formats of 8 bits per datum or less stream at their data rate.
- * @param unpB_src_format: Unpacker input (L1) data format of the operand unpacked into SrcB (operand A).
+ * @param stream_narrow: Whether the streamed operand holds 8 bits per datum or less, from
+ *                       @ref _llk_unpack_AB_matmul_stream_narrow_; such an operand is streamed at its data rate (the replay
+ *                       advances its address with one CFGSHIFTMASK), every other one as before. Pass the same value to
+ *                       @ref _llk_unpack_AB_matmul_.
  * @note Call @ref _llk_unpack_AB_matmul_uninit_ to restore the modified datum-count state.
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
@@ -241,8 +252,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t unpB_num_faces  = 4,
     const bool unpA_partial_face        = false,
     const bool unpB_partial_face        = false,
-    const std::uint32_t unpA_src_format = to_underlying(DataFormat::Invalid),
-    const std::uint32_t unpB_src_format = to_underlying(DataFormat::Invalid))
+    const bool stream_narrow            = false)
 {
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
@@ -284,11 +294,6 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     }
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
-
-    // The streamed operand is in1 (SrcA) when ct_dim >= rt_dim, in0 (SrcB) otherwise; a narrow format takes the CFGSHIFTMASK advance,
-    // whose stride @ref _llk_unpack_AB_matmul_ loads into SCRATCH_SEC0_val
-    const bool stream_narrow = _llk_unpack_AB_matmul_narrow_format_((ct_dim >= rt_dim) ? unpA_src_format : unpB_src_format);
-    matmul_unp_stream_stride = stream_narrow ? MATMUL_UNP_UNKNOWN : MATMUL_UNP_GPR_ADVANCE;
 
     _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face, stream_narrow);
 }
@@ -333,9 +338,8 @@ inline void _llk_unpack_AB_matmul_held_tile_(const bool partial_face)
  *
  * Iterates over the reused dimension, computing per-tile L1 addresses (with optional kernel-
  * broadcast wraparound and kt_dim striding), and unpacks operand A to SrcB / operand B to SrcA
- * for each row while streaming the other operand through the MOP. With the CFGSHIFTMASK advance (narrow formats, see
- * @ref _llk_unpack_AB_matmul_init_) the streamed tile stride in SCRATCH_SEC0_val is reloaded from the tile size GPRs
- * when it differs from the programmed one.
+ * for each row while streaming the other operand through the MOP. With the CFGSHIFTMASK advance (stream_narrow) the
+ * streamed tile stride is loaded into SCRATCH_SEC0_val from the tile size GPRs at every call.
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
@@ -350,6 +354,7 @@ inline void _llk_unpack_AB_matmul_held_tile_(const bool partial_face)
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
  * @param kt_dim: Number of tiles along the contraction (K) dimension.
+ * @param stream_narrow: The value given to @ref _llk_unpack_AB_matmul_init_ (from @ref _llk_unpack_AB_matmul_stream_narrow_).
  * @note Call @ref _llk_unpack_AB_matmul_init_ with matching template args before this function, and
  *       @ref _llk_unpack_AB_matmul_uninit_ after it to restore modified state.
  * @ref _llk_math_matmul_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
@@ -366,7 +371,8 @@ inline void _llk_unpack_AB_matmul_(
     const bool unpB_partial_face = false,
     std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim   = 1,
-    const std::uint32_t kt_dim   = 1)
+    const std::uint32_t kt_dim   = 1,
+    const bool stream_narrow     = false)
 {
     // In0/InA -> srcB (unpacker 1; supports partial face)
     // In1/InB -> srcA (unpacker 0)
@@ -382,25 +388,21 @@ inline void _llk_unpack_AB_matmul_(
         TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
     }
 
-    if (matmul_unp_stream_stride != MATMUL_UNP_GPR_ADVANCE)
+    if (stream_narrow)
     {
-        // Tile stride of the streamed operand in 16-byte words: in1 tiles are consecutive, in0 rows are kt_dim tiles apart.
-        const std::uint32_t stream_stride = reuse_a ? tile_size_b : (tile_size_a * kt_dim);
-
-        // Reload SCRATCH_SEC0_val (TILE_SIZE_A is the in1 tile size, TMP_LO the in0 row stride) when the stride changed; the WRCFG
-        // is ordered against the replay's CFGSHIFTMASKs in the Configuration Unit, so no NOP is needed after it.
-        if (matmul_unp_stream_stride != stream_stride)
+        // The replay's CFGSHIFTMASK adds SCRATCH_SEC0_val to the streamed operand's base address: load it with the streamed
+        // tile stride in 16-byte words (in1 tiles are consecutive, in0 rows are kt_dim tiles apart) from the tile size GPRs
+        // (TILE_SIZE_A is the in1 tile size, TMP_LO the in0 row stride), so a tile size change between two calls and another
+        // op's use of the scratch register are honoured. The WRCFG is ordered against the replay's CFGSHIFTMASKs in the
+        // Configuration Unit, so no NOP is needed after it.
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+        if (reuse_a)
         {
-            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-            if (reuse_a)
-            {
-                TTI_WRCFG(p_gpr_unpack::TILE_SIZE_A, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
-            }
-            else
-            {
-                TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
-            }
-            matmul_unp_stream_stride = stream_stride;
+            TTI_WRCFG(p_gpr_unpack::TILE_SIZE_A, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+        }
+        else
+        {
+            TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
         }
     }
 
