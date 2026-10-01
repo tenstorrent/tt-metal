@@ -49,6 +49,74 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
     return v_shares_k_buffer && (Sq_chunk_t == 1);
 }
 
+// ---------------------------------------------------------------------------
+// Rotated Q split: host/device contract. The remainder ("float") Q chunks of an uneven work split
+// change owner core between ring iterations, so no LOCKSTEP GROUP pays the +1 K-mcast slot on
+// every one. A group is the set of cores one injector multicasts to while waiting for every
+// receiver -- today a full grid row, for either the shared-K (latent-V) or the GQA-grouped family.
+// Everything here is derived identically by the program factory and all three kernels.
+//
+// rotated_max_slots -- the maximum owned chunk count -- is not here: the factory pushes it as
+// each kernel's LAST compile-time arg, and each kernel reads it back from that position.
+// ---------------------------------------------------------------------------
+
+// One semaphore holds distinct completion bits for all receiving active ordinals.
+// Bits stay set until kernel completion, so arbitrary inter-core skew is safe.
+constexpr uint32_t kRotatedHandoffSemCount = 1;
+
+// Per active ordinal, only the moving unit is sent. Its ID is its first flat chunk
+// index (a balanced unit has two consecutive chunks); ~0u means no remainder.
+// The existing global_q_start/end args describe the fixed base range.
+constexpr uint32_t kRotatedNoRemainder = ~0u;
+constexpr uint32_t kRotatedReaderIterWords = 2;   // [remainder_start, group_has_remainder]
+constexpr uint32_t kRotatedWriterIterWords = 2;   // [remainder_start, float_dest]
+constexpr uint32_t kRotatedComputeIterWords = 1;  // [remainder_start]
+
+struct RotatedQSlots {
+    uint32_t base_start = 0;
+    uint32_t base_count = 0;
+    uint32_t remainder_start = kRotatedNoRemainder;
+
+    constexpr uint32_t count(uint32_t unit_chunks) const {
+        return base_count + (remainder_start != kRotatedNoRemainder ? unit_chunks : 0);
+    }
+
+    constexpr uint32_t at(uint32_t slot) const {
+        return slot < base_count ? base_start + slot : remainder_start + slot - base_count;
+    }
+};
+
+constexpr uint32_t rotated_iter_base(uint32_t args_base, uint32_t iter_stride, uint32_t ordinal) {
+    return args_base + ordinal * iter_stride;
+}
+
+// Ordinal of `ring_iter` within the ACTIVE subsequence. All three kernels index the schedule by
+// this rather than by absolute ring_iter: the handoff pairs a donor signal with a receiver wait in
+// the NEXT EXECUTED iteration, and consecutive ordinals cannot straddle a skipped one. Equal to
+// ring_iter for a full mask, which is what lets the device-derived kv-pad mask rotate too.
+constexpr uint32_t rotated_active_ordinal(uint32_t active_ring_iter_mask, uint32_t ring_iter) {
+    constexpr uint32_t kRingIterMaskBits = 32;
+    const uint32_t before = ring_iter >= kRingIterMaskBits ? ~0u : ((1u << ring_iter) - 1u);
+    uint32_t bits = active_ring_iter_mask & before;
+    uint32_t count = 0;
+    while (bits) {
+        bits &= bits - 1u;  // clear lowest set bit
+        ++count;
+    }
+    return count;
+}
+
+// float_dest: the float's next owner as one packed word, or kRotatedNoDest when it stays put.
+// Physical NoC coordinates are small, so y takes the low byte and x the rest.
+constexpr uint32_t kRotatedDestYBits = 8;
+constexpr uint32_t kRotatedDestYMask = (1u << kRotatedDestYBits) - 1u;
+constexpr uint32_t kRotatedNoDest = ~0u;
+constexpr uint32_t rotated_pack_dest(uint32_t phys_x, uint32_t phys_y) {
+    return (phys_x << kRotatedDestYBits) | phys_y;
+}
+constexpr uint32_t rotated_dest_x(uint32_t packed_dest) { return packed_dest >> kRotatedDestYBits; }
+constexpr uint32_t rotated_dest_y(uint32_t packed_dest) { return packed_dest & kRotatedDestYMask; }
+
 template <bool v_shares_k_buffer, bool kt_inplace_v = false>
 constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks) {
     // Reader pushes one K entry and one V entry per real chunk; compute pops the
