@@ -196,7 +196,8 @@ class TtMoEUnified:
         dispatch, combine = self._seq_modules(S)
         signpost("moe.dispatch")
         idx2 = ttnn.reshape(ttnn.typecast(idx, ttnn.uint16) if idx.dtype != ttnn.uint16 else idx, (S, K))
-        offsets, counts, region_offsets = self._routing_setup(idx2)
+        # 4th output (#57859, every device's offsets row along the axis) is not used here
+        offsets, counts, region_offsets, _ = self._routing_setup(idx2)
         ind = ttnn.reshape(ttnn.to_layout(idx2, ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
         scores = ttnn.reshape(ttnn.to_layout(ttnn.typecast(wts, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
         buf, meta = _dispatch(dispatch, ttnn.squeeze(x, dim=0), ind, offsets, self.dispatch_table)

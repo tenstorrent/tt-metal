@@ -45,3 +45,19 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: hy4_preview_d_p O.1
 - Files: `tests/cases.py`
+
+### Upstream sync: a fourth output, `all_global_dispatch_offsets` (#57859, source @ `73027b6e6ff`, 2026-10-01)
+- What: 3-way merge (base = fork_op.py's copy of the source @ `67ca5f3af48`, theirs = the same copy @ `73027b6e6ff`,
+  ours = this fork; no conflicts) of #57859: the op returns four tensors, the new last one
+  `[devices along cluster_axis, n_routed_experts]`, every device's `global_dispatch_offsets` row, replicated along
+  the axis (store-and-forward dispatch sizes other devices' runs from it); the kernel reads all rows once and
+  writes in 8-column blocks (source: 2-3x faster). The first three outputs are unchanged by position and value.
+  The fork's own change (no all_gather on a 1-device dispatch axis) is kept: the table then has one row.
+- Why: the source's tests and wrappers now unpack four outputs, so the fork's carried source tests could not run
+  (21 failed with "expected 4, got 3"); keeping the fork on the source's contract as main moves.
+- Default behaviour: changes the return arity (bug-fix-style exception to "behind an option"): every caller now
+  unpacks four (ernie45_d_p, gemma4_a4b_d_p, mimo_v2_6_d_p, mimo_v2_6_d_p_2x2, hy4_preview_d_p, glm53_flash_d_p,
+  xing40_a4b_d_p, `tt/experts.py` / `tt/moe_unified.py`, the fourth ignored). `tests/test_offset_cumsum.py` checks the
+  fourth output against the torch reference too.
+- Needed by: rebase onto origin/malimpic/llk_helper_library_rebased_0110_2
+- Files: `device/*`, `offset_cumsum.{hpp,cpp}`, `offset_cumsum_nanobind.cpp`, `tests/test_offset_cumsum.py`
