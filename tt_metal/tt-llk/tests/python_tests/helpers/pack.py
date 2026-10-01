@@ -98,16 +98,19 @@ def pack_uint8(torch_tensor):
     return torch_tensor.cpu().numpy().astype(np.uint8).tobytes()
 
 
-def _pack_nibbles(nibbles: np.ndarray, face_r_dim: int | None = None) -> bytes:
-    """Pack 4-bit datums two per byte: even index in the low nibble, odd index in the high nibble.
+def _pack_4bit_integer_datums(
+    datums: np.ndarray, face_r_dim: int | None = None
+) -> bytes:
+    """Pack 4-bit integer datums two per byte: even index in the low nibble, odd index in the high nibble.
 
-    With ``face_r_dim``, each face starts on a 16 B L1 boundary: the unpacker addresses a
-    face as its own 16 B-aligned block, so a 1x16 face (8 B) is followed by 8 B of padding.
+    With ``face_r_dim``, each face is padded to a 16 B L1 boundary: tiles other than 32x32 use a
+    z=1 buffer-descriptor shape, so every face is addressed as its own 16 B-aligned unit and a
+    1x16 face (8 B) is followed by 8 B of padding.
     """
-    nibbles = nibbles.flatten().astype(np.uint8)
-    if nibbles.size % 2:
-        raise ValueError(f"4-bit packing needs an even datum count, got {nibbles.size}")
-    packed = (((nibbles[1::2] & 0x0F) << 4) | (nibbles[0::2] & 0x0F)).tobytes()
+    datums = datums.flatten().astype(np.uint8)
+    if datums.size % 2:
+        raise ValueError(f"4-bit packing needs an even datum count, got {datums.size}")
+    packed = (((datums[1::2] & 0x0F) << 4) | (datums[0::2] & 0x0F)).tobytes()
     if face_r_dim is None:
         return packed
     face_bytes = face_r_dim * FACE_C_DIM // 2
@@ -121,19 +124,17 @@ def _pack_nibbles(nibbles: np.ndarray, face_r_dim: int | None = None) -> bytes:
 def pack_int4(torch_tensor, num_faces=None, face_r_dim=None):
     # INT4 uses sign-magnitude format in hardware: bit 3 = sign, bits 2:0 = magnitude
     array = np.clip(
-        torch_tensor.cpu().numpy().astype(np.int16),
-        *FOUR_BIT_INTEGER_RANGE[DataFormat.Int4],
-    )
+        torch_tensor.cpu().numpy(), *FOUR_BIT_INTEGER_RANGE[DataFormat.Int4]
+    ).astype(np.int8)
     sign = (array < 0).astype(np.uint8) << 3
-    return _pack_nibbles(sign | np.abs(array).astype(np.uint8), face_r_dim)
+    return _pack_4bit_integer_datums(sign | np.abs(array).astype(np.uint8), face_r_dim)
 
 
 def pack_uint4(torch_tensor, num_faces=None, face_r_dim=None):
     array = np.clip(
-        torch_tensor.cpu().numpy().astype(np.int16),
-        *FOUR_BIT_INTEGER_RANGE[DataFormat.UInt4],
-    )
-    return _pack_nibbles(array.astype(np.uint8), face_r_dim)
+        torch_tensor.cpu().numpy(), *FOUR_BIT_INTEGER_RANGE[DataFormat.UInt4]
+    ).astype(np.uint8)
+    return _pack_4bit_integer_datums(array, face_r_dim)
 
 
 # ============================================================================

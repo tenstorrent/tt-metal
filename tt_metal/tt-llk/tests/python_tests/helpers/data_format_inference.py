@@ -163,14 +163,11 @@ def effective_dest_acc(
     return DestAccumulation.Yes if arch != ChipArchitecture.QUASAR else dest_acc
 
 
-# L1 input formats each SrcA/SrcB-only 2x register format may be unpacked from. Int4/UInt4 live
-# only in L1 and are widened by the unpacker, so they share the 8-bit 2x registers: Int4 goes to
-# Int8_2x, and UInt4 is accepted by either, matching the signed/unsigned pair it widens into.
 _2X_L1_FORMAT = {
-    DataFormat.MxFp4_2x_A: {DataFormat.MxFp4},
-    DataFormat.MxFp4_2x_B: {DataFormat.MxFp4},
-    DataFormat.Int8_2x: {DataFormat.Int8, DataFormat.Int4, DataFormat.UInt4},
-    DataFormat.UInt8_2x: {DataFormat.UInt8, DataFormat.UInt4},
+    DataFormat.MxFp4_2x_A: DataFormat.MxFp4,
+    DataFormat.MxFp4_2x_B: DataFormat.MxFp4,
+    DataFormat.Int8_2x: DataFormat.Int8,
+    DataFormat.UInt8_2x: DataFormat.UInt8,
 }
 
 _SRCS_PASSTHROUGH_FORMATS = [
@@ -208,7 +205,7 @@ def infer_unpack_out(
         The inferred output data format for unpacking to registers
     """
     if register_format_hint is not None:
-        if input_format not in _2X_L1_FORMAT.get(register_format_hint, frozenset()):
+        if input_format != _2X_L1_FORMAT.get(register_format_hint):
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
@@ -691,15 +688,22 @@ def data_formats(
             unpack_dst = DataFormat.Fp8_e4m3
             math_format = DataFormat.Float16
             pack_src_format = DataFormat.Float16
-        else:
-            # Int4/UInt4 can't exist in registers; the unpacker widens them to Int8/UInt8.
+        elif input_format.is_4bit_integer():
+            # Int4/UInt4 can't exist in registers; the unpacker widens Int4 to Int8 and UInt4 to UInt8.
             unpack_dst = (
-                infer_unpack_out(input_format, output_format, is_fp32_dest_acc_en)
-                if input_format.is_4bit_integer()
-                else input_format
+                DataFormat.Int8 if input_format == DataFormat.Int4 else DataFormat.UInt8
             )
             math_format = unpack_dst
-            pack_src_format = unpack_dst
+            # A 32-bit dest holds Int32, so the packer reads it as Int32.
+            pack_src_format = (
+                DataFormat.Int32
+                if is_fp32_dest_acc_en == DestAccumulation.Yes
+                else output_format
+            )
+        else:
+            unpack_dst = input_format
+            math_format = input_format
+            pack_src_format = input_format
             # Widening reductions (e.g. UInt16 reduce-sum) keep a narrow input but accumulate into a
             # wider 32-bit value in a 32-bit dest. The kernel masks the garbage high bits on load (driven
             # by the narrow math format) yet stores the full 32-bit result, so the packer must read the
@@ -740,6 +744,10 @@ def data_formats(
 
         if input_format_B is not None and input_format_B == DataFormat.Fp8_e4m3:
             unpack_B_dst_val = DataFormat.Fp8_e4m3
+        elif input_format_B == DataFormat.Int4:
+            unpack_B_dst_val = DataFormat.Int8
+        elif input_format_B == DataFormat.UInt4:
+            unpack_B_dst_val = DataFormat.UInt8
         elif input_format_B is not None:
             unpack_B_dst_val = input_format_B
         else:

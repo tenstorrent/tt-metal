@@ -93,26 +93,6 @@ def unpack_uint8(packed_list):
     return np.frombuffer(bytes(packed_list), dtype=np.uint8).tolist()
 
 
-def _unpack_nibbles(packed_list) -> np.ndarray:
-    """Split each byte into two 4-bit datums: low nibble first, then high nibble."""
-    packed = np.frombuffer(bytes(packed_list), dtype=np.uint8)
-    nibbles = np.empty(packed.size * 2, dtype=np.uint8)
-    nibbles[0::2] = packed & 0x0F
-    nibbles[1::2] = packed >> 4
-    return nibbles
-
-
-def unpack_int4(packed_list):
-    # INT4 uses sign-magnitude format in hardware: bit 3 = sign, bits 2:0 = magnitude
-    nibbles = _unpack_nibbles(packed_list)
-    magnitude = (nibbles & 0x07).astype(np.int8)
-    return np.where(nibbles & 0x08, -magnitude, magnitude).tolist()
-
-
-def unpack_uint4(packed_list):
-    return _unpack_nibbles(packed_list).tolist()
-
-
 # ============================================================================
 # BFP (Block Floating-Point) Unpacking
 #
@@ -642,8 +622,6 @@ _UNPACKERS = {
     DataFormat.Fp8_e4m3: unpack_fp8_e4m3,
     DataFormat.Int8: unpack_int8,
     DataFormat.UInt8: unpack_uint8,
-    DataFormat.Int4: unpack_int4,
-    DataFormat.UInt4: unpack_uint4,
 }
 
 
