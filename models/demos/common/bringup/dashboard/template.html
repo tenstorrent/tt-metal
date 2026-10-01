@@ -234,20 +234,14 @@ section[hidden]{display:none}
     </section>
   </div>
 
-  <div class="two">
-    <section aria-labelledby="s-find">
-      <div class="sec-head"><h2 id="s-find">Findings and tagged gaps</h2><p>Missing TTNN ops, harness pitfalls, contract notes</p></div>
-      <div id="findings" style="display:grid;gap:12px"></div>
-    </section>
-    <section aria-labelledby="s-time">
+  <section aria-labelledby="s-time">
       <div class="sec-head"><h2 id="s-time">Chunk timing</h2><p>Warm prefill time by token range (k = 1024 tokens): nothing read back. Accuracy runs (the ladder) are not timed here</p></div>
       <div class="tbl-wrap"><table id="timing"></table></div>
       <h3 id="pos-head" style="margin:22px 0 4px">Chunk time by position</h3>
       <p id="pos-sub" class="muted" style="margin:0 0 8px"></p>
       <div id="pos-wrap"><svg id="pos" viewBox="0 0 900 260" role="img" style="width:100%;height:auto"></svg></div>
       <div class="tbl-wrap"><table id="pos-table"></table></div>
-    </section>
-  </div>
+  </section>
 
   <section aria-labelledby="s-shard">
     <div class="sec-head"><h2 id="s-shard">Sharding across chips</h2><p id="shard-sub"></p></div>
@@ -301,6 +295,12 @@ section[hidden]{display:none}
     <div class="legend" id="pcc-legend"></div>
     <div class="svg-wrap" id="pcc-wrap"><svg id="pcc" viewBox="0 0 900 300" width="100%" role="img" aria-label="Per-layer PCC chart"></svg></div>
     <details><summary style="cursor:pointer;color:var(--ink2);font-size:13px">Table view</summary><div class="tbl-wrap"><table id="pcc-table"></table></div></details>
+  </section>
+
+  <section aria-labelledby="s-final" id="final-sec">
+    <div class="sec-head"><h2 id="s-final">Final tests</h2><p>End to end: the intake smoke on the device model and through the real runner, the full-target ladder rung, the serving contract tests</p></div>
+    <div class="tbl-wrap"><table id="final"><thead><tr><th>Test</th><th>Result</th><th>Prompt</th><th>Expected</th><th>Answer</th><th class="num">Time</th><th>Detail</th></tr></thead><tbody></tbody></table></div>
+    <div class="kv" id="final-lines"></div>
   </section>
 
   <footer id="foot"></footer>
@@ -536,13 +536,6 @@ function pccChart(){
     D.layer_types.map((ty, i) => `<tr><td class="mono">L${i} ${ty}</td>${tr.map(t => { const p = t.points.find(q => q[0] === i); return `<td class="mono">${p ? p[1].toFixed(7) : "—"}</td>`; }).join("")}</tr>`).join("") + "</tbody>";
 }
 
-function findings(){
-  const col = {API:"--s4", ACCURACY:"--s2", PERF:"--s3", INFRA:"--crit", CONTRACT:"--s1"};
-  $("#findings").innerHTML = (D.findings || []).map(f => `<div style="display:grid;gap:4px">
-    <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><span class="tag" style="border-color:var(${col[f.kind] || "--line"})">${esc(f.kind)}</span><b style="font-size:13.5px">${esc(f.title)}</b><span class="sub mono" style="font-size:11.5px">${esc(f.task || "")}</span></div>
-    <div class="sub" style="font-size:13px">${esc(f.detail)}</div></div>`).join("") || `<div class="empty">None yet</div>`;
-}
-
 function timing(){
   const T = D.timing || [];
   if (!T.length){ $("#timing").outerHTML = `<div class="empty">No device runs yet</div>`; return; }
@@ -750,8 +743,27 @@ function prior(){
     const n = (vi + (e.key === "ArrowRight" ? 1 : -1) + V.length) % V.length; show(n); tabs.querySelector(`[data-v="${n}"]`).focus(); };
   show(vi);
 }
-function render(){ header(); deferred(); profile(); prior(); ladder(); dag(); ops(); findings(); timing(); positionsChart(); sharding(); pccChart();
-  $("#foot").textContent = `Generated from ${D.source} (tasks.yaml, state.json, results/, components.yaml, plan.yaml, findings.yaml) by models/demos/common/bringup/dashboard/export.py.`; }
+function finalTests(){
+  const F = D.final || {smokes:[], ladder:null, contract:null};
+  const NR = `<span class="pill"><span class="dot" style="background:var(--crit)"></span>○ <span class="metric-bad">not run</span></span>`;
+  const res = (ran, ok) => !ran ? NR : pill(ok ? "PASS" : "FAIL");
+  const short = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
+  $("#final tbody").innerHTML = (F.smokes || []).map(r => {
+    const det = [r.task ? `task ${esc(r.task)}` : "", r.mode === "runner" && r.ran ? `prompt ${r.prompt_len} tok · boundary ${r.boundary} · ${r.records} records` : ""].filter(Boolean).join("<br>");
+    return `<tr><td>${esc(r.label)}</td><td>${res(r.ran, r.ok)}</td><td title="${esc(r.prompt)}">${esc(short(r.prompt, 48))}</td><td class="mono">${esc(r.expected)}</td>
+      <td class="mono">${r.ran ? esc(JSON.stringify(r.answer)) : `<span class="sub">—</span>`}</td><td class="num">${r.ran && r.seconds != null ? fmtDur(r.seconds) : "—"}</td><td class="mono" style="font-size:12px">${det || "—"}</td></tr>`; }).join("");
+  const L = F.ladder, C = F.contract, lines = [];
+  if (L) lines.push(["Full-target ladder", !L.ran ? NR : `${pill(L.status)} <span class="mono">${esc(L.rung)} (${L.seq.toLocaleString()} in ${L.chunk.toLocaleString()}): min layer PCC ${fmt(L.min_pcc)} · top-1 ${L.top1 != null ? fmt(L.top1) : "—"} · top-5 ${L.top5 != null ? fmt(L.top5) : "—"}</span> <span class="sub mono">${esc(L.task)}</span>`]);
+  else lines.push(["Full-target ladder", NR]);
+  if (C){ const ok = C.passed === C.total;
+    lines.push(["Contract tests", `<span class="mono ${ok ? "metric-ok" : "metric-bad"}">${C.passed}/${C.total} passed</span>` + (C.failed ? ` <span class="metric-bad">${C.failed} failed</span>` : "") +
+      (C.not_run ? ` <span class="metric-bad">${C.not_run} not run</span>` : "") +
+      ` <span class="sub mono" style="font-size:12px">${C.tests.map(t => `${esc(t.test)} ${t.ok == null ? "not run" : (t.ok ? "✓" : "✕") + " " + esc(t.task)}`).join(" · ")}</span>`]); }
+  else lines.push(["Contract tests", NR]);
+  $("#final-lines").innerHTML = lines.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+}
+function render(){ header(); deferred(); profile(); prior(); ladder(); dag(); ops(); timing(); positionsChart(); sharding(); pccChart(); finalTests();
+  $("#foot").textContent = `Generated from ${D.source} (tasks.yaml, state.json, results/, components.yaml, plan.yaml) by models/demos/common/bringup/dashboard/export.py.`; }
 if (D) render();
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());
 new MutationObserver(() => D && render()).observe(document.documentElement, {attributes:true, attributeFilter:["data-theme"]});

@@ -390,3 +390,33 @@ def test_settings_gate_commit_stages_the_model_code(fx):
     z = next(t for t in generate(s, Reference())["tasks"] if t["id"] == "Z.1")
     got = stage_paths(s, led, z)
     assert any(p.endswith("/tt") for p in got) and any(p.endswith("bringup/hooks.py") for p in got)
+
+
+def test_runner_smoke_kind_gates_k1_on_its_answer(fx):
+    """The contract test marked kind: runner_smoke runs in K.1's gate and K.1 requires smoke_runner_ok == 1; without
+    it K.1 has no such metric. L.smoke (the model smoke) sits after the last rung and before K.1."""
+    from models.demos.common.bringup.testing import serving as SV
+
+    s = Spec.load(fx(intake={"smoke": {"prompt": "capital of France?", "expect": "Paris"}}))
+    s.repo.mkdir(exist_ok=True)
+    tdir = s.repo / "models/demos/fixture/tests/bringup/contract"
+    tdir.mkdir(parents=True)
+    (tdir / "test_runner_smoke.py").write_text("def test_x():\n    assert False, 'not built'\n")
+    write(s, "serving_contract.md", SERVING_MD)
+    smoke = {
+        "test": "models/demos/fixture/tests/bringup/contract/test_runner_smoke.py",
+        "checks": "runner smoke",
+        "section": "Adapter and table",
+        "gates": "adapter",
+    }
+    write(s, "contract_tests.yaml", {"tests": [smoke]})
+    t = {x["id"]: x for x in generate(s, Reference())["tasks"]}
+    assert "smoke_runner_ok" not in t["K.1"]["gate"]["metrics"] and "L.smoke" in t["K.1"]["deps"]
+    assert t["L.smoke"]["deps"] == ["L.last"] and t["L.smoke"]["gate"]["metrics"] == {"smoke_device_ok": "== 1"}
+    write(s, "contract_tests.yaml", {"tests": [{**smoke, "kind": "runner_smoke"}]})
+    assert SV.check(s, s.repo) == [] and SV.runner_smoke(s, "adapter")["test"] == smoke["test"]
+    t = {x["id"]: x for x in generate(s, Reference())["tasks"]}
+    assert t["K.1"]["gate"]["metrics"]["smoke_runner_ok"] == "== 1"
+    assert "test_runner_smoke.py" in t["K.1"]["gate"]["cmd"]
+    write(s, "contract_tests.yaml", {"tests": [{**smoke, "kind": "runner_smok"}]})
+    assert any("unknown kind" in e for e in SV.check(s, s.repo))
