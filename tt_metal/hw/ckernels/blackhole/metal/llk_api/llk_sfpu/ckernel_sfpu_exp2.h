@@ -122,7 +122,7 @@ void calculate_exp2_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_exp2() {
-    if constexpr (!is_fp32_dest_acc_en && APPROXIMATION_MODE == true) {
+    if constexpr (!is_fp32_dest_acc_en && APPROXIMATION_MODE == true && ITERATIONS == 32) {
         calculate_exp2_bf16<ITERATIONS>();
         return;
     }

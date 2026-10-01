@@ -7,13 +7,17 @@
 // L5 holds 127 and L7 the final register addend. Clamp callers repin L2/L6
 // to 255 before every issue because SWAP destroys those operands.
 namespace sfpi {
-template <uint32_t Degree, bool Clamp, uint32_t Hold>
-inline void exp2_paired_body() {
-    static_assert(Degree == 2u || Degree == 3u);
+template <uint32_t Hold>
+inline void exp2_paired_scale() {
     TTI_SFPLOAD(ckernel::p_sfpu::LREG0, 0, Hold, 0);
     TTI_SFPLOAD(ckernel::p_sfpu::LREG3, 0, Hold, 2);
     TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG12, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG0, 0);
     TTI_SFPMAD(ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG12, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG3, 0);
+}
+
+template <uint32_t Degree, bool Clamp>
+inline void exp2_paired_reduce() {
+    static_assert(Degree == 2u || Degree == 3u);
     if constexpr (Clamp) {
         TTI_SFPSWAP(0, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 9);
         TTI_SFPSWAP(0, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG3, 9);
@@ -66,5 +70,11 @@ inline void exp2_paired_body() {
         ckernel::p_sfpu::LREG3,
         ckernel::p_sfpu::LREG3,
         sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+}
+
+template <uint32_t Degree, bool Clamp, uint32_t Hold>
+inline void exp2_paired_body() {
+    exp2_paired_scale<Hold>();
+    exp2_paired_reduce<Degree, Clamp>();
 }
 }  // namespace sfpi
