@@ -7,6 +7,8 @@
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 using matmul_device_operation_t = ttnn::experimental::prim::MinimalMatmulDeviceOperation;
 
@@ -343,6 +345,40 @@ MinimalMatmulStridedReduceScatterAsync::create_output_tensors(
                                         : create_device_tensor(tensor_specs[2], tensor_args.input_tensor.device());
 
     return {mm_output_tensor, rs_intermediate_tensor, rs_output_tensor};
+}
+
+std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // {mm, rs_intermediate, rs_output}. The matmul output takes the union-default label of its operands (input,
+    // weight, bias and the optional second in0 source). The reduce_scatter consumes the matmul output: its
+    // intermediate is scratch over that tensor and keeps its label (reduce_scatter_minimal_async convention); its
+    // output is the reduce_scatter of the matmul LABEL along `cluster_axis` for `dim`. Caller-supplied persistent
+    // buffers are those tensors and take the same labels. The fused addcmul is elementwise on the reduce_scatter
+    // result and leaves its distribution alone. No honest label (nullopt, already warned about): {} keeps the union
+    // default for all three.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(input_topology), std::cref(tensor_args.weight_tensor.tensor_topology())};
+    if (tensor_args.bias.has_value()) {
+        operands.emplace_back(tensor_args.bias->tensor_topology());
+    }
+    if (tensor_args.mm_optional_input_tensor.has_value()) {
+        operands.emplace_back(tensor_args.mm_optional_input_tensor->tensor_topology());
+    }
+    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
+    TensorTopology mm_topology(std::move(shape), std::move(placements), input_topology.mesh_coords());
+
+    auto rs_output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+        mm_topology,
+        attributes.cluster_axis,
+        tensor_args.input_tensor.device()->shape(),
+        static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank()),
+        static_cast<int32_t>(attributes.dim));
+    if (!rs_output_topology.has_value()) {
+        return {};
+    }
+    return {mm_topology, mm_topology, std::move(*rs_output_topology)};
 }
 
 }  // namespace ttnn::experimental::prim

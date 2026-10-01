@@ -107,6 +107,8 @@ struct LlamaReduceScatterDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<CoreRangeSet, CoreRangeSet> get_rs_core_grids(
         const LlamaReduceScatterDeviceOperation::operation_attributes_t& operation_attributes,
         const LlamaReduceScatterDeviceOperation::tensor_args_t& tensor_args);

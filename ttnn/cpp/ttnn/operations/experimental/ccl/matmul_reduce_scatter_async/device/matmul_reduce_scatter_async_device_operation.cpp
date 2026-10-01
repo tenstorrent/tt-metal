@@ -8,6 +8,8 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 /* Reduce Scatter Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
@@ -77,6 +79,36 @@ MatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
         args.matmul_struct, {.input_tensors = {tensor_args.input, tensor_args.weight}})[0];
 
     return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
+}
+
+std::vector<tt::tt_metal::TensorTopology> MatmulReduceScatterAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // {mm, reduce_scatter}. The matmul output takes the union-default label of input, weight and bias (what launch()
+    // gives a plain matmul). The reduce_scatter consumes that matmul output, so its label is the reduce_scatter of
+    // the matmul LABEL -- not of any tensor in tensor_args -- along reduce_scatter_params.cluster_axis (nullopt: the
+    // whole mesh) for reduce_scatter_params.dim; the caller's persistent output buffer IS that result and takes the
+    // label. Not delegated to ReduceScatterMinimalAsyncDeviceOperation, whose hook labels its own 2-3 tensors from
+    // its own input. No honest label (nullopt, already warned about): {} keeps the union default for both.
+    const auto& input_topology = tensor_args.input.tensor_topology();
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(input_topology), std::cref(tensor_args.weight.tensor_topology())};
+    if (tensor_args.bias.has_value()) {
+        operands.emplace_back(tensor_args.bias->tensor_topology());
+    }
+    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
+    TensorTopology mm_topology(std::move(shape), std::move(placements), input_topology.mesh_coords());
+
+    auto reduce_scatter_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+        mm_topology,
+        args.reduce_scatter_params.cluster_axis,
+        tensor_args.input.device()->shape(),
+        static_cast<uint32_t>(tensor_args.input.logical_shape().rank()),
+        static_cast<int32_t>(args.reduce_scatter_params.dim));
+    if (!reduce_scatter_topology.has_value()) {
+        return {};
+    }
+    return {std::move(mm_topology), std::move(*reduce_scatter_topology)};
 }
 
 ttsl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(

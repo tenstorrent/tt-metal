@@ -9,6 +9,7 @@
 #include "llama_reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -114,6 +115,20 @@ LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDevic
 
     auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
     return tensor;
+}
+
+std::vector<tt::tt_metal::TensorTopology> LlamaReduceScatterDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // The output holds this device's `dim` slice of the sum along `cluster_axis`
+    // (test_llama_reduce_scatter_async_TG composes it with ConcatMesh2dToTensor dims=(0, dim)): Shard{dim} on the
+    // cluster axis, the input's placement on the other axis. The intermediate packet buffer is caller-owned scratch
+    // outside the return value. No honest label (nullopt, already warned about): {} keeps the union default.
+    const auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+        tensor_args.input_tensor, attributes.cluster_axis, static_cast<int32_t>(attributes.dim));
+    if (!output_topology.has_value()) {
+        return {};
+    }
+    return {*output_topology};
 }
 
 }  // namespace ttnn::operations::experimental::ccl
