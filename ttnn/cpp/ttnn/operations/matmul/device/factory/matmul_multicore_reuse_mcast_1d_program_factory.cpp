@@ -143,7 +143,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     const bool use_global_cb = global_cb.has_value();
-    const bool in1_is_locally_sharded = in1_is_sharded && !use_global_cb;
+    // DRAM width-sharded in1 (weights spread over the DRAM banks): every core reads its own per_core_N slice from the
+    // bank(s) holding it, as the 2D factory's in1 senders do (IN1_DRAM_WIDTH_SHARDED); it is not an L1-local shard.
+    const bool in1_is_dram_width_sharded =
+        in1_is_sharded && !use_global_cb &&
+        in1_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+        in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
+    const bool in1_is_locally_sharded = in1_is_sharded && !use_global_cb && !in1_is_dram_width_sharded;
+    const uint32_t num_dram_banks = in1_is_dram_width_sharded ? device->num_dram_channels() : 0;
+    const uint32_t per_core_N_storage = in1_is_dram_width_sharded ? (N + num_dram_banks - 1) / num_dram_banks : 0;
 
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -190,7 +198,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     uint32_t in0_aligned_tile_size =
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size = (in1_is_locally_sharded || use_global_cb)
+    uint32_t in1_aligned_tile_size = (in1_is_locally_sharded || use_global_cb || in1_is_dram_width_sharded)
                                          ? in1_single_tile_size
                                          : tt::align(in1_single_tile_size, dram_alignment);
     // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
@@ -519,6 +527,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     if (bias_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_sender_writer_compile_time_args);
     }
+    if (in1_is_dram_width_sharded) {
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in1_single_tile_size);
+    }
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
@@ -566,6 +578,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     if (in1_is_locally_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+    }
+    if (in1_is_dram_width_sharded) {
+        mm_kernel_in1_sender_writer_defines["IN1_DRAM_WIDTH_SHARDED"] = "1";
     }
     if (use_global_cb) {
         mm_kernel_in1_sender_writer_defines["ENABLE_GLOBAL_CB"] = "1";
@@ -1048,6 +1063,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     }
 
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+    uint32_t in1_dram_vc = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         uint32_t output_idx_x = i % num_blocks_x;
@@ -1188,6 +1204,27 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 } else {
                     mm_in1_sender_writer_args.push_back(out_num_blocks_x);
                 }
+            }
+
+            if (in1_is_dram_width_sharded) {
+                // vc, number of bank segments, byte offset into the first bank's row, then (bytes, bank id) per
+                // segment covering this core's N tiles [x * per_core_N, (x + 1) * per_core_N), as the 2D factory
+                // walks them (never past the last bank's storage)
+                in1_dram_vc = in1_dram_vc == 3 ? 0 : in1_dram_vc + 1;
+                mm_in1_sender_writer_args.push_back(in1_dram_vc);
+                const uint32_t n_start = output_idx_x * per_core_N;
+                const uint32_t n_end = std::min((output_idx_x + 1) * per_core_N, num_dram_banks * per_core_N_storage);
+                std::vector<uint32_t> segments;
+                for (uint32_t n = n_start; n < n_end;) {
+                    const uint32_t bank = n / per_core_N_storage;
+                    const uint32_t w = std::min(n_end, (bank + 1) * per_core_N_storage) - n;
+                    segments.push_back(w * in1_single_tile_size);
+                    segments.push_back(bank);
+                    n += w;
+                }
+                mm_in1_sender_writer_args.push_back(segments.size() / 2);
+                mm_in1_sender_writer_args.push_back((n_start % per_core_N_storage) * in1_single_tile_size);
+                mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.end(), segments.begin(), segments.end());
             }
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
@@ -3043,7 +3080,8 @@ static void override_mcast_in0_program_parameters(
     const MeshTensor& dst_tensor = output_tensors.at(0).mesh_tensor();
 
     bool src0_sharded = input_tensors[0].is_sharded();
-    bool src1_sharded = input_tensors[1].is_sharded();
+    // DRAM width-sharded in1 is read from its banks by the in1 reader (runtime arg 0), not aliased by cb_src1
+    bool src1_sharded = input_tensors[1].is_sharded() && !input_tensors[1].memory_config().is_dram();
     bool out_sharded = output_tensors[0].is_sharded();
 
     // Manually unroll sender core

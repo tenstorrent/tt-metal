@@ -2202,11 +2202,11 @@ bool get_broadcast_batch(
 }  // namespace
 
 MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& config = operation_attributes.program_config.value();
 
     return std::visit(
-        [&operation_attributes](const auto& c) -> program_factory_t {
+        [&operation_attributes, &tensor_args](const auto& c) -> program_factory_t {
             using T = std::decay_t<decltype(c)>;
             if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
                 return MatmulMultiCoreProgramFactory{};
@@ -2218,7 +2218,14 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
                 // gather_in0 (create_descriptor not yet supported) and any GCB-backed config
                 // (ProgramDescriptor cannot attach an experimental GlobalCircularBuffer) use the legacy
                 // MeshWorkload builder.
-                if (c.gather_in0 || operation_attributes.global_cb.has_value()) {
+                // DRAM width-sharded in1 (per-core weight slices read straight from their DRAM banks) is only
+                // implemented in the legacy builder's mcast_in0 path; the Metal 2.0 kernel fork lacks the
+                // IN1_DRAM_WIDTH_SHARDED reader.
+                const auto& in1 = tensor_args.input_tensors.at(1);
+                const bool in1_dram_width_sharded =
+                    c.mcast_in0 && in1.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                    in1.memory_config().buffer_type() == BufferType::DRAM;
+                if (c.gather_in0 || operation_attributes.global_cb.has_value() || in1_dram_width_sharded) {
                     return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
                 }
                 return MatmulMultiCoreReuseMcast1DProgramFactory{};
