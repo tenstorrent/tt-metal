@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Where the LTX-2.5 text-encode time goes on 4x8: host prep, device graph, readback, for the
+"""Where the LTX-2.5 text-encode time goes on a 2x4 submesh of the 4x8 galaxy: host prep, device graph, readback, for the
 eager path, the first traced call (capture) and replays; the Gemma stack vs feature extractor +
 connectors; and what the 1024-token padding costs. Prints GEMMA4_TIMING lines; asserts only that
 traced and eager embeddings agree.
@@ -103,6 +103,8 @@ def test_gemma4_encode_timing(*, mesh_device):
     for path in (TEXT_ENCODER, TRANSFORMER):
         if not Path(path).exists():
             pytest.skip(f"missing {path}")
+    # BH galaxy fabric init needs the full mesh opened; a bare (2, 4) open has taken the box down.
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
 
     pair = Gemma4TokenizerEncoderPair(
         TEXT_ENCODER,

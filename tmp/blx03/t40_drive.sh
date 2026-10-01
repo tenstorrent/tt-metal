@@ -1,6 +1,7 @@
 #!/bin/bash
-# t40 driver on blx03: profile job, then the 1080p/145f e2e with the encode-capture fix, one broker
-# job at a time behind any other project job. Writes $OUT/DONE when both have finished.
+# t40 driver on blx03: the encode profile on a 2x4 submesh (full mesh opened, then create_submesh),
+# one broker job behind any other project job. The 4x8 e2e stays off until full-mesh runs are allowed.
+# Writes $OUT/DONE when the job has finished.
 OUT=/home/smarton/fasth3/out/t40
 mkdir -p $OUT
 submit() {  # label, timeout, command
@@ -16,5 +17,5 @@ submit() {  # label, timeout, command
   echo "$(date +%T) $1 job $id: $(tt-device-mcp status -j $id 2>&1 | grep -iE '^Status' | head -1)" >> $OUT/jobs.txt
 }
 submit prof 1200 "bash /home/smarton/fasth3/t40/tmp/blx03/t40_prof.sh"
-submit e2e 1500 "W=/home/smarton/fasth3/t40 OUT=/home/smarton/fasth3/out/t40 PYTEST_TIMEOUT=1200 bash /home/smarton/fasth3/t40/tmp/blx03/run25.sh conv145_t40"
+# submit e2e 1500 "W=/home/smarton/fasth3/t40 OUT=/home/smarton/fasth3/out/t40 PYTEST_TIMEOUT=1200 bash /home/smarton/fasth3/t40/tmp/blx03/run25.sh conv145_t40"
 touch $OUT/DONE
