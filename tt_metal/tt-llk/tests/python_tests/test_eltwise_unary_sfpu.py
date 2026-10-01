@@ -1491,17 +1491,18 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
 
 
-# Every finite BF16 value through the BF16 kernel (FP32 DEST off). Subnormal inputs and
+# Every finite BF16 value through the BF16 kernel (FP32 DEST off), in the approximation
+# mode whose instance the BF16 kernel replaces. Subnormal inputs and
 # NaN lanes are outside a step count (see helpers/ulp_sweep.py); finite/non-finite
 # disagreements on normal inputs are failures in their own right.
 _BF16_EXHAUSTIVE_OPS = [
-    MathOperation.Tanhshrink,
+    (MathOperation.Tanhshrink, ApproximationMode.No),
 ]
 
 
 @pytest.mark.nightly
-@pytest.mark.parametrize("mathop", _BF16_EXHAUSTIVE_OPS)
-def test_eltwise_unary_sfpu_bf16_exhaustive(mathop):
+@pytest.mark.parametrize("mathop,approx_mode", _BF16_EXHAUSTIVE_OPS)
+def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode):
     from helpers.ulp_sweep import measurable_mask, nonfinite_failures, sweep_spec
 
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -1530,7 +1531,7 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop):
         formats,
         templates=[
             generate_input_dim(dimensions, dimensions),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(approx_mode),
             FAST_MODE(FastMode.No),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
