@@ -150,6 +150,7 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
+    TT_METAL_PROFILE_RISCV_PMC,                    // Enable RISC-V baby-core HPM counters
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
@@ -1237,6 +1238,44 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->profiler_enabled = true;
             }
             break;
+
+        // TT_METAL_PROFILE_RISCV_PMC
+        // RISC-V hardware performance monitor on the Tensix baby cores (BRISC, NCRISC, TRISC0/1/2).
+        // Value is the mhpmevent3 and mhpmevent4 selects, comma separated, hex or decimal. Each is
+        // eight 4-bit nibbles, one per pipeline domain (BP, IF, DE, DE1, EX, LS, TTCSR, MEM from low
+        // to high). mhpmevent4 defaults to 0 (counter 4 idle) if only one value is given.
+        // See BRISC_PERF_COUNTERS.md for the event catalog. Blackhole only.
+        // Default: disabled
+        // Usage: export TT_METAL_PROFILE_RISCV_PMC=0x10110111,0x0A000000
+        case EnvVarID::TT_METAL_PROFILE_RISCV_PMC: {
+            // strtoul with base 0 rather than sscanf: the selects routinely have bit 31 set (the MEM
+            // nibble is the top one), which does not survive a signed parse.
+            char* end = nullptr;
+            const unsigned long ev3 = std::strtoul(value, &end, 0);
+            unsigned long ev4 = 0;
+            if (end != nullptr && *end == ',') {
+                ev4 = std::strtoul(end + 1, &end, 0);
+            }
+            if (end == value || (end != nullptr && *end != '\0')) {
+                TT_THROW(
+                    "TT_METAL_PROFILE_RISCV_PMC=\"{}\" could not be parsed. Expected one or two "
+                    "integers (hex accepted), e.g. 0x10110111,0x0A000000.",
+                    value);
+            }
+            if (ev3 > std::numeric_limits<uint32_t>::max() || ev4 > std::numeric_limits<uint32_t>::max()) {
+                TT_THROW("TT_METAL_PROFILE_RISCV_PMC=\"{}\" has a select wider than 32 bits.", value);
+            }
+            if (ev3 == 0 && ev4 == 0) {
+                TT_THROW(
+                    "TT_METAL_PROFILE_RISCV_PMC has both event selects zero, which leaves both "
+                    "counters disabled in hardware. Unset the variable instead.");
+            }
+            this->profiler_riscv_pmc_event3 = static_cast<uint32_t>(ev3);
+            this->profiler_riscv_pmc_event4 = static_cast<uint32_t>(ev4);
+            this->profiler_riscv_pmc_enabled = true;
+            this->profiler_enabled = true;
+            break;
+        }
 
         // TT_METAL_TRACE_PROFILER
         // Enables trace profiler for detailed execution tracing.

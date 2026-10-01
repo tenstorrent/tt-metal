@@ -415,6 +415,14 @@ void JitBuildEnv::init(
         }
         this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(perf_counter_mode) + " ";
     }
+    if (rtoptions.get_profiler_riscv_pmc_enabled()) {
+        // The hooks live in the baby-core firmware, so this define has to reach the firmware build,
+        // not just the kernel build. Both share this defines_ string.
+        TT_ASSERT(rtoptions.get_profiler_enabled());
+        this->defines_ += "-DPROFILE_RISCV_PMC=1 ";
+        this->defines_ += "-DPROFILE_RISCV_PMC_EV3=" + std::to_string(rtoptions.get_profiler_riscv_pmc_event3()) + "u ";
+        this->defines_ += "-DPROFILE_RISCV_PMC_EV4=" + std::to_string(rtoptions.get_profiler_riscv_pmc_event4()) + "u ";
+    }
 
     if (rtoptions.get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
