@@ -98,7 +98,12 @@ class ContextFull(RuntimeError):
 
 
 @contextlib.contextmanager
-def open_mesh_device(trace_region_size: int | None, system_config=None):
+def open_mesh_device(
+    trace_region_size: int | None,
+    system_config=None,
+    mesh_shape: tuple[int, int] | None = None,
+    l1_small_size: int | None = None,
+):
     """Open the full system mesh the way the ``mesh_device`` pytest fixture does for
     the decode demo: 2D fabric (the submesh pipeline sockets need it) and two
     command queues.
@@ -107,6 +112,9 @@ def open_mesh_device(trace_region_size: int | None, system_config=None):
     ``device`` section. The profile cannot be chosen by device count here -- the device
     does not exist yet -- so this uses the default (or ``$DEEPSEEK_V4_SYSTEM_PROFILE``);
     the model then re-resolves it against the mesh it is actually handed.
+
+    ``mesh_shape`` (``(rows, cols)``) wins over the profile's, and ``l1_small_size``
+    reserves L1_SMALL (both as ``tests/prefill/test_prefill_decode_demo.py`` opens it).
     """
     from tests.scripts.common import get_updated_device_params
 
@@ -114,6 +122,8 @@ def open_mesh_device(trace_region_size: int | None, system_config=None):
     device_params = sys_cfg.device.device_params()
     if trace_region_size:
         device_params["trace_region_size"] = trace_region_size
+    if l1_small_size:
+        device_params["l1_small_size"] = l1_small_size
     params = get_updated_device_params(device_params)
     fabric_config = params.pop("fabric_config")
     ttnn.set_fabric_config(
@@ -126,7 +136,9 @@ def open_mesh_device(trace_region_size: int | None, system_config=None):
     )
     # Default to the whole system flattened to a line, which is the shape the model's
     # submesh pipeline is built against; a profile may pin an explicit shape instead.
-    if sys_cfg.device.mesh_shape:
+    if mesh_shape:
+        mesh_shape = ttnn.MeshShape(*mesh_shape)
+    elif sys_cfg.device.mesh_shape:
         mesh_shape = ttnn.MeshShape(*sys_cfg.device.mesh_shape)
     else:
         mesh_shape = ttnn.MeshShape(1, ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size())
@@ -335,6 +347,11 @@ class ChatEngine:
         tp_size = getattr(args, "tp_size", None)
         if tp_size is None:
             tp_size = system_config.pipeline.tp_size
+        # Kept for a caller that builds a second model on the same weights (the server's prefill).
+        self.loader = loader
+        self.weight_cache = top_cache
+        # ``num_stages`` / ``submeshes`` / ``use_prefetcher`` are unset for the CLI (the model's defaults);
+        # the server's prefill path sets them to the layout of tests/prefill/test_prefill_decode_demo.py.
         self.model = DeepSeekV4Model(
             config,
             loader,
@@ -345,6 +362,9 @@ class ChatEngine:
             use_submeshes=True,
             system_config=system_config,
             tp_size=tp_size,
+            num_stages=getattr(args, "num_stages", None),
+            submeshes=getattr(args, "submeshes", None),
+            use_prefetcher=getattr(args, "use_prefetcher", None),
         )
         self.lm_head = Linear(
             _w(loader, "lm_head.weight"),
