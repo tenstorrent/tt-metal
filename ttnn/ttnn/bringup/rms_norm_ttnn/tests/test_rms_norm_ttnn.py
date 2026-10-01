@@ -30,6 +30,9 @@ CASES = _load("cases").CASES
 def _device_params(c):
     p = dict(c["device_params"])
     p["fabric_config"] = getattr(ttnn.FabricConfig, p["fabric_config"])
+    # A case runs on a box of its own mesh size only (conftest skips it elsewhere): a smaller mesh opened on a bigger
+    # box fails the FABRIC_2D router handshake (e.g. a 2x2 case on a 4x2 box), and the case's math depends on its mesh.
+    p["require_exact_physical_num_devices"] = True
     return p
 
 

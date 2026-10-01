@@ -417,3 +417,34 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   position geometries do not pile up in DRAM. Forward path untouched; ladder/profile do not call free().
 - Positions alone: passed, 204800->209920 one chunk 3138 ms.
 - Re-run: the X.3 gate command (ladder s56320 && profile && positions).
+
+## O.1 optests (run1, attempt 1)
+- Capture (ladder rung last): 90 distinct ttnn.bringup calls to 8 forks. The 80 mhc_pre_xing coefficient calls
+  (attn_hc / ffn_hc x 40 layers) differ only in their per-layer hc_scale / hc_base float-list arguments. Then
+  1 collapse, 1 pack, 1 each of mhc_post, dispatch, combine, offset_cumsum, unified_routed_expert_moe and
+  ring_mla, and 2 rms_norm (kv_a 512, q_a 768).
+- The previous attempt's crash (`KeyError: 'sig'` in fork_cases.py): the xing mhc_post case (task P.2) had no
+  sig. Added `"sig": "f7215974bc"` (no other change). fork_cases reads only `<fork>/tests/cases.py`, so
+  mhc_pre_ttnn's cases.py now also adds the sigged entries of `xing_cases.py` (with an `op` key);
+  test_mhc_pre_ttnn.py runs only entries without `op`. Sigs added to the existing pack (8d5301954a) and collapse
+  (de9b297083) cases. 80 new coef cases (`_O1_COEF`): each carries its captured scale / base, and the input
+  row is random. test_mhc_pre_xing.py uses `case["base"]` when present.
+- New cases (all 4x2, FABRIC_2D, l1_small 24576, random inputs):
+  - dispatch / combine: dgs 4, s1280, h3584, e64, k4, buffer 20704, exact.
+  - offset_cumsum: e64, epc 8, max count 1280.
+  - unified_routed_expert_moe: Silu, high_precision, HiFi4, bfp8 weights, i1024. Group tokens 5120.
+    Measured pcc 0.999996, rel 0.0030 (limit 0.008).
+  - rms_norm x2: fp32 with row-major fp32 weight. Max rel 0.0030 (rtol 0.006).
+  - sdpa ring_mla: new `_ring_mla` path in test_sdpa.py. q [1, 16, 1280, 576] per chip, heads split over the
+    columns. Block-cyclic ND-sharded cache [1, 1, 14080, 576]. isl 51200, logical_n 56320. HiFi2 + fp32 dest,
+    q64 / k256. Checked against the float32 causal reference over every row of both columns. Seeds 0-2
+    measured pcc 0.99943, rel 0.034, worst row <= 0.198. Limits: pcc 0.999, rel 0.042, row 0.28. Zeroing one
+    output row fails the case (checked by hand, reverted).
+- On this 8-chip box the other models' 1x4 / 2x2 cases fail the FABRIC_2D handshake. The six conftest-based
+  fork tests now set `require_exact_physical_num_devices` in `_device_params`, so a case runs only on a box
+  of its mesh size; the 38 4-chip cases skip here. No case or limit of another model changed. The mhc tests
+  keep their own fixtures, which open the whole box, and all their cases ran.
+- Gate: ladder PASSED (final hidden pcc 0.9985). Fork tests: 106 passed, 38 skipped.
+  `{"forks_used": 8, "fork_calls": 90, "fork_calls_uncovered": 0, "fork_tests_failed": 0}`.
+- Re-run: the brief's gate command. One fork: `scripts/run_safe_pytest.sh --run-all --no-precompile
+  ttnn/ttnn/bringup/sdpa/tests/test_sdpa.py -k xing40`.

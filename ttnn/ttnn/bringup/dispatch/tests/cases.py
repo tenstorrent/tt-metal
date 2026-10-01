@@ -158,4 +158,36 @@ CASES = [
         "seed": 0,
         "exact": True,
     },
+    {
+        # Xing4.0 routed experts on the 4x2 SP x TP mesh: dispatch up / down each mesh column (cluster_axis 0, a
+        # dispatch group of the column's 4 chips), 1280 tokens per chip, 64 experts (8 per chip, 32 per column), top-4.
+        # Captured per device: input [1, 1280, 3584] bf16 TILE, indices [1, 1280, 4] uint16 RM, offsets [1, 64] uint32
+        # RM, table [1, 65] int32 RM, all DRAM interleaved; ladder rung last (5120-token chunk).
+        "id": "xing40_a4b_d_p-4x2-dgs4-s1280-h3584-e64-k4",
+        "model": "xing40_a4b_d_p",
+        "task": "O.1",
+        "sig": "da3c0f76df",
+        "mesh": [4, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "seq_len_per_chip": 1280,
+        "emb_dim": 3584,
+        "num_routed_experts": 64,
+        "num_experts_per_tok": 4,
+        "experts_per_chip": 8,
+        "dispatch_group_size": 4,
+        "metadata_len": 3,
+        "max_dispatch_buffer_token_size": 20704,
+        "cluster_axis": 0,
+        "num_links": 1,
+        "topology": "Linear",
+        "fp8_output": False,
+        "num_workers_per_sender": 2,
+        "subdevice_id": None,
+        "input": {"dtype": "BFLOAT16", "layout": "TILE"},
+        "indices": {"dtype": "UINT16", "layout": "ROW_MAJOR"},
+        "offsets": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "table": {"dtype": "INT32", "layout": "ROW_MAJOR"},
+        "seed": 0,
+        "exact": True,
+    },
 ]

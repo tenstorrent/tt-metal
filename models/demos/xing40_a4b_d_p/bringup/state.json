@@ -2754,8 +2754,79 @@
   "waiting": null
  },
  "O.1": {
-  "attempts": 0,
-  "status": "TODO"
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "16be7e2bb61ab2ff6b9dd0ea654d43c19784ff48",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "bca065e4-ad8e-44ef-81c6-4ecb48203e54"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/O.1.optests.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "16be7e2bb61ab2ff6b9dd0ea654d43c19784ff48",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/O.1.optests.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "optests",
+    "seconds": 1812.0,
+    "session_id": "bca065e4-ad8e-44ef-81c6-4ecb48203e54",
+    "t": "2026-10-01T07:56:06"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 358.1,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T07:25:54"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-01T08:02:36"
+   }
+  ],
+  "last_run": "2026-10-01T08:02:36",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/O.1.log",
+  "metrics": {
+   "fork_calls_uncovered": 0,
+   "fork_tests_failed": 0,
+   "forks_used": 8
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "optests",
+  "started": "2026-10-01T07:56:38",
+  "status": "PASS",
+  "waiting": null
  },
  "P.1": {
   "attempt": 1,
