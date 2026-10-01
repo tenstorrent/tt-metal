@@ -135,6 +135,7 @@ def msa_indexer_sparse(
     block_cyclic_sp_axis=None,
     block_cyclic_chunk_local=None,
     kv_len=None,
+    index_k_tp_sharded=False,
 ):
     """The MSA op chain over a FULL-context (already-gathered) K/V; index_q/q may stay SP-sharded.
 
@@ -154,8 +155,12 @@ def msa_indexer_sparse(
       of block_size). The indexer scores/writes only columns [0, kv_len) (hash-excluded runtime arg, so a
       growing prefix reuses one program) and top-k ranks only those kv_len/block_size block columns; the
       stale tail past kv_len is never read. None -> T is the valid length (the legacy exact-size gather).
+    index_k_tp_sharded: index_k was gathered from a TP-deduped cache, so it is striped across all sp*tp chips
+      (chip (s, t) at (s*tp + t)*rows) rather than sp; the indexer's key remap follows. K / V keep the SP layout.
     -> out  [1, Hq, Sq, head_dim]
     """
+    # Pass the dedup flag only when set, so the TP-replicated path issues the exact same call as before.
+    tp_sharded_kwargs = {"block_cyclic_cache_tp_sharded": True} if index_k_tp_sharded else {}
     # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
     with zone("indexer"):
         block_scores = ttnn.experimental.indexer_score_msa(
@@ -170,6 +175,7 @@ def msa_indexer_sparse(
             block_cyclic_sp_axis=block_cyclic_sp_axis,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
             kv_len=kv_len,
+            **tp_sharded_kwargs,
         )
 
         # Top-k block ids (uint32 row-major) — the block selection that encodes causality. The op already
@@ -275,7 +281,7 @@ def msa_sp_attention_nocache(
     )
 
 
-def msa_cache_read_extent(cached_len, chunk_local, sp, block_size):
+def msa_cache_read_extent(cached_len, chunk_local, sp, block_size, tp=1):
     """(kv_len, n_rows) for the cross-chunk MSA read after the chunk at ``cached_len`` has been written.
 
     The KV writer places global position g on SP rank (g // chunk_local) % sp, so a chunk that starts
@@ -287,17 +293,85 @@ def msa_cache_read_extent(cached_len, chunk_local, sp, block_size):
     rank's written prefix -- including [end, kv_len) -- hold zeros or stale finite KV in the persistent gather
     buffer (zeroed at allocation, see CCLManager.get_high_bw_gather_buffer), all future to every query of the
     chunk, so the indexer's causal mask and sparse_sdpa_msa's diagonal-block mask never attend them.
+
+    ``tp`` > 1 sizes the read of a TP-deduped cache (index_k under ``M3_INDEX_K_TP_SHARD``): each SP rank's
+    ``chunk_local`` rows of a slab are split into ``tp`` stripes of ``chunk_local / tp``, one per chip, so
+    ``n_rows`` is chip (0, 0)'s local row count, which owns the first stripe of every slab. ``kv_len`` is unchanged.
     """
     assert (
         cached_len % ttnn.TILE_SIZE == 0
     ), f"cached_len={cached_len} must be a multiple of {ttnn.TILE_SIZE} (the KV writer's tile grid)"
     assert chunk_local % block_size == 0, f"chunk_local={chunk_local} must be a whole number of {block_size} blocks"
+    assert (
+        chunk_local % (tp * ttnn.TILE_SIZE) == 0
+    ), f"chunk_local={chunk_local} must split into {tp} whole-tile stripes"
     chunk_global = chunk_local * sp
+    stripe = chunk_local // tp
     end = cached_len + chunk_global  # the chunk (incl. its pad tail) is written up to here
     kv_len = (end + block_size - 1) // block_size * block_size
     full_slabs, rem = divmod(end, chunk_global)
-    n_rows = full_slabs * chunk_local + min(rem, chunk_local)
+    n_rows = full_slabs * stripe + min(rem, stripe)
     return kv_len, n_rows
+
+
+_FABRIC_2D_CONFIGS = (
+    ttnn.FabricConfig.FABRIC_2D,
+    ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+    ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+    ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+)
+
+
+def _gather_tp_sharded_index_k(
+    index_k_cache, *, slot, mesh_config, ccl_manager, tp_axis, cached_len, chunk_local, block_size
+):
+    """Rebuild one (user, layer) slot of the TP-deduped index_k cache as the full context on every chip.
+
+    Each chip holds ``rows = seq_local/tp`` rows (see MiniMaxKVCache). The result is the persistent worst-case
+    buffer ``[1, 1, rows*sp*tp, hd]`` with chip (s, t) at ``(s*tp + t)*rows``: the stripe-major layout the
+    indexer decodes in-kernel with ``block_cyclic_cache_tp_sharded``. Two routes give the same buffer:
+
+      * 2D fabric: one full-mesh snake ``high_bw_all_gather`` (row-major over the mesh IS the sp*tp order),
+        moving only the written prefix of every chip.
+      * otherwise: a TP-inner gather (chip t at t*rows inside each SP row), then an SP-outer gather of that.
+        The SP leg has to move every TP stripe's fixed slot up to the last one's prefix, so it carries close
+        to the whole capacity rather than the prefix.
+
+    The gathered tensor aliases the persistent buffers: never deallocate.
+    """
+    device = ccl_manager.mesh_device
+    sp_axis = mesh_config.sp_axis
+    sp, tp = device.shape[sp_axis], device.shape[tp_axis]
+    rows = index_k_cache.shape[2]
+    hd = index_k_cache.shape[3]
+    _, n_rows = msa_cache_read_extent(cached_len, chunk_local, sp, block_size, tp=tp)
+    assert n_rows <= rows, f"index_k cache read past capacity: {n_rows} > {rows} rows"
+    full = ccl_manager.get_high_bw_gather_buffer(
+        "msa_cache_index_k_tp", (1, 1, rows * sp * tp, hd), index_k_cache.dtype
+    )
+
+    if ttnn.get_fabric_config() in _FABRIC_2D_CONFIGS:
+        return ttnn.experimental.high_bw_all_gather(
+            index_k_cache,
+            dim=2,
+            output_tensor=full,
+            cluster_axis=None,
+            num_links=ccl_manager.num_links,
+            input_batch_index=slot,
+            gathered_dim_size=n_rows * sp * tp,
+        )
+
+    row = ccl_manager.get_high_bw_gather_buffer("msa_cache_index_k_tp_row", (1, 1, rows * tp, hd), index_k_cache.dtype)
+    row = ttnn.experimental.high_bw_all_gather(
+        index_k_cache,
+        dim=2,
+        output_tensor=row,
+        cluster_axis=tp_axis,
+        num_links=ccl_manager.num_links,
+        input_batch_index=slot,
+        gathered_dim_size=n_rows * tp,
+    )
+    return high_bw_sp_gather(row, mesh_config, ccl_manager, full, gathered_dim_size=((tp - 1) * rows + n_rows) * sp)
 
 
 def msa_sp_attention_cache_read(
@@ -323,6 +397,7 @@ def msa_sp_attention_cache_read(
     which is the block-cyclic layout the indexer / sparse_sdpa_msa decode in-kernel (stride T/sp ==
     seq_local); ``kv_len`` bounds them to the written prefix. Returns the chunk's SP-sharded attention out
     ``[1, Hq_local, s_local, hd]``. The gathered tensors alias the persistent buffers: never deallocate.
+    A TP-deduped index_k cache (``kv_cache.index_k_tp_axis``) is rebuilt by ``_gather_tp_sharded_index_k``.
     """
     sp_axis = mesh_config.sp_axis
     device = ccl_manager.mesh_device
@@ -336,6 +411,7 @@ def msa_sp_attention_cache_read(
     assert (
         n_rows <= seq_local and kv_len <= seq_local * sp
     ), f"cache read past capacity: {n_rows} rows / kv_len {kv_len} > {seq_local} rows x {sp}"
+    index_k_tp_axis = kv_cache.index_k_tp_axis
 
     def gather(key, cache_t):
         buf = ccl_manager.get_high_bw_gather_buffer(key, (1, 1, seq_local * sp, cache_t.shape[3]), cache_t.dtype)
@@ -349,7 +425,19 @@ def msa_sp_attention_cache_read(
         k_full = gather("msa_cache_k", kv_cache.k)
         v_full = gather("msa_cache_v", kv_cache.v)
     with zone("ag_index_k"):
-        index_k_full = gather("msa_cache_index_k", kv_cache.index_k)
+        if index_k_tp_axis is None:
+            index_k_full = gather("msa_cache_index_k", kv_cache.index_k)
+        else:
+            index_k_full = _gather_tp_sharded_index_k(
+                kv_cache.index_k,
+                slot=slot,
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
+                tp_axis=index_k_tp_axis,
+                cached_len=cached_len,
+                chunk_local=chunk_local,
+                block_size=block_size,
+            )
     return msa_indexer_sparse(
         index_q,
         index_k_full,
@@ -366,4 +454,5 @@ def msa_sp_attention_cache_read(
         block_cyclic_sp_axis=sp_axis,
         block_cyclic_chunk_local=chunk_local,
         kv_len=kv_len,
+        index_k_tp_sharded=index_k_tp_axis is not None,
     )
