@@ -34,14 +34,14 @@ void kernel_main() {
         pages_per_fabric_chunk * chunks_per_cb_batch * kCbBatchesPerConversionBlock;  // as in the reader
 
     // Common args: the reader's ([0] input [1] output ... [3..7] cache slot, then the chip shard geometry), so both
-    // compute the same chunks and runs. Per-core args: [0] first owned bank / local copy core index [1] owned bank
+    // compute the same chunks and runs. Per-core args: [0] first owned lane / local copy core index [1] owned lane
     // stride / number of local copy cores [2] rank [3] number of fabric link workers, then their NoC x, y.
     const uint32_t landing_l1 = get_write_ptr(metadata_cb);
     const ChipShardGeometry geometry =
         read_chip_shard_geometry<kValidPrefixFromMetadata>(landing_l1, valid_prefix_args);
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(1), page_bytes);
-    const uint32_t first_owned_bank = get_arg_val<uint32_t>(0);
-    const uint32_t owned_bank_stride = get_arg_val<uint32_t>(1);
+    const uint32_t first_owned_lane = get_arg_val<uint32_t>(0);
+    const uint32_t owned_lane_stride = get_arg_val<uint32_t>(1);
     const uint32_t rank = get_arg_val<uint32_t>(2);
 
     uint32_t chunks_in_batch = 0, cb_chunk_offset = 0;
@@ -64,8 +64,8 @@ void kernel_main() {
             geometry,
             num_dram_banks,
             pages_per_fabric_chunk,
-            first_owned_bank,
-            owned_bank_stride,
+            first_owned_lane,
+            owned_lane_stride,
             kWholeChipShard,
             [&](uint32_t outer_slice, uint32_t page_in_slice, uint32_t num_pages) {
                 cb_wait_front(chunk_cb, pages_per_fabric_chunk * (chunks_in_batch + 1));
@@ -77,8 +77,8 @@ void kernel_main() {
             });
     } else {
         // the reader publishes each run on input_run_cb; this core's share is conversion blocks c, c + n, ...
-        const uint32_t local_copy_core_index = first_owned_bank;
-        const uint32_t num_converting_cores = owned_bank_stride;
+        const uint32_t local_copy_core_index = first_owned_lane;
+        const uint32_t num_converting_cores = owned_lane_stride;
         const uint32_t num_fabric_link_workers = get_arg_val<uint32_t>(3);
         const uint32_t blocks_converted_addr = get_semaphore(blocks_converted_semaphore_id + local_copy_core_index);
         const uint32_t valid_pages_in_shard = geometry.num_outer_slices * geometry.valid_pages_per_outer_slice;
