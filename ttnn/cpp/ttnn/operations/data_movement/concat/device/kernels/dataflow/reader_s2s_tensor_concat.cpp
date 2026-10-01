@@ -33,8 +33,9 @@ void kernel_main() {
 
     uint32_t arg_idx = 0;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-        // input_num_sticks is this RISC's sticks per block: every stick when the blocks are
-        // split, half of them when there is only one block.
+        // input_num_sticks is this RISC's sticks per block, for each block in [block_start,
+        // block_end): every stick of those blocks when the host split the blocks, or half of each
+        // block's sticks when it split the sticks instead and both RISCs cover all the blocks.
         const uint32_t input_num_pages_per_stick = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t input_num_sticks = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t input_write_offset = get_arg_val<uint32_t>(arg_idx++);
