@@ -72,11 +72,17 @@ Fallbacks to torch CPU: **none** (every block runs in ttnn).
   `/mnt/models/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2…`), bf16 safetensors. `visual.*` / `mtp.*` are not read.
 * Trace: `PREFILL_TRACE_DIR=/mnt/models/Qwen/Qwen-3_8-27B-Cache/golden/synthetic_10240L_hf_ref` — 10240 tokens, 64 layers,
   upstream HF fp32 compute, stored bf16. The CPU reference in `reference/` reproduces it at PCC 0.999999 (first 128 tokens,
-  final hidden and K/V of layers 3/23/43/63: `tests/torch/test_golden_hf_first_token.py`).
+  final hidden and K/V of layers 3/23/43/63: `tests/torch/test_golden_hf_first_token.py`). This trace was removed from
+  `/mnt/models` by 2026-10-01; the results below that use it are kept as recorded.
+* Second trace: `PREFILL_TRACE_DIR=/mnt/models/agentic-prefill-goldens/Qwen/Qwen3.8-27B/isl10240` — first 10240 tokens of
+  wikitext-2 (train), HF fp32 on CPU, stored bf16; token ids in the shared `token_cache` file. Results in
+  [PCC vs the wikitext golden](#pcc-vs-the-wikitext-golden-agentic-prefill-goldens).
 * Tilized weight cache: `~/.cache/tt_qwen_3_8_27b/tensor_cache_8x4/real_v2` (outside the package; `QWEN38_TT_CACHE` moves
   it, `=off` disables). Cold build ≈ 4 min (checkpoint already page-cached; first NFS read ≈ 7 min more), warm build ≈ 31 s.
 
 ## PCC status (full depth 64 layers, full width, real weights, 10240 tokens, fabric **linear** / FABRIC_1D)
+
+Synthetic trace (`synthetic_10240L_hf_ref`). For the wikitext trace see the next section.
 
 Measured by `tests/test_prefill_acceptance.py` (the verifier's interface). GDN rows grade recurrent state / conv state.
 
@@ -182,6 +188,96 @@ fp32 would be the next step if the spec allowed it; a bf16 KV cache would lift t
 | 62 | linear_attention | recurrent / conv | 0.9954 / 0.9999 | 0.9960 / 0.9994 |
 | 63 | full_attention | K / V | 0.9850 / 0.9969 ¹ | 0.9844 / 0.9967 ¹ |
 
+## PCC vs the wikitext golden (agentic-prefill-goldens)
+
+Same build, weights and test as above, graded against a second, independent trace:
+`PREFILL_TRACE_DIR=/mnt/models/agentic-prefill-goldens/Qwen/Qwen3.8-27B/isl10240`, the first 10240 tokens of
+wikitext-2-raw-v1 (train) under the Qwen3.8 tokenizer, HF forward on CPU in fp32 (sdpa), stored bf16. Token ids come from
+the shared `token_cache` the trace's `metadata.json` points to (`n_tokens` = 10240); the acceptance test reads both formats.
+Measured 2026-10-01 on the 8×4 Galaxy, fabric linear.
+
+| Run | min per-layer PCC | layers below target (0.99) | e2e final-hidden PCC | wall time |
+|---|---|---|---|---|
+| one-shot (`PREFILL_CHUNKED=0`) | **0.9987** (layer 43 V) | 0 | 0.9997 | 30 s |
+| chunked 2×5120 (`PREFILL_CHUNKED=1`) | **0.9987** (layer 43 V) | 0 | 0.9997 | 30 s |
+
+Every layer is above `pcc_target` in both modes; chunked matches one-shot to within 0.0003 on every layer.
+
+**Reading this against the synthetic trace.** The same code scores 0.9456 / 0.9438 (min) on the synthetic prompt, with
+the deficit concentrated in the late attention layers' K/V and the chunked GDN conv states (see above). On real text none of
+that drift appears: the worst layer is 0.9987 and the final hidden state 0.9997. The depth-amplification explanation above
+was measured on the synthetic prompt only; whether that prompt is unusually sensitive to bf16 compounding, or real text is
+unusually benign, is not established by these two traces.
+
+### Per-layer table, wikitext trace (one-shot | chunked)
+
+| layer | type | graded tensors | one-shot | chunked |
+|---|---|---|---|---|
+| 0 | linear_attention | recurrent / conv | 1.0000 / 1.0000 | 1.0000 / 1.0000 |
+| 1 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 2 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 3 | full_attention | K / V | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 4 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 5 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 6 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 7 | full_attention | K / V | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 8 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 9 | linear_attention | recurrent / conv | 0.9998 / 0.9999 | 0.9998 / 0.9999 |
+| 10 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 11 | full_attention | K / V | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 12 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 13 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 14 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 15 | full_attention | K / V | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 16 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 17 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 18 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 19 | full_attention | K / V | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 20 | linear_attention | recurrent / conv | 0.9999 / 1.0000 | 0.9999 / 1.0000 |
+| 21 | linear_attention | recurrent / conv | 0.9999 / 1.0000 | 0.9999 / 1.0000 |
+| 22 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 23 | full_attention | K / V | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 24 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 25 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 26 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 27 | full_attention | K / V | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 28 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 29 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 30 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 31 | full_attention | K / V | 0.9999 / 0.9998 | 0.9999 / 0.9998 |
+| 32 | linear_attention | recurrent / conv | 0.9998 / 0.9998 | 0.9998 / 0.9999 |
+| 33 | linear_attention | recurrent / conv | 0.9998 / 0.9998 | 0.9998 / 0.9999 |
+| 34 | linear_attention | recurrent / conv | 0.9998 / 0.9999 | 0.9998 / 0.9999 |
+| 35 | full_attention | K / V | 0.9998 / 0.9998 | 0.9998 / 0.9998 |
+| 36 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 37 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 38 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 39 | full_attention | K / V | 0.9998 / 0.9997 | 0.9998 / 0.9997 |
+| 40 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 41 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9999 / 0.9999 |
+| 42 | linear_attention | recurrent / conv | 0.9995 / 0.9999 | 0.9998 / 0.9999 |
+| 43 | full_attention | K / V | 0.9996 / 0.9987 | 0.9996 / 0.9987 |
+| 44 | linear_attention | recurrent / conv | 0.9998 / 0.9999 | 0.9998 / 0.9999 |
+| 45 | linear_attention | recurrent / conv | 0.9998 / 0.9999 | 0.9998 / 0.9999 |
+| 46 | linear_attention | recurrent / conv | 0.9999 / 0.9999 | 0.9998 / 0.9999 |
+| 47 | full_attention | K / V | 0.9996 / 0.9989 | 0.9996 / 0.9988 |
+| 48 | linear_attention | recurrent / conv | 0.9996 / 0.9999 | 0.9995 / 0.9999 |
+| 49 | linear_attention | recurrent / conv | 0.9997 / 0.9999 | 0.9997 / 0.9999 |
+| 50 | linear_attention | recurrent / conv | 0.9996 / 0.9999 | 0.9997 / 0.9999 |
+| 51 | full_attention | K / V | 0.9996 / 0.9992 | 0.9996 / 0.9992 |
+| 52 | linear_attention | recurrent / conv | 0.9999 / 1.0000 | 0.9999 / 0.9999 |
+| 53 | linear_attention | recurrent / conv | 0.9999 / 1.0000 | 0.9999 / 0.9999 |
+| 54 | linear_attention | recurrent / conv | 0.9998 / 0.9999 | 0.9998 / 0.9999 |
+| 55 | full_attention | K / V | 0.9995 / 0.9993 | 0.9995 / 0.9994 |
+| 56 | linear_attention | recurrent / conv | 0.9998 / 1.0000 | 0.9998 / 0.9999 |
+| 57 | linear_attention | recurrent / conv | 0.9999 / 1.0000 | 0.9998 / 1.0000 |
+| 58 | linear_attention | recurrent / conv | 0.9999 / 1.0000 | 0.9998 / 0.9999 |
+| 59 | full_attention | K / V | 0.9995 / 0.9994 | 0.9995 / 0.9996 |
+| 60 | linear_attention | recurrent / conv | 0.9996 / 1.0000 | 0.9994 / 0.9999 |
+| 61 | linear_attention | recurrent / conv | 0.9998 / 1.0000 | 0.9997 / 0.9999 |
+| 62 | linear_attention | recurrent / conv | 0.9996 / 1.0000 | 0.9995 / 1.0000 |
+| 63 | full_attention | K / V | 0.9996 / 0.9998 | 0.9996 / 0.9998 |
+
 ## Component tests (random weights, full width, 8×4 mesh, fabric linear)
 
 All assert `pcc_lower_bound` (0.87) from `PREFILL_SPEC`; all are ≥ `pcc_target`.
@@ -218,13 +314,13 @@ export PATH=$PWD/python_env/bin:$PATH
 bash <method>/check_runtime_env.sh python_env/bin/python
 export PREFILL_SPEC=<prepare>/spec.json
 export PREFILL_HF_MODEL=/home/aleksajovanovic/models/qwen_3_8_27b_prefill HF_MODEL=$PREFILL_HF_MODEL
-export PREFILL_TRACE_DIR=/mnt/models/Qwen/Qwen-3_8-27B-Cache/golden/synthetic_10240L_hf_ref
+export PREFILL_TRACE_DIR=/mnt/models/agentic-prefill-goldens/Qwen/Qwen3.8-27B/isl10240  # or a trace with inline token_ids
 
 # host tests (no device)
 python -m pytest models/demos/qwen_3_8_27b/tests/torch -q
 # device component suite (8x4 mesh), ~6 min
 scripts/run_safe_pytest.sh --run-all models/demos/qwen_3_8_27b/tests/unit
-# acceptance, full depth/width, real weights (writes the JSON report)
+# acceptance, full depth/width, real weights (prints "PCC REPORT {...}" before the asserts; writes the JSON report on pass)
 PREFILL_CHUNKED=0 PREFILL_ACCEPTANCE_OUT=/tmp/oneshot.json scripts/run_safe_pytest.sh models/demos/qwen_3_8_27b/tests/test_prefill_acceptance.py -s
 PREFILL_CHUNKED=1 PREFILL_ACCEPTANCE_OUT=/tmp/chunked.json scripts/run_safe_pytest.sh models/demos/qwen_3_8_27b/tests/test_prefill_acceptance.py -s
 # diagnostics (reduced, 2048 tokens)
@@ -245,8 +341,9 @@ PYTHONPATH=$PWD python models/demos/qwen_3_8_27b/scripts/diag_layer_drift.py 204
 
 ## Known gaps
 
-* 7 attention layers (one-shot) / 16 layers (chunked) are between `pcc_lower_bound` and `pcc_target` — explained above;
-  all knobs within the spec's dtypes were tried.
+* On the synthetic trace, 7 attention layers (one-shot) / 16 layers (chunked) are between `pcc_lower_bound` and
+  `pcc_target` — explained above; all knobs within the spec's dtypes were tried. On the wikitext trace every layer is
+  ≥ 0.9987.
 * Throughput is not tuned: the composed GDN core runs 320 sequential chunk steps per GDN layer at 10k tokens and every SP
   row recomputes the whole chunk's recurrence (×8 redundancy) — ~32 s per 10k one-shot (the fused core: ~12 s).
   Cross-row GDN state hand-off, trace capture and the fused core's accuracy are follow-ons.

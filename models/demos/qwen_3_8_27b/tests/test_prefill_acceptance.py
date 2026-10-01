@@ -10,7 +10,11 @@
 Per-layer rows (``layer_pcc``): attention layers compare K and V ([1, 4, T, 256], post-RoPE K / raw V);
 Gated-DeltaNet layers have no per-token K/V — their cache *is* the carried state, so the row's ``k`` is
 the recurrent state ([1, 48, 128, 128]) and ``v`` the conv state ([1, 10240, 3]), the two tensors the
-trace stores for those layers. The report is written from the measured run, after the PCC assert.
+trace stores for those layers. The report is printed (``PCC REPORT {...}``) before the PCC assert, so a
+failing run still shows every layer, and written to ``PREFILL_ACCEPTANCE_OUT`` only after it passes.
+
+Trace formats: token ids either inline in ``metadata.json`` (``token_ids``) or, for
+agentic-prefill-goldens traces, the first ``n_tokens`` of the shared ``token_cache`` file it points to.
 (pattern: minimax_m3/tests/galaxy_prefill_kv_pcc.py)
 """
 
@@ -44,6 +48,17 @@ def _golden(trace_dir: Path, layer: int, is_full: bool):
         return f.get_tensor(f"recurrent_state_layer_{layer}").float(), f.get_tensor(f"conv_state_layer_{layer}").float()
 
 
+def _token_ids(trace_dir: Path, meta: dict) -> torch.Tensor:
+    if "token_ids" in meta:
+        return torch.tensor(meta["token_ids"], dtype=torch.int64)
+    # agentic-prefill-goldens: one shared token cache per model; a trace is its first n_tokens
+    with safe_open(str(trace_dir / meta["token_cache"]), "pt") as f:
+        ids = f.get_tensor("token_ids")
+    n = meta["n_tokens"]
+    assert ids.numel() >= n, f"token cache holds {ids.numel()} ids; the trace needs {n}"
+    return ids[:n].to(torch.int64)
+
+
 @pytest.mark.timeout(7200)  # cold weight conversion + 64-layer read-back exceed the repo's 300 s default
 def test_prefill_kv(mesh, mesh_config, ccl_manager, spec):
     chunked = os.environ.get("PREFILL_CHUNKED", "0") == "1"
@@ -54,7 +69,7 @@ def test_prefill_kv(mesh, mesh_config, ccl_manager, spec):
     # dimensions come from the checkpoint's own config.json (not from constants)
     cfg = Qwen38Config.from_hf_json(hf_dir / "config.json")
     meta = json.loads((trace_dir / "metadata.json").read_text())
-    token_ids = torch.tensor(meta["token_ids"], dtype=torch.int64)
+    token_ids = _token_ids(trace_dir, meta)
     T = token_ids.numel()
     chunk = spec.chunk_size
     assert meta["num_layers"] == cfg.num_hidden_layers, "trace depth != model depth"
@@ -111,6 +126,25 @@ def test_prefill_kv(mesh, mesh_config, ccl_manager, spec):
 
     worst = min(min(r["k"], r["v"]) for r in rows)
     logger.info(f"min per-layer PCC = {worst:.6f} (lower bound {spec.pcc_lower_bound}, target {spec.pcc_target})")
+    report = {
+        "mode": "chunked" if chunked else "one_shot",
+        "python": sys.executable,
+        "trace": str(trace_dir),
+        "num_layers": len(model.layers),
+        "hidden_size": cfg.hidden_size,
+        "seq_len": T,
+        "chunk_size": chunk,
+        "sp": mesh_config.sp,
+        "tp": mesh_config.tp,
+        "target_hw": spec.target_hw,
+        "fabric": fabric_name(),
+        "e2e_final_hidden_pcc": e2e,
+        "min_layer_pcc": worst,
+        "gdn_layer_state_mapping": {"k": "recurrent_state", "v": "conv_state"},
+        "layer_pcc": rows,
+    }
+    # printed before the asserts so a failing run still shows every layer
+    print("PCC REPORT " + json.dumps(report), flush=True)
     for r in rows:
         for key in ("k", "v"):
             assert math.isfinite(r[key]), f"layer {r['layer']} {key} PCC is not finite"
@@ -119,21 +153,6 @@ def test_prefill_kv(mesh, mesh_config, ccl_manager, spec):
             ), f"layer {r['layer']} {key}: PCC {r[key]:.6f} < pcc_lower_bound {spec.pcc_lower_bound}"
 
     if out_path:
-        report = {
-            "mode": "chunked" if chunked else "one_shot",
-            "python": sys.executable,
-            "num_layers": len(model.layers),
-            "hidden_size": cfg.hidden_size,
-            "seq_len": T,
-            "chunk_size": chunk,
-            "sp": mesh_config.sp,
-            "tp": mesh_config.tp,
-            "target_hw": spec.target_hw,
-            "layer_pcc": rows,
-            "fabric": fabric_name(),
-            "e2e_final_hidden_pcc": e2e,
-            "gdn_layer_state_mapping": {"k": "recurrent_state", "v": "conv_state"},
-        }
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         Path(out_path).write_text(json.dumps(report, indent=2))
         logger.info(f"acceptance report -> {out_path}")
