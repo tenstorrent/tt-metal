@@ -71,8 +71,13 @@ class COMPRESSED_MM_META(TemplateParameter):
     def convert_to_cpp(self) -> str:
         codes = tile_formats(self.pattern, self.kt, self.ct)
         meta = encode_tile_meta(codes, self.ct)
-        words = [int.from_bytes(meta[i : i + 4], "little") for i in range(0, len(meta), 4)]
-        nz = [sum(1 for c in range(self.ct) if codes[k * self.ct + c] != 0) for k in range(self.kt)]
+        words = [
+            int.from_bytes(meta[i : i + 4], "little") for i in range(0, len(meta), 4)
+        ]
+        nz = [
+            sum(1 for c in range(self.ct) if codes[k * self.ct + c] != 0)
+            for k in range(self.kt)
+        ]
         return "\n".join(
             [
                 f"constexpr std::uint32_t META_WORDS = {len(words)};",
@@ -83,8 +88,17 @@ class COMPRESSED_MM_META(TemplateParameter):
 
 
 # (pattern, M, ct, kt): the patterns at the DeepSeek decode call shape, and the one-tile and full-width k rows.
-CASES = [(p, 8, 8, 16) for p in ("bfp8", "bfp4", "bfp2", "alt84", "alt82", "zero50_4", "zero50_8")]
-CASES += [("bfp8", 8, 1, 16), ("bfp8", 8, 16, 16), ("bfp4", 8, 1, 16), ("bfp4", 8, 16, 16), ("bfp4", 1, 8, 16)]
+CASES = [
+    (p, 8, 8, 16)
+    for p in ("bfp8", "bfp4", "bfp2", "alt84", "alt82", "zero50_4", "zero50_8")
+]
+CASES += [
+    ("bfp8", 8, 1, 16),
+    ("bfp8", 8, 16, 16),
+    ("bfp4", 8, 1, 16),
+    ("bfp4", 8, 16, 16),
+    ("bfp4", 1, 8, 16),
+]
 
 
 @pytest.mark.perf
@@ -96,7 +110,11 @@ def test_perf_compressed_custom_mm(perf_report, case):
     configuration = PerfConfig(
         "sources/compressed_custom_mm_perf.cpp",
         InputOutputFormat(BF16, BF16, in1_format),
-        run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE, PerfRunType.MATH_ISOLATE],
+        run_types=[
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ],
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
             COMPRESSED_MM_META(pattern=pattern, kt=kt, ct=ct),

@@ -371,8 +371,12 @@ def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
 
 def test_sdpa_custom_mm_rejects_semaphore_overflow():
     """The driver refuses more FPU_SFPU posts per call than the 4-bit semaphore holds; no hardware needed."""
-    with pytest.raises(ValueError, match="posts per call exceed"):
-        _run(8, 256, 512, signal_granularity=1, read_transposed=False, mm_transpose=False)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="posts per call exceed"
+    ):
+        _run(
+            8, 256, 512, signal_granularity=1, read_transposed=False, mm_transpose=False
+        )
     assert 16 // 16 <= SEMAPHORE_MAX_VALUE
     assert 15 // 1 <= SEMAPHORE_MAX_VALUE
     assert 16 // 1 > SEMAPHORE_MAX_VALUE

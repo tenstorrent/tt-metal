@@ -68,10 +68,19 @@ def test_perf_custom_mm(perf_report, in1_format, in0_face_r_dim, call_shape, spl
     configuration = PerfConfig(
         "sources/custom_mm_perf.cpp",
         InputOutputFormat(BF16, BF16, in1_format),
-        run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE, PerfRunType.MATH_ISOLATE],
+        run_types=[
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ],
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            CUSTOM_MM_PERF_FLAGS(split_acc=split_acc, finalize=split_acc, dense_layout=True, clear_src=True),
+            CUSTOM_MM_PERF_FLAGS(
+                split_acc=split_acc,
+                finalize=split_acc,
+                dense_layout=True,
+                clear_src=True,
+            ),
         ],
         runtimes=[
             # in0 and the result use 2 faces of M rows; in1 uses 4 full faces.

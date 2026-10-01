@@ -51,10 +51,18 @@ def test_perf_sdpa_custom_mm(perf_report, in0_face_r_dim, call_shape):
     configuration = PerfConfig(
         "sources/sdpa_custom_mm_perf.cpp",
         InputOutputFormat(BF16, BF16),
-        run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE, PerfRunType.MATH_ISOLATE],
+        run_types=[
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ],
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            SDPA_CUSTOM_MM_FLAGS(signal_granularity=signal_granularity, read_transposed=False, mm_transpose=False),
+            SDPA_CUSTOM_MM_FLAGS(
+                signal_granularity=signal_granularity,
+                read_transposed=False,
+                mm_transpose=False,
+            ),
         ],
         runtimes=[
             # in1 (SrcA) has 4 full faces; in0 (SrcB) and the result have 2 faces of M rows.

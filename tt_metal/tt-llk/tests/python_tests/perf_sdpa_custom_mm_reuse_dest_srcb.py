@@ -34,12 +34,18 @@ CALL_SHAPES = [(kt, nt) for kt in (2, 4) for nt in (1, 4, 8, 16)] + [(8, 1), (8,
     # O at DEST tile 0 with P above it is the SDPA chunk's placement; P at tile 0 with O above it the functional test's.
     dst_first=[True, False],
 )
-def test_perf_sdpa_custom_mm_reuse_dest_srcb(perf_report, math_fidelity, call_shape, dst_first):
+def test_perf_sdpa_custom_mm_reuse_dest_srcb(
+    perf_report, math_fidelity, call_shape, dst_first
+):
     kt, nt = call_shape
     configuration = PerfConfig(
         "sources/sdpa_custom_mm_reuse_dest_srcb_perf.cpp",
         InputOutputFormat(BF16, BF16),
-        run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE, PerfRunType.MATH_ISOLATE],
+        run_types=[
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ],
         templates=[
             MATH_FIDELITY(math_fidelity),
             SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=kt, nt_dim=nt),

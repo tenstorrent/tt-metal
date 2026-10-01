@@ -628,7 +628,9 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {},
-        "test_name_aliases": {"perf_sdpa_custom_mm_reuse_dest_srcb": "perf_sdpa_custom_mm_reuse_dest_srcb"},
+        "test_name_aliases": {
+            "perf_sdpa_custom_mm_reuse_dest_srcb": "perf_sdpa_custom_mm_reuse_dest_srcb"
+        },
     },
     "perf_sfpu_binop_scalar": {
         "version": 3,
