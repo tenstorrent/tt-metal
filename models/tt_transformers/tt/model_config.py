@@ -1441,8 +1441,17 @@ class ModelArgs:
                         k=self.dim,
                         n=self.hidden_dim // self.cluster_shape[1],
                         num_cores=self.mlp_core_grid.num_cores,
-                        num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(
-                            TensorGroup.FF1_FF3, self.hidden_dim // self.cluster_shape[1]
+                        num_workers_per_dram_bank=(
+                            3
+                            if self.device_name == "P150"
+                            and math.ceil(
+                                (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_grid_size.x)
+                            )
+                            % 3
+                            == 0
+                            else self.get_dram_sharded_matmul_num_workers(
+                                TensorGroup.FF1_FF3, self.hidden_dim // self.cluster_shape[1]
+                            )
                         ),
                     )
         elif mode == Mode.PREFILL:
