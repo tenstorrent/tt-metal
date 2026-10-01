@@ -235,8 +235,9 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     runtime_args_1.reserve(num_input_tensors * 5);
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const uint32_t sticks_per_block = input_num_sticks_per_block[input_id];
-        // When the blocks are split each RISC copies every stick of its own blocks; when they are
-        // not, the sticks of the single block are halved and the writer starts after the reader.
+        // Under a block split each RISC copies every stick of the blocks it owns. Otherwise both
+        // RISCs walk every block -- however many there are -- and halve each block's sticks, with
+        // the writer starting where the reader stops.
         const uint32_t reader_sticks = split_blocks ? sticks_per_block : tt::div_up(sticks_per_block, 2);
         const uint32_t writer_sticks = split_blocks ? sticks_per_block : sticks_per_block - reader_sticks;
         const uint32_t writer_stick_offset = split_blocks ? 0 : reader_sticks;
