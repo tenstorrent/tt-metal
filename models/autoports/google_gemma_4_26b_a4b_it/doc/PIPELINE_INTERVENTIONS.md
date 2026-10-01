@@ -317,6 +317,18 @@ five-task release suite has not been rerun. Resume requires a new user request.
   bounded next-action evidence only, not solved-task progress. A seeded900-second
   Django outcome trial is running from18:32:53; policy remains unselected and
   full readiness accuracy remains required. See`eval_speed/weight_control.json`.
+- By 18:55 UTC, that bounded Django trial has verifier reward 1: its patch
+  passes the one FAIL_TO_PASS and all 103 PASS_TO_PASS tests. The agent still
+  reaches the 900-second timeout after three no-tool responses, so this is a
+  verified patch-quality result, not clean completion or a measured 8x speedup.
+  The weight-only candidate also passes the existing 100-token traced readiness
+  reference (prefill top-1 0.96, decode top-1 0.98, top-5/top-100 1.0). This narrow
+  reference does not establish long-context accuracy or select a release policy.
+  A same-host, same-request-seed selected-policy control started at 18:59 UTC.
+  Bounded CI [36910894168](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36910894168),
+  job 110533086359 on `qb2-120-p01t03`, tests the candidate with the same 900-second
+  cap and reused exact image `ad58effd178b...`; no image build or full suite is
+  launched. Both runs are monitored. Complete provenance is in the eval report.
 - Measure their TTFT and TSU.
 - Separate model/device performance from eval-framework overhead.
 - Check whether the same evals can run with more parallelism and finish sooner.
