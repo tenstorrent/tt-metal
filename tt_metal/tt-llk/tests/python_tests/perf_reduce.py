@@ -31,8 +31,7 @@ REDUCE_MATHOP = {
     ReduceDimension.Scalar: MathOperation.ReduceScalar,
 }
 
-# The production reduce accumulates in fp32 DEST by default (ttnn reduce_op), so the
-# same-format pairs are swept with both DEST modes; the converting pairs keep the 16-bit DEST.
+# ttnn reduce accumulates in fp32 DEST by default, so same-format pairs are swept in both DEST modes.
 _DEST_ACC_FORMATS = {
     (DataFormat.Float16_b, DataFormat.Float16_b),
     (DataFormat.Float32, DataFormat.Float32),
@@ -46,10 +45,7 @@ def _dest_accs(formats):
 
 
 def _fidelities(formats, pool_type):
-    """MAX pools with GMPOOL, which has no fidelity phases, so one point covers it. SUM and AVG
-    issue one pooling phase per fidelity step (a bf16 32x32 column sum takes 16.1 cycles per tile
-    at LoFi and 83.1 at HiFi4 on Blackhole), so the bf16 pair is swept over the phase counts the
-    kernels use; the other pairs stay at the default HiFi4 to keep the matrix small."""
+    """GMPOOL (MAX) has no fidelity phases; SUM and AVG sweep the fidelities on the bf16 pair only."""
     if pool_type == ReducePool.Max:
         return [MathFidelity.HiFi4]
     if (

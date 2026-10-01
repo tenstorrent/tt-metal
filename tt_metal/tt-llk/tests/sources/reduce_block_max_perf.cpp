@@ -2,16 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel for the experimental block row max (experimental/llk_{math,unpack_AB}_reduce_custom.h), the
-// compile-time family without the trigger handshake, in the shape of reduce_perf.cpp: the same zones and the
-// same five run types. Per block of REDUCE_BLOCK_CT_DIM input tiles (operand A, contiguous in the input ring; the
-// scaler is tile 0 of operand B) one output tile is produced; TILE_CNT / REDUCE_BLOCK_CT_DIM blocks per loop
-// iteration, grouped into DEST sections of MAX_TILES_DEST output tiles. TILE_CNT counts input tiles, as in
-// perf_reduce.py, so the report's cycles per tile are per input tile.
-// Mocks: the unpack mock publishes one SrcB valid and then REDUCE_BLOCK_CT_DIM SrcA valids per block, which is
-// what the real unpack does (one scaler face, then one whole tile per UNPACR); the math mock clears SrcA once per
-// input tile and SrcB once per block, which is what the real math does (SETRWC CLR_A per tile in the MOP, CLR_B at
-// the end of the replayed transpose).
+// Perf kernel of the experimental block row max (experimental/llk_{math,unpack_AB}_reduce_custom.h) in the shape of reduce_perf.cpp.
+// TILE_CNT counts input tiles, as in perf_reduce.py, so the report's cycles per tile are per input tile; the scaler is tile 0 of operand B.
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>

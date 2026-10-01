@@ -32,9 +32,8 @@ using namespace ckernel::unpacker;
  * @param tensor_shape: Shape of the tensor, including face_r_dim and num_faces.
  *
  * @note For tiny tiles (face_r_dim < 16), padding is applied to prevent incorrect outputs.
- * @note The math kernel of REDUCE_SCALAR writes SrcA rows 0 to 15 of the bank it works on (MOVB2A). A full face
- *       rewrites all sixteen rows on the next unpack, so only tiny tiles, whose faces leave rows behind, need
- *       the source clear; it is the same clear the tiny tile path of every reduce dimension uses.
+ * @note The REDUCE_SCALAR math kernel writes SrcA rows 0 to 15 (MOVB2A); a full face rewrites them on the next unpack,
+ *       so only tiny tiles need the source clear.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_shape)

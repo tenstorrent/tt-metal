@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf sweep of the experimental block row max (reduce_block_max_row), the SDPA row statistic.
+"""Perf sweep of the experimental block row max (reduce_block_max_row).
 
-One output tile per block of block_ct_dim input tiles; tile_cnt counts input tiles, as in perf_reduce.py, so
-the cycles per tile of the report are per input tile and the pack floor scales with 1 / block_ct_dim. Formats as
-test_reduce_block_max.py: bf16 input, bf16 output with a 16-bit or an fp32 DEST, fp32 output with an fp32 DEST.
+tile_cnt counts input tiles, as in perf_reduce.py, so the report's cycles per tile are per input tile.
 """
 
 import pytest
