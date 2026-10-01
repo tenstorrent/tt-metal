@@ -3558,19 +3558,17 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
     # read these; on this rail the verify count is the contract K.
     _SPEC_V = _SPEC_CONTRACT_K
     _SPEC_N = _SPEC_CONTRACT_K + 1
-    _DFLASH_ASYNC = _dflash_env_flag("GEMMA4_CONTRACT_ASYNC", "0")
-
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
         "output_tokens_per_step": 1,
         # A step this class does not speculate on runs the plain decode; the
         # device sampler keeps that step from pulling [B, vocab] logits to host.
         "supports_sample_on_device": True,
-        # Off by default: upstream vLLM refuses async scheduling for
-        # method=custom_class, and the runner's overlap would let a proposal
-        # run after the next verify was submitted.
-        "supports_async_decode": _DFLASH_ASYNC,
-        "supports_async_spec_decode": _DFLASH_ASYNC,
+        # The plugin cannot see when a drafter-served row leaves the plain
+        # decode inputs stale. Keep async decode disabled until that state
+        # change is part of the scheduler-visible reload plan.
+        "supports_async_decode": False,
+        "supports_async_spec_decode": False,
         "supports_spec_decode": True,
         # Drafts come from the device and the target hidden state never leaves
         # it, so the runner holds no handle and ``hidden`` is unused.
@@ -3630,7 +3628,6 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         self._dflash_live_owner = None
         self._dflash_owner_tables = None
         self._dflash_last_pt = None
-        self._dflash_stale_rows = set()
         self._dflash_steps = 0
         self._dflash_committed = 0
         self._dflash_ring = self._dflash_ring_geometry()
@@ -3780,35 +3777,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         except Exception:
             pass
 
-    def _dflash_mark_stale(self, row):
-        """The plain decode's device-resident token and position for ``row`` are stale.
-
-        The traced decode keeps each row's token and position on the device
-        and reloads them from the host only on a batch layout change. A row
-        answered from the drafter never went through that trace, so its next
-        plain decode must reload every row's inputs from the host
-        (``_dflash_plain_kwargs``); under async decode the merge keeps host
-        inputs for the rows listed in ``_slots_prefilled_since_decode``.
-        """
-        self._dflash_stale_rows.add(int(row))
-        slots = getattr(self, "_slots_prefilled_since_decode", None)
-        if slots is None:
-            slots = self._slots_prefilled_since_decode = set()
-        slots.add(int(row))
-
-    def _dflash_plain_kwargs(self, kwargs):
-        """Keyword arguments for a plain decode, with a host reload when a drafter-served row needs one."""
-        if not self._dflash_stale_rows:
-            return kwargs
-        self._dflash_stale_rows.clear()
-        kwargs = dict(kwargs)
-        kwargs["reset_batch"] = True
-        return kwargs
-
-    def _dflash_note_step(self, row, kwargs, page_tables_per_layer):
+    def _dflash_note_step(self, kwargs, page_tables_per_layer):
         """Record the owner's tables from this step for the next page-table refresh."""
         self._dflash_owner_tables = (kwargs.get("page_table"), page_tables_per_layer, kwargs.get("kv_cache"))
-        self._dflash_mark_stale(row)
 
     # -- prefill: capture taps, accumulate over scheduler chunks --------------
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
@@ -4020,9 +3991,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         """
 
         def plain():
-            return Gemma4ForCausalLM.decode_forward(
-                self, *args, page_tables_per_layer=page_tables_per_layer, **self._dflash_plain_kwargs(kwargs)
-            )
+            return Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
 
         if len(live) != 1:
             self._dflash_leave_speculation("several live rows", [self._dflash_slot_of(r, kwargs) for r in live])
@@ -4069,7 +4038,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
                 # them near max_model_len). The replay's first id is still
                 # the answer, and the next propose commits one token.
                 retained.consumed = True
-                self._dflash_note_step(row, kwargs, page_tables_per_layer)
+                self._dflash_note_step(kwargs, page_tables_per_layer)
                 return retained.posterior[0]
             self._dflash_end_session()
             return None
@@ -4113,7 +4082,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         # The bootstrap refreshed the verify page tables from this table.
         page_table = kwargs.get("page_table")
         self._dflash_last_pt = page_table[:1].clone() if page_table is not None else None
-        self._dflash_note_step(row, kwargs, page_tables_per_layer)
+        self._dflash_note_step(kwargs, page_tables_per_layer)
 
     def _dflash_decline_reason(self, dec, position):
         """Why no verify block can be written at ``position``, or None.
@@ -4163,7 +4132,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             posterior = retained.posterior[:width]
             ids[row, : len(posterior)] = torch.tensor(posterior, dtype=torch.int32)
             if len(live) == 1:
-                self._dflash_note_step(row, kwargs, page_tables_per_layer)
+                self._dflash_note_step(kwargs, page_tables_per_layer)
                 return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
             # A peer joined after the proposal. The device evaluated the drafts
             # already, so the drafted row is answered and kept out of the
@@ -4296,13 +4265,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         step's row count and argmaxed over the vocabulary.
         """
         args, kwargs = self._dflash_column_zero(args, kwargs, rows, exclude_row)
-        kwargs = self._dflash_plain_kwargs(kwargs)
         is_tokens = kwargs.get("sampling_params") is not None
         tt_out = Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
-        if exclude_row is not None:
-            # The excluded row ran at position -1 and left a stale resident
-            # position behind; its next plain decode must reload.
-            self._dflash_mark_stale(exclude_row)
         if self._dflash_is_host(tt_out):
             host = tt_out[0] if isinstance(tt_out, tuple) else tt_out
         else:
