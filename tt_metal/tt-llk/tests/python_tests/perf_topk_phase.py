@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-The phases of the generic TopK network per call, on the pipeline perf kernel (sources/topk_perf.cpp) in
-MATH_ISOLATE with the datacopies dropped: one phase per build (local sort, merge, rebuild, or nothing: the loop
-skeleton), so per call = (cycles per row of the phase build - the skeleton) / calls per row (local sort Wt / 2,
-merge Wt - 1, rebuild Wt / 2 for a row of Wt value tiles). The rows with the copies kept give the datacopy carrier
-of a step; the tile0_sorted rows time the local sort with its phases 0 to 4 on the second tile only. The whole
-pipeline in the four run types is perf_topk.py.
+The phases of the generic TopK network on the pipeline perf kernel (sources/topk_perf.cpp) in MATH_ISOLATE, one
+phase per build: per call = (cycles per row of the phase build - the skeleton) / calls per row.
 """
 
 import pytest

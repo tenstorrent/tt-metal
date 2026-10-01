@@ -942,14 +942,8 @@ template <
     bool RANK_STAMPED      = false,
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
     bool TILE0_SORTED      = false>
-// TILE0_SORTED: the first value tile (and its index tile) is already sorted in direction idir, as the output tile 0
-// of a previous end_phase 5 call in the same direction is. Phases 0 to 4 then run on the second tile only (their
-// groups address DEST from 64 rows up, through the DEST target offset; phase 4 covers positions 32 to 63 in the
-// direction of the second half) and phase 5 merges the two halves as usual. The values of the result are those of
-// the full call; the index order among equal values is that of the full call for the comparator-stable and the
-// rank-stamped networks (the sorted order is unique there) and may differ for the unstable one. A template
-// parameter, not an argument: the phase loops below unroll over their four groups only when the group bounds are
-// constants, and a runtime flag would cost the callers without it about 8 percent of the sort.
+// TILE0_SORTED: the first value tile (and its index tile) is already sorted in direction idir; phases 0 to 4 then run on the
+// second tile only. A template parameter, since the phase loops below unroll only with constant group bounds.
 inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
     // NOTE (stable sort): TIE_ORDER is the GLOBAL sort order, not this call's idir. Callers may run
@@ -991,8 +985,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
             }
             for (int ph = i_start_phase; ph < (i_end_phase + 1); ph++)
             {
-                // With the first tile sorted, the phase 0 to 3 loops skip groups 0 and 1 (the first tile) and phase 4
-                // covers the second 32-datum sequence alone, in the direction of the second half.
+                // Phases 0 to 3 skip groups 0 and 1 (the first tile); phase 4 covers the second 32-datum sequence alone.
                 bool tile1_only = false;
                 if constexpr (TILE0_SORTED)
                 {
@@ -1140,8 +1133,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         std::uint32_t end_step                = (i_start_phase == i_end_phase) ? i_end_step : 4;
                         std::uint32_t sorted_seq_length       = 1 << num_steps;
                         std::uint32_t datums_compared         = 0;
-                        // The second tile alone is the second 32-datum sequence of phase 4: its direction is the
-                        // flipped one, and its rows start at the quadrant base moved 64 rows up.
+                        // The second tile alone is the second 32-datum sequence of phase 4, sorted in the flipped direction.
                         const std::uint32_t total_datums_to_compare = tile1_only ? 32 : 64;
                         const bool pass_dir                         = tile1_only ? !static_cast<bool>(idir) : static_cast<bool>(idir);
                         for (std::uint32_t ss = start_step; ss > end_step; ss--)

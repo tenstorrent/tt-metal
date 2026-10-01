@@ -32,8 +32,7 @@ inline void calculate_bitonic_topk_phases_steps(
         idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
 }
 
-// The local sort with the tile0_sorted flag (phases 0 to 4 on the second tile only when the first is already
-// sorted in direction idir). A separate entry, since the SFPU call macros take the function's address.
+// The local sort with the tile0_sorted flag; a separate entry since the SFPU call macros take the function's address.
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -48,8 +47,6 @@ inline void calculate_bitonic_topk_local_sort(
     std::uint32_t i_end_step,
     std::uint32_t i_start_step,
     std::uint32_t tile0_sorted) {
-    // The flag is a template parameter of the network (the phase loops unroll only with constant group bounds), so
-    // the runtime argument selects the instantiation.
     if (tile0_sorted != 0) {
         _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true>(
             idir, i_end_phase, i_start_phase, i_end_step, i_start_step);

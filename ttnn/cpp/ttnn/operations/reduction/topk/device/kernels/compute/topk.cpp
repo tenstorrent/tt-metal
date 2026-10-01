@@ -402,11 +402,8 @@ void kernel_main() {
                         ckernel::topk_canonicalize_negzero_values(0);
                     }
                 }
-                // From the second sort on, dest reg 0 holds a tile this kernel sorted in the same direction (the
-                // top or the bottom half of a previous 64-sort, re-stamped in the rank-stamped mode), so the sort
-                // may skip its phases 0 to 4 on that tile. Taken for the stable modes only: their sorted order is
-                // unique, so the result is the one of the full sort; the unstable network would keep the order
-                // among equal values the resident tile already has instead of re-deriving it.
+                // From the second sort on, dest reg 0 holds a tile sorted in the same direction, so the stable sorts
+                // (whose order is unique) skip phases 0 to 4 on it.
                 const bool tile0_sorted = stable_sort && !first_sort_from_transposed;
                 ckernel::topk_local_sort<network_stable, DST_ACCUM_MODE, /*fused=*/false, rank_stamped, tie_order>(
                     0, (int)!largest, end_phase, 0, 0, 0, tile0_sorted);

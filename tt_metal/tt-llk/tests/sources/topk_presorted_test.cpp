@@ -1,14 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// The insertion step of the single-core topk kernel on one 2-tile slab, for the tile0_sorted argument of
-// topk_local_sort. The slab (value tiles 0 and 1, index tiles 2 and 3) is unpacked with the transposes and
-// sorted once with i_end_phase 5, which leaves DEST tile 0 sorted in the call's direction; then tile 1 (values
-// and indices) is copied in again from L1 as the incoming tile and the slab is sorted a second time, with
-// tile0_sorted = TOPK_TILE0_SORTED. All four DEST tiles are packed, so the host compares the two builds of this
-// kernel bit for bit and checks the second sort against its golden. The rank-stamped mode re-stamps the slab
-// before each sort as the kernel does; the comparator-stable mode canonicalizes the value tiles before each
-// sort. The fused mode is not covered: the kernel that inserts into a resident tile does not use it.
+// The insertion step of the single-core topk kernel on one 2-tile slab, for the tile0_sorted argument of topk_local_sort:
+// the slab is sorted with i_end_phase 5, tile 1 is copied in again and the slab is sorted a second time with TOPK_TILE0_SORTED.
 
 #include <cstdint>
 
@@ -139,8 +133,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         if constexpr (TOPK_RANK_STAMPED)
         {
-            // Both tiles get their chain positions before every sort, as the kernel stamps the accumulator with
-            // its level's range and the incoming tile with the top range.
+            // Re-stamp both tiles before every sort, as the kernel does.
             SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, calculate_topk_stamp_local_positions, (APPROX, TOPK_LARGEST, TOPK_TAG_BITS), dst_index, vector_mode);
         }
         if constexpr (NETWORK_STABLE_SORT)
@@ -165,8 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (TOPK_RANK_STAMPED)
     {
-        // Strip the rank tags off both value tiles for the bf16 pack and move both u16 index tiles into the
-        // half the packer reads.
+        // Strip the rank tags off the value tiles and move the index tiles into the half the packer reads.
         ckernel::sfpu::_topk_strip_rank_tags_<TOPK_TAG_BITS>(0);
         ckernel::sfpu::_topk_strip_rank_tags_<TOPK_TAG_BITS>(1);
         ckernel::sfpu::_topk_uint16_move_dest_tile_to_pack_half_(2);

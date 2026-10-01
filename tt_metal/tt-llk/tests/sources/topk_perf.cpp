@@ -2,27 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Perf twin of topk_test.cpp: the generic bitonic TopK pipeline (transposed unpack, datacopies, local sort,
-// merge and rebuild per 2-tile slab, pack) with INIT and TILE_LOOP zones on every thread and the row pipeline
-// repeated LOOP_FACTOR times inside TILE_LOOP. L1 is addressed through the 16-tile PERF_INPUT_A / PERF_OUTPUT
-// rings, so the matrix width is a shape only (the network is data oblivious: every compare-exchange is issued
-// whatever the values). TILE_LOOP is reported per value tile of the row.
-//
-// Run types: L1_TO_L1 (the pipeline as the functional kernel runs it), MATH_ISOLATE (the unpack thread sets the
-// source valids the datacopies retire, the math thread runs the copies and the network without the DEST
-// hand-off, the pack thread idles), UNPACK_ISOLATE (the unpack thread runs, the math thread retires the valids)
-// and PACK_ISOLATE (the pack thread packs without waiting for the math thread).
-//
-// TOPK_PERF_PHASE selects the SFPU calls issued per tile-pair step: 0 the whole network as the functional
-// kernel (local sort at the first iteration, merge at every step, rebuild where the functional kernel issues
-// it), 1 the local sort only, 2 the merge only, 3 the rebuild only, 4 no network call (the datacopy carrier
-// alone), 5 the fuse / stamp prologue and the defuse / strip epilogue only. TOPK_PERF_DROP_COPY (MATH_ISOLATE
-// only) leaves out the datacopies with their format reconfigs and inits, so the network runs on whatever DEST
-// holds and the phase costs come out per call. TOPK_PERF_TILE0_SORTED passes tile0_sorted to the local sort
-// (phases 0 to 4 on the second tile only).
-//
-// The fused and rank-stamped modes are not pinned to one iteration here: that static_assert of the functional
-// kernel guards its bf16 L1 round trip, which this kernel does not check.
+// Perf twin of topk_test.cpp: the generic bitonic TopK pipeline (transposed unpack, datacopies, local sort, merge and rebuild per
+// 2-tile slab, pack), reported per value tile of the row; TOPK_PERF_PHASE selects the SFPU calls a tile-pair step issues.
 
 #include <algorithm>
 #include <cstdint>
@@ -165,8 +146,6 @@ constexpr auto TOPK_TIE_ORDER      = TOPK_LARGEST ? ckernel::sfpu::TopkTieOrder:
 constexpr std::uint32_t dst_index  = 0;
 constexpr VectorMode vector_mode   = VectorMode::RC_custom;
 
-// The local sort call; the tile0_sorted argument exists on the LLK of this branch only, so the branch that
-// passes it is instantiated only when the row asks for it.
 template <bool TILE0_SORTED>
 inline void issue_local_sort(const int end_phase)
 {

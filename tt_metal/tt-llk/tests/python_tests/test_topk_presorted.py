@@ -1,17 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-The tile0_sorted argument of topk_local_sort on the insertion step of the single-core topk kernel
-(sources/topk_presorted_test.cpp): a 2-tile slab is sorted with i_end_phase 5, tile 1 is copied in again as
-the incoming tile, and the slab is sorted a second time, once with the full network and once with phases 0 to
-4 on the second tile only. Both builds run on the same stimuli; their four packed DEST tiles (values 0 and 1,
-indices 2 and 3) are compared bit for bit and the second sort is checked against a golden built from the
-first sort's top 32 and the re-inserted tile.
-
-The comparator-stable and the rank-stamped networks order the slab by (value, index), a total order, so their
-result does not depend on the network path and the two builds must be identical. The unstable network's
-index order among equal values is a function of the input arrangement, so for it the values must be identical
-and the indices only where the row holds no equal values.
+The tile0_sorted argument of topk_local_sort on the insertion step (sources/topk_presorted_test.cpp): the full and
+the skipping build sort the same slab and are compared bit for bit, the full one also against a golden.
 """
 
 from dataclasses import dataclass
@@ -89,26 +80,22 @@ def _row_values(stimuli_class, row):
 
 
 def _canonical(values):
-    """The value the networks compare: -0.0 folds into +0.0 (the SrcA datacopy, the canonicalize sweep and the
-    rank stamp all do that before the first compare)."""
+    """The value the networks compare: -0.0 folds into +0.0 before the first compare."""
     values = values.to(torch.float32).clone()
     values[values == 0.0] = 0.0
     return values
 
 
 def _stable_order(values, tie_keys, descending):
-    """Positions ordered by the value in the sort direction, equal values by tie_keys ascending: a stable sort by
-    value of the positions taken in tie_keys order (a lexicographic order, whatever the spacing of the values)."""
+    """Positions ordered by the value in the sort direction, equal values by tie_keys ascending."""
     by_key = torch.argsort(tie_keys.to(torch.int64), stable=True)
     by_value = torch.argsort(values[by_key].to(torch.float32), descending=descending, stable=True)
     return by_key[by_value]
 
 
 def _golden_second_sort(row_values, descending, tie_by_position):
-    """Values and indices of the slab after the insertion step: the first sort's top 32 plus tile 1 again. The
-    comparator-stable network breaks ties by the index tile; the rank-stamped network by the position in the slab
-    (the stamps are the local positions, which in the kernels' use equal the index order because every fresh tile
-    comes from later in the row; here tile 1 is the same tile again, so the two orders differ)."""
+    """Values and indices of the slab after the insertion step: the first sort's top 32 plus tile 1 again.
+    Stable ties by the index tile, rank-stamped ties by slab position."""
     values = _canonical(row_values)
     indices = torch.arange(W_VALUES)
     order = _stable_order(values, indices, descending)  # first sort: the positions are the indices
@@ -190,8 +177,7 @@ def test_topk_presorted(sort_direction: TopKSortDirection, sort_mode: str, stimu
     src_A = src_A.flatten()
     src_A = prepare_input_tensor_for_topk(src_A, formats, INPUT_DIMENSIONS_SLAB)
 
-    # Both builds are prepared before either runs: the compile-producer pass compiles in prepare() and ends the
-    # test at the first run(), so a second configuration prepared after it would never be compiled.
+    # Both builds are prepared before either runs: the compile-producer pass ends the test at the first run().
     full = _config(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, False)
     skip = _config(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, True)
     full.prepare()

@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-The generic TopK pipeline (sources/topk_perf.cpp, the perf twin of topk_test.cpp): transposed unpack,
-datacopies, local sort, merge and rebuild per 2-tile slab, pack, over a tile row of W values with uint16
-indices, in the four run types. TILE_LOOP is cycles per value tile of the row; a row of Wt value tiles has
-Wt - 1 tile-pair steps. The per-phase split of the same kernel is perf_topk_phase.py (MATH_ISOLATE only; the
-perf report keeps one column set per module).
+The generic TopK pipeline (sources/topk_perf.cpp, the perf twin of topk_test.cpp) in the four run types.
+TILE_LOOP is cycles per value tile of the row; the per-phase split of the same kernel is perf_topk_phase.py.
 """
 
 import pytest
@@ -28,8 +25,7 @@ pytestmark = [skip_for_quasar]
 DESC, ASC = TopKSortDirection.Descending, TopKSortDirection.Ascending
 RING_TILES = 16
 
-# (W, K, direction, sort mode). The per-step cost does not depend on W (the stage 2 sweep measured 2840 to 2899
-# cycles per step from W 1024 to 8192), so three widths stand for the sweep.
+# (W, K, direction, sort mode)
 PIPELINE_ROWS = [
     (1024, 32, DESC, "unstable"),
     (4096, 32, DESC, "unstable"),
@@ -50,7 +46,7 @@ def test_perf_topk_pipeline(perf_report, row):
     stable = sort_mode == "stable"
     fused = sort_mode == "fused"
     rank_stamped = sort_mode == "rank_stamped"
-    wt = W // 32  # value tiles per tile row; the matrix holds the index tiles too
+    wt = W // 32  # value tiles per tile row
     PerfConfig(
         "sources/topk_perf.cpp",
         formats,

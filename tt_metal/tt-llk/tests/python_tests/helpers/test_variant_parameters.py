@@ -1043,10 +1043,8 @@ class ROPE(TemplateParameter):
 
 @dataclass
 class TOPK_PERF(TemplateParameter):
-    """Knobs of the TopK pipeline perf kernel (sources/topk_perf.cpp): which network calls a tile-pair step issues
-    (full, sort, merge, rebuild, copy: the datacopy carrier alone, fuse: the fuse and stamp prologue alone), whether
-    the datacopies are dropped in MATH_ISOLATE, and whether the local sort skips its phases 0 to 4 on the first tile.
-    The field names are the perf report columns."""
+    """Knobs of the TopK pipeline perf kernel (sources/topk_perf.cpp): the network calls a step issues, whether
+    MATH_ISOLATE drops the datacopies, whether the local sort gets tile0_sorted."""
 
     topk_phase: str = "full"
     topk_drop_copy: bool = False
