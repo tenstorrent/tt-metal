@@ -35,7 +35,6 @@ namespace m2 = tt::tt_metal::experimental;
 void py_module_types(nb::module_& mod) {
     export_enum<tt::tt_metal::UnpackMode>(mod, "UnpackMode");
     export_enum<tt::tt_metal::Precision>(mod, "Precision");
-    export_enum<tt::tt_metal::KernelBuildOptLevel>(mod, "KernelBuildOptLevel");
     export_enum<m2::DFBEndpointType>(mod, "DFBEndpointType");
     export_enum<m2::DFBAccessPattern>(mod, "DFBAccessPattern");
 
@@ -334,13 +333,16 @@ void py_module_types(nb::module_& mod) {
             [](m2::KernelSpec::CompilerOptions* self,
                std::vector<std::filesystem::path> include_paths,
                m2::KernelSpec::CompilerOptions::Defines defines,
-               tt::tt_metal::KernelBuildOptLevel opt_level) {
+               std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level) {
                 new (self) m2::KernelSpec::CompilerOptions{
-                    .include_paths = std::move(include_paths), .defines = std::move(defines), .opt_level = opt_level};
+                    .include_paths = std::move(include_paths),
+                    .defines = std::move(defines),
+                    .opt_level = opt_level.value_or(tt::tt_metal::KernelBuildOptLevel::O2)};
             },
             nb::arg("include_paths") = std::vector<std::filesystem::path>{},
             nb::arg("defines") = m2::KernelSpec::CompilerOptions::Defines{},
-            nb::arg("opt_level") = tt::tt_metal::KernelBuildOptLevel::O2)
+            // KernelBuildOptLevel is registered by ttnn.experimental.fabric_mux, which binds after this module.
+            nb::arg("opt_level") = nb::none())
         .def_rw("include_paths", &m2::KernelSpec::CompilerOptions::include_paths)
         .def_rw("defines", &m2::KernelSpec::CompilerOptions::defines)
         .def_rw("opt_level", &m2::KernelSpec::CompilerOptions::opt_level);
