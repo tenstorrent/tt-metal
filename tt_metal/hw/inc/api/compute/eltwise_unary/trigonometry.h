@@ -283,9 +283,9 @@ ALWI void acos_tile(uint32_t idst) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_acos,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
+        (APPROX, is_fp32_dest_acc_en, is_fp32_dest_acc_en ? 8 : 32),
         idst,
-        VectorMode::RC));
+        is_fp32_dest_acc_en ? VectorMode::RC : VectorMode::None));
 }
 
 /**
