@@ -35,7 +35,7 @@ from .chip_architecture import (
     get_chip_architecture,
     quasar_arch_variant,
 )
-from .data_format_inference import data_formats, is_format_combination_outlier
+from .data_format_inference import data_formats, promote_dest_accumulation
 from .device import (
     CHIP_DEFAULT_BOOT_MODES,
     KERNEL_COMPLETE,
@@ -1004,17 +1004,14 @@ class TestConfig:
         }
 
         if formats:
-            # Check if this is an outlier format combination that requires dest_acc to be enabled
-            # Automatically enable dest_acc for outlier combinations
-            if (
-                is_format_combination_outlier(
-                    formats.input_format,
-                    formats.output_format,
-                    dest_acc,
-                )
-                and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-            ):
-                self.dest_acc = DestAccumulation.Yes
+            # The one promotion rule, shared with constraints.py so the goldens and the
+            # parametrize builders cannot drift from the Dest this build actually uses.
+            self.dest_acc = promote_dest_accumulation(
+                formats.input_format,
+                formats.output_format,
+                dest_acc,
+                TestConfig.CHIP_ARCH,
+            )
 
             self.formats_config = data_formats(
                 input_format=formats.input_format,
