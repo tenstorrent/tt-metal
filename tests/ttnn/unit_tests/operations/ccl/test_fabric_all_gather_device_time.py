@@ -82,7 +82,8 @@ def _link_peak_gbps(num_devices):
 def _busiest_link_shards(op, mesh_shape, cluster_axis, fabric_config, num_links=NUM_LINKS):
     """Shards the busiest link direction carries in one call.
 
-    fabric_all_gather: closed even rings are balanced (the opposite shard goes half each way): G/2 - 1/2 shards per
+    Assumes a fully wired mesh, where a full-mesh snake closes iff the mesh is a torus or has an even side (as
+    resolve_mesh_ring_plan does). fabric_all_gather: closed even rings are balanced (the opposite shard goes half each way): G/2 - 1/2 shards per
     direction; a full-mesh gather on a torus with both sides >= 3 runs two edge-disjoint Hamiltonian cycles that each
     carry half of every shard. high_bw_all_gather: its rings are not balanced, G/2 shards on the busier direction. An
     open line carries G - 1 shards on its middle links. Split over num_links links.
@@ -320,9 +321,11 @@ def test_kv_prefix_device_time(mesh_device, kv_rows, input_layout, request):
         _report(f"kv{kv_rows} {_payload_id(request)} {input_layout}", key, seconds, G, kv_rows * 1152, busiest, peak)
 
 
-def _overlap_window(mesh_device, request, kv_rows, fmt, nd_sharded, q_local, topk_keys, topk_grid, gather_grid, tag):
+def _overlap_window(
+    mesh_device, request, kv_rows, fmt, nd_sharded, q_local, topk_keys, topk_grid, gather_grid, tag, exploratory=False
+):
     """The KV gather on the full grid, on gather_grid alone, top-k on topk_grid alone, and both concurrently (host time
-    per blocking replay)."""
+    per blocking replay). Only an exploratory placement may fail to run (reported, not raised)."""
     G = mesh_device.get_num_devices()
     dtype, width, row_bytes = _KV_FORMATS[fmt]
     inp = _kv_cache(mesh_device, kv_rows, fmt, nd_sharded=nd_sharded)
@@ -370,7 +373,9 @@ def _overlap_window(mesh_device, request, kv_rows, fmt, nd_sharded, q_local, top
             try:
                 region_alone = _time_replays(mesh_device, gather)
                 together = _time_replays(mesh_device, both)
-            except RuntimeError as e:  # e.g. the op does not fit in the region
+            except RuntimeError as e:  # e.g. the op does not fit in an exploratory region
+                if not exploratory:
+                    raise
                 ttnn.synchronize_device(mesh_device)
                 print(f"\nFABRIC_ALL_GATHER_PERF {tag} {key} does not run: {str(e).splitlines()[0][:160]}", flush=True)
                 continue
@@ -416,6 +421,7 @@ def test_kv_gather_on_overlap_strip(mesh_device, cache_tokens, input_layout, reg
         topk_grid,
         gather_grid,
         f"cache{cache_tokens} {_payload_id(request)} {input_layout} {region}",
+        exploratory=True,
     )
 
 

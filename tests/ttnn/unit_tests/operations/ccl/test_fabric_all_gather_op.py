@@ -167,23 +167,28 @@ def test_axis_gather_matches_high_bw(mesh_device, cluster_axis, case):
 @pytest.mark.parametrize("device_params", _FABRICS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [_system_mesh()], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [1, None])
-def test_pages_larger_than_payload(mesh_device, cluster_axis):
-    """16 KiB ROW_MAJOR rows: every page is split over several packets (3 at a 6 KiB payload, the last one partial)."""
+@pytest.mark.parametrize("width", [8192, 16384], ids=["16KiB_rows", "32KiB_rows"])
+@pytest.mark.parametrize("nd_sharded", [False, True], ids=["interleaved", "nd_sharded"])
+def test_pages_larger_than_payload(mesh_device, cluster_axis, width, nd_sharded):
+    """ROW_MAJOR rows larger than the fabric payload: every page is split over several packets (3 for 16 KiB at a 6 KiB
+    payload, the last one partial). 32 KiB rows also exceed one NoC packet in the copy cores' ND-sharded conversion."""
     torch.manual_seed(2)
-    rows, width = 64, 8192
+    rows = 64
     if cluster_axis is None:
         G = mesh_device.get_num_devices()
-        host = _random((1, 1, rows * G, width), ttnn.bfloat16)
         mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
     else:
         G = mesh_device.shape[cluster_axis]
-        host = _random((1, 1, rows * G, width), ttnn.bfloat16)
         dims = (None, 2) if cluster_axis == 1 else (2, None)
         mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
-    inp = _device_tensor(mesh_device, host, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mapper)
+    host = _random((1, 1, rows * G, width), ttnn.bfloat16)
+    mem = _kv_nd_memory_config(mesh_device, width) if nd_sharded else ttnn.DRAM_MEMORY_CONFIG
+    inp = _device_tensor(mesh_device, host, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mapper, memory_config=mem)
     ref_out, new_out, _ = _prefilled_pair(mesh_device, (1, 1, rows * G, width), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
     _both(mesh_device, inp, ref_out, new_out, dim=2, cluster_axis=cluster_axis, num_links=2)
-    _check(new_out, host, ref_out, f"16 KiB rows, cluster_axis {cluster_axis}")
+    _check(
+        new_out, host, ref_out, f"{width * 2 // 1024} KiB rows, cluster_axis {cluster_axis}, nd_sharded {nd_sharded}"
+    )
 
 
 @pytest.mark.parametrize("device_params", _FABRICS[:1], indirect=True)
