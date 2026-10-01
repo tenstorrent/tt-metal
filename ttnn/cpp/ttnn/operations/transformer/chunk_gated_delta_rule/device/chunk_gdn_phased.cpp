@@ -67,7 +67,7 @@ ChunkGdnPrepOperation::spec_return_value_t ChunkGdnPrepOperation::compute_output
             s, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config));
     };
     const uint32_t BH = attrs.BH, NC = attrs.num_chunks, C = attrs.chunk_size, K = attrs.key_dim, V = attrs.val_dim;
-    return {
+    std::vector<tt::tt_metal::TensorSpec> specs = {
         f32(ttnn::Shape({BH, NC, C, V})),  // v_beta
         f32(ttnn::Shape({BH, NC, C, K})),  // kd
         f32(ttnn::Shape({BH, NC, C, K})),  // q_decay
@@ -76,6 +76,10 @@ ChunkGdnPrepOperation::spec_return_value_t ChunkGdnPrepOperation::compute_output
         f32(ttnn::Shape({BH, NC, 1, 1})),  // dl (1 tile per chunk)
         f32(ttnn::Shape({BH, NC, C, C})),  // t_inv
     };
+    if (attrs.emit_g_cumsum) {
+        specs.push_back(f32(ttnn::Shape({BH, NC, C, 1})));  // g_cumsum (column form, Ct tiles/chunk)
+    }
+    return specs;
 }
 
 ChunkGdnPrepOperation::tensor_return_value_t ChunkGdnPrepOperation::create_output_tensors(
@@ -108,7 +112,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm,
     float scale,
     bool qk_flat,
-    uint32_t Hk) {
+    uint32_t Hk,
+    bool emit_g_cumsum) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Derive dims. Head-major q gives BH/NC/K directly; flat q [B,T,Hk*K] gives B/T, so BH=B*HV,
@@ -129,6 +134,7 @@ std::vector<Tensor> chunk_gdn_prep(
         .Hk = Hk,
         .qk_norm = qk_norm,
         .scale = scale,
+        .emit_g_cumsum = emit_g_cumsum,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
@@ -180,7 +186,14 @@ ChunkGdnScanOperation::spec_return_value_t ChunkGdnScanOperation::compute_output
     const auto s_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     ttnn::Shape o_shape({attrs.BH, attrs.num_chunks, attrs.chunk_size, attrs.val_dim});
     ttnn::Shape s_shape({attrs.BH, attrs.key_dim, attrs.val_dim});
-    return {tt::tt_metal::TensorSpec(o_shape, o_layout), tt::tt_metal::TensorSpec(s_shape, s_layout)};
+    std::vector<tt::tt_metal::TensorSpec> specs = {
+        tt::tt_metal::TensorSpec(o_shape, o_layout), tt::tt_metal::TensorSpec(s_shape, s_layout)};
+    if (attrs.emit_intermediates) {
+        ttnn::Shape h_shape({attrs.BH, attrs.num_chunks, attrs.key_dim, attrs.val_dim});
+        specs.push_back(tt::tt_metal::TensorSpec(h_shape, s_layout));  // h (entering state per chunk)
+        specs.push_back(tt::tt_metal::TensorSpec(o_shape, o_layout));  // v_new
+    }
+    return specs;
 }
 
 ChunkGdnScanOperation::tensor_return_value_t ChunkGdnScanOperation::create_output_tensors(
@@ -208,7 +221,8 @@ std::vector<Tensor> chunk_gdn_scan(
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    bool use_mcast) {
+    bool use_mcast,
+    bool emit_intermediates) {
     const auto& vb_shape = v_beta.logical_shape();  // [BH, NC, C, V]
     const auto& kd_shape = kd.logical_shape();      // [BH, NC, C, K]
     const char* serial_env = std::getenv("QWEN_GDN_SCAN_SERIAL");
@@ -222,6 +236,7 @@ std::vector<Tensor> chunk_gdn_scan(
         .output_final_state = output_final_state,
         .use_mcast = use_mcast,
         .force_serial = serial_env && serial_env[0] == '1',
+        .emit_intermediates = emit_intermediates,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

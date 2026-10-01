@@ -46,6 +46,9 @@ struct ChunkGdnPrepParams {
     // folds `scale` into q's norm. Only valid for chunk_size==32 (Ct==1). scale defaults to no-op.
     bool qk_norm = false;
     float scale = 1.0f;
+    // emit_g_cumsum => an 8th output g_cumsum [BH, NC, C, 1] fp32: the chunk-local decay cumsum the
+    // kernel used (chunk_gated_delta_rule(output_intermediates=True)).
+    bool emit_g_cumsum = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -80,7 +83,8 @@ struct ChunkGdnPrepOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// Returns {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv} (all fp32, per-chunk DRAM tensors).
+// Returns {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv[, g_cumsum]} (all fp32, per-chunk DRAM
+// tensors; g_cumsum [BH, NC, C, 1] only when emit_g_cumsum).
 // (WY hand-off is un-premultiplied: the scan applies t_inv AFTER the v_beta - kd@S subtraction,
 //  so the inverse's fp error is not amplified by the cancellation.)
 std::vector<Tensor> chunk_gdn_prep(
@@ -101,7 +105,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm = false,
     float scale = 1.0f,
     bool qk_flat = false,
-    uint32_t Hk = 0);
+    uint32_t Hk = 0,
+    bool emit_g_cumsum = false);
 
 // ---------------------------------------------------------------------------
 // SCAN
@@ -116,6 +121,9 @@ struct ChunkGdnScanParams {
     bool output_final_state;
     bool use_mcast = true;
     bool force_serial = false;
+    // emit_intermediates => two more outputs: h [BH, NC, K, V] (state ENTERING each chunk; h[:,0] is
+    // the initial state) and v_new [BH, NC, C, V], both fp32.
+    bool emit_intermediates = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -149,7 +157,7 @@ struct ChunkGdnScanOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// Returns {o [BH,NC,C,V] bf16, final_state [BH,K,V] fp32}.
+// Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32[, h [BH,NC,K,V] fp32, v_new [BH,NC,C,V] fp32]}.
 std::vector<Tensor> chunk_gdn_scan(
     const Tensor& v_beta,
     const Tensor& kd,
@@ -163,6 +171,7 @@ std::vector<Tensor> chunk_gdn_scan(
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    bool use_mcast = true);
+    bool use_mcast = true,
+    bool emit_intermediates = false);
 
 }  // namespace ttnn::prim
