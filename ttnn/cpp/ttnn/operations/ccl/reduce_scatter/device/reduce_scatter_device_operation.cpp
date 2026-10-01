@@ -44,7 +44,7 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_hit(
 ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    // Padded, so the Linear doubling below doubles the pages; doubled logical rows can fit in the same tile row.
+    // Padded shape: doubled logical rows can stay within one tile row, and the intermediate would not double.
     auto inter_shape = input_tensor.padded_shape();
 
     // For now default to tt::tt_metal::BufferType::DRAM to prevent CB overflows.
