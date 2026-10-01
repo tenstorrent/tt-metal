@@ -376,3 +376,22 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   - Device gate (existing experts registration): PASS. pcc 0.999974, rel 0.0073, ratio [0.9859, 1.0208], worst row 0.021 (row 12), slices 0.0069-0.0079.
 - The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_experts.py`
+
+## C.full_moe.ffn_residual.test.1 (test review)
+- Replaced the rendered one-liner with the prior's frozen full_moe ffn_residual test (same golden, [2048, 4096]), restructured like the cp4 `test_c_full_moe_attn_residual.py`: every check also runs per CP slice.
+- Limits (unchanged from the prior and cp4 layer 1): PCC >= 0.99 (gated), output size, finite, rel L2 <= 0.01 (whole and per slice), per-token norm ratio [0.99, 1.01], experts term on delta = out - h_mid: coef in [0.97, 1.03] and rel <= 0.1 (whole and per slice).
+- At layer 5 the experts term is only ~6.7% of ||out||, so PCC misses most experts_out bugs. The experts-term checks catch them.
+- CPU measurements (script /tmp/cp4ffr/m.py, not kept; numbers in the test docstring):
+  - bf16 add: per-slice experts rel 0.017-0.021.
+  - Golden out itself: 0.026-0.032.
+  - Slices 1 and 2 swapped: slice rel 0.09, experts rel 1.3-1.5.
+  - Slice 3 dropped: slice rel 0.074, coef 0.
+  - Slice 3 halved: coef 0.5.
+  - Shifted one row: experts rel 1.39.
+  - All caught.
+- Results:
+  - Reference: PASS (pcc 0.999998, rel 0.0019).
+  - Stub: FAIL (pcc 0).
+  - Device gate (existing ffn_residual registration): PASS. pcc 0.999997, rel 0.0023, ratio [0.9988, 1.0014], slices 0.0023, coef 1.0016, experts rel 0.0194 (slices 0.0175-0.0213).
+- The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_moe_ffn_residual.py`
