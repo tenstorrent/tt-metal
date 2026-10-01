@@ -31,9 +31,9 @@ t48 changes only Python against t36, so the job uses blx03's t36 build, kernels 
 
 ```bash
 ssh g14blx03 'set -e; cd ~/fasth3/tt-metal
-  test "$(git rev-parse --short=11 HEAD)" = 16ba9a383dc   # the build must be the t36 C++
+  git merge-base --is-ancestor 16ba9a383dc HEAD   # blx03 sits on t36 plus script-only commits (86076afc66a)
   git fetch origin ttp/t48-ltx25-integrated
-  git diff --quiet HEAD FETCH_HEAD -- tt_metal ttnn/cpp CMakeLists.txt && echo "no C++ change: build reusable"
+  git diff --quiet HEAD FETCH_HEAD -- tt_metal ttnn/cpp CMakeLists.txt cmake || { echo "C++ differs: rebuild needed, stop"; exit 1; }
   git worktree add --detach ~/fasth3/t48 FETCH_HEAD'
 ```
 
