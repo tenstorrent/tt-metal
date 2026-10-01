@@ -117,6 +117,12 @@ int main(void)
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
     host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
 #endif
+#if defined(LLK_EXP_DBG_BARRIER) && defined(ARCH_WORMHOLE) // experiment: the flag has landed before the last arrival, which ends BRISC's serving
+    (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(
+        host_signal::NOC_OVERLAY_START_ADDR + (mailbox_offset / sizeof(std::uint32_t)) * host_signal::NOC_STREAM_REG_SPACE_SIZE +
+        host_signal::STREAM_SCRATCH_REG_INDEX * 4));
+    (void)ckernel::load_blocking(&ckernel::pc_buf_base[0]);
+#endif
 }
 
 extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrument_function)) std::uint32_t _start()

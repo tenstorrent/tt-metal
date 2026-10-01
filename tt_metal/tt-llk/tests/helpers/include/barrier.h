@@ -121,6 +121,37 @@ __attribute__((always_inline)) inline void flip(std::uint8_t sem)
 }
 } // namespace detail
 
+#if defined(LLK_EXP_DBG_BARRIER) && defined(ARCH_WORMHOLE) // experiment: BRISC restarts every thread from a flushed pipeline
+namespace detail
+{
+// Park at the BRISC barrier server (brisc.cpp dbg_barrier): the resume PC goes into this thread's reset PC, the arrive
+// read blocks until BRISC has every thread, and the ebreak halts the core. BRISC flushes it (fetch, branch predictor,
+// decode, execute, memory; registers stay) and restarts it at 1f, where the hold read waits for the common release.
+__attribute__((always_inline)) inline void park()
+{
+    volatile std::uint32_t* reset_pc = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE) + TRISC_RESET_PC_SEC0_PC_ADDR32 + THREAD_ID;
+    std::uint32_t scratch;
+    asm volatile(
+        "la    %[s], 1f\n\t"
+        "sw    %[s], 0(%[rpc])\n\t"
+        "lw    %[s], 0(%[rpc])\n\t"
+        "andi  %[s], %[s], 0\n\t"
+        "lw    %[s], 0(%[pcb])\n\t"
+        "andi  %[s], %[s], 0\n\t"
+        ".word 0x00100073\n\t"
+        ".rept 16\n\t"
+        ".word 0x00000013\n\t"
+        ".endr\n"
+        "1:\n\t"
+        "lw    %[s], 0(%[pcb])\n\t"
+        "andi  %[s], %[s], 0\n\t"
+        : [s] "=&r"(scratch)
+        : [rpc] "r"(reset_pc), [pcb] "r"(ckernel::pc_buf_base)
+        : "memory");
+}
+} // namespace detail
+#endif
+
 // The release is a level, sampled by each peer before it arrives and flipped once every peer has; a token on a
 // shared count could be consumed twice and release a peer early. Waiters poll the PC buffer, not the measured L1.
 template <typename Action>
@@ -128,6 +159,26 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
 {
     ckernel::fence_compiler();
 
+#if defined(LLK_EXP_DBG_BARRIER) && defined(ARCH_WORMHOLE) // experiment
+    ckernel::tensix_sync();
+    if (is_action_thread)
+    {
+        while (ckernel::semaphore_read(ARRIVE_SEM) < NUM_THREADS - 1)
+        {
+        }
+        while (ckernel::semaphore_read(ARRIVE_SEM) != 0)
+        {
+            ckernel::semaphore_get(ARRIVE_SEM);
+        }
+        action();
+        ckernel::tensix_sync();
+    }
+    else
+    {
+        ckernel::semaphore_post(ARRIVE_SEM);
+    }
+    detail::park();
+#else
     if (is_action_thread)
     {
         while (ckernel::semaphore_read(ARRIVE_SEM) < NUM_THREADS - 1)
@@ -157,6 +208,7 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
         {
         }
     }
+#endif
 
     ckernel::fence_compiler();
 }

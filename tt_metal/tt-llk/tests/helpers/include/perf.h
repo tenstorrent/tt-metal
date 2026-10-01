@@ -257,3 +257,13 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         }
     }
 }
+
+// Experiment: INIT out of line, at the end of the kernel code (sections.ld), so no change to it can move the measured
+// loop. By value, so nothing the loop uses escapes; noipa keeps the INIT code from shaping run_kernel's.
+#if defined(LLK_EXP_OOL_INIT)
+#define LLK_INIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"))) {
+#define LLK_INIT_END   }();
+#else
+#define LLK_INIT_BEGIN {
+#define LLK_INIT_END   }
+#endif

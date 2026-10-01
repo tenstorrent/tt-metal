@@ -74,6 +74,7 @@ SECTIONS
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
     *(.gnu.warning)
+    *(.llk_init_text) /* experiment: out of line INIT blocks (perf.h), last so they move nothing */
   } > REGION_CODE
   .fini :
   {

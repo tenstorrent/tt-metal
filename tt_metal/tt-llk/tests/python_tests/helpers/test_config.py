@@ -497,6 +497,7 @@ class TestConfig:
             "-ffast-math "
             "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
             "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            "-DLLK_EXP_DBG_BARRIER -DLLK_EXP_OOL_INIT "  # experiment: debug flush barrier, INIT out of line
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage

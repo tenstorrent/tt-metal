@@ -54,6 +54,126 @@ enum class BriscCommandState : std::uint32_t
 // regular protocol counter as soon as the first command is processed.
 constexpr std::uint32_t BRISC_BOOT_READY_SENTINEL = 0xB001CAFEU;
 
+#if defined(LLK_EXP_DBG_BARRIER) && defined(ARCH_WORMHOLE) // experiment: serve the TRISC rendezvous of barrier.h park()
+namespace dbg_barrier
+{
+constexpr std::uint32_t PC_BUF[3]        = {0xFFE80000U, 0xFFE90000U, 0xFFEA0000U};
+constexpr std::uint32_t DBG_CNTL_0       = 0xFFB12080U;
+constexpr std::uint32_t DBG_CNTL_1       = 0xFFB12084U;
+constexpr std::uint32_t DBG_STATUS_0     = 0xFFB12088U;
+constexpr std::uint32_t DBG_STATUS_1     = 0xFFB1208CU;
+constexpr std::uint32_t REQ              = 1U << 31;
+constexpr std::uint32_t READ_VALID       = 1U << 30;
+constexpr std::uint32_t WR               = 1U << 16;
+constexpr std::uint32_t REG_STATUS       = 0;
+constexpr std::uint32_t REG_COMMAND      = 1;
+constexpr std::uint32_t STATUS_PAUSED    = 1U << 0;
+constexpr std::uint32_t COMMAND_CONTINUE = 1U << 2;
+constexpr std::uint32_t COMMAND_FLUSH    = 1U << 8; // without debug mode (bit 31) the flush restarts at the reset PC
+
+inline volatile std::uint32_t& reg(std::uint32_t addr)
+{
+    return *reinterpret_cast<volatile std::uint32_t*>(addr);
+}
+
+// The request bit is synchronized and edge detected (tt_tensix.sv): hold it until STATUS_0 shows it, then let it fall.
+inline void request(std::uint32_t cntl)
+{
+    reg(DBG_CNTL_0) = cntl | REQ;
+    while (!(reg(DBG_STATUS_0) & REQ))
+    {
+    }
+    reg(DBG_CNTL_0) = cntl;
+    while (reg(DBG_STATUS_0) & REQ)
+    {
+    }
+}
+
+inline std::uint32_t read(std::uint32_t trisc, std::uint32_t index)
+{
+    request(((trisc + 1) << 17) | index);
+    while (!(reg(DBG_STATUS_0) & READ_VALID))
+    {
+    }
+    return reg(DBG_STATUS_1);
+}
+
+inline void write(std::uint32_t trisc, std::uint32_t index, std::uint32_t value)
+{
+    reg(DBG_CNTL_1) = value;
+    request(((trisc + 1) << 17) | WR | index);
+}
+
+inline bool kernel_complete(std::uint32_t trisc)
+{
+    const std::uint32_t v = reg(host_signal::NOC_OVERLAY_START_ADDR + trisc * host_signal::NOC_STREAM_REG_SPACE_SIZE + host_signal::STREAM_SCRATCH_REG_INDEX * 4);
+    return (v & 0xFFFFFFU) == (ckernel::KERNEL_COMPLETE & 0xFFFFFFU);
+}
+
+// A BRISC read of a PC buffer returns once that TRISC is blocked on its word 0 read and idle, so this waits without polling.
+inline void wait_all_parked()
+{
+    for (std::uint32_t t = 0; t < 3; ++t)
+    {
+        (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(PC_BUF[t]));
+    }
+}
+
+inline void release_all()
+{
+    for (std::uint32_t t = 0; t < 3; ++t)
+    {
+        reg(PC_BUF[t]) = 0;
+    }
+}
+
+inline void spin(std::uint32_t n)
+{
+    for (std::uint32_t i = 0; i < n; ++i)
+    {
+        asm volatile("nop");
+    }
+}
+
+void serve()
+{
+    for (;;)
+    {
+        wait_all_parked();
+        const bool done = kernel_complete(0) && kernel_complete(1) && kernel_complete(2);
+        release_all(); // on to the ebreak, or out of the kernel
+        if (done)
+        {
+            return;
+        }
+        for (std::uint32_t t = 0; t < 3; ++t)
+        {
+            while (!(read(t, REG_STATUS) & STATUS_PAUSED))
+            {
+            }
+        }
+        spin(512); // fetch ahead of the halted cores has settled
+        for (std::uint32_t addr = 0; addr < 64 * 16; addr += 16) // every L1 bank arbiter last granted BRISC (asm: address 0 is valid L1)
+        {
+            std::uint32_t v;
+            asm volatile("lw %0, 0(%1)\n\tandi %0, %0, 0" : "=r"(v) : "r"(addr) : "memory");
+        }
+#if !defined(LLK_EXP_DBG_NO_ICINV) // experiment: keep the icaches warm from INIT
+        reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = 0b1110;
+#endif
+        spin(64);
+        for (std::uint32_t t = 0; t < 3; ++t)
+        {
+            write(t, REG_COMMAND, COMMAND_FLUSH | COMMAND_CONTINUE);
+        }
+        wait_all_parked();
+        spin(512);
+        release_all();
+    }
+}
+} // namespace dbg_barrier
+#endif
+
 void reset_state(std::uint32_t& counter)
 {
     counter++;
@@ -140,6 +260,9 @@ int main()
 
                 reset_state(counter);
                 commit_store(brisc_bread0, counter);
+#if defined(LLK_EXP_DBG_BARRIER) && defined(ARCH_WORMHOLE) // experiment
+                dbg_barrier::serve();
+#endif
                 break;
 
             case BriscCommandState::RESET_TRISCS:
