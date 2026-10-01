@@ -46,4 +46,5 @@ tests:
     k: "test_tt_routed_expert_hybrid_functional or (test_tt_routed_expert_hybrid_isl_sweep and w_ndshard and (t0- or t1024 or t2048))"
     why: "the hybrid split (counts <= the model's threshold, 320 for glm_51 and kimi_k2_7, to moe_fused_swiglu, which stays the original; the rest to this op via min_active_tokens): 251 fused, 768/1024/2048/3001 on this op, 0 on neither; ROW_MAJOR and TILE x (the TILE composite input is a clone), interleaved and ND-sharded weights"
   - path: models/demos/deepseek_v3_d_p/tests/cache/test_routed_expert_cache.py
+    mesh: [2, 2]
     why: "the op on a 4-chip EP mesh (fabric2d 2x2, 64 experts, 16 per chip, dispatched buffer): weights vs cold vs warm weight cache give the same output; plus the host-only dtype-aware cache check"

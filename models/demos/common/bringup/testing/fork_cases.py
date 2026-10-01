@@ -10,8 +10,8 @@
 - Test cases: each fork ``ttnn/ttnn/bringup/<fork>/tests/cases.py`` defines ``CASES``, a list of dicts, each with at
   least ``model`` and ``sig``: the model that made the call, and the captured signature the case reproduces.
 - Uncovered: a call this model makes that no case of its fork carries (same model, same sig).
-- ``--run-tests``: runs ``scripts/run_safe_pytest.sh --run-all`` on the tests of every fork the model uses, every
-  model's cases included (the top-level tests/test_*.py; a fork's own unit suite in tests/unit/ is not run).
+- ``--run-tests``: runs the tests of every fork the model uses through ``fork_tests.py`` (each case's mesh on the cards
+  of this box that form it), every model's cases included (the top-level tests/test_*.py; a fork's own unit suite in tests/unit/ is not run).
 Records forks_used, fork_calls, fork_calls_uncovered and fork_tests_failed (a gate wants 0 of each of the last two)
 and prints what is missing.
 """
@@ -22,7 +22,6 @@ import argparse
 import json
 import re
 import runpy
-import subprocess
 import sys
 from pathlib import Path
 
@@ -85,11 +84,12 @@ def run_tests(forks: list[str]) -> int:
     if missing:
         print(f"forks without tests/test_*.py: {missing}")
         return 1
-    dirs = [str(p.relative_to(REPO)) for v in files.values() for p in v]
-    if not dirs:
+    if not any(files.values()):
         return 0
-    # --no-precompile: the up-front collect pass would run each test's host-side input building a second time.
-    return subprocess.run(["scripts/run_safe_pytest.sh", "--run-all", "--no-precompile", *dirs], cwd=REPO).returncode
+    # Grouped by each case's mesh and run on the cards of this box that form it (fork_tests.py / cards.py).
+    from models.demos.common.bringup.testing.fork_tests import run
+
+    return run(sorted(files))
 
 
 def main(argv=None) -> int:
