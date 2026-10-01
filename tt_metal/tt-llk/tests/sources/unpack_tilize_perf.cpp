@@ -254,6 +254,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         (tile_index < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles");
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                    if (tile_index == MAX_TILES_DEST - 1 || i == TILE_CNT - 1)
+                    {
+                        _perf_pack_section_end();
+                    }
                 }
             }
             PROFILER_SYNC();

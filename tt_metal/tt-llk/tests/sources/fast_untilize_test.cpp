@@ -279,6 +279,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
                     }
+                    else
+                    {
+                        _perf_pack_section_end();
+                    }
                 }
             }
         }
@@ -310,6 +314,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
                             _llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
+                        }
+                        else
+                        {
+                            _perf_pack_section_end();
                         }
                         chunk_col += unit_dim;
                     }

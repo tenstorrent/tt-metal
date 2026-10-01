@@ -46,6 +46,15 @@ enum class PerfRunType
     SFPU_ISOLATE
 };
 
+// Isolate pack loops skip _llk_pack_dest_section_done_, so they drain the packers here at the same points instead:
+// Wormhole packers that never go idle keep whichever of two speeds the code timing picked at the start.
+inline void _perf_pack_section_end()
+{
+#ifdef ARCH_WORMHOLE
+    TTI_STALLWAIT(ckernel::p_stall::STALL_THCON | ckernel::p_stall::STALL_PACK, ckernel::p_stall::PACK);
+#endif
+}
+
 inline void _perf_unpack_set_valid(std::uint32_t source)
 {
     std::uint32_t set_a = source == ckernel::SrcA ? 1 : 0;

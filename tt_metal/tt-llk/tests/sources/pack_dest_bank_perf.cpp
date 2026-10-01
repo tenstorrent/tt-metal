@@ -233,6 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, PERF_ADDRESS(PERF_OUTPUT, block * NUM_TILES_IN_BLOCK));
+                    _perf_pack_section_end();
                 }
             }
         }
