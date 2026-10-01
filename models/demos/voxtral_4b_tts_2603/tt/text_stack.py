@@ -336,11 +336,28 @@ class TextStack:
         batch = int(ids.shape[0])
         real = int(ids.shape[-1])
         start = int((ids == ids[:1]).all(dim=0).long().cumprod(0).sum())
+        if real - start < 2:
+            # A TAIL OF AT LEAST TWO TOKENS. With every row identical -- what the demo builds from a single
+            # `--text`, repeated to the batch -- there is no per-row tail at all, and the whole-prompt
+            # prefill is not an option: at batch 32 a long prompt's fused SwiGLU circular buffers plus its
+            # live input exceed L1. So the last positions become the tail. Two, not one: a one-token tail
+            # (exactly one 32-row tile of compact rows) came back wrong in the last rows of the tile at the
+            # prompt's final position (PCC ~0.45 for rows 29-31 against the reference), while two- and
+            # four-token tails are exact (>= 0.9996 on every row).
+            start = real - 2
         tail = real - start
         tail_slots = _tile_ceil(tail)
         rows = _tile_ceil(start)
-        if start < tile or tail < 1 or (batch * tail) % tile or rows + tail_slots > self.kv_capacity - 1:
+        if start < tile or tail < 1 or (batch * tail) % tile:
             return {}
+        if rows + tail_slots > self.kv_capacity - 1:
+            # Say so instead of falling back: the whole-prompt prefill this would take does not fit L1 at
+            # batch 32 for any prompt long enough to reach here.
+            raise ValueError(
+                f"KV capacity {self.kv_capacity} is too small for this {real}-token prompt's shared-prefix "
+                f"layout ({rows} prefix + {tail_slots} tail slots); build with "
+                "kv_capacity=pipeline.tts_kv_capacity(prompt_len, max_frames)"
+            )
         gap = rows - start
         # The tail runs COMPACT: `[1, 1, batch * tail, dim]`, sample b's positions [t0, R) in rows
         # b * tail.., so no row pads its tail out to a tile and nothing recomputes shared positions.

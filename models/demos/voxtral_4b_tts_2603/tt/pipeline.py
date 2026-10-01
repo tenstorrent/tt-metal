@@ -702,8 +702,14 @@ def speech_inputs(texts=None, voice=None, batch=None):
 
 
 def tts_kv_capacity(prompt_len: int, max_frames: int) -> int:
-    """KV slots one speech request needs: the whole prompt plus one per frame, tile-rounded."""
-    return _tile_ceil(int(prompt_len) + int(max_frames))
+    """KV slots one speech request needs: the whole prompt, one per frame, and the shared-prefix layout.
+
+    The shared-prefix prefill (`TextStack._stage_prefix`) stores the prefix tile-rounded (up to 31 slots
+    of gap, which every decode position is offset by) and the per-row tail tile-rounded, so it needs up to
+    2 x 32 slots more than prompt + frames. Without them `_stage_prefix` declines and the request takes the
+    whole-prompt prefill, whose fused SwiGLU does not fit L1 at batch 32 for a long prompt.
+    """
+    return _tile_ceil(int(prompt_len) + int(max_frames) + 2 * ttnn.TILE_SIZE)
 
 
 # Text tokens a speech request may carry beyond the voice block and its five control tokens; the
@@ -718,7 +724,11 @@ def default_tts_kv_capacity(hf_model) -> int:
     voices = common.available_voices()
     longest = max((int(v) for v in voices.values()), default=0)
     frames, _ = common.resolve_max_frames(hf_model)
-    return tts_kv_capacity(longest + TTS_TEXT_BUDGET + 5, frames)
+    # No extra shared-prefix slack here: the text budget is far above the package's texts (18-51 tokens)
+    # and already leaves it -- every preset fits the split with texts up to 94 tokens (the tightest is
+    # casual_female) -- and every slot is attended on every decode step, so 64 more would cost ~1.4 ms a frame.
+    # A longer prompt gets a clear error from `_stage_prefix` asking for `tts_kv_capacity(...)`.
+    return _tile_ceil(longest + TTS_TEXT_BUDGET + 5 + frames)
 
 
 def trim_to_end(result) -> list:

@@ -7,11 +7,15 @@ each stage scored against the PyTorch reference TEACHER-FORCED onto this run's o
 states, through to the vocoded waveform -- the same comparison `test_e2e_text_to_speech.py` makes over a
 whole utterance, without its Whisper/UTMOS scoring. Every threshold is a fixed number.
 
-Two voices, because the shared-prefix prefill has two cases: `casual_male`'s tile-rounded prefix fits
-inside its prompt, and `ar_male`'s runs past it (start 70 -> 96 rows, prompt 90), so its prefix ids are
-padded -- the case that crashed for 7 of the 20 presets.
+Three cases, one per shape the shared-prefix prefill has to handle:
+  * `casual_male`: its tile-rounded prefix fits inside its prompt;
+  * `ar_male`: its prefix runs past the prompt (start 70 -> 96 rows, prompt 90), so the prefix ids are
+    padded -- the case that crashed for 7 of the 20 presets;
+  * `single_prompt`: ONE long text repeated in all 32 rows, which is what the demo does with a single
+    `--text`. Every row is identical, so there is no per-row tail at all; a 203-token prompt (224 padded)
+    is long enough that the whole-prompt prefill would not fit L1.
 
-First run ~10 min (the CPU reference for 2 x FRAMES frames); later runs reuse the cached reference.
+First run ~15 min (the CPU reference for 3 x FRAMES frames); later runs reuse the cached reference.
 """
 from __future__ import annotations
 
@@ -24,15 +28,30 @@ from models.demos.voxtral_4b_tts_2603.tt import common, pipeline
 pytestmark = pytest.mark.timeout(3600)
 
 FRAMES = 8
-VOICES = ("casual_male", "ar_male")
+# (case id, voice, text repeated in every row or None for the package's 32 distinct texts)
+CASES = (
+    ("casual_male", "casual_male", None),
+    ("ar_male", "ar_male", None),
+    (
+        "single_prompt",
+        "casual_male",
+        "On the first warm evening of the year, the whole neighbourhood gathered in the narrow street outside the "
+        "old bakery, sharing bread, lemonade and stories about the winter, while the children chased each other "
+        "between the long wooden tables until the lamps came on.",
+    ),
+)
 PCC_TARGET = 0.99
 MIN_ACOUSTIC_AGREEMENT = 0.98  # fraction of live acoustic codes equal to the teacher-forced reference
 MIN_SEMANTIC_AGREEMENT = 0.99
 
 
+def _inputs(voice, text, batch=common.DEFAULT_BATCH):
+    return pipeline.speech_inputs(texts=None if text is None else [text] * batch, voice=voice, batch=batch)
+
+
 @pytest.fixture(scope="module")
 def pipe(device, hf_model):
-    longest = max(int(pipeline.speech_inputs(voice=v)[0].shape[-1]) for v in VOICES)
+    longest = max(int(_inputs(voice, text)[0].shape[-1]) for _, voice, text in CASES)
     return pipeline.build_pipeline(
         device,
         model=hf_model,
@@ -41,10 +60,10 @@ def pipe(device, hf_model):
     )
 
 
-@pytest.mark.parametrize("voice", VOICES)
-def test_text_to_speech_short(pipe, hf_model, voice):
+@pytest.mark.parametrize("case, voice, text", CASES, ids=[c[0] for c in CASES])
+def test_text_to_speech_short(pipe, hf_model, case, voice, text):
     common.use_all_cpu_threads()
-    input_ids, audio_mask, voice_embedding, _ = pipeline.speech_inputs(voice=voice, batch=pipe.batch)
+    input_ids, audio_mask, voice_embedding, _ = _inputs(voice, text, batch=pipe.batch)
     batch = pipe.batch
     x0 = pipe.noise(FRAMES, batch=batch)
     cfg_alpha = torch.full((batch,), pipeline.DEFAULT_CFG_ALPHA)
@@ -105,15 +124,15 @@ def test_text_to_speech_short(pipe, hf_model, voice):
     acoustic_agree = float((tt["codes"][:, 1:, :] == ref["codes"][:, 1:, :])[live].float().mean())
     semantic_agree = float((tt["codes"][:, 0, :] == ref["codes"][:, 0, :]).float().mean())
     print(
-        f"\n[{voice}] prompt {input_ids.shape[-1]} tokens, {frames} frames: prefill {prefill:.6f} decode {decode:.6f} "
+        f"\n[{case}] prompt {input_ids.shape[-1]} tokens, {frames} frames: prefill {prefill:.6f} decode {decode:.6f} "
         f"semantic {semantic:.6f} x_final {x_final:.6f} waveform {wave:.6f} (peak {peak:.3f}); acoustic codes {acoustic_agree:.4f}, semantic codes "
         f"{semantic_agree:.4f}"
     )
-    assert prefill >= PCC_TARGET, f"[{voice}] prefill hidden PCC {prefill:.6f}"
-    assert decode >= PCC_TARGET, f"[{voice}] decode hidden PCC {decode:.6f}"
-    assert semantic >= PCC_TARGET, f"[{voice}] semantic logits PCC {semantic:.6f}"
-    assert x_final >= PCC_TARGET, f"[{voice}] acoustic x_final PCC {x_final:.6f}"
-    assert peak <= 1.5, f"[{voice}] waveform out of audio range: max |x| = {peak:.3f}"
-    assert wave >= PCC_TARGET, f"[{voice}] waveform PCC {wave:.6f} against the reference codec on the same codes"
-    assert acoustic_agree >= MIN_ACOUSTIC_AGREEMENT, f"[{voice}] acoustic code agreement {acoustic_agree:.4f}"
-    assert semantic_agree >= MIN_SEMANTIC_AGREEMENT, f"[{voice}] semantic code agreement {semantic_agree:.4f}"
+    assert prefill >= PCC_TARGET, f"[{case}] prefill hidden PCC {prefill:.6f}"
+    assert decode >= PCC_TARGET, f"[{case}] decode hidden PCC {decode:.6f}"
+    assert semantic >= PCC_TARGET, f"[{case}] semantic logits PCC {semantic:.6f}"
+    assert x_final >= PCC_TARGET, f"[{case}] acoustic x_final PCC {x_final:.6f}"
+    assert peak <= 1.5, f"[{case}] waveform out of audio range: max |x| = {peak:.3f}"
+    assert wave >= PCC_TARGET, f"[{case}] waveform PCC {wave:.6f} against the reference codec on the same codes"
+    assert acoustic_agree >= MIN_ACOUSTIC_AGREEMENT, f"[{case}] acoustic code agreement {acoustic_agree:.4f}"
+    assert semantic_agree >= MIN_SEMANTIC_AGREEMENT, f"[{case}] semantic code agreement {semantic_agree:.4f}"
