@@ -15,13 +15,15 @@ import math
 import ttnn
 
 
-def layer_norm(x, params):
-    """``ttnn.layer_norm`` with the eps of the module ``params`` were preprocessed from.
+def layer_norm(x, params, residual=None):
+    """``ttnn.layer_norm(x + residual)`` with the eps of the module ``params`` were preprocessed from.
 
     ttnn defaults to epsilon=1e-12; ``preprocess_layer_norm_parameters`` records the
-    module's own (1e-5 for nn.LayerNorm).
+    module's own (1e-5 for nn.LayerNorm). The residual add runs inside the norm's kernel.
     """
-    return ttnn.layer_norm(x, weight=params.weight, bias=params.bias, epsilon=params.eps)
+    return ttnn.layer_norm(
+        x, weight=params.weight, bias=params.bias, epsilon=params.eps, residual_input_tensor=residual
+    )
 
 
 class TtnnConv2D:
