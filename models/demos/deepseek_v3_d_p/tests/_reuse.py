@@ -47,11 +47,14 @@ class _Registry:
         self.device_gen = None
         self.device_key = None
         self.models = {}
+        self.dirty = False
 
     def get_device(self, request, silicon_arch_name, device_params):
         from conftest import mesh_device as root_mesh_device
 
         key = (_freeze(getattr(request, "param", None)), _freeze(device_params))
+        if self.dirty:
+            self.close_all()
         if self.device is not None and key == self.device_key:
             logger.info("reusing open mesh device")
             return self.device
@@ -91,6 +94,7 @@ class _Registry:
         self.models.clear()
 
     def close_all(self):
+        self.dirty = False
         if self.device is None:
             self.models.clear()
             return
@@ -126,3 +130,13 @@ def finish_transformer(transformer):
 
 def close_all():
     _REGISTRY.close_all()
+
+
+def mark_dirty():
+    """Drop everything at the next close_if_dirty() or get_device(), not now: fixture finalizers may still use it."""
+    _REGISTRY.dirty = True
+
+
+def close_if_dirty():
+    if _REGISTRY.dirty:
+        _REGISTRY.close_all()

@@ -349,9 +349,14 @@ if _reuse.reuse_enabled():
     def pytest_runtest_makereport(item, call):
         outcome = yield
         rep = outcome.get_result()
-        if rep.when in ("setup", "call") and rep.failed:
-            logger.warning(f"{item.nodeid} failed; dropping the reused mesh device and models")
-            _reuse.close_all()
+        if rep.failed:
+            logger.warning(f"{item.nodeid} {rep.when} failed; dropping the reused mesh device and models")
+            _reuse.mark_dirty()
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_teardown(item, nextitem):
+        yield
+        _reuse.close_if_dirty()
 
     def pytest_sessionfinish(session, exitstatus):
         _reuse.close_all()
