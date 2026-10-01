@@ -9,7 +9,8 @@ width-sharded chunks, ~1.2 ms at the DRAM floor) + concat + argmax, while dies 0
 
   * die d holds only vocab slice d: columns [d * V/n, (d + 1) * V/n), rebuilt at construction from that die's
     A3 chunks into ``_CHUNKS_PER_DIE`` (2) A3-style DRAM width-sharded chunks (same bf8 tiles, same DRAM-sharded
-    matmul program config); the full-vocab chunks are freed on every die.
+    matmul program config; QWEN36_SP_LMHEAD_DTYPE=bf4 re-quantizes them to bfloat4_b at load); the full-vocab
+    chunks are freed on every die.
   * die n-1 normalizes its last row (the 64-core model._tail_norm_fast, written in the A3 in0 layout) and sends it
     down a reverse chain of new sockets n-1 -> n-2 -> ... -> 0 (the 1D line fabric here only connects
     neighbouring dies: a direct 3 -> 0 socket TT_FATALs); each die forwards it before its own slice matmuls. The
@@ -44,6 +45,18 @@ _GATHER_RECV_CORES = [ttnn.CoreCoord(6, 8), ttnn.CoreCoord(7, 8)]
 
 # A3-style DRAM width-sharded chunks per die slice.
 _CHUNKS_PER_DIE = 2
+
+
+def lmhead_dtype():
+    """QWEN36_SP_LMHEAD_DTYPE: weight dtype of the SP LM-head slices. Unset / "" / "bf8" = bfloat8_b (default);
+    "bf4" = bfloat4_b (half the DRAM read; the slices are re-quantized from the loaded bf8 values at load time;
+    changes the logits, numerics gate required)."""
+    v = os.environ.get("QWEN36_SP_LMHEAD_DTYPE", "").strip().lower()
+    if v in ("", "bf8"):
+        return ttnn.bfloat8_b
+    if v == "bf4":
+        return ttnn.bfloat4_b
+    raise ValueError(f"QWEN36_SP_LMHEAD_DTYPE={v!r}: expected unset, 'bf8' or 'bf4'")
 
 
 def lmhead_shard_enabled():
@@ -96,8 +109,8 @@ class SPLMHeadShard:
                 _build_socket_pair(subs[d], subs[d + 1], _GATHER_SEND_CORES, _GATHER_RECV_CORES, st, fifo)
             )
         logger.info(
-            f"[SPLMHeadShard] {self.n} dies x {self.n_per} chunks; per-die slice cols {self.cols_d}, "
-            f"static={int(self.static)}"
+            f"[SPLMHeadShard] {self.n} dies x {self.n_per} chunks ({self.weight_dtype}); per-die slice cols "
+            f"{self.cols_d}, static={int(self.static)}"
         )
 
     # ---------------------------------------------------------------------------------------------
@@ -117,6 +130,8 @@ class SPLMHeadShard:
         self.col0 = [sum(self.cols_d[:d]) for d in range(self.n)]
         self.cols = max(self.cols_d)  # (log only)
         c = tpc.I3_A3_LM_CFG
+        wdt = lmhead_dtype()  # QWEN36_SP_LMHEAD_DTYPE (default bfloat8_b)
+        self.weight_dtype = wdt
         for d, (sub, m) in enumerate(zip(self.subs, self.models)):
             sub_cols = self.cols_d[d] // self.n_per
             nt = sub_cols // 32
@@ -144,9 +159,20 @@ class SPLMHeadShard:
             out = []
             for i in range(self.n_per):
                 wi = slab[:, i * sub_cols : (i + 1) * sub_cols].contiguous()
-                t = ttnn.from_torch(wi, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=sub, memory_config=mc)
+                t = ttnn.from_torch(wi, dtype=wdt, layout=ttnn.TILE_LAYOUT, device=sub, memory_config=mc)
                 back = ttnn.to_torch(t, mesh_composer=comp).reshape(K, sub_cols)
-                assert torch.equal(back, wi), f"[SPLMHeadShard] die {d} chunk {i}: bf8 re-quantization is not exact"
+                if wdt == ttnn.bfloat8_b:
+                    assert torch.equal(back, wi), f"[SPLMHeadShard] die {d} chunk {i}: bf8 re-quantization is not exact"
+                else:
+                    # bf4 (QWEN36_SP_LMHEAD_DTYPE=bf4): lossy from the bf8 values; check it is a fixed point of the
+                    # conversion (re-quantizing the dequantized tiles gives the same tiles).
+                    t2 = ttnn.from_torch(back, dtype=wdt, layout=ttnn.TILE_LAYOUT, device=sub, memory_config=mc)
+                    back2 = ttnn.to_torch(t2, mesh_composer=comp).reshape(K, sub_cols)
+                    ttnn.deallocate(t2)
+                    assert torch.equal(back2, back), f"[SPLMHeadShard] die {d} chunk {i}: bf4 conversion not idempotent"
+                    if d == 0 and i == 0:
+                        rel = float((back.float() - wi.float()).norm() / wi.float().norm())
+                        logger.info(f"[SPLMHeadShard] bf4 slice weights: rel L2 error vs the bf8 values {rel:.4f}")
                 out.append(t)
             del slab, pieces
             for ch in m._a3_lm_chunks:
