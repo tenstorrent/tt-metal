@@ -178,7 +178,9 @@ def test_vit(device, batch_size, is_single_card_n300):
     logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
     samples_per_sec = 1 / inference_time_avg * batch_size
     logger.info(f"Samples per second: {samples_per_sec}")
-    margin = 0.04
+    # 5 %: the N300 pool spreads 1352-1382 and the N150 pool 1473-1484 around their targets on the
+    # same build, and N150 sat 1-3 % under 1470 for most of 2026-09 before the fleet-wide speed-up.
+    margin = 0.05
     min_range = expected_samples_per_sec * (1 - margin)
     max_range = expected_samples_per_sec * (1 + margin)
     # The regression side is the gate. A run above the band is a stale target (the pool's
