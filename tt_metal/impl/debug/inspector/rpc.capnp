@@ -61,6 +61,7 @@ struct GlobalSemaphoreRecord {
     address @0 :UInt64;
     coreRanges @1 :List(LogicalCoreRange);
     chipIds @2 :List(UInt32);  # metal device ids this rank owns
+    resetValue @3 :Int64;  # last value the host wrote (initial value or reset), -1 if none
 }
 
 struct MeshDeviceData {

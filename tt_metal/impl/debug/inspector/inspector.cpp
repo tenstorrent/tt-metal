@@ -452,6 +452,24 @@ void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, 
     }
 }
 
+void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        if (auto it = data->global_semaphores_data.find(buffer); it != data->global_semaphores_data.end()) {
+            it->second.reset_value = value;
+        }
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log global semaphore reset: {}", e.what());
+    }
+}
+
 void Inspector::mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
     if (!is_enabled()) {
         return;

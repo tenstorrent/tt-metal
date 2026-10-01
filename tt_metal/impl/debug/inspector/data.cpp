@@ -227,6 +227,7 @@ void Data::rpc_get_global_semaphores(rpc::Inspector::GetGlobalSemaphoresResults:
         for (uint32_t j = 0; j < semaphore_data.chip_ids.size(); ++j) {
             chip_ids.set(j, semaphore_data.chip_ids[j]);
         }
+        semaphore.setResetValue(semaphore_data.reset_value ? int64_t{*semaphore_data.reset_value} : -1);
     }
 }
 

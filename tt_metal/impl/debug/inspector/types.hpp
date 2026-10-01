@@ -58,6 +58,7 @@ struct GlobalSemaphoreData {
     uint64_t address{};
     CoreRangeSet cores;
     std::vector<uint32_t> chip_ids;
+    std::optional<uint32_t> reset_value;
 };
 
 struct MeshDeviceData {

@@ -73,6 +73,7 @@ void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
             tt::tt_metal::detail::WriteToBuffer(*buffer_->get_device_buffer(coord), host_buffer);
         }
     }
+    Inspector::global_semaphore_reset(buffer_.get(), reset_value);
 }
 
 void GlobalSemaphoreImpl::setup_buffer(

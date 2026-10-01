@@ -13,9 +13,12 @@ Description:
     Kind is program for a semaphore of the program running on the core (CreateSemaphore). It is read
     from the kernel config buffer at the core type's sem_offset, and only on cores its core range
     covers: the host initializes a slot on those cores only, so any other core holds a stale value
-    there. Initial is the value the program launched with. Kind is global for a GlobalSemaphore, one
-    word at the same L1 address on every Tensix core of its range, shown whether or not the core is
-    running.
+    there. Kind is global for a GlobalSemaphore, one word at the same L1 address on every Tensix core
+    of its range, shown whether or not the core is running.
+
+    Initial is the value the host last wrote: at launch for a program semaphore, at creation or the
+    latest reset_semaphore_value for a global one, N/A if it never wrote one. A kernel resetting a
+    semaphore on device is not reflected.
 
     Both lists come from Inspector, which records each program's semaphores and every live
     GlobalSemaphore.
@@ -66,13 +69,15 @@ def program_semaphores_by_kernel(inspector_data) -> dict[int, list]:
     return by_kernel
 
 
-def global_semaphores(inspector_data, id_mapping, run_checks) -> list[tuple[int, list, set[int]]]:
-    """(address, core ranges, exalens device ids) for every live GlobalSemaphore this rank can reach."""
+def global_semaphores(inspector_data, id_mapping, run_checks) -> list[tuple[int, list, set[int], int | None]]:
+    """(address, core ranges, exalens device ids, host-written value) per live GlobalSemaphore this rank reaches."""
     result = []
     for record in inspector_data.getGlobalSemaphores().semaphores:
         unique_ids = [id_mapping.get_unique_id(c) for c in record.chipIds if id_mapping.has_metal_device_id(c)]
         devices = [run_checks.get_device_by_unique_id(u) for u in unique_ids]
-        result.append((int(record.address), list(record.coreRanges), {d.id for d in devices if d is not None}))
+        device_ids = {d.id for d in devices if d is not None}
+        initial = int(record.resetValue) if record.resetValue >= 0 else None
+        result.append((int(record.address), list(record.coreRanges), device_ids, initial))
     return result
 
 
@@ -83,7 +88,7 @@ def program_rows(location: OnChipCoordinate, dispatcher_data: DispatcherData, by
     sem_offset_index, core_type = BLOCKS[core.block_type]
     kernel_config = core.mailboxes.launch[core.launch_msg_rd_ptr].kernel_config
     kernel_ids = [int(kernel_config.watcher_kernel_ids[i]) for i in range(len(kernel_config.watcher_kernel_ids))]
-    semaphores = next((by_kernel[k] for k in kernel_ids if k in by_kernel), [])
+    semaphores: list = next((by_kernel[k] for k in kernel_ids if k in by_kernel), [])
     base = core.kernel_config_base + int(kernel_config.sem_offset[sem_offset_index])
     (x, y), _ = location.to("logical")
     rows = []
@@ -101,9 +106,9 @@ def global_rows(location: OnChipCoordinate, semaphores) -> list[SemaphoreRow]:
     if core_type != "tensix":
         return []  # GlobalSemaphores live on worker cores
     rows = []
-    for address, core_ranges, device_ids in semaphores:
+    for address, core_ranges, device_ids, initial in semaphores:
         if location.device.id in device_ids and covers(core_ranges, x, y):
-            rows.append(SemaphoreRow("global", None, address, read_word_from_device(location, address), None))
+            rows.append(SemaphoreRow("global", None, address, read_word_from_device(location, address), initial))
     return rows
 
 
