@@ -332,6 +332,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v1.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v2.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v3.h
+    inc/internal/tt-2xx/quasar/semaphore_cached_pool.h
     inc/internal/tt-2xx/tt-2.0.0/meta/fds_registers/tt_fds_dispatch_reg.h
     inc/internal/tt-2xx/tt-2.0.0/meta/fds_registers/tt_fds_tensixneo_reg.h
     inc/internal/tt-2xx/tt-2.0.0/meta/registers/overlay_reg.h

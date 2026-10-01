@@ -112,6 +112,24 @@ void max_block_sfpi(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_ti
     cb_out.push_back(num_tiles);
 }
 
+// Pushes num_tiles zero tiles to out_cb, made as x - x from the front tile of like_cb (which stays).
+void zero_block(uint32_t like_cb, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_like(like_cb);
+    CircularBuffer cb_out(out_cb);
+    sub_init(like_cb, like_cb);
+    cb_like.wait_front(1);
+    cb_out.reserve_back(num_tiles);
+    tile_regs_acquire();
+    sub_tiles(like_cb, like_cb, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        pack_tile(0, out_cb);
+    }
+    tile_regs_release();
+    cb_out.push_back(num_tiles);
+}
+
 /**
  * out_cb = eltwise_max(in0, in1)
  */

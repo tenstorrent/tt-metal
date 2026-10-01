@@ -149,6 +149,23 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             Q_memcfg.buffer_type());
     }
 
+    // ROW_MAJOR Q is only supported when Q is height-sharded in L1. The interleaved reader path always
+    // reads Q as tiles into the tilized Q CB, while compute waits on the row-major Q CB whenever Q is
+    // ROW_MAJOR -> the kernels deadlock and hang the device (#58698). Likewise, a ROW_MAJOR Q selects a
+    // ROW_MAJOR output, and the interleaved writer path writes tile-sized pages, which is only valid for
+    // a sharded output whose shard buffer backs the output CB directly.
+    if (input_tensors.at(0).layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            input_tensors.at(0).is_sharded(),
+            "ROW_MAJOR Q is only supported when Q is HEIGHT_SHARDED in L1; interleaved ROW_MAJOR Q is not "
+            "supported. Convert Q to TILE layout or shard it.");
+        TT_FATAL(
+            operation_attributes.output_mem_config.is_sharded(),
+            "ROW_MAJOR Q produces a ROW_MAJOR output, which requires a HEIGHT_SHARDED output memory config; "
+            "got {}",
+            operation_attributes.output_mem_config.memory_layout());
+    }
+
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
         TT_FATAL(
             input_tensors.at(i).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
