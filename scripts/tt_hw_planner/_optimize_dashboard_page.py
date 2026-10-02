@@ -799,6 +799,15 @@ function renderTab(S) {
   } else if (curTab === "Latency Breakdown") {
     const st = (S.stages || []).filter(s => s.ms != null);
     if (!st.length) { el.innerHTML = `<div class="empty">no per-stage timing captured yet</div>`; return; }
+    // No per-stage START pin recorded (older harness): show current only, but state the REAL gain
+    // from the end-to-end before/after so the run does not read as "no progress".
+    const lbNoBase = st.every(s => s.baseline_ms == null);
+    const lbCap = (lbNoBase && S.fullpipe_baseline_ms != null && S.fullpipe_ms != null)
+      ? `<div class="caption">per-stage baseline not recorded for this run — end-to-end (all layers): `
+        + fmtMs(S.fullpipe_baseline_ms) + ` → ` + fmtMs(S.fullpipe_ms)
+        + (S.fullpipe_baseline_ms > 0 ? ` (${((1 - S.fullpipe_ms / S.fullpipe_baseline_ms) * 100).toFixed(1)}% faster)` : ``)
+        + `</div>`
+      : ``;
     const tot = st.reduce((a, s) => a + s.ms, 0) || 1;
     const stack = st.map((s, i) =>
       `<div style="width:${(s.ms / tot * 100).toFixed(2)}%;background:${PALETTE[i % PALETTE.length]}" title="${esc(s.name)} ${fmtMs(s.ms)}"></div>`).join("");
@@ -807,7 +816,7 @@ function renderTab(S) {
     const rows = st.map(s => `<tr><td>${esc(s.name)}</td><td>${fmtMs2(s.ms)}</td>
       <td>${fmtMs2(s.baseline_ms)}</td><td>${esc(s.path || "")}</td>
       <td>${s.bytes != null ? (s.bytes / 1e9).toFixed(2) + " GB" : "—"}</td></tr>`).join("");
-    el.innerHTML = groupedBars(st) + `<div class="stack" style="margin-top:14px">${stack}</div><div class="legend">${legend}</div>
+    el.innerHTML = lbCap + groupedBars(st) + `<div class="stack" style="margin-top:14px">${stack}</div><div class="legend">${legend}</div>
       <table style="margin-top:12px"><tr><th>stage</th><th>current</th><th>baseline</th><th>path</th><th>bytes</th></tr>${rows}</table>`;
   } else if (curTab === "Power Analysis") {
     const th = S.thermal;
@@ -818,8 +827,14 @@ function renderTab(S) {
       (scalars.length ? `<table>${scalars.map(([k, v]) =>
         `<tr><th>${esc(k)}</th><td>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`).join("")}</table>` : "");
   } else if (curTab === "Scaling") {
-    const c = S.config || {}, tp = S.topology, env = S.env || {};
-    let html = `<table>${Object.entries({...env, ...c}).map(([k, v]) =>
+    const c = S.config || {}, tp = S.topology, env = S.env || {}, par = S.parallelism;
+    const parTable = par ? (`<h3 style="color:var(--dim);font-size:12px;margin:0 0 6px">PARALLELISM &amp; SCALING</h3>`
+      + `<table>` + [["tensor-parallel (TP)", par.tp != null ? par.tp + "\u00d7 (weights split across " + par.tp + " chips)" : null],
+          ["data-parallel (DP)", par.dp != null ? par.dp + "\u00d7" : null],
+          ["devices", par.devices], ["batch (users)", par.batch]]
+          .filter(r => r[1] != null).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(String(v))}</td></tr>`).join("")
+      + `</table>` + `<h3 style="color:var(--dim);font-size:12px;margin:14px 0 6px">RUN CONFIG</h3>`) : "";
+    let html = parTable + `<table>${Object.entries({...env, ...c}).map(([k, v]) =>
       `<tr><th>${esc(k)}</th><td>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`).join("")}</table>`;
     if (tp) html += `<h3 style="color:var(--dim);font-size:12px;margin:14px 0 6px">BOARD TOPOLOGY</h3>
       <table>${Object.entries(tp).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`).join("")}</table>`;

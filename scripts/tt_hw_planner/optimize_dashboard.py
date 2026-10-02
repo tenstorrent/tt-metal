@@ -480,6 +480,31 @@ def _roofline_points(buckets: list) -> list:
 # --------------------------------------------------------------------------- the snapshot
 
 
+def _parallelism(ledger: dict, topology, batch) -> "dict | None":
+    """Parallel-scaling facts for the Scaling view, read from the run itself (never a mesh string):
+    tensor-parallel degree (ledger `tp_degree`), device count (board topology), the implied data-
+    parallel degree, and the batch/users. None when the run declares nothing."""
+
+    def _num(r):
+        if not isinstance(r, dict):
+            return None
+        for k in ("value", "value_ms", "degree"):
+            v = r.get(k)
+            if isinstance(v, (int, float)) and v > 0:
+                return int(v)
+        return None
+
+    tp = None
+    for r in (ledger or {}).get("tp_degree") or []:
+        n = _num(r)
+        if n:
+            tp = n
+    devices = len(topology) if isinstance(topology, dict) and topology else None
+    dp = (devices // tp) if (tp and devices and devices >= tp and devices % tp == 0) else None
+    out = {"tp": tp, "dp": dp, "devices": devices, "batch": batch}
+    return out if any(v is not None for v in out.values()) else None
+
+
 def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None, requested_batch: int | None = None) -> dict:
     """Assemble the one JSON snapshot the dashboard renders. Every section is best-effort: a file
     that does not exist yet (baseline still measuring) simply omits its section, never fails."""
@@ -543,7 +568,11 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None, requ
         {
             "name": n,
             "ms": stages_cur.get(n),
-            "baseline_ms": stages_base.get(n),
+            # The committed-best split is the CURRENT time, not the baseline -- using it for both
+            # read baseline == current and hid every per-stage gain. The per-stage baseline is the
+            # START, recorded only as a KIND_STAGE_E2E pin; _stage_starts fills it below where one
+            # exists. No pin -> None (the UI shows current + the real end-to-end gain instead).
+            "baseline_ms": None,
             "path": stage_paths.get(n),
             "bytes": stage_bytes.get(n),
         }
@@ -684,6 +713,7 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None, requ
         "env": env or None,
         "thermal": thermal,
         "topology": topology,
+        "parallelism": _parallelism(ledger, topology, _parse_batch(run_dir, requested_batch)),
     }
 
 
