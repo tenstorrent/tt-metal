@@ -26,10 +26,13 @@ from release_test_report import (  # noqa: E402
     FAILED,
     INCONCLUSIVE,
     PASSED,
+    QUASAR_EMU_SCHEMA,
     build,
     classify,
     load_expected,
     parse_horizon,
+    parse_horizon_emu,
+    parse_quasar_emu,
     parse_junit_dir,
     parse_results_block,
     render_markdown,
@@ -425,20 +428,116 @@ def test_horizon_emu_rows_keep_their_group_and_filter(tmp_path):
     assert hits[FAILED] == [{"config": "horizon", "group": "tests/axi", "filter": "test_axi_device", "runner": "gtest"}]
 
 
-def test_horizon_emu_evidence_flows_into_its_requirement(mapping, tmp_path):
-    """Both Horizon sources together: emulator rows cover AIIPSW-9, tt-umd-horizon rows AIIPSW-15."""
+RESNET_OP = "models/demos/vision/classification/resnet50/quasar/tests/ops/test_add.py"
+
+
+def test_horizon_emu_credits_only_resnet_tests_to_aiipsw9(mapping, tmp_path):
+    """AIIPSW-9 is the ResNet LLK API on Horizon: other Horizon tests are executed, not evidence for it."""
     (tmp_path / "emu").mkdir()
-    emu = _horizon(tmp_path / "emu", [{"name": "x", "result": "passed", "group": "unit_tests_legacy", "filter": "*Bmm"}])
+    emu = _horizon(
+        tmp_path / "emu",
+        [
+            {"name": "a", "result": "passed", "group": RESNET_OP, "filter": "", "runner": "pytest"},
+            {"name": "b", "result": "passed", "group": "unit_tests_legacy", "filter": "*Bmm"},
+        ],
+    )
     umd = _horizon(tmp_path, [{"name": "test_horizon_cluster", "result": "passed"}])
     _s, umd_evidence = parse_horizon(umd)
-    _s, emu_evidence = parse_horizon(emu, req_key=HORIZON_EMU_REQUIREMENT)
+    _s, emu_evidence = parse_horizon_emu(emu)
     rows = load_expected(SIM_YAML, "1x3")
     report = build(mapping, rows, rows, [], PASSED, extra_evidence={**umd_evidence, **emu_evidence})
 
-    covered = {r["key"] for r in report["requirements"] if r["passed"]}
-    assert {HORIZON_REQUIREMENT, HORIZON_EMU_REQUIREMENT} <= covered
+    by_key = {r["key"]: r for r in report["requirements"]}
+    assert [r["group"] for r in by_key[HORIZON_EMU_REQUIREMENT]["passed"]] == [RESNET_OP]
+    assert by_key[HORIZON_REQUIREMENT]["passed"], "tt-umd-horizon still covers AIIPSW-15"
+    horizon_bmm = {"config": "horizon", "group": "unit_tests_legacy", "filter": "*Bmm", "runner": "gtest"}
+    assert horizon_bmm in report["unattributed"][PASSED], "reported as executed, not as AIIPSW-9 evidence"
     md = render_markdown(report, META)
-    assert "AIIPSW-9" in md and "unit_tests_legacy" in md and "test_horizon_cluster" in md
+    assert "AIIPSW-9" in md and "test_add.py" in md and "test_horizon_cluster" in md
+
+
+# --- Quasar emulator evidence, from the tt-umd-simulators "Quasar Release" check ---
+
+
+def _quasar_emu(tmp_path, tests, ts=None, schema=QUASAR_EMU_SCHEMA):
+    from datetime import datetime, timezone
+
+    p = tmp_path / "quasar-emu-results.json"
+    p.write_text(
+        json.dumps(
+            {
+                "schema": schema,
+                "tested_sha": "fedcba987654",
+                "timestamp": ts or datetime.now(timezone.utc).isoformat(),
+                "run_url": "http://quasar/run",
+                "totals": {"passed": sum(t["result"] == "passed" for t in tests),
+                           "failed": sum(t["result"] == "failed" for t in tests)},
+                "tests": tests,
+            }
+        )
+    )
+    return str(p)
+
+
+def _q(config, group, filt, result, runner="gtest"):
+    return {"name": f"[{config}] {group}", "result": result, "config": config, "source_config": config,
+            "group": group, "filter": filt, "runner": runner}
+
+
+def test_quasar_emu_rows_keep_config_and_whole_file_filters(tmp_path):
+    path = _quasar_emu(
+        tmp_path,
+        [_q("2x3", RESNET_OP, "", "passed", "pytest"), _q("1x3", "unit_tests_legacy", "*Bmm", "failed")],
+    )
+    status, rows = parse_quasar_emu(path)
+    assert status == FAILED
+    assert rows[PASSED] == [{"config": "2x3", "group": RESNET_OP, "filter": "", "runner": "pytest"}]
+    assert rows[FAILED] == [{"config": "1x3", "group": "unit_tests_legacy", "filter": "*Bmm", "runner": "gtest"}]
+
+
+def test_quasar_emu_missing_stale_or_wrong_schema_is_inconclusive(tmp_path):
+    assert parse_quasar_emu("") == (INCONCLUSIVE, {})
+    assert parse_quasar_emu(str(tmp_path / "absent.json")) == (INCONCLUSIVE, {})
+    stale = _quasar_emu(tmp_path, [_q("1x3", "unit_tests_legacy", "*Bmm", "passed")], ts="2020-01-01T00:00:00Z")
+    assert parse_quasar_emu(stale) == (INCONCLUSIVE, {})
+    horizon = _quasar_emu(tmp_path, [_q("1x3", "unit_tests_legacy", "*Bmm", "passed")], schema="horizon-test-results/v1")
+    assert parse_quasar_emu(horizon) == (INCONCLUSIVE, {}), "Horizon results must not pass for Quasar ones"
+
+
+def test_quasar_emu_rows_are_credited_through_the_map(mapping, tmp_path):
+    """Emulator rows reach the requirements the map names, without touching the sim verdict."""
+    conv = "models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_conv2_modelcfg.py"
+    e2e = "models/demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py"
+    profiler = "tests/tt_metal/tools/profiler/test_device_profiler.py"
+    path = _quasar_emu(
+        tmp_path,
+        [
+            _q("2x3", RESNET_OP, "", "passed", "pytest"),
+            _q("2x3", conv, "", "passed", "pytest"),
+            _q("2x3", e2e, "test_resnet50_e2e[pretrained-device_params0]", "passed", "pytest"),
+            _q("2x3_DISPATCH", profiler, "test_full_buffer", "failed", "pytest"),
+            _q("2x3_DISPATCH", "unit_tests_legacy", "*EventQuery", "passed"),
+        ],
+    )
+    _status, emu_rows = parse_quasar_emu(path)
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED, mapped_evidence=emu_rows)
+
+    by_key = {r["key"]: r for r in report["requirements"]}
+    assert {r["group"] for r in by_key["AIIPSW-4"]["passed"]} == {RESNET_OP, e2e}
+    assert [r["group"] for r in by_key["AIIPSW-16"]["passed"]] == [conv]
+    assert [r["filter"] for r in by_key["AIIPSW-13"]["failed"]] == ["test_full_buffer"]
+    assert "*EventQuery" in [r["filter"] for r in by_key["AIIPSW-6"]["passed"]], "2x3_DISPATCH wildcard"
+    assert report["verdict"] == PASSED and report["passed"] == rows, "the sim verdict and counts are the sim's"
+
+
+def test_emulator_sources_are_named_in_both_renderers(mapping):
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED)
+    meta = {**META, "emulators": [("Quasar emulator", "110 passed, 0 failed on tt-metal fedcba987654")]}
+    for text in (render_markdown(report, meta), render_plain(report, meta)):
+        assert "Quasar emulator" in text and "fedcba987654" in text
+        assert "Quasar Release" in text, "the scope note names the source check"
 
 
 def test_evidence_carries_no_test_counts(mapping):
