@@ -1355,8 +1355,12 @@ class MultichipDecoder(OptimizedDecoder):
         attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q, kv_cache["k"], kv_cache["v"], **sdpa_kwargs
         )
-        attn = ttnn.reshape(attn, (1, 1, B, cfg.num_heads * cfg.head_dim))
-        attn = self._gate(attn, ln, g)
+        # gate in the SDPA's native [1,B,nh,hd] head layout, then flatten ONCE (the generic _gate flattens,
+        # re-splits into heads -- an ~11 us 4-core reshape -- and flattens again).
+        if g is None:
+            g = ttnn.linear(ln, self.w["wg"], compute_kernel_config=self._ck_gate)
+        g = ttnn.reshape(ttnn.softplus(g), (1, B, cfg.num_heads, 1))
+        attn = ttnn.reshape(ttnn.mul(attn, g), (1, 1, B, cfg.num_heads * cfg.head_dim))
         q_w = self.meta["q_w"]
         o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
         if self.use_dram_sharded:
