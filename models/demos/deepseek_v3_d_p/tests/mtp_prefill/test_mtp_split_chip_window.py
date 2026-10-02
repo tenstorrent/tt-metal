@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""``MTPSeamSplice`` on device: a chunk resuming at any tile-aligned start still gets exact MTP windows.
+"""``MTPSplitChipLookahead`` on device: a chunk resuming at any tile-aligned start still gets exact MTP windows.
 
 The union holds a random table indexed by global position, its lookahead slots laid out as the inference
 server sends them, so the window every real row must produce is known in closed form -- the embedding
@@ -22,7 +22,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions, rotated_chip_positions
-from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPSeamSplice, MTPUnionEmbedding
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPSplitChipLookahead, MTPUnionEmbedding
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import build_sp_rank_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
@@ -35,9 +35,9 @@ PAD_ROW = 3 * CHUNK + 2 * LOOKAHEAD
 """The table row every pad slot holds: no real position's embedding."""
 
 STARTS = (0, 3200, 32, 608, 3296, 4512, 5088, 8000)
-"""Resume points: slab- and chip-aligned controls (no seam), the largest and the smallest seam row, a
-mid-chunk resume, the seam on the last chip at both extremes (its next chip wraps to chip 0), a later
-slab."""
+"""Resume points: chunk- and chip-aligned controls (no split chip), the largest and the smallest split row, a
+mid-chunk resume, the last chip as the split chip at both extremes (its next chip wraps to chip 0), a later
+chunk."""
 
 GENERATED_ROWS = (3, 40, 77, 200)
 """Rows of the gathered generation block that the patch writes, one per generated position."""
@@ -107,7 +107,7 @@ _MESH_PARAMS = [
 )
 @pytest.mark.skipif(not is_blackhole(), reason="deepseek_v3_d_p prefill is Blackhole-only")
 @pytest.mark.timeout(1200)
-def test_mtp_seam_windows(mesh_device, device_params, num_links):
+def test_mtp_split_chip_windows(mesh_device, device_params, num_links):
     sp, tp = tuple(mesh_device.shape)
     window_len = CHUNK // sp
     union_len = window_len + LOOKAHEAD
@@ -119,12 +119,12 @@ def test_mtp_seam_windows(mesh_device, device_params, num_links):
     sp_rank = build_sp_rank_tensor(mesh_device, sp, (sp, tp), SP_AXIS)
     order = _per_device_scalars(sp_rank)
     assert order == [float(i // tp) for i in range(sp * tp)], f"device tensors are not SP-row-major: {order}"
-    for seam_chip in range(sp):
+    for split_chip in range(sp):
         for name, op, value in (("eq", ttnn.eq, 1.0), ("ne", ttnn.ne, 0.0)):
-            flag = op(sp_rank, float(seam_chip))
-            want = [value if i // tp == seam_chip else 1.0 - value for i in range(sp * tp)]
+            flag = op(sp_rank, float(split_chip))
+            want = [value if i // tp == split_chip else 1.0 - value for i in range(sp * tp)]
             got = _per_device_scalars(flag)
-            assert got == want, f"{name}(sp_rank, {seam_chip}) gave {got} ({flag.dtype})"
+            assert got == want, f"{name}(sp_rank, {split_chip}) gave {got} ({flag.dtype})"
             ttnn.deallocate(flag)
 
     g = torch.Generator().manual_seed(0)
@@ -135,20 +135,20 @@ def test_mtp_seam_windows(mesh_device, device_params, num_links):
     failures = []
     for start in STARTS:
         offset = start % window_len
-        seam_chip = (start // window_len) % sp
-        next_chip = (seam_chip + 1) % sp
+        split_chip = (start // window_len) % sp
+        next_chip = (split_chip + 1) % sp
         if offset:
             last_plain_end = start + window_len - offset - NUM_LEVELS
-            for chunk_end, wants_splice in ((last_plain_end, False), (last_plain_end + 1, True)):
-                splice = MTPSeamSplice.for_chunk_start(
+            for chunk_end, wants_lookahead in ((last_plain_end, False), (last_plain_end + 1, True)):
+                lookahead = MTPSplitChipLookahead.for_chunk_start(
                     start, window_len, sp, sp_rank, all_gather_sp, chunk_end=chunk_end, num_levels=NUM_LEVELS
                 )
-                assert (splice is not None) == wants_splice, f"start={start} chunk_end={chunk_end}: {splice}"
-                if splice is not None:
-                    splice.deallocate()
+                assert (lookahead is not None) == wants_lookahead, f"start={start} chunk_end={chunk_end}: {lookahead}"
+                if lookahead is not None:
+                    lookahead.deallocate()
 
-        # Ending one past the next chip's first position, the seam chip's slots carry that chip's first ids; on a
-        # full chunk the seam chip holds the end, its slots carry the next chunk's, and the splice all-gathers.
+        # Ending one past the next chip's first position, the split chip's slots carry that chip's first ids; on a
+        # full chunk the split chip holds the end, its slots carry the next chunk's, and the lookahead all-gathers.
         chunk_ends = (start + CHUNK, start + window_len - offset + 1) if offset else (start + CHUNK,)
         for chunk_end in chunk_ends:
             positions = _union_positions(start, sp, window_len, chunk_end)
@@ -157,7 +157,7 @@ def test_mtp_seam_windows(mesh_device, device_params, num_links):
                 positions[next_chip][0],
                 positions[next_chip][1],
                 start + CHUNK,
-                positions[(seam_chip + 3) % sp][5],
+                positions[(split_chip + 3) % sp][5],
             ]
             written = table.clone()
             keep = torch.ones(sp, 1, union_len, 1)
@@ -180,16 +180,16 @@ def test_mtp_seam_windows(mesh_device, device_params, num_links):
                 else:
                     parts = [_upload(union_host, mesh_device, (0, -1))]
                 union = MTPUnionEmbedding(parts, num_levels=NUM_LEVELS, window_len=window_len)
-                seam_splice = MTPSeamSplice.for_chunk_start(
+                split_lookahead = MTPSplitChipLookahead.for_chunk_start(
                     start, window_len, sp, sp_rank, all_gather_sp, chunk_end=chunk_end, num_levels=NUM_LEVELS
                 )
-                assert (seam_splice is None) == (offset == 0), f"{label}: seam splice {seam_splice}"
-                if seam_splice is not None:
+                assert (split_lookahead is None) == (offset == 0), f"{label}: split-chip lookahead {split_lookahead}"
+                if split_lookahead is not None:
                     want_next = next_chip if chunk_end == start + CHUNK else None
                     assert (
-                        seam_splice.next_chip == want_next
-                    ), f"{label}: splice reads chip {seam_splice.next_chip}'s rows, expected {want_next} (None: slots)"
-                union.set_seam_splice(seam_splice)
+                        split_lookahead.next_chip == want_next
+                    ), f"{label}: next_chip {split_lookahead.next_chip}, expected {want_next} (None: slots)"
+                union.set_split_chip_lookahead(split_lookahead)
 
                 t0 = time.perf_counter()
                 _check_windows(
@@ -209,13 +209,14 @@ def test_mtp_seam_windows(mesh_device, device_params, num_links):
                     union, written, positions, window_len, chunk_end, mesh_device, f"{label} patched", failures
                 )
                 logger.info(
-                    f"[seam] {label}: seam row {seam_splice.seam_row if seam_splice else None}, first {NUM_LEVELS} "
-                    f"windows + readback {t1 - t0:.2f}s, warm {NUM_LEVELS} windows {1e3 * (t2 - t1):.1f}ms"
+                    f"[split chip] {label}: split row {split_lookahead.split_row if split_lookahead else None}, "
+                    f"first {NUM_LEVELS} windows + readback {t1 - t0:.2f}s, warm {NUM_LEVELS} windows "
+                    f"{1e3 * (t2 - t1):.1f}ms"
                 )
 
-                if seam_splice is not None:
-                    union.clear_seam_splice()
-                    seam_splice.deallocate()
+                if split_lookahead is not None:
+                    union.clear_split_chip_lookahead()
+                    split_lookahead.deallocate()
                 union.deallocate()
                 ttnn.deallocate(keep_t)
                 ttnn.deallocate(select_t)

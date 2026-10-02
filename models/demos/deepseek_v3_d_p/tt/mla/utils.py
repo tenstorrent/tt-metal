@@ -85,7 +85,7 @@ def rotated_chip_positions(kv_actual_isl: int, sp: int, chunk_local: int) -> lis
     mirroring the writer kernel EXACTLY. positions[c][r] is the global token position carried by
     chip c's r-th rotated row.
 
-    Slab-aware: each chip writes chunk_local rows starting at update_idxt, and the cache cell at
+    Chunk-aware: each chip writes chunk_local rows starting at update_idxt, and the cache cell at
     local row lr on chip c holds global position (lr // chunk_local)*chunk_size_global +
     c*chunk_local + (lr % chunk_local). The union over all (c, r) tiles
     [kv_actual_isl, kv_actual_isl + chunk_size_global) exactly, so the first new_actual_isl
@@ -93,18 +93,18 @@ def rotated_chip_positions(kv_actual_isl: int, sp: int, chunk_local: int) -> lis
     separate new_actual_isl plumbing needed.
     """
     chunk_size_global = sp * chunk_local
-    boundary_slab = kv_actual_isl // chunk_size_global
-    boundary_chip = (kv_actual_isl // chunk_local) % sp
-    boundary_offset = kv_actual_isl % chunk_local
+    split_chunk = kv_actual_isl // chunk_size_global
+    split_chip = (kv_actual_isl // chunk_local) % sp
+    split_offset = kv_actual_isl % chunk_local
 
     positions = [[0] * chunk_local for _ in range(sp)]
     for c in range(sp):
-        if c < boundary_chip:
-            update_idxt = (boundary_slab + 1) * chunk_local
-        elif c == boundary_chip:
-            update_idxt = boundary_slab * chunk_local + boundary_offset
+        if c < split_chip:
+            update_idxt = (split_chunk + 1) * chunk_local
+        elif c == split_chip:
+            update_idxt = split_chunk * chunk_local + split_offset
         else:
-            update_idxt = boundary_slab * chunk_local
+            update_idxt = split_chunk * chunk_local
         for r in range(chunk_local):
             lr = update_idxt + r
             positions[c][r] = (lr // chunk_local) * chunk_size_global + c * chunk_local + (lr % chunk_local)
@@ -124,7 +124,7 @@ def llama4_scale_host(
 
     ``1 + beta*ln(1 + floor(pos/orig_max))``, where the row -> position map is
     ``rotated_chip_positions``, NOT ``kv_actual_isl + row``: a rotated chunk's rows are scattered
-    across chips, and the two coincide only when kv_actual_isl is slab-aligned. Chip-major flatten, to
+    across chips, and the two coincide only when kv_actual_isl is chunk-aligned. Chip-major flatten, to
     match an SP shard over dim 2. fp32 -- the term sits just above 1.0 and adjacent windows are ~0.01
     apart by 50k. Callers cast.
     """
@@ -144,11 +144,11 @@ def rotated_chip_real_token_counts(kv_actual_isl: int, actual_isl: int, sp: int,
     A rotated chunk's `chunk_size_global` rows tile [kv_actual_isl, kv_actual_isl + chunk_size_global)
     but are spread across chips by the KV-pad-aware rotation, so a chip's real-row count is NOT
     ``min(chunk_local, actual_isl - c * chunk_local)`` -- that formula only holds for the SEQUENTIAL
-    layout (which is the degenerate kv_actual_isl == 0 / slab-aligned case, where this function
+    layout (which is the degenerate kv_actual_isl == 0 / chunk-aligned case, where this function
     reduces to it exactly).
 
-    Positions increase monotonically with the chip-local row (a slab step adds chunk_size_global
-    while the within-slab offset rewinds by at most chunk_local < chunk_size_global), so each chip's
+    Positions increase monotonically with the chip-local row (a chunk step adds chunk_size_global
+    while the within-chunk offset rewinds by at most chunk_local < chunk_size_global), so each chip's
     real rows are a contiguous PREFIX of its local rows. That is what lets a single count per chip
     describe the split, and why the consumers' RIGHT-padding contract still holds under rotation.
     """
@@ -178,19 +178,19 @@ def mtp_lookahead_positions(
 
     The inference server's layout. Chip c's slots ``[0, num_levels)`` carry the ``num_levels`` positions after
     the last one it holds: the next chip's first, or the next chunk's first on the chip holding the chunk's
-    end. A chunk starting off a ``chunk_local`` boundary leaves the seam chip's first run ending where the next
+    end. A chunk starting off a ``chunk_local`` boundary leaves the split chip's first run ending where the next
     chip's begins; while its second run lies past ``actual_end``, its slots carry that chip's first
     ``num_levels`` positions instead. A position at or past the turn end is pad on the wire too. Keyed off
     ``rotated_chip_positions`` so it cannot drift from the writer kernel.
     """
     positions = rotated_chip_positions(kv_actual_isl, sp, chunk_local)
     slots = [[row[-1] + 1 + k for k in range(num_levels)] for row in positions]
-    seam_row = chunk_local - kv_actual_isl % chunk_local
-    if sp > 1 and seam_row < chunk_local:
-        seam_chip = (kv_actual_isl // chunk_local) % sp
-        seam = positions[seam_chip]
-        if seam[seam_row] >= actual_end:
-            slots[seam_chip] = [seam[seam_row - 1] + 1 + k for k in range(num_levels)]
+    split_row = chunk_local - kv_actual_isl % chunk_local
+    if sp > 1 and split_row < chunk_local:
+        split_chip = (kv_actual_isl // chunk_local) % sp
+        split_positions = positions[split_chip]
+        if split_positions[split_row] >= actual_end:
+            slots[split_chip] = [split_positions[split_row - 1] + 1 + k for k in range(num_levels)]
     return slots
 
 
@@ -206,14 +206,14 @@ def blockcyclic_positions(sp: int, chunk_size_global: int, seq_len_cache: int) -
     chunk_local = chunk_size_global // sp
     c = torch.arange(sp).repeat_interleave(seq_len_local)
     lr = torch.arange(seq_len_local).repeat(sp)
-    slab, off = lr // chunk_local, lr % chunk_local
-    return slab * chunk_size_global + c * chunk_local + off
+    chunk, off = lr // chunk_local, lr % chunk_local
+    return chunk * chunk_size_global + c * chunk_local + off
 
 
 def blockcyclic_cache_host(
     kv_natural: torch.Tensor, sp: int, chunk_size_global: int, seq_len_cache: int, kvpe_dim: int
 ) -> torch.Tensor:
-    """Arrange a natural-order [seq, kvpe] KV tensor into the device cache's block-cyclic slab-major
+    """Arrange a natural-order [seq, kvpe] KV tensor into the device cache's block-cyclic chunk-major
     layout so that an SP-contiguous shard of dim 2 gives each chip its own rows. Rows whose global
     position is beyond the provided KV (e.g. the not-yet-written new chunk) stay zero. Returns
     [1, 1, seq_len_cache, kvpe_dim].

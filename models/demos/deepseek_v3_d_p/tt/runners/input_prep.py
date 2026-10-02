@@ -42,9 +42,9 @@ def prepare_prefill_input_tensor(
 
     An SP-sharded uint32 ROW_MAJOR DRAM tensor, ``[sp_factor, 1, len(token_ids) // sp_factor]``, from
     the chunk in natural position order at ``chunk_start``. Chip ``c``'s row carries the positions
-    chip ``c`` OWNS: a chunk resuming mid-slab is rotated across the chips, and the device derives
-    each row's rope angle and KV-cache slot the same way (``rotated_chip_positions``). A slab-aligned
-    ``chunk_start`` -- every caller but an MTP mid-slab resume -- takes the plain reshape the rotation
+    chip ``c`` OWNS: a chunk resuming off a chunk boundary is rotated across the chips, and the device derives
+    each row's rope angle and KV-cache slot the same way (``rotated_chip_positions``). A chunk-aligned
+    ``chunk_start`` -- every caller but an MTP mid-chunk resume -- takes the plain reshape the rotation
     degenerates to.
     """
     isl_per_chip = len(token_ids) // sp_factor
@@ -71,7 +71,7 @@ def prepare_prefill_input_tensor(
 
 
 def _rotation_index(chunk_start: int, sp_factor: int, isl_per_chip: int) -> torch.Tensor:
-    """Chip-major device row -> offset into the chunk's id list; ``arange`` when slab-aligned."""
+    """Chip-major device row -> offset into the chunk's id list; ``arange`` when chunk-aligned."""
     return torch.tensor(
         [p - chunk_start for row in rotated_chip_positions(chunk_start, sp_factor, isl_per_chip) for p in row],
         dtype=torch.long,
@@ -94,7 +94,7 @@ def prepare_prefill_mtp_tokens(
 
     ``token_ids`` is the chunk followed by the ``num_mtp_tokens`` ids after it; its real ids end at
     ``chunk_end`` (default: the whole chunk). Chip ``c``'s first ``num_levels`` slots take the ids
-    ``mtp_lookahead_positions`` assigns it: on a chunk starting off a per-chip boundary, the seam chip's
+    ``mtp_lookahead_positions`` assigns it: on a chunk starting off a per-chip boundary, the split chip's
     take the next chip's first ids while its second run lies past ``chunk_end``. Every later slot is
     ``MTP_PAD_TOKEN_ID``. Block-cyclic only.
     """
@@ -139,7 +139,7 @@ def mtp_generation_union_rows(
 
     The geometry of last-chunk generation, stated once for both mask builders below. A position can sit
     in one chip's trunk and another's lookahead slots, and every copy gets patched. Block-cyclic only, and
-    keyed off ``rotated_chip_positions`` and ``mtp_lookahead_positions``: a chunk resuming off a slab
+    keyed off ``rotated_chip_positions`` and ``mtp_lookahead_positions``: a chunk resuming off a chunk
     boundary is rotated, so chip c's rows are NOT ``[chunk_start + c*isl_per_chip, ...)``.
     """
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
@@ -246,7 +246,7 @@ def build_mtp_generation_select(
 
 
 def build_sp_rank_tensor(mesh_device: ttnn.MeshDevice, sp_factor: int, mesh_shape: tuple, sp_axis: int) -> ttnn.Tensor:
-    """``[1, 1, 1, 1]`` bf16 per chip holding its SP rank. Built once; ``MTPSeamSplice`` compares against it."""
+    """``[1, 1, 1, 1]`` bf16 per chip holding its SP rank. Built once; ``MTPSplitChipLookahead`` compares against it."""
     ranks = torch.arange(sp_factor, dtype=torch.float32).view(sp_factor, 1, 1, 1)
     return _upload_sp_sharded(ranks, mesh_device, mesh_shape, sp_axis, ttnn.bfloat16)
 

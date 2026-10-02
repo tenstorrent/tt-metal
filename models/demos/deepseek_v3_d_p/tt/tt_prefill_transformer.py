@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
     MTPDeviceEmbedSource,
     MTPDeviceGeneration,
-    MTPSeamSplice,
+    MTPSplitChipLookahead,
 )
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
     build_mtp_generation_keep_mask,
@@ -659,7 +659,7 @@ class TtPrefillTransformer(LightweightModule):
     def mtp_generate_embedding(self, h_normed: ttnn.Tensor, last_row: int) -> ttnn.Tensor:
         """``H^k -> [1, 1, 32*sp, H/tp]``: the greedy next token at ``last_row``, embedded and
         SP-broadcast so every chip can read it. ``last_row`` is the chip-major flat row carrying the
-        chunk's last real position, which is ``actual_isl - 1`` only on a slab-aligned chunk.
+        chunk's last real position, which is ``actual_isl - 1`` only when the chunk starts on a chunk boundary.
         """
         assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
         logits, _ = self.lm_head(h_normed, last_row)
@@ -751,7 +751,7 @@ class TtPrefillTransformer(LightweightModule):
         assert (
             0 <= provided_levels <= self.num_mtp_levels
         ), f"provided_levels {provided_levels} outside [0, {self.num_mtp_levels}]"
-        seam_splice = MTPSeamSplice.for_chunk_start(
+        split_lookahead = MTPSplitChipLookahead.for_chunk_start(
             fwd_kwargs["actual_start"],
             self.seq_len // self.sp_factor,
             self.sp_factor,
@@ -762,7 +762,7 @@ class TtPrefillTransformer(LightweightModule):
         )
         generation = None
         try:
-            union.set_seam_splice(seam_splice)
+            union.set_split_chip_lookahead(split_lookahead)
             if provided_levels < self.num_mtp_levels:
                 generation = self._mtp_build_generation(
                     union,
@@ -781,7 +781,7 @@ class TtPrefillTransformer(LightweightModule):
         finally:
             if generation is not None:
                 generation.deallocate()
-            if seam_splice is not None:
-                union.clear_seam_splice()
-                seam_splice.deallocate()
+            if split_lookahead is not None:
+                union.clear_split_chip_lookahead()
+                split_lookahead.deallocate()
         return out, source.generated_tokens

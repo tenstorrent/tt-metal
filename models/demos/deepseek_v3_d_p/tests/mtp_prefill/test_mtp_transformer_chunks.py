@@ -63,9 +63,9 @@ PARTIAL_TAIL = 2540
 # Two turns on one cache; not a chunk multiple, so the second chunk is ROTATED across the chips.
 MT_PREFIX = 5 * 640
 MT_TURN2 = 2500
-# A resume inside chip 5's rows: that chip then carries two position runs, joined at the seam.
-MT_SEAM_PREFIX = MT_PREFIX + 96
-MT_SEAM = 6 * 640
+# A resume inside chip 5's rows splits that chip: it then carries two position runs.
+MT_SPLIT_PREFIX = MT_PREFIX + 96
+MT_SPLIT = 6 * 640
 
 
 def _one_turn(actual_isl: int, num_chunks: int = NUM_CHUNKS) -> list[tuple[int, int]]:
@@ -84,16 +84,16 @@ SCHEDULE_AXIS = {
     "provided-none": lambda k: _one_turn(TOTAL),
     "partial": lambda k: _one_turn(2 * CHUNK + PARTIAL_TAIL),
     "multiturn": lambda k: [(0, MT_PREFIX), (MT_PREFIX, MT_PREFIX + MT_TURN2)],
-    "multiturn-seam": lambda k: _resumed_turn(MT_SEAM_PREFIX, MT_SEAM_PREFIX + CHUNK + MT_TURN2),
-    "multiturn-seam-end": lambda k: _resumed_turn(MT_SEAM_PREFIX, MT_SEAM - 2),
+    "multiturn-split": lambda k: _resumed_turn(MT_SPLIT_PREFIX, MT_SPLIT_PREFIX + CHUNK + MT_TURN2),
+    "multiturn-split-end": lambda k: _resumed_turn(MT_SPLIT_PREFIX, MT_SPLIT - 2),
 }
 """Name -> K -> the ``(actual_start, actual_isl)`` of every chunk this test drives, in order.
 
 ``provided-*`` vary how much of the final chunk's lookahead is already in the stream; ``partial``
 ends mid-chunk, and ``multiturn`` resumes one cache at a chip-aligned but not chunk-aligned start.
-``multiturn-seam`` resumes inside a chip's rows, for a second turn of two chunks;
-``multiturn-seam-end`` stops that turn just short of the seam, so generation writes the rows the
-seam chip splices in.
+``multiturn-split`` resumes inside a chip's rows, for a second turn of two chunks;
+``multiturn-split-end`` stops that turn just short of the split row, so generation writes the rows the
+split chip's lookahead reads.
 """
 
 MTP_LEVEL_AXIS = (4, 7)
@@ -119,7 +119,7 @@ def _from_device(t: ttnn.Tensor, mesh_device) -> torch.Tensor:
 
     Valid because this test runs ``is_balanced=False``, where the input sharding is a plain reshape
     and concatenating the chips back along ``-2`` is its exact inverse. Row order is position order
-    only when slab-aligned; ``_unrotate_index`` converts the general case.
+    only when chunk-aligned; ``_unrotate_index`` converts the general case.
     """
     return ttnn.to_torch(
         t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=_shard_dims(), mesh_shape=mesh_device.shape)
@@ -159,7 +159,7 @@ def assert_socket_rows(stream: Sequence[int], sp_factor: int, chunk_size: int, n
     """Claim (1): each chip's row is the CONTIGUOUS slice of the stream at its own offset.
 
     Restated over the host lists: on device the trunk row and the lookahead row are separate blocks.
-    This is the H2D WIRE layout, which is the device's row layout only when slab-aligned.
+    This is the H2D WIRE layout, which is the device's row layout only when chunk-aligned.
     """
     isl = chunk_size // sp_factor
     for c in range(sp_factor):
@@ -178,7 +178,7 @@ def assert_socket_rows(stream: Sequence[int], sp_factor: int, chunk_size: int, n
 def _unrotate_index(start: int, sp_factor: int, chunk_size: int) -> torch.Tensor:
     """Device row -> natural position order, for reading a rotated chunk back against the reference.
 
-    The identity when slab-aligned, so the comparison below is one expression for both.
+    The identity when chunk-aligned, so the comparison below is one expression for both.
     """
     isl_per_chip = chunk_size // sp_factor
     perm = torch.tensor(
@@ -272,7 +272,7 @@ def _next_token_fn(transformer: TtPrefillTransformer, row: int):
     """``H^k -> int``: the greedy token at ``row``, through the trunk's own LM head.
 
     Tells the TEST which id the device must have generated so the reference can embed it. ``row``
-    comes from ``_last_real_row``; it is ``actual_isl - 1`` only when slab-aligned.
+    comes from ``_last_real_row``; it is ``actual_isl - 1`` only when chunk-aligned.
     """
 
     def next_token(h_normed):
@@ -356,7 +356,8 @@ def test_mtp_transformer_chunks(
     """GLM-5.3 MTP4/MTP7 chunked prefill end to end: every window, every level, exact ids.
 
     Four claims, most-local first: the stream the socket delivers, every level's output against the
-    teacher-forced reference, row 0 and the seam rows of every window, and the last chunk's generated tokens.
+    teacher-forced reference, row 0 and the split-chip lookahead rows of every window, and the last chunk's
+    generated tokens.
     """
     torch.manual_seed(42)
     if not skip_pcc and num_layers == 78 and schedule == "provided-all":
@@ -643,7 +644,7 @@ def test_mtp_transformer_chunks(
             del res
             continue
 
-        seam_is_decisive = True
+        generated_ids_distinct = True
         generated = []
         if derive_gen["on"]:
             next_token = _next_token_fn(transformer, last_row)
@@ -658,10 +659,10 @@ def test_mtp_transformer_chunks(
 
             dupes = len(generated) - len(set(generated))
             if dupes:
-                seam_is_decisive = False
+                generated_ids_distinct = False
                 logger.warning(
                     f"[mtp chunks] chunk {chunk_idx}: generated ids {generated} contain {dupes} "
-                    "duplicate(s), so the generation seam below CANNOT distinguish a patch swap "
+                    "duplicate(s), so the generated rows check below CANNOT distinguish a patch swap "
                     "between the levels that share an id. It still catches a wrong id and a patch "
                     "written outside the generated rows."
                 )
@@ -721,23 +722,24 @@ def test_mtp_transformer_chunks(
                 _, msg = assert_with_pcc(ref_xs[level].unsqueeze(0)[:, :, :1], dev_x[level][:, :, :1], FUSED_MTP_PCC)
                 logger.info(f"[mtp chunks] chunk {chunk_idx} L{level}: row 0 PCC {msg}")
             if generated and level >= provided:
-                seam = real_len - level - 1
+                first_gen_row = real_len - level - 1
                 _, msg = assert_with_pcc(
-                    ref_xs[level].unsqueeze(0)[:, :, seam:], dev_x[level][:, :, seam:], FUSED_MTP_PCC
+                    ref_xs[level].unsqueeze(0)[:, :, first_gen_row:], dev_x[level][:, :, first_gen_row:], FUSED_MTP_PCC
                 )
                 logger.info(
-                    f"[mtp chunks] chunk {chunk_idx} L{level}: generation seam PCC {msg}"
-                    f"{'' if seam_is_decisive else ' (duplicate ids -- swap-blind, see warning above)'}"
+                    f"[mtp chunks] chunk {chunk_idx} L{level}: generated rows PCC {msg}"
+                    f"{'' if generated_ids_distinct else ' (duplicate ids -- swap-blind, see warning above)'}"
                 )
             if sp_factor > 1 and start % isl_per_chip:
-                seam_row = isl_per_chip - start % isl_per_chip
-                rows = slice(seam_row - level - 1, min(seam_row, real_len))
+                split_row = isl_per_chip - start % isl_per_chip
+                rows = slice(split_row - level - 1, min(split_row, real_len))
                 if rows.start < rows.stop:
                     _, msg = assert_with_pcc(
                         ref_xs[level].unsqueeze(0)[:, :, rows], dev_x[level][:, :, rows], FUSED_MTP_PCC
                     )
                     logger.info(
-                        f"[mtp chunks] chunk {chunk_idx} L{level}: MTP seam rows {rows.start}:{rows.stop} PCC {msg}"
+                        f"[mtp chunks] chunk {chunk_idx} L{level}: split-chip lookahead rows "
+                        f"{rows.start}:{rows.stop} PCC {msg}"
                     )
 
         del dev_x, dev_out, dev_normed, ref_hiddens, ref_xs, ref_outs, ref_normeds
