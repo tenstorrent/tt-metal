@@ -2,7 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""FSDP shard-dim selection and tile alignment (shape-only, no device needed)."""
+"""FSDP shard-dim selection and tile alignment (shape-only, no device needed).
+
+``rank-2`` / ``rank-1`` below mean the second-to-last / last dim.
+"""
 
 from __future__ import annotations
 

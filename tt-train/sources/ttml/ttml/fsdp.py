@@ -383,8 +383,9 @@ def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int, axis_size: 
     """Pick a shard dim for ``parameter``, or return ``None`` to skip it.
 
     Rules (shared between lazy and eager paths):
-      1. Candidates are ``rank - 2`` (``O`` in TTML's ``[1,1,O,I]``), then ``rank - 1``,
-         minus dims already sharded on another mesh axis (e.g. TP) or of size 1.
+      1. Candidates are ``rank - 2`` (second-to-last dim, ``O`` in TTML's ``[1,1,O,I]``),
+         then ``rank - 1`` (last dim), minus dims of size 1 or already sharded on
+         another mesh axis (e.g. TP).
       2. Prefer whole-tile shards, then an even split, then the first candidate.
       3. No candidate: return ``None`` and the caller skips the parameter.
          Divisibility is enforced by the caller.
@@ -718,8 +719,9 @@ def fully_shard(
     Args:
         module: An ``AbstractModuleBase`` instance to wrap.
         shard_dim: Tensor dim to shard along, or ``"auto"`` (default).
-            Auto picks ``rank-2`` or ``rank-1``, preferring whole-tile shards and
-            skipping dims of size 1 or already sharded by another mesh axis (e.g. TP).
+            Auto picks ``rank-2`` or ``rank-1`` (second-to-last or last dim),
+            preferring whole-tile shards and skipping dims of size 1 or already
+            sharded by another mesh axis (e.g. TP).
             Parameters with no usable or non-divisible dim stay replicated, with a warning.
         mesh_axis: Name of the mesh axis to shard across. Defaults to ``"fsdp"``
         reshard_after_forward: If ``True`` (default), the module's weights
