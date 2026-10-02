@@ -695,6 +695,98 @@ def test_recheck_queues_a_candidate_deferred_at_the_agent_limit(rundir):
     assert entry["why"] == "deferred at the wave's agent limit", rc
 
 
+def _refresh_twin(tmp_path):
+    """A refresh: P100 (a fix PR) was deep-read long ago; its issue I200 closed after the watermark and carries the
+    same fix commit. The refresh's case file holds only I200; the deep store's rows carry no fix commit.
+    """
+    fix = lambda: {  # noqa: E731
+        "oid": "a" * 40,
+        "subject": "Fix the race (#100)",
+        "files": ["src/k.cpp"],
+        "adds": 3,
+        "dels": 1,
+        "nfiles": 1,
+    }
+    write(
+        str(tmp_path / "old_cases.jsonl"),
+        [{"id": "P100", "title": "fix race", "fix": [fix()], "later": {}}],
+    )
+    write(
+        str(tmp_path / "cases.jsonl"),
+        [{"id": "I200", "title": "race in k", "fix": [fix()], "later": {}}],
+    )
+    write(
+        str(tmp_path / "triage.jsonl"),
+        [
+            {
+                "id": "I200",
+                "verdict": "code-bug",
+                "classes": ["race"],
+                "mechanism": "m",
+                "component": "c",
+                "deep_priority": 3,
+            }
+        ],
+    )
+    write(str(tmp_path / "deep.jsonl"), [{"id": "P100", "is_real_bug": "yes"}])
+
+
+def _select(tmp_path, *extra):
+    return run(
+        os.path.join(MINING, "select.py"),
+        *extra,
+        "--cases",
+        tmp_path / "cases.jsonl",
+        "--triage",
+        tmp_path / "triage.jsonl",
+        "--exclude",
+        tmp_path / "deep.jsonl",
+        "--deep",
+        tmp_path / "deep.jsonl",
+    )
+
+
+def test_a_refresh_holdout_never_shares_a_fix_with_an_old_deep_read(tmp_path):
+    _refresh_twin(tmp_path)
+    # without the case file the deep store came from, the twin cannot be recognised: refuse rather than leak it
+    code, out, err = _select(tmp_path, "holdout", "--out", tmp_path / "h.jsonl")
+    assert code != 0 and "--deep-cases" in out + err, out + err
+    code, out, err = _select(
+        tmp_path,
+        "holdout",
+        "--out",
+        tmp_path / "h.jsonl",
+        "--deep-cases",
+        tmp_path / "old_cases.jsonl",
+    )
+    assert code == 0, out + err
+    assert (
+        open(tmp_path / "h.jsonl").read() == ""
+    ), "I200 shares P100's fix, which is in the pack"
+
+
+def test_a_refresh_deep_selection_skips_a_case_already_read_under_another_id(tmp_path):
+    _refresh_twin(tmp_path)
+    code, out, err = _select(
+        tmp_path,
+        "deep",
+        "--out-dir",
+        tmp_path / "deep_out",
+        "--deep-cases",
+        tmp_path / "old_cases.jsonl",
+    )
+    assert code == 0, out + err
+    batched = (
+        "".join(
+            open(os.path.join(tmp_path / "deep_out", f)).read()
+            for f in os.listdir(tmp_path / "deep_out")
+        )
+        if os.path.isdir(tmp_path / "deep_out")
+        else ""
+    )
+    assert "I200" not in batched, batched
+
+
 def test_deep_selection_excludes_a_held_out_fix_under_another_id(tmp_path):
     _mined(tmp_path, n=2)
     cases = [json.loads(x) for x in open(tmp_path / "cases.jsonl")]

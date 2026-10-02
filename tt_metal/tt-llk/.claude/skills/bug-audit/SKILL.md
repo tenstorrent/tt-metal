@@ -248,8 +248,10 @@ CLOSED since the watermark: nothing mined before is fetched, triaged or deep-rea
    CLOSE date, into `closed_*.jsonl` files beside the full fetch. Windowing on the creation date misses most of it:
    of the 40 tt-metal issues closed in the two days after one watermark, 38 had been opened before it.
 3. **Build, triage and deep-read only the new cases:** mining steps 2, 3 and 5 on the `closed_*` dumps, with
-   `select.py --exclude` given the existing deep-read store and every holdout (it matches by id AND by fix commit, so
-   a case already read under another id is skipped too). Where a new fix touches the files of an old deep-read
+   `select.py --exclude` and `--deep` given the existing deep-read store and every holdout, and `--deep-cases` given
+   the case file that store was built from. It matches by id AND by fix commit, so a case already read under another
+   id (an issue whose fix PR was read) is skipped too; deep-read rows record no commit, so it looks theirs up in
+   `--deep-cases`, and a holdout refuses to run when it cannot. Where a new fix touches the files of an old deep-read
    case, re-read that old case too: its fix-completeness verdict may have changed (a revert, a re-fix).
 4. **Use the new cases twice.** Their `unfixed` siblings go to the sibling sweep. And bugs fixed after the watermark
    were never seen by the mining, so they are a clean holdout: pick the next recall benchmark from them

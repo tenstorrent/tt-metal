@@ -3,6 +3,7 @@
 
   select.py holdout --cases cases.jsonl --triage triage.jsonl --out holdout.jsonl [--n 60] [--seed 7]
                     [--code-glob 'tt_metal/**' ...] [--test-glob '*/tests/*' ...]
+                    [--exclude F ...] [--deep deep.jsonl ...] [--deep-cases old_cases.jsonl ...]
   select.py screened --cases picked.jsonl --screen <holdout-screen output> --out holdout.jsonl --n 60 [--triage x]
   select.py deep --cases cases.jsonl --triage triage.jsonl --exclude holdout.jsonl --out-dir deep/ \
                  [--min-priority 2] [--per-batch 4] [--max 0] [--include-test-bugs]
@@ -75,7 +76,14 @@ p.add_argument(
     "--deep",
     action="append",
     default=[],
-    help="deep-read stores; cases a deep read judged not real are excluded",
+    help="deep-read stores; cases a deep read judged not real are excluded, and so is any case sharing a deep-read fix",
+)
+p.add_argument(
+    "--deep-cases",
+    action="append",
+    default=[],
+    help="case files used only to look up the fix commits of excluded or deep-read ids that --cases does not hold "
+    "(a refresh: pass the case file the deep store was built from)",
 )
 p.add_argument(
     "--reject",
@@ -98,15 +106,29 @@ tri = (
     if a.triage
     else {}
 )
+# fix commits of ids the current case file may not hold (a refresh builds it from the new dumps only)
+lookup = dict(cases)
+for f in a.deep_cases:
+    for c in map(json.loads, filter(str.strip, open(f))):
+        lookup.setdefault(c["id"], c)
+unresolved = set()
+
+
+def fixes_of(cid):
+    c = lookup.get(cid)
+    if c is None:
+        unresolved.add(cid)
+        return set()
+    return {fx["oid"] for fx in c.get("fix", [])}
+
+
 excl, excl_fix = set(), set()
 for f in a.exclude:
     for x in filter(str.strip, open(f)):
         r = json.loads(x)
         excl.add(str(r["id"]))
-        if r.get("fix_commit"):
-            excl_fix.add(
-                r["fix_commit"]
-            )  # an issue case and its PR case can share one fix commit
+        # an issue case and its PR case can share one fix commit; a deep-read row records no commit, so look it up
+        excl_fix |= {r["fix_commit"]} if r.get("fix_commit") else fixes_of(r["id"])
 only = set(open(a.only_ids).read().split()) if a.only_ids else None
 is_test = lambda f: any(fnmatch.fnmatch(f, g) for g in a.test_glob)  # noqa: E731
 CODE_EXT = (".c", ".cc", ".cpp", ".h", ".hpp", ".inl", ".py", ".rs", ".go")
@@ -116,10 +138,18 @@ for f in a.deep:
     for d in map(json.loads, filter(str.strip, open(f))):
         if d.get("is_real_bug") == "no":
             not_real.add(d["id"])
-        if (
-            d["id"] in cases
-        ):  # a deep-read fix may be in the pack, so no holdout case may share it
-            deep_fix |= {fx["oid"] for fx in cases[d["id"]]["fix"]}
+        # a deep-read fix may be in the pack, so no holdout case may share it, and no case is read twice
+        deep_fix |= fixes_of(d["id"])
+if unresolved:
+    msg = (
+        f"{len(unresolved)} excluded or deep-read case ids (e.g. {', '.join(sorted(unresolved)[:3])}) are in neither "
+        "--cases nor any --deep-cases, so a new case sharing one of their fixes cannot be recognised. Pass the case "
+        "file they were built from with --deep-cases."
+    )
+    if a.cmd == "holdout":
+        # a holdout sharing a fix with the pack measures memory, not skill
+        sys.exit(msg)
+    print("WARNING: " + msg, file=sys.stderr)
 
 
 # An include, a comment, or a block-comment continuation (`*`, `* text`, `*/`). Not a bare `#` (a `#define` or `#if`
@@ -215,8 +245,12 @@ else:
         c = cases.get(cid)
         if not c:
             continue
-        if any(fx["oid"] in excl_fix for fx in c.get("fix", [])):
-            continue  # a held-out bug's twin case (an issue and its PR share one fix) must not reach the pack
+        if any(
+            fx["oid"] in excl_fix or fx["oid"] in deep_fix for fx in c.get("fix", [])
+        ):
+            # a held-out bug's twin case (an issue and its PR share one fix) must not reach the pack, and a case
+            # already deep-read under another id is not read again
+            continue
         later = c.get("later") or {}
         suspicious = bool(later.get("reverts") or later.get("citing_later"))
         ok_verdict = t["verdict"] == "code-bug" or (
