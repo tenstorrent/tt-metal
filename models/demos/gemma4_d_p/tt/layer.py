@@ -13,6 +13,10 @@ from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
 from models.demos.gemma4_d_p.utils.substate import substate
 
 
+# Most residual rows per device kept block-sharded in L1 between norms (chunk 8192 at CP8 / TP4).
+_MAX_SHARDED_RESIDUAL_ROWS = 256
+
+
 class Gemma4DecoderLayer:
     def __init__(
         self,
@@ -132,6 +136,9 @@ class Gemma4DecoderLayer:
         # The residual stream stays in the norms' block-sharded layout from here to the next layer's input norm, so
         # the norms and adds skip their reshards.
         shard_mc = self.post_attention_layernorm.shard_memory_config(attn_output)
+        if attn_output.padded_shape[-2] > _MAX_SHARDED_RESIDUAL_ROWS:
+            # Above chunk 8192 the residual's L1 shard clashes with the taller matmul circular buffers.
+            shard_mc = None
         out_mc = shard_mc or act_mc
         attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=out_mc)
         if shard_mc is not None and residual.memory_config() != shard_mc:
