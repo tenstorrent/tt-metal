@@ -156,7 +156,36 @@ flowchart TD
 | GPU PCC | All applicable heads and all 60 layers over the complete requested prefix in slot 0; threshold 0.91 |
 | Address-table samples | Each head/layer and each CP rank's first and last populated 32-token block; table-based UMD reads must exactly match TTNN-gathered values |
 | Loopback byte equality | Every applicable 32-token block over the requested prefix; slot 5 must exactly match slot 0 |
+| Next-token likelihood | Final hidden states at every 16th position plus the last chunk, scored against the GPU capture per depth bin; per-bin limits on top-1 agreement, ΔNLL and top-20 KL |
 
 TTNN readback slices the populated prefix, untilizes a temporary copy to BF16 row-major, reads through the owning mesh command queue, and gathers/reorders host shards with PyTorch. The live BFP8 caches remain unchanged. UMD reads use the physical addresses described by the exported migration table and device map.
+
+## Next-token likelihood
+
+The KV PCC checks what decode will read. The likelihood report checks whether prefill's own predictions changed. During the run, the test keeps slot 0's final decoder hidden states at every 16th position and over the whole last chunk, and writes them to `hidden_samples.safetensors`. After the device closes, the [likelihood tool](../tt/runners/likelihood.py) applies the HF model's final norm and tied LM head, with its logit softcap, in fp32 on the host. It scores the result against the same positions of the GPU capture's final-layer stream.
+
+The test prints the report and writes it to `likelihood.json`. Each depth bin (0–8K, 8K–64K, 64K–256K) shows:
+
+- the mean gold-token NLL under both runs, and its mean and mean absolute difference (ΔNLL);
+- top-1 agreement;
+- KL over the reference's top 20 tokens plus one bucket for the rest.
+
+The last prompt position gets its own line, since its logits are a served request's first output token. At 256K that position has no gold token, so only top-1 agreement and KL are reported for it.
+
+Each bin must meet the limits in `LIKELIHOOD_LIMITS` in the test. They were set from main at chunk 8192 with some margin, and they fail a known long-context regression. The last position is reported but not gated.
+
+Compare any two runs, for example build A against build B or one chunk size against another. Runs at different chunk sizes are scored on the positions both hold:
+
+```bash
+python -m models.demos.gemma4_d_p.tt.runners.likelihood RUN_A_DIR RUN_B_DIR
+```
+
+Either argument may be a GPU trace directory instead of a run. A CPU fp32 reference over the capture's first tokens gives short-context ground truth. It takes about 30 minutes for 32K tokens on a 64-core host and needs about 130 GB of RAM:
+
+```bash
+python -m models.demos.gemma4_d_p.tt.runners.prepare_cpu_reference /path/to/cpu_fp32_32k --context-len 32768
+```
+
+TT prefill is deterministic: the same build run twice gives ΔNLL = 0 everywhere. Any nonzero difference between two builds is therefore a real change.
 
 See [test commands and setup](PREFILL_MIGRATION.md).
