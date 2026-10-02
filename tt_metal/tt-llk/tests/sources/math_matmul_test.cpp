@@ -247,6 +247,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
+        // Experiment (bistability repro): REPRO_PAD skipped nops move the pack loop by 4*REPRO_PAD
+        // bytes at a constant executed cost; REPRO_DELAY spins with constant code size.
+        asm volatile("j 1f\n\t.rept %0\n\tnop\n\t.endr\n1:" ::"i"(REPRO_PAD));
+        {
+            std::uint32_t repro_spin;
+            asm volatile("li %0, %1\n2:\n\taddi %0, %0, -1\n\tbnez %0, 2b" : "=&r"(repro_spin) : "i"(REPRO_DELAY + 1));
+        }
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             return;

@@ -338,6 +338,8 @@ PERF_TEST_SCHEMAS = {
             "partial_face_math",
             "partial_face_pack",
             "r_dimm",
+            "repro_delay",
+            "repro_pad",
             "throttle_level",
             "tile_cnt",
             "unpack_to_dest",
