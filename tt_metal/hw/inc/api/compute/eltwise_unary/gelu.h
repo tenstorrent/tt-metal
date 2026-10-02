@@ -82,7 +82,7 @@ ALWI void gelu_tanh_tile_init_pack() {
  * tanh-GELU (e.g. F.gelu(approximate="tanh")).
  *
  * fast = false evaluates it in FP32 with the accurate tanh. fast = true, for BF16 outputs, computes the same
- * function as x / (1 + exp(-2u)) with a polynomial exp and one Newton step on the reciprocal: within 1 BF16
+ * function as x / (1 + exp(-2u)) with a polynomial exp and two Newton steps on the reciprocal: within 1 BF16
  * ULP of the accurate form where |GELU| >= 1e-3, and without its cancellation in the negative tail.
  *
  * Return value: None
@@ -93,21 +93,25 @@ ALWI void gelu_tanh_tile_init_pack() {
  * | fast             | x / (1 + exp(-2u)) instead of the FP32 tanh form                           | bool     |                                                       | False    |
  */
 // clang-format on
-template <bool fast = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool fast = false>
 ALWI void gelu_tanh_tile(uint32_t idst) {
     if constexpr (fast) {
-        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
     } else {
-        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
     }
 }
 
-template <bool fast = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool fast = false>
 ALWI void gelu_tanh_tile_pack(uint32_t idst) {
     if constexpr (fast) {
-        PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+        PACK(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
     } else {
-        PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+        PACK(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
     }
 }
 

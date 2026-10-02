@@ -307,3 +307,24 @@ def test_gelu_tanh_fast_param_matches_tanh(device):
     assert ulp_distance(fast[core], tanh[core]).max() <= 1
     tail = finite & ~core
     assert (fast[tail].float() - tanh[tail].float()).abs().max() <= 1e-5
+
+
+def test_gelu_tanh_fast_param_inf_nan_and_saturation(device):
+    """GELU_TANH param 1 at the non-finite inputs and the saturation ends: +inf and large positive x pass through
+    (exp(-2u) clamps to ~0), large negative x saturates to 0 (exp(-2u) clamps to 2^127 and its reciprocal flushes),
+    and -inf / NaN must not come out finite-nonzero (same contract as test_gelu_inf_nan_handling)."""
+    inputs = torch.zeros((32, 32), dtype=torch.bfloat16)
+    values = [float("inf"), float("-inf"), float("nan"), 1e30, -1e30, 3.0e38, -3.0e38]
+    for i, v in enumerate(values):
+        inputs[0, i] = v
+    tt_input = ttnn.from_torch(inputs, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.unary_chain(tt_input, [ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0)]))
+    pos_inf, neg_inf, nan_out, big, neg_big, huge, neg_huge = (out[0, i].item() for i in range(len(values)))
+
+    assert pos_inf == float("inf"), f"gelu(+inf) -> {pos_inf!r}, expected +inf"
+    for name, val in [("gelu(-inf)", neg_inf), ("gelu(NaN)", nan_out)]:
+        assert val == 0.0 or not math.isfinite(val), f"{name} -> {val!r}, expected 0 or any non-finite"
+    for x, val in [(inputs[0, 3].item(), big), (inputs[0, 5].item(), huge)]:
+        assert val == x, f"gelu({x!r}) -> {val!r}, expected identity"
+    for x, val in [(-1e30, neg_big), (-3.0e38, neg_huge)]:
+        assert val == 0.0, f"gelu({x!r}) -> {val!r}, expected 0"
