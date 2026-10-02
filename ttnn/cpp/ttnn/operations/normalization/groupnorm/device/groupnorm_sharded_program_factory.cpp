@@ -1177,7 +1177,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     if (corrected_stats) {
         // D statistics (compute/groupnorm_sharded_v2.cpp): c_20 partial, c_21 global with the reader's
         // c_22 alias, c_23/c_24 the D- and D*rstd-filled tiles, c_25 the block_wt pass-3 column tiles.
-        for (uint32_t single_cb : {tt::CBIndex::c_20, tt::CBIndex::c_23, tt::CBIndex::c_24}) {
+        for (uint32_t single_cb : {tt::CBIndex::c_20, tt::CBIndex::c_23, tt::CBIndex::c_24, tt::CBIndex::c_27}) {
             desc.cbs.push_back(CBDescriptor{
                 .total_size = single_tile_size,
                 .core_ranges = all_cores,

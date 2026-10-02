@@ -132,6 +132,7 @@ void kernel_main() {
     constexpr uint32_t dfb_dfill_id = tt::CBIndex::c_23;
     constexpr uint32_t dfb_tfill_id = tt::CBIndex::c_24;
     constexpr uint32_t dfb_ecol_id = tt::CBIndex::c_25;
+    constexpr uint32_t dfb_dacc_id = tt::CBIndex::c_27;  // accumulated sum(r) tile, reduced into c_20
     static_assert(!(corrected_stats && has_row_mask), "corrected_stats is host-gated off under pad correction");
     // Composed-mask CBs, created only under pad correction (has_row_mask); aliased to
     // always-present CBs otherwise.
@@ -263,6 +264,7 @@ void kernel_main() {
     DataflowBuffer dfb_dfill(dfb_dfill_id);
     DataflowBuffer dfb_tfill(dfb_tfill_id);
     DataflowBuffer dfb_ecol(dfb_ecol_id);
+    DataflowBuffer dfb_dacc(dfb_dacc_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -555,27 +557,51 @@ void kernel_main() {
                 dfb_mask_last.pop_front(block_w);
             }
             dfb_x.wait_front(block_hw);
+            reconfig_data_format_srcb(has_row_mask ? dfb_mask_last_id : dfb_input_mask_id, dfb_x_id);
             if constexpr (corrected_stats) {
                 // Corrected two-pass statistics. With bf16 DEST the pass-1 sum of x runs on values of
                 // magnitude |mean|, so the mean's error scales with |mean|/std. dfb_x now holds the
                 // masked residual r = (x - s)*m, s being the pass-1 mean every core received; summing
                 // it once more gives D = mean(x - s), and then mean = s + D, var = Q - D^2 and
-                // y = (r - D*m) * rstd, every sum running on values of magnitude ~std. Partial-D is
-                // accumulated and reduced exactly like Partial-E[x] above. The mask tiles stay
-                // resident until pass 3 has built its per-column D*rstd*m_w tiles.
-                reconfig_data_format_srcb(has_row_mask ? dfb_mask_last_id : dfb_input_mask_id, dfb_ones_id);
+                // y = (r - D*m) * rstd, every sum running on values of magnitude ~std. The mask
+                // tiles stay resident until pass 3 has built its per-column D*rstd*m_w tiles.
+                //
+                // Fused accumulation, one pass over r: DEST slot 0 += r*r (the squared residual the
+                // plain path accumulates below) and slot 1 += r*1 (the residual itself), with the
+                // same mul_init(acc_to_dest) + mul_tiles the chains emit. The first tile is written
+                // without accumulation, so neither slot depends on DEST being clear.
+                tile_regs_acquire();
+                mul_init(dfb_x_id, dfb_x_id, /*acc_to_dest=*/false);
+                mul_tiles(dfb_x_id, dfb_x_id, 0, 0, 0);
+                mul_tiles(dfb_x_id, dfb_ones_id, 0, 0, 1);
+                mul_init(dfb_x_id, dfb_x_id, /*acc_to_dest=*/true);
+                for (uint32_t h = 0; h < block_h; ++h) {
+                    for (uint32_t w = (h == 0) ? 1 : 0; w < math_block_w; ++w) {
+                        const uint32_t idx = h * block_w + w;
+                        mul_tiles(dfb_x_id, dfb_x_id, idx, idx, 0);
+                        mul_tiles(dfb_x_id, dfb_ones_id, idx, 0, 1);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                dfb_ex2pe.reserve_back(1);
+                pack_tile(0, dfb_ex2pe_id);
+                dfb_ex2pe.push_back(1);
+                dfb_dacc.reserve_back(1);
+                pack_tile(1, dfb_dacc_id);
+                dfb_dacc.push_back(1);
+                tile_regs_release();
+            } else {
+                // (x - E[x])^2
                 ckl::eltwise_chain(
                     valid_group_shape,
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         x_strided_block_input,
-                        ckl::input(
-                            dfb_ones_id,
-                            ckl::WaitPolicy::Upfront,
-                            ckl::PopPolicy::None,
-                            ckl::DataFormatReconfig::Disabled),
+                        x_strided_block_input,
                         ckl::Dst::D0,
-                        ckl::DestAccumulation::WholeShape>{ckl::StridedTileRange{0, block_w}},
+                        ckl::DestAccumulation::WholeShape>{
+                        ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
                     ckl::PackTile<ckl::output(
                         dfb_ex2pe_id,
                         ckl::ReservePolicy::OneUpfront,
@@ -583,34 +609,7 @@ void kernel_main() {
                         ckl::DataFormatReconfig::Disabled,
                         ckl::TileAddressing::Direct,
                         ckl::DestAccumulation::WholeShape)>{});
-                compute_kernel_lib::
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_exd_partial_id>(
-                        compute_kernel_lib::ReduceInputBlockShape::single(),
-                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                        compute_kernel_lib::NoAccumulation{},
-                        scale_by_mean_recip);
-                reconfig_data_format_srcb(dfb_ones_id, dfb_x_id);
-            } else {
-                reconfig_data_format_srcb(has_row_mask ? dfb_mask_last_id : dfb_input_mask_id, dfb_x_id);
             }
-
-            // (x - E[x])^2
-            ckl::eltwise_chain(
-                valid_group_shape,
-                ckl::BinaryFpu<
-                    ckl::BinaryFpuOp::Mul,
-                    x_strided_block_input,
-                    x_strided_block_input,
-                    ckl::Dst::D0,
-                    ckl::DestAccumulation::WholeShape>{
-                    ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
-                ckl::PackTile<ckl::output(
-                    dfb_ex2pe_id,
-                    ckl::ReservePolicy::OneUpfront,
-                    ckl::PushPolicy::OneAtEnd,
-                    ckl::DataFormatReconfig::Disabled,
-                    ckl::TileAddressing::Direct,
-                    ckl::DestAccumulation::WholeShape)>{});
 
             // If modifying this code, see the long comment at the first REDUCE_SCALAR
             // pack into dfb_ex_partial earlier in this kernel.
@@ -623,6 +622,16 @@ void kernel_main() {
                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                     compute_kernel_lib::NoAccumulation{},
                     scale_by_mean_recip);
+            if constexpr (corrected_stats) {
+                // Partial-D from the fused accumulation; same REDUCE_SCALAR pack, so the reader's
+                // single-tile-overwrite trick holds for c_20 as well.
+                compute_kernel_lib::
+                    reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_dacc_id, dfb_scaler_id, dfb_exd_partial_id>(
+                        compute_kernel_lib::ReduceInputBlockShape::single(),
+                        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                        compute_kernel_lib::NoAccumulation{},
+                        scale_by_mean_recip);
+            }
 
             dfb_ex_partial.wait_front(1);
             if constexpr (corrected_stats) {
