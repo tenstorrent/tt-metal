@@ -556,6 +556,35 @@ def _prefill_forward_single(
         fill_page_table = page_table
     else:
         fill_page_table = chunk_page_table if is_chunked else page_table
+    # Under vLLM hybrid kv-cache groups every layer receives the ONE
+    # ``chunk_page_table`` the generator sliced from the full-attention
+    # group's table, but a sliding layer's blocks live in its own group's
+    # table (``page_table`` here, per-layer): filling chunk >= 2 through the
+    # full-attention slice wrote sliding K/V into full-attention blocks
+    # (single-chunk prompts coherent, two-chunk prompts garbage, measured
+    # 2026-10-02). Slice this layer's own table at the chunk's block range
+    # instead; for a legacy single broadcast table the slice equals the
+    # passed one. Eager only — the traced path carries device offsets.
+    _own_chunk_slice = None
+    if (
+        is_chunked
+        and chunk_offset is not None
+        and page_table is not None
+        and config.cache_position_modulo is None
+        and fill_page_table is chunk_page_table
+    ):
+        _bs = (
+            (int(kv_cache[0].padded_shape[1]) * int(kv_cache[0].padded_shape[2]) * int(kv_cache[0].padded_shape[-1]))
+            // ((1 if weights.kv_replicated else max(1, config.num_key_value_heads // tp)) * int(config.head_dim))
+            if kv_cache is not None
+            else 0
+        )
+        _cols = int(chunk_page_table.shape[-1])
+        _c0 = chunk_offset // _bs if _bs > 0 else -1
+        if _c0 >= 0 and _c0 + _cols <= int(page_table.shape[-1]):
+            _rows = int(page_table.shape[0])
+            _own_chunk_slice = ttnn.slice(page_table, [0, _c0], [_rows, _c0 + _cols])
+            fill_page_table = _own_chunk_slice
 
     xqkv = apply_qkv_projection(hidden_states, weights)
 
@@ -748,6 +777,8 @@ def _prefill_forward_single(
         else:
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
+    if _own_chunk_slice is not None:
+        _own_chunk_slice.deallocate(True)
 
     # 6. SDPA (causal prefill, scale=1.0)
     # The non-chunked SDPA silently returns WRONG results at seq_len >= 32768
