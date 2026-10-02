@@ -850,17 +850,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1"
     _file_export = migration_file_export_enabled()
 
-    if _mock_migration and not _migration_enabled:
-        _mock_table_path = migration_table_path()
-        _mock_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
-        runtime.build_kv_chunk_table(kv_caches, path=_mock_table_path)
-        remove_stale_device_map_sidecars(_mock_map_path)
-        serialize_device_map(mesh_device, _mock_map_path)
-        logger.info(
-            f"[mock-migration] KV chunk table -> {_mock_table_path}, device map -> {_mock_map_path} "
-            f"(no migration worker); prefill_producer can import them"
-        )
-
     if _migration_enabled:
         from models.demos.common.prefill.runners.migration import (
             allgather_kv_stage_layouts,
@@ -903,7 +892,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 "(see docs/ADDING_A_PREFILL_MODEL.md §2)."
             )
         kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
-        _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
         if _mock_migration:
             stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE)
         elif _file_export:
@@ -968,7 +956,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
                 )
 
-    elif os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1":
+    elif _mock_migration:
         if not single_rank:
             raise ValueError(
                 f"PREFILL_MOCK_MIGRATION=1 is unsupported for num_ranks={num_ranks} (each rank would "
@@ -978,6 +966,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         table_path = migration_table_path()
         runtime.build_kv_chunk_table(kv_caches, path=table_path)
         device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+        remove_stale_device_map_sidecars(device_map_path)
         serialize_device_map(mesh_device, device_map_path)
         logger.info(
             f"[mock-migration] KV chunk table -> {table_path}, device map -> {device_map_path} "
