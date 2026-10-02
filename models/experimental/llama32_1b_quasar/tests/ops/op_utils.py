@@ -224,6 +224,14 @@ def assert_pcc(torch_ref: torch.Tensor, tt_out: ttnn.Tensor = None, *, pcc=0.99,
     # Compare over the overlapping leading elements. This covers both the op-pads-to-tiles case
     # (got has more elements than ref) and the bounded-readback case (host is a shorter prefix of ref).
     got_flat, ref_flat = got.reshape(-1), ref.reshape(-1)
+    # Only a bounded-readback prefix (host is not None) may legitimately be SHORTER than ref. On a full
+    # readback, a shorter output is a real failure (missing/truncated data), so keep the strict numel check
+    # instead of silently comparing just the leading prefix and passing.
+    if host is None:
+        assert got_flat.numel() >= ref_flat.numel(), (
+            f"output has {got_flat.numel()} elements, expected >= {ref_flat.numel()} (ref) "
+            f"— a short full-readback output must not be masked by the leading-prefix compare"
+        )
     n = min(got_flat.numel(), ref_flat.numel())
     got_cmp, ref_cmp = got_flat[:n], ref_flat[:n]
     passing, msg = comp_pcc(ref_cmp, got_cmp, pcc)
