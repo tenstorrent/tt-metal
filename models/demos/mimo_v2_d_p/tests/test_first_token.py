@@ -112,6 +112,64 @@ def top(tok, logits, k=5):
     return ", ".join(f"{tok.decode([t])!r} {x:.2f}" for t, x in zip(i.tolist(), v.tolist()))
 
 
+def generate(tok, model, ids, logits):
+    """Greedy tokens after ``ids`` until <|im_end|> (or MIMO_FT_STEPS), from the logits of the prompt's last token: each
+    step re-prefills the chunk holding the newest token (earlier chunks stay in the KV cache)."""
+    out, step_ms = [int(logits.argmax())], []
+    while len(out) < STEPS and out[-1] != tok.eos_token_id:
+        seq = ids + out
+        t0 = time.perf_counter()
+        logits, _ = run_chunk(model, seq, (len(seq) - 1) // CHUNK)
+        step_ms.append((time.perf_counter() - t0) * 1e3)
+        out.append(int(logits.argmax()))
+        if len(out) % 64 == 0:
+            logger.info(f"{len(out)} tokens: ...{tok.decode(out[-64:])!r}")
+    if step_ms:
+        med = sorted(step_ms)[len(step_ms) // 2]
+        logger.info(
+            f"generated {len(out)} tokens (stop: {'eos' if out[-1] == tok.eos_token_id else 'MIMO_FT_STEPS'}); per token "
+            f"median {med:.1f} ms -> {1e3 / med:.2f} tok/s, total {sum(step_ms) / 1e3:.1f} s"
+        )
+    return out
+
+
+DOCS = os.environ.get(
+    "MIMO_FT_DOCS",
+    "METALIUM_GUIDE.md:tech_reports/tensor_layouts/tensor_layouts.md:tech_reports/tensor_accessor/tensor_accessor.md",
+)
+DOC_QUESTION = os.environ.get(
+    "MIMO_FT_DOC_QUESTION",
+    "Using only the documents above: what is a circular buffer in TT-Metalium, and how do the reader, compute and writer "
+    "kernels of a Tensix core use circular buffers to pass tiles between each other?",
+)
+
+
+@pytest.mark.timeout(14400)
+@MESH_PARAMS
+def test_long_doc(mesh_device, device_params):
+    """A long prompt (MIMO_FT_DOCS: ':'-separated files of the repo, stitched) prefilled chunk by chunk, then a greedy
+    answer to MIMO_FT_DOC_QUESTION."""
+    tok = tokenizer()
+    root = Path(__file__).parents[4]
+    parts = [f"=== File: {f} ===\n\n{(root / f).read_text()}" for f in DOCS.split(":")]
+    ids = chat_ids(tok, "\n\n".join(parts) + f"\n\n=== End of documents ===\n\n{DOC_QUESTION}")
+    n_prompt_chunks = math.ceil(len(ids) / CHUNK)
+    n_chunks = math.ceil((len(ids) + STEPS) / CHUNK)
+    cfg, model = build(mesh_device, device_params, max_seq=(n_chunks + 1) * CHUNK)
+    logger.info(f"prompt {len(ids)} tokens ({DOCS}) = {n_prompt_chunks} chunks of {CHUNK}")
+    t0 = time.perf_counter()
+    for c in range(n_prompt_chunks - 1):
+        run_chunk(model, ids, c)
+    logits, _ = run_chunk(model, ids, n_prompt_chunks - 1)
+    logger.info(f"prefill {len(ids)} tokens: {(time.perf_counter() - t0) * 1e3:.0f} ms (eager, incl. the logits read)")
+    logger.info(f"top-5: {top(tok, logits)}")
+    out = generate(tok, model, ids, logits)
+    logger.info(
+        f"mesh={mesh_id(mesh_device)} layers={N_LAYERS} thinking={THINKING} Q: {DOC_QUESTION!r} ->\n{tok.decode(out)}"
+    )
+    assert logits.isfinite().all()
+
+
 @pytest.mark.timeout(14400)
 @MESH_PARAMS
 def test_first_token(mesh_device, device_params):
@@ -128,22 +186,7 @@ def test_first_token(mesh_device, device_params):
     _, pcc = comp_pcc(ref, logits)
     logger.info(f"device lm_head vs host fp32 (same hidden): PCC {pcc:.6f}, argmax {logits.argmax()} / {ref.argmax()}")
     logger.info(f"top-5: {top(tok, logits)}")
-    out, step_ms = [int(logits.argmax())], []
-    # greedy until <|im_end|>: re-prefill the chunk holding the newest token (earlier chunks stay cached)
-    while len(out) < STEPS and out[-1] != tok.eos_token_id:
-        seq = ids + out
-        t0 = time.perf_counter()
-        logits, _ = run_chunk(model, seq, (len(seq) - 1) // CHUNK)
-        step_ms.append((time.perf_counter() - t0) * 1e3)
-        out.append(int(logits.argmax()))
-        if len(out) % 64 == 0:
-            logger.info(f"{len(out)} tokens: ...{tok.decode(out[-64:])!r}")
-    if step_ms:
-        med = sorted(step_ms)[len(step_ms) // 2]
-        logger.info(
-            f"generated {len(out)} tokens (stop: {'eos' if out[-1] == tok.eos_token_id else 'MIMO_FT_STEPS'}); per token "
-            f"median {med:.1f} ms -> {1e3 / med:.2f} tok/s, total {sum(step_ms) / 1e3:.1f} s"
-        )
+    out = generate(tok, model, ids, logits)
     logger.info(
         f"mesh={mesh_id(mesh_device)} layers={N_LAYERS} thinking={THINKING} prompt {len(ids)} tokens: {QUESTION!r} ->\n"
         f"{tok.decode(out)}"
