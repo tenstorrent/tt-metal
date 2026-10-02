@@ -24,6 +24,7 @@ from ttml.modules import (
 )
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
+from ._validation import _validate_dropout_probability
 from .pos_embedding import PositionalEmbedding, TrainablePositionalEmbedding
 from .gpt_block import GPTBlock
 from .safetensors_loader import load_gpt2_from_safetensors
@@ -53,6 +54,9 @@ class NanoGPTConfig:
     positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
     experimental: NanoGPTExperimentalConfig = field(default_factory=NanoGPTExperimentalConfig)
 
+    def __post_init__(self) -> None:
+        self.dropout = _validate_dropout_probability(self.dropout)
+
 
 class NanoGPT(AbstractModuleBase):
     """NanoGPT model implemented in Python using ttml operations.
@@ -62,6 +66,7 @@ class NanoGPT(AbstractModuleBase):
     """
 
     def __init__(self, config: NanoGPTConfig) -> None:
+        _validate_dropout_probability(config.dropout)
         super().__init__()
 
         self.config = config

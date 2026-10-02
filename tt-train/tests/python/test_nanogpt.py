@@ -11,6 +11,7 @@ This test suite verifies that the Python NanoGPT modules work correctly:
 - NanoGPT (full model)
 """
 
+import importlib
 from dataclasses import replace
 
 import numpy as np
@@ -33,6 +34,12 @@ from ttml.modules import Embedding
 from ttml.models.nanogpt.gpt_mlp import GPTMLP
 from ttml.models.nanogpt.multi_head_attention import MultiHeadAttention
 from ttml.modules import Parameter, RunMode, LinearLayer
+
+nanogpt_module = importlib.import_module("ttml.models.nanogpt")
+gpt_block_module = importlib.import_module("ttml.models.nanogpt.gpt_block")
+gpt_mlp_module = importlib.import_module("ttml.models.nanogpt.gpt_mlp")
+multi_head_attention_module = importlib.import_module("ttml.models.nanogpt.multi_head_attention")
+pos_embedding_module = importlib.import_module("ttml.models.nanogpt.pos_embedding")
 
 
 # =============================================================================
@@ -665,6 +672,63 @@ class TestNanoGPTConfig:
         assert config.n_head == 4
         assert config.dropout == 0.1
         assert config.bias is False
+
+    @pytest.mark.parametrize("dropout", [0.0, 1.0])
+    def test_dropout_probability_inclusive_endpoints(self, dropout):
+        config = NanoGPTConfig(dropout=dropout)
+
+        assert config.dropout == dropout
+
+    @pytest.mark.parametrize("dropout", [-0.1, float("nan"), 1.1, float("-inf"), float("inf")])
+    def test_invalid_dropout_probability(self, dropout, expect_error):
+        with expect_error(ValueError, r"dropout probability must be in \[0, 1\]"):
+            NanoGPTConfig(dropout=dropout)
+
+
+@pytest.mark.parametrize("dropout", [-0.1, float("nan"), 1.1, float("-inf"), float("inf")])
+@pytest.mark.parametrize(
+    "component",
+    [
+        "mlp",
+        "attention",
+        "fixed_positional_embedding",
+        "trainable_positional_embedding",
+        "block",
+        "model",
+        "factory",
+    ],
+)
+def test_nanogpt_components_reject_invalid_dropout_before_allocation(monkeypatch, expect_error, component, dropout):
+    def unexpected_allocation(*args, **kwargs):
+        pytest.fail(f"{component} allocated model state before validating dropout")
+
+    if component == "mlp":
+        monkeypatch.setattr(gpt_mlp_module, "LinearLayer", unexpected_allocation)
+        constructor = lambda: GPTMLP(64, dropout)
+    elif component == "attention":
+        monkeypatch.setattr(multi_head_attention_module, "LinearLayer", unexpected_allocation)
+        constructor = lambda: MultiHeadAttention(64, 2, dropout)
+    elif component == "fixed_positional_embedding":
+
+        class UnexpectedAutoContext:
+            get_instance = staticmethod(unexpected_allocation)
+
+        monkeypatch.setattr(pos_embedding_module.ttml.autograd, "AutoContext", UnexpectedAutoContext)
+        constructor = lambda: PositionalEmbedding(32, 64, dropout)
+    elif component == "trainable_positional_embedding":
+        monkeypatch.setattr(pos_embedding_module.ttml.init, "normal", unexpected_allocation)
+        constructor = lambda: TrainablePositionalEmbedding(32, 64, dropout)
+    elif component == "block":
+        monkeypatch.setattr(gpt_block_module, "LayerNorm", unexpected_allocation)
+        constructor = lambda: GPTBlock(64, 2, dropout)
+    else:
+        config = NanoGPTConfig(dropout=0.0)
+        config.dropout = dropout
+        monkeypatch.setattr(nanogpt_module, "LinearLayer", unexpected_allocation)
+        constructor = lambda: create_nanogpt(config) if component == "factory" else NanoGPT(config)
+
+    with expect_error(ValueError, r"dropout probability must be in \[0, 1\]"):
+        constructor()
 
 
 # =============================================================================

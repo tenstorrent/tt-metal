@@ -9,6 +9,8 @@ from __future__ import annotations
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, RunMode
 
+from ._validation import _validate_dropout_probability
+
 
 class GPTMLP(AbstractModuleBase):
     """GPT-style MLP (feed-forward) layer."""
@@ -18,6 +20,7 @@ class GPTMLP(AbstractModuleBase):
         embedding_dim: int,
         dropout: float = 0.0,
     ) -> None:
+        dropout = _validate_dropout_probability(dropout)
         super().__init__()
 
         self.embedding_dim = embedding_dim

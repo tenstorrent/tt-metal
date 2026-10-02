@@ -11,6 +11,8 @@ from typing import Optional
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, RunMode
 
+from ._validation import _validate_dropout_probability
+
 
 class MultiHeadAttention(AbstractModuleBase):
     """Multi-head attention layer using C++ LinearLayer for better performance.
@@ -27,6 +29,7 @@ class MultiHeadAttention(AbstractModuleBase):
         num_heads: int,
         dropout: float = 0.0,
     ) -> None:
+        dropout = _validate_dropout_probability(dropout)
         super().__init__()
 
         assert embedding_dim % num_heads == 0, "embedding_dim must be divisible by num_heads"

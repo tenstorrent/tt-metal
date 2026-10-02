@@ -11,6 +11,7 @@ from typing import Optional
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
 
+from ._validation import _validate_dropout_probability
 from .gpt_mlp import GPTMLP
 from .multi_head_attention import MultiHeadAttention
 
@@ -66,6 +67,7 @@ class GPTBlock(AbstractModuleBase):
         bias: bool = True,
         use_composite_layernorm: bool = False,
     ) -> None:
+        dropout = _validate_dropout_probability(dropout)
         super().__init__()
 
         self.embedding_dim = embedding_dim

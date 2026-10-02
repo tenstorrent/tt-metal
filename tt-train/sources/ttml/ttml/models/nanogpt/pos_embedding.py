@@ -12,6 +12,8 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
+from ._validation import _validate_dropout_probability
+
 
 def sin_pos_embedding_np(seq_len: int, d_model: int) -> np.ndarray:
     """
@@ -48,6 +50,7 @@ class PositionalEmbedding(AbstractModuleBase):
             embedding_dim: Dimension of embeddings
             dropout_prob: Dropout probability
         """
+        dropout_prob = _validate_dropout_probability(dropout_prob)
         super().__init__()
 
         self.sequence_length = sequence_length
@@ -105,6 +108,7 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
             embedding_dim: Dimension of embeddings
             dropout_prob: Dropout probability
         """
+        dropout_prob = _validate_dropout_probability(dropout_prob)
         super().__init__()
 
         self.sequence_length = sequence_length
