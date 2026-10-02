@@ -137,6 +137,7 @@ DOCS = os.environ.get(
     "MIMO_FT_DOCS",
     "METALIUM_GUIDE.md:tech_reports/tensor_layouts/tensor_layouts.md:tech_reports/tensor_accessor/tensor_accessor.md",
 )
+PREFILL_PASSES = int(os.environ.get("MIMO_FT_PREFILL_PASSES", "1"))
 DOC_QUESTION = os.environ.get(
     "MIMO_FT_DOC_QUESTION",
     "Using only the documents above: what is a circular buffer in TT-Metalium, and how do the reader, compute and writer "
@@ -157,11 +158,15 @@ def test_long_doc(mesh_device, device_params):
     n_chunks = math.ceil((len(ids) + STEPS) / CHUNK)
     cfg, model = build(mesh_device, device_params, max_seq=(n_chunks + 1) * CHUNK)
     logger.info(f"prompt {len(ids)} tokens ({DOCS}) = {n_prompt_chunks} chunks of {CHUNK}")
-    t0 = time.perf_counter()
-    for c in range(n_prompt_chunks - 1):
-        run_chunk(model, ids, c)
-    logits, _ = run_chunk(model, ids, n_prompt_chunks - 1)
-    logger.info(f"prefill {len(ids)} tokens: {(time.perf_counter() - t0) * 1e3:.0f} ms (eager, incl. the logits read)")
+    for p in range(PREFILL_PASSES):  # pass 0 is cold (JIT per chunk position), later passes rewrite the same KV warm
+        t0 = time.perf_counter()
+        for c in range(n_prompt_chunks - 1):
+            run_chunk(model, ids, c)
+        logits, _ = run_chunk(model, ids, n_prompt_chunks - 1)
+        logger.info(
+            f"prefill pass {p} ({'cold' if p == 0 else 'warm'}) {len(ids)} tokens: "
+            f"{(time.perf_counter() - t0) * 1e3:.0f} ms (eager, incl. the logits read)"
+        )
     logger.info(f"top-5: {top(tok, logits)}")
     out = generate(tok, model, ids, logits)
     logger.info(
