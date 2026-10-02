@@ -7,9 +7,11 @@
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <array>
+#include <cstdlib>
 #include <map>
 #include <span>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -537,6 +539,13 @@ void PrefetchKernel::CreateKernel() {
     defines["PREFETCH_Q_ENTRY_BITS"] = std::to_string(my_dispatch_constants.prefetch_q_entry_size_bytes() * 8);
     if (my_dispatch_constants.prefetch_q_snoop()) {
         defines["PREFETCH_Q_SNOOP"] = "1";
+    }
+    // TEMP, do not commit: prefetcher cycle accounting. The value picks which group of regions is timed, see
+    // cq_prefetch.cpp. Anything other than 1 to 4 times no regions.
+    if (const char* stats = std::getenv("TT_METAL_FD_PREFETCH_Q_STATS"); stats != nullptr) {
+        const std::string_view group(stats);
+        defines["PREFETCH_Q_STATS"] =
+            (group == "1" || group == "2" || group == "3" || group == "4") ? std::string(group) : "0";
     }
 
     if (!is_hd()) {

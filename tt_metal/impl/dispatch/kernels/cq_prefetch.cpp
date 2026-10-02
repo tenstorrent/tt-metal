@@ -166,6 +166,145 @@ FORCE_INLINE uint32_t prefetch_q_read_slot(volatile tt_l1_ptr prefetch_q_entry_t
 #endif
 }
 
+// TEMP, do not commit: prefetcher cycle accounting, printed when the prefetcher exits.
+//
+// Always on with PREFETCH_Q_STATS: kernel start to exit, the idle wait for the host, and whole-run HPM counters.
+// None of these touch the per-entry path. Busy time is everything outside the idle wait.
+//
+// PREFETCH_Q_STATS=<group> also times the regions of one group, so probes for one diagnostic never slow down
+// another. Compare busy_cycles against a group 0 run to see how much a group's own probes cost.
+//   0: no region probes
+//   1: startup, each fetch_q_get_cmds call and each process_cmd call, with HPM deltas
+//   2: inside fetch: busy polls, NoC read issue, consume, read retire wait
+//   3: inside a relay inline command: header invalidate, header read, credit wait, relay write issue,
+//      write flush wait, credit release
+//   4: the fetch bookkeeping between the group 2 regions: loop top checks, read_from_pcie before and after the
+//      read issue (after includes consume), in-flight bookkeeping after an issue, and retire bookkeeping, with
+//      HPM deltas
+#if defined(PREFETCH_Q_STATS)
+struct PrefetchQStats {
+    uint64_t start_cycle;
+    uint64_t idle_cycles;
+    uint64_t busy_start_cycle;
+    uint64_t max_busy_cycles;
+    uint32_t idle_waits;
+};
+static PrefetchQStats prefetch_q_stats = {};
+
+inline __attribute__((always_inline)) uint64_t prefetch_q_cycle_now() {
+    uint64_t t;
+    __asm__ __volatile__("csrr %0, 0xB00" : "=r"(t)::"memory");
+    return t;
+}
+
+constexpr uint32_t pq_group = PREFETCH_Q_STATS;
+// Group 1 probes also read minstret and the four HPM counters, so each region gets its own event counts.
+constexpr bool pq_full = pq_group == 1 || pq_group == 4;
+constexpr uint32_t PQ_NUM_COUNTERS = 6;  // mcycle, minstret, mhpmcounter3..6
+
+// Rocket HPM event selectors: bits [7:0] pick the event set, higher bits select events within it. D$ blocked and
+// long-latency interlock were checked against the cache latency test; the two I$ events were not.
+constexpr uint64_t PQ_EVENT_ICACHE_BLOCKED = 1 | (1ull << (8 + 3));
+constexpr uint64_t PQ_EVENT_DCACHE_BLOCKED = 1 | (1ull << (8 + 4));
+constexpr uint64_t PQ_EVENT_LONG_LATENCY = 1 | (1ull << (8 + 1));
+constexpr uint64_t PQ_EVENT_ICACHE_MISS = 2 | (1ull << (8 + 0));
+
+enum PqRegion : uint32_t {
+    PQ_STARTUP,
+    PQ_FETCH,
+    PQ_PROCESS,
+    PQ_POLL,
+    PQ_READ_ISSUE,
+    PQ_CONSUME,
+    PQ_READ_WAIT,
+    PQ_HDR_INVALIDATE,
+    PQ_HDR_READ,
+    PQ_CREDIT_WAIT,
+    PQ_RELAY_WRITE,
+    PQ_FLUSH_WAIT,
+    PQ_RELEASE,
+    PQ_LOOP_TOP,
+    PQ_PCIE_PRE,
+    PQ_PCIE_POST,
+    PQ_ISSUE_POST,
+    PQ_RETIRE_POST,
+    PQ_NUM_REGIONS
+};
+constexpr uint32_t pq_region_group(uint32_t region) {
+    return region <= PQ_PROCESS ? 1U : region <= PQ_READ_WAIT ? 2U : region <= PQ_RELEASE ? 3U : 4U;
+}
+constexpr bool pq_active(uint32_t region) { return pq_region_group(region) == pq_group; }
+
+struct PqSnap {
+    uint64_t v[PQ_NUM_COUNTERS];
+};
+struct PqRegionStats {
+    uint64_t sum[PQ_NUM_COUNTERS];
+    uint32_t count;
+};
+static PqRegionStats pq_regions[PQ_NUM_REGIONS] = {};
+static PqSnap pq_run_start = {};
+static uint64_t pq_probe_cycles = 0;
+static uint64_t pq_probe_instret = 0;
+
+#define PQ_CSR(csr)                                           \
+    ({                                                        \
+        uint64_t value;                                       \
+        __asm__ __volatile__("csrr %0, " #csr : "=r"(value)); \
+        value;                                                \
+    })
+
+template <bool full>
+inline __attribute__((always_inline)) PqSnap pq_read() {
+    PqSnap s;
+    s.v[0] = PQ_CSR(0xB00);
+    if constexpr (full) {
+        s.v[1] = PQ_CSR(0xB02);
+        s.v[2] = PQ_CSR(0xB03);
+        s.v[3] = PQ_CSR(0xB04);
+        s.v[4] = PQ_CSR(0xB05);
+        s.v[5] = PQ_CSR(0xB06);
+    }
+    return s;
+}
+
+// The mv reads the loaded register, so the core stalls until the load returns before reading the counters.
+// Passing the value only as an asm input would order the compiler but not the pipeline.
+template <bool full>
+inline __attribute__((always_inline)) PqSnap pq_read_after(uint32_t loaded) {
+    uint32_t sink;
+    __asm__ __volatile__("mv %0, %1" : "=r"(sink) : "r"(loaded) : "memory");
+    return pq_read<full>();
+}
+
+template <uint32_t region>
+inline __attribute__((always_inline)) void pq_record(const PqSnap& start, const PqSnap& end) {
+    PqRegionStats& stats = pq_regions[region];
+    for (uint32_t i = 0; i < (pq_full ? PQ_NUM_COUNTERS : 1U); i++) {
+        stats.sum[i] += end.v[i] - start.v[i];
+    }
+    stats.count++;
+}
+
+#define PQ_START(region, var)          \
+    [[maybe_unused]] PqSnap var;       \
+    if constexpr (pq_active(region)) { \
+        var = pq_read<pq_full>();      \
+    }
+#define PQ_STOP(region, var)                        \
+    if constexpr (pq_active(region)) {              \
+        pq_record<region>(var, pq_read<pq_full>()); \
+    }
+#define PQ_STOP_AFTER(region, var, loaded)                      \
+    if constexpr (pq_active(region)) {                          \
+        pq_record<region>(var, pq_read_after<pq_full>(loaded)); \
+    }
+#else
+#define PQ_START(region, var)
+#define PQ_STOP(region, var)
+#define PQ_STOP_AFTER(region, var, loaded)
+#endif
+
 // Read and store telemetry values via local variables to avoid L1 reads
 static uint32_t command_counter = 0;
 static uint32_t upstream_blocked_counter = 0;
@@ -470,6 +609,7 @@ FORCE_INLINE uint32_t read_from_pcie(
     const uint32_t size,
     const uint32_t trid,
     const bool queue_empty) {
+    PQ_START(PQ_PCIE_PRE, pq_pcie_pre);
     uint32_t pending_read_size = 0U;
 #if ENABLE_PREFETCH_DPRINTS
     DPRINT(
@@ -568,10 +708,14 @@ FORCE_INLINE uint32_t read_from_pcie(
         dst_addr,
         size);
 #endif
+    PQ_STOP(PQ_PCIE_PRE, pq_pcie_pre);
+    PQ_START(PQ_READ_ISSUE, pq_read_issue);
     noc_async_read_set_trid(trid);
     noc_async_read(host_src_addr, dst_addr, size);
     // Avoid leaking this trid to unrelated reads.
     noc_async_read_set_trid(0U);
+    PQ_STOP(PQ_READ_ISSUE, pq_read_issue);
+    PQ_START(PQ_PCIE_POST, pq_pcie_post);
     pending_read_size = needed_bytes;
     pcie_read_ptr += size;
 #if ENABLE_PREFETCH_DPRINTS
@@ -583,6 +727,7 @@ FORCE_INLINE uint32_t read_from_pcie(
         fence);
 #endif
 
+    PQ_START(PQ_CONSUME, pq_consume);
 #if defined(PREFETCH_Q_SNOOP)
     // Nothing to clear: next lap the slot still carries this lap's phase, which reads as empty.
     const uintptr_t consumed_entry_addr = reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr);
@@ -604,6 +749,8 @@ FORCE_INLINE uint32_t read_from_pcie(
         prefetch_q_expected_phase ^= 1U;
 #endif
     }
+    PQ_STOP(PQ_CONSUME, pq_consume);
+    PQ_STOP(PQ_PCIE_POST, pq_pcie_post);
     return pending_read_size;
 }
 
@@ -707,6 +854,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
         // neither cmd_ptr nor fence will be wrapped. Whenever wrapping of fence happens, cmd_ptr will also be wrapped.
         // So if cmd_ptr == fence, then there are no ready commands. This is different from issue_fence, which may wrap
         // earlier.
+        PQ_START(PQ_LOOP_TOP, pq_loop_top);
         const bool cmd_ready = (cmd_ptr != fence);
 
         // If a stall-after read is already in-flight, we must not consume/issue beyond it.
@@ -720,11 +868,15 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
         // (Avoids extra volatile PrefetchQ polling / decode on the steady-state path.)
         if (cmd_ready && (has_pending_stall_after ||
                           (inflight_count == tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS))) {
+            PQ_STOP(PQ_LOOP_TOP, pq_loop_top);
             return;
         }
+        PQ_STOP(PQ_LOOP_TOP, pq_loop_top);
 
         // Local helper for reading the current prefetch_q entry.
+        PQ_START(PQ_POLL, pq_poll);
         uint32_t prefetch_q_rd_ptr_local = prefetch_q_read_slot(prefetch_q_rd_ptr);
+        PQ_STOP_AFTER(PQ_POLL, pq_poll, prefetch_q_rd_ptr_local);
         uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
         bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
 
@@ -764,6 +916,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 
                 total_size = read_from_pcie<preamble_size>(
                     prefetch_q_rd_ptr, issue_fence, pcie_read_ptr, cmd_ptr, fetch_size, this_trid, queue_empty);
+                PQ_START(PQ_ISSUE_POST, pq_issue_post);
 
                 if (total_size == 0U) {
                     // Could not issue due to cmddat_q wrap restriction. Do not consume host entry; retry later.
@@ -793,6 +946,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 
                 // Cycle through PREFETCH_TRIDS.
                 next_trid_idx = (next_trid_idx + 1U) & (static_cast<uint32_t>(PREFETCH_TRIDS.size()) - 1U);
+                PQ_STOP(PQ_ISSUE_POST, pq_issue_post);
 
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT(
@@ -819,7 +973,9 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 }
 
                 // Refresh host state for potential next issue.
+                PQ_START(PQ_POLL, pq_refresh_poll);
                 prefetch_q_rd_ptr_local = prefetch_q_read_slot(prefetch_q_rd_ptr);
+                PQ_STOP_AFTER(PQ_POLL, pq_refresh_poll, prefetch_q_rd_ptr_local);
                 fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
                 stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
             }
@@ -845,7 +1001,10 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     fence,
                     cmd_ptr);
 #endif
+                PQ_START(PQ_READ_WAIT, pq_read_wait);
                 noc_async_read_barrier_with_trid(inflight[idx].trid);
+                PQ_STOP(PQ_READ_WAIT, pq_read_wait);
+                PQ_START(PQ_RETIRE_POST, pq_retire_post);
 
 #if ENABLE_PREFETCH_DPRINTS
                 if (inflight[idx].read_start < cmd_ptr) {
@@ -877,8 +1036,10 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 #if ENABLE_PREFETCH_DPRINTS
                     DPRINT("fetch_q_get_cmds: RETIRE_DONE -> STALLED (stall-after read)\n");
 #endif
+                    PQ_STOP(PQ_RETIRE_POST, pq_retire_post);
                     return;
                 }
+                PQ_STOP(PQ_RETIRE_POST, pq_retire_post);
 
                 // We just advanced the committed fence (made commands available). Restart the loop so we can
                 // opportunistically top up the in-flight window using the unified issue logic, without duplicating a
@@ -890,11 +1051,23 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 uint32_t heartbeat = 0U;
 
                 if ((fetch_size = prefetch_q_read_slot(prefetch_q_rd_ptr)) == 0U) {
+#if defined(PREFETCH_Q_STATS)
+                    const uint64_t idle_start = prefetch_q_cycle_now();
+                    const uint64_t busy_cycles = idle_start - prefetch_q_stats.busy_start_cycle;
+                    if (busy_cycles > prefetch_q_stats.max_busy_cycles) {
+                        prefetch_q_stats.max_busy_cycles = busy_cycles;
+                    }
+#endif
                     PrefetchTelemetryBlockGuard block_guard;
                     do {
                         invalidate_l1_cache();
                         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
                     } while ((fetch_size = prefetch_q_read_slot(prefetch_q_rd_ptr)) == 0U);
+#if defined(PREFETCH_Q_STATS)
+                    prefetch_q_stats.busy_start_cycle = prefetch_q_cycle_now();
+                    prefetch_q_stats.idle_cycles += prefetch_q_stats.busy_start_cycle - idle_start;
+                    prefetch_q_stats.idle_waits++;
+#endif
                 }
                 // Host has work now; restart without recursion.
                 continue;
@@ -921,8 +1094,11 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
+    PQ_START(PQ_CREDIT_WAIT, pq_credit_wait);
     RelayInlineState::cb_writer.acquire_pages(npages);
+    PQ_STOP(PQ_CREDIT_WAIT, pq_credit_wait);
 
+    PQ_START(PQ_RELAY_WRITE, pq_relay_write);
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
@@ -942,10 +1118,15 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
         length,
         RelayInlineState::downstream_cb_end_addr,
         RelayInlineState::downstream_noc_encoding);
+    PQ_STOP(PQ_RELAY_WRITE, pq_relay_write);
 
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
+    PQ_START(PQ_FLUSH_WAIT, pq_flush_wait);
     noc_async_writes_flushed();
+    PQ_STOP(PQ_FLUSH_WAIT, pq_flush_wait);
+    PQ_START(PQ_RELEASE, pq_release);
     RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
+    PQ_STOP(PQ_RELEASE, pq_release);
     return load_aligned<uint32_t>(&cmd->relay_inline.stride);
 }
 
@@ -2467,9 +2648,19 @@ bool process_cmd(
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // Every command invalidates its own header extent, sized to CQPrefetchCmdLarge because the variant is
     // unknown until cmd_id is read. Both fetch paths reach this, so exec_buf is covered too.
+    PQ_START(PQ_HDR_INVALIDATE, pq_hdr_invalidate);
     invalidate_l2_cache_range(cmd_ptr, sizeof(CQPrefetchCmdLarge));
+    PQ_STOP(PQ_HDR_INVALIDATE, pq_hdr_invalidate);
 #endif
     volatile CQPrefetchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQPrefetchCmd tt_l1_ptr*>(cmd_ptr);
+#if defined(PREFETCH_Q_STATS)
+    // The first header load after the invalidate misses. The switch below reloads cmd_id, which then hits.
+    if constexpr (pq_active(PQ_HDR_READ)) {
+        PQ_START(PQ_HDR_READ, pq_hdr_read);
+        const uint32_t pq_cmd_id = cmd->base.cmd_id;
+        PQ_STOP_AFTER(PQ_HDR_READ, pq_hdr_read, pq_cmd_id);
+    }
+#endif
     bool done = false;
 
     switch (cmd->base.cmd_id) {
@@ -3186,15 +3377,20 @@ void kernel_main_hd() {
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0);
 
+    PQ_STOP(PQ_STARTUP, pq_run_start);
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");
         constexpr uint32_t preamble_size = 0;
+        PQ_START(PQ_FETCH, pq_fetch);
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
+        PQ_STOP(PQ_FETCH, pq_fetch);
 
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
         uint32_t stride;
+        PQ_START(PQ_PROCESS, pq_process);
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
+        PQ_STOP(PQ_PROCESS, pq_process);
         cmd_ptr += stride;
     }
 }
@@ -3208,6 +3404,26 @@ void kernel_main() {
     // Lines of the queue can still be cached from an earlier run on this core. Invalidating a clean L2 line also
     // drops its L1 D$ copy, and the prefetcher never writes the queue, so the L2 invalidate covers both levels.
     invalidate_l2_cache_range(prefetch_q_view_base, prefetch_q_size);
+#endif
+#if defined(PREFETCH_Q_STATS)
+    __asm__ __volatile__("csrw 0x323, %0" ::"r"(PQ_EVENT_ICACHE_BLOCKED));
+    __asm__ __volatile__("csrw 0x324, %0" ::"r"(PQ_EVENT_DCACHE_BLOCKED));
+    __asm__ __volatile__("csrw 0x325, %0" ::"r"(PQ_EVENT_LONG_LATENCY));
+    __asm__ __volatile__("csrw 0x326, %0" ::"r"(PQ_EVENT_ICACHE_MISS));
+    const uint64_t pq_event3_readback = PQ_CSR(0x323);
+    // Cost of an empty probe in this group's mode, so it can be subtracted from each sample.
+    pq_probe_cycles = ~0ULL;
+    for (uint32_t i = 0; i < 8; i++) {
+        const PqSnap a = pq_read<pq_full>();
+        const PqSnap b = pq_read<pq_full>();
+        if (b.v[0] - a.v[0] < pq_probe_cycles) {
+            pq_probe_cycles = b.v[0] - a.v[0];
+            pq_probe_instret = b.v[1] - a.v[1];
+        }
+    }
+    pq_run_start = pq_read<true>();
+    prefetch_q_stats.start_cycle = pq_run_start.v[0];
+    prefetch_q_stats.busy_start_cycle = prefetch_q_stats.start_cycle;
 #endif
 #if defined(FABRIC_RELAY)
     DPRINT("prefetcher_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);
@@ -3234,6 +3450,44 @@ void kernel_main() {
     } else {
         ASSERT(0);
     }
+#if defined(PREFETCH_Q_STATS)
+    const PqSnap pq_run_end = pq_read<true>();
+    const uint64_t total_cycles = pq_run_end.v[0] - prefetch_q_stats.start_cycle;
+    DPRINT(
+        "prefetch_q_stats group={} total_cycles={} idle_cycles={} busy_cycles={} idle_waits={} max_busy_cycles={}\n",
+        pq_group,
+        total_cycles,
+        prefetch_q_stats.idle_cycles,
+        total_cycles - prefetch_q_stats.idle_cycles,
+        prefetch_q_stats.idle_waits,
+        prefetch_q_stats.max_busy_cycles);
+    DPRINT(
+        "prefetch_q_hpm event3={} instret={} icache_blocked={} dcache_blocked={} long_latency={} icache_miss={}\n",
+        pq_event3_readback,
+        pq_run_end.v[1] - pq_run_start.v[1],
+        pq_run_end.v[2] - pq_run_start.v[2],
+        pq_run_end.v[3] - pq_run_start.v[3],
+        pq_run_end.v[4] - pq_run_start.v[4],
+        pq_run_end.v[5] - pq_run_start.v[5]);
+    DPRINT("prefetch_q_probe cycles={} instret={}\n", pq_probe_cycles, pq_probe_instret);
+    for (uint32_t region = 0; region < PQ_NUM_REGIONS; region++) {
+        if (pq_region_group(region) != pq_group) {
+            continue;
+        }
+        const PqRegionStats& r = pq_regions[region];
+        DPRINT(
+            "prefetch_q_region id={} n={} cycles={} instret={} icache_blocked={} dcache_blocked={} long_latency={} "
+            "icache_miss={}\n",
+            region,
+            r.count,
+            r.sum[0],
+            r.sum[1],
+            r.sum[2],
+            r.sum[3],
+            r.sum[4],
+            r.sum[5]);
+    }
+#endif
 #if defined(COMPILE_FOR_IDLE_ERISC)
     if (early_exit()) {
         noc_async_full_barrier();

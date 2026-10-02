@@ -129,7 +129,8 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     prefetch_q_dev_ptrs(num_hw_cqs),
     prefetch_q_dev_fences(num_hw_cqs),
     // The ring starts zeroed, which reads as phase 0, so the first lap writes phase 1.
-    prefetch_q_phases(num_hw_cqs, 1) {
+    prefetch_q_phases(num_hw_cqs, 1),
+    prefetch_q_hold_starts(num_hw_cqs, 0) {
     this->prefetch_q_windows.reserve(num_hw_cqs);
     this->completion_q_windows.reserve(num_hw_cqs);
 
@@ -271,7 +272,10 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
                  prefetch_q_base + tt::align(mem_map.prefetch_q_size(), DispatchMemMap::PREFETCH_Q_SNOOP_BEAT_BYTES)},
             tt::umd::IoOrdering::Strict,
             /*core_end=*/std::nullopt,
-            mem_map.prefetch_q_snoop() ? tt::umd::WindowFlags::Snoop : tt::umd::WindowFlags::None));
+            // TEMP, do not commit: negative control that keeps the cached-poll kernel but drops the snoop bit.
+            mem_map.prefetch_q_snoop() && std::getenv("TT_METAL_FD_PREFETCH_Q_SNOOP_NEG_CONTROL") == nullptr
+                ? tt::umd::WindowFlags::Snoop
+                : tt::umd::WindowFlags::None));
 
         tt_cxy_pair completion_queue_writer_core =
             ctx.get_dispatch_core_manager().completion_queue_writer_core(this->device_id, channel, cq_id);
@@ -722,6 +726,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
             return;
         }
+        // TEMP, do not commit: held entries would never reach the device while the host waits on it.
+        this->fetch_queue_release(cq_id);
         TTZoneScopedDN(DISPATCH, "wait_for_fetch_q_space");
 
         // Body of the operation
@@ -765,6 +771,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     uint32_t prefetch_q_base = mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
     uint32_t prefetch_q_limit = prefetch_q_base + mem_map.prefetch_q_size();
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
+        // TEMP, do not commit: a release writes one contiguous range, so it cannot span the wrap.
+        this->fetch_queue_release(cq_id);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         if (mem_map.prefetch_q_snoop()) {
             this->prefetch_q_phases[cq_id] ^= 1U;
@@ -900,6 +908,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         entry_val |= 1u << shift_for_msb;
     }
 
+    const bool held = this->prefetch_q_hold_starts[cq_id] != 0;  // TEMP, do not commit
     if (dispatch_mem_map.prefetch_q_snoop()) {
         constexpr uint32_t phase_bit = PrefetchConstants::PREFETCH_Q_PHASE_BIT;
         TT_ASSERT(entry_bytes == 4, "Snooped fetch queue entries must be 4 bytes");
@@ -919,10 +928,17 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         const uint32_t beat_first = index - (index % entries_per_beat);
         std::vector<uint32_t>& shadow = this->prefetch_q_shadows[cq_id];
         shadow[index] = entry_val;
-        this->prefetch_q_windows[cq_id]->write_block(
-            prefetch_q_base + beat_first * entry_bytes,
-            &shadow[beat_first],
-            DispatchMemMap::PREFETCH_Q_SNOOP_BEAT_BYTES);
+        if (!held) {
+            this->prefetch_q_windows[cq_id]->write_block(
+                prefetch_q_base + beat_first * entry_bytes,
+                &shadow[beat_first],
+                DispatchMemMap::PREFETCH_Q_SNOOP_BEAT_BYTES);
+        }
+    } else if (held) {
+        TT_FATAL(entry_bytes == 4, "Holding fetch queue writes needs 4 byte entries");
+        const uint32_t prefetch_q_base =
+            dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
+        this->prefetch_q_shadows[cq_id][(this->prefetch_q_dev_ptrs[cq_id] - prefetch_q_base) / entry_bytes] = entry_val;
     } else if (entry_bytes == 2) {
         this->prefetch_q_windows[cq_id]->write16(this->prefetch_q_dev_ptrs[cq_id], static_cast<uint16_t>(entry_val));
     } else {
@@ -930,6 +946,43 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         this->prefetch_q_windows[cq_id]->write32(this->prefetch_q_dev_ptrs[cq_id], entry_val);
     }
     this->prefetch_q_dev_ptrs[cq_id] += entry_bytes;
+}
+
+void SystemMemoryManager::fetch_queue_hold(const uint8_t cq_id) {
+    TT_FATAL(this->prefetch_q_hold_starts[cq_id] == 0, "Fetch queue {} is already held", cq_id);
+    this->prefetch_q_hold_starts[cq_id] = this->prefetch_q_dev_ptrs[cq_id];
+}
+
+void SystemMemoryManager::fetch_queue_release(const uint8_t cq_id) {
+    const uint32_t hold_start = this->prefetch_q_hold_starts[cq_id];
+    if (hold_start == 0) {
+        return;
+    }
+    this->prefetch_q_hold_starts[cq_id] = 0;
+    const uint32_t hold_end = this->prefetch_q_dev_ptrs[cq_id];
+    if (hold_end == hold_start) {
+        return;
+    }
+    const DispatchMemMap& dispatch_mem_map = MetalContext::instance(this->context_id).dispatch_mem_map();
+    const uint32_t prefetch_q_base =
+        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
+    // Snooped writes must cover whole beats. The extra slots get their shadow values, which is safe for the
+    // same reason as the per-entry beat rewrite. Unsnooped writes must stop at the held range, since the
+    // device clears consumed slots and the shadow would bring them back.
+    uint32_t first = hold_start;
+    uint32_t last = hold_end;
+    if (dispatch_mem_map.prefetch_q_snoop()) {
+        constexpr uint32_t beat = DispatchMemMap::PREFETCH_Q_SNOOP_BEAT_BYTES;
+        first = prefetch_q_base + (((hold_start - prefetch_q_base) / beat) * beat);
+        last = prefetch_q_base + tt::align(hold_end - prefetch_q_base, beat);
+    }
+    log_info(
+        tt::LogMetal,
+        "Releasing {} held fetch queue entries for cq {}",
+        (hold_end - hold_start) / sizeof(uint32_t),
+        cq_id);
+    this->prefetch_q_windows[cq_id]->write_block(
+        first, &this->prefetch_q_shadows[cq_id][(first - prefetch_q_base) / sizeof(uint32_t)], last - first);
 }
 
 bool SystemMemoryManager::is_dram_backed() const {

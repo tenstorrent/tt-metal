@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <unordered_map>
 #include <random>
 #include <tt-metalium/core_coord.hpp>
@@ -1352,9 +1353,17 @@ protected:
         // This updates the read/write pointers in the Device's L1 memory, effectively
         // Signals to the prefetcher kernel that new commands are available to fetch
         const auto start = std::chrono::steady_clock::now();
+        // TEMP, do not commit: prefill the fetch queue so the prefetcher drains it without waiting on the host.
+        const bool prefill = std::getenv("TT_METAL_FD_PREFETCH_Q_PREFILL") != nullptr;
+        if (prefill) {
+            mgr_->fetch_queue_hold(fdcq_->id());
+        }
         for (const uint32_t sz : entry_sizes) {
             mgr_->fetch_queue_reserve_back(fdcq_->id());
             mgr_->fetch_queue_write(sz, fdcq_->id());
+        }
+        if (prefill) {
+            mgr_->fetch_queue_release(fdcq_->id());
         }
 
         // Wait for completion of the issued commands

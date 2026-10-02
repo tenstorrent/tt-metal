@@ -101,6 +101,11 @@ public:
 
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
+    // TEMP, do not commit: while held, fetch queue entries only go to the host shadow. Release writes them to
+    // the device in one block, so the prefetcher drains a prefilled queue. A wrap or a wait for space releases.
+    void fetch_queue_hold(uint8_t cq_id);
+    void fetch_queue_release(uint8_t cq_id);
+
     // Both CQs on the device must be idle when this is called.
     void set_current_and_last_completed_event(
         uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
@@ -140,6 +145,8 @@ private:
     // Last value the host wrote to each fetch queue entry, padded to whole 16B beats. Snooped writes cover a
     // whole beat, so the neighbouring entries are rewritten with these values.
     std::vector<std::vector<uint32_t>> prefetch_q_shadows;
+    // TEMP, do not commit: address of the first held fetch queue entry, or 0 when not holding.
+    std::vector<uint32_t> prefetch_q_hold_starts;
 
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;
