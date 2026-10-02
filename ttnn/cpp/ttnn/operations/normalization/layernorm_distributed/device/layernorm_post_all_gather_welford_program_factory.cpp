@@ -114,6 +114,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
 
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
+    // #56908: on the 2D-core-grid path each core owns tiles_per_core_y of the width, not the full Wt.
+    // Reader width and writer/compute block size must be derived from the LOCAL slice, with global Wt
+    // retained only as the per-row stride (Wt_full). Assigned after the 2D grid is chosen (see below).
+    uint32_t reader_Wt = Wt;
+    uint32_t local_block_size = block_size;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
@@ -250,6 +255,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
             cores_y--;
         }
         tiles_per_core_y = Wt / cores_y;
+        reader_Wt = tiles_per_core_y;  // #56908: reader consumes only this core's column slice
+        local_block_size =
+            fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(tiles_per_core_y, 4)
+                             : tt::tt_metal::find_max_divisor(tiles_per_core_y, 8);  // #56908: blk divides local slice
 
         CoreRange all_cores_range({0, 0}, {cores_x - 1, cores_y - 1});
         all_cores = CoreRangeSet(std::vector{all_cores_range});
@@ -384,12 +393,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                 m2::TensorBinding{.tensor_parameter_name = POSTWF_STATS_T, .accessor_name = "stats_src"},
             },
         .compile_time_args =
-            {{"blk", block_size},
+            {{"blk", local_block_size},
              {"stats_tiles_cols", stats_tiles_cols},
              {"gamma_is_row_major", gamma_is_row_major},
              {"beta_is_row_major", beta_is_row_major},
              {"dfb_length", cb_length},
-             {"Wt", Wt},
+             {"Wt", reader_Wt},  // #56908: local column-slice width (global Wt carried as Wt_full stride)
              {"reduce_factor", reduce_factor}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset", "Wt_full"}},
@@ -422,7 +431,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         .dfb_bindings = {m2::DFBBinding{
             .dfb_spec_name = POSTWF_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POSTWF_OUTPUT_T, .accessor_name = "dst"}},
-        .compile_time_args = {{"blk", block_size}},
+        .compile_time_args = {{"blk", local_block_size}},  // #56908: block size from local slice
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -459,7 +468,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         .compile_time_args =
             {{"Wt", tiles_per_core_y},
              {"W", W},
-             {"blk", block_size},
+             {"blk", local_block_size},
              {"stats_tiles_cols", stats_tiles_cols},
              {"fp32_dtype", static_cast<uint32_t>(fp32_dest_acc_en)},
              {"dfb_length", cb_length}},
