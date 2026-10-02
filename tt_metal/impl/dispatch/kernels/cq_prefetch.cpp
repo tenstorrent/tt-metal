@@ -3199,12 +3199,8 @@ void kernel_main() {
 #endif
     set_l1_data_cache<true>();
 #if defined(PREFETCH_Q_SNOOP)
-    // Lines of the queue can still be cached from an earlier run on this core. Only the queue's own lines are
-    // discarded from the L1 D$: the prefetcher never writes them, while the rest of the D$ can hold dirty stack
-    // and data.
-    for (uintptr_t line = prefetch_q_view_base & ~uintptr_t{63}; line < prefetch_q_view_end; line += 64) {
-        invalidate_l1_dcache(line);
-    }
+    // Lines of the queue can still be cached from an earlier run on this core. Invalidating a clean L2 line also
+    // drops its L1 D$ copy, and the prefetcher never writes the queue, so the L2 invalidate covers both levels.
     invalidate_l2_cache_range(prefetch_q_view_base, prefetch_q_size);
 #endif
 #if defined(FABRIC_RELAY)
