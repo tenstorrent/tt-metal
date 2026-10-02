@@ -1421,11 +1421,22 @@ _MEASUREMENT = re.compile(r"(?:max )?(\d+) ULP")
 #: What marks a row's comment as the exhaustive sweep's: ``write_table``'s suffix.
 _EXHAUSTIVE = "exhaustive"
 
+#: A run label, in any of its shapes, names the day it ran. The emitter writes the label
+#: once per op on the key line and leaves each row with its number alone, so a row
+#: speaks for its own run only when it carries a date; the number says what was
+#: measured, not which run measured it.
+_DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
+
 
 def _measured_budget_rows(path=_TABLE_PATH):
     """``(op_name, row_text, max_ulp, measured_or_None, exhaustive)`` for every
-    ``max_ulp`` row. *exhaustive* is whether the comment the measurement was read from
-    is the sweep's."""
+    ``max_ulp`` row. *exhaustive* is whether the run that measured it is the sweep:
+    the row's own, when its comment is dated, and the op's key line otherwise.
+
+    Deciding that by "the row has a number" instead read every emitted row -- which has
+    a number and no label -- as a sampled one, and the exhaustive audit below then
+    covered 10 of the table's 1,614 budgets. Acosh's ``max_ulp: 7  # max 6 ULP`` raised
+    to 12 with its comment untouched passed."""
     rows, op, op_measured, op_exhaustive = [], None, None, False
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -1443,7 +1454,7 @@ def _measured_budget_rows(path=_TABLE_PATH):
             continue  # a tolerance row has no step budget to back
         found = _MEASUREMENT.search(comment)
         measured = int(found.group(1)) if found else op_measured
-        exhaustive = _EXHAUSTIVE in comment if found else op_exhaustive
+        exhaustive = _EXHAUSTIVE in comment if _DATED.search(comment) else op_exhaustive
         rows.append((op, body.strip(), int(declared.group(1)), measured, exhaustive))
     return rows
 
@@ -1480,8 +1491,6 @@ EXACT_SELECTIONS = (
     MathOperation.SfpuBinaryMax,
     MathOperation.SfpuBinaryMin,
 )
-
-_DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def _sampled_zero_budgets(path=_TABLE_PATH):
@@ -1522,35 +1531,70 @@ def test_a_sampled_zero_on_an_inexact_op_is_floored_to_one():
     assert not unfloored, "\n".join(unfloored)
 
 
-def test_no_step_budget_exceeds_the_measurement_it_records():
-    """An exhaustive row carries exactly the budget the emitter derives from its
-    measurement -- ``_verdict``'s rule, 0 for 0 and otherwise ``EMIT_HEADROOM`` rounded
-    up -- so a budget widened by hand has to falsify the comment beside it, which is
-    the table header's rule for raising one. A 2x envelope would have admitted Acosh's
-    ``max_ulp: 7  # max 6 ULP`` raised to 12 with its comment untouched.
-
-    A sampled row may sit anywhere in ``[measured, MEASUREMENT_HEADROOM * measured]``,
-    and at 1 over a measured 0: a finite sample cannot assert exactness."""
+def _budgets_past_their_measurement(path=_TABLE_PATH):
+    """Every ``max_ulp`` row in *path* whose budget is not the one its measurement
+    allows, as messages. An exhaustive row carries exactly the budget the emitter
+    derives from its measurement -- ``_verdict``'s rule, 0 for 0 and otherwise
+    ``EMIT_HEADROOM`` rounded up -- so a budget widened by hand has to falsify the
+    comment beside it, which is the table header's rule for raising one. A sampled row
+    may sit anywhere in ``[measured, MEASUREMENT_HEADROOM * measured]``, and at 1 over
+    a measured 0: a finite sample cannot assert exactness."""
     from helpers.ulp_sweep import _row_fields, _verdict
 
-    for op, body, budget, measured, exhaustive in _measured_budget_rows():
+    problems = []
+    for op, body, budget, measured, exhaustive in _measured_budget_rows(path):
         if measured is None:
             continue  # owned by test_every_step_budget_names_the_measurement_it_came_from
         where = f"{op}: {body} (records {measured} ULP)"
         if exhaustive:
             out_fmt = _row_fields(body)["out"]
-            assert ("ulp", budget) == _verdict(measured, out_fmt), (
-                f"{where}: the emitter writes {_verdict(measured, out_fmt)[1]} for that "
-                f"measurement, not {budget}. Re-measure rather than edit the number."
-            )
+            if ("ulp", budget) != _verdict(measured, out_fmt):
+                problems.append(
+                    f"{where}: the emitter writes {_verdict(measured, out_fmt)[1]} for "
+                    f"that measurement, not {budget}. Re-measure rather than edit the "
+                    "number."
+                )
         elif measured == 0:
-            assert budget <= 1, f"{where}: a 0-ULP measurement cannot justify {budget}"
-        else:
-            assert budget >= measured, f"{where}: budget {budget} is below it"
-            assert budget <= MEASUREMENT_HEADROOM * measured, (
-                f"{where}: budget {budget} is more than "
-                f"{MEASUREMENT_HEADROOM}x the measurement"
+            if budget > 1:
+                problems.append(f"{where}: a 0-ULP measurement cannot justify {budget}")
+        elif budget < measured:
+            problems.append(f"{where}: budget {budget} is below it")
+        elif budget > MEASUREMENT_HEADROOM * measured:
+            problems.append(
+                f"{where}: budget {budget} is more than {MEASUREMENT_HEADROOM}x the "
+                "measurement"
             )
+    return problems
+
+
+def test_no_step_budget_exceeds_the_measurement_it_records():
+    problems = _budgets_past_their_measurement()
+    assert not problems, "\n".join(problems)
+
+
+#: One op as the emitter writes it: the run label once on the key line, each row with
+#: its number alone, and a row from another run naming that run itself.
+_LABELLED_OP = """\
+Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-30, except where a row says otherwise
+  - {{in: Float16, out: Float16, dest: "No", max_ulp: {exhaustive}}}  # max 6 ULP
+  - {{in: Float32, out: Float16, dest: "No", max_ulp: {sampled}}}  # max 6 ULP, wormhole, 2026-09-21
+"""
+
+
+def test_an_emitted_row_is_held_to_the_run_on_its_key_line(tmp_path):
+    """The raise the audit exists to reject: a row the sweep wrote, its budget edited
+    and its comment untouched. The row carries no label of its own, so the run it is
+    held to is the key line's, and the key line says exhaustive: only the emitter's
+    own number passes. The dated row beside it names a sampled run and keeps the 2x
+    envelope, so a raise within it is not this audit's to reject."""
+    path = tmp_path / "budget.yaml"
+    path.write_text(_LABELLED_OP.format(exhaustive=7, sampled=12), encoding="utf-8")
+    assert _budgets_past_their_measurement(path) == []
+
+    path.write_text(_LABELLED_OP.format(exhaustive=12, sampled=12), encoding="utf-8")
+    problems = _budgets_past_their_measurement(path)
+    assert len(problems) == 1 and "the emitter writes 7" in problems[0], problems
+    assert _measured_budget_rows(path)[0][4] is True, "the emitted row read as sampled"
 
 
 # ── A gated cell is not quietly parked ────────────────────────────────────────
