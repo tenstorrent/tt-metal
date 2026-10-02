@@ -435,6 +435,14 @@ with exact-text changes and a thermodynamics wording caveat disclosed. A fresh
 task-specific guidance. Full-suite measurement remains gated on correct clean
 completion. Active resumed time is about 103 minutes, cumulative about 6h36m.
 
+07:25 UTC: TTI 9bfa8ea7 adds explicit persistent pinned-HF-cache wiring after
+finding that launcher local-dir weights and the autoport's pinned hub loader use
+different cache layouts. It sets cache environment before Python imports and
+shares one immutable snapshot. All 122 related host tests pass; startup savings
+are unmeasured and no image is rebuilt. The prefill-precision Sympy trial is
+still bounded and monitored. Active resumed time is about 114 minutes,
+cumulative about 6h47m. No combined-suite result is claimed.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
