@@ -637,7 +637,7 @@ def test_matmul_tiny(
             dest_acc, dest_sync_mode
         )
     ),
-    implied_math_format=[ImpliedMathFormat.Yes],
+    implied_math_format=[ImpliedMathFormat.No],
     register_format_hint=[DataFormat.Int8_2x],
     enable_direct_indexing=[True, False],
     transpose=[Transpose.No],
