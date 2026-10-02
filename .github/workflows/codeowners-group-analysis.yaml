@@ -1297,9 +1297,12 @@ jobs:
           REQUESTER_NAME="$REQUESTER_LOGIN"
 
           # Load Slack users from file (set in previous step)
-          ALL_SLACK_USERS=$(cat "${RUNNER_TEMP}/slack_users_direct.json")
+          # Deactivated accounts stay in users.list; drop them so a name that
+          # matches both an old and a current account resolves to the live one.
+          ALL_SLACK_USERS=$(jq -c '[.[] | select(.deleted != true)]' "${RUNNER_TEMP}/slack_users_direct.json")
           USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
-          echo "Loaded $USER_COUNT Slack users from cache"
+          echo "Loaded $USER_COUNT live Slack users from cache"
+          PINGED_SLACK_IDS=""
 
           # Get full name for requester if available
           echo "DEBUG: REQUESTER_LOGIN='$REQUESTER_LOGIN', PR_AUTHOR_LOGIN='$PR_AUTHOR_LOGIN'"
@@ -1546,6 +1549,7 @@ jobs:
 
                   if [ -n "$SLACK_USER_ID" ]; then
                     SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
+                    PINGED_SLACK_IDS="$PINGED_SLACK_IDS,$SLACK_USER_ID"
                     echo "✅ Found Slack user: $USER_NAME -> $SLACK_USER_ID"
                   else
                     SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME"
@@ -1666,6 +1670,10 @@ jobs:
               channel: $channel,
               text: $text
             }')
+
+          # A mention of someone outside the channel does not notify them.
+          SLACK_BOT_TOKEN="${{ secrets.CODEOWNERS_PING_BOT }}" \
+            python3 .github/scripts/codeowners_slack.py invite --channel "$SLACK_CHANNEL" --users "$PINGED_SLACK_IDS"
 
           echo "Sending direct ping to Slack..."
           SLACK_RESPONSE=$(curl -s --max-time 30 -X POST \
@@ -1806,6 +1814,9 @@ jobs:
           SLACK_USERS_FILE: ${{ runner.temp }}/slack_users.json
           SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
           GITHUB_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          # Deactivated-owner and orphan-file report for CODEOWNERS admins,
+          # posted as a thread reply by the Slack step below.
+          ADMIN_REPORT_FILE: ${{ runner.temp }}/codeowners_admin_report.txt
         run: |
           python3 .github/scripts/select_owners_to_ping.py
       - name: Send notifications
@@ -1892,6 +1903,11 @@ jobs:
 
       - name: Send Slack notifications
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
+          CODEOWNERS_ADMIN_SLACK_IDS: ${{ vars.CODEOWNERS_ADMIN_SLACK_IDS }}
+          ADMIN_REPORT: ${{ steps.select-owners.outputs.admin-report }}
+          ADMIN_REPORT_FILE: ${{ runner.temp }}/codeowners_admin_report.txt
         run: |
           SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
           SELECTED_OWNERS="${{ steps.select-owners.outputs.selected-owners }}"
@@ -1909,8 +1925,11 @@ jobs:
           REQUESTER_NAME="$REQUESTER_LOGIN"
 
           # Load Slack users from file (set in Setup for notifications step)
-          ALL_SLACK_USERS=$(cat "${RUNNER_TEMP}/slack_users.json")
+          # Deactivated accounts stay in users.list; drop them so a name that
+          # matches both an old and a current account resolves to the live one.
+          ALL_SLACK_USERS=$(jq -c '[.[] | select(.deleted != true)]' "${RUNNER_TEMP}/slack_users.json")
           USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
+          PINGED_SLACK_IDS=""
 
           echo "DEBUG Slack: SEND_SLACK='$SEND_SLACK'"
           echo "DEBUG Slack: SELECTED_OWNERS='$SELECTED_OWNERS'"
@@ -2086,6 +2105,7 @@ jobs:
 
                   if [ -n "$SLACK_USER_ID" ]; then
                     SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
+                    PINGED_SLACK_IDS="$PINGED_SLACK_IDS,$SLACK_USER_ID"
                     echo "✅ Found Slack user: $USER_NAME -> $SLACK_USER_ID"
                   else
                     SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME"
@@ -2276,6 +2296,9 @@ jobs:
             echo "🔍 Final JSON payload:"
             echo "$SLACK_PAYLOAD"
 
+            # A mention of someone outside the channel does not notify them.
+            python3 .github/scripts/codeowners_slack.py invite --channel "$SLACK_CHANNEL" --users "$PINGED_SLACK_IDS"
+
             echo "Attempting to send message to Slack..."
             SLACK_RESPONSE=$(curl -s --max-time 30 -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
@@ -2288,6 +2311,10 @@ jobs:
               echo "✅ Successfully sent Slack notification to channel $SLACK_CHANNEL (message ts: $SLACK_TS)"
               echo "📋 Notified users: $SELECTED_OWNERS"
               echo "📋 Notified groups: $SELECTED_SLACK_GROUPS"
+              if [ "$ADMIN_REPORT" = "true" ]; then
+                python3 .github/scripts/codeowners_slack.py report --channel "$SLACK_CHANNEL" \
+                  --report-file "$ADMIN_REPORT_FILE" --thread-ts "$SLACK_TS"
+              fi
             else
               SLACK_ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "Unknown error"')
               echo "❌ Failed to send Slack notification: $SLACK_ERROR"
@@ -2299,6 +2326,12 @@ jobs:
 
           elif [ "$SEND_SLACK" = "true" ] && [ "$NO_OWNERS_AVAILABLE" = "true" ]; then
             echo "Slack notification enabled but no owners available for notification (only PR author is codeowner)"
+            if [ "$ADMIN_REPORT" = "true" ]; then
+              # Nobody to thread under: post a short parent so admins still see it.
+              python3 .github/scripts/codeowners_slack.py report --channel "C07G47JMQHM" \
+                --report-file "$ADMIN_REPORT_FILE" \
+                --pr-url "https://github.com/${{ github.repository }}/pull/$PR_NUMBER" --pr-title "$PR_TITLE"
+            fi
           elif [ "$SEND_SLACK" = "true" ] && [ -z "$SELECTED_OWNERS" ] && [ -z "$SELECTED_SLACK_GROUPS" ]; then
             echo "Slack notification enabled but no pending owners or groups to notify"
           else

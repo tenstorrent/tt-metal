@@ -41,10 +41,19 @@ before.
                       lookup so the tier is computed for the person who will
                       actually be mentioned.
 
+  ADMIN_REPORT_FILE   Where to write the CODEOWNERS-admin report (see below).
+                      Without it the report is only logged.
+
 Outputs (appended to $GITHUB_OUTPUT):
   selected-owners        comma-separated, sorted+deduped individual logins
   selected-slack-groups  comma-separated Slack group IDs
   no-owners-available    "true" iff both of the above are empty
+  admin-report           "true" iff ADMIN_REPORT_FILE holds a report
+
+The admin report is Slack mrkdwn for the CODEOWNERS maintainers, posted as a
+thread reply to the ping. It lists every file in the PR whose CODEOWNERS entry
+names someone whose Slack account is deactivated (they have usually left, so the
+entry needs updating), and every pending file nobody could be pinged for.
 """
 
 from __future__ import annotations
@@ -104,10 +113,12 @@ API_REQUIRED_REVIEWER = "akerteszTT"
 # review request lands on someone who can act on it today. Out-of-office is the
 # only tier that is skipped rather than deprioritised, and even that is undone
 # when skipping would leave the rule with nobody: an unanswered ping still beats
-# no ping.
+# no ping. A deactivated account is different: nobody reads that ping, so it is
+# never picked, and the rule is reported as having no live owner instead.
 TIER_WORKING = 0  # inside local working hours, no out-of-office status
 TIER_REACHABLE = 1  # no out-of-office status, but outside working hours
 TIER_OOO = 2  # marked out of office
+TIER_DEACTIVATED = 3  # Slack account deactivated; never pinged
 
 WORK_START_HOUR = 9
 WORK_END_HOUR = 18  # exclusive, so 09:00-17:59 local
@@ -203,6 +214,8 @@ def availability_tier(user: dict | None, now_utc: int) -> int:
         # No Slack match. We cannot tell what their day looks like, so treat them
         # as reachable rather than penalising them into the out-of-office tier.
         return TIER_REACHABLE
+    if user.get("deleted"):
+        return TIER_DEACTIVATED
     if is_ooo(user, now_utc):
         return TIER_OOO
     hour, weekday = local_time(user, now_utc)
@@ -284,25 +297,39 @@ class SlackDirectory:
         return name
 
     def _match(self, login: str) -> dict | None:
+        """Match against live accounts first, deactivated ones only as a fallback.
+
+        `users.list` keeps deactivated accounts, and a leaver can share a name
+        with a current colleague. Searching live accounts first stops the
+        leaver shadowing the colleague; searching deactivated ones afterwards
+        still lets a CODEOWNERS entry for someone who left be recognised as
+        such instead of looking like a login with no Slack match.
+        """
         override = SLACK_ID_OVERRIDES.get(login)
         if override:
             return self.by_id.get(override)
+        live = [u for u in self.users if not u.get("deleted")]
+        gone = [u for u in self.users if u.get("deleted")]
+        return self._match_in(login, live) or self._match_in(login, gone)
 
+    def _match_in(self, login: str, users: list[dict]) -> dict | None:
         # Step order and exact-case comparisons are copied from the workflow. It
         # is tempting to try the login first and skip the GitHub call, but a
         # display_name that happens to equal someone else's login would then
         # resolve to a different person here than in the ping itself.
+        if not users:
+            return None
         full_name = self.full_name(login)
         if full_name:
-            for user in self.users:
+            for user in users:
                 profile = user.get("profile") or {}
                 if full_name in (user.get("real_name") or "", profile.get("real_name") or ""):
                     return user
-            for user in self.users:
+            for user in users:
                 if ((user.get("profile") or {}).get("display_name") or "") == full_name:
                     return user
 
-        for user in self.users:
+        for user in users:
             profile = user.get("profile") or {}
             if login in (user.get("name") or "", profile.get("display_name") or ""):
                 return user
@@ -313,7 +340,7 @@ class SlackDirectory:
             if len(word) < 3:
                 continue
             needle = word.lower()
-            hits = [u for u in self.users if any(needle in field.lower() for field in _name_fields(u))]
+            hits = [u for u in users if any(needle in field.lower() for field in _name_fields(u))]
             if len(hits) == 1:
                 return hits[0]
         return None
@@ -325,6 +352,9 @@ class SlackDirectory:
 
     def tier(self, login: str, now_utc: int) -> int:
         return availability_tier(self.user(login), now_utc)
+
+    def deactivated(self, login: str) -> bool:
+        return bool((self.user(login) or {}).get("deleted"))
 
     def active(self, login: str) -> bool:
         """Slack presence, used only to order people within a tier.
@@ -371,6 +401,12 @@ class Selector:
         # same and the pick stays random.
         self.now_utc = int(datetime.now(tz=timezone.utc).timestamp())
         self.directory = SlackDirectory.from_env()
+
+        # For the admin report: file -> deactivated logins named on its
+        # CODEOWNERS entry, and (owners label, files) for pending rules that
+        # ended up with nobody to ping.
+        self.stale: dict[str, set[str]] = {}
+        self.orphans: list[tuple[str, list[str]]] = []
 
         # Parse "team:members" file once into a lookup (first entry wins, as the
         # original `grep "^$team:" | head -1` did).
@@ -464,8 +500,9 @@ class Selector:
     def pick_two(self, candidates: list[str]) -> list[str]:
         """Pick the two owners most likely to act on the request.
 
-        Out-of-office candidates are dropped first, but only if that leaves
-        someone: a rule where everyone is away still gets pinged. The two slots
+        Deactivated accounts are never picked. Out-of-office candidates are
+        dropped next, but only if that leaves someone: a rule where everyone is
+        away still gets pinged. The two slots
         are then filled in tier order rather than stopping after one in-hours
         reviewer, because asking a single person halves the chance of a reply.
         Within a tier the pick stays random, so re-running `/codeowners ping`
@@ -474,12 +511,16 @@ class Selector:
         than remaining slots, which keeps the presence calls to the one group
         where they change the answer.
         """
-        if not candidates:
+        live = [c for c in candidates if self.directory.tier(c, self.now_utc) < TIER_DEACTIVATED]
+        for login in candidates:
+            if login not in live:
+                log(f"Excluding {login} (Slack account deactivated)")
+        if not live:
             return []
-        pool = [c for c in candidates if self.directory.tier(c, self.now_utc) < TIER_OOO]
+        pool = [c for c in live if self.directory.tier(c, self.now_utc) < TIER_OOO]
         if not pool:
             log("All candidates are marked out of office; pinging them anyway")
-            pool = list(candidates)
+            pool = live
 
         chosen: list[str] = []
         for tier in sorted({self.directory.tier(c, self.now_utc) for c in pool}):
@@ -518,6 +559,9 @@ class Selector:
 
         selected_owners: list[str] = []
         selected_slack_groups: list[str] = []
+        # Files a pinged Slack group already covers, so an individual pattern
+        # over the same files is not reported as having nobody to ping.
+        group_files: set[str] = set()
 
         # Teams
         for team_entry in split_nonempty(self.teams, "§"):
@@ -545,12 +589,14 @@ class Selector:
             gid = slack_group_id(team)
             if gid:
                 selected_slack_groups.append(gid)
+                group_files.update(f for f in team_files.split(",") if f)
                 log(f"Added pending Slack group: {team} -> {gid}")
                 continue
 
             # No Slack group -> individual selection from team members.
             log(f"Team {team} has no Slack group, using individual selection")
             unapproved = self.unapproved_filtered(self.team_owners(team))
+            picked_before = len(selected_owners)
 
             # metalium-api-owners: always include akerteszTT for tt_metal/api/ files.
             if team == API_OWNERS_TEAM:
@@ -561,6 +607,8 @@ class Selector:
                     log(f"Added {API_REQUIRED_REVIEWER} as required reviewer (tt_metal/api/)")
 
             selected_owners.extend(self.pick_two(unapproved))
+            if len(selected_owners) == picked_before:
+                self.orphans.append((f"`{team}`", [f for f in team_files.split(",") if f]))
 
         # Individual patterns
         for pattern_group in split_nonempty(self.individuals, "§"):
@@ -569,13 +617,24 @@ class Selector:
             owners = head.split(":", 1)[1] if ":" in head else ""
             key = sorted_files_key(files)
 
+            # Checked before the approval skip: a CODEOWNERS entry naming a
+            # leaver is worth fixing even when someone else already approved.
+            for login in dict.fromkeys(pair.split("|", 1)[0] for pair in owners.split(",")):
+                if login and self.directory.deactivated(login):
+                    for fname in (f for f in files.split(",") if f):
+                        self.stale.setdefault(fname, set()).add(login)
+
             if files_has_approval.get(key):
                 log(f"Pattern {pattern} already approved (combined), skipping")
                 continue
 
             usernames = [pair.split("|", 1)[0] for pair in owners.split(",") if pair != ""]
-            unapproved = self.unapproved_filtered(usernames)
-            selected_owners.extend(self.pick_two(unapproved))
+            file_list = [f for f in files.split(",") if f]
+            picked = self.pick_two(self.unapproved_filtered(usernames))
+            selected_owners.extend(picked)
+            if not picked and not set(file_list) <= group_files:
+                label = ", ".join(f"`{u}`" for u in dict.fromkeys(usernames) if u) or "none"
+                self.orphans.append((label, file_list))
 
         # Sort + dedupe individual owners (parity with sort | uniq).
         final_owners = sorted(set(o for o in selected_owners if o))
@@ -585,7 +644,50 @@ class Selector:
         return final_owners, final_groups, no_owners
 
 
-def write_output(owners: list[str], groups: list[str], no_owners: bool) -> None:
+def render_admin_report(stale: dict[str, set[str]], orphans: list[tuple[str, list[str]]]) -> str:
+    """Slack mrkdwn listing what the ping could not fix, or "" when nothing.
+
+    Every affected file is listed in full, so the whole thing can be handled
+    from one message.
+    """
+    lines: list[str] = []
+    if stale:
+        handles = sorted({login for logins in stale.values() for login in logins})
+        named = ", ".join(f"`{h}`" for h in handles)
+        who = (
+            f"Deactivated Slack account {named} is a codeowner"
+            if len(handles) == 1
+            else f"Deactivated Slack accounts {named} are codeowners"
+        )
+        lines.append(f"{who} for these files, please update CODEOWNERS:")
+        for path in sorted(stale):
+            suffix = "" if len(handles) == 1 else " (" + ", ".join(f"`{h}`" for h in sorted(stale[path])) + ")"
+            lines.append(f"• `{path}`{suffix}")
+    if orphans:
+        if lines:
+            lines.append("")
+        lines.append("Nobody could be pinged for these pending files, please find them a reviewer:")
+        seen: set[str] = set()
+        for label, files in orphans:
+            for path in files:
+                if path not in seen:
+                    seen.add(path)
+                    lines.append(f"• `{path}` (owners: {label})")
+    return "\n".join(lines)
+
+
+def write_admin_report(report: str) -> bool:
+    if report:
+        log("Admin report:\n" + report)
+    path = os.environ.get("ADMIN_REPORT_FILE", "")
+    if not path:
+        return False
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(report)
+    return bool(report)
+
+
+def write_output(owners: list[str], groups: list[str], no_owners: bool, admin_report: bool = False) -> None:
     selected_owners = ",".join(owners)
     selected_groups = ",".join(groups)
     log(f"DEBUG: Final SELECTED_OWNERS='{selected_owners}'")
@@ -604,14 +706,17 @@ def write_output(owners: list[str], groups: list[str], no_owners: bool) -> None:
         out.write(f"selected-owners={selected_owners}\n")
         out.write(f"selected-slack-groups={selected_groups}\n")
         out.write(f"no-owners-available={'true' if no_owners else ''}\n")
+        out.write(f"admin-report={'true' if admin_report else ''}\n")
     finally:
         if close:
             out.close()
 
 
 def main() -> int:
-    owners, groups, no_owners = Selector().select()
-    write_output(owners, groups, no_owners)
+    selector = Selector()
+    owners, groups, no_owners = selector.select()
+    has_report = write_admin_report(render_admin_report(selector.stale, selector.orphans))
+    write_output(owners, groups, no_owners, has_report)
     return 0
 
 
