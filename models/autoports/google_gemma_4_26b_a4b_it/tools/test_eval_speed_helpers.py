@@ -18,6 +18,31 @@ from probe_context_dedup import compact
 from probe_loop_recovery import wall_deadline
 from probe_native_eval_action import request_messages
 from replay_eval_requests import post
+from summarize_swe_suite import counter_delta
+
+
+class SuiteCounterTests(unittest.TestCase):
+    def test_only_matched_complete_counter_window_is_accepted(self):
+        zero = {
+            "request_success_total": 0,
+            "time_to_first_token_seconds_count": 0,
+            "time_to_first_token_seconds_sum": 0,
+            "e2e_request_latency_seconds_sum": 0,
+            "generation_tokens_total": 0,
+            "prompt_tokens_total": 0,
+        }
+        final = dict(zip(zero, (1, 1, 2, 5, 3, 10)))
+        events = [
+            {"event": "server_metrics", "phase": "before_request", "counters": zero},
+            {"event": "server_metrics", "phase": "after_response", "counters": final},
+        ]
+        responses = [{"usage": {"completion_tokens": 3, "prompt_tokens": 10}}]
+        result = counter_delta(events, responses)
+        self.assertTrue(result["valid"])
+        self.assertEqual((result["ttft_s"], result["post_first_token_s"]), (2, 3))
+        final["request_success_total"] = 0
+        self.assertFalse(counter_delta(events, responses)["valid"])
+        self.assertFalse(counter_delta([], responses)["valid"])
 
 
 def turn(call_id, command, output):

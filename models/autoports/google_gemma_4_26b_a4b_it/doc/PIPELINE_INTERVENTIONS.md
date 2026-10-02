@@ -379,6 +379,17 @@ five-task release suite has not been rerun. Resume requires a new user request.
 
 ## Evidence
 
+2026-10-02 05:31 UTC: the user explicitly resumes with an aggregate-suite goal:
+measure the original five tasks together and reduce total time while preserving
+reward. A bounded Sympy/sklearn pair is dispatched serially as CI 36969576147 /
+110720576884 with reused image and TTI b2ffb198; local Astropy independently
+tests clean completion under a 1,200-second cap. The final topology remains one
+persistent server and serial C1 trials. Request-counter instrumentation and a
+suite phase/outcome summarizer make startup, warmup, inference, tools, verifier,
+late responses and total dispatch-to-finish time explicit. Current progress and
+forecast gates are in `eval_speed/suite_20261002.md`. No full-suite result or
+ten-task expansion is claimed yet.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.

@@ -5,7 +5,14 @@ the current eval bottlenecks, predict the attainable speed, iterate on small
 measured experiments, then run and monitor actual CI. This is ongoing work,
 not a claim that the five-task evaluation has been repaired.
 
-## Latest checkpoint (20:26 UTC)
+## Current aggregate-suite continuation (2026-10-02)
+
+The user requests the actual combined time of the original five tasks, followed
+by aggregate optimization. See [suite experiment log](suite_20261002.md) for the
+fixed topology, bounded remaining-task gates, forecasts, live CI and current
+handoff. Isolated successes below are prior evidence, not an all-five result.
+
+## Prior checkpoint (2026-10-01 20:26 UTC)
 
 Experimental configurable-weight BFP8 passes the existing short readiness gate
 and produces a verifier-passing Django patch both locally and in actual QB2 CI.
