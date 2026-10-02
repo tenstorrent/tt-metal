@@ -65,6 +65,8 @@ class _KeepProbe(Generator):
         self.data_parallel = 1
         self.mode = None
         self.decoded_with = None
+        self._pending_deferred_decode_sampling = None
+        self._deferred_decode_sampling_failed = False
         if capabilities is not None:
             self.model_capabilities = capabilities
         # Staged as a previous decode would have left them: a captured trace and the

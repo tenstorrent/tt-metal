@@ -2677,7 +2677,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         ``reload_inputs``: host inputs are authoritative, so ``start_pos`` may
         re-anchor the seed counters. ``None`` takes the last decode_forward's
         value. Payloads from ``decode_forward(defer_device_sampling=True)`` go
-        through ``sample_deferred_decode`` instead.
+        through ``sample_deferred_decode`` instead. A grammar mask, like
+        penalties, is applied to ``tt_logits`` in place.
         """
         self._raise_if_deferred_sampling_failed()
 

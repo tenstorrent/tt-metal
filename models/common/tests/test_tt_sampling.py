@@ -47,6 +47,7 @@ RING_FABRIC_DEVICE_PARAMS = (
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}] if len(ttnn.get_device_ids()) > 1 else [{}]
 )
 _TRACE_DEVICE_PARAMS = [{"trace_region_size": 23887872}]
+# The grammar sampling trace measured 360448 B on P150 (1 chip); (4, 8) reuses the shared budget unmeasured.
 _GRAMMAR_TRACE_DEVICE_PARAMS = [{**RING_FABRIC_DEVICE_PARAMS[0], **_TRACE_DEVICE_PARAMS[0]}]
 
 # Lane positions used to sweep the "odd lane out" tests below. The sampling
