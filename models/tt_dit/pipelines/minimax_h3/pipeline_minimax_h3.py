@@ -2459,6 +2459,22 @@ class MiniMaxH3Pipeline:
 
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
+
+        def step_levels(i: int) -> torch.Tensor:
+            t = float(timesteps[i])
+            level_kwargs = {"video_timestep": t, "audio_timestep": float(audio_timesteps[i])}
+            if "condition_video" in slot_roles:
+                level_kwargs["condition_video_timestep"] = max(t, MINIMAX_H3_KEYFRAME_NOISE_AUG)
+            if "condition_audio" in slot_roles:
+                level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
+            return slot_levels(slot_roles, **level_kwargs)
+
+        def upload_levels(levels: torch.Tensor) -> None:
+            self._tt_timestep.update(
+                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+            )
+
+        upload_levels(step_levels(0))
         if _is_host_rank():
             _tqdm_spacer()
         for i, t in enumerate(
@@ -2471,19 +2487,6 @@ class MiniMaxH3Pipeline:
             )
         ):
             t_step = time.time()
-            level_kwargs = {
-                "video_timestep": float(t),
-                "audio_timestep": float(audio_timesteps[i]),
-            }
-            if "condition_video" in slot_roles:
-                level_kwargs["condition_video_timestep"] = max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG)
-            if "condition_audio" in slot_roles:
-                level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
-            levels = slot_levels(slot_roles, **level_kwargs)
-            self._tt_timestep.update(
-                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
-            )
-
             video_velocity, audio_velocity = transformer(
                 video_1BVC=self._tt_video.value,
                 audio_1BAC=self._tt_audio.value,
@@ -2500,13 +2503,15 @@ class MiniMaxH3Pipeline:
                 traced=traced,
             )
 
-            ttnn.synchronize_device(self.mesh_device)
-            if ttnn.using_distributed_env():
-                ttnn.distributed_context_barrier()
             ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_video.value, video_velocity)
             ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_audio.value, audio_velocity)
+            if i + 1 < len(timesteps):
+                upload_levels(step_levels(i + 1))
+            ttnn.synchronize_device(self.mesh_device)
+            if ttnn.using_distributed_env():
+                ttnn.distributed_context_barrier()
             t_step = time.time() - t_step
             if i == 0:
                 t_first = t_step
