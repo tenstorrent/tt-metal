@@ -391,6 +391,22 @@ def test_rotating_line_counter_smoke(device):
 
 
 @pytest.mark.parametrize("control", [False, True], ids=["payload", "signal"])
+def test_rotating_line_counter_without_handshake(device, control):
+    run_positional_mcast_case(
+        device,
+        width=8,
+        senders=list(range(8)),
+        rotating=True,
+        counter=True,
+        control=control,
+        alternating=False,
+        handshake=False,
+        rounds=128,
+        suppress_round_output=True,
+    )
+
+
+@pytest.mark.parametrize("control", [False, True], ids=["payload", "signal"])
 def test_rotating_line_flag_source_lifetime(device, control):
     run_positional_mcast_case(
         device,
