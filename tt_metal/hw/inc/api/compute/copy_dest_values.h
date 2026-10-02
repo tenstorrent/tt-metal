@@ -31,6 +31,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat DATA_FORMAT>
 ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+#ifdef ARCH_QUASAR
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -40,6 +41,17 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
         idst_out,
         0 /*unused*/,
         VectorMode::RC)));
+#else
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        copy_dest_value,
+        (DATA_FORMAT, false /*APPROXIMATE*/, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
+        idst_in,
+        idst_out,
+        0 /*unused*/,
+        VectorMode::RC)));
+#endif
 }
 
 // clang-format off
