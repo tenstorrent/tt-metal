@@ -3404,6 +3404,7 @@ ComputeConfig MakeGen1ComputeConfig(
         .unpack_to_dest_mode = unpack_dst_modes,
         .bfp8_pack_precise = (bfp_pack_precision_mode == Precision::Precise),
         .math_approx_mode = (compute_config.sfpu_precision_mode == Precision::Approximate),
+        .enable_trisc2_rvv = compute_config.config_1xx.has_value() && compute_config.config_1xx->enable_trisc2_rvv,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -3449,6 +3450,7 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         .dst_full_sync_en = !compute_config.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
         .math_approx_mode = (compute_config.sfpu_precision_mode == Precision::Approximate),
+        .enable_trisc0_rvv = compute_config.config_2xx.has_value() && compute_config.config_2xx->enable_trisc0_rvv,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
