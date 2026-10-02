@@ -61,6 +61,12 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     check_tensor(key, "Key", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(value, "Value", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
 
+    const auto check_same_device = [&query](const ttnn::Tensor& tensor, const char* name) {
+        TT_FATAL(tensor.device() == query.device(), "Tensor '{}' must be on the same MeshDevice as Query", name);
+    };
+    check_same_device(key, "Key");
+    check_same_device(value, "Value");
+
     // The softmax scaler is 1/sqrt(head_dim) computed from the padded shape and kernels
     // iterate the padded sequence, so tile padding on S or Q/K head_dim would silently
     // mis-scale attention instead of erroring out. V's head_dim never feeds the scaler
@@ -119,6 +125,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.mask.has_value()) {
         const auto& mask = tensor_args.mask.value();
         check_tensor(mask, "Attention Mask", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+        check_same_device(mask, "Attention Mask");
 
         auto mask_shape = mask.logical_shape();
         auto [mB, mH, mS1, mS2] = mask_shape.to_array_4D();
@@ -162,6 +169,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             "Preallocated Output",
             tt::tt_metal::Layout::TILE,
             tt::tt_metal::DataType::BFLOAT16);
+        check_same_device(preallocated_output.value(), "Preallocated Output");
 
         const auto output_shape = preallocated_output->padded_shape();
         // Output shape (B, H, S, vE) - heads NOT fused, inner dim matches V
@@ -197,6 +205,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             "Preallocated Intermediate",
             tt::tt_metal::Layout::TILE,
             tt::tt_metal::DataType::FLOAT32);
+        check_same_device(preallocated_intermediate, "Preallocated Intermediate");
 
         auto interm_shape = preallocated_intermediate.padded_shape();
         // intermediate shape: (B, q_heads, S, 32) - 1 FP32 tile: logsumexp = max + log(sum_exp)

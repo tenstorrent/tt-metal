@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/tensor.hpp>
@@ -22,6 +23,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -741,6 +743,45 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
 // =============================================================================
 // VALIDATION TESTS - Testing Error Conditions and Edge Cases
 // =============================================================================
+
+TEST_F(SDPAForwardTest, RejectsKeyOnDifferentMeshDeviceBeforeDispatch) {
+    using Operation = ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation;
+
+    if (tt::tt_metal::GetNumAvailableDevices() < 2U) {
+        GTEST_SKIP() << "requires two devices to construct tensors with different MeshDevice owners";
+    }
+
+    auto* query_device = &ttml::autograd::ctx().get_device();
+    auto foreign_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(1);
+    auto host_tensor = xt::zeros<float>({1U, 1U, 32U, 32U});
+    auto query = ttml::core::from_xtensor(host_tensor, query_device);
+    auto local_key = ttml::core::from_xtensor(host_tensor, query_device);
+    auto foreign_key = ttml::core::from_xtensor(host_tensor, foreign_device.get());
+    auto value = ttml::core::from_xtensor(host_tensor, query_device);
+    const std::optional<ttnn::Tensor> no_mask = std::nullopt;
+
+    const Operation::operation_attributes_t attributes{
+        .return_intermediates = false,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .dropout_probability = 0.0F};
+    const Operation::tensor_args_t local_args{
+        .query = query,
+        .key = local_key,
+        .value = value,
+        .mask = no_mask,
+        .preallocated_intermediate = std::nullopt,
+        .preallocated_output = std::nullopt};
+    const Operation::tensor_args_t foreign_args{
+        .query = query,
+        .key = foreign_key,
+        .value = value,
+        .mask = no_mask,
+        .preallocated_intermediate = std::nullopt,
+        .preallocated_output = std::nullopt};
+
+    EXPECT_NO_THROW(Operation::validate_on_program_cache_miss(attributes, local_args));
+    EXPECT_THROW(Operation::validate_on_program_cache_miss(attributes, foreign_args), std::exception);
+}
 
 // Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
 TEST_F(SDPAForwardTest, DISABLED_ValidationTest_EdgeCaseDimensions) {
