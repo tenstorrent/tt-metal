@@ -272,8 +272,8 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
         case UnaryOpType::GELU_TANH:
             result.type = KernelActivation::GELU_TANH;
-            // param0: 0 = accurate (FP32 tanh), non-zero = fast (BF16-grade, see gelu_tanh_tile<true>)
-            result.param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
+            // param0: 0 = accurate (FP32 tanh), any non-zero value = fast (BF16-grade); normalized like the unary path.
+            result.param0 = has_first && params[0] != 0.0f ? 1u : 0u;
             break;
 
         case UnaryOpType::TANH:

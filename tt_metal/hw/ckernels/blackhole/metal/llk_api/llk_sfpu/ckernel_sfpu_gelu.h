@@ -390,11 +390,11 @@ inline void gelu_tanh_init() {
 // 22 SFPU ops against ~38 for calculate_gelu_tanh. For FP32 outputs, prefer calculate_gelu_tanh.
 // =============================================================================
 
-// 2^f on [0, 1) as 1 + c1 f + ... + c4 f^4, fitted for relative error (1.5e-5, mean 6e-8: unbiased) with c0 = 1 and c2..c4 rounded to
-// BF16 so each loads with one SFPLOADI; c1 lives in a programmable constant. The 2^-23 mantissa scale is folded in
+// 2^f on [0, 1) as 1 + c1 f + ... + c4 f^4, fitted for relative error (max 1.5e-5) with zero mean error: a one-sided
+// error biases |GELU| in one direction, which accumulates through a residual stream. c0 = 1 and c2..c4 are rounded
+// to BF16 so each loads with one SFPLOADI; c1 lives in a programmable constant. The 2^-23 mantissa scale is folded in
 // (c_k * 2^(-23k), which keeps them BF16-exact). setexp() below overwrites the exponent, so the polynomial must stay
-// in [1, 2) for every mantissa: it spans [1, 1.99997] over all 2^23. An earlier fit had 3.0e-5 error, mostly
-// positive (mean +2.6e-6); that bias raised Gemma4's deep-layer KV error x1.05 at chunk 8192.
+// in [1, 2) for every mantissa: it spans [1, 1.99997] over all 2^23.
 constexpr float GELU_TANH_FAST_EXP2_C1 = 8.2622300113e-08f;  // vConstFloatPrgm2
 constexpr float GELU_TANH_FAST_EXP2_C2 = 3.4278135885e-15f;
 constexpr float GELU_TANH_FAST_EXP2_C3 = 8.8508325543e-23f;
@@ -425,8 +425,7 @@ inline void calculate_gelu_tanh_fast() {
         sfpi::vFloat e = sfpi::setexp(frac, exponential_part);
 
         // d >= 1, so no zero/inf/NaN cases: approximate reciprocal plus two branch-free Newton steps. Each step
-        // lands at or below 1/d, so a single step biases |GELU| low; that bias raised Gemma4's deep-layer KV error
-        // x1.09 at chunk 4096, and the second step brings it to x1.04 for ~0.3% of the layer.
+        // lands at or below 1/d, so a single step would bias |GELU| low; the second makes that bias negligible.
         sfpi::vFloat den = e + 1.0f;
         sfpi::vFloat r = sfpi::approx_recip(den);
         r = r * (2.0f - den * r);
