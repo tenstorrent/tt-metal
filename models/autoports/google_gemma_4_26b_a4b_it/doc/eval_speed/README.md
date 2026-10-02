@@ -73,6 +73,12 @@ a Docker delayed-writer control reproduces the leak and prevents it in81ms,
 and a20-second real Harbor timeout smoke stops all3 owned processes with no
 late saved action. An abandoned upstream response still finishes12.36s later;
 that wasted serving work is separately measured, not counted as agent time.
+TTI4fcfdcfb adds opt-in upstream disconnect propagation (58 host tests). Two
+short real timeout smokes prevent late actions; the25-second case interrupts
+decoding after217 partial tokens. A following native replay matches the prior
+parsed response. These are cancellation/plumbing results, not improved reward.
+An old-BFP8/original-T1 repeat-advisory control is prepared; previous advisory
+failures used the new-prefill policy. The actual five-task CI remains fixed.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.
