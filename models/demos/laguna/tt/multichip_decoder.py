@@ -1319,7 +1319,17 @@ class MultichipDecoder(OptimizedDecoder):
         return ttnn.concat(outs, dim=1)
 
     # ---- decode: reuse optimized body + all_reduce after WO --------------- #
-    def decode_forward(self, x_1BH, cur_pos, rope_idx, page_table, kv_cache, sequential_kv_write=False, rope_mats=None):
+    def decode_forward(
+        self,
+        x_1BH,
+        cur_pos,
+        rope_idx,
+        page_table,
+        kv_cache,
+        sequential_kv_write=False,
+        rope_mats=None,
+        next_norm_cores=None,
+    ):
         cfg = self.cfg
         B = x_1BH.shape[-2]
         residual = x_1BH
@@ -1432,4 +1442,15 @@ class MultichipDecoder(OptimizedDecoder):
         h = ttnn.add(residual, o, memory_config=res_mem)
         ln2 = self._rms(h, self.w["post_ln"], cores=res_cores)
         mlp_out = self._mlp(ln2, B, sharded=True)
-        return ttnn.add(h, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG if res_mem else None)
+        # the layer output goes straight into the NEXT layer's input-norm layout when that is h's own shard
+        # spec (a sharded add whose output spec differs from its sharded input's gave PCC 0)
+        out_mem = ttnn.DRAM_MEMORY_CONFIG if res_mem else None
+        if res_mem is not None and next_norm_cores == res_cores:
+            out_mem = res_mem
+        return ttnn.add(h, mlp_out, memory_config=out_mem)
+
+    def input_norm_cores(self):
+        """Width-shard grid the decode input norm uses (handed off to the fused QKV+gate matmul)."""
+        if self.use_dram_sharded and self.meta.get("qkvg_pad"):
+            return _decode_shard_cores(self.cfg.hidden, self.meta["qkvg_pad"])
+        return None

@@ -530,8 +530,10 @@ class LagunaModel:
         # TT_LAGUNA_NO_ROPE_HOIST=1 forces per-layer local compute (A/B diagnostic).
         rope_ctx = None if os.environ.get("TT_LAGUNA_NO_ROPE_HOIST") == "1" else self._build_decode_rope(rope_idx, B)
         h = hidden_1BH
+        n = len(self.layers)
         for i, (dec, kv) in enumerate(zip(self.layers, kv_cache)):
             pt = page_table[i] if per_layer else page_table
+            nxt = self.layers[i + 1] if i + 1 < n else None
             h = dec.decode_forward(
                 h,
                 cur_pos,
@@ -540,6 +542,8 @@ class LagunaModel:
                 kv,
                 sequential_kv_write=sequential_kv_write,
                 rope_mats=(rope_ctx[dec.cfg.attention_type] if rope_ctx is not None else None),
+                # the next layer's input-norm grid: the layer output may be written in that layout directly
+                next_norm_cores=(nxt.input_norm_cores() if nxt is not None and hasattr(nxt, "input_norm_cores") else None),
             )
         return h
 
