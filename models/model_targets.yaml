@@ -1639,6 +1639,50 @@ targets:
             owner_id: U0491KT8MNY # Mohamed Bahnas
             team: models
 
+  qwen3-tts-1.7b:
+    aliases: ["Qwen3-TTS-12Hz-1.7B-Base", "Qwen/Qwen3-TTS-12Hz-1.7B-Base", "Qwen3-TTS-12Hz-1.7B-CustomVoice", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+
+  qwen3-tts-0.6b:
+    aliases: ["Qwen3-TTS-12Hz-0.6B-Base", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "Qwen3-TTS-12Hz-0.6B-CustomVoice", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+
   vit:
     aliases: ["ViT", "vit", "google/vit-base-patch16-224"]
     skus:
