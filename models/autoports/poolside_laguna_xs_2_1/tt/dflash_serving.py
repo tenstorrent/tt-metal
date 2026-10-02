@@ -11,6 +11,8 @@ buffer.  It never mutates the normal target forward path.
 
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import dataclass
 from typing import Callable, Mapping, Sequence
 
@@ -56,6 +58,8 @@ class DFlashServingRound:
     accepted_drafts: int
     committed: tuple[int, ...]
     target_only: bool = False
+    draft_ms: float = 0.0
+    verify_ms: float = 0.0
 
 
 class DFlashServedController:
@@ -86,6 +90,17 @@ class DFlashServedController:
         self._expected_input_token = None
         self._closed = False
         self.rounds: list[DFlashServingRound] = []
+        # TT_LAGUNA_DFLASH_STATS=1 prints one line per round (draft/verify wall time, accepted drafts).
+        self._stats = os.environ.get("TT_LAGUNA_DFLASH_STATS") == "1"
+
+    def _log_round(self, served: DFlashServingRound) -> None:
+        if self._stats:
+            print(
+                f"[laguna dflash] round pos={served.position} target_only={int(served.target_only)} "
+                f"accepted={served.accepted_drafts} committed={len(served.committed)} "
+                f"draft_ms={served.draft_ms:.2f} verify_ms={served.verify_ms:.2f}",
+                flush=True,
+            )
 
     @property
     def active(self) -> bool:
@@ -246,11 +261,13 @@ class DFlashServedController:
             raise RuntimeError(
                 f"DFlash auxiliary context ends at {capture.end_position}, but known bonus is at {position}"
             )
+        verify_start = time.perf_counter()
         target_greedy, verify_capture = self._verify_contiguous(
             [known_bonus],
             position,
             verify_kwargs,
         )
+        verify_ms = (time.perf_counter() - verify_start) * 1000.0
         self.cache.update_target_capture(verify_capture)
         self._pending = [target_greedy[0]]
         self.rounds.append(
@@ -261,8 +278,10 @@ class DFlashServedController:
                 accepted_drafts=0,
                 committed=(target_greedy[0],),
                 target_only=True,
+                verify_ms=verify_ms,
             )
         )
+        self._log_round(self.rounds[-1])
         return self._pop_committed(position)
 
     def serve_token(
@@ -286,6 +305,7 @@ class DFlashServedController:
             raise RuntimeError(
                 f"DFlash auxiliary context ends at {capture.end_position}, but known bonus is at {position}"
             )
+        draft_start = time.perf_counter()
         proposal = self.core.proposal_round(
             self.cache,
             target_model=self.target_model,
@@ -297,11 +317,14 @@ class DFlashServedController:
         if len(drafts) != expected_drafts:
             raise ValueError(f"DFlash drafter returned {len(drafts)} tokens, expected {expected_drafts}")
         verify_tokens = [known_bonus, *drafts]
+        verify_start = time.perf_counter()
         target_greedy, verify_capture = self._verify_contiguous(
             verify_tokens,
             position,
             verify_kwargs,
         )
+        verify_ms = (time.perf_counter() - verify_start) * 1000.0
+        draft_ms = (verify_start - draft_start) * 1000.0
 
         accepted, committed = self._accept_greedy(drafts, target_greedy)
         # Commit auxiliary states only for rows that are now authoritative:
@@ -317,8 +340,11 @@ class DFlashServedController:
                 target_greedy=tuple(target_greedy),
                 accepted_drafts=accepted,
                 committed=tuple(committed),
+                draft_ms=draft_ms,
+                verify_ms=verify_ms,
             )
         )
+        self._log_round(self.rounds[-1])
         return self._pop_committed(position)
 
     def end_request(self, request_id=None) -> None:
