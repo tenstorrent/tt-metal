@@ -3610,7 +3610,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
     the candidate block from the drafts this class proposed and owns the
     accept walk.
 
-    Steps for one request that decodes alone:
+    Steps for one greedy request that decodes alone:
 
     1. ``prefill_forward`` runs the prompt eagerly and keeps the residual taps
        of the drafter's target layers as ``_spec_pending``. A prompt split
@@ -3632,7 +3632,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
     step with the owner, when the owner was prefilled together with another
     request, when the runner samples on host, or when a proposal declines
     (see ``propose_draft_tokens``). The row then continues as plain decode,
-    which is what the block rail does at batch size above one. A step the
+    which is what the block rail does at batch size above one. A request
+    whose device sampling is not greedy (``_dflash_row_is_greedy``) never
+    starts a session: the session answers with the target's argmax ids, and
+    only the plain decode draws from the request's own distribution. A step the
     owner is not part of leaves its session alone: the scheduler keeps the
     drafts of a request it did not schedule and sends them on that request's
     next step, which the retained proposal must still answer.
@@ -3863,6 +3866,44 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
 
     def _dflash_owner_in(self, slots):
         return any(self._dflash_owns(self._dflash_live_owner, slot) for slot in slots)
+
+    def _dflash_leave_row(self, slot, why):
+        """Drop ``slot``'s own pending taps and end its own session.
+
+        Another request's taps or session stay: that request is not in this
+        step and may still decode alone.
+        """
+        pending = self._dflash_owns(self._dflash_pending_owner, slot)
+        live = self._dflash_owns(self._dflash_live_owner, slot)
+        if pending or live:
+            logger.info(f"Gemma4DFlash speculative contract: leaving speculation for slot {slot} ({why})")
+        if pending:
+            self._dflash_drop_pending()
+        if live:
+            self._dflash_end_session()
+
+    @staticmethod
+    def _dflash_row_is_greedy(sampling_params, row):
+        """Whether device sampling with ``sampling_params`` gives ``row`` the target's argmax.
+
+        The drafter session answers with the fused replay's argmax ids, so
+        only such a row may take it. A penalty changes the logits before the
+        argmax; top_k and top_p need no check, because they only narrow a
+        distribution that temperature 0 has already collapsed to one token.
+        Each field is one value for every row or a per-row sequence.
+        """
+        for name, neutral in (
+            ("temperature", 0.0),
+            ("presence_penalty", 0.0),
+            ("frequency_penalty", 0.0),
+            ("repetition_penalty", 1.0),
+        ):
+            value = getattr(sampling_params, name)
+            if not isinstance(value, (int, float)):
+                value = value[int(row)]
+            if float(value) != neutral:
+                return False
+        return True
 
     def _dflash_leave_speculation(self, why, slots=None):
         """Drop the pending taps and end the live session.
@@ -4117,11 +4158,11 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
     def _dflash_ordinary_step(self, args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live):
         """An ordinary decode step: the runner asked for no verification.
 
-        With one live row this is where speculation starts (from pending taps)
-        or continues (a retained proposal the scheduler sent no drafts for).
-        Both answer with a fused replay's first posterior id, the target's
-        greedy choice after the row's token, in the flat int32 form the device
-        sampler produces. Every other case is the plain decode.
+        With one live greedy row this is where speculation starts (from
+        pending taps) or continues (a retained proposal the scheduler sent no
+        drafts for). Both answer with a fused replay's first posterior id, the
+        target's greedy choice after the row's token, in the flat int32 form
+        the device sampler produces. Every other case is the plain decode.
         """
 
         def plain():
@@ -4133,13 +4174,13 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             self._dflash_leave_speculation("several live rows", [self._dflash_slot_of(r, kwargs) for r in live])
             return plain()
         row = live[0]
-        if kwargs.get("sampling_params") is None:
+        sampling = kwargs.get("sampling_params")
+        if sampling is None:
             # Host sampling reads logits; the fused replay yields ids only.
-            slot = self._dflash_slot_of(row, kwargs)
-            if self._dflash_owns(self._dflash_pending_owner, slot):
-                self._dflash_drop_pending()
-            if self._dflash_owns(self._dflash_live_owner, slot):
-                self._dflash_end_session()
+            self._dflash_leave_row(self._dflash_slot_of(row, kwargs), "host sampling")
+            return plain()
+        if not self._dflash_row_is_greedy(sampling, row):
+            self._dflash_leave_row(self._dflash_slot_of(row, kwargs), "the row does not sample greedily")
             return plain()
         token = self._dflash_solo_next_token(row, tokens, start_pos, rows, kwargs, page_tables_per_layer)
         if token is None:
@@ -4247,8 +4288,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         drafts is answered from the retained proposal once the block matches
         it; a mismatch raises, because answering would report a posterior for
         tokens the device never evaluated. Rows without drafts take column 0
-        from the plain decode, or, for the one live row, from the session as
-        an ordinary step would.
+        from the plain decode, or, for the one live row when it is greedy,
+        from the session as an ordinary step would.
         """
         from vllm_tt_plugin.spec_decode import PLACEHOLDER_TOKEN_ID, VerifyOutput
 
@@ -4281,10 +4322,14 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
         if len(live) == 1:
             row = live[0]
-            token = self._dflash_solo_next_token(row, tokens, start_pos, rows, kwargs, page_tables_per_layer)
-            if token is not None:
-                ids[row, 0] = int(token)
-                return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
+            sampling = kwargs.get("sampling_params")
+            if sampling is not None and not self._dflash_row_is_greedy(sampling, row):
+                self._dflash_leave_row(self._dflash_slot_of(row, kwargs), "the row does not sample greedily")
+            else:
+                token = self._dflash_solo_next_token(row, tokens, start_pos, rows, kwargs, page_tables_per_layer)
+                if token is not None:
+                    ids[row, 0] = int(token)
+                    return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
         else:
             self._dflash_leave_speculation("several live rows", [self._dflash_slot_of(r, kwargs) for r in live])
         ids[:, 0] = self._dflash_plain_argmax(args, kwargs, page_tables_per_layer, rows)
@@ -4396,9 +4441,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
     def _dflash_plain_argmax(self, args, kwargs, page_tables_per_layer, rows, exclude_row=None):
         """Each row's next-token id from the plain decode, int32 ``[rows]``.
 
-        Device-sampled ids are used as they are (greedy sampling is the
-        argmax, and this rail is greedy); host logits are converted at this
-        step's row count and argmaxed over the vocabulary.
+        Device-sampled ids are used as they are: each is the row's own draw,
+        which is the argmax for a greedy row. Host logits are converted at
+        this step's row count and argmaxed over the vocabulary.
         """
         args, kwargs = self._dflash_column_zero(args, kwargs, rows, exclude_row)
         kwargs = self._dflash_plain_kwargs(kwargs)
