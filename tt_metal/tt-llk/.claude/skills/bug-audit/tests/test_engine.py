@@ -969,6 +969,37 @@ def _init(tmp_path, tree, *extra):
     return code, o + e, {f for b in m for f in b["files"]}
 
 
+def test_init_run_batches_hold_at_most_300_lines_and_every_file_once(tmp_path):
+    sizes = {
+        "a/f1.c": 1,
+        "a/f50.c": 50,
+        "a/f120.c": 120,
+        "a/f200.c": 200,
+        "b/f290.c": 290,
+        "b/f299.c": 299,
+        "b/f310.c": 310,
+        "c/f1200.c": 1200,
+    }
+    tree = _git_tree(
+        tmp_path, list(sizes), {f: "int x;\n" * n for f, n in sizes.items()}
+    )
+    code, out, files = _init(tmp_path, tree)
+    assert code == 0, out
+    man = json.load(open(tmp_path / "run" / "batches" / "manifest.json"))
+    listed = [f for b in man for f in b["files"]]
+    assert sorted(listed) == sorted(
+        sizes
+    ), "every in-scope file is in exactly one batch"
+    for b in man:
+        lines = sum(sizes[f] for f in b["files"])
+        # a file longer than the budget is a batch of its own; otherwise the default budget is 300 lines
+        assert lines <= 300 or len(b["files"]) == 1, (b["files"], lines)
+    assert (
+        json.load(open(tmp_path / "run" / "state.json"))["batching"]["max_lines"] == 300
+    )
+    assert [b["files"] for b in man if "c/f1200.c" in b["files"]] == [["c/f1200.c"]]
+
+
 def test_init_run_include_and_exclude_take_comma_lists_like_prio(tmp_path):
     tree = _git_tree(tmp_path, ["a/x.c", "b/y.c", "c/z.c"])
     code, out, files = _init(
