@@ -27,6 +27,10 @@ static_assert(
     sizeof(decltype(CQDispatchCmd::notify_dispatch_s_go_signal.index_bitmask)) * CHAR_BIT);
 
 static_assert(
+    DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 < 16,
+    "FDS reserves group zero and requires every dispatch message index to fit in a four-bit group id");
+
+static_assert(
     DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET ==
         std::numeric_limits<dev_msgs::go_msg_t::FieldTraits<false, dev_msgs::go_msg_t::Field::dispatch_message_offset>::
                                 element_type>::max(),

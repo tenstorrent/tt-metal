@@ -11,7 +11,8 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
-constexpr std::uint8_t FULL_TILE_MVMULS_PER_K_FACE = NUM_FACES * (MAX_FACE_R_DIM / MAX_FPU_ROWS);
+static_assert(MAX_FACE_R_DIM % ELTWISE_MATH_ROWS == 0, "ELTWISE_MATH_ROWS must divide the 16-row face");
+constexpr std::uint8_t FULL_TILE_MVMULS_PER_K_FACE = NUM_FACES * (MAX_FACE_R_DIM / ELTWISE_MATH_ROWS);
 
 // Counter increments programmed into one matmul ADDR_MOD slot.
 struct _llk_math_matmul_step_t
@@ -62,6 +63,7 @@ struct _llk_math_matmul_execution_geometry_t
     bool has_next_face;
     bool has_next_face_row;
     bool has_next_k_face;
+    bool use_half_face_replay;
 };
 
 /**
@@ -92,7 +94,7 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
     const std::uint8_t face_rows          = src_b_shape.face_r_dim < MAX_FPU_ROWS ? MAX_FPU_ROWS : src_b_shape.face_r_dim;
     const std::uint16_t dst_rows_per_tile = static_cast<std::uint16_t>(output_shape.total_num_faces()) * face_rows;
     const std::uint8_t num_k_faces        = src_b_shape.num_faces_c_dim;
-    const std::uint8_t face_row_passes    = src_b_shape.face_r_dim > MAX_FPU_ROWS ? 2 : 1;
+    const std::uint8_t face_row_passes    = face_rows / ELTWISE_MATH_ROWS;
     const std::uint8_t mvmuls_per_k_face  = output_shape.total_num_faces() * face_row_passes;
 
     // Which traversal axes this shape leaves active. A face holds one or two FPU row
@@ -103,16 +105,16 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
     // Keep these predicates named. Each is read two to five times, and substituting them
     // at their use sites costs 204 bytes per math kernel (measured): the compiler reloads
     // and re-compares the shape word at every site instead of once here.
-    const bool face_has_two_row_groups  = face_rows > MAX_FPU_ROWS;
+    const bool face_has_two_row_groups  = face_rows > ELTWISE_MATH_ROWS;
     const bool has_column_faces         = output_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM;
     const bool has_row_faces            = output_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM;
     const std::int32_t src_b_row_stride = face_rows * num_k_faces;
 
     // A single-row-group face has no SrcB row group to step, so SrcA takes the column face
-    // instead. Dest advances one row group either way: every MVMUL writes eight rows.
+    // instead. Dest advances one row group either way: every MVMUL writes ELTWISE_MATH_ROWS rows.
     const std::int32_t fpu_rows_src_a = !face_has_two_row_groups && has_column_faces ? MAX_FACE_C_DIM : 0;
-    const std::int32_t fpu_rows_src_b = face_has_two_row_groups ? MAX_FPU_ROWS : 0;
-    const std::int32_t fpu_rows_dest  = face_has_two_row_groups || has_column_faces ? MAX_FPU_ROWS : 0;
+    const std::int32_t fpu_rows_src_b = face_has_two_row_groups ? ELTWISE_MATH_ROWS : 0;
+    const std::int32_t fpu_rows_dest  = face_has_two_row_groups || has_column_faces ? ELTWISE_MATH_ROWS : 0;
 
     // Slot assignment, innermost first. The column face outranks the face row. Because
     // has_row_faces implies face_has_two_row_groups, the face row is active exactly when
@@ -122,11 +124,11 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
     const bool has_next_face       = next_face_is_column || next_face_is_row;
     const std::int32_t face_src_a  = next_face_is_column ? MAX_FACE_C_DIM : 0;
     const std::int32_t face_src_b  = next_face_is_row ? src_b_row_stride : 0;
-    const std::int32_t face_dest   = has_next_face ? MAX_FPU_ROWS : 0;
+    const std::int32_t face_dest   = has_next_face ? ELTWISE_MATH_ROWS : 0;
 
     const bool has_next_face_row      = has_column_faces && has_row_faces;
     const std::int32_t face_row_src_b = has_next_face_row ? src_b_row_stride : 0;
-    const std::int32_t face_row_dest  = has_next_face_row ? MAX_FPU_ROWS : 0;
+    const std::int32_t face_row_dest  = has_next_face_row ? ELTWISE_MATH_ROWS : 0;
 
     const bool has_next_k_face      = num_k_faces > 1;
     const std::int32_t k_face_src_a = has_next_k_face ? MAX_FACE_C_DIM * output_shape.num_faces_c_dim : 0;
@@ -162,9 +164,10 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
                 .src_b = static_cast<std::uint8_t>(0x3F & k_face_src_b),
                 .dest  = 0,
             },
-        .has_next_face     = has_next_face,
-        .has_next_face_row = has_next_face_row,
-        .has_next_k_face   = has_next_k_face,
+        .has_next_face        = has_next_face,
+        .has_next_face_row    = has_next_face_row,
+        .has_next_k_face      = has_next_k_face,
+        .use_half_face_replay = FPU_SPLITS_DEST_ROW_GROUP && face_rows == MAX_FPU_ROWS,
     };
 }
 
@@ -190,7 +193,8 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
     if constexpr (ENABLE_2X_FORMAT)
     {
         const std::uint16_t num_tile_incr = (ct_dim >= rt_dim) ? 64 : ct_dim * 64;
-        // Non-DI MXFP4_2x traversal (mirrors the DI X2 (srca,srcb,dest) sequence):
+        // Non-DI 2x traversal (mirrors the DI X2 (srca,srcb,dest) sequence), one FPU row group
+        // per MVMUL. With an 8-row FPU:
         //   #0 (0, 0, 0)     #1 (0, 8, 8)
         //   #2 (16, 0,16)    #3 (16, 8,24)
         //   #4 (0,16,32)     #5 (0,24,40)
@@ -199,11 +203,11 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
         // at #1->#2 it is still 0 so srcb cr=1 wraps to 0; at #3->#4 we pump it up to
         // 16 via {cr=1, incr=16}; at #5->#6 srcb cr=1 then wraps to 16.
 
-        // Common in-replay step (used between #0->#1, #2->#3, #4->#5, #6->#7).
+        // Common in-replay step (used within each face pair).
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 8, .clr = 0, .cr = 0},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
+            .srcb = {.incr = ELTWISE_MATH_ROWS, .clr = 0, .cr = 0},
+            .dest = {.incr = ELTWISE_MATH_ROWS, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_0);
 
@@ -211,7 +215,7 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
         addr_mod_t {
             .srca = {.incr = 16, .clr = 0, .cr = 0},
             .srcb = {.incr = 0, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = ELTWISE_MATH_ROWS, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_1);
 
@@ -220,7 +224,7 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 1},
             .srcb = {.incr = 16, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = ELTWISE_MATH_ROWS, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_2);
 
@@ -228,7 +232,7 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
         addr_mod_t {
             .srca = {.incr = 16, .clr = 0, .cr = 0},
             .srcb = {.incr = 0, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = ELTWISE_MATH_ROWS, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_3);
 
@@ -367,7 +371,7 @@ inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_di
  * outside the replay buffer by the MOP in @ref _llk_math_matmul_mop_config_, or directly from the
  * RISC core in the experimental no-MOP path.
  *
- * @tparam ENABLE_2X_FORMAT: Select the MXFP4_2x replay image.
+ * @tparam ENABLE_2X_FORMAT: Select the 2x traversal, half the MVMULs of the plain one.
  */
 template <bool ENABLE_2X_FORMAT>
 inline constexpr std::uint32_t _llk_math_matmul_replay_buf_len_()
@@ -375,18 +379,27 @@ inline constexpr std::uint32_t _llk_math_matmul_replay_buf_len_()
     return (ENABLE_2X_FORMAT ? FULL_TILE_MVMULS_PER_K_FACE : MAX_NUM_FACES_C_DIM * FULL_TILE_MVMULS_PER_K_FACE) - 1;
 }
 
+template <std::uint32_t NUM_ROWS>
+inline void _llk_math_matmul_emit_rows_()
+{
+#pragma GCC unroll 4
+    for ([[maybe_unused]] const auto row : fpu_row_offsets<NUM_ROWS>())
+    {
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    }
+}
+
 /**
  * @brief Records the standard or 2x MVMUL image into replay buffer slot 0.
  *
- * Standard matmul always records the full 15-entry K-outer image. MOP-based tiny matmul selects a
- * window from that image.
+ * Standard matmul records the full K-outer image, or a dedicated half-face image for narrow-FPU tiny tiles.
  *
  * @tparam ENABLE_2X_FORMAT: When true, records the non-DI MXFP4_2x variant.
  * The variant uses a 7-MVMUL replay for A0/A1 and B0/B1. SrcA uses MxFp4_2x_A/B for the 2x sub-element expansion.
  * @note Call @ref _llk_math_matmul_addrmod_ with the matching template args first, the recorded MVMULs select its addrmod slots.
  */
 template <bool ENABLE_2X_FORMAT>
-inline void _llk_math_matmul_load_replay_()
+inline void _llk_math_matmul_load_replay_(const bool use_half_face_replay = false)
 {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
@@ -398,8 +411,9 @@ inline void _llk_math_matmul_load_replay_()
 
     if constexpr (ENABLE_2X_FORMAT)
     {
-        // Non-DI MXFP4_2x: 7-MVMUL replay + matmul_op = 8 MVMULs per tile (vs 16 in plain non-DI).
-        // (srca,srcb,dest) sequence mirrors the DI X2 path:
+        // Non-DI 2x: half the face pairs of the plain image (SrcA expands two datums per element), so
+        // one K face covers the tile: 8 MVMULs per tile on an 8-row FPU, 16 on a 4-row FPU.
+        // (srca,srcb,dest) sequence mirrors the DI X2 path, shown for 8 rows:
         //   #0 (0,  0,  0)  B0[0:7]*A0
         //   #1 (0,  8,  8)  B0[8:15]*A0
         //   #2 (16, 0, 16)  B0[0:7]*A1     <- ADDR_MOD_1 (srca+=16, srcb cr->0)
@@ -411,37 +425,61 @@ inline void _llk_math_matmul_load_replay_()
         load_replay_buf<0, replay_buf_len>(
             []
             {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #0 -> srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // #1 -> srca+=16, srcb cr->0, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #2 -> srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // #3 -> srca cr->0, srcb cr+=16 (=16), dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #4 -> srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // #5 -> srca+=16, srcb cr->16, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #6 -> srcb+=8, dest+=8
+                constexpr std::uint32_t IN_FACE_ROWS = FACE_R_DIM - ELTWISE_MATH_ROWS;
+
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
             });
     }
     else
     {
+        if constexpr (FPU_SPLITS_DEST_ROW_GROUP)
+        {
+            if (use_half_face_replay)
+            {
+                // Slots 12..18 preserve the geometry-derived suffixes while transitioning
+                // an eight-row physical face after two four-row MVMULs.
+                load_replay_buf<12, 7>(
+                    []
+                    {
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                    });
+                return;
+            }
+        }
+
+        // Each face pair ends with a transition, except the final pair whose last MVMUL comes from the MOP or no-MOP caller.
         load_replay_buf<0, replay_buf_len>(
             []
             {
-                // Tiny tiles select a window and derive each transition from their geometry.
-                // For full-tile input (32x32 x 32x32), the transitions are as follows:
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca,  srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca=srca, srcb+=8, dest+=8 // A1 -> A2 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A1 // srca=0, srcb=32, dest+=8 // A1 -> A2 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // srca=srca, srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B2A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A1 // srca=srca, srcb+=8, dest+=8 // A1 -> A2 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B2A1 // srca=32/16,srcb=16, dest=0 // A1 -> A2 && srca=16 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8, dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16, dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A3 // srca=srca, srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A3 // srca=32, srcb=48, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A2 // srca=srca, srcb+=8, dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A2 // srca+=16, srcb=0, dest+=8 // A2 -> A1 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3 // srca=srca, srcb+=8, dest+=8
+                constexpr std::uint32_t IN_FACE_ROWS = FACE_R_DIM - ELTWISE_MATH_ROWS;
+
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
             });
     }
 }
@@ -474,7 +512,7 @@ inline void _llk_math_matmul_mop_config_(const std::uint8_t ct_dim, const std::u
 
     constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
 
-    _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>();
+    _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>(geometry.use_half_face_replay);
 
     const std::uint32_t replay_start_idx = ENABLE_2X_FORMAT ? 0 : geometry.replay_start_idx;
     const std::uint32_t replay_len       = ENABLE_2X_FORMAT ? replay_buf_len : geometry.replay_len;
@@ -487,6 +525,17 @@ inline void _llk_math_matmul_mop_config_(const std::uint8_t ct_dim, const std::u
     temp.program_bank0_sw_cntl(instrn_buffer);
 }
 
+template <std::uint32_t SRC_B, std::uint32_t SRC_A, std::uint32_t DEST, std::uint32_t NUM_ROWS = FACE_R_DIM>
+inline void _llk_math_matmul_di_emit_face_()
+{
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<NUM_ROWS>())
+    {
+        const auto offset = row / 4; // Direct-indexing addresses use four-row units.
+        TTI_MVMULDI(p_setrwc::CLR_NONE, 0, SRC_B + offset, SRC_A, 0, DEST + offset);
+    }
+}
+
 /**
  * @brief Initializes mop config for matrix multiply operation using the direct-indexing instruction variant.
  *
@@ -495,7 +544,7 @@ inline void _llk_math_matmul_mop_config_(const std::uint8_t ct_dim, const std::u
  *
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
+ * @tparam ENABLE_2X_FORMAT: Select the 2x-format face traversal.
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
@@ -511,80 +560,58 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
     constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
     const bool reuse_a                      = ct_dim >= rt_dim;
 
-    constexpr std::uint32_t replay_buf_len =
-        ENABLE_2X_FORMAT ? 8 - 1 : 16 - 1; // -1 since the last instruction for the Tile * Tile operation will come out of the MOP
+    constexpr std::uint32_t FACE_PAIRS     = ENABLE_2X_FORMAT ? 4 : 8;
+    constexpr std::uint32_t OPS_PER_FACE   = FACE_R_DIM / ELTWISE_MATH_ROWS;
+    constexpr std::uint32_t replay_buf_len = FACE_PAIRS * OPS_PER_FACE - 1;
+
+    // The MOP supplies the final row group of the final face pair.
+    constexpr std::uint32_t REPLAY_ROWS = FACE_R_DIM - ELTWISE_MATH_ROWS;
+
     if constexpr (ENABLE_2X_FORMAT)
     {
         load_replay_buf<0, replay_buf_len>(
-            // Lambda function to load reply buffer
             []
             {
                 // [B0] x [A0 A1]
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x0, 0x0, 0x0); // B0[0:7]*A0  srcb=0x0<<2='d0, srca=0x0<<2='d0, dest=0x0<<2='d0
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x0, 0x0, 0x2); // B0[8:15]*A0 srcb=0x2<<2='d8, srca=0x0<<2='d0, dest=0x2<<2='d8
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x4, 0x0, 0x4); // B0[0:7]*A1  srcb=0x0<<2='d0, srca=0x4<<2='d16, dest=0x4<<2='d16
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x4, 0x0, 0x6); // B0[8:15]*A1 srcb=0x2<<2='d8, srca=0x4<<2='d16, dest=0x6<<2='d24
+                _llk_math_matmul_di_emit_face_<0x0, 0x0, 0x0>();
+                _llk_math_matmul_di_emit_face_<0x0, 0x4, 0x4>();
+
                 // [B1] x [A0 A1]
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x0, 0x0, 0x8); // B1[0:7]*A0  srcb=0x4<<2='d16, srca=0x0<<2='d0, dest=0x8<<2='d32
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x0, 0x0, 0xA); // B1[8:15]*A0 srcb=0x6<<2='d24, srca=0x0<<2='d0, dest=0xA<<2='d40
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x4, 0x0, 0xC); // B1[0:7]*A1  srcb=0x4<<2='d16, srca=0x4<<2='d16, dest=0xC<<2='d48
+                _llk_math_matmul_di_emit_face_<0x4, 0x0, 0x8>();
+                _llk_math_matmul_di_emit_face_<0x4, 0x4, 0xC, REPLAY_ROWS>();
             });
     }
     else
     {
         load_replay_buf<0, replay_buf_len>(
-            // Lambda function to load reply buffer
             []
             {
                 // [B0] x [A0 A1]
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x0, 0x0, 0x0); // B0[0:7]*A0  srcb=0x0<<2='d0, srca=0x0<<2='d0, dest=0x0<<2='d0
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x0, 0x0, 0x2); // B0[8:15]*A0 srcb=0x2<<2='d8, srca=0x0<<2='d0, dest=0x2<<2='d8
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x4, 0x0, 0x4); // B0[0:7]*A1  srcb=0x0<<2='d0, srca=0x4<<2='d16, dest=0x4<<2='d16 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x8 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x4, 0x0, 0x6); // B0[8:15]*A1 srcb=0x2<<2='d8, srca=0x4<<2='d16, dest=0x6<<2='d24 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x8 if transposed.
+                _llk_math_matmul_di_emit_face_<0x0, 0x0, 0x0>();
+                _llk_math_matmul_di_emit_face_<0x0, 0x4, 0x4>();
 
                 // [B2] x [A0 A1]
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x8, 0x0, 0x0, 0x8); // B2[0:7]*A0  srcb=0x8<<2='d32, srca=0x0<<2='d0, dest=0x8<<2='d32
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xA, 0x0, 0x0, 0xA); // B2[8:15]*A0 srcb=0xA<<2='d40, srca=0x0<<2='d0, dest=0xA<<2='d40
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x8, 0x4, 0x0, 0xC); // B2[0:7]*A1  srcb=0x8<<2='d32, srca=0x4<<2='d16, dest=0xC<<2='d48 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x8 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xA, 0x4, 0x0, 0xE); // B2[8:15]*A1 srcb=0xA<<2='d40, srca=0x4<<2='d16, dest=0xE<<2='d56 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x8 if transposed.
+                _llk_math_matmul_di_emit_face_<0x8, 0x0, 0x8>();
+                _llk_math_matmul_di_emit_face_<0x8, 0x4, 0xC>();
 
                 // [B1] x [A2 A3] (Accumulates to the result of [B0] x [A0 A1] )
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x8, 0x0, 0x0); // B1[0:7]*A2  srcb=0x4<<2='d16, srca=0x8<<2='d32, dest=0x0<<2='d0 // A2 -> A1 if
-                                                                          // transposed. That is, srca should be set 0x4 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x8, 0x0, 0x2); // B1[8:15]*A2 srcb=0x6<<2='d24, srca=0x8<<2='d32, dest=0x2<<2='d8 // A2 -> A1 if
-                                                                          // transposed. That is, srca should be set 0x4 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0xC, 0x0, 0x4); // B1[0:7]*A3  srcb=0x4<<2='d16, srca=0xC<<2='d48, dest=0x4<<2='d16
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0xC, 0x0, 0x6); // B1[8:15]*A3 srcb=0x6<<2='d24, srca=0xC<<2='d48, dest=0x6<<2='d24
+                _llk_math_matmul_di_emit_face_<0x4, 0x8, 0x0>();
+                _llk_math_matmul_di_emit_face_<0x4, 0xC, 0x4>();
 
                 // [B3] x [A2 A3] (Accumulates to the result of [B2] x [A0 A1]  )
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xC, 0x8, 0x0, 0x8); // B3[0:7]*A2  srcb=0xC<<2='d48, srca=0x8<<2='d32, dest=0x8<<2='d32 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x4 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0x8, 0x0, 0xA); // B3[8:15]*A2 srcb=0xE<<2='d56, srca=0x8<<2='d32, dest=0xA<<2='d40 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x4 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xC, 0xC, 0x0, 0xC); // B3[0:7]*A3  srcb=0xC<<2='d48, srca=0xC<<2='d48, dest=0xC<<2='d48
+                _llk_math_matmul_di_emit_face_<0xC, 0x8, 0x8>();
+                _llk_math_matmul_di_emit_face_<0xC, 0xC, 0xC, REPLAY_ROWS>();
             });
     }
 
-    /* Just choose what is more readable*/
-    constexpr static std::uint32_t matmul_op =
-        ENABLE_2X_FORMAT ? TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x4, ADDR_MOD_1, 0xE)
-                         :                                                     // B1[8:15]*A1 srcb=0x6<<2='d24, srca=0x4<<2='d16, dest=0xE<<2='d56
-            TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0xC, ADDR_MOD_1, 0xE); // B3[8:15]*A3 srcb=0xE<<2='d56, srca=0xC<<2='d48, dest=0xE<<2='d56
-    std::uint32_t matmul_op_last;
-    if constexpr (ENABLE_2X_FORMAT)
-    {
-        matmul_op_last =
-            reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0x0, 0x6, 0x4, ADDR_MOD_2, 0xE) : TT_OP_MVMULDI(p_setrwc::CLR_B, 0x0, 0x6, 0x4, ADDR_MOD_2, 0xE);
-    }
-    else
-    {
-        matmul_op_last =
-            reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0x0, 0xE, 0xC, ADDR_MOD_2, 0xE) : TT_OP_MVMULDI(p_setrwc::CLR_B, 0x0, 0xE, 0xC, ADDR_MOD_2, 0xE);
-    }
+    constexpr std::uint32_t LAST_ROW_OFFSET = REPLAY_ROWS / 4;
+    constexpr std::uint32_t FINAL_SRC_B     = (ENABLE_2X_FORMAT ? 0x4 : 0xC) + LAST_ROW_OFFSET;
+    constexpr std::uint32_t FINAL_SRC_A     = ENABLE_2X_FORMAT ? 0x4 : 0xC;
+    constexpr std::uint32_t FINAL_DEST      = 0xC + LAST_ROW_OFFSET;
+
+    constexpr std::uint32_t matmul_op  = TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0, FINAL_SRC_B, FINAL_SRC_A, ADDR_MOD_1, FINAL_DEST);
+    const std::uint32_t matmul_op_last = reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0, FINAL_SRC_B, FINAL_SRC_A, ADDR_MOD_2, FINAL_DEST)
+                                                 : TT_OP_MVMULDI(p_setrwc::CLR_B, 0, FINAL_SRC_B, FINAL_SRC_A, ADDR_MOD_2, FINAL_DEST);
 
     ckernel_template temp(1 /* outer loop */, FIDELITY_PHASES, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), matmul_op);
     temp.set_last_outer_loop_instr(matmul_op_last);
@@ -628,8 +655,6 @@ inline void _llk_math_matmul_init_(
 
     if constexpr (ENABLE_DIRECT_INDEXING)
     {
-        // Direct-indexing path. Supports plain DI and DI+X2 (DI+X2 is the original
-        // MXFP4_2x matmul implementation).
         _llk_math_matmul_di_addrmod_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
         _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
         _set_tile_shape_idx_gpr_(NUM_FACES * MAX_FACE_R_DIM);
@@ -717,7 +742,6 @@ inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
         if (strided_dest)
         {
             TT_SETRWC(p_setrwc::CLR_NONE, 0, dst_rows_per_tile * (t + 1), p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::C_TO_CR_MODE, 0, p_setrwc::SET_D);
         }
     }
     _reset_counters_<p_setrwc::SET_ABD_F>();
