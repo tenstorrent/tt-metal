@@ -17,13 +17,16 @@
 // The recipe headers key their ring hooks (valid-row key tail masking) on SDPA_RECIPE_RING.
 #define SDPA_RECIPE_RING 1
 
-// Optimization: pack and unpack at -Os, math at -O2 for every recipe and geometry, which keeps the ring
-// programs inside the kernel config buffer (70656 B at the default Blackhole worker L1). Watcher builds are
+// Optimization: unpack and pack at -O3, math at -O2. Even-row Q chunks (the host rounds a paired recipe's odd Q
+// chunk up) keep every recipe inside the kernel config buffer (70656 B at the default Blackhole worker L1);
+// -O3 on unpack/pack is worth 10-25% of ring SDPA time over -Os, -O3 on math nothing. Watcher builds are
 // size-optimized on every thread.
-#if defined(WATCHER_ENABLED) || defined(TRISC_PACK) || defined(TRISC_UNPACK)
+#if defined(WATCHER_ENABLED)
 #pragma GCC optimize("Os")
-#else
+#elif defined(TRISC_MATH)
 #pragma GCC optimize("O2")
+#else
+#pragma GCC optimize("O3")
 #endif
 
 #define REDUCE_OP (PoolType::MAX)
