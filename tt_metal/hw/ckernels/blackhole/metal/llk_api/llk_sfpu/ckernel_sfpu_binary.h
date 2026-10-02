@@ -251,6 +251,15 @@ inline void calculate_sfpu_binary_div(
             // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
             // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
             v_if(sfpi::is_finite(result)) {
+                // The residual cannot be formed for an infinite divisor either, and that case
+                // reaches here because the quotient is finite: r = 1/inf = 0, result = in0 * 0
+                // = 0, and result * in1 is 0 * inf, so the residual is NaN and the refinement
+                // destroys a correct zero. A NaN divisor is left to refine, which is how its
+                // NaN reaches the result.
+                // One integer compare: `&& !sfpi::is_inf(in1)` in the v_if does not compile.
+                v_and(
+                    sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0)) !=
+                    sfpi::as<sfpi::vInt>(sfpi::vFloat(std::numeric_limits<float>::infinity())));
                 // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
                 // The residual subtraction is exact under Sterbenz's lemma.
                 sfpi::vFloat e = in0 - result * in1;
@@ -259,13 +268,17 @@ inline void calculate_sfpu_binary_div(
             v_endif;
         }
 
-        v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::copysgn(result, in0);
-            }
-            v_endif;
+        // A zero divisor needs almost nothing of its own: the reciprocal of +-0 is +-inf, so
+        // in0 * r is already the IEEE quotient, +-inf by the xor of the signs, or NaN for
+        // 0 / 0 and NaN / 0. The one exception is a subnormal dividend, which the multiply
+        // reads as zero and turns into 0 * inf = NaN, so a finite nonzero dividend takes r's
+        // infinity with the xor sign. The magnitudes are compared as integers because the
+        // SFPU compare does not read -0.0 as equal to 0.0.
+        v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0)) == 0) {
+            v_and(sfpi::is_finite(in0));
+            v_and(sfpi::as<sfpi::vInt>(sfpi::setsgn(in0, 0)) != 0);
+            result = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(in0) ^ sfpi::as<sfpi::vInt>(in1));
+            result = sfpi::copysgn(r, result);
         }
         v_endif;
 
