@@ -44,8 +44,6 @@ class DFlashServingEnvelope:
             raise RuntimeError("DFlash served decoding is greedy-only")
         if bool(self.prefix_caching):
             raise RuntimeError("DFlash served decoding is not qualified with prefix caching")
-        if bool(self.hybrid_kv):
-            raise RuntimeError("DFlash served decoding is not qualified with hybrid KV")
         if not bool(self.cache_off):
             raise RuntimeError("DFlash served decoding requires cache-off request ownership")
 
@@ -225,8 +223,6 @@ class DFlashServedController:
         if any(token < 0 or token >= int(self.core.config.vocab_size) for token in input_tokens):
             raise ValueError("DFlash target verify input is outside the shared target vocabulary")
         verify_kwargs = dict(verify_kwargs or {})
-        if verify_kwargs.get("page_tables_per_layer") is not None:
-            raise RuntimeError("DFlash served verification does not support hybrid per-layer page tables")
         verify_positions = list(range(int(position), int(position) + len(input_tokens)))
         target_greedy, verify_capture = self.verify_greedy(
             input_tokens,

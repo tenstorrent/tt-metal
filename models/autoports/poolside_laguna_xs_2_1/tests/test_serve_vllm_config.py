@@ -264,10 +264,6 @@ def test_dflash_is_explicit_p150x2_batch_one_cache_off_experimental_only(tmp_pat
     [
         ({}, "requires TT_LAGUNA_PREFIX_CACHE=0"),
         (
-            {"TT_LAGUNA_PREFIX_CACHE": "0", "TT_LAGUNA_HYBRID_KV": "1"},
-            "requires TT_LAGUNA_HYBRID_KV=0",
-        ),
-        (
             {"TT_LAGUNA_PREFIX_CACHE": "0", "TT_LAGUNA_SPEC_DECODE": "1"},
             "does not support TT_LAGUNA_SPEC_DECODE",
         ),
@@ -731,6 +727,21 @@ def test_chat_template_kwargs_override(tmp_path):
     assert "chat_template_kwargs=<none>\n" in none.stdout
 
 
+def test_s_dflash_runs_on_the_hybrid_default_with_its_chunks_and_a_64_token_draft_margin(tmp_path):
+    result = _s_dflash(tmp_path, TT_LAGUNA_HYBRID_KV=None, LAGUNA_MAX_NUM_SEQS=None)
+    assert result.returncode == 0, result.stderr
+    assert "hybrid_kv=1\n" in result.stdout
+    assert "dflash_envelope=p150x4_batch1_greedy_hybrid_cache_off\n" in result.stdout
+    assert "max_num_seqs=1\n" in result.stdout
+    # The draft RoPE horizon is 1,048,576; a proposal pads up to 64 rows past the context.
+    assert "max_model_len=1048512\n" in result.stdout
+    assert "chunked_prefill_cli_args=--enable-chunked-prefill --max-num-batched-tokens 8192\n" in result.stdout
+
+    explicit = _s_dflash(tmp_path, TT_LAGUNA_HYBRID_KV=None, LAGUNA_MAX_NUM_SEQS=None, LAGUNA_MAX_MODEL_LEN="1048576")
+    assert explicit.returncode == 2
+    assert "LAGUNA_MAX_MODEL_LEN+64<=1048576" in explicit.stderr
+
+
 def _s_dflash(tmp_path, **overrides):
     env = {
         "HF_MODEL": S,
@@ -772,9 +783,6 @@ def test_s_dflash_is_explicit_p150x4_batch_one_uniform_cache_off_experimental_on
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
-        # The S profile default is hybrid KV; DFlash needs the uniform rollback.
-        ({"TT_LAGUNA_HYBRID_KV": None}, "requires TT_LAGUNA_HYBRID_KV=0"),
-        ({"TT_LAGUNA_HYBRID_KV": "1"}, "requires TT_LAGUNA_HYBRID_KV=0"),
         # p150x4's uniform-KV profile default is eight sequences.
         ({"LAGUNA_MAX_NUM_SEQS": None}, "requires LAGUNA_MAX_NUM_SEQS=1"),
         ({"TT_LAGUNA_PREFIX_CACHE": "1"}, "requires TT_LAGUNA_PREFIX_CACHE=0"),

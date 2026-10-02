@@ -645,8 +645,6 @@ if [ "$TT_LAGUNA_DFLASH" -eq 1 ]; then
     die "Laguna DFlash serving requires LAGUNA_MAX_NUM_SEQS=1"
   [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
     die "Laguna DFlash serving requires TT_LAGUNA_PREFIX_CACHE=0"
-  [ "$TT_LAGUNA_HYBRID_KV" -eq 0 ] ||
-    die "Laguna DFlash serving requires TT_LAGUNA_HYBRID_KV=0"
   [ "$TT_LAGUNA_CONTEXT_PROBE" -eq 0 ] && [ "$TT_LAGUNA_MULTI_SEQ_POOL" -eq 0 ] ||
     die "Laguna DFlash serving does not support context or multi-sequence probes"
   [ -z "${TT_LAGUNA_SPEC_DECODE:-}" ] ||
@@ -655,12 +653,23 @@ if [ "$TT_LAGUNA_DFLASH" -eq 1 ]; then
     die "Laguna DFlash serving requires TT_LAGUNA_STREAMING_PREFILL=1"
   [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
     die "Laguna DFlash serving does not support sparse-MoE experimental paths"
+  # A proposal round pads up to 64 rows past the context, inside the draft's RoPE horizon. An unset context
+  # (the hybrid default equals that horizon) is lowered by those 64 tokens; an explicit one must fit.
+  if [ -z "${LAGUNA_MAX_MODEL_LEN:-}" ] && ((10#$MAX_MODEL_LEN + 64 > MODEL_DFLASH_MAX_HORIZON)); then
+    MAX_MODEL_LEN=$((MODEL_DFLASH_MAX_HORIZON - 64))
+  fi
   ((10#$MAX_MODEL_LEN + 64 <= MODEL_DFLASH_MAX_HORIZON)) ||
     die "Laguna DFlash serving requires LAGUNA_MAX_MODEL_LEN+64<=$MODEL_DFLASH_MAX_HORIZON"
   DFLASH_STATUS=experimental_cache_off_serving
-  DFLASH_ENVELOPE=${MODEL_DFLASH_PROFILE}_batch1_greedy_uniform_cache_off
-  CHUNKED_PREFILL_CLI_ARG=--no-enable-chunked-prefill
-  CHUNKED_PREFILL_CLI_ARGS=("$CHUNKED_PREFILL_CLI_ARG")
+  if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ]; then
+    # Hybrid KV keeps its 8192-token scheduler chunks; the DFlash controller retains a 511-row target tail
+    # across chunked prefill calls.
+    DFLASH_ENVELOPE=${MODEL_DFLASH_PROFILE}_batch1_greedy_hybrid_cache_off
+  else
+    DFLASH_ENVELOPE=${MODEL_DFLASH_PROFILE}_batch1_greedy_uniform_cache_off
+    CHUNKED_PREFILL_CLI_ARG=--no-enable-chunked-prefill
+    CHUNKED_PREFILL_CLI_ARGS=("$CHUNKED_PREFILL_CLI_ARG")
+  fi
 else
   DFLASH_STATUS=production_safe_disabled
   DFLASH_ENVELOPE=disabled

@@ -228,8 +228,6 @@ class LagunaForCausalLM:
             raise RuntimeError("Laguna DFlash serving requires --max-num-seqs 1, " f"got {int(max_batch_size)}")
         if bool(prefix_enabled):
             raise RuntimeError("Laguna DFlash serving requires TT_LAGUNA_PREFIX_CACHE=0")
-        if bool(hybrid_enabled):
-            raise RuntimeError("Laguna DFlash serving requires TT_LAGUNA_HYBRID_KV=0")
         if str(spec_mode):
             raise RuntimeError("Laguna DFlash serving cannot be combined with TT_LAGUNA_SPEC_DECODE")
 
@@ -1181,12 +1179,24 @@ class LagunaForCausalLM:
             raise ValueError(f"{operation} KV cache has {len(kv_cache)} entries for {layer_count} built layers")
         attention_hosts = []
         fill_hosts = []
+        rows = len(ranges)
         for i in range(layer_count):
             cache_meta = kv_cache[i]
             if "scratch_block_idx" not in cache_meta:
                 raise ValueError(f"{operation} KV cache layer {i} is missing its adapter-private scratch block")
+            # The TT plugin pads every per-layer table to [max_num_seqs, width] (vllm_tt_plugin
+            # model_runner._block_tables_per_layer) for decode trace stability; prefill rows beyond the
+            # scheduled requests are those zero padding rows. Drop them, refusing anything non-zero.
+            layer_table = torch.as_tensor(page_tables_per_layer[i], dtype=torch.int32)
+            if layer_table.dim() == 2 and int(layer_table.shape[0]) > rows:
+                if bool(layer_table[rows:].any()):
+                    raise ValueError(
+                        f"{operation} layer {i} page table has {layer_table.shape[0]} rows for {rows} "
+                        "prefill requests and the extra rows are not zero padding"
+                    )
+                layer_table = layer_table[:rows]
             attention_host, fill_host = self._protect_prefill_padding_blocks(
-                page_tables_per_layer[i],
+                layer_table,
                 ranges,
                 bucket_lens,
                 block_size=cache_meta["block_size"],
@@ -2068,8 +2078,6 @@ class LagunaForCausalLM:
             raise RuntimeError("DFlash serving was enabled but its request controller is unavailable")
         if int(tokens.shape[0]) != 1:
             raise RuntimeError(f"DFlash served decoding requires B=1, got B={tokens.shape[0]}")
-        if page_tables_per_layer is not None:
-            raise RuntimeError("DFlash served decoding does not support hybrid per-layer page tables")
         if sampling_params is None or not self._spec_is_greedy(sampling_params):
             raise RuntimeError("DFlash served decoding is exact-greedy only")
         try:
@@ -2100,7 +2108,7 @@ class LagunaForCausalLM:
         verify_kwargs = {
             "page_table": page_table,
             "kv_cache": kv_cache,
-            "page_tables_per_layer": None,
+            "page_tables_per_layer": page_tables_per_layer,
         }
         # Without scheduler look-ahead vLLM allocates only the block containing the current input, so at
         # residues 49..63 a 16-row verify would cross that ownership boundary: advance with one exact
@@ -2280,8 +2288,6 @@ class LagunaForCausalLM:
 
         if not self._DFLASH_SERVING_ENABLED:
             raise RuntimeError("DFlash target verify is default-off; set TT_LAGUNA_DFLASH=1")
-        if page_tables_per_layer is not None:
-            raise RuntimeError("DFlash target verify does not support hybrid per-layer page tables")
         if not kv_cache:
             raise ValueError("DFlash target verify requires an allocated KV cache")
         token_ids = torch.as_tensor(tokens, dtype=torch.int64).reshape(-1)
@@ -2302,16 +2308,28 @@ class LagunaForCausalLM:
                 f"is outside max_model_len {self.max_model_len}"
             )
 
-        pt_host = torch.as_tensor(page_table, dtype=torch.int32)
-        if pt_host.dim() == 1:
-            pt_host = pt_host.unsqueeze(0)
-        if pt_host.dim() != 2 or int(pt_host.shape[0]) < 1:
-            raise ValueError("DFlash target verify requires one uniform page-table row")
-        pt_host = pt_host[:1].repeat(B, 1) if B > 1 else pt_host[:1]
-        traced = self._dflash_verify_replay(token_ids, pos, pt_host)
-        if traced is not None:
-            return traced
-        pt = self._page_table_to_device(pt_host)
+        if page_tables_per_layer is not None:
+            # Hybrid KV: one block table per KV group (full + three sliding); every row of the B-row verify
+            # belongs to the same request, so each group's first row is repeated B times.
+            layout = self._hybrid_kv_layout()
+            groups = self._validated_group_page_tables(page_tables_per_layer, purpose="DFlash verify")
+            group_rows = [groups[g][:1].repeat(B, 1) if B > 1 else groups[g][:1] for g in range(layout.num_groups)]
+            rows_per_layer = layout.expand_group_values(group_rows)
+            traced = self._dflash_verify_replay(token_ids, pos, None, rows_per_layer)
+            if traced is not None:
+                return traced
+            pt = layout.expand_group_values([self._page_table_to_device(rows) for rows in group_rows])
+        else:
+            pt_host = torch.as_tensor(page_table, dtype=torch.int32)
+            if pt_host.dim() == 1:
+                pt_host = pt_host.unsqueeze(0)
+            if pt_host.dim() != 2 or int(pt_host.shape[0]) < 1:
+                raise ValueError("DFlash target verify requires one uniform page-table row")
+            pt_host = pt_host[:1].repeat(B, 1) if B > 1 else pt_host[:1]
+            traced = self._dflash_verify_replay(token_ids, pos, pt_host)
+            if traced is not None:
+                return traced
+            pt = self._page_table_to_device(pt_host)
         tok_tt = self.gen._rep(token_ids.reshape(1, B).to(torch.int32), ttnn.uint32)
         cur = self.gen._rep(pos, ttnn.int32)
         ridx = self.gen._rep(pos.reshape(1, B), ttnn.uint32)
@@ -2340,12 +2358,28 @@ class LagunaForCausalLM:
         cur = g._rep(torch.zeros([R], dtype=torch.int32), ttnn.int32)
         ridx = g._rep(torch.zeros([1, R], dtype=torch.int32), ttnn.uint32)
         pt_host = torch.zeros((R, int(num_blocks)), dtype=torch.int32)
-        pt = self._page_table_to_device(pt_host)
+        hybrid = self._kv_cache_is_hybrid(kv_cache)
+        if hybrid:
+            pt, pt_groups, _ = self._decode_pt_grouped_alloc([pt_host.clone() for _ in kv_cache])
+        else:
+            pt, pt_groups = self._page_table_to_device(pt_host), None
         pos = torch.arange(64, 64 + R, dtype=torch.int32)
         ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(torch.zeros(R, dtype=torch.int64), R), tok)
         ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), cur)
         ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), ridx)
-        st = dict(tid=None, tok=tok, cur=cur, ridx=ridx, pt=pt, rows=R, pt_shape=tuple(pt_host.shape), last_pt_host=None)
+        st = dict(
+            tid=None,
+            tok=tok,
+            cur=cur,
+            ridx=ridx,
+            pt=pt,
+            rows=R,
+            pt_shape=tuple(pt_host.shape),
+            last_pt_host=None,
+            hybrid=hybrid,
+            pt_groups=pt_groups,
+            last_pt_host_groups={},
+        )
 
         def step():
             hidden = self.model.embed_decode(ttnn.reshape(tok, (1, R)))
@@ -2422,8 +2456,13 @@ class LagunaForCausalLM:
             ttnn.deallocate(core.combine_aux_hidden_states(hidden))
             ttnn.deallocate(hidden)
         pt_row = torch.zeros((1, int(num_blocks)), dtype=torch.int32)
+        hybrid_rows = [pt_row.clone() for _ in kv_cache] if self._kv_cache_is_hybrid(kv_cache) else None
         self.verify_greedy_decode_with_dflash_aux(
-            torch.zeros(1, dtype=torch.int64), torch.tensor([64], dtype=torch.int32), page_table=pt_row, kv_cache=kv_cache
+            torch.zeros(1, dtype=torch.int64),
+            torch.tensor([64], dtype=torch.int32),
+            page_table=None if hybrid_rows else pt_row,
+            kv_cache=kv_cache,
+            page_tables_per_layer=hybrid_rows,
         )
         ttnn.synchronize_device(self.mesh_device)
         print(
@@ -2443,17 +2482,25 @@ class LagunaForCausalLM:
         self._verify_dec["dflash"] = st
         return st
 
-    def _dflash_verify_replay(self, token_ids, pos, pt_host):
+    def _dflash_verify_replay(self, token_ids, pos, pt_host, rows_per_layer=None):
         """Replay the captured 16-row verify; None when this round cannot use it (other row count or
         page-table width), in which case the caller runs the eager verify."""
         st = getattr(self, "_verify_dec", {}).get("dflash") if self._DFLASH_VERIFY_TRACE else None
         B = int(token_ids.shape[0])
-        if st is None or st.get("tid") is None or B != st["rows"] or tuple(pt_host.shape) != st["pt_shape"]:
+        if st is None or st.get("tid") is None or B != st["rows"]:
+            return None
+        hybrid = rows_per_layer is not None
+        if hybrid != bool(st.get("hybrid")):
+            return None
+        shape = tuple(torch.as_tensor(rows_per_layer[0]).shape) if hybrid else tuple(pt_host.shape)
+        if shape != st["pt_shape"]:
             return None
         ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(token_ids.reshape(B, 1), B), st["tok"])
         ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), st["cur"])
         ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), st["ridx"])
-        if st["last_pt_host"] is None or not torch.equal(pt_host, st["last_pt_host"]):
+        if hybrid:
+            self._decode_pt_grouped_refresh(st, rows_per_layer)
+        elif st["last_pt_host"] is None or not torch.equal(pt_host, st["last_pt_host"]):
             ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
             st["last_pt_host"] = pt_host.clone()
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)

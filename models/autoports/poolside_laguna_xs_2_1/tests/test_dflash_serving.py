@@ -142,7 +142,6 @@ def _controller(proposal_builder, verify_greedy):
         ({"enabled": True, "batch_size": 2}, "exactly one request"),
         ({"enabled": True, "greedy": False}, "greedy-only"),
         ({"enabled": True, "prefix_caching": True}, "prefix caching"),
-        ({"enabled": True, "hybrid_kv": True}, "hybrid KV"),
         ({"enabled": True, "cache_off": False}, "cache-off"),
     ],
 )
@@ -334,7 +333,6 @@ _OTHER_DEVICE_COUNTS = tuple(d for d in (1, 2, 4) if d != DFLASH_SPEC.serving_de
         *(({"device_count": d}, DFLASH_SPEC.serving_profile) for d in _OTHER_DEVICE_COUNTS),
         ({"max_batch_size": 2}, "max-num-seqs 1"),
         ({"prefix_enabled": True}, "PREFIX_CACHE=0"),
-        ({"hybrid_enabled": True}, "HYBRID_KV=0"),
         ({"spec_mode": "1"}, "SPEC_DECODE"),
     ],
 )
@@ -353,15 +351,17 @@ def test_vllm_dflash_envelope_rejects_unqualified_modes(override, match, expect_
     LagunaForCausalLM._validate_dflash_serving_envelope(**{**envelope, "enabled": False})
 
 
-def test_vllm_dflash_envelope_accepts_the_selected_checkpoint_topology():
+@pytest.mark.parametrize("hybrid_enabled", (False, True))
+def test_vllm_dflash_envelope_accepts_the_selected_checkpoint_topology(hybrid_enabled):
     LagunaForCausalLM._validate_dflash_serving_envelope(
         enabled=True,
         device_count=DFLASH_SPEC.serving_device_count,
         max_batch_size=1,
         prefix_enabled=False,
-        hybrid_enabled=False,
+        hybrid_enabled=hybrid_enabled,
         spec_mode="",
     )
+    DFlashServingEnvelope(enabled=True, hybrid_kv=hybrid_enabled).validate()
     assert LagunaForCausalLM._DFLASH_DEVICE_COUNT == {"poolside/Laguna-XS-2.1": 2, "poolside/Laguna-S-2.1": 4}[MODEL_ID]
 
 
@@ -439,14 +439,29 @@ def test_vllm_dflash_verify_is_contiguous_uniform_and_returns_aux_capture(expect
 
     with expect_error(ValueError, "strictly contiguous"):
         bridge.verify_greedy_decode_with_dflash_aux([1, 2], [9, 11], page_table=[[4, 5]], kv_cache=[object()])
-    with expect_error(RuntimeError, "hybrid"):
-        bridge.verify_greedy_decode_with_dflash_aux(
-            [1],
-            [9],
-            page_table=[[4, 5]],
-            kv_cache=[object()],
-            page_tables_per_layer=[[[4, 5]]],
-        )
+
+    # Hybrid KV: one block table per group (full + three sliding), each repeated to the verify rows, and
+    # every logical layer receives its own group's table.
+    from models.autoports.poolside_laguna_xs_2_1.tt.kv_grouping import (
+        build_hybrid_kv_layout,
+        laguna_hybrid_layer_kinds,
+    )
+
+    layout = build_hybrid_kv_layout(laguna_hybrid_layer_kinds(8))
+    bridge._hybrid_kv_layout = lambda: layout
+    page_tables.clear()
+    per_layer = [torch.tensor([[10 + layer % 4, 20 + layer % 4]], dtype=torch.int32) for layer in range(8)]
+    greedy, capture = bridge.verify_greedy_decode_with_dflash_aux(
+        [1, 2],
+        [30, 31],
+        kv_cache=[object()] * 8,
+        page_tables_per_layer=per_layer,
+    )
+    assert greedy == [2, 3]
+    assert (capture.start_position, capture.row_count) == (30, 2)
+    assert [t.tolist() for t in page_tables] == [[[10 + g, 20 + g]] * 2 for g in range(4)]
+    layer_tables = bridge.model.decode_call[3]
+    assert [t.tolist() for t in layer_tables] == [[[10 + layer % 4, 20 + layer % 4]] * 2 for layer in range(8)]
 
 
 def test_vllm_dflash_output_buffer_and_runtime_guards(monkeypatch, expect_error):
@@ -581,16 +596,17 @@ def test_vllm_dflash_output_buffer_and_runtime_guards(monkeypatch, expect_error)
             SimpleNamespace(temperature=torch.tensor([1.0])),
             False,
         )
-    with expect_error(RuntimeError, "hybrid"):
-        bridge._dflash_serve(
-            torch.tensor([[7]]),
-            torch.tensor([20]),
-            [[0]],
-            [{"block_size": 64}],
-            [object()],
-            greedy,
-            False,
-        )
+    hybrid_tables = [object()]
+    bridge._dflash_serve(
+        torch.tensor([[7]]),
+        torch.tensor([20]),
+        [[0]],
+        [{"block_size": 64}],
+        hybrid_tables,
+        greedy,
+        False,
+    )
+    assert calls[-1][1]["verify_kwargs"]["page_tables_per_layer"] is hybrid_tables
     with expect_error(RuntimeError, "exceed"):
         bridge._dflash_serve(
             torch.tensor([[7]]),
