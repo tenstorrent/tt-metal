@@ -49,9 +49,9 @@ class MiMoRuntimeOptions:
     # Sequence-parallel residual: the MoE block takes this col's normed rows and gathers x / top-k over TP itself
     # (router + untilize on S/TP rows, no block-input all-gather).
     moe_ag_tp_in_gather: bool = True  # MIMO_MOE_AG_TP_IN_GATHER
-    # The MoE block's all-gathers: "fabric" (ttnn.experimental.fabric_all_gather, a drop-in with a relay at the link
-    # rate) or "high_bw" (ttnn.experimental.high_bw_all_gather).
-    moe_ag_gather_op: str = "fabric"  # MIMO_MOE_AG_GATHER_OP
+    # The MoE block's all-gathers: "fabric" (ttnn.experimental.fabric_all_gather: ~10-20% faster on device, traced; eager
+    # its per-call fence absorbs the chips' launch skew and it loses 2-3 ms per 6 layers on the LoudBox), or "high_bw".
+    moe_ag_gather_op: str = "high_bw"  # MIMO_MOE_AG_GATHER_OP
     # Per-layer static expert placement (JSON, tests/perf/expert_placement.py; all-gather block only). None: the EP table.
     expert_placement: str | None = None  # MIMO_EXPERT_PLACEMENT
     # Gather the top-k idx / w as tiles and untilize after the gather (high_bw_all_gather costs per page).
@@ -128,7 +128,7 @@ class MiMoRuntimeOptions:
         kw["expert_placement"] = env.get("MIMO_EXPERT_PLACEMENT") or None
         kw["sp_residual"] = flag("MIMO_SP_RESIDUAL", True)
         kw["moe_ag_tp_in_gather"] = flag("MIMO_MOE_AG_TP_IN_GATHER", True)
-        kw["moe_ag_gather_op"] = env.get("MIMO_MOE_AG_GATHER_OP", "fabric")
+        kw["moe_ag_gather_op"] = env.get("MIMO_MOE_AG_GATHER_OP", "high_bw")
         kw["untilize_width"] = int(env.get("MIMO_UA_W", "32"))
         root = env.get("MIMO_TTNN_CACHE")
         kw["ttnn_cache"] = root not in ("0", "off", "none", "")
