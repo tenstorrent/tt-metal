@@ -4,7 +4,7 @@
 
 """Shared base classes and validation for fuser config schemas.
 
-Each architecture (wormhole/parser.py, blackhole/parser.py) inherits from the base
+Each architecture (wormhole/parser.py, blackhole/parser.py, quasar/parser.py) inherits from the base
 classes defined here and supplies plain dicts that control all validation and
 construction. The dicts are:
 
@@ -12,7 +12,8 @@ construction. The dicts are:
     UNPACKER_MAP         unpacker name to (factory(schema), checks), set via _unpacker_map class attr
     PACKER_MAP           packer name to (class, checks), set via _packer_map class attr
     OUTPUT_DIMS          op name to lambda(in0, in1), set via _output_dims class attr
-    UNARY/BINARY_SFPU_OPS  set of supported MathOperation, set via _sfpu_ops class attr
+    UNARY/BINARY/
+    TERNARY_SFPU_OPS     set of supported MathOperation, set via _sfpu_ops class attr
 """
 
 from typing import Annotated, ClassVar, Dict, List, Literal, Optional, Tuple, Union

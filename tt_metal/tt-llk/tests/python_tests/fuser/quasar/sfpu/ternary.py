@@ -16,15 +16,20 @@ class TernarySfpu(BaseTernarySfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
         return (
             f"test_utils::init_ternary_sfpu_operation_quasar<{op}, "
-            f"{config.dest_acc.cpp_enum_value}, {self.approx_mode.cpp_enum_value}>();\n"
+            f"{config.dest_acc.cpp_enum_value} /*is_fp32_dest_acc_en*/, "
+            f"{self.approx_mode.cpp_enum_value} /*APPROX*/>();\n"
         )
 
     def calculate(self, operation, config, compute_unit, block):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
         return (
             f"test_utils::call_ternary_sfpu_operation_quasar<{op}, "
-            f"{operation.dest_sync.cpp_enum_value}, {config.dest_acc.cpp_enum_value}, "
-            f"{self.approx_mode.cpp_enum_value}, {self.iterations}>("
-            f"{block.dest_src0}, {block.dest_src1}, {block.dest_src2}, "
-            f"{block.tile_id_dest});\n"
+            f"{operation.dest_sync.cpp_enum_value}, "
+            f"{config.dest_acc.cpp_enum_value} /*is_fp32_dest_acc_en*/, "
+            f"{self.approx_mode.cpp_enum_value} /*APPROX*/, "
+            f"{self.iterations} /*ITERATIONS*/>("
+            f"{block.dest_src0} /*src0_tile*/, "
+            f"{block.dest_src1} /*src1_tile*/, "
+            f"{block.dest_src2} /*src2_tile*/, "
+            f"{block.tile_id_dest} /*dst_tile*/);\n"
         )

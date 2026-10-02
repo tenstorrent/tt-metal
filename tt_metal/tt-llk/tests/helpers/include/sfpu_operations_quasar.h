@@ -111,11 +111,18 @@
 #include "llk_sfpu/ckernel_sfpu_mask.h"             // calculate_mask / calculate_mask_posinf / calculate_int_mask
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/ckernel_sfpu_situ_glu.h"         // calculate_situ_glu (softcapped gate * sigmoid(gate) * softcapped up)
-#include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
-#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
 #include "sfpu/ckernel_sfpu_mul_int32.h"   // _mul_int32_ (int mul)
+
+// Ternary SFPU op headers (consumed by the ternary dispatchers below).
+// To add a new Quasar ternary SFPU op:
+// 1. Include its ckernel header below.
+// 2. Add the SfpuType enumerator if it is not there.
+// 3. Add the `if constexpr` branch in call_ternary_sfpu_operation_quasar()
+//    and init_ternary_sfpu_operation_quasar().
+#include "llk_sfpu/ckernel_sfpu_where.h"
+#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 
 namespace test_utils
 {

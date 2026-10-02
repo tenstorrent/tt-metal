@@ -20,6 +20,10 @@ class TernarySfpu(Sfpu):
         approx_mode: ApproximationMode = ApproximationMode.No,
         iterations: int = 8,
     ):
+        if operation not in MathOperation.get_sfpu_ternary_operations():
+            raise ValueError(
+                f"Operation {operation} is not a valid SFPU ternary operation."
+            )
         self.operation = operation
         self.approx_mode = approx_mode
         self.iterations = iterations
@@ -37,11 +41,7 @@ class TernarySfpu(Sfpu):
 
     def calculate(self, operation, config, compute_unit, block):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
-        vector_mode = (
-            "ckernel::VectorMode::R"
-            if operation.tile_shape.tile_dims in ((16, 32), (32, 16))
-            else "ckernel::VectorMode::RC"
-        )
+        vector_mode = self._vector_mode(operation)
         data_format = config.sentinel._sfpu_format
         if self.operation == MathOperation.SfpuWhere and data_format not in (
             DataFormat.Float32,
@@ -55,8 +55,10 @@ class TernarySfpu(Sfpu):
             f"{operation.dest_sync.cpp_enum_value}, {config.dest_acc.cpp_enum_value}, "
             f"{op}, {self.approx_mode.cpp_enum_value}, "
             f"{config.dest_acc.cpp_enum_value}, {data_format}, {self.iterations}>("
-            f"{block.dest_src0}, {block.dest_src1}, {block.dest_src2}, "
-            f"{block.tile_id_dest}, 0, {vector_mode});\n"
+            f"{block.dest_src0} /*dst_index_in0*/, "
+            f"{block.dest_src1} /*dst_index_in1*/, "
+            f"{block.dest_src2} /*dst_index_in2*/, "
+            f"{block.tile_id_dest} /*dst_index_out*/, 0 /*value*/, {vector_mode});\n"
         )
 
     def __str__(self):
