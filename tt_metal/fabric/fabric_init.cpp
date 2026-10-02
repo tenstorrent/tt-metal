@@ -9,7 +9,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_builder.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 
@@ -21,11 +21,9 @@ bool isFabricUnitTest() { return false; }
 
 namespace tt::tt_fabric {
 
-std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::tt_metal::IDevice* device) {
+std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(
+    FabricContext& fabric_context, tt::tt_metal::IDevice* device) {
     auto fabric_program_ptr = std::make_unique<tt::tt_metal::Program>();
-
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto& fabric_context = control_plane.get_fabric_context();
 
     // Use FabricBuilder to coordinate the build phases
     FabricBuilder builder(device, *fabric_program_ptr, fabric_context);
@@ -42,22 +40,22 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     builder.create_kernels();
 
     // Compile the program
-    fabric_program_ptr->impl().compile(device, tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
+    fabric_program_ptr->impl().compile(device, fabric_context.get_rtoptions().get_fast_dispatch());
 
     return fabric_program_ptr;
 }
 
-std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_metal::IDevice* device) {
-    auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    if (tt_fabric::is_tt_fabric_config(fabric_config)) {
-        return create_and_compile_tt_fabric_program(device);
+std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(
+    tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::IDevice* device) {
+    if (tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config())) {
+        return create_and_compile_tt_fabric_program(env_impl.get_control_plane().get_fabric_context(), device);
     }
     return nullptr;
 }
 
-void configure_fabric_cores(tt::tt_metal::IDevice* device) {
-    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::IDevice* device) {
+    auto soc_desc = env_impl.get_cluster().get_soc_desc(device->id());
+    const auto& control_plane = env_impl.get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
     const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
     const auto& fabric_context = control_plane.get_fabric_context();
