@@ -1,12 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One GPU-trace comparison with six allocated KV slots; optional loopback copy."""
+"""One GPU-trace comparison with six allocated KV slots; optional loopback copy.
+
+Besides the KV PCC, the final hidden states are scored against the GPU reference's next-token likelihoods.
+"""
 
 import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,10 +27,15 @@ from models.demos.gemma4_d_p.tt.runners.kv_validation import (
     compare_slot_cache,
     read_cache_tensor,
 )
+from models.demos.gemma4_d_p.tt.runners.likelihood import HIDDEN_SAMPLES, HiddenSampler, compare, format_report
+from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 
 MIN_PER_HEAD_PCC = 0.928
 MIN_OVERALL_PCC = 0.978
 MAX_OVERALL_RRMSE = 0.208
+# Next-token likelihood against the GPU reference, per depth bin keyed by its first position: minimum top-1
+# agreement, maximum mean ΔNLL and maximum mean top-20 KL.
+LIKELIHOOD_LIMITS = {0: (0.88, 0.35, 0.20), 8192: (0.86, 0.35, 0.25), 65536: (0.87, 0.35, 0.22)}
 
 
 def verify_inputs(adapter, trace_dir):
@@ -174,6 +183,23 @@ def test_prefill_migration(migration_environment, context_len):
         ("Overall PCC", f">= {MIN_OVERALL_PCC:.6f}", overall["pcc"], overall_pcc_passed),
         ("Overall RRMSE", f"< {MAX_OVERALL_RRMSE:.6f}", overall["relative_rmse"], overall_rrmse_passed),
     )
+    started = time.perf_counter()
+    likelihood = compare(env["PREFILL_TRACE_DIR"], output_dir)
+    (output_dir / "likelihood.json").write_text(json.dumps(likelihood, indent=2) + "\n")
+    print(
+        f"\nNext-token likelihood vs GPU reference ({time.perf_counter() - started:.0f} s)\n{format_report(likelihood)}",
+        flush=True,
+    )
+    likelihood_criteria = []
+    for entry in likelihood["bins"]:
+        min_top1, max_delta_nll, max_kl = LIKELIHOOD_LIMITS[entry["start"]]
+        depth = f"{entry['start'] // 1024}-{entry['end'] // 1024}K"
+        likelihood_criteria += [
+            (f"Top-1 {depth}", f">= {min_top1:.6f}", entry["top1_agreement"], entry["top1_agreement"] >= min_top1),
+            (f"ΔNLL {depth}", f"<= {max_delta_nll:.6f}", entry["delta_nll"], entry["delta_nll"] <= max_delta_nll),
+            (f"Top-20 KL {depth}", f"<= {max_kl:.6f}", entry["topk_kl"], entry["topk_kl"] <= max_kl),
+        ]
+    criteria += tuple(likelihood_criteria)
     print("\nAccuracy criteria")
     print("┌──────────────────────┬─────────────┬──────────┬────────┐")
     print("│ Criterion            │ Required    │ Achieved │ Result │")
@@ -194,6 +220,11 @@ def test_prefill_migration(migration_environment, context_len):
         failures.append(
             f"Overall RRMSE failed: actual={overall['relative_rmse']:.6f}, required < {MAX_OVERALL_RRMSE:.6f}"
         )
+    failures += [
+        f"{name} failed: actual={achieved:.6f}, required {required}"
+        for name, required, achieved, passed in likelihood_criteria
+        if not passed
+    ]
     if failures:
         pytest.fail("Accuracy checks failed:\n" + "\n".join(failures), pytrace=False)
     if gate == "loopback":
@@ -225,6 +256,14 @@ def run_migration_case(gate, context_len, output_dir):
         command += ["--verify-migration", "dst-bytes"]
     original_loop = prefill_runner.run_request_loop
     failures = []
+    metadata = json.loads((Path(env["PREFILL_TRACE_DIR"]) / "metadata.json").read_text())
+    sampler = HiddenSampler(context_len, Gemma4ServiceConfig.CHUNK_SIZE, metadata["token_ids"])
+    original_prefill_chunk = Gemma4PrefillRuntime.prefill_chunk
+
+    def sampled_prefill_chunk(runtime, *args, **kwargs):
+        original_prefill_chunk(runtime, *args, **kwargs)
+        if kwargs["slot_id"] == 0:
+            sampler.add_chunk(runtime.output, kwargs["actual_start"], kwargs["actual_end"])
 
     def checked_loop(runtime, kv_cache, *args, **kwargs):
         with (output_dir / "producer.log").open("w") as log:
@@ -237,6 +276,7 @@ def run_migration_case(gate, context_len, output_dir):
                         f"Producer exited with code {producer_returncode}. See {output_dir / 'producer.log'}."
                     )
                 assert runtime.slot_ends == [context_len] + [0] * (Gemma4ServiceConfig.MAX_USER_SLOTS - 1)
+                sampler.save(output_dir / HIDDEN_SAMPLES)
                 table = ttnn.experimental.disaggregation.import_from_protobuf_file(env["PREFILL_MIGRATION_TABLE_PATH"])
                 device_map = prefill_producer._read_device_map(timeout_s=10)
 
@@ -258,7 +298,10 @@ def run_migration_case(gate, context_len, output_dir):
                     producer.terminate()
                     producer.wait(timeout=30)
 
-    with patch.object(prefill_runner, "run_request_loop", checked_loop):
+    with (
+        patch.object(prefill_runner, "run_request_loop", checked_loop),
+        patch.object(Gemma4PrefillRuntime, "prefill_chunk", sampled_prefill_chunk),
+    ):
         prefill_runner.main()
     if failures:
         raise failures[0]
