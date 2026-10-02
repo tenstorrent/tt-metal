@@ -35,6 +35,7 @@ void check_matching_dtype(
 void check_same_device(
     const Tensor& reference, const Tensor& candidate, std::string_view operation_name, std::string_view candidate_name);
 void check_interleaved(const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name);
+void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name);
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name);
 void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name);
 

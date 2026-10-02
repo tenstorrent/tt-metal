@@ -1,0 +1,61 @@
+# Unary SFPU kernels from the Blackhole SFPI port that ignore APPROXIMATION_MODE, on one shared
+# input: [-8, 8] plus 0, +-0.5, +-1, just below / above 1, +-2, +-3, 5, a small normal (1e-4) and a
+# denormal (1e-40), +-100 and +-65000 (large enough to saturate, overflow exp, and test the fmod quotient
+# past 2**23). Op parameters are the harness constants (sfpu_operations_quasar.h).
+#
+# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
+# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16]
+    stimuli:
+      include:
+        - [-8.0, -3.01]
+        - [-2.99, -2.01]
+        - [-1.99, -1.01]
+        - [-0.99, -0.51]
+        - [-0.49, -0.01]
+        - [0.0101, 0.49]
+        - [0.51, 0.98609375]
+        - [1.0178125, 1.99]
+        - [2.01, 2.99]
+        - [3.01, 4.99]
+        - [5.01, 8.0]
+        - -65000.0
+        - -100.0
+        - -3.0
+        - -2.0
+        - -1.0
+        - -0.5
+        - 0.0
+        - 1.0e-40
+        - 0.0001
+        - 0.5
+        - 0.99609375
+        - 1.0
+        - 1.0078125
+        - 2.0
+        - 3.0
+        - 5.0
+        - 100.0
+        - 65000.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16_b
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [Hardsigmoid, Celu, Elu, Hardmish, Hardshrink, Hardtanh, Heaviside, Prelu, Selu, Softshrink, Threshold, SigmoidAppx, Tanhshrink, Xielu, Add1, Cbrt, Exp2, Expm1, Rpow, Sign, UnaryPower, Erfc, Isinf, Isposinf, Isneginf, Isnan, Isfinite, LogicalNotUnary, UnaryGt, UnaryLt, UnaryGe, UnaryLe, UnaryEq, UnaryNe, Fmod, Remainder, Identity, CastFp32ToFp16a, AltComplexRotate90, Softcap, TanhDerivative]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

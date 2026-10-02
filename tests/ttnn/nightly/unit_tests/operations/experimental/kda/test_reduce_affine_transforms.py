@@ -24,7 +24,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 
@@ -196,6 +196,7 @@ def _run(
     b: ttnn.Tensor,
     groups_per_head: int,
     *,
+    actual_start: ttnn.Tensor,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -204,6 +205,8 @@ def _run(
             a,
             b,
             groups_per_head,
+            actual_start=actual_start,
+            local_rows=32 * groups_per_head,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )
@@ -237,6 +240,7 @@ def _composed_ttnn_baseline(
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("sharded_inputs", [False, True], ids=("interleaved", "height-sharded-l1"))
 def test_reduce_affine_transforms_contract_and_trace(
+    zero_actual_start,
     device: ttnn.Device,
     summary_dtype: ttnn.DataType,
     sharded_inputs: bool,
@@ -257,7 +261,7 @@ def test_reduce_affine_transforms_contract_and_trace(
     b_tt = _to_device(b, device, summary_dtype, memory_config=b_memory)
     snapshots = (ttnn.to_torch(a_tt).clone(), ttnn.to_torch(b_tt).clone())
 
-    first = _run(a_tt, b_tt, groups_per_head)
+    first = _run(a_tt, b_tt, groups_per_head, actual_start=zero_actual_start)
     for output, shape in zip(first, ((batch_heads, key_dim, key_dim), (batch_heads, key_dim, value_dim)), strict=True):
         assert output.dtype == ttnn.float32
         assert output.layout == ttnn.TILE_LAYOUT
@@ -266,7 +270,7 @@ def test_reduce_affine_transforms_contract_and_trace(
         assert output.buffer_address() not in (a_tt.buffer_address(), b_tt.buffer_address())
 
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    traced = _run(a_tt, b_tt, groups_per_head)
+    traced = _run(a_tt, b_tt, groups_per_head, actual_start=zero_actual_start)
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
     for _ in range(2):
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
@@ -293,6 +297,7 @@ def test_reduce_affine_transforms_contract_and_trace(
     ],
 )
 def test_reduce_affine_transforms_shape_accuracy(
+    zero_actual_start,
     device: ttnn.Device,
     batch_heads: int,
     groups_per_head: int,
@@ -315,7 +320,7 @@ def test_reduce_affine_transforms_shape_accuracy(
     a_tt = _to_device(a, device, summary_dtype, memory_config=a_memory)
     b_tt = _to_device(b, device, summary_dtype, memory_config=b_memory)
 
-    outputs = _run(a_tt, b_tt, groups_per_head)
+    outputs = _run(a_tt, b_tt, groups_per_head, actual_start=zero_actual_start)
 
     for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
         assert_accurate(
@@ -327,14 +332,16 @@ def test_reduce_affine_transforms_shape_accuracy(
 
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
-def test_reduce_affine_transforms_is_device_deterministic(device: ttnn.Device, summary_dtype: ttnn.DataType) -> None:
+def test_reduce_affine_transforms_is_device_deterministic(
+    zero_actual_start, device: ttnn.Device, summary_dtype: ttnn.DataType
+) -> None:
     case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1441)
     a_tt, b_tt = (_to_device(tensor, device, summary_dtype) for tensor in host)
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
 
     def run() -> tuple[ttnn.Tensor, ...]:
-        return _run(a_tt, b_tt, case.groups_per_head)
+        return _run(a_tt, b_tt, case.groups_per_head, actual_start=zero_actual_start)
 
     reference_outputs, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, run)
     assert_equal(
@@ -349,7 +356,7 @@ def test_reduce_affine_transforms_is_device_deterministic(device: ttnn.Device, s
 
 
 def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
     case = _SMALL_CASE
     host_a = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1911)
@@ -357,10 +364,10 @@ def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(
     device_a = tuple(_to_device(tensor, device) for tensor in host_a)
     device_b = tuple(_to_device(tensor, device) for tensor in host_b)
 
-    output_a = _run(*device_a, case.groups_per_head)
+    output_a = _run(*device_a, case.groups_per_head, actual_start=zero_actual_start)
     ttnn.synchronize_device(device)
     entries = device.num_program_cache_entries()
-    output_b = _run(*device_b, case.groups_per_head)
+    output_b = _run(*device_b, case.groups_per_head, actual_start=zero_actual_start)
     ttnn.synchronize_device(device)
 
     assert device.num_program_cache_entries() == entries
@@ -379,12 +386,12 @@ def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(
 
 
 def test_reduce_affine_transforms_default_compute_config_matches_explicit_defaults(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
     case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=817)
     a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
-    implicit = _run(a_tt, b_tt, case.groups_per_head)
+    implicit = _run(a_tt, b_tt, case.groups_per_head, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
     explicit_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -395,7 +402,9 @@ def test_reduce_affine_transforms_default_compute_config_matches_explicit_defaul
         dst_full_sync_en=False,
         throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
     )
-    explicit = _run(a_tt, b_tt, case.groups_per_head, compute_kernel_config=explicit_config)
+    explicit = _run(
+        a_tt, b_tt, case.groups_per_head, compute_kernel_config=explicit_config, actual_start=zero_actual_start
+    )
     assert device.num_program_cache_entries() == entries
     for name, implicit_output, explicit_output in zip(("A", "B"), implicit, explicit, strict=True):
         assert_bit_identical(
@@ -406,12 +415,12 @@ def test_reduce_affine_transforms_default_compute_config_matches_explicit_defaul
 
 
 def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_program(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
     case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=818)
     a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
-    exact = _run(a_tt, b_tt, case.groups_per_head)
+    exact = _run(a_tt, b_tt, case.groups_per_head, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
     approximate_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -420,7 +429,9 @@ def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_progra
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    approximate = _run(a_tt, b_tt, case.groups_per_head, compute_kernel_config=approximate_config)
+    approximate = _run(
+        a_tt, b_tt, case.groups_per_head, compute_kernel_config=approximate_config, actual_start=zero_actual_start
+    )
     assert device.num_program_cache_entries() == entries + 1
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
     for name, golden, exact_output, approximate_output in zip(("A", "B"), expected, exact, approximate, strict=True):
@@ -429,7 +440,7 @@ def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_progra
 
 
 def test_reduce_affine_transforms_rejects_unsupported_compute_config(
-    device: ttnn.Device, expect_error: Callable
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
 ) -> None:
     case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
@@ -439,13 +450,13 @@ def test_reduce_affine_transforms_rejects_unsupported_compute_config(
         packer_l1_acc=True,
     )
     with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
-        _run(a_tt, b_tt, case.groups_per_head, compute_kernel_config=unsupported_config)
+        _run(a_tt, b_tt, case.groups_per_head, compute_kernel_config=unsupported_config, actual_start=zero_actual_start)
 
 
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_reduce_affine_transforms_production_performance(device: ttnn.Device) -> None:
+def test_reduce_affine_transforms_production_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _PRODUCTION_PERF_CASE
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for affine-transform reduction performance checks")
@@ -463,7 +474,13 @@ def test_reduce_affine_transforms_production_performance(device: ttnn.Device) ->
     )
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return _run(a_tt, b_tt, case.groups_per_head, compute_kernel_config=production_compute_config)
+        return _run(
+            a_tt,
+            b_tt,
+            case.groups_per_head,
+            compute_kernel_config=production_compute_config,
+            actual_start=zero_actual_start,
+        )
 
     outputs, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
@@ -498,11 +515,11 @@ def test_reduce_affine_transforms_production_performance(device: ttnn.Device) ->
     )
 
 
-def test_reduce_affine_transforms_matches_composed_ttnn_baseline(device: ttnn.Device) -> None:
+def test_reduce_affine_transforms_matches_composed_ttnn_baseline(zero_actual_start, device: ttnn.Device) -> None:
     batch_heads, groups_per_head, key_dim, value_dim = 2, 4, 32, 64
     a, b = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim, seed=117)
     expected = _oracle(a, b, batch_heads, groups_per_head)
-    fused = _run(_to_device(a, device), _to_device(b, device), groups_per_head)
+    fused = _run(_to_device(a, device), _to_device(b, device), groups_per_head, actual_start=zero_actual_start)
     with ttnn.manage_config("throw_exception_on_fallback", True):
         composed = _composed_ttnn_baseline(a, b, device, batch_heads, groups_per_head)
     ttnn.synchronize_device(device)
@@ -527,6 +544,7 @@ def test_reduce_affine_transforms_matches_composed_ttnn_baseline(device: ttnn.De
     ],
 )
 def test_reduce_affine_transforms_rejects_invalid_inputs(
+    zero_actual_start,
     device: ttnn.Device,
     expect_error: Callable,
     case: str,
@@ -559,10 +577,11 @@ def test_reduce_affine_transforms_rejects_invalid_inputs(
     elif case == "unaligned":
         b_tt = _to_device(b[:, :, :31], device)
     with expect_error(RuntimeError, message):
-        _run(a_tt, b_tt, groups_per_head)
+        _run(a_tt, b_tt, groups_per_head, actual_start=zero_actual_start)
 
 
 def test_reduce_affine_transforms_rejects_excess_workers(
+    zero_actual_start,
     device: ttnn.Device,
     expect_error: Callable,
 ) -> None:
@@ -574,7 +593,7 @@ def test_reduce_affine_transforms_rejects_excess_workers(
     b_tt = _to_device(b, device)
 
     with expect_error(RuntimeError, f"supports at most {worker_limit} group workers on this device"):
-        _run(a_tt, b_tt, group_workers)
+        _run(a_tt, b_tt, group_workers, actual_start=zero_actual_start)
 
 
 @pytest.mark.parametrize("input_name", ["a", "b"])
@@ -584,6 +603,7 @@ def test_reduce_affine_transforms_rejects_excess_workers(
     ids=["width_sharded", "block_sharded"],
 )
 def test_reduce_affine_transforms_rejects_unsupported_input_sharding(
+    zero_actual_start,
     device: ttnn.Device,
     expect_error: Callable,
     input_name: str,
@@ -602,17 +622,18 @@ def test_reduce_affine_transforms_rejects_unsupported_input_sharding(
     b_tt = _to_device(b, device, memory_config=b_memory)
 
     with expect_error(RuntimeError, f"{input_name} must use interleaved or height-sharded memory"):
-        _run(a_tt, b_tt, 4)
+        _run(a_tt, b_tt, 4, actual_start=zero_actual_start)
 
 
 def test_reduce_affine_transforms_rejects_invalid_configuration(
+    zero_actual_start,
     device: ttnn.Device,
     expect_error: Callable,
 ) -> None:
     a, b = _host_inputs(1, 4, 32, 32)
     a_tt, b_tt = _to_device(a, device), _to_device(b, device)
     with expect_error(RuntimeError, "groups_per_head must be positive"):
-        _run(a_tt, b_tt, 0)
+        _run(a_tt, b_tt, 0, actual_start=zero_actual_start)
 
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
@@ -621,4 +642,4 @@ def test_reduce_affine_transforms_rejects_invalid_configuration(
     )
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "output memory layout must be INTERLEAVED, got HEIGHT_SHARDED"):
-        _run(a_tt, b_tt, 4, memory_config=sharded)
+        _run(a_tt, b_tt, 4, memory_config=sharded, actual_start=zero_actual_start)

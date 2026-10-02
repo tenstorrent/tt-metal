@@ -113,8 +113,9 @@ def _run_sfpu_binary_llk_golden(
     perf_report=None,
     dst_rounding_mode=DstRoundingMode.Default,
     format_variant=None,
+    max_ulp=None,
 ):
-    """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
+    """Shared driver for the LLK-golden binary SFPU ops.
 
     ``prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)``
     returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
@@ -211,14 +212,16 @@ def _run_sfpu_binary_llk_golden(
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
+    )
 
     if post_check is not None:
         post_check(res_tensor)
 
 
 # ===========================================================================
-# Family 1 — integer ops (add, mul, gt, lt, le, ge), Int32 only.
+# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32 only.
 # Ported from test_sfpu_binary_quasar.py.
 # ===========================================================================
 def _prepare_int_stimuli(
@@ -251,6 +254,7 @@ _INT_OPS = [
     ("LT", MathOperation.SfpuLtInt, None),
     ("LE", MathOperation.SfpuLeInt, None),
     ("GE", MathOperation.SfpuGeInt, None),
+    ("COPY_DEST", MathOperation.SfpuCopyDest, None),
 ]
 
 
@@ -275,7 +279,7 @@ def test_eltwise_binary_sfpu_int_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU integer ops (add, mul, gt, lt, le, ge), Int32."""
+    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32."""
     formats = InputOutputFormat(input_format=data_format, output_format=data_format)
     _run_sfpu_binary_llk_golden(
         formats,
@@ -295,7 +299,7 @@ def test_eltwise_binary_sfpu_int_quasar(
 
 
 # ===========================================================================
-# Family 2 — float ops (add, sub, mul, div, atan2). Ported from test_sfpu_binary_float_quasar.py.
+# Family 2 — float ops (add, sub, mul, div, atan2, copy_dest). Ported from test_sfpu_binary_float_quasar.py.
 # add/sub route the SFPU calculate_sfpu_binary ADD/SUB path (tenstorrent/tt-metal#49883).
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
@@ -337,7 +341,7 @@ def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
             flat[src0_idx * MAX_TILE_ELEMENTS + lane] = dividend
             flat[src1_idx * MAX_TILE_ELEMENTS + lane] = divisor
         return flat.reshape(scaled.shape)
-    # SfpuElwadd / SfpuElwsub / SfpuElwmul — symmetric ±250 range.
+    # SfpuElwadd / SfpuElwsub / SfpuElwmul / SfpuCopyDest — symmetric ±250 range.
     scaled = ((src_A.to(torch.float32) - 0.5) * 500.0).to(torch_format)
     return scaled.flatten().reshape(scaled.shape)
 
@@ -373,13 +377,18 @@ def _check_div_special_cases(res_tensor):
         ), f"x/x special case at lane {lane}: expected 1.0, got {actual}"
 
 
+_DIV_FP32_MAX_ULP = 4
+
 _FLOAT_OPS = [
     ("ADD", MathOperation.SfpuElwadd, ApproximationMode.No),
     ("SUB", MathOperation.SfpuElwsub, ApproximationMode.No),
     ("MUL", MathOperation.SfpuElwmul, ApproximationMode.No),
     ("DIV", MathOperation.SfpuElwdiv, ApproximationMode.No),
+    ("DIV", MathOperation.SfpuElwdiv, ApproximationMode.Yes),
     ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.No),
     ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.Yes),
+    # COPY_DEST ignores APPROXIMATION_MODE (stateless copy); only one entry needed.
+    ("COPY_DEST", MathOperation.SfpuCopyDest, ApproximationMode.No),
 ]
 
 
@@ -407,12 +416,20 @@ def test_eltwise_binary_sfpu_float_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU float ops (add, sub, mul, div, atan2)."""
+    """Binary SFPU float ops (add, sub, mul, div, atan2, copy_dest)."""
     format_variant = formats_dest_acc
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
     post_check = (
         _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
+    )
+    # A 32-bit Dest DIV runs two Newton-Raphson steps in every approximation mode; the
+    # default 5% tolerance would also pass the bare LUT seed, so gate it by ULP instead.
+    max_ulp = (
+        _DIV_FP32_MAX_ULP
+        if mathop == MathOperation.SfpuElwdiv
+        and formats.output_format == DataFormat.Float32
+        else None
     )
     _run_sfpu_binary_llk_golden(
         formats,
@@ -429,6 +446,7 @@ def test_eltwise_binary_sfpu_float_quasar(
         is_perf=is_perf,
         perf_report=perf_report,
         format_variant=format_variant,
+        max_ulp=max_ulp,
     )
 
 
@@ -470,6 +488,51 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
         binary_op,
         prepare_stimuli=_prepare_float_stimuli,
         dst_rounding_mode=DstRoundingMode.NearestEven,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
+
+
+# ===========================================================================
+# add_top_row — adds the top four rows of faces 0 and 1 (the tile's top four rows) of two
+# tiles; the rest of the result tile keeps what Dest held. Float32 and Int32, both with a
+# 32-bit Dest. The golden models the same Dest rows as on Blackhole.
+# ===========================================================================
+_ADD_TOP_ROW_FORMATS = [DataFormat.Float32, DataFormat.Int32]
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
+@pytest.mark.parametrize(
+    "data_format", _ADD_TOP_ROW_FORMATS, ids=[f.name for f in _ADD_TOP_ROW_FORMATS]
+)
+def test_eltwise_binary_sfpu_add_top_row_quasar(
+    data_format,
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Binary SFPU add_top_row, Float32 and Int32."""
+    formats = InputOutputFormat(input_format=data_format, output_format=data_format)
+    if data_format == DataFormat.Int32:
+        prepare_stimuli = lambda f, dims, s0, s1, op: _prepare_int_stimuli(
+            f, dims, s0, s1, op, None
+        )
+    else:
+        prepare_stimuli = _prepare_float_stimuli
+    _run_sfpu_binary_llk_golden(
+        formats,
+        DestAccumulation.Yes,
+        ImpliedMathFormat.No,
+        tile_indices,
+        MathOperation.SfpuAddTopRow,
+        "ADD_TOP_ROW",
+        prepare_stimuli=prepare_stimuli,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

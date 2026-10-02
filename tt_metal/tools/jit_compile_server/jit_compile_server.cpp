@@ -20,6 +20,7 @@
 #include "impl/jit_server/types.hpp"
 #include "jit_build/depend.hpp"
 #include "jit_build/jit_build_utils.hpp"
+#include "jit_build/pch.hpp"
 
 // Remote JIT compile server
 //
@@ -187,17 +188,29 @@ void compile_one(
     const tt::tt_metal::jit_server::TargetRecipe& target,
     const std::string& out_dir,
     size_t src_index,
-    const std::string& temp_obj) {
+    const std::string& temp_obj,
+    const fs::path& pch_root) {
     std::string obj_path = out_dir + target.objs[src_index];
     std::string obj_temp_path = out_dir + temp_obj;
     std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
     // Build the g++ argv via the shared jit_build_utils builder and run it directly (posix_spawn,
     // no shell), the same path used by the local compile.
     std::vector<std::string> defines(target.defines.begin(), target.defines.end());
+    std::string cflags = target.cflags;
+    // Preprocess-and-ship sends self-contained .ii files whose standard headers
+    // are already expanded, so they cannot benefit from this shared prelude.
+    if (fs::path(target.srcs[src_index]).extension() != ".ii" && !target.pch_umbrella.empty()) {
+        const std::string pch =
+            tt::jit_build::ensure_pch(gpp, target.compiler_opt_level, target.cflags, target.pch_umbrella, pch_root);
+        if (!pch.empty()) {
+            defines.insert(defines.begin(), {"-include", pch});
+            cflags += " -Winvalid-pch -Wno-error=invalid-pch";
+        }
+    }
     std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
         gpp,
         target.compiler_opt_level,
-        target.cflags,
+        cflags,
         target.includes,
         defines,
         target.srcs[src_index],
@@ -215,7 +228,7 @@ void compile_one(
     // missing dephash conservatively forces a server-side recompile next time, and client-side reuse
     // rides on the client-written <elf> full-dephash sidecar instead.
     if (fs::path(target.srcs[src_index]).extension() != ".ii") {
-        tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+        tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash", target.pch_umbrella);
     }
     fs::remove(temp_d_path);
 }
@@ -266,6 +279,7 @@ void build_target(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
     const std::string& out_dir,
+    const fs::path& pch_root,
     tt::tt_metal::jit_server::CompileResponse& response) {
     if (target.srcs.size() != target.objs.size()) {
         throw std::runtime_error("srcs and objs must have the same size for target " + target.target_name);
@@ -302,7 +316,7 @@ void build_target(
 
     for (size_t i = 0; i < num_objs; ++i) {
         if (compiled[i]) {
-            compile_one(gpp, target, out_dir, i, temp_objs[i]);
+            compile_one(gpp, target, out_dir, i, temp_objs[i], pch_root);
         }
     }
 
@@ -396,7 +410,10 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
                     resolve_uploaded_firmware_path(request.build_key, resolved_target).string();
             }
             std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
-            build_target(request.gpp, resolved_target, out_dir, response);
+            // Shared across build keys: the PCH is keyed on compiler, optimization level, cflags
+            // and umbrella text, so one copy per cache root serves every build key.
+            const fs::path pch_root = fs::path(g_server_cache_root) / "pch";
+            build_target(request.gpp, resolved_target, out_dir, pch_root, response);
         }
 
         response.success = true;

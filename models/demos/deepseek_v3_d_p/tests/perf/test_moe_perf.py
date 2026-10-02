@@ -49,19 +49,19 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Re-cut 2026-09-07 on the CI LoudBox (bh_loudbox), run 34128459250. One sample.
-        # The routed expert is the whole delta: it reads 994,733 ns against a 2,365,321 ns
-        # remainder the previous centre also had to contain, which puts the op alone at 1.67x --
-        # inside the 1.10-1.69x its own gate records at these token counts.
-        expected_ns_8x1=3_360_055,
+        # Re-cut 2026-09-27 on the CI LoudBox (bh_loudbox), run 36356781842. One sample.
+        # ND-sharded routed-expert weights are the whole delta: the op reads 817,335 ns against
+        # 979,850 ns on main run 36360866118, and the remainder moves by under 1%.
+        expected_ns_8x1=3_180_625,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Re-cut 2026-09-07 on the CI LoudBox (bh_loudbox), run 34128459250. One sample.
-        # Same cause as 8x1, and this slot is the most exposed to it: the routed expert is 61% of
-        # the total at 4,044,853 ns against a 2,541,825 ns remainder, so the op alone moved 1.56x.
-        # This gate still has to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7%
-        # slower.
-        expected_ns_2x4=6_586_678,
+        # Re-cut 2026-09-27 on the CI LoudBox (bh_loudbox), run 36356781842. One sample.
+        # ND-sharded routed-expert weights are the whole delta: the op reads 3,110,641 ns against
+        # 3,808,493 ns on main run 36360866118, and the remainder moves by under 0.5%.
+        # AVG DEVICE KERNEL DURATION is a SUM, so a truncated capture reads low exactly like a
+        # speedup -- diff the Matmul/CCL/Other split against a main run before trusting a miss.
+        # This gate has to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7% slower.
+        expected_ns_2x4=5_613_881,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,

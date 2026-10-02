@@ -157,7 +157,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
-    tt::tt_metal::IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size);

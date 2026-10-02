@@ -352,19 +352,64 @@ def serialize_prebuilt_kv_chunk_table(*, table, path: str) -> str:
     return path
 
 
-def export_device_map_to_file(mesh_device, mesh_shape, path: str) -> str:
-    device_map = _build_device_map(mesh_device, mesh_shape)
-    tmp = f"{path}.tmp"
+def _write_device_map_lines(device_map, path: str, rank: int) -> None:
+    tmp = f"{path}.tmp.{rank}"
     with open(tmp, "w", encoding="utf-8") as map_file:
         map_file.writelines(f"{mesh_id} {chip_id} {umd_id}\n" for mesh_id, chip_id, umd_id in device_map)
     os.replace(tmp, path)
-    logger.info(f"[migration] device map ({len(device_map)} chips) exported to {path}")
-    return path
+
+
+def device_map_rank_sidecar_path(path: str, rank: int) -> str:
+    return f"{path}.r{rank}"
+
+
+def write_device_map_rank_sidecar(device_map, path: str, rank: int) -> str:
+    """Write this rank's chips to its own sidecar and drop any merged map a prior run left at ``path``.
+
+    Ranks sharing a host share ``path`` (one file per node); writing it directly was last-writer-wins.
+    Called before a collective, so every rank's removal precedes every rank's merge."""
+    try:
+        os.remove(path)
+        logger.warning(f"[migration] removed stale device map {path} from a prior run")
+    except FileNotFoundError:
+        pass
+    sidecar = device_map_rank_sidecar_path(path, rank)
+    _write_device_map_lines(device_map, sidecar, rank)
+    return sidecar
+
+
+def merge_device_map_rank_sidecars(path: str, host_ranks, rank: int) -> int:
+    """Union the sidecars of ``host_ranks`` (every rank on this host) into ``path``.
+
+    Every rank on the host writes the same content, so the concurrent replaces are idempotent and the
+    merged file never appears with only some ranks' chips."""
+    merged = {}
+    for host_rank in sorted(host_ranks):
+        sidecar = device_map_rank_sidecar_path(path, host_rank)
+        with open(sidecar, encoding="utf-8") as map_file:
+            for line in map_file:
+                if not line.strip():
+                    continue
+                mesh_id, chip_id, umd_id = (int(field) for field in line.split())
+                if merged.setdefault((mesh_id, chip_id), umd_id) != umd_id:
+                    raise RuntimeError(
+                        f"[migration] device map sidecars disagree on fabric node ({mesh_id}, {chip_id}): "
+                        f"{merged[(mesh_id, chip_id)]} vs {umd_id} in {sidecar}"
+                    )
+    _write_device_map_lines([(m, c, u) for (m, c), u in sorted(merged.items())], path, rank)
+    return len(merged)
 
 
 def export_device_map_file_and_gather_stage_layouts(mesh_device, stages, mesh_shape, device_map_path: str):
-    export_device_map_to_file(mesh_device, mesh_shape, device_map_path)
-    return allgather_kv_stage_layouts(mesh_device, stages, mesh_shape)
+    rank = int(ttnn.distributed_context_get_rank())
+    write_device_map_rank_sidecar(_build_device_map(mesh_device, mesh_shape), device_map_path, rank)
+    # A collective: past it, every rank's sidecar exists.
+    stage_layouts = allgather_kv_stage_layouts(mesh_device, stages, mesh_shape)
+    host_tag = _host_tag_int()
+    host_ranks = [s["rank"] for s in stage_layouts[0] if s["host_tag"] == host_tag]
+    num_chips = merge_device_map_rank_sidecars(device_map_path, host_ranks, rank)
+    logger.info(f"[migration] device map ({num_chips} chips, ranks {host_ranks}) exported to {device_map_path}")
+    return stage_layouts
 
 
 def deliver_device_map_and_gather_stage_layouts(mesh_device, stages, mesh_shape, rank):
@@ -380,7 +425,11 @@ def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeo
         f"wait_ready_ms={wait_ready_timeout_ms}"
     )
     client.send_kv_chunk_table(table_path)
-    client.wait_ready(wait_ready_timeout_ms)
+    try:
+        client.wait_ready(wait_ready_timeout_ms)
+    except RuntimeError as e:
+        logger.warning(f"[migration] WORKER_READY not observed ({e}); serving anyway")
+        return client
     logger.info(f"[migration] WORKER_READY: table={table_path}")
 
     return client
