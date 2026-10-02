@@ -129,9 +129,9 @@ FORCE_INLINE void sort_fused_chunk(
 // Every body reduces the row chunks [first_chunk, first_chunk + num_chunks) into an unfused
 // [values, indices] survivor at DST slot 0 with row-global indices. The survivor is sorted
 // descending unless final_ascending, which prepares it as merge operand one of another core.
-template <uint32_t K>
+template <uint32_t K, bool final_ascending>
 FORCE_INLINE void reduce_fused_row(
-    CircularBuffer& input, uint32_t first_chunk, uint32_t num_chunks, uint32_t tail_elements, bool final_ascending) {
+    CircularBuffer& input, uint32_t first_chunk, uint32_t num_chunks, uint32_t tail_elements) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     constexpr uint32_t survivor_slot = 0;
     // A fused survivor has no separate index tiles. Its merge operand is
@@ -334,7 +334,12 @@ void kernel_main() {
         tile_regs_acquire();
 
         if constexpr (body_mode == ComputeBodyMode::FusedEndToEnd) {
-            reduce_fused_row<K>(input, seg_first_chunk, num_chunks, tail_elements, body_final_ascending);
+            // The rebuild assembles its instructions from the direction, so each direction gets its own body.
+            if (body_final_ascending) {
+                reduce_fused_row<K, true>(input, seg_first_chunk, num_chunks, tail_elements);
+            } else {
+                reduce_fused_row<K, false>(input, seg_first_chunk, num_chunks, tail_elements);
+            }
         } else {
             reduce_segmented_row<K, columns>(input, seg_first_chunk, num_chunks, tail_elements, body_final_ascending);
         }
