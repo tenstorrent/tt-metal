@@ -309,6 +309,179 @@ void Kernel::process_named_compile_time_args(
     callback(this->named_compile_time_args());
 }
 
+void Kernel::process_user_facing_resource_binding_handles(
+    const std::function<void(const tt::tt_metal::Binding&)>& callback) const {
+    Binding general_dfb_binding{
+        .name = "DFBBindingToken",
+        .emission_namespace = "dfb",
+        .binding_type = "DFBBindingToken",
+        .includes = {"api/dataflow/dataflow_buffer.h"},
+        // Enables programmatic binding token getter for general dfb
+        .programmatic_getter_config = ProgrammaticBindingTokenGetterConfig{},
+    };
+
+    Binding relay_dfb_binding{
+        .name = "RelayDFBBindingToken",
+        .emission_namespace = "dfb",
+        .binding_type = "RelayDFBBindingToken",
+        .includes = {"api/dataflow/dataflow_buffer.h"},
+    };
+
+    // Get the DFB bindings from the settings callback
+    process_dataflow_buffer_binding_handles([&](const std::string& name,
+                                                uint16_t id,
+                                                bool is_relay,
+                                                uint8_t prefetcher_pipe_id,
+                                                const std::optional<LLKMetadata>& metadata) {
+        if (is_relay) {
+            BindingEntry entry{.name = name, .args = {std::to_string(id)}};
+            // PrefetcherPipe relays bake the persistent slot into the token so the TRISC
+            // constructor can O(1)-align to the durable checkpoint; CrossNode relays
+            // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
+            if (prefetcher_pipe_id != 0xFF) {
+                entry.args.push_back(std::to_string(static_cast<uint32_t>(prefetcher_pipe_id)));
+            }
+            relay_dfb_binding.entries.push_back(std::move(entry));
+        } else {
+            BindingEntry entry{.name = name, .args = {std::to_string(id)}};
+            if (metadata.has_value()) {
+                entry.args.push_back(serialize_llk_metadata(*metadata));
+            }
+            general_dfb_binding.entries.push_back(std::move(entry));
+        }
+    });
+
+    // Sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
+    std::ranges::sort(general_dfb_binding.entries, [](const auto& a, const auto& b) { return a.name < b.name; });
+    std::ranges::sort(relay_dfb_binding.entries, [](const auto& a, const auto& b) { return a.name < b.name; });
+
+    Binding semaphore_binding{
+        .name = "SemaphoreBindingToken",
+        .emission_namespace = "sem",
+        .binding_type = "SemaphoreBindingToken",
+        .includes = {"api/dataflow/semaphore_binding_token.h"},
+    };
+
+    auto sem_scope_enumerator = [](const SemScope& scope) {
+        switch (scope) {
+            case SemScope::LOCAL_NONATOMIC: return "LOCAL_NONATOMIC";
+            case SemScope::DM_LOCAL_CACHED: return "DM_LOCAL_CACHED";
+            case SemScope::EXTERNAL: return "EXTERNAL";
+            case SemScope::COMPUTE_ATOMIC: return "COMPUTE_ATOMIC";
+        }
+        TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
+    };
+
+    // Get the semaphore bindings from the settings callback
+    // Sort them to ensure the file output is deterministic, as explained above
+    process_semaphore_binding_handles([&](const std::string& name, uint16_t id, SemScope scope, uint32_t) {
+        semaphore_binding.entries.push_back(BindingEntry{
+            .name = name,
+            .args = {fmt::format("{}u", id), fmt::format("::SemScope::{}", sem_scope_enumerator(scope))}});
+    });
+    std::ranges::sort(semaphore_binding.entries, [](const auto& a, const auto& b) { return a.name < b.name; });
+
+    // Get the tensor binding handles from the settings callback
+    // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
+    // (Kernel::compute_hash also hashes them in the same order... these two must be the same.)
+
+    Binding tensor_binding{
+        .name = "TensorBindingToken",
+        .emission_namespace = "tensor",
+        .binding_type = "::tensor_accessor::TensorBindingToken",
+        .is_binding_type_templated = true,
+        .includes = {"api/tensor/tensor_binding_token.h"},
+        .programmatic_getter_config =
+            ProgrammaticBindingTokenGetterConfig{
+                .null_binding_type = "::tensor_accessor::NullTensorBindingToken",
+            },
+    };
+
+    process_tensor_binding_handles([&](const std::string& name,
+                                       uint32_t cta_offset,
+                                       uint32_t addr_crta_offset,
+                                       uint32_t /*num_rt_words*/,
+                                       const LLKMetadata& metadata) {
+        tensor_binding.entries.push_back(BindingEntry{
+            .name = name,
+            .args = {serialize_llk_metadata(metadata)},
+            .template_args = {fmt::format("{}u", cta_offset), fmt::format("{}u", addr_crta_offset)},
+        });
+    });
+
+    // Get the scratchpad bindings from the settings callback.
+    // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
+    // (Kernel::compute_hash hashes them in the same order — the two must agree).
+
+    Binding scratchpad_binding{
+        .name = "ScratchpadBindingToken",
+        .emission_namespace = "scratch",
+        .binding_type = "ScratchpadBindingToken",
+        .includes = {"api/scratchpad.h"},
+        .entries = {},  // assigned later
+        .programmatic_getter_config = ProgrammaticBindingTokenGetterConfig{},
+    };
+
+    process_scratchpad_binding_handles([&](const std::string& name,
+                                           uint32_t size_bytes,
+                                           uint32_t addr_crta_word,
+                                           const std::optional<LLKMetadata>& metadata) {
+        BindingEntry entry{.name = name, .args = {fmt::format("{}u", addr_crta_word), fmt::format("{}u", size_bytes)}};
+        if (metadata.has_value()) {
+            entry.args.push_back(serialize_llk_metadata(*metadata));
+        }
+        scratchpad_binding.entries.push_back(std::move(entry));
+    });
+
+    // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
+    // hashes them in binding order; both orders carry the same set, so the cache key is stable).
+
+    Binding prefetcher_pipe_binding{
+        .name = "PrefetcherPipeBindingToken",
+        .emission_namespace = "pipe",
+        .binding_type = "PrefetcherPipeBindingToken",
+        .includes = {"api/dataflow/prefetcher_pipe_binding_token.h"},
+        .entries = {},  // assigned later
+    };
+    process_prefetcher_pipe_binding_handles([&](const std::string& name, uint8_t prefetcher_pipe_id) {
+        prefetcher_pipe_binding.entries.push_back(
+            BindingEntry{.name = name, .args = {fmt::format("{}u", prefetcher_pipe_id)}});
+    });
+    std::ranges::sort(prefetcher_pipe_binding.entries, [](const auto& a, const auto& b) { return a.name < b.name; });
+
+    // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
+
+    Binding tensor_binding_sequence_binding{
+        .name = "TensorBindingSequenceToken",
+        .emission_namespace = "tensor",
+        // every entries construct the binding sequence using `std::make_tuple(...)`,
+        // this should be deduced as tuple<TensorBindingToken<...>, ...>.
+        .binding_type = "auto",
+        .includes = {"tuple"},
+        .entries = {},  // assigned later
+    };
+
+    process_tensor_binding_sequences([&](const std::string& name, const std::vector<std::string>& members) {
+        tensor_binding_sequence_binding.entries.push_back(BindingEntry{
+            .name = name,
+            .args = {
+                fmt::format("std::make_tuple({})", fmt::join(members, ", ")),
+            }});
+    });
+
+    std::array all_bindings{
+        general_dfb_binding,
+        relay_dfb_binding,
+        semaphore_binding,
+        tensor_binding,
+        scratchpad_binding,
+        prefetcher_pipe_binding,
+        tensor_binding_sequence_binding,
+    };
+    std::ranges::for_each(all_bindings, callback);
+}
+
 void Kernel::process_dataflow_buffer_binding_handles(const std::function<void(
                                                          const std::string& accessor_name,
                                                          uint16_t logical_dfb_id,
