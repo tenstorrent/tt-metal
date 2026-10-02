@@ -41,6 +41,33 @@ try:
 except ImportError:  # loaded via importlib.spec_from_file_location
     from models.demos.laguna.tt.model import MODEL_ID, LagunaModel
 
+try:  # tt-lang is optional: without it the sampler keeps the ttnn FillPad + Pad before top-k
+    from .ttl_logits_pad import logits_pad
+except ImportError:
+    try:
+        from models.demos.laguna.tt.ttl_logits_pad import logits_pad
+    except ImportError:
+        logits_pad = None
+
+
+class _LagunaSampling1D(Sampling1D):
+    """Sampling1D whose multi-device top-k pads the logits shard to the power-of-two top-k width with one
+    tt-lang kernel (tile copy + -inf tail fill) instead of ttnn's FillPad + Pad."""
+
+    def _topk_multi_device(self, x_bf16):
+        w = x_bf16.shape[-1]
+        wp = 1 << (w - 1).bit_length()
+        rows = x_bf16.shape[-2]
+        if logits_pad is None or wp == w or len(x_bf16.shape) != 4 or rows > 32 or x_bf16.dtype != ttnn.bfloat16:
+            return super()._topk_multi_device(x_bf16)
+        dev = x_bf16.device()
+        x32 = ttnn.reshape(x_bf16, [1, 1, 32, w], [1, 1, 32, w])  # view: the tile's padded rows made logical
+        out = ttnn.empty([1, 1, 32, wp], ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ttnn.L1_MEMORY_CONFIG)
+        logits_pad(x32, out)
+        x_p = ttnn.reshape(out, [1, 1, rows, wp], [1, 1, 32, wp])  # back to the logical rows (view)
+        return super()._topk_multi_device(x_p)  # already a power of two wide: the base skips its pad
+
+
 BLOCK_SIZE = 32
 # The standalone KV cache length must be a whole number of SDPA K chunks, not just of BLOCK_SIZE: decode
 # reads the cache in k_chunk_size blocks (64; prefill and the verify option use 128), and a final chunk
@@ -122,7 +149,7 @@ class LagunaGenerator(ReadinessGenerator):
     # ---- sampler / param builders ------------------------------------------ #
     def _sampler(self, batch):
         if batch not in self._samplers:
-            s = Sampling1D(
+            s = _LagunaSampling1D(
                 vocab_size=self.vocab,
                 mesh_device=self.mesh_device,
                 max_batch_size=batch,
