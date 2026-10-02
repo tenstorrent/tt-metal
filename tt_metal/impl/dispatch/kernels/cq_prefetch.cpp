@@ -812,6 +812,12 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     break;
                 }
 
+                // With the window full the loop exits without using the next slot, and it is polled again once a
+                // read retires, so skip polling it here.
+                if (inflight_count == tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS) {
+                    break;
+                }
+
                 // Refresh host state for potential next issue.
                 prefetch_q_rd_ptr_local = prefetch_q_read_slot(prefetch_q_rd_ptr);
                 fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
