@@ -79,7 +79,7 @@ from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Tr
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, dram_probe
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
 from ...utils.tracing import StateTensor
@@ -464,6 +464,14 @@ class MiniMaxH3Output:
         return self.audio.shape[-1] / self.sampling_rate
 
 
+def _skip_decode_warm() -> bool:
+    return os.environ.get("MINIMAX_H3_WARMUP_SKIP_DECODE_WARM", "0") == "1"
+
+
+def _skip_oom_rungs() -> bool:
+    return os.environ.get("MINIMAX_H3_WARMUP_SKIP_OOM_RUNGS", "0") == "1"
+
+
 def _is_host_rank() -> bool:
     return not ttnn.using_distributed_env() or int(ttnn.distributed_context_get_rank()) == 0
 
@@ -532,6 +540,7 @@ class MiniMaxH3Pipeline:
         )
         self._log_generation = True
         self._buckets: dict[int, _BucketState] = {}
+        self.unfittable_rungs: list[int] = []
         self._force_bucket: int | None = None
         self._force_prompt_pad: int | None = None
         self._force_vision_pad: int | None = None
@@ -710,6 +719,7 @@ class MiniMaxH3Pipeline:
             self._prepare_transformer()
         self._prepare_text_encoder()
         self._prepare_audio_decoder()
+        dram_probe.register(self)
 
         if warmup:
             self._warmup_on_init()
@@ -1095,6 +1105,20 @@ class MiniMaxH3Pipeline:
         Every call runs the encoder; with the default co-residency the weights are already on
         device, so this costs the ~2.8 s forward, not the 50 GB reload.
         """
+        # The conditioner gathers at the request's presentation length, and its CCL manager caches a
+        # pair per distinct shape for the life of the process (0.4 GB/device after a handful of
+        # requests, resident through the DiT and the VAE decode). The returned taps are fresh tensors,
+        # not persistent buffers, so the pairs can go the moment the encode is done.
+        with self.encoder_ccl_manager.transient_ping_pong_buffers():
+            return self._encode_prompt_device(prompt, keyframes=keyframes, references=references)
+
+    def _encode_prompt_device(
+        self,
+        prompt: str,
+        *,
+        keyframes: Sequence[Image.Image] = (),
+        references: Sequence[MiniMaxH3PreparedReference] = (),
+    ) -> tuple[ttnn.Tensor, torch.Tensor]:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
         if keyframes and references:
@@ -1976,7 +2000,7 @@ class MiniMaxH3Pipeline:
         vae = self._vae if has_visual else None
         audio_encoder = self._prepare_audio_encoder() if has_audio else None
 
-        with self._track_cache_misses(on_event, "vae_encode"):
+        with self._track_cache_misses(on_event, "vae_encode"), self.encoder_ccl_manager.transient_ping_pong_buffers():
             condition_rows, audio_condition_rows = encode_references(
                 prepared,
                 encode_clip=(lambda pixels: vae.encode_clip(pixels)) if has_visual else None,
@@ -2080,6 +2104,7 @@ class MiniMaxH3Pipeline:
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
         transformer = self._prepare_transformer()
+        dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
                 transformer,
@@ -2102,6 +2127,7 @@ class MiniMaxH3Pipeline:
             audio = self._decode_audio(
                 self._prepare_audio_decoder(), audio_rows, num_audio_latents, layout.num_condition_audio_rows
             )
+        dram_probe.report("end of request (after audio decode)")
 
         self._log(f"program cache misses: {self.last_program_cache_misses}")
         yuv = self.vae_output_type == "yuv420"
@@ -2225,9 +2251,10 @@ class MiniMaxH3Pipeline:
         self.trace_audio = False
         self._log_generation = False
         try:
-            if self.vae_output_type == "yuv420":
-                self._warm_vae_decode()
-            self._warm_audio_decode()
+            if not _skip_decode_warm*():
+                if self.vae_output_type == "yuv420":
+                    self._warm_vae_decode()
+                self._warm_audio_decode()
             self._warm_prompt_encoder()
             fitted = self._warm_denoise_buckets(prompt, generation_kwargs, overrides)
             self._capture_traces(prompt, fitted, overrides, trace_audio)
@@ -2256,12 +2283,29 @@ class MiniMaxH3Pipeline:
             shrink = rung not in overrides
             request = overrides.get(rung, shrunk)
             if bucket is None or not bucket.warm:
-                request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
+                try:
+                    request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
+                except RuntimeError as error:
+                    # Diagnostic mode (MINIMAX_H3_WARMUP_SKIP_OOM_RUNGS=1): a rung whose forced
+                    # request runs out of device memory is reported and skipped, so one warmup
+                    # walks the whole ladder and names the largest rung this mesh can bind. The
+                    # OOM is a host-side allocator failure raised before dispatch, so the device
+                    # is left consistent; the skipped rung is NOT servable in this process.
+                    if "Out of Memory" not in str(error) or not _skip_oom_rungs():
+                        raise
+                    self.unfittable_rungs.append(rung)
+                    self._host_log(f"rung {rung} does not fit in device memory; skipped (diagnostic mode)")
+                    continue
                 if request is None:
                     continue
                 if shrink:
                     shrunk = request
             fitted[rung] = request
+        if self.unfittable_rungs:
+            self._host_log(
+                f"rungs that do not fit: {sorted(self.unfittable_rungs)}; largest that binds: "
+                f"{max(fitted) if fitted else None}"
+            )        
         return fitted
 
     def _capture_traces(
@@ -2574,6 +2618,10 @@ class MiniMaxH3Pipeline:
         host = _is_host_rank()
         if host:
             _tqdm_spacer()
+        with self.encoder_ccl_manager.transient_ping_pong_buffers():
+            self._warm_vision_merge_lengths(seq_lens, tower_sizes, encoder, tower, merge, hidden, zeros, host)
+
+    def _warm_vision_merge_lengths(self, seq_lens, tower_sizes, encoder, tower, merge, hidden, zeros, host) -> None:
         for seq_len in tqdm.tqdm(
             seq_lens,
             desc="Warming vision merge sequence lengths",
@@ -2716,14 +2764,27 @@ class MiniMaxH3Pipeline:
                 device=self.mesh_device,
             )
 
-        transformer.prepare_static_sources(
-            prompt_1BLP=prompt_device,
-            prompt_len=l_len,
-            condition_video_1BKC=self._tt_cond_video.value,
-            condition_audio_1BKC=self._tt_cond_audio.value if self.task == "ref2va" else None,
-            prompt_cap=caps.prompt,
-            traced=traced,
+        static_transient = (
+            self.ccl_manager.transient_ping_pong_buffers()
+            if not (self.use_persistent_ccl_buffers or self.trace_denoise)
+            else nullcontext()
         )
+        with static_transient:
+            try:
+                transformer.prepare_static_sources(
+                    prompt_1BLP=prompt_device,
+                    prompt_len=l_len,
+                    condition_video_1BKC=self._tt_cond_video.value,
+                    condition_audio_1BKC=self._tt_cond_audio.value if self.task == "ref2va" else None,
+                    prompt_cap=caps.prompt,
+                    traced=traced,
+                )
+            except RuntimeError as err:
+                if "Out of Memory" in str(err):
+                    dram_probe.report(f"after OOM in prepare_static_sources, rung {rung}")
+                raise
+            ttnn.synchronize_device(self.mesh_device)
+        dram_probe.report(f"after prepare_static_sources, rung {rung}")
 
         state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
         state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
@@ -2787,21 +2848,46 @@ class MiniMaxH3Pipeline:
                 )
             ):
                 t_step = time.time()
-                video_velocity, audio_velocity = transformer(
-                    video_1BVC=self._tt_video.value,
-                    audio_1BAC=self._tt_audio.value,
-                    assembly_indices=state.assembly_idx.value,
-                    video_out_indices=self._tt_video_out_idx.value,
-                    audio_out_indices=self._tt_audio_out_idx.value,
-                    timestep=self._tt_timestep.value,
-                    adaln_indices=state.adaln.value,
-                    timestep_indices=state.tsi.value,
-                    rope_cos=state.rope_cos.value,
-                    rope_sin=state.rope_sin.value,
-                    logical_n=self._tt_logical_n.value,
-                    pad_to=rung,
-                    traced=traced,
+                level_kwargs = {
+                    "video_timestep": float(t),
+                    "audio_timestep": float(audio_timesteps[i]),
+                }
+                if "condition_video" in slot_roles:
+                    level_kwargs["condition_video_timestep"] = max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG)
+                if "condition_audio" in slot_roles:
+                    level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
+                levels = slot_levels(slot_roles, **level_kwargs)
+                self._tt_timestep.update(
+                    levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
                 )
+
+                try:
+                    video_velocity, audio_velocity = transformer(
+                        video_1BVC=self._tt_video.value,
+                        audio_1BAC=self._tt_audio.value,
+                        assembly_indices=state.assembly_idx.value,
+                        video_out_indices=self._tt_video_out_idx.value,
+                        audio_out_indices=self._tt_audio_out_idx.value,
+                        timestep=self._tt_timestep.value,
+                        adaln_indices=state.adaln.value,
+                        timestep_indices=state.tsi.value,
+                        rope_cos=state.rope_cos.value,
+                        rope_sin=state.rope_sin.value,
+                        logical_n=self._tt_logical_n.value,
+                        pad_to=rung,
+                        traced=traced,
+                    )
+                except RuntimeError as err:
+                    if "Out of Memory" in str(err):
+                        # The forward's locals are gone by now; this is the resident set that remains.
+                        dram_probe.report(f"after OOM in step {i + 1}, rung {rung} (forward unwound)")
+                    raise
+
+                ttnn.synchronize_device(self.mesh_device)
+                if i == 0:
+                    dram_probe.report(f"after step 1, rung {rung}")
+                if ttnn.using_distributed_env():
+                    ttnn.distributed_context_barrier()
 
                 ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
                 ttnn.add_(self._tt_video.value, video_velocity)
