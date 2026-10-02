@@ -23,6 +23,14 @@ using routing_plane_id_t = std::uint8_t;
 static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 
+// Every FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS main-loop iterations, the fabric router writes
+// FABRIC_KERNEL_HEARTBEAT_MAGIC | (16-bit iteration count) to a word owned by the base ethernet firmware.
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE = 0x1F80;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE = 0x7CC70;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC = 0xDCBA0000;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK = 0xFFFF0000;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS = 64;
+
 // Constants for fabric mesh configuration
 static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
