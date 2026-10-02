@@ -744,6 +744,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         TT_FATAL(use_streaming_compute, "pv_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
         defines_map["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(*program_config->pv_math_fidelity));
     }
+    // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
+    if (use_streaming_compute && math_fidelity == tt::tt_metal::MathFidelity::LoFi) {
+        defines_map["SDPA_COMPUTE_LOFI"] = "1";
+    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
