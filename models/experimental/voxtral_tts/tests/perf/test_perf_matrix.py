@@ -36,8 +36,10 @@ DEVICE_ID = int(os.environ.get("VOXTRAL_DEVICE_ID", "0"))
 RESULTS_PATH = os.environ.get("PM_RESULTS", "")
 VOICE = "neutral_male"
 SR = 24000
-# Jerry's PR README (1x p300c, batch 32, trace + 1 CQ): 78.9 ms per frame for 32 users, 406 frames/s.
-JERRY = {"ms_per_frame_32": 78.9, "frames_per_s_32": 406.0, "rtf_per_user_32": 1000.0 / 12.5 / 78.9}
+# PR #58516 README (one p150 chip, batch 32, trace + 1 CQ, tip 2fa38a243a1): 63.0 ms per frame for 32
+# users, 508 frames/s. It is the SUM of two separately traced stages (decode 37.2 + acoustic 25.8), not
+# a measured frame loop; our ms per frame is one measured trace replay per frame.
+JERRY = {"ms_per_frame_32": 63.0, "frames_per_s_32": 508.0, "rtf_per_user_32": 1000.0 / 12.5 / 63.0}
 
 
 def _row(name, wall, audio_s, frames, prefill_s, codec_s, users):
@@ -64,7 +66,7 @@ def _print(rows):
             f"{r['config']:14s} {r['users']:5d} {r['wall_s']:7.2f} {r['audio_s']:8.1f} {r['rtf_aggregate']:8.2f} {r['rtf_per_user']:9.2f} {r['frames_per_s']:9.0f} {r['prefill_s']:9.2f} {r['codec_s']:8.2f}"
         )
     print(
-        f"{'Jerry PR, 32':14s} {32:5d} {'':>7s} {'':>8s} {32 * JERRY['rtf_per_user_32']:8.2f} {JERRY['rtf_per_user_32']:9.2f} {JERRY['frames_per_s_32']:9.0f}   (README: 78.9 ms per 32-user frame)"
+        f"{'Jerry PR, 32':14s} {32:5d} {'':>7s} {'':>8s} {32 * JERRY['rtf_per_user_32']:8.2f} {JERRY['rtf_per_user_32']:9.2f} {JERRY['frames_per_s_32']:9.0f}   (README: 63.0 ms per 32-user frame = decode 37.2 + acoustic 25.8, stage sum)"
     )
 
 

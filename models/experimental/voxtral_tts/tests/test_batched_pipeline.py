@@ -93,15 +93,19 @@ def _requests_all_voices(model_dir):
 
 def test_a1_slots_are_independent_and_deterministic(pipe):
     reqs = _requests_all_voices(pipe.model_dir)
-    # the same request in slot 0 and slot B//2
-    reqs[B // 2] = reqs[0]
+    # The same request in several slots, including adjacent ones and ones that are not multiples of 8:
+    # slots 0 and B//2 alone happened to agree while rows b != 0 mod 8 did not (2026-10-01, the device
+    # loop's next-frame embedding grouped each row's sum differently).
+    copies = sorted({0, min(3, B - 1), B // 2, B - 1})
+    for s in copies[1:]:
+        reqs[s] = reqs[0]
     f1 = pipe.generate_batch(reqs)
     t1 = dict(pipe.last_timings)
     f2 = pipe.generate_batch(reqs)
-    same_slot = f1[0].shape == f1[B // 2].shape and bool(torch.equal(f1[0], f1[B // 2]))
+    same_slot = all(f1[0].shape == f1[s].shape and bool(torch.equal(f1[0], f1[s])) for s in copies[1:])
     same_run = all(a.shape == b.shape and bool(torch.equal(a, b)) for a, b in zip(f1, f2))
     _record(a1_same_request_two_slots_identical=same_slot, a1_two_runs_identical=same_run, a1_timings=t1)
-    print(f"\n[phaseA] A1 same request in two slots identical: {same_slot}; two runs identical: {same_run}")
+    print(f"\n[phaseA] A1 same request in slots {copies} identical: {same_slot}; two runs identical: {same_run}")
     print(f"[phaseA] A1 frames per row: {t1['frames']}")
     assert same_slot, "the same request produced different codes in different slots"
     assert same_run, "the same batch produced different codes on a second run"
