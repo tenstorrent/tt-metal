@@ -120,19 +120,19 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 ### 4.1 The record
 
 dispatch_s writes one record per command: two 16-byte timestamps (`realtime_profiler_timestamp_t`) making a
-32-byte `realtime_profiler_record_t`. Records for commands that are not a profiled program carry id 0, and the
-BRISC drops them before they reach the host.
+32-byte `realtime_profiler_record_t` of eight 4-byte words (offsets below are in bytes). Records for commands
+that are not a profiled program carry id 0, and the BRISC drops them before they reach the host.
 
-| Bytes | Field | Contents |
-|-------|-------|----------|
-| 0-3 | `kernel_start.time_hi` | Device wall clock when dispatch_s started the command, high 32 bits |
-| 4-7 | `kernel_start.time_lo` | Same, low 32 bits |
-| 8-11 | `kernel_start.id` | Program runtime id; 0 = not a profiled program |
-| 12-15 | `kernel_start.header` | Always 0 in a program record (marks marker entries, see 4.2) |
-| 16-19 | `kernel_end.time_hi` | Last worker completion seen while the slot was open, high 32 bits |
-| 20-23 | `kernel_end.time_lo` | Same, low 32 bits |
-| 24-27 | `kernel_end.id` | Same program runtime id |
-| 28-31 | `kernel_end.header` | Cycles dispatch_s waited for a free slot before publishing; 0 = no wait. The BRISC turns it into a stall marker and zeroes it |
+| Offset | Field | Contents |
+|--------|-------|----------|
+| 0 | `kernel_start.time_hi` | Device wall clock when dispatch_s started the command, high 32 bits |
+| 4 | `kernel_start.time_lo` | Same, low 32 bits |
+| 8 | `kernel_start.id` | Program runtime id; 0 = not a profiled program |
+| 12 | `kernel_start.header` | Always 0 in a program record (marks marker entries, see 4.2) |
+| 16 | `kernel_end.time_hi` | Last worker completion seen while the slot was open, high 32 bits |
+| 20 | `kernel_end.time_lo` | Same, low 32 bits |
+| 24 | `kernel_end.id` | Same program runtime id |
+| 28 | `kernel_end.header` | Cycles dispatch_s waited for a free slot before publishing; 0 = no wait. The BRISC turns it into a stall marker and zeroes it |
 
 The BRISC never lets an end time go backwards: a slot that saw no completion while open is given the previous
 record's end time.
