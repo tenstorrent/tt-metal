@@ -475,7 +475,7 @@ An end-to-end example of the decode attention module is in the [attention.py](..
      - `k`: Key tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `v`: Value tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `is_causal`: Bool, defaults to `true`. Whether to apply causal masking.
-     - `attn_mask`: Defaults to `None`, and only valid with `is_causal=False`. Dim 2 must match `q`'s dim 2 — the padded per-device Q head count, not a sequence length — and dim 3 must match `k`'s `cache_len`. Dim 3 must also be a multiple of `k_chunk_size`: unpaged decode defaults it to `min(512, largest power-of-two divisor of cache_len)`, paged decode defaults it to `32` through `SDPAProgramConfig`, and paged non-causal attention requires an explicit positive `k_chunk_size`. For a reference construction, see the `tt_xattn_mask` reshape in [models/tt_transformers/tt/multimodal/llama_vision_model.py](../../models/tt_transformers/tt/multimodal/llama_vision_model.py), which pads the per-device head count (dim 2) to 32, not the head dimension.
+     - `attn_mask`: Defaults to `None`, and only valid with `is_causal=False`. Shape `(1, bsz, nh, cache_len)`: dim 2 is the per-device Q head count, not a sequence length, and must match `q`'s dim 2 in both the logical and the padded shape. Dim 3 must match `k`'s `cache_len` and be a multiple of `k_chunk_size`. Unpaged decode defaults the chunk size to `min(512, largest power-of-two divisor of cache_len)`. Paged decode uses `32` when `program_config` is omitted; a custom config for paged non-causal attention must set a positive `k_chunk_size`. For a reference construction, see the `tt_xattn_mask` reshape in [models/tt_transformers/tt/multimodal/llama_vision_model.py](../../models/tt_transformers/tt/multimodal/llama_vision_model.py), which sets logical dim 2 to the per-device head count and pads it to 32.
      - `cur_pos`: (Required for is_causal=True) List of current positions in the sequence for each batch. Defaults to `None`. Must be provided if `cur_pos_tensor` is not provided.
      - `cur_pos_tensor`: (Required for is_causal=True) Optional current position tensor. Defaults to `None`. Must be provided if `cur_pos` is not provided.
      - `scale`: Optional scale factor. Defaults to `None`.
@@ -518,7 +518,7 @@ For purely causal attention you do not need this section: prefer `is_causal=True
 | Padding | The tokenizer, when batching variable-length inputs | `[batch, seq]`, expanded to 4D |
 | Tile padding | KV length padded up to a multiple of 32 | the padded columns must be masked |
 
-The third is specific to tile-based hardware. Tensors are stored in 32x32 tiles, so a `kv_len` of 100 occupies 128 columns. Those 28 extra columns are part of the tensor the softmax sees; unless they are masked they contribute to its denominator, which raises no error and silently changes the result. Build the mask at the padded width and block the added columns — see the decode path in [models/demos/ttnn_falcon7b/tt/common.py](../../models/demos/ttnn_falcon7b/tt/common.py), which rounds `kv_len` up to a multiple of 32 and fills the added columns with the blocking value.
+The third is specific to tile-based hardware, and who handles it depends on the path. `scaled_dot_product_attention` keeps the unpadded KV length: the mask's logical width must match K's, and the op masks the tile padding itself, so don't widen that mask. When a path stores the padded length in its logical shape instead, the padding is yours to mask: a `kv_len` of 100 becomes 128 columns, and unless the extra 28 are blocked they add to the softmax denominator and silently change the result. See the decode path in [models/demos/ttnn_falcon7b/tt/common.py](../../models/demos/ttnn_falcon7b/tt/common.py), which rounds `kv_len` up to a multiple of 32 and fills the added columns with the blocking value.
 
 #### Converting a 2D mask to a 4D additive mask
 
@@ -540,7 +540,7 @@ mask_4d = blocked.to(torch.bfloat16) * -1e3
 tt_mask = ttnn.from_torch(mask_4d, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
 ```
 
-This yields `[batch, 1, q_len, kv_len]`, which is the prefill and fused-softmax layout. Decode needs `[1, b, nh, s]` instead — see the table below.
+This yields `[batch, 1, q_len, kv_len]`, which prefill `scaled_dot_product_attention` accepts directly. Interleaved `scale_mask_softmax` takes it only when `q_len` is `1` or `32`; otherwise reshape it as described below. Decode needs `[1, b, nh, s]` instead — see the table below.
 
 Dim 1 is left at `1` so the mask broadcasts across heads; expand it only if the OP requires an explicit head dimension. If you need the causal half alone, `AttentionMaskConverter(is_causal=True).to_causal_4d(...)` from `transformers.modeling_attn_mask_utils` produces it in one call, using `torch.finfo(dtype).min` as its fill value.
 
@@ -556,7 +556,7 @@ Mask shapes are enforced with hard asserts, so a mismatch is a crash rather than
 | --- | --- | --- |
 | `scaled_dot_product_attention` | none, with `is_causal=True` | `attn_mask` and `is_causal` are mutually exclusive |
 | `scaled_dot_product_attention` | `(bsz or 1, n_q_heads or 1, seqlen, cache_len)` | dims 2 and 3 must match Q and K exactly |
-| `scaled_dot_product_attention_decode` | `[1, b, nh, s]` | dim 2 is the padded Q head count; dim 3 is the KV length and must be a multiple of `k_chunk_size` |
+| `scaled_dot_product_attention_decode` | `[1, b, nh, s]` | dim 2 matches Q's head count, logical and padded; dim 3 is the KV length and must be a multiple of `k_chunk_size` |
 | `scale_mask_softmax`, interleaved | height (dim -2) `1` or the tile height (32) | intermediate dims must all be `1`; inner dim and batch must match the input |
 | `scale_mask_softmax`, sharded | equal to the input's padded shape | mask must be in `TILE` layout |
 | `ttnn.add` then `ttnn.softmax` | anything broadcastable | unfused, so slower |

@@ -43,8 +43,8 @@ void bind_sdpa_decode(nb::module_& mod) {
             is_causal (bool): whether the attention is is_causal. Defaults to `True`.
             attn_mask (ttnn.Tensor, optional): the input tensor [1 x b x nh x s]; `nh` must match Q's.
                 `s` must be a multiple of `k_chunk_size`: unpaged decode defaults it to
-                `min(512, largest power-of-two divisor of s)`, paged decode defaults it to 32 through
-                `SDPAProgramConfig`, and paged non-causal attention requires an explicit positive
+                `min(512, largest power-of-two divisor of s)`. Paged decode uses 32 when `program_config`
+                is omitted; a custom config for paged non-causal attention must set a positive
                 `k_chunk_size`. Only valid with `is_causal=False`. Defaults to `None`.
             cur_pos (List of int, optional): list of integers of length b. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.

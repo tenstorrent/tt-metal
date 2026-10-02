@@ -483,7 +483,8 @@ attention_weights = ttnn.scale_mask_softmax(
 ```
 
 > **Mask shape.** The height (dim -2) must be `1` or the tile height, and intermediate dimensions
-> must be `1` — so a full causal mask and any per-head bias are both rejected here. Constructing a
+> must be `1`. So a full causal mask is accepted only when its query length is `1` or one tile, and
+> any per-head bias is rejected here. Constructing a
 > mask from a tokenizer's output is covered in
 > [LLMs Tech Report §2.4.3](../../../../../../../tech_reports/LLMs/llms.md#243-attention-masks).
 
