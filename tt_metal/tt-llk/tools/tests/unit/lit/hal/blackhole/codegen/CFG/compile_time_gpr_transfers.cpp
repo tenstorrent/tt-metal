@@ -29,7 +29,8 @@ extern "C" __attribute__((noinline, used)) void read_cfg_field_word_to_gpr()
 
 extern "C" __attribute__((noinline, used)) void write_common_gpr_wait()
 {
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr<4>());
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Wait>(
+        hal::gpr<4>());
 }
 
 // CHECK-LABEL: <write_common_gpr_wait>:
@@ -48,9 +49,20 @@ extern "C" __attribute__((noinline, used)) void write_gpr_deferred()
 // CHECK-NEXT: ttwrcfg 5,0,77
 // CHECK-NEXT: ret
 
+// Completion defaults to Deferred: no NOP unless Wait is requested.
+extern "C" __attribute__((noinline, used)) void write_gpr_default_completion()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_cntx1_address, cfg::Sec::S0>(hal::gpr<5>());
+}
+
+// CHECK-LABEL: <write_gpr_default_completion>:
+// CHECK-NEXT: ttwrcfg 5,0,77
+// CHECK-NEXT: ret
+
 extern "C" __attribute__((noinline, used)) void write_gpr_128_wait()
 {
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S1, cfg::GprTransferSize::Bits128>(hal::gpr<16>());
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S1, cfg::GprTransferSize::Bits128, cfg::WrcfgCompletion::Wait>(
+        hal::gpr<16>());
 }
 
 // CHECK-LABEL: <write_gpr_128_wait>:
@@ -85,7 +97,6 @@ extern "C" __attribute__((noinline, used)) void write_state_reset_via_gpr()
 
 // CHECK-LABEL: <write_state_reset_via_gpr>:
 // CHECK-NEXT: ttwrcfg 4,0,4
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 // A field group stands in for its Raw anchor in whole-word GPR transfers.
@@ -96,7 +107,6 @@ extern "C" __attribute__((noinline, used)) void write_field_group_gpr()
 
 // CHECK-LABEL: <write_field_group_gpr>:
 // CHECK-NEXT: ttwrcfg 4,1,112
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_field_group_from_gpr()
@@ -106,5 +116,4 @@ extern "C" __attribute__((noinline, used)) void write_field_group_from_gpr()
 
 // CHECK-LABEL: <write_field_group_from_gpr>:
 // CHECK-NEXT: ttwrcfg 4,1,112
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret

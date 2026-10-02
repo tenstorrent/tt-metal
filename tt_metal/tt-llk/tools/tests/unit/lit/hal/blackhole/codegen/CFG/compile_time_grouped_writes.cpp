@@ -56,7 +56,7 @@ extern "C" __attribute__((noinline, used)) void write_ordered_constant_operation
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 1>(),
         cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(hal::gpr<4>()),
-        cfg::from_gpr<cfg::Thcon[cfg::Reg4].Base_cntx4_address, cfg::Sec::S0>(hal::gpr<5>()),
+        cfg::from_gpr<cfg::Thcon[cfg::Reg4].Base_cntx4_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Wait>(hal::gpr<5>()),
         cfg::set<cfg::DestOffset::Enable, cfg::Sec::S0, 1>(),
         cfg::set<cfg::AluFormatSpecReg::SrcB_val, cfg::Sec::S0, 2>());
 }
