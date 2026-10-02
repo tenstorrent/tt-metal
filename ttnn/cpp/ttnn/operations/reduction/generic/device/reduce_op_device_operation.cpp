@@ -234,7 +234,8 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
 ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Tripwire: adding a ReduceParams field must be a deliberate choice — hash it below, or
-    // exclude it like the two scalars, which the kernels read as runtime args.
+    // exclude it like post_mul_scaler, which the kernels read as a runtime arg. The scaler is
+    // compiled into the planned auxiliary tiles, so it must stay in the hash.
     static_assert(
         reflect::size<operation_attributes_t>() == 15,
         "ReduceParams gained or lost a field: add it to compute_program_hash or document why it is "
@@ -243,6 +244,7 @@ ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
         ttsl::hash::type_hash<ReduceDeviceOperation>,
         operation_attributes.math_op,
         operation_attributes.dim,
+        operation_attributes.scaler,
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         operation_attributes.compute_kernel_config,
