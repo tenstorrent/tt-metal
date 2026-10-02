@@ -120,6 +120,7 @@ ScanResult scan_text(const ElfImage& elf, const Range& body, bool all_instructio
     // Start from the top of .text rather than the body so the replay-payload counter is
     // already correct by the time the body begins.
     std::uint32_t replay_payload = 0;
+    int since_sfpu               = 1 << 20; // Tensix instructions since the last SFPU opcode
     for (std::uint32_t vaddr = text_start; vaddr + 4u <= text_end; vaddr += 4u)
     {
         const std::uint32_t word = elf.word_at(vaddr);
@@ -162,6 +163,8 @@ ScanResult scan_text(const ElfImage& elf, const Range& body, bool all_instructio
             result.unpacker_mask |= (params >> TT_SETADCXX_CNTSETMASK_SHIFT) & TT_SETADCXX_UNP_MASK;
         }
 
+        since_sfpu = is_sfpu_opcode(opcode) ? 0 : since_sfpu + 1;
+
         if (!in_body || !is_detourable_tensix(opcode))
         {
             continue;
@@ -172,7 +175,8 @@ ScanResult scan_text(const ElfImage& elf, const Range& body, bool all_instructio
 #if defined(ARCH_QUASAR)
         const bool sfpu = false;
 #else
-        const bool sfpu = is_sfpu_opcode(opcode) || (opcode == TT_OP_STALLWAIT && stallwait_touches_sfpu(params));
+        // Shared stalls like dest_section_flip() wait on SFPU with no SFPU code nearby,
+        const bool sfpu = is_sfpu_opcode(opcode) || (opcode == TT_OP_STALLWAIT && stallwait_touches_sfpu(params) && since_sfpu <= 4);
 #endif
         if (all_instructions || sync_op_name(opcode) != nullptr)
         {

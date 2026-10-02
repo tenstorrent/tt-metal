@@ -19,7 +19,7 @@ from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
 
-TTNOP_DIR = Path(__file__).resolve().parent
+TTNOP_DIR = Path(__file__).resolve().parents[1]
 LLK_DIR = TTNOP_DIR.parents[2]
 TT_METAL_DIR = TTNOP_DIR.parents[3]
 SFPI_BIN = Path("tests/sfpi/compiler/bin")
@@ -170,7 +170,7 @@ def reproduce_command(record: dict, delays=()) -> str:
     else:
         env["TTNOP_FILLER"] = record["filler"]
     assignments = " ".join(f"{key}={value}" for key, value in env.items())
-    return f"{assignments} ./focus.sh {shlex.quote(record['case'])}"
+    return f"{assignments} ./scripts/focus.sh {shlex.quote(record['case'])}"
 
 
 def as_ranges(values, separator: str = ", ") -> str:
