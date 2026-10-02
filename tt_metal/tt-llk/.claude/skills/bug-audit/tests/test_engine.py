@@ -787,6 +787,71 @@ def test_a_refresh_deep_selection_skips_a_case_already_read_under_another_id(tmp
     assert "I200" not in batched, batched
 
 
+def test_a_refresh_deep_selection_still_reads_a_case_with_a_fix_never_read(tmp_path):
+    _refresh_twin(tmp_path)
+    cases = [json.loads(x) for x in open(tmp_path / "cases.jsonl")]
+    refix = dict(cases[0]["fix"][0], oid="b" * 40, subject="Fix the race properly")
+    cases[0]["fix"].append(refix)  # I200 also carries a later re-fix nobody has read
+    write(str(tmp_path / "cases.jsonl"), cases)
+    code, out, err = _select(
+        tmp_path,
+        "deep",
+        "--out-dir",
+        tmp_path / "deep_out",
+        "--deep-cases",
+        tmp_path / "old_cases.jsonl",
+    )
+    assert code == 0, out + err
+    batched = "".join(
+        open(os.path.join(tmp_path / "deep_out", f)).read()
+        for f in os.listdir(tmp_path / "deep_out")
+    )
+    assert (
+        "I200" in batched
+    ), "a re-fix of a read case is the incomplete-fix case a deep read is for"
+    code, out, err = _select(
+        tmp_path,
+        "holdout",
+        "--out",
+        tmp_path / "h.jsonl",
+        "--deep-cases",
+        tmp_path / "old_cases.jsonl",
+    )
+    assert (
+        code == 0 and open(tmp_path / "h.jsonl").read() == ""
+    ), "but it is never a holdout"
+
+
+def test_deep_selection_never_rereads_a_deep_read_case_or_samples_its_twin(tmp_path):
+    _refresh_twin(tmp_path)
+    # P100 itself in the case file, triaged one below --min-priority so only --sample could pick it or its twin
+    cases = [json.loads(x) for x in open(tmp_path / "cases.jsonl")]
+    old = [json.loads(x) for x in open(tmp_path / "old_cases.jsonl")]
+    write(str(tmp_path / "cases.jsonl"), cases + old)
+    tri = [json.loads(x) for x in open(tmp_path / "triage.jsonl")]
+    tri[0]["deep_priority"] = 1
+    tri.append(dict(tri[0], id="P100"))
+    write(str(tmp_path / "triage.jsonl"), tri)
+    code, out, err = run(
+        os.path.join(MINING, "select.py"),
+        "deep",
+        "--cases",
+        tmp_path / "cases.jsonl",
+        "--triage",
+        tmp_path / "triage.jsonl",
+        "--deep",
+        tmp_path / "deep.jsonl",
+        "--sample",
+        "5",
+        "--out-dir",
+        tmp_path / "deep_out",
+    )
+    assert code == 0, out + err
+    d = tmp_path / "deep_out"
+    batched = "".join(open(d / f).read() for f in os.listdir(d)) if d.is_dir() else ""
+    assert "P100" not in batched and "I200" not in batched, batched
+
+
 def test_deep_selection_excludes_a_held_out_fix_under_another_id(tmp_path):
     _mined(tmp_path, n=2)
     cases = [json.loads(x) for x in open(tmp_path / "cases.jsonl")]
