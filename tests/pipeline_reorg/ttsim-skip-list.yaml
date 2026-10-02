@@ -68,3 +68,34 @@ blackhole:
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
+
+  # SFPSTOCHRND rnd_mode=2 (round to zero, the float -> uint16 typecast) aborts ttsim (#51655)
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops[ttnn_function=ttnn.eq-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops[ttnn_function=ttnn.ne-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops[ttnn_function=ttnn.lt-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops[ttnn_function=ttnn.le-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops[ttnn_function=ttnn.gt-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops[ttnn_function=ttnn.ge-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops[ttnn_function=ttnn.logical_and-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops[ttnn_function=ttnn.logical_or-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops[ttnn_function=ttnn.logical_xor-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops_scalar[ttnn_function=ttnn.eq-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops_scalar[ttnn_function=ttnn.ne-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops_scalar[ttnn_function=ttnn.lt-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops_scalar[ttnn_function=ttnn.le-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops_scalar[ttnn_function=ttnn.gt-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_ops_scalar[ttnn_function=ttnn.ge-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_opt_out[ttnn_function=ttnn.eq-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_opt_out[ttnn_function=ttnn.ne-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_opt_out[ttnn_function=ttnn.lt-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_opt_out[ttnn_function=ttnn.le-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_opt_out[ttnn_function=ttnn.gt-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_opt_out[ttnn_function=ttnn.ge-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_opt_out[ttnn_function=ttnn.logical_and-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_opt_out[ttnn_function=ttnn.logical_or-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py::test_binary_comp_opt_out[ttnn_function=ttnn.logical_xor-out_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_math.py::test_eq[output_dtype=DataType.UINT16
+  - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py::TestTypecast::test_run_eltwise_typecast_op
+  - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py::test_typecast_rounding_fractional
+  - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py::test_typecast_zero_fp_to_int[pt_input_dtype=torch.float32-tt_input_dtype=DataType.FLOAT32-tt_output_dtype=DataType.UINT16]
+  - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py::test_typecast_zero_fp_to_int[pt_input_dtype=torch.bfloat16-tt_input_dtype=DataType.BFLOAT16-tt_output_dtype=DataType.UINT16]
