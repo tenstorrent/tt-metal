@@ -518,7 +518,7 @@ def _fused_vs_phased(device, hk, hv, nc, nv, np_producers, seed, wy_inverse=None
     B = 1
     _, tensors, s0 = _make_inputs(device, B, nc * CHUNK, hk, hv, True, seed=seed)
     const_tiles = _const_tiles(device)
-    o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased(), wy_inverse
+    o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased(), wy_inverse)
 
     if not _SIM:  # determinism of the phased reference: pinned by test_fused_bit_exact_vs_phased, re-checked on silicon
         o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased(), wy_inverse)
