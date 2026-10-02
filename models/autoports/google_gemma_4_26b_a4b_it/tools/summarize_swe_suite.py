@@ -109,6 +109,9 @@ def summarize(root):
             server=counter_delta(trial_events, responses),
             completed_response_server=completed_response_counters(trial_events, responses),
             repeated_tool_advisories=sum(event["event"] == "repeated_tool_feedback" for event in trial_events),
+            reasoning_history_interventions=sum(
+                event["event"] == "reasoning_history_limited" for event in trial_events
+            ),
         )
         verifier = path.parent.parent / "verifier/report.json"
         if verifier.exists():
