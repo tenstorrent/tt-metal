@@ -105,17 +105,17 @@ class TtChronosTraceRunner:
         if not same_groups:
             raise ValueError("trace group layout changed (unique groups, block size or mask shape)")
         target_cq = self.cq_id if cq_id is None else cq_id
-        ttnn.copy_host_to_device_tensor(
-            self.model.host_tokens(prepared.patched_tokens),
-            self.inputs.patched_tokens,
-            cq_id=target_cq,
-        )
+        host_tokens = self.model.host_tokens(prepared.patched_tokens)
+        assert (
+            host_tokens.shape == self.inputs.patched_tokens.shape
+        ), f"host tokens {host_tokens.shape} != persistent device tokens {self.inputs.patched_tokens.shape}"
+        ttnn.copy_host_to_device_tensor(host_tokens, self.inputs.patched_tokens, cq_id=target_cq)
         if not prepared.unique_groups:
-            ttnn.copy_host_to_device_tensor(
-                self._host_tensor(prepared.group_mask, split_batch=self.model.group_mask_is_split(prepared)),
-                self.inputs.group_mask,
-                cq_id=target_cq,
-            )
+            host_mask = self._host_tensor(prepared.group_mask, split_batch=self.model.group_mask_is_split(prepared))
+            assert (
+                host_mask.shape == self.inputs.group_mask.shape
+            ), f"host group mask {host_mask.shape} != persistent device mask {self.inputs.group_mask.shape}"
+            ttnn.copy_host_to_device_tensor(host_mask, self.inputs.group_mask, cq_id=target_cq)
         self._prepared = prepared
 
     def execute(
