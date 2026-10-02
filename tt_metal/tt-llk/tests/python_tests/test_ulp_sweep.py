@@ -743,11 +743,11 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch):
     )
 
 
-def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):
-    """The key line is the enrolment and the only place a measurement can land, so the
-    emit set is exactly the unary ops that have one -- an op on tolerance everywhere
-    included, an unregistered-in-the-table op excluded. Sweeping the latter made every
-    whole-table emit exit red after writing the rest (65 of 93 ops had no block)."""
+def test_the_sweep_collects_every_keyed_op_whether_gating_or_emitting(monkeypatch):
+    """The key line is the enrolment and the only place a measurement can land, so both
+    runs take exactly the unary ops that have one. Gating used to take only the ops with
+    a step budget somewhere, which left every op on tolerance everywhere (Erfc,
+    SigmoidAppx, ...) with recorded figures that no nightly ever re-measured."""
     import test_unary_sfpu_ulp as sweep
     from helpers import ulp_sweep
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, Metric
@@ -756,20 +756,17 @@ def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
     emitted = set(sweep._sweep_ops())
     monkeypatch.setattr(ulp_sweep, "EMIT", False)
-    monkeypatch.setattr(
-        sweep.sys, "argv", [a for a in sweep.sys.argv if a != "--ulp-emit"]
-    )
     gated = set(sweep._sweep_ops())
 
     keyed = {op for op in _SFPU_ACCURACY_BUDGET if op in sfpu_unary_ops()}
     assert emitted == keyed - set(_UNARY_OPS_NOT_SWEPT)
-    assert gated <= emitted
+    assert gated == emitted
     tolerance_only = {
         op
-        for op in emitted
+        for op in keyed
         if not any(c.metric == Metric.ULP for c in _SFPU_ACCURACY_BUDGET[op].values())
     }
-    assert tolerance_only.isdisjoint(gated)
+    assert tolerance_only <= gated, "an op on tolerance everywhere is still measured"
 
 
 def test_emit_writes_on_a_clean_wormhole_session(table):
