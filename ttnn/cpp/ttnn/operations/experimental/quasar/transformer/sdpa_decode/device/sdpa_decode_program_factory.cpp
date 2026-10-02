@@ -1077,8 +1077,14 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     // Quasar: every DM-side DFB endpoint with implicit sync draws NoC transaction IDs from one 24-entry
     // program-wide pool. The attention-sink and sliding-window DFBs (GPT-OSS) push it past the limit, so
     // they use explicit sync; their producers barrier before push_back.
+    // The tree-reduction stats DFBs also use explicit sync: with PNHt == 2 (64 q heads, GPT-OSS) each
+    // takes 2 txn ids, which alone overflows the pool. The writer already barriers its NoC reads before
+    // pushing m_in/l_in and its NoC writes before popping out_m/out_l.
     auto reader_hw = ttnn::create_reader_datamovement_config();
     auto writer_hw = ttnn::create_writer_datamovement_config();
+    for (const auto& stats_dfb : {DFB_M_IN, DFB_L_IN, DFB_OUT_M, DFB_OUT_L}) {
+        writer_hw.config_2xx->disable_dfb_implicit_sync_for.push_back(stats_dfb);
+    }
     if (use_attention_sink) {
         reader_hw.config_2xx->disable_dfb_implicit_sync_for.push_back(DFB_ATTN_SINK);
     }
