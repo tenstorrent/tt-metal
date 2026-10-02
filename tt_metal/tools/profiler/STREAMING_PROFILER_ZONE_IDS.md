@@ -17,7 +17,7 @@ flowchart TB
   classDef file  fill:#F8FAFC,stroke:#64748B,stroke-width:2px,color:#0F172A
 
   subgraph B[" 1 · JIT build — once per kernel, cached "]
-    S["zone site in kernel source<br/>DeviceZoneScopedN(&quot;X&quot;)"]:::build
+    S["zone site in kernel source<br/>DeviceZoneScopedN('X')"]:::build
     L["link: .tt_zone_ids placed at 0x6800000<br/>site k gets id 0x6800000 + k"]:::build
     S --> L
   end
@@ -59,10 +59,10 @@ flowchart LR
   classDef code fill:#F1F5F9,stroke:#475569,stroke-width:2px,color:#0F172A
   classDef sec  fill:#FEF3C7,stroke:#B45309,stroke-width:2px,color:#0F172A
 
-  Z["DeviceZoneScopedN(&quot;X&quot;)"]:::code
+  Z["DeviceZoneScopedN('X')"]:::code
   I["<b>.tt_zone_ids</b> — never loaded<br/>one zero byte; its address is the id"]:::sec
   M["<b>.tt_zone_meta</b> — never loaded<br/>{ id, name_ptr, file_ptr, line }"]:::sec
-  T["<b>.tt_zone_str</b> — never loaded<br/>&quot;X&quot;, &quot;kernel.cpp&quot;"]:::sec
+  T["<b>.tt_zone_str</b> — never loaded<br/>'X', 'kernel.cpp'"]:::sec
   C["<b>.text</b> — the device<br/>lui / addi of the id, then the marker"]:::code
 
   Z --> I
