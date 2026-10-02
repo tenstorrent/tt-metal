@@ -134,6 +134,14 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         const auto& out = tensor_args.output_tensor.value();
         check_on_device(out, "output tensor");
         const auto& out_logical = out.logical_shape();
+        TT_FATAL(out_logical.rank() >= 2, "variable_matmul output tensor must have rank >= 2");
+        bool output_leading_dims_are_singleton = true;
+        for (uint32_t dim = 0; dim + 2 < out_logical.rank(); ++dim) {
+            output_leading_dims_are_singleton &= out_logical[dim] == 1;
+        }
+        TT_FATAL(
+            output_leading_dims_are_singleton,
+            "variable_matmul: output leading dims must all be 1 (op writes one 2D surface over the last two dims)");
         const uint32_t matmul_N = operation_attributes.transpose_b ? w_logical[-2] : w_logical[-1];
         const uint32_t out_N = out_logical[-1];
         TT_FATAL(out.layout() == Layout::TILE, "variable_matmul output tensor must be TILE layout");

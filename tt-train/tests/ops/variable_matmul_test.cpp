@@ -205,6 +205,29 @@ float subregion_max_abs_error(
 }
 }  // namespace
 
+TEST_F(VariableMatmulTest, InputAndOutputRowRejectsOutputWithMultipleLeadingPlanes) {
+    const uint32_t M_parent = 320, K = 128, N = 64;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_parent, K, device, /*seed=*/246U);
+    auto weight = create_random_device_tensor(K, N, device, /*seed=*/247U);
+    const auto output_data = ttml::test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{1U, 2U, M_parent, N}, -1.0F, 1.0F, /*seed=*/248U);
+    auto output = ttml::core::from_xtensor(output_data, device);
+    auto offsets = make_offsets({0U, 32U}, device);
+
+    EXPECT_ANY_THROW(ttml::metal::variable_matmul_into_rows(
+        /*input_tensor=*/input,
+        /*weight_tensor=*/weight,
+        /*config=*/kConfig,
+        /*offsets_tensor=*/offsets,
+        /*output_tensor=*/output,
+        /*offsets_start_index=*/0U,
+        /*expected_M_tiles=*/M_parent / 32U,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false));
+}
+
 TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
     const uint32_t M_parent = 320, K = 128, N = 64;
     auto* device = &ttml::autograd::ctx().get_device();
