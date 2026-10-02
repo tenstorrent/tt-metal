@@ -32,7 +32,6 @@
 
 #include "context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "llrt/zone_meta.hpp"
 #include "impl/streaming_profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -217,16 +216,6 @@ Receiver::~Receiver() {
         programs_->verify_completeness(d);
     }
     log_report();
-    const uint64_t foreign = llrt::ZoneMetaRegistry::instance().foreign_sections();
-    const uint64_t collisions = llrt::ZoneMetaRegistry::instance().collisions();
-    if (collisions != 0 || foreign != 0) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] zone names: {} id collisions, {} foreign metadata sections ignored (the JIT "
-            "cache holds ELFs from a different .tt_zone_meta layout)",
-            collisions,
-            foreign);
-    }
 }
 
 bool Receiver::poll(Stream& s) {

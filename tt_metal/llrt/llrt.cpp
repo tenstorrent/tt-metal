@@ -82,12 +82,12 @@ const CachedBinary& get_cached_binary(
         ll_api::ElfFile elf;
         elf.ReadImage(path);
         ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
-        // Every device-executed image, kernel or firmware, passes through here before it can run, so
-        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
-        // Not gated on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the JIT build key)
-        // carry .tt_zone_meta, and ingest_elf returns immediately for the rest. Must run before from_elf, which may
-        // XIP-transform the ELF in place.
-        ZoneMetaRegistry::instance().ingest_elf(elf, path);
+        // Every device-executed image, kernel or firmware, passes through here before it can run, so giving it its
+        // block of zone ids and registering their names happens strictly before a zone can reach the host. Not gated
+        // on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the JIT build key) carry zone
+        // sites, and ingest_elf returns immediately for the rest. Must run before from_elf, which packs the text the
+        // ids are immediates in and may XIP-transform the ELF in place.
+        ZoneMetaRegistry::instance().ingest_elf(path, elf);
         ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
         if (update_callback) {
             update_callback(image);
