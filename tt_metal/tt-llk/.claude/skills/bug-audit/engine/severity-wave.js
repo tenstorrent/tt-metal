@@ -34,7 +34,7 @@ const SCHEMA = {
 
 const prompt = (p) => `Rate the severity of confirmed bugs. Read-only. Read ${p}: about 10 findings, each with a key, the
 location, the claim, the failure scenario, the verifiers' reasons (why it was confirmed, with the triggering path),
-any other_sites the entry covers, and hunters_worst.
+and any other_sites the entry covers.
 
 Rubric, judged by who hits it and what happens:
 - high: wrong results, a crash, a hang, or memory corruption on a normal, supported configuration or common
@@ -46,8 +46,7 @@ Rubric, judged by who hits it and what happens:
 Rate each on its own merits, from the code and the verifier reasons, not from the claimed severity.
 An item's other_sites are the same defect in sibling copies (another arch, dtype or variant) or another confirmed
 defect on the same line. One rating covers the whole entry, so rate its WORST site: read each site's claim and failure
-scenario too. hunters_worst is the highest rating any hunter gave across these sites; rate below it only when no
-site's own claim supports it, and say why. Return one rating per item, same keys.`
+scenario too. Return one rating per item, same keys.`
 
 const results = await pipeline(inputs, (p) =>
   agent(prompt(p), { label: `rate:${p.split('/').pop()}`, phase: 'Rate', schema: SCHEMA, effort: 'low' }))

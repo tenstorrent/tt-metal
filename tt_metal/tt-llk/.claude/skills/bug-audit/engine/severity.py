@@ -39,7 +39,6 @@ def other_sites(f):
         {
             "site": m["site"],
             "relation": m.get("relation", ""),
-            "severity": m["severity"],
             "claim": m["summary"],
             "failure_scenario": m["failure_scenario"],
         }
@@ -49,7 +48,6 @@ def other_sites(f):
         {
             "site": key_of(f),
             "relation": "another confirmed defect on the same line",
-            "severity": m["severity"],
             "claim": m["summary"],
             "failure_scenario": m.get("failure_scenario", ""),
         }
@@ -93,7 +91,6 @@ if argv[0] == "prepare":
                 "reasons": (f.get("reasons") or [])[:2],
                 # the rating replaces the whole entry's severity, so the rater sees each site it covers
                 "other_sites": other_sites(f),
-                "hunters_worst": f.get("severity_audit") or f["severity"],
             }
             for f in todo[i : i + size]
         ]

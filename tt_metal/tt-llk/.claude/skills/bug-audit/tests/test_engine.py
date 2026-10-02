@@ -1478,11 +1478,10 @@ def test_severity_rater_sees_every_merged_site_and_the_worst_one_it_must_cover(
     assert code == 0, out + err
     (item,) = json.load(open(tmp_path / "sev" / "b0000.json"))["items"]
     # one rating replaces the merged entry's severity, so the rater must see the HIGH copy's own claim, not only
-    # its location
+    # its location; it is not shown any claimed severity (a sibling lead's is a placeholder), to rate from the code
     sites = {s["site"]: s for s in item["other_sites"]}
     assert sites[f"{bh}:12"]["claim"] == "BH copy hangs every matmul", item
-    assert sites[f"{bh}:12"]["severity"] == "high", item
-    assert item["hunters_worst"] == "high", item
+    assert "severity" not in sites[f"{bh}:12"] and "hunters_worst" not in item, item
 
 
 def _recheck_all(rundir, tmp_path, outcome_of):
