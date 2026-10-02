@@ -168,13 +168,49 @@ outputs deterministic, 3/5 equal normal decode, 2/5 diverge at near-ties. Warm m
 60.4/54.6, 57.6/57.5, 103.2/54.5, 57.2/54.3, 41.1/54.4. Functional, but a net loss except on highly
 predictable text because verify runs eagerly (~277 ms per 16-row round).
 
+**DFlash, traced verify (2026-10-02 afternoon; 5ce2f42f312 and its two parents).** Three changes:
+(1) with `TT_LAGUNA_DFLASH=1` the TT scheduler reserves 16 look-ahead KV slots (`laguna_vllm_ext.dflash_lookahead`;
+stock vLLM does `num_spec_tokens + 1` for its own DFlash). Before, at positions 49..63 of every 64-token block a
+16-row verify would have written past the allocated block, so DFlash fell back to one eager target row per token
+(141 ms each; 395 of 707 rounds in one run). (2) The 16-row target verify is captured once at warmup and replayed:
+254 -> 104 ms per round (`TT_LAGUNA_DFLASH_TRACE=0` keeps the eager verify). (3) Every eager piece that runs beside
+the resident trace (the draft at each tile-padded context size 32..544 rows, the 1..16-row aux combine, the 1-row
+verify) is compiled before capture, and the rolling target context lives in one buffer allocated before capture
+and stores combined (fc + norm) states. Without (3) the second draft round hung in its logits read and the board
+needed `tt-smi -r`.
+
+Measured with `vllm` chat completions, greedy, thinking off, 512 tokens, second (warm) run of each prompt;
+decode tokens/s per user = (completion tokens - 1) / (last token time - first token time):
+
+| prompt | normal decode | DFlash eager, no look-ahead | DFlash traced + look-ahead |
+|---|---:|---:|---:|
+| Python binary search | 18.5 | 20.2 | 63.1 |
+| C++ ring buffer | 18.5 | 16.2 | 42.7 |
+| SQL schema | 18.5 | 17.1 | 42.5 |
+| `def fibonacci` completion | 18.6 | 16.1 | 51.3 |
+| repeat a 7-item list 3x | 19.0 | 22.0 | 54.9 |
+| first 60 primes | 18.6 | 21.4 | 60.3 |
+| explain a hash map | 18.5 | 10.7 | 29.2 |
+| lighthouse short story | 18.5 | 6.3 | 13.9 |
+
+Traced and eager verify (same look-ahead) produce identical completions on all 8 prompts. Per round: 4.37
+committed tokens on average, draft median 24.5 ms, verify median 104 ms. DFlash text differs from normal decode on
+7/8 prompts at near-ties (log-probability gaps 0.13-1.0 at the first differing token); a 16-row batched decode
+against HF fp32 on the optimizer reference (100 positions) gives argmax equal to 1-row decode at 99/99 positions,
+top-1 98% vs 99%, mean logits correlation 0.9697 vs 0.9695, with no degradation by row index, so the difference
+is numerics of the batched pass, not a verify bug.
+
 **Concurrency.** Uniform KV, 8 sequences, 131,072 context: 8 concurrent greedy chat requests give
 outputs identical to the same requests sent one at a time; 642 tokens in 9.9 s (64.6 tok/s aggregate)
 vs 43.2 s sequentially.
 
 **Re-checks after these changes.** vllm-tt-plugin `tests/tt` (uniform KV, 8 sequences, thinking off):
-69 passed, 3 failed, 1 skipped; two failures are the vocabulary artifacts above, the third
-(`test_topk[15]`, all 8 sampled first tokens "\n") passed in 3/3 reruns. Laguna-XS-2.1 on p150x2 with
+69 passed, 3 failed, 1 skipped. Two failures come from test assumptions about the vocabulary, checked with the
+Laguna tokenizer: `test_bad_words` blocks "Hello" (token 6352) and " Hello" (16331), and vLLM correctly blocks
+exactly those sequences, but the model wrote `"Hello` (one token, 91512), which the test's punctuation-stripping
+text check then flags; `test_allowed_token_ids` allows ids 1-3, which in this vocabulary are the control tokens
+`〈|CODE_START|〉`, `〈|EOS|〉`, `〈|CODE_END|〉` that decode to an empty string. The third (`test_topk[15]`, all 8
+sampled first tokens "\n") passed in 3/3 reruns. Laguna-XS-2.1 on p150x2 with
 the same code: prefill top-1/5/100 0.95/1.00/1.00, teacher-forced 0.94/1.00/1.00 (established 0.95).
 The TTNN warning "Allocating device buffers is unsafe due to the existence of an active trace" printed
 once at the first request of every server is expected: eager prefill allocates temporaries after
@@ -186,6 +222,9 @@ trace capture and frees them within the call; it was present in the 2026-10-01 s
   uniform KV for concurrency, up to 131,072 tokens).
 - Passkey retrieval beyond 503,073 tokens (the 1,048,576 configuration boots with 16.4% free).
 - Prefix caching together with hybrid KV; DFlash or n-gram speculation together with hybrid KV.
-- DFlash speed: verify is not traced, so DFlash is slower than plain decode on most text.
+- DFlash on low-acceptance text: on free prose (the story prompt) DFlash commits under 2 tokens per 129 ms round
+  and stays slower than normal decode (13.9 vs 18.5 tokens/s). DFlash and n-gram speculation are one sequence,
+  greedy, uniform KV only.
+- More than 8 concurrent sequences on p150x4 (the launcher limit), including vLLM's 32-sequence nightly shape.
 - Penalized requests take a host round trip per token (correct but slower than device sampling), and the
   first token of a penalized request (sampled in prefill) is not penalized.
