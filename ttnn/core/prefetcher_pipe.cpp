@@ -9,9 +9,8 @@
 
 namespace ttnn {
 
-std::vector<std::reference_wrapper<const tt::tt_metal::experimental::PrefetcherPipe>> prefetcher_pipe_refs(
-    const PrefetcherPipeList& prefetcher_pipes) {
-    std::vector<std::reference_wrapper<const tt::tt_metal::experimental::PrefetcherPipe>> refs;
+PrefetcherPipeRefList prefetcher_pipe_refs(const PrefetcherPipeList& prefetcher_pipes) {
+    PrefetcherPipeRefList refs;
     refs.reserve(prefetcher_pipes.size());
     for (const auto& pipe : prefetcher_pipes) {
         TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", refs.size());

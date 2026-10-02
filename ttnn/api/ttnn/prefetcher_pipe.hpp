@@ -18,9 +18,10 @@ namespace ttnn {
 // create_prefetcher_pipes_for_tensor_prefetcher call. Empty means none.
 using PrefetcherPipeList = std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>;
 
-// The tt-metal PrefetcherPipe calls borrow the pipes they read, so this is how a ttnn caller lends
-// its shared pipes to one. TT_FATALs on a null pipe.
-std::vector<std::reference_wrapper<const tt::tt_metal::experimental::PrefetcherPipe>> prefetcher_pipe_refs(
-    const PrefetcherPipeList& prefetcher_pipes);
+// The form the tt-metal PrefetcherPipe calls take: they borrow the pipes they read.
+using PrefetcherPipeRefList = std::vector<std::reference_wrapper<const tt::tt_metal::experimental::PrefetcherPipe>>;
+
+// Lends a ttnn caller's shared pipes to a tt-metal PrefetcherPipe call. TT_FATALs on a null pipe.
+PrefetcherPipeRefList prefetcher_pipe_refs(const PrefetcherPipeList& prefetcher_pipes);
 
 }  // namespace ttnn
