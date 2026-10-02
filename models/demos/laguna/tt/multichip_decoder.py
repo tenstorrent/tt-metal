@@ -61,6 +61,7 @@ from .prefill_page_table import single_shot_fill_page_table
 
 TOKEN_DISPATCH_ENV = "TT_LAGUNA_MOE_TOKEN_DISPATCH"
 FOLD_GATE_QKV_ENV = "TT_LAGUNA_FOLD_GATE_QKV"  # 0 = separate 1-core g_proj matmul in decode
+ROPE_PERMUTE_ENV = "TT_LAGUNA_ROPE_PERMUTE"  # 0 = partial RoPE via rot/pass slices + concat
 MOE_PREFILL_TILE_SPARSE_ENV = "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE"
 TOKEN_DISPATCH_BUCKETS = frozenset({1024, 2048, 4096, 8192})
 TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 40))
@@ -429,9 +430,27 @@ class MultichipDecoder(OptimizedDecoder):
             w[key] = shard_tt(key, lambda: w_in_full, mesh_dim, dtype)
             w[key + "_ds"] = ttnn.to_memory_config(w[key], _dram_weight_memcfg(k_local, n_local, dram_cores))
 
+        # --- partial RoPE as full-width RoPE: permute every Q/K head's dims (and the q/k norm weights) so the
+        # rd rotary lanes pair up across the two head halves [rot_lo | pass_lo | rot_hi | pass_hi]; with cos=1 /
+        # sin=0 on the pass lanes a plain full-width rotate_half RoPE is then exactly HF's partial RoPE, and
+        # Q.K (and so attention) is unchanged. Drops the per-layer rot/pass slices + concat for Q and K.
+        rope_perm = None
+        rd0 = cfg.rotary_dim
+        if rd0 < hd and rd0 % 2 == 0 and (hd - rd0) % 2 == 0 and _parse_binary_env(ROPE_PERMUTE_ENV, True):
+            r2, p2 = rd0 // 2, (hd - rd0) // 2
+            rope_perm = torch.cat(
+                [torch.arange(0, r2), torch.arange(rd0, rd0 + p2), torch.arange(r2, rd0), torch.arange(rd0 + p2, hd)]
+            )
+        rp_tag = "_rp" if rope_perm is not None else ""
+
+        def head_perm(w_t, nheads):  # [H, nheads*hd] columns permuted within each head
+            if rope_perm is None:
+                return w_t
+            return w_t.reshape(w_t.shape[0], nheads, hd)[:, :, rope_perm].reshape(w_t.shape[0], nheads * hd)
+
         # --- packed QKV (column-parallel), reordered into per-device [Q_d|K_d|V_d] blocks --- #
-        wq = g("self_attn.q_proj.weight").t().contiguous()  # [H, GQ*hd]
-        wk = g("self_attn.k_proj.weight").t().contiguous()  # [H, GKV*hd]
+        wq = head_perm(g("self_attn.q_proj.weight").t().contiguous(), GQ)  # [H, GQ*hd]
+        wk = head_perm(g("self_attn.k_proj.weight").t().contiguous(), GKV)  # [H, GKV*hd]
         wv = g("self_attn.v_proj.weight").t().contiguous()  # [H, GKV*hd]
         blocks = []
         for d in range(D):
@@ -439,7 +458,9 @@ class MultichipDecoder(OptimizedDecoder):
             blocks.append(wk[:, d * local_kv_w : (d + 1) * local_kv_w])
             blocks.append(wv[:, d * local_kv_w : (d + 1) * local_kv_w])
         wqkv = torch.cat(blocks, dim=1).contiguous()  # [H, D*local_qkv_w]; shard(dim1) -> per-dev block
-        store_shard("wqkv", wqkv, H, local_qkv_w, policy.attn_qkv, mesh_dim=1)
+        store_shard("wqkv" + rp_tag, wqkv, H, local_qkv_w, policy.attn_qkv, mesh_dim=1)
+        if rp_tag:  # callers look the weights up by their canonical names
+            w["wqkv"], w["wqkv_ds"] = w.pop("wqkv" + rp_tag), w.pop("wqkv" + rp_tag + "_ds")
         # WO row-parallel: device d owns contiguous Q-head rows [d*local_q_w:(d+1)*local_q_w] -> plain shard(dim0)
         wo = g("self_attn.o_proj.weight").t().contiguous()  # [GQ*hd, H]
         store_shard("wo", wo, local_q_w, H, policy.attn_o, mesh_dim=0)
@@ -465,14 +486,18 @@ class MultichipDecoder(OptimizedDecoder):
                     ]
                 return torch.cat(fused, dim=1).contiguous()
 
-            qkvg_il = shard_tt("wqkvg", build_qkvg, 1, policy.attn_qkv)
+            qkvg_il = shard_tt("wqkvg" + rp_tag, build_qkvg, 1, policy.attn_qkv)
             w["wqkvg_ds"] = ttnn.to_memory_config(qkvg_il, _dram_weight_memcfg(H, fused_pad, dram_cores))
             ttnn.deallocate(qkvg_il)
             qkvg_pad = fused_pad
         else:
             qkvg_pad = None
-        w["q_norm"] = rep_tt("q_norm", lambda: g("self_attn.q_norm.weight").reshape(1, 1, 1, hd), policy.qk_norm)
-        w["k_norm"] = rep_tt("k_norm", lambda: g("self_attn.k_norm.weight").reshape(1, 1, 1, hd), policy.qk_norm)
+        def norm_w(name):
+            v = g(name)
+            return (v if rope_perm is None else v[rope_perm]).reshape(1, 1, 1, hd)
+
+        w["q_norm"] = rep_tt("q_norm" + rp_tag, lambda: norm_w("self_attn.q_norm.weight"), policy.qk_norm)
+        w["k_norm"] = rep_tt("k_norm" + rp_tag, lambda: norm_w("self_attn.k_norm.weight"), policy.qk_norm)
         w["input_ln"] = rep_tt("input_ln", lambda: g("input_layernorm.weight").reshape(1, 1, 1, H), ttnn.bfloat16)
         w["post_ln"] = rep_tt(
             "post_ln", lambda: g("post_attention_layernorm.weight").reshape(1, 1, 1, H), ttnn.bfloat16
@@ -576,11 +601,18 @@ class MultichipDecoder(OptimizedDecoder):
         # trust-remote-code load (get_class_from_dynamic_module runs twice — one per kind — not 40x).
         # Tables depend only on (attention_type, max_seq_len, config), so sharing is exact / bit-identical.
         rope_tables = kwargs.get("rope_tables")
-        kind = cfg.attention_type
+        kind = cfg.attention_type + rp_tag
         if rope_tables is not None and kind in rope_tables:
             cos_2d, sin_2d = rope_tables[kind]
         else:
-            cos, sin = _hf_rope_tables(hf_config, kind, max_seq_len)
+            cos, sin = _hf_rope_tables(hf_config, cfg.attention_type, max_seq_len)  # [seq, rd0]
+            if rope_perm is not None:  # full-width tables in the permuted lane order: cos=1 / sin=0 on pass lanes
+                rot = rope_perm < rd0
+                cos_f = torch.ones(cos.shape[0], hd, dtype=cos.dtype)
+                sin_f = torch.zeros(sin.shape[0], hd, dtype=sin.dtype)
+                cos_f[:, rot] = cos[:, rope_perm[rot]]
+                sin_f[:, rot] = sin[:, rope_perm[rot]]
+                cos, sin = cos_f, sin_f
             cos_2d = ttnn.from_torch(
                 cos, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=replicate
             )
@@ -590,6 +622,8 @@ class MultichipDecoder(OptimizedDecoder):
             if rope_tables is not None:
                 rope_tables[kind] = (cos_2d, sin_2d)
 
+        if rope_perm is not None:
+            cfg.rotary_dim = hd  # RoPE now runs full width over the permuted head dims
         # ---- mutate cfg to LOCAL head counts so all inherited attention code runs per-device ----
         cfg.num_heads = lqh
         cfg.num_kv_heads = lkv
