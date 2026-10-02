@@ -4,8 +4,11 @@
 """Serving contract, runner smoke: disaggregated serving end to end, with the bring-up device model standing in for
 decode (serving_contract.md, "Adapter and table").
 
-1. Prefill: tt-metal's real prefill runner (runner_case.py, as test_runner_contract.py runs it: runner + producer
-   subprocess, FABRIC_2D, 1 slot, D2H layer acks, mock migration on the migration-enabled path) prefills one request,
+1. Prefill: tt-metal's real prefill runner (runner_case.py, as test_runner_contract.py runs it: FABRIC_2D, 1 slot,
+   D2H layer acks, mock migration on the migration-enabled path), fed by tt-d-gen's real engine (use_engine:
+   testing/dgen_prefill_driver.py admits the request, the engine chunks it) when a tt-d-gen build is found, else by
+   the producer fallback (producer_case.py; the output and the recorded answer's `feeder` say which ran), prefills one
+   request,
    the spec's `intake.smoke.prompt` wrapped by the chat template with `text.template_kwargs` (smoke.py prompt_ids).
    That prompt is 16 tokens: below 64 the migration boundary is 0 and nothing would migrate, so the test uses the
    padded variant: the fixed neutral system message PAD_SYSTEM before the same user turn (135 tokens).
@@ -18,7 +21,7 @@ decode (serving_contract.md, "Adapter and table").
    logits at the last position, greedy. Each new token is appended and the tail recomputed, until EOS or 8 tokens.
 Pass: the table has the geometry tables.py knows, and the decoded answer contains `intake.smoke.expect` ("Paris").
 Records metric smoke_runner_ok and `<results>/<task>_runner_smoke.json` (prompt, expected, answer, token ids, ok,
-seconds, mode "runner", prompt_len, boundary, records) for the dashboard's "Final tests" section.
+seconds, mode "runner", prompt_len, boundary, records, feeder) for the dashboard's "Final tests" section.
 Fail fast: test_runner_contract.run_child (bounded waits, process-group kill). The precompile pass of
 run_safe_pytest (UP_FRONT_COLLECT=1) skips the body: the parent opens the mesh for step 3 and must not hold the chips
 while a runner subprocess wants them.
@@ -119,7 +122,13 @@ def test_runner_smoke(tmp_path):
         # there keeps the chips locked, and the real pass's runner subprocess then waits forever for them.
         pytest.skip("precompile pass: the runner subprocess needs the chips; runs in the real pass only")
     from models.demos.common.bringup.testing.smoke import tokenizer
-    from models.demos.xing40_a4b_d_p.tests.bringup.contract.test_runner_contract import run_child, runner_env, tail
+    from models.demos.xing40_a4b_d_p.tests.bringup.contract.test_runner_contract import (
+        feeder_files,
+        run_child,
+        runner_env,
+        tail,
+        use_engine,
+    )
 
     t_all = time.time()
     R.self_check()
@@ -146,28 +155,46 @@ def test_runner_smoke(tmp_path):
         XING_CONTRACT_TURNS=json.dumps({"0": [n]}),
     )
     runner_log = out / "runner.log"
-    log(f"runner up: prefill_runner + producer for 1 request ({runner_log})")
+    feeder = use_engine(out, env, [{"name": "smoke", "token_ids": [int(t) for t in ids], "after": None}], {}, 1)
+    engine = bool(env.get("XING_CONTRACT_FEEDER_CMD"))
+    who, flog, _ = feeder_files(env, out)
+    log(f"feeder: {feeder}")
+    log(f"runner up: prefill_runner + {who} for 1 request ({runner_log})")
     t0 = time.time()
     rc, why = run_child(out, env, runner_log)
     if why:
         pytest.fail(
-            f"{why}; see {runner_log} and {out / 'producer.log'}\n{tail(out / 'producer.log', 20)}\n{tail(runner_log)}",
-            pytrace=False,
+            f"[{feeder}] {why}; see {runner_log} and {flog}\n{tail(flog, 20)}\n{tail(runner_log)}", pytrace=False
         )
     if (out / "not_built.txt").exists():
         pytest.fail(f"not built: {(out / 'not_built.txt').read_text()}", pytrace=False)
     res = json.loads((out / "result.json").read_text()) if (out / "result.json").exists() else {}
     pj = json.loads((out / "producer.json").read_text()) if (out / "producer.json").exists() else {}
-    if rc != 0 or res.get("errors") or pj.get("errors"):
+    ej = json.loads((out / "engine.json").read_text()) if (out / "engine.json").exists() else {}
+    ferr = (ej.get("errors") or ([] if ej.get("ok") else ["no engine.json / not ok"])) if engine else pj.get("errors")
+    if rc != 0 or res.get("errors") or ferr:
         pytest.fail(
-            f"runner exit {rc}; runner errors {res.get('errors')}; producer errors {pj.get('errors')}\n"
-            f"see {runner_log} and {out / 'producer.log'}\n{res.get('traceback', '')}\n{tail(runner_log)}",
+            f"[{feeder}] runner exit {rc}; runner errors {res.get('errors')}; {who} errors {ferr}\n"
+            f"see {runner_log} and {flog}\n{res.get('traceback', '')}\n{tail(runner_log)}",
             pytrace=False,
         )
-    log(
-        f"prefill done in {time.time() - t0:.0f} s: ends {res.get('ends')}, acks {pj.get('acks_drained')}/"
-        f"{pj.get('acks_expected')}"
-    )
+    if engine:
+        er = ej["requests"]["smoke"]
+        log(
+            f"prefill done in {time.time() - t0:.0f} s: engine slot {er.get('slot')}, PREFILL_DONE at "
+            f"{er.get('done_position')}, runner chunks {res.get('chunks')}"
+        )
+        if er.get("done_position") != n or [tuple(c[1:]) for c in res.get("chunks", [])] != R.chunk_plan(n):
+            pytest.fail(
+                f"engine: PREFILL_DONE at {er.get('done_position')} (prompt {n}), runner chunks {res.get('chunks')}, "
+                f"server plan {R.chunk_plan(n)}",
+                pytrace=False,
+            )
+    else:
+        log(
+            f"prefill done in {time.time() - t0:.0f} s: ends {res.get('ends')}, acks {pj.get('acks_drained')}/"
+            f"{pj.get('acks_expected')}"
+        )
     if int(res.get("ends", {}).get("0", -1)) != n:
         pytest.fail(f"slot 0 ended at {res.get('ends')}, expected {n}", pytrace=False)
 
@@ -226,7 +253,7 @@ def test_runner_smoke(tmp_path):
     ok = expect.lower() in text.lower()
     log(
         f"answer {text!r} (expect {expect!r}): {'ok' if ok else 'FAIL'}; prompt_len {n}, boundary {cap}, "
-        f"total {time.time() - t_all:.0f} s"
+        f"total {time.time() - t_all:.0f} s; feeder {feeder}"
     )
     from models.demos.common.bringup.core import metrics
     from models.demos.common.bringup.testing.smoke import record_answer
@@ -244,5 +271,6 @@ def test_runner_smoke(tmp_path):
         boundary=cap,
         records=records,
         prompt_variant=what,
+        feeder=feeder,
     )
     assert ok, f"decoded answer {text!r} does not contain {expect!r} (prompt_len {n}, migrated [0, {cap}))"
