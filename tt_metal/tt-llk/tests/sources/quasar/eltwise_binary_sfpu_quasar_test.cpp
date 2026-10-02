@@ -171,17 +171,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_zero_dest_dvalid_handshake_for_math();
             set_up_zero_dest_dvalid_handshake_for_sfpu();
         }
-        // Max/min selects the Dest mode (fp32 / int32 / neither) from pack_src
-        // so integer ordering is preserved. Other ops use the inferred mode.
-        if constexpr (test_utils::quasar_binary_op_is_max_min(SFPU_BINARY_OP))
-        {
-            configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(
-                math_format, static_cast<DataFormat>(formats.pack_src));
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>(math_format, math_format);
-        }
+
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
         if constexpr (!unpack_to_dest)
         {
