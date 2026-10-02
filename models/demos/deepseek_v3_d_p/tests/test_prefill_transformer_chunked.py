@@ -204,31 +204,31 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut three times. Recentered to CI run 36356786056 / job 108828333472: every chunk came
-    # in 2.4-5.2% under the previous centre (run 34492835936 / job 102927415897), with the drop growing
-    # with KV depth.
+    # then re-cut four times. Recentered to CI run 36817743337 / job 110348724900: every chunk came
+    # in 0.9-2.7% under the previous centre (run 36356786056 / job 108828333472), chunk 10 within 0.4%
+    # of the band floor.
     (61, 11, 10): [
-        0.403,
-        0.406,
-        0.440,
-        0.468,
-        0.500,
-        0.532,
-        0.562,
-        0.593,
-        0.638,
-        0.678,
-        0.717,
+        0.394,
+        0.397,
+        0.435,
+        0.462,
+        0.494,
+        0.527,
+        0.554,
+        0.584,
+        0.630,
+        0.664,
+        0.698,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
     # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
-    # Chunks 0-6 lowered to CI run 36032933534 / job 107749492403: they came in 4-30% under the old
-    # baseline and within 0.3-3% of the traced twin in the same run, i.e. the early-chunk dispatch overhead
-    # is gone (same shape on two local Galaxy runs). Chunks 7-10 were in band above baseline; unchanged.
-    (61, 11, 10): [0.437, 0.435, 0.449, 0.478, 0.513, 0.550, 0.581, 0.61104, 0.65888, 0.69774, 0.73711],
+    # Recentered to the mean of CI run 36817743337 / job 110348725004 and run 36886712494 / job
+    # 110456359778, which agree within 1.7% per chunk: chunks 0-1 came in 8-9% under the previous centre
+    # (run 36032933534 / job 107749492403) and failed its band, the rest 2.9-4.3%.
+    (61, 11, 10): [0.399, 0.399, 0.436, 0.464, 0.496, 0.529, 0.556, 0.587, 0.634, 0.669, 0.706],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
