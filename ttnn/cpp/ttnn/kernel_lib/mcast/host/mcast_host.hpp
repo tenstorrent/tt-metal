@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
+#include "ttnn/kernel_lib/mcast/mcast_common.hpp"
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
