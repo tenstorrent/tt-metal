@@ -88,7 +88,10 @@ static inline void apply_plan_at(std::uint32_t base, std::uint32_t magic)
         const std::uint32_t v    = plan[2 + 4 * i + 1];
         const std::uint32_t port = plan[2 + 4 * i + 2];
         const std::uint32_t mask = plan[2 + 4 * i + 3];
-        if (port == 1) TT_SETC16(a, v & mask & 0xFFFF);
+        if (port == 1)
+        {
+            TT_SETC16(a, v & mask & 0xFFFF);
+        }
         else
         {
             const std::uint32_t cur = ckernel::cfg_read(a);
@@ -97,10 +100,8 @@ static inline void apply_plan_at(std::uint32_t base, std::uint32_t magic)
     }
 }
 
-// Addr mods have to be restored. This is ThreadConfig, so each thread has its own values.
 // Plan format is [magic][N][has_ch1x][data], where data is N x [addr32, v_t0, v_t1, v_t2],
 // and, if has_ch1x is set, [adc_ch1x_unpacker][adc_ch1x_packer] at the very end.
-// Most kernels don't touch tile dimension config, so the flag is usually unset.
 static constexpr std::uint32_t LLK_RESTORE_ADDRMOD_BASE  = 0x1C000;
 static constexpr std::uint32_t LLK_RESTORE_ADDRMOD_MAGIC = 0x41525431u; // 'ART1'
 
@@ -184,7 +185,7 @@ int main(void)
         ckernel::fence_compiler();
 
 #ifndef LLK_DEVICE_PRINT_BUFFER_BASE
-        apply_restore_plan(); // reconfig-escape pair sweep; no-op unless host wrote a plan @ 0x1A000
+        apply_restore_plan();
 #endif
 
         run_kernel(temp_args);

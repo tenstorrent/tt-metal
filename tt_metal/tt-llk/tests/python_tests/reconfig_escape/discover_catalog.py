@@ -2,30 +2,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Empirical catalog builder for the reconfig-escape pair sweep: sample broadly across the real test
-suite, capture each sampled op's actual write-footprint, dedupe on the observed signature, then
-gate-validate only the survivors. Runs standalone in CI (weekly cadence): every invocation starts
-fresh and produces a self-contained manifest.json, the format pair_sweep.py consumes.
-
-Sampling is per (file, function) -- nodeid up to its parametrize '[' -- not per file: several files
-bundle multiple test functions with independent parametrize spaces, and a flat per-file cap skews
-toward whichever function pytest happens to list first.
-
-Three phases:
-  1. DISCOVERY: for a bounded random sample of nodeids per test function (the real suite is far too
-     large to run exhaustively), compile once, then one `--compile-consumer -n 8` xdist round
-     captures baseline PASS/FAIL and each candidate's true post-exec residue via
-     xdist_capture_plugin.py. No gate yet -- most candidates get discarded as duplicates next.
-  2. DEDUPE: group baseline-PASS candidates with a real write-footprint by their observed
-     (addr32, value) signature (diffed against pristine), excluding a data-driven set of
-     high-cardinality fields from the key first (see the dedup-cardinality-cutoff code below for
-     which fields and why). The restore payload for each representative still replays every field
-     byte-for-byte regardless -- only the dedup key drops these fields.
-  3. GATE: restore each surviving representative's own captured residue and rerun it (one xdist
-     round via xdist_plan_plugin.py, reusing the artifacts compiled in phase 1 -- no recompile
-     needed within a single continuous invocation). A handful of genuine "TENSIX TIMED OUT" gate
-     failures are expected at full scale (heaviest kernels under -n 8 contention) and fall out of
-     the catalog as ENVERR/unusable, not bugs.
+"""Catalog builder for reconfig testing. This finds reachable config states.
+We sample across the testsuite, capture each executed variant's config footprint, and dedup.
+The results are then written into a JSON for pair_sweep.py.
 
 Usage:
   python3 discover_catalog.py --worktree DIR --arch blackhole \
@@ -48,110 +27,41 @@ PASS, FAIL, ENVERR = "PASS", "FAIL", "ENVERR"
 _CFG_STATE_SIZE = {"blackhole": 56}
 _ADDR_MOD_ADDR32 = {
     "blackhole": sorted(
-        set(range(12, 20))
-        | set(range(28, 36))
-        | set(range(37, 41))
-        | set(range(47, 55))
+        set(range(12, 20))  # ADDR_MOD_AB_SEC0-7
+        | set(range(20, 28))  # ADDR_MOD_AB2_SEC0-7
+        | set(range(28, 36))  # ADDR_MOD_DST_SEC0-7
+        | set(range(37, 41))  # ADDR_MOD_PACK_SEC0-3
+        | set(range(47, 55))  # ADDR_MOD_BIAS_SEC0-7
     ),
 }
 _BOOT_OWNED = {"blackhole": set()}
-# addr32 2 bits 22-31 = firmware DISABLE_RISC_BP; masked out of restore so we never write
-# firmware-owned bits. (addr32 0 here holds only legacy ALU format fields -- CFG_STATE_ID is a
-# same-numbered but separate ThreadConfig field, not reachable through this Config-space path.)
-_RESTORE_MASK_OVERRIDE = {2: 0x003FFFFF}
-# Reachable write surface (written bits per addr32), used only to exclude non-write-surface
-# addresses from the dedup signature below.
-_WRITE_MASK = {
-    "blackhole": {
-        0: 0x0000FFFF,
-        1: 0xFFFFFFFF,
-        2: 0xFFFFFFFF,
-        5: 0x0000FFFF,
-        7: 0x0000FFFF,
-        12: 0xFFFFFFFF,
-        13: 0xFFFFFFFF,
-        14: 0xFFFFFFFF,
-        15: 0xFFFFFFFF,
-        16: 0x0000FFFF,
-        17: 0xFFFFFFFF,
-        18: 0xFFFFFFFF,
-        19: 0x0000FFFF,
-        20: 0xFFFFFFFF,
-        21: 0xFFFFFFFF,
-        24: 0xFFFFFFFF,
-        25: 0xFFFFFFFF,
-        28: 0x0000FFFF,
-        29: 0x0000FFFF,
-        30: 0x0000FFFF,
-        31: 0x0000FFFF,
-        32: 0x0000FFFF,
-        33: 0x0000FFFF,
-        34: 0x0000FFFF,
-        35: 0x0000FFFF,
-        37: 0x0000FFFF,
-        38: 0x0000FFFF,
-        39: 0x0000FFFF,
-        40: 0x0000FFFF,
-        41: 0x0000FFFF,
-        47: 0x0000FFFF,
-        48: 0x0000FFFF,
-        49: 0x0000FFFF,
-        50: 0xFFFFFFFF,
-        51: 0x0000FFFF,
-        52: 0x0000FFFF,
-        53: 0x0000FFFF,
-        54: 0x0000FFFF,
-        55: 0x0000FFFF,
-        56: 0xFFFFFFFF,
-        57: 0xFFFFFFFF,
-        59: 0xFFFFFFFF,
-        64: 0xFFFF000F,
-        65: 0xFFFFFFFF,
-        68: 0xFFFFFFFF,
-        69: 0xFFFFFFFF,
-        70: 0xFFFFFFFF,
-        71: 0xFFC80000,
-        72: 0xFFFFFFFF,
-        73: 0x00000030,
-        76: 0xFFFFFFFF,
-        77: 0xFFFFFFFF,
-        84: 0xFFFFFFFF,
-        86: 0xFFFFFFFF,
-        92: 0xFFFFFFFF,
-        93: 0xFFFFFFFF,
-        112: 0xFFFF000F,
-        113: 0xFFFF0000,
-        119: 0x00400000,
-        120: 0x0000000F,
-        124: 0xFFFFFFFF,
-        125: 0xFFFFFFFF,
-        140: 0xFFFFFFFF,
-        141: 0xFFFFFFFF,
-        180: 0xFFFFFFFF,
-        181: 0xFFFFFFFF,
-        182: 0xFFFFFFFF,
-        183: 0xFFFFFFFF,
-        186: 0xFFFFFFFF,
-        209: 0xFFFFFFFF,
-        211: 0xFFFFFFFF,
-        220: 0x0000000B,
-    },
-}
+
+# addr32 2 bits 22-31 are firmware-owned: DISABLE_RISC_BP_Disable_{main,trisc,ncrisc} and their
+# _bmp_clear_* siblings (cfg_defines.h), all packed into that top range. Masked out of restore so
+# we never write firmware-owned bits.
+#
+# addr32 0 here holds only legacy ALU format fields. CFG_STATE_ID is a same-numbered but separate
+# ThreadConfig field, not reachable through this Config-space path.
+_DISABLE_RISC_BP_SHAMT = (
+    22  # cfg_defines.h: DISABLE_RISC_BP_Disable_main_SHAMT, lowest firmware-owned bit
+)
+_RESTORE_MASK_OVERRIDE = {2: (1 << _DISABLE_RISC_BP_SHAMT) - 1}
 
 
 def build_restore_entries(arch, pristine_path):
     """Restore plan from a captured pristine snapshot (host snapshot_cfg JSON: [[state,addr32,val]..]).
 
-    State-0 cfg-bus words -> port-0 full-word writes (re-establish the shared banked baseline).
-    addr-mod words -> port-1 SETC16 zero writes (reset-default). NOTE: snapshot_cfg()'s addr32
-    numbering (Config[state][addr32], the shared double-buffered CFG bus) and _ADDR_MOD_ADDR32's
-    numbering (ThreadConfig[thread][idx], a separate per-thread-banked array entirely -- see
-    BackendConfiguration.md) are DIFFERENT address spaces that happen to share small integers.
-    cfg_read()/cfg_write() (ckernel.h) can only reach Config, never ThreadConfig, and RISCV store
-    instructions can't write ThreadConfig at all (SETC16 only) -- so there is no capture of the
-    real addr-mod value here to replay; 0 is a guess, not a captured value. Verified empirically:
-    replaying the Config-space value that happens to share the addr-mod address's number (via
-    either cfg_write or SETC16) breaks far more victims than this reset-default-0 guess does.
+    State-0 cfg-bus words become port-0 full-word writes, re-establishing the shared banked
+    baseline. Addr-mod words become port-1 SETC16 writes of 0, the reset default.
+
+    Config[state][addr32] (the shared double-buffered CFG bus) and ThreadConfig[thread][idx]
+    (a separate per-thread-banked array, see BackendConfiguration.md) are different address
+    spaces. They happen to reuse the same small integers for addr32.
+
+    cfg_read()/cfg_write() can only reach Config. RISCV stores can't reach ThreadConfig at all;
+    only SETC16 can. So there is no captured addr-mod value to replay here -- 0 is a guess, not
+    a measurement. Replaying whatever Config-space value happens to share that addr32 number
+    instead breaks more victims than this guess does.
     """
     with open(pristine_path) as f:
         snap = json.load(f)
@@ -187,15 +97,16 @@ def build_addrmod_restore_entries(addrmod_path):
 _XDIST_CAPTURE_PLUGIN_SRC = '''\
 """pytest plugin: one-shot restore-to-pristine + direct post-exec residue capture, per test item.
 
-Discovery doesn't need the "2nd launch's pre-launch snapshot is launch 1's post-exec residue"
-trick snapshot_build.py uses (which needs two launches to land on the same core -- a real risk
-under xdist, since nothing guarantees the same worker runs two separate pytest invocations for
-the same nodeid). Instead: restore-to-pristine in pytest_runtest_setup (same mechanism
+snapshot_build.py reads residue by treating a 2nd launch's pre-launch snapshot as launch 1's
+post-exec state. That needs two launches landing on the same core, a real risk under xdist since
+nothing guarantees the same worker runs two separate pytest invocations for the same nodeid.
+
+Discovery avoids that: restore-to-pristine in pytest_runtest_setup (the same mechanism
 cfg_restore.py already uses), then read the CFG state directly via snapshot_cfg/thread_items in
-pytest_runtest_teardown -- same process, same core, right after that item's own kernel finished,
-no second launch needed. cfg_restore.py's own capture trick already proves residue survives a
-full test-to-test boundary (fixture teardown + the next test's setup); this only needs it to
-survive from test-body-end to that SAME test's own teardown, a strictly smaller window.
+pytest_runtest_teardown. Same process, same core, right after that item's own kernel finished, no
+second launch needed. cfg_restore.py's own capture trick already proves residue survives a full
+test-to-test boundary (fixture teardown plus the next test's setup); this only needs it to
+survive from test-body-end to that same test's own teardown, a strictly smaller window.
 
 --llk-pristine-restore=PATH   restore plan applied before every candidate item launches.
 --llk-capture-outdir=DIR      each candidate's post-exec snapshot written to
@@ -377,23 +288,12 @@ def _chunks(seq, size):
 
 
 def compile_all(worktree, arch, nodeids, jobs, timeout):
-    """At full-suite sample sizes (tens of thousands of candidates) passing every nodeid on argv
-    blows the OS argument-list limit (measured: 12502 candidates -> OSError: Argument list too
-    long). Targeting whole test FILES instead (bounded, small argv) was tried and reverted: it
-    collects everything in those files, including unrelated non-hardware unit tests that happen to
-    share the file, and running those alongside heavily deselected items introduced real
-    fixture-teardown failures that don't happen with exact-nodeid targeting.
-
-    Batching the positional-nodeid invocation into several pytest subprocesses (one per chunk) was
-    also tried and reverted: test_config.py's PRODUCE-mode session start wipes the whole shared
-    build-artifact directory ("start compilation from a clean artifact directory"), so each
-    subsequent batch's fresh pytest session destroyed every earlier batch's compiled output --
-    only the last batch's candidates ever had a real ELF by the time the discovery round ran
-    (measured: 269/12836 baseline PASS at full scale, all failures "ELF file does not exist").
-
-    Passing the nodeid list to pytest.main() in-process instead -- via a tiny driver invoked with
-    a short argv (just a path to a JSON file holding the real list) -- keeps this to the one
-    session compile-producer mode already assumes, with no OS argv-length exposure at all.
+    """Compiles via a short-argv driver: nodeids go through a JSON file, not argv, so full-suite
+    sample sizes never risk the OS argument-list limit. Targets exact nodeids rather than whole
+    test files: file-level targeting would collect unrelated tests sharing the file, and running
+    those alongside heavy deselection trips real fixture-teardown failures. Runs as a single
+    pytest session, not batched subprocesses: test_config.py's PRODUCE-mode session start wipes
+    the shared build-artifact directory, so multiple sessions would destroy each other's output.
     """
     nodeids_path = os.path.join(
         worktree,
@@ -550,11 +450,8 @@ def main():
         "--sample-per-test",
         type=int,
         default=150,
-        help="max candidates to sample per test function. 150 measured (2026-09-25, "
-        "blackhole, full 233k-item/511-function suite) to reach ~9900 total "
-        "candidates and 352 distinct dedup signatures, with marginal growth down "
-        "to roughly 1%% per 1000 additional samples -- decelerating but not fully "
-        "flat",
+        help="max candidates to sample per test function; distinct dedup signatures found "
+        "grows with this but with diminishing returns at scale",
     )
     p.add_argument(
         "--dedup-cardinality-cutoff",
@@ -687,8 +584,8 @@ def main():
 
     with open(pristine_snap_path) as f:
         pristine = {addr32: val for state, addr32, val in json.load(f) if state == 0}
-    live = _WRITE_MASK[args.arch]
     addrmod = set(_ADDR_MOD_ADDR32.get(args.arch, []))
+    boot_owned = _BOOT_OWNED[args.arch]
 
     discovered = []
     for nid in sampled:
@@ -707,7 +604,10 @@ def main():
             diff = {
                 a: v
                 for s, a, v in snap
-                if s == 0 and a in live and a not in addrmod and v != pristine.get(a)
+                if s == 0
+                and a not in addrmod
+                and a not in boot_owned
+                and v != pristine.get(a)
             }
             rec["snapshot_path"] = snap_path
             rec["signature"] = tuple(sorted(diff.items()))
@@ -721,17 +621,19 @@ def main():
         file=sys.stderr,
     )
 
-    # Exact-value dedup never converges: a handful of CFG words are per-tile L1 pointers or
+    # Exact-value dedup never converges. A handful of CFG words are per-tile L1 pointers or
     # tile-descriptor words (addr32 76/77/124/125 = THCON_SEC0/1_REG3_Base_address[_cntx1], the
     # per-tile L1 src addr, unconditionally rewritten by every unpack execute path) whose value
-    # tracks wherever a test happened to allocate its tensors, not a mode/format axis. Measured
-    # cardinality across the whole sample -- not a hand-curated name list, since a couple of these
-    # (addr32 69/70) aren't named fields at all -- separates them cleanly: a real discrete
-    # mode-select stays under ~15 distinct values across thousands of candidates; an
-    # address/geometry-encoding field runs into the hundreds. Excluding those from the DEDUP KEY
-    # only (the actual restore payload still replays every field byte-for-byte -- replaying a
-    # stale-but-valid address is harmless) turns a non-converging accumulation curve into one that
-    # visibly decelerates.
+    # tracks wherever a test happened to allocate its tensors, not a mode/format axis.
+    #
+    # Measured cardinality across the whole sample separates these cleanly from genuine discrete
+    # mode-selects, without needing a hand-curated name list (a couple, addr32 69/70, aren't even
+    # named fields). A real discrete mode-select stays under ~15 distinct values across thousands
+    # of candidates; an address/geometry-encoding field runs into the hundreds.
+    #
+    # Excluding those from the dedup key only -- the restore payload still replays every field
+    # byte-for-byte, and replaying a stale-but-valid address is harmless -- turns a non-converging
+    # accumulation curve into one that visibly decelerates.
     per_addr_vals = {}
     for r in discovered:
         if r["signature"]:

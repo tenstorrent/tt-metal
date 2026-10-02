@@ -202,9 +202,14 @@ _THD_STATE_SIZE = {
     ChipArchitecture.WORMHOLE: 57,
 }
 _THREAD_CFG_IDS = (0, 1, 2)  # THREAD_0_CFG/1/2 == UNPACK/MATH/PACK
-# Blackhole ADDR_MOD_AB_SEC0-5 ThreadConfig-local indices (cfg_defines.h).
+# Blackhole addr-mod ThreadConfig-local indices (cfg_defines.h): ADDR_MOD_AB_SEC0-7,
+# ADDR_MOD_AB2_SEC0-7, ADDR_MOD_DST_SEC0-7, ADDR_MOD_PACK_SEC0-3, ADDR_MOD_BIAS_SEC0-7.
 _ADDR_MOD_ADDR32_BH = sorted(
-    set(range(12, 20)) | set(range(28, 36)) | set(range(37, 41)) | set(range(47, 55))
+    set(range(12, 20))
+    | set(range(20, 28))
+    | set(range(28, 36))
+    | set(range(37, 41))
+    | set(range(47, 55))
 )
 
 

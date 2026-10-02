@@ -20,14 +20,15 @@ item, each pinned to X's restore plan via xdist_plan_plugin.py. That turns N**2 
 into N rounds of up to N-1 parallel trials.
 
 A physical core accumulates persistent hardware state across every no-reset launch, regardless
-of which op runs, and this does not reduce to a fixed launch count (composition-dependent, not
-purely count-dependent) -- so a single reset per polluter round is not enough on its own. The
-only launch count confirmed clean in isolation is 12. It survives a fresh pytest subprocess
-restart (so it isn't a host-side leak) and is only cleared by a real reset; `tt-smi -r` resets
-the whole chip, not one core, so it can only be inserted at a round/batch boundary where every
-worker is synced, never mid-batch. Each polluter's victims are therefore split into small
-sub-batches sized to stay under that floor, with a reset before every sub-batch instead of once
-per (potentially much larger) round.
+of which op runs. This doesn't reduce to a fixed launch count: it's composition-dependent, not
+purely count-dependent, so a single reset per polluter round is not enough on its own. The only
+launch count confirmed clean in isolation is 12.
+
+This residue survives a fresh pytest subprocess restart, so it isn't a host-side leak, and only
+a real reset clears it. `tt-smi -r` resets the whole chip, not one core, so it can only be
+inserted at a round/batch boundary where every worker is synced, never mid-batch. Each
+polluter's victims are therefore split into small sub-batches sized to stay under that floor,
+with a reset before every sub-batch instead of once per (potentially much larger) round.
 
 A pair is an escape when K's baseline is PASS but K after X is FAIL or HANG. A K-side flake
 (K itself sometimes flaky at baseline) is out of scope here: only PASS-baseline ops are used
@@ -35,19 +36,21 @@ as victims at all, so any post-X divergence is attributable to X, not to K's own
 
 Restore mode replants a *captured snapshot* of X's residue rather than running X for real, so a
 restore-mode escape can be a snapshot/replant-fidelity artifact of the harness rather than a real
-hardware effect. Every restore-mode escape is therefore re-checked with a plain-pytest ground-truth
-reproduction before it is reported: reset, then one serial (`-n`-less, single-core) pytest
-invocation running X's real test then K's real test back to back, no restore machinery, no
-plan-map. Only escapes that reproduce this way are reported; unverified candidates are still
-written to the JSONL (with `verified: false`) so nothing is silently dropped, but they are
-excluded from the final escape count/summary. Fallback-mode escapes already ran real X then real
-K with no reset in between (see the fallback phase below), so they're ground truth already and
-skip re-verification. This still isn't an absolute guarantee -- a single hardware run can still be
-flaky -- but it is far stronger evidence than an unverified restore-mode hit.
+hardware effect. Every restore-mode escape is therefore re-checked with a plain-pytest
+ground-truth reproduction before it is reported: reset, then one serial (no `-n`, single-core)
+pytest invocation running X's real test then K's real test back to back, with no restore
+machinery and no plan-map.
 
---splits/--group shard the polluter loop across machines (each machine needs its own --out):
-every shard still sweeps against the FULL victim set, so a shard's own escapes are already
-ground truth for that (polluter, victim) pair -- no merge step is needed beyond concatenating
+Only escapes that reproduce this way are reported. Unverified candidates are still written to
+the JSONL (`verified: false`) so nothing is silently dropped, but they're excluded from the
+final escape count/summary. Fallback-mode escapes already ran real X then real K with no reset
+in between (see the fallback phase below), so they're ground truth already and skip
+re-verification. This still isn't an absolute guarantee: a single hardware run can still be
+flaky. But it is far stronger evidence than an unverified restore-mode hit.
+
+--splits/--group shard the polluter loop across machines; each machine needs its own --out.
+Every shard still sweeps against the full victim set, so a shard's own escapes are already
+ground truth for that (polluter, victim) pair. No merge step is needed beyond concatenating
 each shard's report, same as every other sharded suite in this repo.
 
 Usage:

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       architecture:
-        description: "Architecture to run the reconfig-escape sweep on"
+        description: "Architecture to run the reconfig sweep on"
         required: true
         default: all
         type: choice
