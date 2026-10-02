@@ -181,16 +181,20 @@ class MlaKvCache:
             intermediates["tt_kvpe"] = ttnn.clone(packed)
         return packed
 
+    def prepare_scaled_fp8_inputs(
+        self, latent: ttnn.Tensor, rope: ttnn.Tensor, *, keep_rope_tiled: bool = False
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Quantize latent directly and expose cache fields, optionally retaining tiled RoPE."""
+        latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            latent, round_scale_to_power_of_two=True
+        )
+        rope_rm = rope if keep_rope_tiled else ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
+        return latent_fp8, scales, rope_rm
+
     def _pack_scaled_fp8(
         self, latent: ttnn.Tensor, rope: ttnn.Tensor, *, intermediates: dict[str, ttnn.Tensor] | None
     ) -> ttnn.Tensor:
-        latent_rm = ttnn.to_layout(latent, ttnn.ROW_MAJOR_LAYOUT)
-        latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
-            latent_rm, round_scale_to_power_of_two=True
-        )
-        if latent_rm is not latent:
-            ttnn.deallocate(latent_rm)
-        rope_rm = ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
+        latent_fp8, scales, rope_rm = self.prepare_scaled_fp8_inputs(latent, rope)
         packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(latent_fp8, scales, rope_rm)
         if intermediates is not None:
             reconstructed = ttnn.experimental.deepseek_prefill.per_token_cast_back(
@@ -481,7 +485,7 @@ def populate_kv_chunk_address_table_block_cyclic(
 
     # ---- Legacy single-stage path (direct call, stage_layout is None). ----
     # The pre-#48826 behavior, still exercised by direct callers that don't build a stage_layout
-    # (e.g. test_glm52_kv_cache_table and the kv_chunk_table runner): base addr / bank count derived
+    # (e.g. test_glm53_kv_cache_table and the kv_chunk_table runner): base addr / bank count derived
     # from the cache itself. tp_axis=None (TP-replicated) is tp_factor == 1 below, so both layouts run
     # the same loop: one device group per row, spanning the whole row's slice.
     host_name = socket.gethostname()

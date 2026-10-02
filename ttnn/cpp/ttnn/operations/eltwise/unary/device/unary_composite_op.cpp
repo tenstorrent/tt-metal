@@ -111,15 +111,6 @@ namespace ttnn {
 // Valid domain: a > 1.5
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-#if !defined(TT_POLY_LLK_DISABLE)
-    if (x.storage_type() == StorageType::DEVICE && x.dtype() == DataType::BFLOAT16 && x.layout() == Layout::TILE &&
-        !x.is_sharded() && (x.device()->arch() == tt::ARCH::BLACKHOLE || x.device()->arch() == tt::ARCH::WORMHOLE_B0) &&
-        (!output_mem_config.has_value() || !output_mem_config->is_sharded())) {
-        return ttnn::unary_chain(
-            x, {{operations::unary::UnaryOpType::TT_POLY_AGGREGATE_MULTIGAMMALN}}, output_mem_config);
-    }
-#endif
-
     Tensor result = ttnn::lgamma(x, output_mem_config);
     result = ttnn::add(
         result,

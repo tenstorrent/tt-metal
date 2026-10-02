@@ -614,7 +614,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             // Noop core: zero-filled runtime args, sized to match the active kernel variant so unused
             // cores neither inflate the per-kernel max runtime-arg allocation nor change slot count when a
             // core flips between noop and work across differently-shaped cache hits.
-            const size_t reader_len = row_major_inputs ? 26 : 21;
+            const size_t reader_len = row_major_inputs ? 26 : 23;
             const size_t writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
             const size_t compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
             reader_runtime_args.assign(reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
@@ -696,8 +696,11 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                 operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
             if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
                 operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
+                // The kernel bit-casts float scalars as one fp32 word, so pack them as fp32.
+                const auto value_dtype = b.has_value() ? b->dtype() : a.dtype();
+                const bool int_fill = value_dtype == DataType::INT32 || value_dtype == DataType::UINT32;
                 compute_scalar_value = pack_scalar_runtime_arg(
-                    operation_attributes.scalar.value(), b.has_value() ? b->dtype() : a.dtype(), false);
+                    operation_attributes.scalar.value(), int_fill ? value_dtype : DataType::FLOAT32, false);
             }
             if (row_major_inputs) {
                 freq = 1;
@@ -812,6 +815,8 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
                 b_num_tiles,
+                aWt,
+                bWt,
             };
         }
 
@@ -892,8 +897,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // TODO: when handling mixed types, we must identify the appropriate dtype and pass it here to define the respective
     // LLK APIs
-    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
-                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
+    const auto& op_params = operation_attributes.op_params;
+    const auto op_config = is_sfpu_op
+                               ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype, op_params)
+                               : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype, op_params);
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
@@ -940,32 +947,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
     }
 
-    // Complete backward markers are cache keys, never unary preprocessing.
-    const auto tt_poly_complete_init = [](unary::UnaryOpType type) -> const char* {
-        switch (type) {
-            case unary::UnaryOpType::TT_POLY_BACKWARD_CELU_BW: return "celu_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_ELU_BW: return "elu_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "erf_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSIGMOID_BW: return "hardsigmoid_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW: return "hardswish_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_LEAKY_RELU_BW: return "leaky_relu_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW: return "log_sigmoid_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_SELU_BW: return "selu_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_SILU_BW: return "silu_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_SOFTPLUS_BW: return "softplus_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_SOFTSIGN_BW: return "softsign_bw_tt_poly_bf16_tile_init();";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_TANHSHRINK_BW: return "tanhshrink_bw_tt_poly_bf16_tile_init();";
-            default: return nullptr;
-        }
-    };
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
-        if (lhs_activations.size() == 1 && !lhs_activations[0].has_parameter() &&
-            tt_poly_complete_init(lhs_activations[0].type()) != nullptr) {
-            lhs_activations.clear();
-        }
 
         // Under a left-hand scalar the kernel evaluates op(c_1, c_0), so the mathematical
         // operands are swapped relative to the physical CBs. The caller's per-operand
@@ -1266,111 +1251,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
 
-    // Selected backward transport in the existing binary kernel.
-    const auto tt_poly_gradient_entry = [](unary::UnaryOpType type) -> const char* {
-        switch (type) {
-            case unary::UnaryOpType::TT_POLY_BACKWARD_CELU_BW: return "celu_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_ELU_BW: return "elu_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "erf_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSIGMOID_BW: return "hardsigmoid_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW: return "hardswish_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_LEAKY_RELU_BW: return "leaky_relu_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW: return "log_sigmoid_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_SELU_BW: return "selu_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_SILU_BW: return "silu_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_SOFTPLUS_BW: return "softplus_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_SOFTSIGN_BW: return "softsign_bw_tt_poly_bf16_gradient";
-            case unary::UnaryOpType::TT_POLY_BACKWARD_TANHSHRINK_BW: return "tanhshrink_bw_tt_poly_bf16_gradient";
-            default: return nullptr;
-        }
-    };
-    const auto tt_poly_has_factor = [&](const auto& chain) {
-        for (const auto& activation : chain) {
-            if (tt_poly_gradient_entry(activation.type()) != nullptr) {
-                return true;
-            }
-        }
-        return false;
-    };
-    const bool tt_poly_gradient_context = tt_poly_has_factor(operation_attributes.lhs_activations) ||
-                                          tt_poly_has_factor(operation_attributes.rhs_activations) ||
-                                          tt_poly_has_factor(operation_attributes.post_activations);
-    if (tt_poly_gradient_context) {
-#if defined(TT_POLY_LLK_DISABLE)
-        TT_FATAL(false, "Disabled selected gradient requires the original public backward composition");
-#else
-        TT_FATAL(
-            is_sfpu_op && !is_quant_op && !is_where_op && op_type == BinaryOpType::MUL && b.has_value() &&
-                !operation_attributes.scalar.has_value() && a.device() == b->device() && a.device() == c.device() &&
-                (a.device()->arch() == tt::ARCH::BLACKHOLE || a.device()->arch() == tt::ARCH::WORMHOLE_B0) &&
-                a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16 &&
-                a.layout() == Layout::TILE && b->layout() == Layout::TILE && c.layout() == Layout::TILE &&
-                !has_sharding && a.logical_shape() == b->logical_shape() && a.logical_shape() == c.logical_shape() &&
-                a.padded_shape() == b->padded_shape() && a.padded_shape() == c.padded_shape() &&
-                operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE &&
-                operation_attributes.lhs_activations.size() == 1 &&
-                !operation_attributes.lhs_activations[0].has_parameter() &&
-                tt_poly_gradient_entry(operation_attributes.lhs_activations[0].type()) != nullptr &&
-                operation_attributes.rhs_activations.empty() && operation_attributes.post_activations.empty() &&
-                !op_config.process_lhs.has_value() && !op_config.process_rhs.has_value() &&
-                !op_config.postprocess.has_value() && !operation_attributes.compute_kernel_config.has_value() &&
-                num_tiles_per_cycle == 1 && !fp32_dest_acc_en && !compute_kernel_defines.contains("PACK_RELU"),
-            "Selected gradient requires one private LHS factor, BF16 MUL, equal interleaved tiles and no extra chains");
-        compute_kernel_defines["BINARY_SFPU_OP"] =
-            tt_poly_gradient_entry(operation_attributes.lhs_activations[0].type());
-        compute_kernel_defines["TT_POLY_BINARY_GRADIENT_CONTEXT"] = "1";
-        if (const auto* const init = tt_poly_complete_init(operation_attributes.lhs_activations[0].type())) {
-            TT_FATAL(
-                compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty() &&
-                    compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty() &&
-                    compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"].empty(),
-                "Complete backward callback requires raw operands without preprocessing");
-            compute_kernel_defines["BINARY_SFPU_INIT"] = init;
-            switch (operation_attributes.lhs_activations[0].type()) {
-                case unary::UnaryOpType::TT_POLY_BACKWARD_CELU_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_CELU_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_ELU_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_ELU_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_ERF_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSIGMOID_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_HARDSIGMOID_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_HARDSWISH_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_LEAKY_RELU_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_LEAKY_RELU_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_LOG_SIGMOID_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_SELU_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_SELU_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_SILU_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_SILU_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_SOFTPLUS_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_SOFTPLUS_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_SOFTSIGN_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_SOFTSIGN_BW_INCLUDE"] = "1";
-                    break;
-                case unary::UnaryOpType::TT_POLY_BACKWARD_TANHSHRINK_BW:
-                    compute_kernel_defines["TT_POLY_BACKWARD_TANHSHRINK_BW_INCLUDE"] = "1";
-                    break;
-                default: break;
-            }
-        }
-#endif
-    }
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
-    if (is_sfpu_op && !tt_poly_gradient_context) {
+    if (is_sfpu_op) {
         if (op_type != BinaryOpType::POWER) {
             unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[src1_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
@@ -1484,10 +1367,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         // where_tile<DataFormat::X> selector — mirrors get_sfpu_init_fn(WHERE, a_dtype)
         // in binary_ng_utils.cpp so the eltwise_chain `Where` element can pick the
         // exact same DataFormat the legacy BINARY_SFPU_OP macro baked in.
-        const char* where_df = (a_dtype == DataType::INT32)     ? "Int32"
-                               : (a_dtype == DataType::UINT32)  ? "UInt32"
-                               : (a_dtype == DataType::FLOAT32) ? "Float32"
-                                                                : "Float16_b";
+        // Match DEST: with fp32 DEST (e.g. a float32 output), bf16 inputs are held as Float32.
+        const char* where_df = (a_dtype == DataType::INT32)                         ? "Int32"
+                               : (a_dtype == DataType::UINT32)                      ? "UInt32"
+                               : (a_dtype == DataType::FLOAT32 || fp32_dest_acc_en) ? "Float32"
+                                                                                    : "Float16_b";
         compute_kernel_defines["WHERE_DATA_FORMAT"] = where_df;
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";

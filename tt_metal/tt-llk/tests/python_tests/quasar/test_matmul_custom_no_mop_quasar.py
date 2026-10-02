@@ -23,6 +23,7 @@ THROTTLE_LEVEL == 0 (same on Wormhole).
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
     get_valid_math_fidelities,
@@ -289,6 +290,10 @@ MATMUL_2X_DIMENSIONS = [
 
 
 @pytest.mark.quasar
+@pytest.mark.skipif(
+    is_4row_arch(),
+    reason="MxFp4_2x register formats do not exist on the 4-row Quasar variant; its 2x path is Int8_2x",
+)
 @parametrize(
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     formats=MATMUL_2X_FORMATS,

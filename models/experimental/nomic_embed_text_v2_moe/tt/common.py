@@ -17,10 +17,10 @@ text attend to another: PCC 0.71 against per-sequence attention, a wrong answer 
 less precise one. Pooling also reduces along S, and has to produce one mean per text rather
 than one per batch.
 
-The MoE matmuls force the opposite. ttnn.matmul broadcasts a weight's batch dims only when
-every batch dim of the activation is 1, so (1, 1, T, H) x (1, E, H, F) gives (1, E, T, F) while
-(B, 1, S, H) raises outright. The spare dim at position 1 is what the expert axis expands into
-and what fast_reduce_nc collapses again.
+The MoE matmuls force the opposite. sparse_matmul takes the tokens as one (1, 1, T, H) operand
+against the (1, E, H, F) weights, and a transposed pass multiplies the stacked weight by one
+(1, 1, H, T) x^T. The spare dim at position 1 is what the expert axis expands into and what
+fast_reduce_nc collapses again.
 
 So tt/moe.py flattens on entry and unflattens on exit, which is where the reference does its own
 x.view(-1, H), and nothing else in the encoder reshapes: ttnn.linear, ttnn.layer_norm and
@@ -96,7 +96,9 @@ def pack_expert_weights(
     In torch that mistake is silent: the wrong slab plus a .T has the right shape and returns
     noise, which test_w2_transposed_view_typechecks_but_is_garbage pins. The 4D operand is what
     makes it loud, since there is no .T to paper over it and the inner dimensions stop agreeing;
-    test_transposed_expert_weights_are_a_shape_error asserts it raises.
+    test_transposed_expert_weights_are_a_shape_error asserts it raises. TtNomicExperts transposes
+    w2 once more for its own programs, back to the (E, H, F) shape of the mistake, so there the
+    module PCC tests are the guard.
     """
     expert_shape = (config.num_experts, config.intermediate_size, config.hidden_size)
     return (
@@ -106,7 +108,10 @@ def pack_expert_weights(
 
 
 def additive_attention_mask(
-    attention_mask: torch.Tensor, device, dtype: ttnn.DataType = ACTIVATION_DTYPE
+    attention_mask: torch.Tensor,
+    device,
+    dtype: ttnn.DataType = ACTIVATION_DTYPE,
+    mask_dtype: ttnn.DataType | None = None,
 ) -> ttnn.Tensor:
     """Turn a (B, S) keep-mask into the (B, 1, S, S) additive mask SDPA takes, on device.
 
@@ -125,18 +130,26 @@ def additive_attention_mask(
     operands, an fp32 mask against bf16 q/k/v being rejected, and the fill value is built in
     that dtype rather than cast down to it: fp32's finfo.min is outside bf16's range and would
     round to -inf. The result is 0.0 at real-token keys and dtype-min everywhere else.
+
+    mask_dtype, when given, is the dtype the mask is cast to after tiling: SDPA also takes a
+    bfloat8_b or bfloat4_b mask, whose shared exponents hold 0 and dtype-min exactly.
     """
     torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[dtype]
     seqlen = attention_mask.shape[-1]
     mask = build_extended_attention_mask(attention_mask, torch_dtype).expand(-1, -1, seqlen, -1)
     row_major = ttnn.from_torch(mask.contiguous(), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    return ttnn.to_layout(row_major, LAYOUT, pad_value=float(torch.finfo(torch_dtype).min))
+    tiled = ttnn.to_layout(row_major, LAYOUT, pad_value=float(torch.finfo(torch_dtype).min))
+    if mask_dtype is None or mask_dtype == dtype:
+        return tiled
+    cast = ttnn.typecast(tiled, mask_dtype)
+    ttnn.deallocate(tiled)
+    return cast
 
 
 def rotary_tables(
     device, config: NomicMoEConfig, seqlen: int, dtype: ttnn.DataType = ACTIVATION_DTYPE
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Build the (1, 1, S, head_dim) cos/sin tables rotary_embedding_hf reads, on device.
+    """Build the (1, 1, S, head_dim) cos/sin tables rotary_embedding_hf reads, in L1.
 
     Delegates to tt_transformers' get_rot_mats_hf, whose unscaled path computes the same
     inv_freq, outer product and concat widening as NomicBertRotaryEmbedding plus
@@ -144,15 +157,23 @@ def rotary_tables(
 
     The concat widening is load-bearing: interleaving gives the GPT-J lane pairing, which under
     the kernel's NeoX rotate-half is not a rotation and does not preserve the per-plane norm.
+
+    L1 because rotary_embedding_hf reads the tables once per folded head: from DRAM they held it at
+    55% of the DRAM peak (tt-npe) although q, k and its output are in L1. In L1 rotary takes 0.97 ms
+    a forward at 8x512 against 1.27. The two tables are 64 KB each at S=512.
     """
-    cos, sin = get_rot_mats_hf(
+    tables = []
+    for table in get_rot_mats_hf(
         head_dim=config.head_dim,
         device=device,
         seq_len=seqlen,
         theta=config.rotary_emb_base,
         rope_scaling=None,
         datatype=dtype,
-    )
+    ):
+        tables.append(ttnn.to_memory_config(table, ttnn.L1_MEMORY_CONFIG))
+        ttnn.deallocate(table)
+    cos, sin = tables
     return cos, sin
 
 
