@@ -312,6 +312,7 @@ struct WorkerToFabricEdmSenderBase {
         WAYPOINT("FWSW");
         while (true) {
             if constexpr (IS_WORKER && VC_ID == 0) {
+                invalidate_l1_cache();
                 if (this->stop_flag != 0u) {
                     const uint64_t erisc_ack_noc_addr = get_noc_addr(
                         this->edm_noc_x,
@@ -526,6 +527,7 @@ struct WorkerToFabricEdmSenderBase {
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
         // Write our local stop flag address to ERISC's worker_stop_flag_address
         if constexpr (IS_WORKER && VC_ID == 0) {
+            this->stop_flag = 0u;
             const uint64_t stop_flag_slot_addr =
                 dest_noc_addr_coord_only |
                 static_cast<uint64_t>(
@@ -674,7 +676,7 @@ struct WorkerToFabricEdmSenderBase {
     uint32_t local_producer_cursor_addr;
 
     volatile tt_l1_ptr uint32_t* worker_teardown_addr;
-    volatile uint32_t stop_flag = 0u;
+    volatile uint32_t stop_flag;
     size_t edm_buffer_base_addr;
 
     BufferIndex buffer_slot_index;
