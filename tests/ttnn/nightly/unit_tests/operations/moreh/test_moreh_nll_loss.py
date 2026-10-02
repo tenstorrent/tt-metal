@@ -328,6 +328,63 @@ def test_moreh_nll_loss_backward_compute_kernel_options(
     )
 
 
+@pytest.mark.parametrize(
+    "invalid_operand, expected_message",
+    [
+        ("target", "target shape"),
+        ("output", "output shape"),
+        ("weight", "weight must contain"),
+    ],
+)
+def test_moreh_nll_loss_rejects_incompatible_tensor_relationships_before_dispatch(
+    invalid_operand, expected_message, device, expect_error
+):
+    if invalid_operand == "weight":
+        input_shape = [32, 64]
+        target_shape = [32]
+        weight_shape = [32]
+        output_shape = target_shape
+    else:
+        input_shape = [64, 32]
+        target_shape = [32] if invalid_operand == "target" else [64]
+        weight_shape = [32]
+        output_shape = [32] if invalid_operand == "output" else target_shape
+
+    tt_input = to_ttnn(torch.rand(input_shape), device=device)
+    tt_target = to_ttnn(torch.zeros(target_shape, dtype=torch.int32), dtype=ttnn.int32, device=device)
+    tt_weight = to_ttnn(torch.rand(weight_shape), device=device)
+    tt_output = to_ttnn(torch.empty(output_shape), device=device)
+
+    device.clear_program_cache()
+    cache_entries_before = device.num_program_cache_entries()
+    with expect_error(RuntimeError, expected_message):
+        ttnn.operations.moreh.nll_loss(
+            tt_input,
+            tt_target,
+            "none",
+            weight_tensor=tt_weight,
+            output_tensor=tt_output,
+        )
+    assert device.num_program_cache_entries() == cache_entries_before
+
+
+def test_moreh_nll_loss_backward_rejects_short_target_before_dispatch(device, expect_error):
+    tt_target = to_ttnn(torch.zeros([32], dtype=torch.int32), dtype=ttnn.int32, device=device)
+    tt_output_grad = to_ttnn(torch.ones([1]), device=device)
+    tt_input_grad = to_ttnn(torch.empty([64, 32]), device=device)
+
+    device.clear_program_cache()
+    cache_entries_before = device.num_program_cache_entries()
+    with expect_error(RuntimeError, "target shape"):
+        ttnn.operations.moreh.nll_loss_backward(
+            target_tensor=tt_target,
+            output_grad_tensor=tt_output_grad,
+            reduction_mean=False,
+            input_grad_tensor=tt_input_grad,
+        )
+    assert device.num_program_cache_entries() == cache_entries_before
+
+
 # ---------------------------------------------------------------------------
 # Regression tests for the step2 reader fixes (items 6 and 7 of #51278). The
 # helpers above never generate a target that is actually equal to ignore_index

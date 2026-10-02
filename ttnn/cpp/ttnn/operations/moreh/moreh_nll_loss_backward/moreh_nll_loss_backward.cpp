@@ -6,6 +6,7 @@
 #include "moreh_nll_loss_backward.hpp"
 
 #include "device/moreh_nll_loss_backward_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_validation.hpp"
 
 namespace ttnn {
 
@@ -19,6 +20,9 @@ Tensor moreh_nll_loss_backward(
     const int32_t ignore_index,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    operations::moreh::nll_loss_validation::validate_backward(
+        target_tensor, output_grad_tensor, weight_tensor, input_grad_tensor, divisor_tensor);
+
     return prim::moreh_nll_loss_backward(
         target_tensor,
         output_grad_tensor,

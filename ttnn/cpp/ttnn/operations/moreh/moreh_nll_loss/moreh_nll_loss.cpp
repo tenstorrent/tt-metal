@@ -6,6 +6,7 @@
 #include "moreh_nll_loss.hpp"
 
 #include "moreh_nll_loss_helper.hpp"
+#include "moreh_nll_loss_validation.hpp"
 #include "moreh_nll_loss_step1/device/moreh_nll_loss_step1_device_operation.hpp"
 #include "moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -24,8 +25,11 @@ Tensor moreh_nll_loss(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using namespace operations::moreh;
 
-    const auto compute_kernel_config_val =
-        init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
+    nll_loss_validation::validate_forward(
+        input_tensor, target_tensor, reduction, weight_tensor, divisor_tensor, output_tensor);
+
+    const auto compute_kernel_config_val = init_device_compute_kernel_config(
+        target_tensor.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
     if (reduction == MEAN) {
         TT_FATAL(divisor_tensor.has_value(), "Divisor tensor must not be empty");
 
@@ -34,7 +38,7 @@ Tensor moreh_nll_loss(
             weight_tensor,
             ignore_index,
             reduction,
-            output_tensor.has_value() ? output_tensor.value().dtype() : input_tensor.dtype(),
+            input_tensor.dtype(),
             input_tensor.padded_shape()[1],
             memory_config,
             compute_kernel_config_val);
