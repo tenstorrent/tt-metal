@@ -34,7 +34,7 @@ from PIL import Image
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames
-from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import TURBO_NUM_FORWARDS, MiniMaxH3TurboPipeline
 from ....utils.video import Audio, export_video_audio_yuv
 from .common import GALAXY_MESHES
 from .common_av import (
@@ -65,8 +65,8 @@ PROMPT = CALIBRATED_FOX_PROMPT
 # 4 and 8 are the adapter's only distilled working points; any other count is a valid schedule over
 # the wrong sigma grid -- it completes and records a number off the validated operating point, so reject it.
 NUM_FORWARDS = int(os.environ.get("MINIMAX_H3_TURBO_NFE", 4))
-if NUM_FORWARDS not in (4, 8):
-    raise ValueError(f"MINIMAX_H3_TURBO_NFE must be 4 or 8 (the Turbo adapter's distilled NFE), got {NUM_FORWARDS}")
+if NUM_FORWARDS not in TURBO_NUM_FORWARDS:
+    raise ValueError(f"MINIMAX_H3_TURBO_NFE must be one of {TURBO_NUM_FORWARDS}, got {NUM_FORWARDS}")
 NUM_INFERENCE_STEPS = NUM_FORWARDS + 1
 
 # One adapter file serves both; the keyframe is the only difference between the two tasks.
@@ -91,7 +91,7 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
     keyframe = Image.open(keyframe_path).convert("RGB") if TASK == "fl2va" else None
     num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(
+    pipeline = MiniMaxH3TurboPipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights,
         dit_fsdp=False,
@@ -129,7 +129,7 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
 
     # The adapter reached the device: `load_h3_adapter_into` raises on a target it cannot place, so
     # what is left to confirm is that it bound anything at all and bound the whole of it.
-    handle = pipeline._lora_handle
+    handle = pipeline.adapter
     assert handle is not None and len(handle) > 0, "the transformer was built without an adapter bound"
     logger.info(f"adapter {handle.name}: {len(handle)} bound targets")
 
