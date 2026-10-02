@@ -16,6 +16,7 @@ are never read here, so skipping them takes the full 498 GB repo down to ~144 GB
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
@@ -147,3 +148,60 @@ def resolve_weights_dir(
     if missing:
         raise WeightsNotFoundError(f"downloaded MiniMax-H3 snapshot at {snapshot} is missing {missing}")
     return snapshot
+
+
+# An adapter deployment reaches the pipeline through these when the caller passes nothing: the
+# serving runner builds the pipeline from the mesh, the weights directory and the output type alone.
+LORA_PATH_ENV = "MINIMAX_H3_LORA_PATH"
+LORA_STRENGTH_ENV = "MINIMAX_H3_LORA_STRENGTH"
+VIDEO_SHIFT_ENV = "MINIMAX_H3_VIDEO_SHIFT"
+AUDIO_SHIFT_ENV = "MINIMAX_H3_AUDIO_SHIFT"
+
+
+@dataclass(frozen=True)
+class AdapterSettings:
+    """What a generation needs to know about its adapter, resolved from arguments and environment.
+
+    `lora_strength` multiplies the adapter's own `alpha / rank`; the loader applies that published
+    scale itself, so 1.0 means "as trained". A deployment that used to pass the published scale
+    here (0.0625 for the lightx2v Turbo files) would now apply it twice, which produces a video
+    rather than an error -- hence the dedicated variable name instead of inheriting the old one.
+    """
+
+    lora_path: Path | None
+    lora_strength: float
+    video_shift: float
+    audio_shift: float
+
+
+def resolve_adapter_settings(
+    *,
+    lora_path: str | os.PathLike | None = None,
+    lora_strength: float | None = None,
+    video_shift: float | None = None,
+    audio_shift: float | None = None,
+    default_video_shift: float,
+    default_audio_shift: float,
+) -> AdapterSettings:
+    """Explicit arguments win; unset ones fall back to the environment, then to the checkpoint's defaults.
+
+    The shifts are resolved here with the adapter because they travel with it: a distilled adapter is
+    trained against one sigma grid, and a wrong shift is a valid schedule over the wrong grid. It
+    completes and costs quality, so nothing downstream can catch it.
+    """
+    env = os.environ
+    path = lora_path or env.get(LORA_PATH_ENV) or None
+    strength = float(env.get(LORA_STRENGTH_ENV, 1.0)) if lora_strength is None else float(lora_strength)
+    if strength <= 0:
+        raise ValueError(f"lora_strength must be positive, got {strength}")
+    video = float(env.get(VIDEO_SHIFT_ENV, default_video_shift)) if video_shift is None else float(video_shift)
+    audio = float(env.get(AUDIO_SHIFT_ENV, default_audio_shift)) if audio_shift is None else float(audio_shift)
+    for name, value in (("video_shift", video), ("audio_shift", audio)):
+        if value <= 0:
+            raise ValueError(f"{name} must be positive, got {value}")
+    return AdapterSettings(
+        lora_path=None if path is None else Path(path),
+        lora_strength=strength,
+        video_shift=video,
+        audio_shift=audio,
+    )
