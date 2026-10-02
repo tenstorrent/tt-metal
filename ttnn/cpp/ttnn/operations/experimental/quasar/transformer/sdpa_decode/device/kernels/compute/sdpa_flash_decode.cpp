@@ -107,7 +107,8 @@ void kernel_main() {
 #ifdef TILIZE_Q
     constexpr auto dfb_q_rm = dfb::q_rm;
 #endif
-    constexpr auto dfb_zero_in = dfb::zero_in;
+    // The zero tile is entry 1 of identity_scale_in (entry 0 is the reduce scaler); see matmul_blocks.
+    constexpr auto dfb_zero_in = dfb::identity_scale_in;
 #ifdef USE_CUR_POS_TENSOR
     // #44366: compute reads cur_pos from compute_cur_pos (writer reads writer_cur_pos)
     // — see reader_decode_all.cpp.

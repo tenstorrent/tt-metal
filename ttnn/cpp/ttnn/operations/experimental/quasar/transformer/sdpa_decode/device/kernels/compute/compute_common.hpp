@@ -1315,11 +1315,13 @@ ALWI void matmul_blocks(
             }
             if (add_mask) {
                 dfb_mask.wait_front(out_subblock_num_tiles);
-                dfb_zero.wait_front(1);
+                // zero_dfb is identity_scale_in: the zero tile sits behind the reduce scaler (entry 1).
+                constexpr uint32_t zero_tile_idx = 1;
+                dfb_zero.wait_front(zero_tile_idx + 1);
                 reconfig_data_format(zero_dfb, mask_dfb);
                 add_init(zero_dfb, mask_dfb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                    add_tiles(zero_dfb, mask_dfb, 0, i, i);
+                    add_tiles(zero_dfb, mask_dfb, zero_tile_idx, i, i);
                 }
                 reconfig_data_format(in1_dfb, in0_dfb);
                 matmul_block_init(in0_dfb, in1_dfb, transpose, subblock_w, subblock_h, in0_block_w);

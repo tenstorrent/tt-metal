@@ -564,7 +564,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const DFBSpecName DFB_PAGE_TABLE{"page_table"};
     const DFBSpecName DFB_Q_RM{"q_rm"};
     const DFBSpecName DFB_OUT_WORKER{"out_worker"};
-    const DFBSpecName DFB_ZERO_IN{"zero_in"};
     const DFBSpecName DFB_SLIDING_MASK{"sliding_window_mask_in"};
     const DFBSpecName DFB_BLOCK_PAD_MASK{"block_pad_mask"};
     const DFBSpecName DFB_COMPUTE_CUR_POS{"compute_cur_pos"};
@@ -687,8 +686,11 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, DFB_ATTN_SINK, "attention_sink", DFBEndpointType::CONSUMER);
     }
 
-    // identity_scale — writer produces, compute consumes.
-    add_dfb(DFB_IDENTITY_SCALE, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
+    // identity_scale — writer produces, compute consumes. Entry 0 is the reduce scaler, entry 1 the zero
+    // tile the fused QK mask add reads (formerly a separate zero_in DFB). Sharing one DFB saves a
+    // DM-visible tile counter: Quasar has 16 per Neo, and the sliding-window GPT-OSS config needs 17
+    // DM<->Tensix DFBs otherwise.
+    add_dfb(DFB_IDENTITY_SCALE, scalar_tile_size, scale_tiles + 1, scalar_df, &scalar_tile);
     bind(writer_dfb, DFB_IDENTITY_SCALE, "identity_scale_in", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_IDENTITY_SCALE, "identity_scale_in", DFBEndpointType::CONSUMER);
 
@@ -745,11 +747,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                 ScratchpadBinding{.scratchpad_spec_name = PAGE_TABLE_SCRATCH, .accessor_name = "page_table"});
         }
     }
-
-    // zero_in — writer produces, compute consumes.
-    add_dfb(DFB_ZERO_IN, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
-    bind(writer_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::PRODUCER);
-    bind(compute_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::CONSUMER);
 
     // sliding_window_mask — writer produces, compute consumes (conditional).
     if (sliding_window_size > 0) {
@@ -1065,7 +1062,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         maybe_unpack(DFB_V_IN, v_df, true);
         maybe_unpack(DFB_MASK_IN, mask_df, true);
         maybe_unpack(DFB_IDENTITY_SCALE, scalar_df, true);
-        maybe_unpack(DFB_ZERO_IN, scalar_df, true);
         maybe_unpack(DFB_Q_RM, q_df, tilize_q);
         maybe_unpack(DFB_SLIDING_MASK, mask_df, sliding_window_size > 0);
         maybe_unpack(DFB_BLOCK_PAD_MASK, mask_df, has_block_padding);
