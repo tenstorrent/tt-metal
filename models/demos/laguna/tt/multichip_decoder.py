@@ -54,6 +54,7 @@ from .optimized_decoder import (
     _dram_weight_memcfg,
     _hf_rope_tables,
     _sparse_pc,
+    _width_sharded_l1,
     weight_cache_key,
 )
 from .prefill_page_table import single_shot_fill_page_table
@@ -265,6 +266,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._route_dense_mask = _parse_binary_env("TT_LAGUNA_ROUTE_DENSE_MASK", True)  # mask router, no topk#2
         self._route_rank = _parse_binary_env("TT_LAGUNA_ROUTE_RANK", True)  # 1-token router: rank<K, no topk
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
+        self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
         self._token_dispatch_fallback_reason = "feature flag is disabled"
         # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
         # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).
@@ -1423,7 +1425,11 @@ class MultichipDecoder(OptimizedDecoder):
         if self.use_dram_sharded and not self._ag_reduce:  # the decode all_gather reads the sharded output
             o = ttnn.sharded_to_interleaved(o, ttnn.L1_MEMORY_CONFIG)
         o = self._reduce(o)  # row-parallel partial -> replicated
-        h = ttnn.add(residual, o)
-        ln2 = self._rms(h, self.w["post_ln"])
+        # the post-attention residual add writes straight into the width-sharded layout the post-attention
+        # norm reads, so its interleaved->sharded is a no-op
+        res_cores = _decode_shard_cores(cfg.hidden, cfg.hidden) if self._sharded_residual and B <= TILE else None
+        res_mem = _width_sharded_l1(TILE, cfg.hidden, res_cores) if res_cores else None
+        h = ttnn.add(residual, o, memory_config=res_mem)
+        ln2 = self._rms(h, self.w["post_ln"], cores=res_cores)
         mlp_out = self._mlp(ln2, B, sharded=True)
-        return ttnn.add(h, mlp_out)
+        return ttnn.add(h, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG if res_mem else None)

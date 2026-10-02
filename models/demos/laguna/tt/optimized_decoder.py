@@ -787,7 +787,7 @@ class OptimizedDecoder(LightweightModule):
         return ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
 
     # ---- shared ops -------------------------------------------------------- #
-    def _rms(self, x, weight, out_cores=None):
+    def _rms(self, x, weight, out_cores=None, cores=None):
         # Decode-sized rows: the interleaved norm runs on ONE core (~65 us for [32, 3072]); width-shard
         # the row across cores (same 32-core split as the QKV matmul input) and normalize in L1.
         rows = x.shape[-2]
@@ -795,8 +795,9 @@ class OptimizedDecoder(LightweightModule):
             m = ((rows + TILE - 1) // TILE) * TILE
             h = x.shape[-1]
             # out_cores: shard on the NEXT DRAM-sharded matmul's input grid and return the sharded result
-            # (no sharded->interleaved here + no interleaved->sharded in _dram_mm)
-            num_cores = out_cores or _decode_shard_cores(h, h)
+            # (no sharded->interleaved here + no interleaved->sharded in _dram_mm). cores: the norm grid
+            # (e.g. the one the residual already lives on) when the result is returned interleaved.
+            num_cores = out_cores or cores or _decode_shard_cores(h, h)
             grid = _core_grid(num_cores)
             block_w = h // TILE // num_cores
             x_sh = ttnn.to_memory_config(x, _width_sharded_l1(m, h, num_cores))
