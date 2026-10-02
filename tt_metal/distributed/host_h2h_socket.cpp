@@ -67,7 +67,7 @@ public:
     // Cores holding at least one entry. A sweep over all of them costs 64 visits per pass
     // whether two cores have work or none do, and a pass runs several times per frame.
     template <typename F>
-    void for_each_live(F&& f) const {
+    void for_each_live(const F& f) const {
         for (uint32_t w = 0; w < 2; ++w) {
             // Snapshotted, so f() popping a core's last entry cannot disturb this walk.
             uint64_t m = live_[w];
@@ -151,7 +151,7 @@ public:
     // One put per array over lo..hi; unchanged cores inside the span are re-put, which is
     // idempotent. Source is the live array: a racing increment can only raise a word.
     template <typename Put>
-    std::string publish(uint32_t host, uint32_t ident, Put&& put) {
+    std::string publish(uint32_t host, uint32_t ident, const Put& put) {
         if (const std::string e = emit(credit_dirty_[host], credit_, host, ident, credit_offset, put, credit_puts_);
             !e.empty()) {
             return e;
@@ -187,13 +187,19 @@ private:
 
     template <typename Off, typename Put>
     std::string emit(
-        Span& d, std::vector<uint64_t>& src, uint32_t host, uint32_t ident, Off&& off, Put&& put, uint64_t& count) {
+        Span& d,
+        std::vector<uint64_t>& src,
+        uint32_t host,
+        uint32_t ident,
+        const Off& off,
+        const Put& put,
+        uint64_t& count) {
         if (d.empty()) {
             return {};
         }
         // Every core, not d.lo..d.hi: the span is cleared when the put is ISSUED, so a put
         // landing after a newer one would leave a stale count nothing ever re-sends.
-        const std::string e = put(&src[idx(host, 0)], static_cast<uint64_t>(cores_) * sizeof(uint64_t), off(0, ident));
+        std::string e = put(&src[idx(host, 0)], static_cast<uint64_t>(cores_) * sizeof(uint64_t), off(0, ident));
         if (!e.empty()) {
             return e;
         }
