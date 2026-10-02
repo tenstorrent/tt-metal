@@ -244,13 +244,35 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             }
             {
-                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels).
+                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels). An ethernet
+                // kernel is data movement on its own core type (EthernetKernel is not a DataMovementKernel).
                 auto* dm_kernel = dynamic_cast<DataMovementKernel*>(&k);
-                kd.is_data_movement = (dm_kernel != nullptr);
+                auto* eth_kernel = dynamic_cast<EthernetKernel*>(&k);
+                kd.is_data_movement = (dm_kernel != nullptr || eth_kernel != nullptr);
                 uint32_t proc_type_idx = 0;
-                if (!kd.is_compute && dm_kernel != nullptr &&
+                if (dm_kernel != nullptr &&
                     std::get<DataMovementConfig>(dm_kernel->config()).processor == DataMovementProcessor::RISCV_1) {
                     proc_type_idx = 1;
+                }
+                if (eth_kernel != nullptr) {
+                    const auto processor = std::get<EthernetConfig>(eth_kernel->config()).processor;
+                    kd.dm_processor = static_cast<uint32_t>(processor);
+                    proc_type_idx = static_cast<uint32_t>(processor);
+                    // Silicon's JIT takes an ethernet build's per-RISC macros (COMPILE_FOR_ERISC, ...) from HAL.
+                    const auto& rtoptions = MetalContext::instance().rtoptions();
+                    for (const auto& define : hw.get_jit_build_query().defines(
+                             {false,
+                              k.get_kernel_programmable_core_type(),
+                              HalProcessorClassType::DM,
+                              proc_type_idx,
+                              rtoptions})) {
+                        const auto eq = define.find('=');
+                        const std::string name = define.substr(0, eq);
+                        if (name == "PROCESSOR_INDEX" || name == "PROGRAMMABLE_CORE_TYPE") {
+                            continue;  // collect_kernels sets these for every kernel
+                        }
+                        kd.defines[name] = eq == std::string::npos ? "1" : define.substr(eq + 1);
+                    }
                 }
                 kd.compile_processor_index = hw.get_processor_index(
                     k.get_kernel_programmable_core_type(), k.get_kernel_processor_class(), proc_type_idx);
@@ -311,6 +333,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 kd.bindings.scratch.push_back(
                     ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk) : ""});
             });
+            k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
+                kd.bindings.pipe.push_back(PipeBinding{name, prefetcher_pipe_id});
+            });
             for (const auto& r : k.core_range_set().ranges()) {
                 kd.core_ranges.push_back(
                     {static_cast<uint32_t>(r.start_coord.x),
@@ -365,6 +390,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                             auto rta = kc.rta_offset()[processor_index];
                             ck.rta_offset = rta.rta_offset();
                             ck.crta_offset = rta.crta_offset();
+                            ck.remote_cb_offset = static_cast<uint16_t>(kc.remote_cb_offset());
+                            ck.min_remote_cb_start_index = static_cast<uint32_t>(kc.min_remote_cb_start_index());
                         }
                         const tt::tt_metal::CoreCoord lc(x, y);
                         if (k.cores_with_runtime_args().count(lc) != 0) {

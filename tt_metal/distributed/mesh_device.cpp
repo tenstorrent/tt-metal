@@ -76,6 +76,9 @@
 #include "mesh_device_view_impl.hpp"
 #include "dummy_mesh_command_queue.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "emule_mesh_command_queue.hpp"
+#endif
 
 namespace tt::tt_metal {
 class SystemMemoryManager;
@@ -1693,6 +1696,15 @@ bool MeshDeviceImpl::initialize_impl(
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (metal_env().get_rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+#ifdef TT_METAL_USE_EMULE
+            // Emulated devices have no dispatch firmware or sysmem command rings; tt-emule's queue gives the
+            // fast-dispatch semantics instead.
+            if (metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+                mesh_command_queues_.push_back(emule::create_mesh_command_queue(
+                    pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
+                continue;
+            }
+#endif
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 pimpl_wrapper,
                 cq_id,
