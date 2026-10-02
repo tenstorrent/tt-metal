@@ -30,6 +30,7 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
 
+    TT_FATAL(a.device() == weights.device(), "Embedding input and weights must reside on the same MeshDevice");
     TT_FATAL(
         weights.layout() == Layout::ROW_MAJOR, "Weights tensor layout must be ROW_MAJOR but got {}", weights.layout());
     TT_FATAL(a.dtype() == DataType::UINT32 or a.dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
