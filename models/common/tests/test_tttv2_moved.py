@@ -22,7 +22,7 @@ import pytest
     ],
 )
 def test_tttv2_import_paths_raise_with_a_pointer(module):
-    with pytest.raises(ImportError) as excinfo:
+    with pytest.raises(ImportError) as excinfo:  # allow-pytest.raises: host-only, runs under --noconftest
         importlib.import_module(module)
     message = str(excinfo.value)
     assert "https://github.com/tenstorrent/tt-transformers" in message
