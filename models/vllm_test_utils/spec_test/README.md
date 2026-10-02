@@ -116,10 +116,10 @@ against the returned logits. Temperature, top-k, top-p and the presence,
 frequency and repetition penalties are applied; logprobs, structured output and
 token filters remain refused, and vLLM refuses `min_p` and `logit_bias` with
 speculation before the plugin sees the request. The model-owned drafter
-proposes the rule's argmax deterministically and declares
-`spec_deterministic_drafts`, which is what lets the plugin treat each proposal
-as a point mass and offer sampled requests the model's drafts. A draft bent past `TT_SPEC_ACCEPT_DEPTH`
-has probability 0, and is rejected, unless it coincides with a shared token.
+proposes the rule's argmax. The plugin treats every proposal as a point mass,
+which is lossless for any drafter, so sampled requests get the model's drafts.
+A draft bent past `TT_SPEC_ACCEPT_DEPTH` has probability 0, and is rejected,
+unless it coincides with a shared token.
 
 The fixed target's device-sampling answer is the argmax, which is right for a
 greedy request only. The model declares `max_device_top_k: 0` and

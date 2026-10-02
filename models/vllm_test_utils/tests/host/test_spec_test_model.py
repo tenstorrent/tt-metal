@@ -1100,8 +1100,6 @@ def test_the_model_routes_sampled_steps_to_the_host_sampler():
 
     assert capabilities["max_device_top_k"] == 0
     assert capabilities["supports_device_penalties"] is False
-    # The drafter is deterministic, which lets sampled requests get its drafts.
-    assert capabilities["spec_deterministic_drafts"] is True
 
 
 def test_a_short_row_s_unwritten_verify_column_is_zero(monkeypatch):

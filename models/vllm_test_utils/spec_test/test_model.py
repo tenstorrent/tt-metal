@@ -190,10 +190,6 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # greedy-only step can still sample on the device.
         "max_device_top_k": 0,
         "supports_device_penalties": False,
-        # The drafter walks the rule's argmax, a deterministic function of the
-        # committed block, so a logits verify may treat each draft as a point
-        # mass and the plugin offers sampled requests this model's drafts.
-        "spec_deterministic_drafts": True,
         # Left at 1 by omission. Any value above 1 selects the block-output
         # rail, which owns the committed width per step and cannot be combined
         # with speculation.
