@@ -2068,8 +2068,11 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
                  - Layouts
                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32
                  - TILE, ROW_MAJOR
+               * - INT32, UINT32, UINT16 (non-negative integer scalar exponent)
+                 - TILE
 
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+            Integer results wrap modulo 2^32 (2^16 for UINT16) on overflow.
 
             {2}
         )doc",
