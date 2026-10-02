@@ -5,6 +5,7 @@
 """Planner-driven device tests for the reduce compute and dataflow helpers."""
 
 from dataclasses import dataclass
+import math
 
 import pytest
 import torch
@@ -526,8 +527,7 @@ def _make_plan(
         batches=case.batches,
         padded_h=case.rows * TILE,
         padded_w=case.cols * TILE,
-        resident_input_tiles=case.rows * case.cols * case.batches if case.input_mode == "alias" else None,
-        resident_output_tiles=case.output_tiles if case.dim != "REDUCE_SCALAR" else None,
+        input_cb_tiles=case.rows * case.cols * case.batches,
         allow_empty_auxiliary=case.allow_empty_auxiliary,
     )
     reductions = [
@@ -638,8 +638,7 @@ def _repeated_input_cb_plan(input_tensor, output):
                     input_tensor.shape[-1],
                     input_tensor.dtype,
                     output.dtype,
-                    resident_input_tiles=input_tensor.buffer_num_pages(),
-                    resident_output_tiles=output.buffer_num_pages(),
+                    input_cb_tiles=input_tensor.buffer_num_pages(),
                 ),
                 reduce_math=planner.ReduceMath.SUM,
                 reduce_dim=planner.ReduceDimension.ROW,
@@ -976,8 +975,7 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
             ttnn.float32,
             batches=batches,
             input_row_stride_tiles=row_stride,
-            resident_input_tiles=allocation_rows * row_stride,
-            resident_output_tiles=output_capacity,
+            input_cb_tiles=allocation_rows * row_stride,
         )
         # Values differ between cores and batches; all unvisited tiles and edge
         # padding retain a large sentinel which must never enter the reduction.
@@ -1147,8 +1145,7 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
             output_dtype,
             batches=max_batches,
             input_row_stride_tiles=row_stride,
-            resident_input_tiles=allocation_rows * row_stride,
-            resident_output_tiles=output_capacity,
+            input_cb_tiles=allocation_rows * row_stride,
             tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(*tail_shape)),
         )
         sequence = _PLANNER.make_reduce_sequence_plan(
@@ -1301,59 +1298,65 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
         algorithm = "REDUCE_TILE"
     input_dtype = ttnn.float32 if fp32_input else ttnn.bfloat16
     for height, width, batches in ((135, 135, 2), (160, 160, 2), (192, 192, 2), (64, 64, 1), (1, 17, 2)):
-        block = _PLANNER.ReduceBlockSpec(
-            256,
-            256,
-            input_dtype,
-            ttnn.float32,
-            batches=2,
-            resident_output_tiles=16,
-            tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(height, width, batches)),
-        )
         scalar = None if pool == "AVG" else 1.0
-        sequence = _PLANNER.make_reduce_sequence_plan(
-            reductions=[
-                (
-                    CB_INPUT,
-                    _PLANNER.ReduceCallConfig(
-                        block,
-                        _REDUCE_MATH[pool],
-                        _REDUCE_DIM[dim],
-                        scalar,
-                        _PLANNER.ReduceFp32Mode.FAST,
-                        input_policy=policy,
-                    ),
-                )
-            ],
-            cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
-            hardware=_PLANNER.ReduceHardwareConfig(
-                arch=device.arch(),
-                fp32_dest_acc_en=True,
-                dst_full_sync_en=False,
-            ),
-            algorithm=None if algorithm == "AUTO" else _ALGORITHM[algorithm],
-        )
+        tail_shape = (height, width, batches)
+
+        def plan_sequence(capacity):
+            block = _PLANNER.ReduceBlockSpec(
+                256,
+                256,
+                input_dtype,
+                ttnn.float32,
+                input_cb_tiles=capacity,
+                batches=2,
+                tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(*tail_shape)),
+            )
+            return _PLANNER.make_reduce_sequence_plan(
+                reductions=[
+                    (
+                        CB_INPUT,
+                        _PLANNER.ReduceCallConfig(
+                            block,
+                            _REDUCE_MATH[pool],
+                            _REDUCE_DIM[dim],
+                            scalar,
+                            _PLANNER.ReduceFp32Mode.FAST,
+                            input_policy=policy,
+                        ),
+                    )
+                ],
+                cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
+                hardware=_PLANNER.ReduceHardwareConfig(
+                    arch=device.arch(),
+                    fp32_dest_acc_en=True,
+                    dst_full_sync_en=False,
+                ),
+                algorithm=None if algorithm == "AUTO" else _ALGORITHM[algorithm],
+            )
+
+        if input_policy == "bulk":
+            # The shared full/tail packet is lcm(axes) times an output group that divides the 8 full columns.
+            tail_axis = (tail_shape[1] if dim == "REDUCE_ROW" else tail_shape[0]) + TILE - 1
+            axes = math.lcm(256 // TILE, tail_axis // TILE)
+            group = plan_sequence(axes * 256 // TILE).calls[0].plan.chunk.output_tiles
+            capacity = axes * group * capacity_multiplier
+        else:
+            capacity = (1 if algorithm == "REDUCE_TILE" else 2) * capacity_multiplier
+        sequence = plan_sequence(capacity)
         plan = sequence.calls[0].plan
         expected_policy = policy
         assert plan.input_policy == expected_policy
-        input_pages = next(cb.page_count for cb in plan.cb_requirements if cb.role == _PLANNER.ReduceCbRole.INPUT)
-        if input_policy != "bulk":
-            assert input_pages == (2 if plan.algorithm == _ALGORITHM["ACCUMULATE_VIA_ADD"] else 1)
-        else:
+        if input_policy == "bulk":
             for variant_height, variant_width in ((256, 256), (height, width)):
                 axis = ((variant_width if dim == "REDUCE_ROW" else variant_height) + 31) // TILE
-                assert input_pages % (axis * plan.chunk.output_tiles) == 0
+                assert capacity % (axis * plan.chunk.output_tiles) == 0
         compute_args, auxiliary_args = _serialize_plan(sequence)
         # The test reader uses the same call metadata to count the planned packets.
         auxiliary_args += sequence.calls[0].compile_time_args
         for use_tail in (False, True):
             variant = plan.tail_plan if use_tail else plan
             group = variant.chunk.output_tiles
-            height, width, batches = (
-                (block.tail.shape.height, block.tail.shape.width, block.tail.shape.batches)
-                if use_tail
-                else (256, 256, 2)
-            )
+            height, width, batches = tail_shape if use_tail else (256, 256, 2)
             ht, wt = (height + 31) // TILE, (width + 31) // TILE
             values = (torch.arange(batches * height * width).reshape(batches, height, width) % 7 - 3).to(torch.bfloat16)
             padded = torch.full((batches, ht * TILE, wt * TILE), 128, dtype=torch.bfloat16)
@@ -1419,7 +1422,7 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
                     cbs=[
                         ttnn.cb_descriptor_from_sharded_tensor(3, source),
                         ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
-                        _scratch_cb(CB_INPUT, input_dtype, input_pages * capacity_multiplier),
+                        _scratch_cb(CB_INPUT, input_dtype, capacity),
                         _scratch_cb(CB_SCALER, input_dtype, len(sequence.auxiliary.tiles)),
                     ],
                 ),
@@ -1476,8 +1479,7 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail, 
             width,
             ttnn.bfloat16,
             ttnn.float32,
-            resident_input_tiles=input_tiles,
-            resident_output_tiles=output_tiles,
+            input_cb_tiles=input_tiles,
             tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(*tail_shape)) if tail_shape else None,
         )
         config = _PLANNER.ReduceCallConfig(
@@ -1557,8 +1559,7 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset,
         full_width,
         ttnn.bfloat16,
         ttnn.float32,
-        resident_input_tiles=14,
-        resident_output_tiles=1,
+        input_cb_tiles=14,
         allow_empty_auxiliary=True,
         tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(32, 17)),
     )
@@ -1649,15 +1650,14 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset,
 
 
 @pytest.mark.parametrize("algorithm", ("REDUCE_TILE", "ACCUMULATE_VIA_ADD"))
-def test_reduce_resident_hw_row_tail(device, algorithm):
-    """A resident HW tail skips whole padded rows and uses its preplanned AVG divisor."""
+def test_reduce_retained_hw_row_tail(device, algorithm):
+    """A retained HW tail skips whole padded rows and uses its preplanned AVG divisor."""
     block = _PLANNER.ReduceBlockSpec(
         160,
         64,
         ttnn.bfloat16,
         ttnn.float32,
-        resident_input_tiles=10,
-        resident_output_tiles=1,
+        input_cb_tiles=10,
         tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(64, 64)),
     )
     sequence = _PLANNER.make_reduce_sequence_plan(

@@ -75,8 +75,6 @@ enum class ReduceCbRole : std::uint8_t {
     Accumulator,
 };
 
-enum class ReduceCbAlias : std::uint8_t { None, InputTensor, OutputTensor };
-
 struct ReduceHardwareConfig {
     tt::ARCH arch = tt::ARCH::Invalid;
     bool fp32_dest_acc_en = false;
@@ -98,9 +96,6 @@ struct ReduceCbRequirement {
     std::uint32_t page_size;
     std::uint32_t page_count;
     std::size_t total_size_bytes;
-    ReduceCbAlias alias = ReduceCbAlias::None;
-
-    bool owns_l1() const { return alias == ReduceCbAlias::None; }
 };
 
 // One concrete tile for the dataflow-side auxiliary recipe. The planner has
@@ -164,8 +159,6 @@ struct ReducePlan {
     std::uint32_t partial_reduce_axis_elements = 0;
 
     std::vector<ReduceCbRequirement> cb_requirements;
-    // Descriptive allocation total only; no memory budget is accepted or checked.
-    std::size_t total_owned_l1_bytes = 0;
 
     const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
     // Use the same compiled plan on full and tail cores. Initialize the runtime
@@ -189,19 +182,18 @@ struct ReduceBlockSpec {
     tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT16;
     tt::tt_metal::Tile input_tile;
     tt::tt_metal::Tile output_tile;
-    // Tiled resident input only. Zero means contiguous at padded_w.
+    // Retained input policies only. Zero means contiguous at padded_w.
     std::uint32_t input_row_stride_tiles = 0;
-    // Present: caller supplies an existing local allocation of this many tiles.
-    // Synchronization and consumption follow the explicitly requested input policy.
-    // Absent: the planner reports the required buffer capacity.
-    std::optional<std::uint32_t> resident_input_tiles;
-    std::optional<std::uint32_t> resident_output_tiles;
+    // Capacity of the input CB in tiles. Retained policies need the whole block,
+    // BulkWaitBulkPop a whole number of planned bulk packets, and streaming
+    // AccumulateViaAdd at least two tiles; a one-tile streaming CB plans ReduceTile.
+    std::uint32_t input_cb_tiles = 0;
     // Absent: reduce the whole logical block. Present: also plan this known
     // smaller shape, including its normalization and auxiliary tiles. Runtime
     // arguments select full or tail work on each core of the same kernel grid.
     // In an accumulated sequence, the configured tails form one alternative
     // scenario and must be enabled together; calls without tails retain their
-    // geometry but use that scenario's combined AVG divisor. Resident input
+    // geometry but use that scenario's combined AVG divisor. Retained input
     // retains the full block's pitches. FIFO producers use the common planned
     // packet size and pad unused pages at the final axis/output group.
     std::optional<ReduceTailConfig> tail;

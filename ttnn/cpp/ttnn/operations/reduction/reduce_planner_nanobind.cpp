@@ -88,10 +88,6 @@ void bind_reduce_planner(nb::module_& mod) {
         .value("OUTPUT", host::ReduceCbRole::Output)
         .value("AUXILIARY", host::ReduceCbRole::Auxiliary)
         .value("ACCUMULATOR", host::ReduceCbRole::Accumulator);
-    nb::enum_<host::ReduceCbAlias>(planner, "ReduceCbAlias")
-        .value("NONE", host::ReduceCbAlias::None)
-        .value("INPUT_TENSOR", host::ReduceCbAlias::InputTensor)
-        .value("OUTPUT_TENSOR", host::ReduceCbAlias::OutputTensor);
     nb::enum_<ttnn::kernel_lib::ReduceAuxiliaryTileType>(planner, "ReduceAuxiliaryTileType")
         .value("FIRST_ROW", ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow)
         .value("FIRST_COLUMN", ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstColumn)
@@ -133,9 +129,7 @@ void bind_reduce_planner(nb::module_& mod) {
             "Raw tt::DataFormat value; DataFormat is not otherwise exposed to Python.")
         .def_ro("page_size", &host::ReduceCbRequirement::page_size)
         .def_ro("page_count", &host::ReduceCbRequirement::page_count)
-        .def_ro("total_size_bytes", &host::ReduceCbRequirement::total_size_bytes)
-        .def_ro("alias", &host::ReduceCbRequirement::alias)
-        .def_prop_ro("owns_l1", &host::ReduceCbRequirement::owns_l1);
+        .def_ro("total_size_bytes", &host::ReduceCbRequirement::total_size_bytes);
 
     nb::class_<host::ReduceAuxiliaryTileSpec>(planner, "ReduceAuxiliaryTileSpec")
         .def(
@@ -217,7 +211,6 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("auxiliary_tiles", &host::ReducePlan::auxiliary_tiles)
         .def_ro("partial_reduce_axis_elements", &host::ReducePlan::partial_reduce_axis_elements)
         .def_ro("cb_requirements", &host::ReducePlan::cb_requirements)
-        .def_ro("total_owned_l1_bytes", &host::ReducePlan::total_owned_l1_bytes)
         .def(
             "compile_time_args",
             [](const host::ReducePlan& self,
@@ -253,14 +246,13 @@ void bind_reduce_planner(nb::module_& mod) {
                uint32_t logical_w,
                tt::tt_metal::DataType input_dtype,
                tt::tt_metal::DataType output_dtype,
+               uint32_t input_cb_tiles,
                uint32_t batches,
                std::optional<uint32_t> padded_h,
                std::optional<uint32_t> padded_w,
                tt::tt_metal::Tile input_tile,
                tt::tt_metal::Tile output_tile,
                uint32_t input_row_stride_tiles,
-               std::optional<uint32_t> resident_input_tiles,
-               std::optional<uint32_t> resident_output_tiles,
                std::optional<host::ReduceTailConfig> tail,
                bool allow_empty_auxiliary) {
                 auto block =
@@ -269,8 +261,7 @@ void bind_reduce_planner(nb::module_& mod) {
                 block.padded_w = padded_w.value_or(block.padded_w);
                 block.output_tile = output_tile;
                 block.input_row_stride_tiles = input_row_stride_tiles;
-                block.resident_input_tiles = resident_input_tiles;
-                block.resident_output_tiles = resident_output_tiles;
+                block.input_cb_tiles = input_cb_tiles;
                 block.tail = tail;
                 block.allow_empty_auxiliary = allow_empty_auxiliary;
                 new (self) host::ReduceBlockSpec(std::move(block));
@@ -280,14 +271,13 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("input_dtype"),
             nb::arg("output_dtype"),
             nb::kw_only(),
+            nb::arg("input_cb_tiles"),
             nb::arg("batches") = 1,
             nb::arg("padded_h") = nb::none(),
             nb::arg("padded_w") = nb::none(),
             nb::arg("input_tile") = tt::tt_metal::Tile{},
             nb::arg("output_tile") = tt::tt_metal::Tile{},
             nb::arg("input_row_stride_tiles") = 0,
-            nb::arg("resident_input_tiles") = nb::none(),
-            nb::arg("resident_output_tiles") = nb::none(),
             nb::arg("tail") = nb::none(),
             nb::arg("allow_empty_auxiliary") = false,
             "Local work for one reduction call on one core. Padding defaults to whole tiles; no tensor placement is "
@@ -302,8 +292,7 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_rw("input_tile", &host::ReduceBlockSpec::input_tile)
         .def_rw("output_tile", &host::ReduceBlockSpec::output_tile)
         .def_rw("input_row_stride_tiles", &host::ReduceBlockSpec::input_row_stride_tiles)
-        .def_rw("resident_input_tiles", &host::ReduceBlockSpec::resident_input_tiles)
-        .def_rw("resident_output_tiles", &host::ReduceBlockSpec::resident_output_tiles)
+        .def_rw("input_cb_tiles", &host::ReduceBlockSpec::input_cb_tiles)
         .def_rw("tail", &host::ReduceBlockSpec::tail)
         .def_rw("allow_empty_auxiliary", &host::ReduceBlockSpec::allow_empty_auxiliary);
 

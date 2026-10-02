@@ -23,7 +23,7 @@ def test_reduce_auxiliary_host_rounding(dtype, scenario):
             (
                 0,
                 planner.ReduceCallConfig(
-                    block=planner.ReduceBlockSpec(32, width, dtype, dtype),
+                    block=planner.ReduceBlockSpec(32, width, dtype, dtype, input_cb_tiles=(width + 31) // 32),
                     reduce_math=planner.ReduceMath.SUM if scalar is not None else planner.ReduceMath.AVG,
                     reduce_dim=planner.ReduceDimension.ROW,
                     scalar=scalar,
