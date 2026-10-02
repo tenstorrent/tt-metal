@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_distributed_sdpa_device_operation.hpp"
+#include "sdpa_phase_fidelity.hpp"
 #include "sdpa_interleaved_cb_ids.hpp"
 #include "sdpa_subblock_utils.hpp"
 
@@ -370,6 +371,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0u,         // arg 26: k_partial_col - unused on ring's non-streaming path
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 27: unified zigzag remap
         0,                                            // arg 28: use_windowed_narrowing — ring is never windowed
+        // arg 29: per-phase matmul fidelity (compute_streaming.hpp); the ring op rejects the per-phase knobs and runs
+        // the non-streaming path, so this carries only the compute kernel config's fidelity. The CB block follows.
+        ttnn::operations::transformer::sdpa::matmul_fidelity_ct_arg(std::nullopt, std::nullopt, math_fidelity),
     };
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
