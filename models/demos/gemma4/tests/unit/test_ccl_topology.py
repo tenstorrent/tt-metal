@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only tests for Gemma4 CCL topology / async / L1 env knobs."""
+"""Host-only tests for Gemma4 CCL topology / async / packet / L1 env knobs."""
 
 import math
 from pathlib import Path
@@ -14,8 +14,14 @@ from models.demos.gemma4.tt.attention.operations import (
     PREFILL_SDPA_MAX_SEQ,
     prefill_short_lived_memcfg,
 )
-from models.demos.gemma4.tt.ccl import ccl_async_enabled, default_ccl_topology
-from models.demos.gemma4.tt.dram_sharded import can_dram_shard
+from models.demos.gemma4.tt.ccl import (
+    LINEAR_PIN_MIN_SEQ_LEN,
+    ccl_async_enabled,
+    default_ccl_packet_bytes,
+    default_ccl_topology,
+    effective_pinned_ccl_topology,
+)
+from models.demos.gemma4.tt.dram_sharded import can_dram_shard, swept_decode_enabled
 
 
 @pytest.mark.parametrize(
@@ -31,12 +37,21 @@ def test_ccl_topology_env_override(monkeypatch, env, expected):
     assert default_ccl_topology() == expected
 
 
+class _FakeGrid:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+
 class _FakeMesh:
-    def __init__(self, n):
+    def __init__(self, n, grid=(8, 8)):
         self._n = n
+        self._grid = grid
 
     def get_num_devices(self):
         return self._n
+
+    def compute_with_storage_grid_size(self):
+        return _FakeGrid(*self._grid)
 
 
 def test_ccl_topology_linear_on_4_device_mesh(monkeypatch):
@@ -54,10 +69,94 @@ def test_ccl_topology_ring_on_bh_8_device_mesh(monkeypatch):
 
 
 def test_ccl_topology_linear_on_wh_8_device_mesh(monkeypatch):
-    """WH T3K 1x8: keep Linear — Ring regresses 26B-A4B full-model PCC < 0.76."""
+    """WH T3K 1x8 MoE (26B-A4B): keep Linear — Ring regresses full-model PCC < 0.76.
+
+    ``is_moe`` defaults True so a caller that forgets the flag cannot put 26B
+    on Ring. Dense 12B/31B pass ``is_moe=False`` (see create_tt_model).
+    """
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
     monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
     assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Linear
+    assert default_ccl_topology(_FakeMesh(8), is_moe=True) == ttnn.Topology.Linear
+
+
+def test_ccl_topology_ring_on_wh_t3k_dense(monkeypatch):
+    """WH T3K 1x8 dense (12B/31B): Ring. Every other WH mesh stays Linear."""
+    monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
+    assert default_ccl_topology(_FakeMesh(8), is_moe=False) == ttnn.Topology.Ring
+    # N150 / N300 dense stay Linear (device count < 8).
+    assert default_ccl_topology(_FakeMesh(1), is_moe=False) == ttnn.Topology.Linear
+    assert default_ccl_topology(_FakeMesh(2), is_moe=False) == ttnn.Topology.Linear
+    # An x2-harvested T3K (8x7 grid) is outside the sweep.
+    assert default_ccl_topology(_FakeMesh(8, (8, 7)), is_moe=False) == ttnn.Topology.Linear
+    # WH Galaxy is n>=8 but not a T3K.
+    assert default_ccl_topology(_FakeMesh(32), is_moe=False) == ttnn.Topology.Linear
+    # Blackhole keeps the n>=8 rule it already had, MoE or not.
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
+    assert default_ccl_topology(_FakeMesh(8), is_moe=True) == ttnn.Topology.Ring
+    assert default_ccl_topology(_FakeMesh(4), is_moe=False) == ttnn.Topology.Linear
+
+
+def test_31b_linear_pin_only_at_128k(monkeypatch):
+    """Dense Linear pin applies at 128k; shorter seq and Ring/None pins pass through."""
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    linear = ttnn.Topology.Linear
+    assert effective_pinned_ccl_topology(linear, is_moe=False, max_seq_len=1024) is None
+    assert effective_pinned_ccl_topology(linear, is_moe=False, max_seq_len=64 * 1024) is None
+    assert effective_pinned_ccl_topology(linear, is_moe=False, max_seq_len=LINEAR_PIN_MIN_SEQ_LEN) is linear
+    assert effective_pinned_ccl_topology(linear, is_moe=False, max_seq_len=None) is linear
+    # MoE keeps Linear at every length, and a Ring / absent pin passes through.
+    assert effective_pinned_ccl_topology(linear, is_moe=True, max_seq_len=1024) is linear
+    assert effective_pinned_ccl_topology(None, is_moe=False, max_seq_len=1024) is None
+    assert effective_pinned_ccl_topology(ttnn.Topology.Ring, is_moe=False, max_seq_len=1024) is ttnn.Topology.Ring
+    # Blackhole never takes a dense Linear pin: the loop it fixes is Wormhole's.
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
+    assert effective_pinned_ccl_topology(linear, is_moe=False, max_seq_len=262144) is None
+    assert effective_pinned_ccl_topology(linear, is_moe=True, max_seq_len=262144) is linear
+
+
+def test_tuned_decode_gate_only_full_unharvested_t3k(monkeypatch):
+    """12B/31B T3K decode knobs must not fire on BH, N150/N300, or a harvested WH."""
+    from models.demos.gemma4.tt.dram_sharded import (
+        decode_1d_matmul_config,
+        is_t3k_dense_target,
+        is_t3k_mesh,
+        lm_head_decode_config,
+        wh_t3k_decode_progcfg,
+    )
+
+    class _Cfg:
+        def __init__(self, moe=False, pli=0):
+            self.enable_moe_block = moe
+            self.hidden_size_per_layer_input = pli
+
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
+    t3k = _FakeMesh(8, (8, 8))
+    assert is_t3k_mesh(t3k) is True
+    assert is_t3k_dense_target(t3k, _Cfg()) is True
+    assert is_t3k_dense_target(t3k, _Cfg(moe=True)) is False  # 26B-A4B
+    assert is_t3k_dense_target(t3k, _Cfg(pli=256)) is False  # E2B / E4B
+    # Every other Wormhole mesh, and a harvested T3K, fails the mesh half.
+    for mesh in (_FakeMesh(1, (8, 8)), _FakeMesh(2, (8, 8)), _FakeMesh(32, (8, 8)), _FakeMesh(8, (8, 7))):
+        assert is_t3k_mesh(mesh) is False
+        assert is_t3k_dense_target(mesh, _Cfg()) is False
+
+    assert wh_t3k_decode_progcfg(t3k, 3840, 1024, tuned_decode=True) is not None
+    assert wh_t3k_decode_progcfg(t3k, 3840, 3840, tuned_decode=True) is not None
+    # 31B sliding qkv is deliberately not in the table; see the table comment.
+    assert wh_t3k_decode_progcfg(t3k, 5376, 2048, tuned_decode=True) is None
+
+    # Off the gate every builder declines, so the call sites keep ttnn auto.
+    assert wh_t3k_decode_progcfg(t3k, 3840, 1024, tuned_decode=False) is None
+    assert decode_1d_matmul_config(t3k, 3840, 1024, tuned_decode=False) is None
+    assert lm_head_decode_config(t3k, 32, 3840, 32768, tuned_decode=False) == (None, None, None)
+
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
+    assert is_t3k_mesh(t3k) is False
+    assert is_t3k_dense_target(t3k, _Cfg()) is False
 
 
 def test_ccl_topology_env_override_beats_device_count(monkeypatch):
@@ -73,6 +172,38 @@ def test_ccl_async_env(monkeypatch):
     assert ccl_async_enabled() is False
     monkeypatch.setenv("GEMMA4_CCL_ASYNC", "1")
     assert ccl_async_enabled() is True
+
+
+def test_default_ccl_packet_bytes_only_on_a_wormhole_t3k(monkeypatch):
+    """WH fabric default 4352 B cannot hold an integer number of 2048 B pages.
+
+    T3K is the cluster that was measured; every other one keeps the default,
+    because a non-default payload is Fabric-wide.
+    """
+    monkeypatch.delenv("GEMMA4_CCL_PACKET_BYTES", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_t3k_cluster", lambda: True)
+    assert default_ccl_packet_bytes() == 6144
+    # N150 / N300 / WH Galaxy are Wormhole but not T3K.
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_t3k_cluster", lambda: False)
+    assert default_ccl_packet_bytes() is None
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
+    assert default_ccl_packet_bytes() is None
+
+
+def test_t3k_cluster_predicate(monkeypatch):
+    """Cluster-type read, so device_params can gate before a mesh is open."""
+    from models.demos.gemma4.tt.ccl import is_t3k_cluster
+
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    monkeypatch.setattr("ttnn.cluster.get_cluster_type", lambda: ttnn.cluster.ClusterType.T3K)
+    assert is_t3k_cluster() is True
+    for other in ("N150", "N300", "GALAXY", "TG"):
+        monkeypatch.setattr("ttnn.cluster.get_cluster_type", lambda o=other: getattr(ttnn.cluster.ClusterType, o))
+        assert is_t3k_cluster() is False, other
+    monkeypatch.setattr("ttnn.cluster.get_cluster_type", lambda: ttnn.cluster.ClusterType.T3K)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
+    assert is_t3k_cluster() is False
 
 
 def test_prefill_l1_act_env(monkeypatch):
@@ -223,3 +354,29 @@ def test_weight_cache_path_ro_mount_falls_back_writable(tmp_path, monkeypatch):
     assert "gemma4_tt_cache" in p4.parts
     # Sanity: helper used by resolve path.
     assert mc._ensure_cache_dir(ro_root / "nested").is_dir()
+
+
+# --- the 31B 128k swept-decode gate ------------------------------------------
+# Found by reading generated text on a real WH T3K: the demo reports PASSED in
+# the degenerate case, so its verdict cannot catch this.
+
+
+class _DenseCfg:
+    """Dense 12B/31B: not MoE, no per-layer inputs."""
+
+    enable_moe_block = False
+    hidden_size_per_layer_input = 0
+
+
+def test_swept_decode_disabled_flag_is_honoured(monkeypatch):
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
+    cfg = _DenseCfg()
+    assert swept_decode_enabled(_FakeMesh(8), cfg) is True
+    cfg.gemma4_swept_decode_disabled = True
+    assert swept_decode_enabled(_FakeMesh(8), cfg) is False
+
+
+def test_swept_decode_still_off_wherever_the_dense_gate_is(monkeypatch):
+    """The new flag narrows the gate; it must never widen it."""
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
+    assert swept_decode_enabled(_FakeMesh(8), _DenseCfg()) is False

@@ -62,6 +62,11 @@
       "_comment_full_model": "Real-weight (gemma4_unified) full-model PCC ~0.94 at 1x1 (single chip measures lower than 1x4's ~0.96); known 12B unified-arch backbone-accumulation gap. Threshold set below measured.",
       "test_full_model[blackhole-1x1]": 0.92
     },
+    "1x2": {
+      "_comment_wormhole_full_model": "Measured 0.9771365 prefill / 0.9846578 decode, identical to base commit 60075853b33 — pre-existing, not moved by this branch. See the 1x8 entry for why these WH gates were added.",
+      "test_full_model[wormhole_b0-1x2]": 0.97,
+      "test_full_model_decode[wormhole_b0-1x2]": 0.97
+    },
     "1x8": {
       "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as E2B (pcc_thresholds ~0.986); measured ~0.985 on 12B/P150x8 full-attention via_harness. Tier-1 unit test \u2014 gate below measured.",
       "test_attention_paged_decode_via_harness[blackhole-full-1x8]": 0.984,
@@ -69,7 +74,10 @@
       "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999,
       "_comment_full_model": "12B is gemma4_unified with num_global_key_value_heads=1 (GQA 16:1). 31B is gemma4 with 4 global KV heads and measures ~0.997 on the same 1x8 stack \u2014 not a missing 12B if-branch. With product GeLU=Accurate, LB P150x8 full_model measures ~0.980 (last-token ~0.983) and full_model_decode ~0.978; earlier non-Accurate stacks were ~0.94\u20130.95. Same unified-arch accumulation gap as 1x1/1x4. Linear HiFi4/fp32 can push prefill ~0.989 but regresses decode (unicode garbage) \u2014 do not re-enable. Gate ~0.01 below measured.",
       "test_full_model[blackhole-1x8]": 0.97,
-      "test_full_model_decode[blackhole-1x8]": 0.97
+      "test_full_model_decode[blackhole-1x8]": 0.97,
+      "_comment_wormhole_full_model": "Wormhole/T3K gates for the real-weight full-model tests. 12B carried no wormhole_b0 entry for full_model or full_model_decode at ANY mesh, so every WH run fell through to get_pcc_threshold's 0.99 unmeasured default and reported red at every value; a gate that is red unconditionally carries no signal. Measured on a real WH T3K with HF_MODEL=google/gemma-4-12B-it and bit-reproducible: 1x2 and 1x4 are identical to every digit here and on the base commit 60075853b33, so those are pre-existing numbers, not something the prefill work on this branch caused. 1x8 is the mesh this branch moves: 0.9394807 -> 0.9830491 prefill, 0.9564212 -> 0.9783923 decode. Gates sit ~0.01 below measured, this file's convention.",
+      "test_full_model[wormhole_b0-1x8]": 0.97,
+      "test_full_model_decode[wormhole_b0-1x8]": 0.97
     },
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.98,
@@ -103,7 +111,10 @@
       "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_128-1x4]": 0.93,
       "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_512-1x4]": 0.93,
       "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_1024-1x4]": 0.93,
-      "test_prefill_trace_eager_hf_parity[blackhole-batch32-prefill_128-1x4]": 0.93
+      "test_prefill_trace_eager_hf_parity[blackhole-batch32-prefill_128-1x4]": 0.93,
+      "_comment_wormhole_full_model": "Low and known-low (0.8562432 prefill / 0.9117593 decode) on bare base as well as here, and not reachable from this branch's prefill path at all: the T3K tuned gate requires 8 devices, so 1x4 runs the untouched code. Gating at the measured value documents the hole instead of hiding it behind an unconditional red; raise these two with a real fix rather than relaxing them further. See the 1x8 entry for why these WH gates were added.",
+      "test_full_model[wormhole_b0-1x4]": 0.845,
+      "test_full_model_decode[wormhole_b0-1x4]": 0.90
     }
   },
   "gemma-4-26B-A4B-it": {

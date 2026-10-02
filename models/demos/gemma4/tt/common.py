@@ -15,6 +15,7 @@ import os
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.common.weight_cache import (
     build_cached_state_dict,
     checkpoint_name,
@@ -23,10 +24,18 @@ from models.common.weight_cache import (
 )
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
-from models.demos.gemma4.tt.ccl import CCLManager
+from models.demos.gemma4.tt.ccl import LINEAR_PIN_MIN_SEQ_LEN, CCLManager, effective_pinned_ccl_topology
+from models.demos.gemma4.tt.dram_sharded import decode_tuning_enabled
+from models.demos.gemma4.tt.generator_trace import normalize_gemma4_model_key
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
+
+# precision_overrides.json spells the topology; ttnn owns the enum.
+_CCL_TOPOLOGY_BY_NAME = {
+    "ring": ttnn.Topology.Ring,
+    "linear": ttnn.Topology.Linear,
+}
 
 # Weights gemma4 consumes on the HOST (not just via ttnn.as_tensor) and that therefore must be
 # loaded for real even on a warm cache (see #45400 follow-up analysis of models/demos/gemma4/tt):
@@ -82,6 +91,29 @@ def create_tt_model(
     if num_layers is not None:
         model_args.num_hidden_layers = num_layers
 
+    # Multi-user decode tuning wedges the mesh; see
+    # dram_sharded.decode_tuning_enabled. 31B batch-32 hung 6 of 11 runs and
+    # batch-8 3 of 3, at iterations 31/118/166 -- a race, not a fixed-capacity
+    # overflow. Only batch-1 has ever been measured clean, so the gate keeps
+    # tuning for one user and drops it for every multi-user decode; 2..7 users
+    # are untested and are gated off with the rest. Set before the model is
+    # built so every decode gate reads the same answer.
+    model_args.gemma4_decode_tuning_disabled = bool(max_batch_size is not None and int(max_batch_size) > 1)
+
+    # The swept decode matmul table loops 31B's 128k answer into a repetition
+    # collapse (quote A, then ``la'`` to the token limit) while main is clean at
+    # the same length and the same Linear topology. precision_overrides.json
+    # records both halves of the pair -- "Linear+sweep DEGENERATES (546 chars,
+    # 39x loop)" -- and ``ccl_topology`` only fixes the Ring half. Scoped to the
+    # measured configuration: 31B, Wormhole, at or above the same 128k threshold
+    # the Linear pin uses. 12B keeps the table at every length.
+    model_args.gemma4_swept_decode_disabled = bool(
+        not is_blackhole()
+        and normalize_gemma4_model_key(model_path) == "31B"
+        and max_seq_len is not None
+        and int(max_seq_len) >= LINEAR_PIN_MIN_SEQ_LEN
+    )
+
     if mesh_config is None:
         is_mesh = hasattr(mesh_device, "shape")
         num_devices = mesh_device.get_num_devices() if is_mesh else 1
@@ -96,7 +128,27 @@ def create_tt_model(
         # num_links=None -> arch default (2 on Blackhole) so the per-layer TP
         # all-reduces (the dominant ~31% of prefill device time) use full
         # inter-device bandwidth.
-        ccl_manager = CCLManager(mesh_device)
+        #
+        # is_moe must follow the checkpoint: the CCLManager default is True and
+        # would force Linear on a Wormhole T3K even for dense 12B/31B. 26B-A4B
+        # stays Linear — Ring drops its full-model PCC below 0.76.
+        #
+        # A model may still pin the topology in precision_overrides.json, which
+        # wins over the arch default. 31B pins Linear at max_seq_len >= 128k
+        # (Ring loops 128k decode); below that the pin is dropped so dense T3K
+        # decode stays on Ring. Measurements live in that JSON comment.
+        _ccl_precision = Gemma4Precision.load(model_path, tuple(mesh_device.shape))
+        _is_moe = bool(getattr(model_args, "enable_moe_block", False))
+        ccl_manager = CCLManager(
+            mesh_device,
+            topology=effective_pinned_ccl_topology(
+                _CCL_TOPOLOGY_BY_NAME.get(_ccl_precision.ccl_topology),
+                is_moe=_is_moe,
+                max_seq_len=max_seq_len,
+            ),
+            is_moe=_is_moe,
+            tuned_decode=decode_tuning_enabled(mesh_device, model_args),
+        )
     else:
         ccl_manager = None
 

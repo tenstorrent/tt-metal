@@ -16,8 +16,11 @@ helpers are adapted from the Qwen3.6 Blackhole TP path (tp_common.py).
 import math
 import os
 
+from loguru import logger
+
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
 
 TILE_SIZE = 32
 # P150 Blackhole DRAM bank count. Wormhole meshes differ — can_dram_shard is
@@ -305,6 +308,581 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
         fused_activation=fused_activation,
         fuse_batch=False,
     )
+
+
+# ── Tuned prefill matmul path: dense Gemma4 12B / 31B on a Wormhole T3K ──────
+#
+# Ported from ign/gemma4_support_loudbox_exps via ign/gemma-4_12B_31B_optim_exps
+# (stages 4 and 5). Everything below is reached only through
+# ``is_t3k_dense_target``; every other (SKU, variant) keeps the bare
+# ``ttnn.linear`` it runs today.
+
+# L1 budget for a prefill activation or matmul in0. What keeps short ISL
+# resident in L1 without OOMing a long prefill.
+_PREFILL_L1_TENSOR_MAX_BYTES = 4 * 1024 * 1024
+
+
+def prefill_in0_fits_l1(rows, k) -> bool:
+    """Whether a ``[rows, k]`` bf16 activation fits the prefill L1 budget."""
+    return int(rows) * int(k) * 2 <= _PREFILL_L1_TENSOR_MAX_BYTES
+
+
+def hoist_prefill_in0(tensor, hoist: bool):
+    """Move a matmul's in0 to L1 interleaved so a tuned config reads it from L1.
+
+    Returns ``(activation, owned)``, where ``owned`` is the copy the caller must
+    deallocate, or None when the input was handed back untouched -- already in
+    L1, sharded, or not worth moving.
+    """
+    if not hoist or tensor.is_sharded() or tensor.memory_config().buffer_type == ttnn.BufferType.L1:
+        return tensor, None
+    activation = ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+    return activation, activation
+
+
+def is_t3k_mesh(mesh_device) -> bool:
+    """True on a full Wormhole T3K: 8 devices, unharvested 8x8 compute grid.
+
+    Deliberately narrow, and the mesh half of ``is_t3k_dense_target``. Every
+    tuned config on this branch was measured on this one system. A different
+    Wormhole mesh (N150 1x1, N300 1x2) has different per-device K/N and would
+    not match a swept key anyway, but an x2-harvested part has an 8x7 grid
+    where the 8x8 / 8x5 program grids below would be illegal.
+    """
+    if is_blackhole():
+        return False
+    try:
+        if mesh_device.get_num_devices() != 8:
+            return False
+        grid = mesh_device.compute_with_storage_grid_size()
+    except (AttributeError, RuntimeError):
+        return False
+    return (grid.x, grid.y) == (8, 8)
+
+
+def is_t3k_dense_target(mesh_device, config) -> bool:
+    """True for dense Gemma4 12B / 31B on a full Wormhole T3K (1x8, 8x8 grid).
+
+    The tuned prefill and decode configs below were measured on that system and
+    those two variants only; everything else (Blackhole, N150/N300, a harvested
+    8x7 T3K) fails this gate and is byte-identical to today. The two config
+    predicates separate 12B/31B from their siblings: 26B-A4B is the only MoE,
+    and E2B/E4B are the only ones with ``hidden_size_per_layer_input`` (256 vs
+    0).
+    """
+    if bool(getattr(config, "enable_moe_block", False)):
+        return False
+    if int(getattr(config, "hidden_size_per_layer_input", 0) or 0):
+        return False
+    return is_t3k_mesh(mesh_device)
+
+
+def decode_tuning_enabled(mesh_device, config) -> bool:
+    """``is_t3k_dense_target`` for the DECODE path, minus multi-user 31B.
+
+    Multi-user decode on 31B wedges the mesh. Measured on a real T3K:
+
+      31B batch-32, tuned    6 hangs / 11 runs   (main: 0 / 8, Fisher p = 0.018)
+      31B batch-8,  tuned    3 hangs / 3 runs    (hung at iteration 31, 118, 166)
+      31B batch-8,  gated    0 hangs / 3 runs    68.4-68.7 ms/tok
+      31B batch-32, gated    0 hangs / 3 runs    85.7-85.8 ms/tok
+      12B batch-8,  tuned    0 hangs / 1 run     38.6 ms/tok  -- unaffected
+
+    The hang iteration wanders (31/118/166), so this is a race, not a
+    fixed-capacity overflow. ``tt-triage`` on the live wedged board shows one
+    device still inside a sharded LayerNorm -- 43 mcast receivers parked in
+    ``noc_semaphore_wait`` under
+    ``reader_mcast_receiver_unary_sharded_ln`` -- while the other seven block
+    behind it in the next reduce-scatter, ~54 ops ahead. No dead cores: not
+    hardware. Bisected to f6df2ea8916; its parent 03d218f9bf1 is clean over 8
+    runs at main's speed.
+
+    12B passing batch-8 with every optimisation on is the sharpest clue: the
+    defect is 31B-specific, so it depends on that model's geometry rather than
+    on the tuned path existing at all.
+
+    The exact defect inside f6df2ea8916 is not isolated, so this restores the
+    parent's decode path wholesale for multi-user decode rather than guessing
+    at a narrower gate -- two narrower gates (the residual island, the swept
+    matmul table) were each tried and each still hung. Only batch-1 has been
+    measured clean, so 2..7 users are gated off with the rest despite being
+    untested; the demo only parametrises 1/8/32, so nothing measured regresses.
+
+    Prefill is untouched, so TTFT is unchanged.
+    """
+    if not is_t3k_dense_target(mesh_device, config):
+        return False
+    return not bool(getattr(config, "gemma4_decode_tuning_disabled", False))
+
+
+def swept_decode_enabled(mesh_device, config) -> bool:
+    """``is_t3k_dense_target``, minus the case where the swept decode table loops.
+
+    Measured on a real WH T3K (1x8, real weights), text_demo_v2
+    long-context-128k, reading the generated text rather than the pytest
+    verdict: main is CLEAN (three quotes, 972 chars, all three verbatim in the
+    source) while this branch emits quote A and then repeats ``la'`` to the
+    token limit. Both arms ran Topology.Linear, so this is the swept decode
+    matmul table, not the CCL topology.
+
+    precision_overrides.json already records the pair independently:
+    "Linear+no-sweep is CLEAN (718 chars) ... Linear+sweep DEGENERATES (546
+    chars, 39x loop)". The ``ccl_topology`` pin fixes the Ring half; this fixes
+    the sweep half. Note the demo still reports PASSED either way -- it does not
+    gate on coherence -- so this cannot be caught by the test verdict.
+
+    Scoped by ``common.create_tt_model`` to 31B at ``max_seq_len >= 128k`` on
+    Wormhole. 12B is unaffected at every length (its 128k answer is clean and
+    15% faster), and prefill keeps the tuned configs -- TTFT is unchanged.
+    """
+    if not decode_tuning_enabled(mesh_device, config):
+        return False
+    return not bool(getattr(config, "gemma4_swept_decode_disabled", False))
+
+
+def single_tile_matmul_ckc(m, dest_acc):
+    """Fidelity/accumulation for the m<=32 matmuls every tuned config declines.
+
+    At m <= 32 (short prefill, a last-token slice, any decode step) the builders
+    above return None, and ttnn.linear's own default -- HiFi2, no fp32 dest-acc
+    -- is not a safe place to sit. Measured on a WH T3K, 31B long-context-128k:
+    HiFi3 without fp32 dest-acc is clean, while both HiFi3 WITH it and ttnn's
+    HiFi2 default degenerate into a repetition loop. Not monotonic in precision,
+    so it is specifically "HiFi3 without fp32 dest-acc". HiFi4 is not an option:
+    with fp32 dest-acc it trips Wormhole bug #38306.
+
+    The accumulator is per model -- fp32 dest-acc carries 12B and is what makes
+    31B loop -- so callers pass the variant's policy, resolved once at
+    weight-load time from the model's own Gemma4Precision (or, for a module
+    built directly, ``default_single_tile_dest_acc``).
+    """
+    if int(m) > TILE_SIZE:
+        return None
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_approx_mode=False,
+        fp32_dest_acc_en=bool(dest_acc),
+        packer_l1_acc=not bool(dest_acc),
+    )
+
+
+def matmul_rows(x):
+    """Row count a matmul sees: the product of every leading dim, not shape[-2].
+
+    Prefill with batch>1 reshapes activations to [B, 1, S, K] (see DecoderLayer),
+    so shape[-2] alone would disagree with the tensor's volume.
+    """
+    rows = 1
+    for i in range(len(x.shape) - 1):
+        rows *= int(x.shape[i])
+    return rows
+
+
+def in_prefill_l1_matmul_band(m: int) -> bool:
+    """Rows for which a tuned single-shot 2D prefill config exists.
+
+    Opens *above* one tile: at m <= 32 (a short prompt's whole prefill, a
+    last-token slice, or a decode step) every builder below declines and the
+    call site falls back to the bare ttnn.linear it uses today.
+    """
+    return TILE_SIZE < int(m) <= _PREFILL_CUTOFF
+
+
+def should_prefill_long_2d(m: int) -> bool:
+    """Rows tall enough to need the batched-reshape matmul instead of one shot."""
+    return int(m) > _PREFILL_CUTOFF and int(m) % _PREFILL_CUTOFF == 0
+
+
+def _prefill_hifi2_ckc():
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+def _prefill_hifi4_ckc():
+    """Short-prefill tuned paths must not silently inherit LoFi."""
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+_L1_FALLBACK_SHAPES: set[tuple[int, int, int]] = set()
+
+
+def linear_l1_safe(x, weight, *, program_config=None, memory_config=None, compute_kernel_config=None):
+    """Use a tuned config when it fits, caching the auto fallback on L1 overflow.
+
+    A program config's circular buffers depend on the compute grid as well as
+    the shape, so a config that fits every shape we measured can still overflow
+    on one we did not. Falling back per shape keeps the tuned path everywhere
+    else instead of killing the run.
+    """
+    if program_config is None:
+        return ttnn.linear(x, weight, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+
+    key = (matmul_rows(x), int(x.shape[-1]), int(weight.shape[-1]))
+    if key not in _L1_FALLBACK_SHAPES:
+        try:
+            return ttnn.linear(
+                x,
+                weight,
+                program_config=program_config,
+                memory_config=memory_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+        except RuntimeError as error:
+            if "circular buffer" not in str(error).lower():
+                raise
+            _L1_FALLBACK_SHAPES.add(key)
+            logger.warning(f"Gemma4 tuned matmul {key} exceeded L1; using ttnn auto for this shape")
+    return ttnn.linear(x, weight, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+
+
+def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
+    """Reshape tall matmuls so their program's circular buffers stay cutoff-sized.
+
+    A single-shot 2D matmul's CBs scale with per_core_M, so at long context
+    (M = chunk size, 2048 and up) they overflow L1. Reshape
+    [1, 1, M, K] -> [1, M/cutoff, cutoff, K] and run ONE batched matmul sized to
+    the cutoff: the kernel iterates the extra batch dim reusing its CBs, which a
+    chunk-and-concat could not do without holding source and destination at once.
+    """
+    out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    x_shape = [int(x.shape[i]) for i in range(len(x.shape))]
+    orig_leading = x_shape[:-1]
+    n_in = x_shape[-1]
+    m = matmul_rows(x)
+    n_out = int(weight.shape[-1])
+    flat = [1, 1, m, n_in]
+    x_work = x if x_shape == flat else ttnn.reshape(x, flat)
+
+    def restore(out):
+        wanted = (*orig_leading, int(out.shape[-1]))
+        actual = tuple(int(out.shape[i]) for i in range(len(out.shape)))
+        return out if actual == wanted else ttnn.reshape(out, wanted)
+
+    if not should_prefill_long_2d(m):
+        return restore(ttnn.linear(x_work, weight, memory_config=out_mc))
+
+    batch = m // _PREFILL_CUTOFF
+    reshaped = ttnn.reshape(x_work, (1, batch, _PREFILL_CUTOFF, n_in))
+    program_config = prefill_progcfg(_PREFILL_CUTOFF, n_in, n_out)
+    output = linear_l1_safe(
+        reshaped,
+        weight,
+        program_config=program_config,
+        memory_config=out_mc,
+        compute_kernel_config=_prefill_hifi2_ckc(),
+    )
+    return restore(ttnn.reshape(output, (1, 1, m, int(output.shape[-1]))))
+
+
+def interleaved_prefill_config(m, k, n):
+    """Shape-gated QKV prefill config for an interleaved weight."""
+    if not in_prefill_l1_matmul_band(m):
+        return None, None
+    return prefill_progcfg(m, k, n), _prefill_hifi4_ckc()
+
+
+def _out_subblock_hw(per_core_n, per_core_m):
+    best = (1, 1)
+    for height in range(1, min(per_core_m, 4) + 1):
+        if per_core_m % height:
+            continue
+        for width in range(1, min(per_core_n, 4 // height) + 1):
+            if per_core_n % width == 0 and height * width > best[0] * best[1]:
+                best = (height, width)
+    return best
+
+
+def _factor_1d_grid(cores, grid_x, grid_y):
+    cols = min(grid_x, cores)
+    while cols > 1 and cores % cols:
+        cols -= 1
+    rows = cores // cols
+    return (cols, rows) if 1 <= rows <= grid_y else None
+
+
+def _pick_1d_cores(n_tiles, grid_x, grid_y, prefer=42):
+    candidates = [
+        cores
+        for cores in range(8, grid_x * grid_y + 1)
+        if n_tiles % cores == 0 and _factor_1d_grid(cores, grid_x, grid_y) is not None
+    ]
+    if not candidates:
+        return None
+    if prefer in candidates:
+        return prefer
+    return max(candidates, key=lambda cores: (-abs(cores - prefer), cores))
+
+
+def prefill_progcfg_1d(m, k, n, cores=None, in0_block_w=None, grid_size=None, fuse_batch=False):
+    """1D-mcast prefill config, or None when no legal core factorization exists."""
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    grid_x, grid_y = grid_size
+    m_tiles, k_tiles, n_tiles = math.ceil(m / TILE_SIZE), math.ceil(k / TILE_SIZE), math.ceil(n / TILE_SIZE)
+    cores = cores or _pick_1d_cores(n_tiles, grid_x, grid_y)
+    if cores is None or n_tiles % cores:
+        return None
+    factored = _factor_1d_grid(cores, grid_x, grid_y)
+    if factored is None:
+        return None
+    cols, rows = factored
+    in0_block_w = in0_block_w or _find_largest_divisor(k_tiles, max_div=4)
+    if k_tiles % in0_block_w:
+        return None
+    per_core_n = n_tiles // cores
+    out_h, out_w = _out_subblock_hw(per_core_n, m_tiles)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cols, rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_h,
+        out_subblock_w=out_w,
+        per_core_M=m_tiles,
+        per_core_N=per_core_n,
+        fuse_batch=fuse_batch,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet(set()),
+        num_global_cb_receivers=0,
+        untilize_out=False,
+    )
+
+
+def interleaved_mlp_prefill_config(m, k, n):
+    """Short-prefill 1D config for the SharedMLP gate_up / down projections."""
+    if not in_prefill_l1_matmul_band(m):
+        return None, None, None
+    # M<=128 and K<5376 (12B short prefill). 1D at K>=5376 hung decode.
+    if int(m) > 128 or int(k) >= 5376:
+        return None, None, None
+    # For TP-sharded widths (31B TP=8 -> n=5376). Full-width TP=1 fused
+    # gate+up (n~43k) overflows Wormhole L1 CBs and falls back dirty.
+    if int(n) > 8192:
+        return None, None, None
+    program_config = prefill_progcfg_1d(m, k, n)
+    if program_config is None:
+        return None, None, None
+    out_memcfg = ttnn.L1_MEMORY_CONFIG if prefill_in0_fits_l1(m, n) else ttnn.DRAM_MEMORY_CONFIG
+    return program_config, out_memcfg, _prefill_hifi4_ckc()
+
+
+# ── Tuned decode matmul path: dense Gemma4 12B / 31B on a Wormhole T3K ───────
+#
+# Like the prefill path above, everything here is reached only through
+# ``swept_decode_enabled`` / ``decode_tuning_enabled`` (threaded to the call
+# sites as a ``tuned_decode`` flag), so every other (SKU, variant) keeps the
+# program config it picks today.
+
+# Swept decode matmul program configs for Wormhole T3K (1x8), keyed by the
+# per-device (K, N) of each decode projection.
+#
+# On Blackhole these matmuls run the DRAM-sharded kernel (``can_dram_shard``);
+# on Wormhole that kernel is a large loss (1.8-3.4x, measured previously), so
+# the MLP and o_proj projections fall through to ttnn's *auto* program config
+# and QKV takes the generic ``decode_1d_matmul_config`` below. Both leave time
+# on the table at M=32, where these matmuls are weight-streaming bound.
+#
+# Measured on a real T3K, each arm captured into a metal trace and timed over
+# replays (eager timing on an 8-device mesh is host-dispatch bound and hides
+# the differences). Each candidate used the same compute-kernel config as the
+# call site it replaces, so these are program-config-only deltas:
+#
+#   12B (bf16 attention + shared_mlp at 1x8)   ships -> swept
+#     qkv sliding   3840x1024   49.0 -> 43.7 us   (-11%)
+#     qkv global    3840x2048   84.4 -> 78.1 us   (-7.5%)
+#     gate_up       3840x3840  156.6 -> 147.6 us  (-5.7%)   [auto today]
+#     down_proj     1920x3840   80.6 -> 76.5 us   (-5.1%)   [auto today]
+#     o_proj slide   512x3840   24.6 -> 23.9 us   (-3%)     [auto today]
+#     o_proj global 1024x3840   45.1 -> 42.8 us   (-5%)     [auto today]
+#   31B (bfp8 everywhere)
+#     qkv sliding   5376x2048   65.6 -> 59.1 us   (-10%)
+#
+# 31B has no entries. Its qkv-sliding one was removed (see the note in the
+# table); its gate_up / down_proj / o_proj / qkv-global were never added: they
+# already stream at ~209 GB/s (73% of Wormhole peak) and every swept arm tied or
+# lost to what ships. The 12B entries exist because its bf16 weights only reach
+# ~188 GB/s (65%), which is where the headroom is. Do not "complete" this table
+# by deriving the missing shapes -- they were swept and auto won.
+#
+# The winning in0_block_w is NOT a function of K (12B gate_up wants 2 while
+# 31B qkv wants 8, and raising 31B qkv-global from 4 to 8 costs 11%), so this
+# is a table of measurements rather than a heuristic. A shape that is not
+# listed keeps today's behaviour exactly.
+_WH_T3K_DECODE_1D = {
+    # (k, n): (grid_x, grid_y, in0_block_w, per_core_N, out_subblock_w)
+    (3840, 1024): (8, 4, 4, 1, 1),
+    (3840, 2048): (8, 8, 4, 1, 1),
+    (3840, 3840): (8, 5, 2, 3, 3),
+    (1920, 3840): (8, 5, 2, 3, 3),
+    (512, 3840): (8, 5, 1, 3, 3),
+    (1024, 3840): (8, 5, 2, 3, 3),
+    # (5376, 2048) -- 31B qkv at tp=8 -- is deliberately absent. Every other
+    # entry is a 12B shape; this was the table's only 31B one, and it bought
+    # 31B nothing measurable (128k TTFT 77463 vs 77478 ms) while its blocking
+    # change was on its own enough to tip 128k decode from clean (718 chars)
+    # into a 39x repetition loop (546 chars). Re-add only with a 128k re-run.
+}
+
+
+def wh_t3k_decode_progcfg(mesh_device, k, n, tuned_decode=False):
+    """Swept 1D-mcast decode program config for ``(k, n)``, or ``None``.
+
+    ``tuned_decode`` is the caller's resolved decode gate
+    (``swept_decode_enabled``); a shape not in the table also returns ``None``.
+    """
+    if not tuned_decode:
+        return None
+    entry = _WH_T3K_DECODE_1D.get((int(k), int(n)))
+    if entry is None:
+        return None
+    grid_x, grid_y, in0_block_w, per_core_n, out_subblock_w = entry
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE, dest_acc=None, tuned_decode=False):
+    """Tuned narrow-N decode config, or ``None`` to keep ttnn's auto pick.
+
+    ``tuned_decode`` is the ``swept_decode_enabled`` gate. It is required rather
+    than inferred: the generic picker below is shape-driven and would otherwise
+    fire on N150/N300/Blackhole meshes, where it is unmeasured. The E2B numbers
+    in the accumulator note came from exactly that.
+    """
+    if not tuned_decode:
+        return None
+    if k % TILE_SIZE or n % TILE_SIZE or m > TILE_SIZE:
+        return None
+    grid = mesh_device.compute_with_storage_grid_size()
+    grid_cores = grid.x * grid.y
+    k_tiles, n_tiles = k // TILE_SIZE, n // TILE_SIZE
+    # A swept T3K entry wins outright over the generic pick below, including for
+    # the wide-N shapes the generic picker declines (12B qkv-global is exactly
+    # n_tiles == 2*grid_cores). The compute config is shared by both paths -- it
+    # carries its own measured PCC pairing and must not diverge.
+    program_config = wh_t3k_decode_progcfg(mesh_device, k, n, tuned_decode=tuned_decode)
+    if program_config is None:
+        if n_tiles >= 2 * grid_cores:
+            return None
+        cap = min(grid_cores, n_tiles // 2)
+        cores = next((c for c in range(cap, 0, -1) if n_tiles % c == 0), 0)
+        if cores < 2:
+            return None
+        rows = next((y for y in range(1, grid.y + 1) if cores % y == 0 and cores // y <= grid.x), None)
+        if rows is None:
+            return None
+        per_core_n = n_tiles // cores
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(cores // rows, rows),
+            in0_block_w=_find_largest_divisor(k_tiles, max_div=4),
+            out_subblock_h=1,
+            out_subblock_w=_find_largest_divisor(per_core_n, max_div=4),
+            per_core_M=1,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    # HiFi2 is this config's own measured pairing and is kept -- raising it to
+    # HiFi3 costs 12B decode 0.9783 -> 0.9760 and an extra FPU pass. What it must
+    # NOT do is hardcode the accumulator: this config only fires at tp>1, so a
+    # fixed fp32_dest_acc_en overrode the per-model policy on exactly the meshes
+    # 1x1 could not catch. That cost E2B's via-harness 0.9884 -> 0.9802 at
+    # 1x2/1x8 while 1x1, where this config does not fire, was untouched.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=bool(resolve_single_tile_dest_acc(dest_acc)),
+        # Stays True regardless: it is part of this config's measured pairing,
+        # and tying it to dest_acc moved 12B decode 0.9783 -> 0.9772.
+        packer_l1_acc=True,
+    )
+    return program_config, compute_kernel_config
+
+
+def wide_vocab_lm_head_ckc(weight):
+    """Fidelity for an LM head too wide for the tuned 1D-mcast program config.
+
+    ``lm_head_decode_config`` declines a per-device vocab shard above 64K because
+    the in1 circular buffer overruns L1 -- a *program config* limit, not a
+    fidelity one. Returning a bare ``None`` surrendered the compute kernel config
+    too, leaving ttnn's default (HiFi2, and crucially ``fp32_dest_acc_en=False``)
+    on the matmul that produces the logits. 12B at tp=2 shards the 262144 vocab
+    only down to 131072 and lands here; tp=8's 32768 keeps the tuned path, which
+    already accumulates in fp32.
+
+    So this mirrors the tuned path's HiFi3 + fp32 dest-acc -- the runtime's own
+    #38306-safe recommendation for Wormhole. Dtype-gated like
+    ``single_tile_matmul_ckc``: against a BFP8_B weight raising fidelity here
+    measured as nothing (0.98328 -> 0.98330).
+    """
+    if weight is None or weight.dtype != ttnn.bfloat16:
+        return None
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
+def lm_head_decode_config(mesh_device, m, k, n, weight=None, tuned_decode=False):
+    """Tuned last-token LM head with safe HiFi3 + fp32 destination accumulation.
+
+    Gated on ``swept_decode_enabled`` like the rest of the decode path: the LM
+    head runs on every SKU and this fidelity pairing was measured on a T3K.
+    """
+    if not tuned_decode:
+        return None, None, None
+    if int(m) > TILE_SIZE:
+        return None, None, None
+    if n > 64 * 1024:
+        # Too wide for the 1D-mcast program config; keep an explicit fidelity.
+        # This width bound is necessary but not sufficient: whether the CBs fit
+        # also depends on the compute grid. A 262144 vocab at tp=4 shards to
+        # exactly 65536 and passes here, but then needs per_core_N=32 on a WH
+        # 8x8 grid (2333920 B of CBs against a 1499136 B L1) versus 16 on a BH
+        # 13x10 grid, where it fits. The call site goes through
+        # ``linear_l1_safe`` so that case falls back per-shape instead of
+        # surrendering the tuned path everywhere.
+        return None, None, wide_vocab_lm_head_ckc(weight)
+    grid = mesh_device.compute_with_storage_grid_size()
+    program_config = prefill_progcfg_1d(
+        m,
+        k,
+        n,
+        cores=grid.x * grid.y,
+        in0_block_w=1,
+        grid_size=(grid.x, grid.y),
+    )
+    if program_config is None:
+        return None, None, None
+    # HiFi4 together with fp32 dest-acc trips Wormhole hardware bug #38306.
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
 
 
 class DramShardedLinear:

@@ -11,6 +11,7 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.dram_sharded import decode_tuning_enabled
 
 from .operations import (
     apply_allreduce,
@@ -34,6 +35,20 @@ from .weights import AttentionWeights
 # Populated on the first (un-traced compile) call; inside trace capture the
 # probe is skipped entirely.
 _Q_SHARDED_MEM_CACHE: dict = {}
+
+# Max decode users for the L1 activation path: one user per core on a single
+# 8-wide grid row. See the clash note in ``decode_forward``.
+_L1_DECODE_ACT_MAX_USERS = 8
+
+
+def _single_core_height_shard_memcfg(shard_shape):
+    """HEIGHT_SHARDED L1 config on one core: the per-user layout SDPA expects."""
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(ttnn.CoreRangeSet([core_range]), list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
 
 
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
@@ -93,30 +108,67 @@ def decode_forward(
         is_kv_shared: if True, skip K/V projection and cache update (use source layer's KV cache)
     """
     tp = mesh_config.tp if mesh_config else 1
+    # Keep the whole QKV -> SDPA -> o_proj chain resident in L1 on the tuned
+    # decode target, so the per-layer TP all-reduce gathers from L1 rather than
+    # DRAM. Off the target this is byte-identical to before (DRAM interleaved,
+    # op-default output placement).
+    #
+    # The L1 path shards Q/K/V one user per core. At 32 users that spans
+    # [0-0 - 7-3] and the sharded L1 buffers collide with paged_update_cache's
+    # statically allocated dataflow buffers ("clash with L1 buffers ... static
+    # dataflow buffer region ends at 1355104"), killing the program. Measured on
+    # a real T3K, 12B: batch-32 fails with this on and passes with it off, while
+    # batch-8 (one 8-wide grid row) passes with it on. That batch-8 result is
+    # 12B-only -- 31B batch-8 hangs 3 of 3 with decode tuning on, which is why
+    # decode_tuning_enabled now gates every multi-user decode and this ceiling
+    # is only reachable at batch-1. Between 9 and 31 users is untested.
+    decode_users = int(hidden_states.shape[-2])
+    l1_act = decode_tuning_enabled(mesh_device, config) and decode_users <= _L1_DECODE_ACT_MAX_USERS
+    qkv_interleaved = ttnn.L1_MEMORY_CONFIG if l1_act else ttnn.DRAM_MEMORY_CONFIG
 
     # 1. Fused QKV projection
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    xqkv = apply_qkv_projection(
+        hidden_states,
+        weights,
+        decode=True,
+        memory_config=ttnn.L1_MEMORY_CONFIG if l1_act else None,
+    )
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
 
-    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
+    # 3. Per-head norms (unshard for rms_norm, restore sharded for RoPE)
     q_sharded_mem = tt_q.memory_config()
-    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+    # rms_norm rejects a HEIGHT_SHARDED *input*, but it will write a
+    # HEIGHT_SHARDED *output*, and the fused decode RoPE preserves that spec
+    # exactly. On the tuned decode target, aim the norms straight at the layout
+    # the KV write and SDPA already require: the reshards below then
+    # short-circuit (``ttnn.to_memory_config`` returns its input when the
+    # configs match) instead of running one InterleavedToSharded per Q/K/V.
+    # Layout only -- measured bit-identical against the
+    # interleaved-then-reshard form. batch>1 is excluded because its per-user
+    # RoPE fallback broadcasts cos/sin over the shard grid rather than using the
+    # fused single-position op.
+    norm_memcfg = q_sharded_mem if (l1_act and tt_q.shape[1] == 1) else None
+    tt_q = ttnn.to_memory_config(tt_q, qkv_interleaved)
+    tt_q = apply_per_head_norm(
+        tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=norm_memcfg
+    )
 
     if is_kv_shared:
         # KV-shared layer: discard own K/V, use source layer's KV cache directly
         tt_k.deallocate(True)
         tt_v.deallocate(True)
     else:
-        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+        tt_k = ttnn.to_memory_config(tt_k, qkv_interleaved)
+        tt_v = ttnn.to_memory_config(tt_v, qkv_interleaved)
         # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+        tt_k = apply_per_head_norm(
+            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=norm_memcfg
+        )
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=norm_memcfg)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
     # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
@@ -162,6 +214,21 @@ def decode_forward(
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)
         if not is_kv_shared:
             tt_k = apply_rope(tt_k, cos_cache, sin_cache, token_index=token_index)
+
+    # SDPA decode accepts HEIGHT_SHARDED L1 Q or DRAM interleaved Q. Interleaved
+    # L1 Q is illegal (``Q tensor buffer type must be DRAM when not sharded``).
+    # The tuned decode target reshards Q so SDPA can emit concat-heads layout
+    # and skip the SDPA->I2S hop. Other meshes leave Q in DRAM interleaved (the
+    # path they already used after the RMSNorm unshard). Batch 1 already landed
+    # here via ``norm_memcfg``, so the config test skips the reshard rather than
+    # paying it twice; it must be a config test, not a ``tt_q is q_src``
+    # identity test, because a same-config ``to_memory_config`` hands back a
+    # *new* wrapper around the same buffer and the deallocate below would free
+    # it.
+    if l1_act and tt_q.memory_config() != q_sharded_mem:
+        q_src = tt_q
+        tt_q = ttnn.to_memory_config(q_src, q_sharded_mem)
+        q_src.deallocate(True)
 
     # 5. KV cache update — skip for KV-shared layers (source layer already updated the cache)
     # Use position_idx_cache (int32) for cache ops when position_idx is uint32 (embedding lookup format)
@@ -209,12 +276,7 @@ def decode_forward(
                     # so a 1-core config with that same shard shape is exactly the
                     # per-user layout the op expects.
                     _shard_shape = list(q_sharded_mem.shard_spec.shape)
-                    _one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-                    single_user_mem = ttnn.MemoryConfig(
-                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                        ttnn.BufferType.L1,
-                        ttnn.ShardSpec(_one_core, _shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
-                    )
+                    single_user_mem = _single_core_height_shard_memcfg(_shard_shape)
                     k_seq = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
                     v_seq = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
                     nkv, hd = k_seq.shape[2], k_seq.shape[3]
@@ -300,8 +362,15 @@ def decode_forward(
         exp_approx_mode=False,
     )
 
+    sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+    # SDPA forbids a sharded output under GQA, and it decides GQA from the K
+    # cache's own head dim (``is_gqa = k_shape[1] > 1``), not from the head
+    # count we pass. Gate on the tensor for that reason: ``kv_replicated``
+    # keeps every KV head on each device, so "1 local head" above does not mean
+    # the cache has one. 31B full_attention is the case that bites --
+    # num_global_key_value_heads=4 < tp=8 replicates 4 heads per device.
+    sdpa_out_mem = q_sharded_mem if l1_act and int(k_cache.shape[1]) == 1 else ttnn.DRAM_MEMORY_CONFIG
     if page_table is not None:
-        sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
@@ -310,7 +379,7 @@ def decode_forward(
             page_table_tensor=page_table,
             scale=1.0,
             sliding_window_size=sliding_window,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=sdpa_out_mem,
             program_config=sdpa_program_config,
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
@@ -329,7 +398,7 @@ def decode_forward(
             cur_pos_tensor=cache_pos,
             scale=1.0,
             sliding_window_size=sliding_window,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=sdpa_out_mem,
             program_config=sdpa_program_config,
         )
     tt_q.deallocate(True)
@@ -337,9 +406,14 @@ def decode_forward(
     # 7. Concat heads + output projection + allreduce
     num_local_heads = config.num_attention_heads // tp
     tt_out = concat_heads(
-        tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device
+        tt_sdpa,
+        is_decode_mode=True,
+        num_heads=num_local_heads,
+        head_dim=config.head_dim,
+        mesh_device=mesh_device,
+        memory_config=ttnn.L1_MEMORY_CONFIG if l1_act else None,
     )
-    tt_out = apply_output_projection(tt_out, weights)
+    tt_out = apply_output_projection(tt_out, weights, memory_config=ttnn.L1_MEMORY_CONFIG if l1_act else None)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
     return tt_out
@@ -645,7 +719,7 @@ def packed_decode_forward(
     l1 = ttnn.L1_MEMORY_CONFIG
 
     # ── ① QKV projection (one call on the full B*P, output kept on L1) ──────
-    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=l1)
+    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=l1, decode=True)
     qkv_dim = xqkv.shape[-1]
 
     # ── ② L1 height-sharded MemoryConfig for the fallback paged_update_cache ─
