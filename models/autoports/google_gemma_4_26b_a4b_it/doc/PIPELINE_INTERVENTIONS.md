@@ -501,6 +501,15 @@ JIT-cache-confounded and are not reported as precision speedups. Local devices
 are closed and unowned. Active resumed time is about 169 minutes, cumulative
 about **7h42m**; no further user intervention or image build.
 
+08:32 UTC: exact pinned-tokenizer audit validates all 172 saved request counts
+from the five prior candidate trajectories. Exact-output dedup saves only
+0.077–0.590% of total input tokens and is not deployed. Previous-input block-
+matched prefixes cover 92.68–95.22%, but real APC is still unimplemented and
+must address sliding-cache/scheduler/trace correctness; these percentages are
+not speedup claims. Sixteen host helper tests pass. Combined retry is monitored
+on `120-qb2-p03t02`, still starting; local devices remain idle. Resumed active
+time about 181 minutes, cumulative **7h54m**.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
