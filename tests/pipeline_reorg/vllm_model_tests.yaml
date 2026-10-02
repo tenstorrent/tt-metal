@@ -20,6 +20,8 @@
 #   additional-structured-output-args, default-chat-template-kwargs, tt-llama-text-ver,
 #   tt-qwen3-text-ver, tt_mm_throttle_perf: server / benchmark configuration.
 #   coherence-test / structured-output / multimodal / sampling-tests: optional test toggles.
+#   prefix-caching-test: cold request + same-document resume must both recall a planted
+#     passphrase and the resume's TTFT must be under half the cold one (APC engaged).
 #   sampling-test-filter: -k filter for the sampling test step.
 #   chunked-prefill-budget: enables the chunked-prefill test step and tells it the
 #     served max_num_batched_tokens, which it uses to size prompts that are
@@ -134,26 +136,40 @@
   team: models
   budget_type: vllm
 
-# 31B tp=8 on the BH LoudBox. Unlike 12B, 31B keeps the gated (traced
-# sequential prefill) default — it is immune to the 12B 1x8 wedge and this is
-# the config validated by the full benchmark sweep on the link-exact emulated
-# LoudBox (rc=0, b32 identity byte-equal, 17.4 tok/s/u b32@4k). Serving knobs
-# mirror the 31B QB2 leg. First run on a fresh cache needs mlperf-write-access
-# and may take two dispatches (the 31B bfp8 conversion is resumable but can
-# exceed the 20 min server gate in one shot; warm thereafter).
+# 31B tp=8 on the BH LoudBox: the serving config of record for an 8-chip
+# Blackhole mesh (a Galaxy column is the same geometry) -- vLLM-managed hybrid
+# kv-cache groups + automatic prefix caching on a bfloat8_b KV pool of
+# 1,523,712 tokens (GEMMA4_MAX_TOKENS_ALL_USERS; mirrors the tt-inference-server
+# BLACKHOLE_GALAXY 256K spec). Prefix caching needs the sliding KV in vLLM's
+# pool, so the bounded device rings and the traced chunked prefill stay off
+# (extra-env overrides the generic 31B exports in the impl workflow).
+# The benchmark drives the device's capacity point: 32 users x 40,960 tokens =
+# 1.31M resident tokens (86% of the pool) in one all-at-once burst -- also the
+# shape where concurrent-prefill-plus-decode defects show (DP=4 Galaxy,
+# 2026-10-02: a few victims per 96-user 32K burst, none at batch 1). Prefilling
+# the whole pool takes ~15 min on 8 chips, hence the benchmark budget. The
+# prefix-caching gate checks that a cache-hit resume answers correctly and
+# faster than the cold request; the chunked-prefill needle tests check that
+# requests sharing a step read their own prefix. First run on a fresh cache
+# needs mlperf-write-access (the 31B bfp8 conversion is resumable; warm after).
 - name: "Gemma4-31B tp=8"
   model: google/gemma-4-31B-it
   coherence-test: true
+  prefix-caching-test: true
   server-timeout: 20
-  benchmark-timeout: 5
+  benchmark-timeout: 25
   mesh-device: P150x8
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 960000000, "l1_small_size": 24576}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 16384 --long_prefill_token_threshold 4096 --async-scheduling"
+  additional-benchmark-args: "--random-input-len 40960 --random-output-len 128 --num-prompts 32 --max-concurrency 32"
+  extra-env: "GEMMA4_HYBRID_KV_CACHE_GROUPS=1 GEMMA4_PREFIX_CACHING=1 GEMMA4_KV_BFP8=1 GEMMA4_BOUNDED_SLIDING_KV_CACHE=0 GEMMA4_CHUNKED_PREFILL_TRACE=0 GEMMA4_MAX_TOKENS_ALL_USERS=1523712 GEMMA4_DECODE_WARMUP_BATCHES=1,4,8,32 GEMMA4_CCL_TOPOLOGY=linear GEMMA4_PAGE_BLOCK_SIZE=64"
+  chunked-prefill-budget: 16384
+  chunked-prefill-test-timeout: 20
   multimodal: false
   skus:
     bh_loudbox:
-      timeout: 40
+      timeout: 70
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
@@ -290,19 +306,29 @@
   team: models
   budget_type: vllm
 
+# 31B on the 4-chip QuietBox 2 (P150x4), same APC serving config as the tp=8
+# leg. The KV pool is set conservatively: TP=4 keeps twice the KV bytes per
+# chip of TP=8, so the 1,523,712-token tp=8 pool halves to ~760K; 524,288 (two
+# full-256K sessions) leaves headroom until a measured ceiling replaces it.
+# Capacity point: 32 users x 15,360 tokens = 492K resident (94% of that pool).
 - name: "Gemma4-31B (P150x4)"
   model: google/gemma-4-31B-it
   coherence-test: true
+  prefix-caching-test: true
   server-timeout: 20
-  benchmark-timeout: 5
+  benchmark-timeout: 25
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 960000000, "l1_small_size": 24576}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 16384 --long_prefill_token_threshold 4096 --async-scheduling"
+  additional-benchmark-args: "--random-input-len 15360 --random-output-len 128 --num-prompts 32 --max-concurrency 32"
+  extra-env: "GEMMA4_HYBRID_KV_CACHE_GROUPS=1 GEMMA4_PREFIX_CACHING=1 GEMMA4_KV_BFP8=1 GEMMA4_BOUNDED_SLIDING_KV_CACHE=0 GEMMA4_CHUNKED_PREFILL_TRACE=0 GEMMA4_MAX_TOKENS_ALL_USERS=524288 GEMMA4_DECODE_WARMUP_BATCHES=1,4,8,32 GEMMA4_CCL_TOPOLOGY=linear GEMMA4_PAGE_BLOCK_SIZE=64"
+  chunked-prefill-budget: 16384
+  chunked-prefill-test-timeout: 20
   multimodal: false
   skus:
     bh_quietbox_2:
-      timeout: 35
+      timeout: 65
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models

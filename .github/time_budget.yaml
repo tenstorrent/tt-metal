@@ -450,9 +450,9 @@ models:
     bh_p150: 30
   vllm:
     wh_galaxy_perf: 430
-    bh_quietbox_2: 310
+    bh_quietbox_2: 340
     wh_llmbox: 342
-    bh_loudbox: 245
+    bh_loudbox: 275
     bh_galaxy: 65
     wh_n150: 65
 umd:

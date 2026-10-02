@@ -154,6 +154,7 @@ jobs:
         FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
         FILE_CHUNKED_PREFILL_TESTS_LOG: "./output/vllm_chunked_prefill_tests.log"
         FILE_COHERENCE_TEST_LOG: "./output/vllm_coherence_test.log"
+        FILE_PREFIX_CACHING_LOG: "./output/vllm_prefix_caching.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -561,6 +562,73 @@ jobs:
             exit 1
           fi
           echo "✅ Coherence guard passed: verbatim echo found"
+
+      - name: 🗂️ Run prefix-caching gate (cache-hit resume)
+        if: ${{ matrix.test-group.prefix-caching-test }}
+        timeout-minutes: 15
+        run: |
+          # Automatic prefix caching: a request sharing a long prefix with a
+          # completed one resumes from the cached blocks. The benchmark and the
+          # echo guard never exercise that path (unique random prompts, one
+          # short request). This gate sends a cold request carrying a ~24K-token
+          # synthetic document with a planted passphrase, then a second request
+          # with the same document and a different question. Both must answer
+          # with the passphrase -- a resume that attends the wrong window tail or
+          # another request's blocks answers wrongly -- and the resume's TTFT
+          # must be under half the cold one, or the cache is not engaged.
+          python3 - <<'EOF' 2>&1 | tee "${FILE_PREFIX_CACHING_LOG}"
+          import json, sys, time, urllib.request
+
+          MODEL = "${{ matrix.test-group.model }}"
+          URL = "http://localhost:8000/v1/chat/completions"
+          secret = f"vault-{int(time.time())}"
+          paras = []
+          for i in range(550):
+              paras.append(
+                  f"[archive section {i:03d}] The archive catalogs shipment manifests, "
+                  f"calibration notes and survey logs for bay {i % 17}; entry checksum "
+                  f"{(i * 7919) % 100000:05d} was verified during audit cycle {i % 9}."
+              )
+              if i == 275:
+                  paras.append(f"IMPORTANT RECORD: the vault passphrase is '{secret}'.")
+          doc = "\n".join(paras)
+
+          def ask(question):
+              body = json.dumps({
+                  "model": MODEL,
+                  "messages": [{"role": "system", "content": doc}, {"role": "user", "content": question}],
+                  "max_tokens": 32, "temperature": 0.0, "stream": True,
+                  "chat_template_kwargs": {"enable_thinking": False},
+              }).encode()
+              req = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json", "X-User-ID": "vllm_test"})
+              t0 = time.perf_counter()
+              ttft, text = None, ""
+              with urllib.request.urlopen(req, timeout=1800) as resp:
+                  for raw in resp:
+                      line = raw.decode("utf-8", "ignore").strip()
+                      if not line.startswith("data:") or line.endswith("[DONE]"):
+                          continue
+                      piece = (json.loads(line[5:])["choices"][0].get("delta") or {}).get("content") or ""
+                      if piece:
+                          ttft = ttft if ttft is not None else time.perf_counter() - t0
+                          text += piece
+              return ttft, text
+
+          cold_ttft, cold = ask("What is the vault passphrase recorded in the archive above? Answer with just the passphrase.")
+          warm_ttft, warm = ask("Quote the vault passphrase from the archive above, and nothing else.")
+          print(f"cold request: ttft={cold_ttft:.2f}s answer={cold.strip()[:80]!r}")
+          print(f"cache-hit resume: ttft={warm_ttft:.2f}s answer={warm.strip()[:80]!r}")
+          ok = True
+          if secret not in cold:
+              print("❌ cold request did not recall the passphrase"); ok = False
+          if secret not in warm:
+              print("❌ cache-hit resume did not recall the passphrase (wrong prefix or window tail)"); ok = False
+          if cold_ttft and warm_ttft and warm_ttft > 0.5 * cold_ttft:
+              print(f"❌ resume was not faster than the cold request ({warm_ttft:.2f}s vs {cold_ttft:.2f}s): prefix caching not engaged"); ok = False
+          if ok:
+              print("✅ Prefix-caching gate passed: resume correct and faster")
+          sys.exit(0 if ok else 1)
+          EOF
 
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
