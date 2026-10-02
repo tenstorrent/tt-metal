@@ -20,11 +20,11 @@ enum class DispatchCoreAxis { ROW, COL, COUNT };
 
 class DispatchCoreConfig {
 private:
-    DispatchCoreType type_ = DispatchCoreType::WORKER;
+    DispatchCoreType type_;
     std::optional<DispatchCoreAxis> axis_;
 
 public:
-    DispatchCoreConfig() = default;
+    DispatchCoreConfig() : type_(DispatchCoreType::WORKER) {}
 
     DispatchCoreConfig(DispatchCoreType type) : type_(type) {}
 
