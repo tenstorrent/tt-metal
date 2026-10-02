@@ -59,6 +59,12 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (4, 8): {"sp": (4, 0), "tp": (8, 1), "num_links": 4},
 }
 
+# BH Galaxy: the same layout. The base qwenimage BH 4x8 preset uses the same SP axis and num_links as
+# WH. Not yet validated on a BH Galaxy.
+_PRESETS_BH: dict[tuple[int, ...], dict] = {
+    (4, 8): {"sp": (4, 0), "tp": (8, 1), "num_links": 4},
+}
+
 
 @dataclass(frozen=True, kw_only=True)
 class QwenImageEditPipelineConfig:
@@ -78,11 +84,12 @@ class QwenImageEditPipelineConfig:
         num_links: int | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
     ) -> QwenImageEditPipelineConfig:
-        preset = _PRESETS_WH.get(tuple(mesh_shape))
+        presets, arch = (_PRESETS_BH, "BH") if ttnn.device.is_blackhole() else (_PRESETS_WH, "WH")
+        preset = presets.get(tuple(mesh_shape))
         if preset is None:
             msg = (
-                f"No Qwen-Image-Edit preset for mesh shape {tuple(mesh_shape)}; "
-                f"supported shapes: {list(_PRESETS_WH)}"
+                f"No Qwen-Image-Edit {arch} preset for mesh shape {tuple(mesh_shape)}; "
+                f"supported shapes: {list(presets)}"
             )
             raise ValueError(msg)
 
