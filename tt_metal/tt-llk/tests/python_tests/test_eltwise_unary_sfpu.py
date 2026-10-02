@@ -1499,11 +1499,15 @@ def test_exponential_clamp_negative(clamp_negative: bool):
 _BF16_EXHAUSTIVE_OPS = [
     (MathOperation.LogWithBase, ApproximationMode.No, 1),
 ]
+# Boards where the op keeps its stock kernel, which this sweep does not test.
+_BF16_STOCK_BOARDS = {}
 
 
 @pytest.mark.nightly
 @pytest.mark.parametrize("mathop,approx_mode,max_ulp", _BF16_EXHAUSTIVE_OPS)
 def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
+    if TestConfig.CHIP_ARCH in _BF16_STOCK_BOARDS.get(mathop, ()):
+        pytest.skip(f"{mathop.name} keeps the stock kernel on {TestConfig.CHIP_ARCH}")
     from helpers.ulp import ulp_distance
     from helpers.ulp_sweep import measurable_mask, nonfinite_failures, sweep_spec
 
