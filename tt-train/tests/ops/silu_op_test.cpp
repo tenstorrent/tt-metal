@@ -16,6 +16,7 @@
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class SiLUOpTest : public ::testing::Test {
 protected:
@@ -264,6 +265,65 @@ TEST_F(SiLUOpTest, SiLUBackwardUsesDistinctProgramsForDistinctPaddedGeometry) {
     EXPECT_TRUE(xt::allclose(core::to_xtensor(output_64x96), silu_backward_reference(data, data), 1.0e-3F, 3e-2F));
 }
 
+TEST_F(SiLUOpTest, SiLUBackwardRejectsL1OperandsAfterDramCachePrime) {
+    using namespace ttml;
+
+    const std::vector<uint32_t> shape = {1, 1, 32, 32};
+    const xt::xarray<float> data = xt::ones<float>(shape);
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const auto input = core::from_xtensor(data, device);
+    const auto grad = core::from_xtensor(data, device);
+    const auto output = core::from_xtensor(data, device);
+    const auto primed_output = metal::silu_bw(input, grad, output);
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(primed_output), silu_backward_reference(data, data), 1.0e-3F, 3e-2F));
+
+    const auto l1_input = ttnn_fixed::to_l1_interleaved(input);
+    const auto l1_grad = ttnn_fixed::to_l1_interleaved(grad);
+    const auto l1_output = ttnn_fixed::to_l1_interleaved(output);
+
+    EXPECT_THROW(metal::silu_bw(l1_input, grad, output), std::runtime_error);
+    EXPECT_THROW(metal::silu_bw(input, l1_grad, output), std::runtime_error);
+    EXPECT_THROW(metal::silu_bw(input, grad, l1_output), std::runtime_error);
+}
+
+TEST_F(SiLUOpTest, SiLUBackwardRejectsUnsupportedTileDescriptorsAfterCachePrime) {
+    using namespace ttml;
+
+    const std::vector<uint32_t> shape = {1, 1, 32, 32};
+    const xt::xarray<float> data = xt::ones<float>(shape);
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const auto standard_input = core::from_xtensor(data, device);
+    const auto standard_grad = core::from_xtensor(data, device);
+    const auto standard_output = core::from_xtensor(data, device);
+    const auto primed_output = metal::silu_bw(standard_input, standard_grad, standard_output);
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(primed_output), silu_backward_reference(data, data), 1.0e-3F, 3e-2F));
+
+    auto make_tensor_with_tile = [device](const tt::tt_metal::Tile& tile) {
+        const auto spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape({1, 1, 32, 32}),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, tile),
+                ttnn::DRAM_MEMORY_CONFIG));
+        return ttnn::create_device_tensor(spec, device);
+    };
+
+    const auto narrow_tile = make_tensor_with_tile(tt::tt_metal::Tile({16, 32}));
+    const auto custom_face_tile =
+        make_tensor_with_tile(tt::tt_metal::Tile({16, 32}, {8, 16}, /*transpose_tile=*/false));
+    const auto transposed_tile = make_tensor_with_tile(tt::tt_metal::Tile({32, 32}, /*transpose_tile=*/true));
+
+    EXPECT_THROW(metal::silu_bw(narrow_tile, standard_grad, standard_output), std::runtime_error);
+    EXPECT_THROW(metal::silu_bw(standard_input, narrow_tile, standard_output), std::runtime_error);
+    EXPECT_THROW(metal::silu_bw(standard_input, standard_grad, narrow_tile), std::runtime_error);
+    EXPECT_THROW(metal::silu_bw(standard_input, custom_face_tile, standard_output), std::runtime_error);
+    EXPECT_THROW(metal::silu_bw(standard_input, transposed_tile, standard_output), std::runtime_error);
+}
+
 // Test block_size alignment patterns
 // Wt % block_size = 0 (perfectly aligned)
 TEST_F(SiLUOpTest, SiLU_Compare_BlockSize_Remainder0) {
@@ -417,4 +477,35 @@ TEST_F(SiLUOpTest, SiLU_Precision_Comparison) {
     // Silent validation - just ensure both implementations work reasonably
     EXPECT_LT(kernel_mean_rmse, 1e-5f) << "Kernel implementation has poor precision";
     EXPECT_LT(composite_mean_rmse, 1e-5f) << "Composite implementation has poor precision";
+}
+
+class SiLUBackwardMultiDeviceContractTest : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(SiLUBackwardMultiDeviceContractTest, RejectsGradientAndOutputFromAnotherDevice) {
+    using namespace ttml;
+
+    auto& parent_mesh = autograd::ctx().get_device();
+    const auto input_mesh = parent_mesh.create_submesh(
+        tt::tt_metal::distributed::MeshShape(1, 1), tt::tt_metal::distributed::MeshCoordinate(0, 0));
+    const auto other_mesh = parent_mesh.create_submesh(
+        tt::tt_metal::distributed::MeshShape(1, 1), tt::tt_metal::distributed::MeshCoordinate(0, 1));
+
+    const std::vector<uint32_t> shape = {1, 1, 32, 32};
+    const xt::xarray<float> data = xt::ones<float>(shape);
+    const auto input = core::from_xtensor(data, input_mesh.get());
+    const auto matching_grad = core::from_xtensor(data, input_mesh.get());
+    const auto foreign_grad = core::from_xtensor(data, other_mesh.get());
+    const auto foreign_output = core::from_xtensor(data, other_mesh.get());
+
+    EXPECT_THROW(metal::silu_bw(input, foreign_grad), std::runtime_error);
+    EXPECT_THROW(metal::silu_bw(input, matching_grad, foreign_output), std::runtime_error);
 }
