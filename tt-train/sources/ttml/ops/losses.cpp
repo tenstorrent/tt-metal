@@ -4,6 +4,7 @@
 
 #include "losses.hpp"
 
+#include <limits>
 #include <stdexcept>
 #include <ttnn/types.hpp>
 
@@ -14,12 +15,33 @@
 #include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 #include "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss.hpp"
 #include "ttnn/operations/moreh/moreh_nll_loss_backward/moreh_nll_loss_backward.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
+
+namespace {
+
+ttnn::Tensor canonicalize_nll_target(const ttnn::Tensor& target, uint32_t sample_count) {
+    const auto& shape = target.logical_shape();
+    const bool is_flat_row = (shape.rank() == 1U && shape[0] == sample_count) ||
+                             (shape.rank() == 2U && shape[0] == 1U && shape[1] == sample_count);
+    if (is_flat_row && target.dtype() == ttnn::DataType::INT32 && target.layout() == ttnn::Layout::TILE) {
+        return target;
+    }
+
+    auto row_major_target = target;
+    if (row_major_target.layout() != ttnn::Layout::ROW_MAJOR) {
+        row_major_target = ttnn::to_layout(row_major_target, ttnn::Layout::ROW_MAJOR);
+    }
+    row_major_target = ttnn::reshape(row_major_target, ttnn::Shape({sample_count}));
+    return ttnn::to_layout(row_major_target, ttnn::Layout::TILE, ttnn::DataType::INT32);
+}
+
+}  // namespace
 
 autograd::TensorPtr mse_loss(
     const autograd::TensorPtr& prediction, const autograd::TensorPtr& target, ReduceType reduce) {
@@ -109,29 +131,70 @@ autograd::TensorPtr nll_loss(
         throw std::logic_error("Unsupported NLL reduction type, only MEAN is supported");
     }
 
-    auto* device = &autograd::ctx().get_device();
-    auto divisor = core::empty(ttnn::Shape({1, 1}), device, prediction->get_value().memory_config());
+    const auto& prediction_value = prediction->get_value();
+    const auto& target_value = target->get_value();
+    const auto& tensor_shape = prediction_value.logical_shape();
 
-    auto tensor_shape = prediction->get_value().logical_shape();
-    uint32_t Ndim = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
-    uint32_t Cdim = tensor_shape[3];
-    auto reshaped_tensor = ttnn::reshape(prediction->get_value(), ttnn::Shape({Ndim, Cdim}));
+    if (tensor_shape.rank() != 4U) {
+        throw std::logic_error(fmt::format("NLL loss expects prediction rank 4, got shape {}", tensor_shape));
+    }
+    if (!ttnn::is_device_tensor(prediction_value) || !ttnn::is_device_tensor(target_value)) {
+        throw std::logic_error("NLL loss expects prediction and target tensors on device");
+    }
+    if (prediction_value.device() != target_value.device()) {
+        throw std::logic_error("NLL loss expects prediction and target tensors on the same device or mesh");
+    }
+    if (prediction_value.dtype() != ttnn::DataType::BFLOAT16 || prediction_value.layout() != ttnn::Layout::TILE) {
+        throw std::logic_error(fmt::format(
+            "NLL loss expects a BFLOAT16 TILE prediction tensor, got dtype {} and layout {}",
+            prediction_value.dtype(),
+            prediction_value.layout()));
+    }
+    if (target_value.dtype() != ttnn::DataType::INT32 && target_value.dtype() != ttnn::DataType::UINT32) {
+        throw std::logic_error(
+            fmt::format("NLL loss expects an INT32 or UINT32 target tensor, got {}", target_value.dtype()));
+    }
+    if (prediction_value.memory_config().is_sharded() || target_value.memory_config().is_sharded()) {
+        throw std::logic_error("NLL loss does not support sharded prediction or target tensors");
+    }
+
+    const uint64_t sample_count = static_cast<uint64_t>(tensor_shape[0]) * tensor_shape[1] * tensor_shape[2];
+    if (sample_count > std::numeric_limits<uint32_t>::max()) {
+        throw std::logic_error(fmt::format("NLL loss sample count {} exceeds UINT32_MAX", sample_count));
+    }
+    if (tensor_shape[3] == 0U) {
+        throw std::logic_error("NLL loss expects a non-empty class dimension");
+    }
+    if (target_value.logical_volume() != sample_count) {
+        throw std::logic_error(fmt::format(
+            "NLL loss expects target volume to match prediction sample count {}, got target shape {} with volume {}",
+            sample_count,
+            target_value.logical_shape(),
+            target_value.logical_volume()));
+    }
+
+    const auto Ndim = static_cast<uint32_t>(sample_count);
+    const uint32_t Cdim = tensor_shape[3];
+    auto canonical_target = canonicalize_nll_target(target_value, Ndim);
+    auto* device = prediction_value.device();
+    auto divisor = core::empty(ttnn::Shape({1, 1}), device, prediction_value.memory_config());
+    auto reshaped_tensor = ttnn::reshape(prediction_value, ttnn::Shape({Ndim, Cdim}));
     auto loss_tensor = ttnn::moreh_nll_loss(
         reshaped_tensor,
-        target->get_value(),
+        canonical_target,
         /* reduction */ "mean",
         /* weight_tensor */ std::nullopt,
         /* divisor_tensor */ divisor,
         /* output_tensor */ std::nullopt,
         /* ignore_index */ -100,
-        /* memory_config */ prediction->get_value().memory_config(),
+        /* memory_config */ prediction_value.memory_config(),
         /* compute_kernel_config */ core::ComputeKernelConfig::precise());
     auto out = autograd::create_tensor(loss_tensor);
 
-    autograd::GradFunction grad = [prediction, target, out, Ndim, Cdim, device, divisor]() {
+    autograd::GradFunction grad = [prediction, canonical_target, out, Ndim, Cdim, device, divisor]() {
         auto out_grad = core::empty(ttnn::Shape({Ndim, Cdim}), device, prediction->get_value().memory_config());
         auto grad = ttnn::moreh_nll_loss_backward(
-            target->get_value(),
+            canonical_target,
             out->get_grad(),
             /* reduction_mean */ true,
             /* weight_tensor */ std::nullopt,
