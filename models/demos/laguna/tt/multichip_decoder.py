@@ -270,6 +270,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
         self._glu_out_sharded = _parse_binary_env("TT_LAGUNA_GLU_OUT_SHARDED", True)  # decode MLP out stays sharded
         self._slice_sharded = _parse_binary_env("TT_LAGUNA_SLICE_SHARDED", True)  # decode splits slice the shard
+        self._reshape_to_shard = _parse_binary_env("TT_LAGUNA_RESHAPE_TO_SHARD", True)  # attn flatten -> WO shard
         # 1-token router: eltwise ops read the sharded logits; the EP-select matmul casts the fp32 weights to bf16
         self._router_sharded_logits = _parse_binary_env("TT_LAGUNA_ROUTER_SHARDED_LOGITS", True)
         self._router_fp32_out = self.D > 1 and self.PACK_GATE_UP and _parse_binary_env("TT_LAGUNA_ROUTER_FP32_OUT", True)
@@ -1489,8 +1490,14 @@ class MultichipDecoder(OptimizedDecoder):
         g = ttnn.reshape(g, (1, B, cfg.num_heads, 1))
         softplus = ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)  # ttnn.softplus defaults
         attn = ttnn.mul(attn, g, input_tensor_b_activations=[softplus])
-        attn = ttnn.reshape(attn, (1, 1, B, cfg.num_heads * cfg.head_dim))
         q_w = self.meta["q_w"]
+        # the flatten writes the WO DRAM-sharded matmul's width-sharded input layout directly (no i2s in _dram_mm)
+        wo_in = (
+            _width_sharded_l1(TILE, q_w, _decode_shard_cores(q_w, cfg.hidden))
+            if self.use_dram_sharded and B <= TILE and self._reshape_to_shard
+            else None
+        )
+        attn = ttnn.reshape(attn, (1, 1, B, cfg.num_heads * cfg.head_dim), memory_config=wo_in)
         o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
         if self.use_dram_sharded and not self._ag_reduce:  # the decode all_gather reads the sharded output
             o = ttnn.sharded_to_interleaved(o, ttnn.L1_MEMORY_CONFIG)
