@@ -221,8 +221,9 @@ class Llama(AbstractModuleBase):
         # the MLP), so N = 2 * num_hidden_layers. fan_in differs between the two: hidden_size
         # for out-proj, intermediate_size for down-proj.
         intermediate_size = config.intermediate_size or compute_swiglu_intermediate_size(config.hidden_size)
-        out_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(config.hidden_size * 2 * config.num_hidden_layers))
-        down_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(intermediate_size * 2 * config.num_hidden_layers))
+        num_residual_writes = 2 * config.num_hidden_layers
+        out_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(config.hidden_size * num_residual_writes))
+        down_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(intermediate_size * num_residual_writes))
 
         # Transformer blocks (ModuleList auto-registers all blocks)
         self.blocks = ModuleList(
