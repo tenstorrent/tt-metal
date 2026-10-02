@@ -124,10 +124,7 @@ def test_perf_eltwise_binary_sfpu_float(
     configuration.run(perf_report)
 
 
-# Float ops whose cost does not depend on the format pair beyond the Dest width, so they are
-# measured on one 16-bit and one 32-bit pair rather than the full matrix above. mask and
-# mask_posinf hard-code their operands (data at dst tile 0, mask at tile 1), so every placement
-# re-runs the first pair; the SFPU work per call is the same.
+# Cost depends only on the Dest width, so one 16-bit and one 32-bit format pair suffice.
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
