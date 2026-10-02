@@ -3,6 +3,7 @@
 
 #include "tt_metal/distributed/host_h2h_socket.hpp"
 
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <string>
@@ -43,10 +44,10 @@ std::size_t geometry_fingerprint(const H2HSocket::Config& cfg) {
 // A load the compiler may not hoist out of a poll loop; acquire orders the trailer's other
 // fields after the guard that vouches for them.
 uint64_t load_acquire(const volatile uint64_t* p) {
-    return __atomic_load_n(const_cast<const uint64_t*>(p), __ATOMIC_ACQUIRE);
+    return std::atomic_ref<uint64_t>(const_cast<uint64_t&>(*p)).load(std::memory_order_acquire);
 }
 void store_release(volatile uint64_t* p, uint64_t v) {
-    __atomic_store_n(const_cast<uint64_t*>(p), v, __ATOMIC_RELEASE);
+    std::atomic_ref<uint64_t>(const_cast<uint64_t&>(*p)).store(v, std::memory_order_release);
 }
 
 }  // namespace
