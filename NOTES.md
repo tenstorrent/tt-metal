@@ -13,6 +13,11 @@
 - If blx03 reboots before the job, the driver dies without a marker: relaunch it
   (`ssh g14blx03`, then `setsid nohup bash ~/fasth3/t85/driver85.sh > /var/tmp/fasth3/t85/driver.out 2>&1 < /dev/null &`, run with ssh -f or it hangs).
 
+## Attempt 2 (2026-10-02 18:38 UTC)
+- blx03 rebooted 2026-10-02 18:23 UTC (driver died, no job had run). Broker healthy again.
+- Relaunched driver85.sh (pid 41834); it submitted job 161 (queued behind ltx-host 160).
+- Old driver log moved to /var/tmp/fasth3/t85/driver.prev.log.
+
 ## Next step on resume
 1. `grep -E 'T85_(AB|BLOCK|STACK|FAIL|EXIT)' /var/tmp/fasth3/t85/run85.log` on blx03.
 2. Per-step saving = 48 x (base - arm) ms_per_block, minus T85_STACK for the adaln arm.
