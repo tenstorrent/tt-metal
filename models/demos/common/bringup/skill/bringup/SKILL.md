@@ -36,6 +36,9 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
   their A/B switch from that file. Component and swap tests always run at the model's max precision
   (`max_precision` in that file); a precision drop from a perf pick is accepted on the end-to-end numbers (ladder,
   contract tests), never judged by component limits.
+- **tt-d-gen**: where the inference server checkout is or should go (default `/localdev/$USER/tt-d-gen`). It goes in
+  `serving.server_repo` (leave the template's default when they take it). As soon as they answer, during the spec
+  review, start the build (section 3).
 - **Retry policy**, only if they want to change it: per role, attempts (default 3) and whether it escalates to
   `ttnn-expert-debugger` (only implement and device fixes do; that agent is for TTNN ops, never CPU code).
 
@@ -65,6 +68,13 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
    With a prior bring-up: `$B new --prior <prior slug> --mesh R,C` instead. It copies the prior's spec with `prior` set
    and the new mesh, and writes hooks that reuse the prior's CPU side; the R.* tasks then pass on their first check
    and the G.* tasks reuse the prior's goldens. Review every copied field (the box name, rules, reads).
+   **tt-d-gen build**, as soon as the path is known and in parallel with everything else: start the `dgen-build` agent
+   in the background (Agent tool, `subagent_type: dgen-build`, prompt: `REPO=<path>`). It clones or pulls tt-d-gen and
+   builds its engine bindings next to it (`<path>-build/`); it never touches the device or the model repo, so it runs
+   alongside the spec review and the run. Skip it when `python -m models.demos.common.bringup.testing.dgen_engine
+   find` already prints a build at that path's current commit. The runner tests (K.1, K.4) fail without a build
+   (`serving.require_engine`, default true); check the agent's reply before K.1 and tell the owner in one line if it
+   failed.
 2. Validate: `python -c "from models.demos.common.bringup.core.spec import Spec; print(Spec.load('<spec>').validate())"`.
 3. Show the spec. Wait for an explicit yes. Then `$B approve intake --spec <spec>`.
 4. `python -m models.demos.common.bringup.plan.ledger_gen --spec <spec> --early --write` and `$B init-run run1 --spec <spec>`.

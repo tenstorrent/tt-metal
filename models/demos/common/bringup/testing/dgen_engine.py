@@ -18,7 +18,8 @@ Finding the build (find_build):
   env      ours minus PYTHONPATH / VIRTUAL_ENV / TT_METAL_HOME / TT_METAL_RUNTIME_ROOT / LD_LIBRARY_PATH, plus
            TT_METAL_HOME = TT_METAL_RUNTIME_ROOT = <repo>/third_party/tt-blaze/tt-metal, PYTHONPATH =
            <repo>/bindings/python
-BRINGUP_DGEN=0 forces the producer fallback; BRINGUP_DGEN=1 makes a missing build a failure instead of a fallback.
+A missing build fails the runner tests (defaults.yaml serving.require_engine: true); spec serving.require_engine: false
+lets the producer stand in. BRINGUP_DGEN=0 forces the producer fallback, BRINGUP_DGEN=1 forces the requirement (diagnostic).
 
 The engine never sends the runner's shutdown sentinel (metadata -1, -1, -1; prefill_runner.py _is_shutdown_sentinel):
 after the driver exits 0, `python -m models.demos.common.bringup.testing.dgen_engine shutdown <service_id>` (this
@@ -75,14 +76,25 @@ class Build:
         return f"tt-d-gen engine ({self.repo} @ {self.sha[:11]}, {self.python})"
 
 
+def _setting(spec, key: str):
+    if spec is not None:
+        return spec.get(key)
+    from models.demos.common.bringup.core import defaults
+
+    return defaults.get(key)
+
+
 def server_repo(spec=None) -> Path:
-    r = os.environ.get("BRINGUP_SERVER_REPO")
-    if not r and spec is not None:
-        try:
-            r = spec.get("serving.server_repo")
-        except Exception:
-            r = None
+    r = os.environ.get("BRINGUP_SERVER_REPO") or _setting(spec, "serving.server_repo")
     return Path(r or f"/localdev/{getpass.getuser()}/tt-d-gen")
+
+
+def engine_required(spec=None) -> bool:
+    """True: a runner test without a tt-d-gen build fails (serving.require_engine). BRINGUP_DGEN=0/1 overrides."""
+    e = os.environ.get("BRINGUP_DGEN")
+    if e in ("0", "1"):
+        return e == "1"
+    return bool(_setting(spec, "serving.require_engine"))
 
 
 def find_build(spec=None) -> tuple[Build | None, str]:

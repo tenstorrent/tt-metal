@@ -11,7 +11,8 @@ https://claude.ai/artifact/L5rXDnJoEpjsEL33s3wmSC. This file is the how-to.
 
 - Run from the repo root with `export PYTHONPATH=$PWD` (the shell's default points at another checkout) and
   `source python_env/bin/activate`.
-- A clone of tt-d-gen at `/localdev/$USER/tt-d-gen` (the serving-contract step reads it at its latest commit).
+- A clone of tt-d-gen at `/localdev/$USER/tt-d-gen` (the serving-contract step reads it at its latest commit) and
+  its engine build (the runner tests drive the model with it); the `dgen-build` agent makes both.
   Optional: `github.com/AleksKnezevic/disagg_lb` next to it, for the settings proven on LoudBoxes.
 - Large files go under `/localdev/$USER/bringup/<model>/` (checkpoint, goldens, weight cache, runs). If your home
   quota is small, run the orchestrator with `TT_METAL_CACHE=/localdev/$USER` so JIT builds land there too.
@@ -99,8 +100,10 @@ gate runs it: a component step name, or `adapter` for K.1) and the frozen tests 
 `python -m models.demos.common.bringup.testing.serving --run <step|adapter|all>`.
 
 The runner tests are fed by tt-d-gen's real engine (`testing/dgen_prefill_driver.py`, its own Python 3.12 process,
-found by `testing/dgen_engine.py` under `serving.server_repo` or `/localdev/$USER/tt-d-gen`); without a build they fall
-back to tt-metal's `prefill_producer`. `BRINGUP_DGEN=0` forces the fallback, `BRINGUP_DGEN=1` makes a missing build fail.
+found by `testing/dgen_engine.py` under `serving.server_repo` or `/localdev/$USER/tt-d-gen`). Without a build they
+fail (`serving.require_engine: true`); `false` lets tt-metal's `prefill_producer` stand in, and `BRINGUP_DGEN=0|1`
+forces either for a diagnostic. The build comes from the `dgen-build` agent (`agents/dgen-build.md`), which `/bringup`
+starts in the background during the spec review; by hand: start it from a session with `REPO=<path>`.
 
 ## Perf picks (F57)
 
@@ -139,7 +142,7 @@ $O resume --spec <spec>
 |---|---|
 | `defaults.yaml` | every framework switch and its default |
 | `orchestrator.py` | the run loop |
-| `agents/` | `bringup-engineer.md` (every step), `serving-contract.md` (SC.1), `settings-audit.md` (Z.1) |
+| `agents/` | `bringup-engineer.md` (every step), `serving-contract.md` (SC.1), `settings-audit.md` (Z.1), `dgen-build.md` (tt-d-gen build) |
 | `briefs/` | the brief template and the per-role text |
 | `core/` | spec, defaults, ledger, gate runner, metrics, freeze, runs, model settings helper |
 | `reference/` | reference interface, block-graph runner, HF parity, golden generator and reader |
