@@ -11,6 +11,7 @@ from . import test_complex_unary_examples as complex_unary
 from . import test_backward_examples as backward
 from . import test_pointwise_binary_examples as pointwise_binary
 from . import test_pointwise_ternary_examples as pointwise_ternary
+from . import test_quantization_examples as quantization
 from . import test_losses_examples as losses
 from . import test_reduction_examples as reduction
 from . import test_normalization_examples as normalization
@@ -353,6 +354,10 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.addcdiv_bw": pointwise_ternary.test_addcdiv_bw,
     "ttnn.where_bw": pointwise_ternary.test_where_bw,
     "ttnn.lerp_bw": pointwise_ternary.test_lerp_bw,
+    # Quantization
+    "ttnn.quantize": quantization.test_quantize,
+    "ttnn.requantize": quantization.test_requantize,
+    "ttnn.dequantize": quantization.test_dequantize,
     # Losses
     "ttnn.l1_loss": losses.test_l1_loss,
     "ttnn.mse_loss": losses.test_mse_loss,

@@ -31,6 +31,7 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     FastMode,
+    FusedSort,
     MathOperation,
     StableSort,
     Transpose,
@@ -43,6 +44,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
     FAST_MODE,
+    FUSED_SORT,
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
@@ -80,6 +82,9 @@ def _config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
             ITERATIONS(32),
             FAST_MODE(FastMode.No),
             STABLE_SORT(StableSort.No),
+            # eltwise_unary_sfpu_perf.cpp instantiates the topk primitives with both sort
+            # constants.
+            FUSED_SORT(FusedSort.No),
             CLAMP_NEGATIVE(False),
         ],
         runtimes=[

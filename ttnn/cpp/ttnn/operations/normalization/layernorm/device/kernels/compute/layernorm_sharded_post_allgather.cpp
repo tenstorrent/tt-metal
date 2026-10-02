@@ -16,17 +16,14 @@
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
-    constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
     constexpr auto block_w = get_arg(args::block_w);
     constexpr auto block_h_const = get_arg(args::block_h);
-    volatile uint32_t block_h_volatile = get_arg(args::block_h);
+    const volatile uint32_t block_h_volatile = get_arg(args::block_h);
     constexpr auto subblock_w_const = get_arg(args::subblock_w);
-    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
+    const volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
-    constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
     // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
     // has to reach the preprocessor as well as `if constexpr`.
 #ifdef FUSE_GAMMA
@@ -51,19 +48,7 @@ void kernel_main() {
     const bool is_second_stage_reader = get_arg(args::is_second_stage_reader) == 1;
     const uint32_t num_distributed_blocks = get_arg(args::num_distributed_blocks);
 
-    uint32_t num_blocks_reduce;
-    if (is_second_stage_reader) {
-        num_blocks_reduce = num_blocks_first_stage + num_blocks_second_stage - 1;
-    } else {
-        num_blocks_reduce = num_blocks_first_stage;
-    }
-
-    bool enable_sqrt;
-    if (use_two_stage_reduce and not is_second_stage_reader) {
-        enable_sqrt = false;
-    } else {
-        enable_sqrt = true;
-    }
+    const bool enable_sqrt = not(use_two_stage_reduce and not is_second_stage_reader);
 #endif
 
     constexpr uint32_t dst0 = 0;
@@ -103,7 +88,6 @@ void kernel_main() {
 #endif
     DataflowBuffer dfb_ex2_obj(dfb_ex2);
     DataflowBuffer dfb_ex_global_obj(dfb_ex_global);
-    DataflowBuffer dfb_fusion_obj(dfb_fusion);
     DataflowBuffer dfb_out_obj(dfb_out);
     DataflowBuffer dfb_ex_sqr_obj(dfb_ex_sqr);
 #ifdef IS_ALLGATHER_WORKER
@@ -140,14 +124,18 @@ void kernel_main() {
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
-    int index_subblock_w_offset = 0;
-    int index_h_offset = 0;
-    int index = 0;
+    uint32_t index_subblock_w_offset = 0;
+    uint32_t index_h_offset = 0;
+    uint32_t index = 0;
 
-    constexpr uint32_t dfb_im = (do_gamma | do_beta) ? dfb_ex_sqr : dfb_out;
+    constexpr uint32_t dfb_im = (do_gamma || do_beta) ? dfb_ex_sqr : dfb_out;
     DataflowBuffer dfb_im_obj(dfb_im);
     constexpr uint32_t dfb_outgamma = do_beta ? dfb_fusion : dfb_out;
     DataflowBuffer dfb_outgamma_obj(dfb_outgamma);
+    // Beta reads gamma's fusion output when gamma ran. Without gamma, fusion is
+    // never packed (and on layer_norm it aliases xmm), so beta reads dfb_im.
+    constexpr uint32_t dfb_beta_src = do_gamma ? dfb_fusion : dfb_im;
+    DataflowBuffer dfb_beta_src_obj(dfb_beta_src);
 
     // global reduce over the gathered statistics
 #ifdef IS_ALLGATHER_WORKER
@@ -163,15 +151,16 @@ void kernel_main() {
         reconfig_data_format(dfb_scaler_global, dfb_stats);
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb_stats, dfb_scaler_global, dfb_var);
         tile_regs_acquire();
-        // striding over the statistics, consisting [E(X), E(X^2)] from all the distributed devices in interleaved order
+        // striding over the statistics, consisting [E(X), E(X^2)] from all the distributed devices in interleaved
+        // order. stats borrows the resident gathered-statistics shard: nothing pushes it, so index it directly and
+        // never pop it (a pop with no matching post faults Quasar's hardware tile counters).
         for (uint32_t w = 0; w < stats_tiles * num_distributed_blocks; w++) {
             reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(
                 dfb_stats,
                 dfb_scaler_global,
-                0,
+                w,
                 scaler0,
                 w % stats_tiles);  // reducing E(x) and E(x^2) separately to different dst
-            dfb_stats_obj.pop_front(1);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -180,6 +169,12 @@ void kernel_main() {
         pack_tile(dst0, dfb_var);
 #else
         pack_tile(dst0, dfb_stats_reduced);
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it before every pack-target switch, else pack_tile
+        // keeps writing into the previously programmed buffer and the new one is never written (all-zero output).
+#ifdef ARCH_QUASAR
+        pack_init(dfb_ex2);
+#endif
         pack_tile(dst1, dfb_ex2);
 #endif
         tile_regs_release();
@@ -195,6 +190,9 @@ void kernel_main() {
         // calculate var = E(x^2) - E(x)^2
         // E(x)^2
         reconfig_data_format(dfb_stats_reduced, dfb_stats_reduced);
+#ifdef ARCH_QUASAR
+        pack_init(dfb_ex_sqr);
+#endif
         dfb_ex_sqr_obj.reserve_back(1);
         dfb_stats_reduced_obj.wait_front(1);
         tile_regs_acquire();
@@ -210,6 +208,9 @@ void kernel_main() {
         reconfig_data_format_srca(dfb_stats_reduced, dfb_ex2);
         reconfig_data_format_srcb(dfb_stats_reduced, dfb_ex_sqr);
         pack_reconfig_data_format(dfb_var);
+#ifdef ARCH_QUASAR
+        pack_init(dfb_var);
+#endif
         dfb_ex2_obj.wait_front(1);
         dfb_ex_sqr_obj.wait_front(1);
         dfb_var_obj.reserve_back(1);
@@ -228,6 +229,9 @@ void kernel_main() {
         // 1/[sqrt(Var + eps)],
         reconfig_data_format(dfb_var, dfb_eps);  // the Var[x] buffer holds the gathered stats for RMS norm
         pack_reconfig_data_format(dfb_stats_reduced);
+#ifdef ARCH_QUASAR
+        pack_init(dfb_stats_reduced);
+#endif
         dfb_var_obj.wait_front(1);
         dfb_eps_obj.wait_front(1);
         dfb_stats_reduced_obj.reserve_back(1);
@@ -236,8 +240,8 @@ void kernel_main() {
         tile_regs_acquire();
         add_tiles(dfb_var, dfb_eps, 0, 0, dst0);
         tile_regs_wait();
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
+        rsqrt_tile_init();
+        rsqrt_tile(dst0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst0, dfb_stats_reduced);
@@ -252,8 +256,14 @@ void kernel_main() {
     // x - E[x]
     reconfig_data_format(dfb_in0, dfb_ex_global);
     pack_reconfig_data_format(dfb_xmm);
+#ifdef ARCH_QUASAR
+    pack_init(dfb_xmm);
+#endif
     index_h_offset = 0;
     sub_bcast_cols_init(dfb_in0, dfb_ex_global);
+    // in0 is the resident input shard (it borrows the input tensor): nothing pushes it, so read it by
+    // absolute tile index and never pop it -- a pop with no matching post is tolerated by WH/BH but
+    // faults Quasar's hardware tile counters (posted=0 acked=N).
     dfb_xmm_obj.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -261,24 +271,24 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
+                index = w + index_subblock_w_offset + index_h_offset;
                 sub_tiles_bcast_cols(dfb_in0, dfb_ex_global, index, 0, w);
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_xmm);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_xmm);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
         dfb_ex_global_obj.pop_front(1);
-        dfb_in0_obj.pop_front(block_w);
+        index_h_offset += block_w;
     }
     dfb_xmm_obj.push_back(num_tiles_per_block);
 #endif
 
-    if constexpr (do_gamma == 0 && do_beta == 0) {
+    if constexpr (!do_gamma && !do_beta) {
         pack_reconfig_data_format(dfb_out);
     } else {
         pack_reconfig_data_format(dfb_im);
@@ -288,6 +298,9 @@ void kernel_main() {
     reconfig_data_format(dfb_xmm, dfb_ex_global);
     mul_bcast_cols_init(dfb_xmm, dfb_ex_global);
     index_h_offset = 0;
+#ifdef ARCH_QUASAR
+    pack_init(dfb_im);
+#endif
     dfb_im_obj.reserve_back(num_tiles_per_block);
 #ifndef RMSNORM
     dfb_xmm_obj.wait_front(num_tiles_per_block);
@@ -304,8 +317,8 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_im);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_im);
             }
             tile_regs_release();
 
@@ -316,18 +329,25 @@ void kernel_main() {
     }
     dfb_im_obj.push_back(num_tiles_per_block);
 
+#ifndef RMSNORM
+    // RMSNorm reads x straight from the resident input shard (xmm aliases in0), which is never pushed and
+    // so must not be popped.
     dfb_xmm_obj.pop_front(num_tiles_per_block);
+#endif
     dfb_im_obj.wait_front(num_tiles_per_block);
 
 #ifdef FUSE_GAMMA
     {
         reconfig_data_format(dfb_im, dfb_gamma);
-        if constexpr (do_beta == 0) {
+        if constexpr (!do_beta) {
             pack_reconfig_data_format(dfb_out);
         }
         mul_bcast_rows_init(dfb_im, dfb_gamma);
         dfb_gamma_obj.wait_front(block_w);
         index_h_offset = 0;
+#ifdef ARCH_QUASAR
+        pack_init(dfb_outgamma);
+#endif
         dfb_outgamma_obj.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_h; i++) {
             index_subblock_w_offset = 0;
@@ -339,8 +359,8 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t i = 0; i < subblock_w; i++) {
-                    pack_tile(i, dfb_outgamma);
+                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                    pack_tile(dst_i, dfb_outgamma);
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
@@ -354,12 +374,15 @@ void kernel_main() {
 
 #ifdef FUSE_BETA
     {
-        dfb_outgamma_obj.wait_front(num_tiles_per_block);
-        reconfig_data_format(dfb_fusion, dfb_beta);
+        dfb_beta_src_obj.wait_front(num_tiles_per_block);
+        reconfig_data_format(dfb_beta_src, dfb_beta);
         pack_reconfig_data_format(dfb_out);
-        add_bcast_rows_init(dfb_fusion, dfb_beta);
+        add_bcast_rows_init(dfb_beta_src, dfb_beta);
         dfb_beta_obj.wait_front(block_w);
         index_h_offset = 0;
+#ifdef ARCH_QUASAR
+        pack_init(dfb_out);
+#endif
         dfb_out_obj.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_h; i++) {
             index_subblock_w_offset = 0;
@@ -367,7 +390,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
-                    add_tiles_bcast_rows(dfb_fusion, dfb_beta, index + index_h_offset, index, w);
+                    add_tiles_bcast_rows(dfb_beta_src, dfb_beta, index + index_h_offset, index, w);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -380,7 +403,7 @@ void kernel_main() {
             index_h_offset += block_w;
         }
         dfb_out_obj.push_back(num_tiles_per_block);
-        dfb_fusion_obj.pop_front(num_tiles_per_block);
+        dfb_beta_src_obj.pop_front(num_tiles_per_block);
     }
 #endif
 }

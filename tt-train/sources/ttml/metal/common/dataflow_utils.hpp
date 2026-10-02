@@ -15,6 +15,10 @@
 #include "api/debug/dprint_pages.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
+#ifndef FORCE_INLINE
+#define FORCE_INLINE inline
+#endif
+
 constexpr uint32_t onetile = 1U;
 
 inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
@@ -557,6 +561,26 @@ inline void write_full_row_tiles(
     for (uint32_t j = 0; j < Wt; j += block_size) {
         uint32_t current_block_size = std::min(block_size, Wt - j);
         write_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
+    }
+}
+
+// Advance (sb, tile_base) to the next (b, sb) block of a Q tensor.
+// Packed layout is flat across blocks; head-major gives each (b, h) a contiguous page of Ts*Th
+// tiles, so head h at seq tile sb sits at (b*H + h)*Ts*Th + sb*Th. Wrapping sb therefore has to
+// skip the other H-1 heads' pages and step past head 0's last seq tile: ((H-1)*Ts + 1)*Th.
+template <bool Packed, uint32_t Ts, uint32_t Th, uint32_t n_heads>
+FORCE_INLINE void advance_q_block(uint32_t& sb, uint32_t& tile_base) {
+    ++sb;
+    if constexpr (Packed) {
+        tile_base += n_heads * Th;
+        if (sb == Ts) {
+            sb = 0U;
+        }
+    } else if (sb < Ts) {
+        tile_base += Th;
+    } else {
+        sb = 0U;
+        tile_base += ((n_heads - 1U) * Ts + 1U) * Th;
     }
 }
 

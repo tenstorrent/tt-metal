@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr auto dfb_max_scaler = dfb::max_scaler;
     constexpr auto dfb_sum_scaler = dfb::sum_scaler;
 
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
     constexpr std::uint32_t block_wt = get_arg(args::block_w);
     const std::uint32_t mask_start_tile_id = get_arg(args::mask_start_tile_id);
 

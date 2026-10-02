@@ -154,19 +154,19 @@ def clamp_max_bw(x, y):
 
 
 def gelu_bw_none(x, y):
-    ttnn.gelu_bw(x, y, approximate="none")
+    ttnn.gelu_bw(x, y, variant=ttnn.GeluVariant.Accurate)
 
 
 def gelu_bw_tanh(x, y):
-    ttnn.gelu_bw(x, y, approximate="tanh")
+    ttnn.gelu_bw(x, y, variant=ttnn.GeluVariant.Tanh)
 
 
 def bias_gelu_unary_bw_none(x, y):
-    ttnn.bias_gelu_bw(x, y, bias=3.1, approximate="none")
+    ttnn.bias_gelu_bw(x, y, bias=3.1, variant=ttnn.GeluVariant.Accurate)
 
 
 def bias_gelu_unary_bw_tanh(x, y):
-    ttnn.bias_gelu_bw(x, y, bias=3.1, approximate="tanh")
+    ttnn.bias_gelu_bw(x, y, bias=3.1, variant=ttnn.GeluVariant.Tanh)
 
 
 def softplus_bw(x, y):
@@ -2397,11 +2397,11 @@ def where_bw(x, y, z):
 
 
 def bias_gelu_bw_none(x, y, z):
-    ttnn.bias_gelu_bw(x, y, z, approximate="none")
+    ttnn.bias_gelu_bw(x, y, z, variant=ttnn.GeluVariant.Accurate)
 
 
 def bias_gelu_bw_tanh(x, y, z):
-    ttnn.bias_gelu_bw(x, y, z, approximate="tanh")
+    ttnn.bias_gelu_bw(x, y, z, variant=ttnn.GeluVariant.Tanh)
 
 
 def lerp_bw_1(x, y, z):

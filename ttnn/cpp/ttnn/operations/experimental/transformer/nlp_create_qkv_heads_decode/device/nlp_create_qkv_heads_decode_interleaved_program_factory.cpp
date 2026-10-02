@@ -42,6 +42,10 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeInterleavedProgr
     const DFBSpecName V_OUT{"v_out"};
     const DFBSpecName READER_SCRATCH{"reader_scratch"};
     const DFBSpecName WRITER_SCRATCH{"writer_scratch"};
+    // Quasar (Gen2) rejects a DM self-loop DFB, so the per-RISC staging scratch becomes a node-local
+    // Scratchpad there (same "aligned_scratch" accessor name, so the kernel selects scratch:: vs dfb::).
+    const ScratchpadSpecName READER_SCRATCH_SP{"reader_scratch"};
+    const ScratchpadSpecName WRITER_SCRATCH_SP{"writer_scratch"};
     const TensorParamName QKV_IN{"qkv_in"};
     const TensorParamName Q_OUT_TENSOR{"q_out_tensor"};
     const TensorParamName K_OUT_TENSOR{"k_out_tensor"};
@@ -76,6 +80,10 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeInterleavedProgr
     const bool is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     const bool use_aligned_path = is_dram && (sub_tile_line_bytes < dram_alignment);
+    // On Quasar (Gen2) a DM kernel cannot self-loop a DFB (bind it PRODUCER+CONSUMER); the aligned-path
+    // staging scratch is exactly such a self-loop, so it becomes a node-local Scratchpad there. WH/BH keep
+    // the existing self-loop DFB (legal on Gen1). Mirrors the paged_fill_cache metadata-scratchpad port.
+    const bool scratch_as_scratchpad = input_tensor.device()->arch() == tt::ARCH::QUASAR;
 
     Group<DataflowBufferSpec> dataflow_buffers = {
         DataflowBufferSpec{
@@ -109,22 +117,32 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeInterleavedProgr
     // the scratch must also be aligned to dram_alignment. L1 buffers are only allocated at L1
     // alignment (16 B on BH), so oversize the buffer by one dram_alignment chunk and have the
     // kernel round its base up.
+    Group<ScratchpadSpec> scratchpads;
     if (use_aligned_path) {
         const uint32_t scratch_num_entries = head_tiles + 1;
-        // Float16_b is just a placeholder DataFormat for this scratch buffer — the kernel only
-        // treats it as raw L1 storage and copies bytes via memcpy.
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = READER_SCRATCH,
-            .entry_size = dram_alignment,
-            .num_entries = scratch_num_entries,
-            .data_format_metadata = tt::DataFormat::Float16_b,
-        });
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = WRITER_SCRATCH,
-            .entry_size = dram_alignment,
-            .num_entries = scratch_num_entries,
-            .data_format_metadata = tt::DataFormat::Float16_b,
-        });
+        if (scratch_as_scratchpad) {
+            // Quasar: node-local L1 scratchpads (no producer/consumer credits) — one per RISC, sized to
+            // the whole staging buffer (entry_size * num_entries bytes). The kernel treats it as raw L1.
+            scratchpads.push_back(
+                ScratchpadSpec{.unique_id = READER_SCRATCH_SP, .size_per_node = dram_alignment * scratch_num_entries});
+            scratchpads.push_back(
+                ScratchpadSpec{.unique_id = WRITER_SCRATCH_SP, .size_per_node = dram_alignment * scratch_num_entries});
+        } else {
+            // WH/BH: self-loop DFB (legal on Gen1). Float16_b is a placeholder DataFormat — the kernel only
+            // treats it as raw L1 storage and copies bytes via memcpy.
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = READER_SCRATCH,
+                .entry_size = dram_alignment,
+                .num_entries = scratch_num_entries,
+                .data_format_metadata = tt::DataFormat::Float16_b,
+            });
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = WRITER_SCRATCH,
+                .entry_size = dram_alignment,
+                .num_entries = scratch_num_entries,
+                .data_format_metadata = tt::DataFormat::Float16_b,
+            });
+        }
     }
 
     KernelSpec::CompilerOptions::Defines defines;
@@ -141,6 +159,7 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeInterleavedProgr
 
     auto make_kernel = [&](const KernelSpecName& unique_id,
                            const DFBSpecName& scratch_dfb,
+                           const ScratchpadSpecName& scratch_sp,
                            uint32_t phases_to_read,
                            DataMovementHardwareConfig hw_config) {
         // Both instances raw-write disjoint sub-tile regions of the borrowed output DFBs
@@ -164,26 +183,37 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeInterleavedProgr
                 .endpoint_type = out_role,
             },
         };
+        Group<KernelSpec::ScratchpadBinding> scratchpad_bindings;
         if (use_aligned_path) {
-            // Sync-free single-toucher scratch: the owning instance self-loops its DFB
-            // (bound as both PRODUCER and CONSUMER; legal on Gen1 where the DFB lowers to a
-            // plain circular buffer one DM RISC both fills and drains).
-            dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = scratch_dfb,
-                .accessor_name = "aligned_scratch",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-            dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = scratch_dfb,
-                .accessor_name = "aligned_scratch",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            });
+            if (scratch_as_scratchpad) {
+                // Quasar (Gen2): a node-local Scratchpad bound ONCE (not a self-loop DFB PRODUCER+CONSUMER
+                // pair). Same "aligned_scratch" accessor name, so the kernel selects scratch:: under ARCH_QUASAR.
+                scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+                    .scratchpad_spec_name = scratch_sp,
+                    .accessor_name = "aligned_scratch",
+                });
+            } else {
+                // WH/BH (Gen1): sync-free single-toucher scratch — the owning instance self-loops its DFB
+                // (bound as both PRODUCER and CONSUMER; legal on Gen1 where the DFB lowers to a plain
+                // circular buffer one DM RISC both fills and drains).
+                dfb_bindings.push_back(DFBBinding{
+                    .dfb_spec_name = scratch_dfb,
+                    .accessor_name = "aligned_scratch",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                });
+                dfb_bindings.push_back(DFBBinding{
+                    .dfb_spec_name = scratch_dfb,
+                    .accessor_name = "aligned_scratch",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                });
+            }
         }
         return KernelSpec{
             .unique_id = unique_id,
             .source = kernel_source,
             .compiler_options = {.defines = defines},
             .dfb_bindings = std::move(dfb_bindings),
+            .scratchpad_bindings = std::move(scratchpad_bindings),
             .tensor_bindings = {{
                 .tensor_parameter_name = QKV_IN,
                 .accessor_name = "qkv_in",
@@ -204,15 +234,18 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeInterleavedProgr
         };
     };
 
-    const auto arch = input_tensor.device()->arch();
     // phase 1 on the reader instance, phase 2 on the writer instance
-    KernelSpec reader = make_kernel(READER, READER_SCRATCH, 1, create_reader_datamovement_config(arch));
-    KernelSpec writer = make_kernel(WRITER, WRITER_SCRATCH, 2, create_writer_datamovement_config(arch));
+    // Pass both the self-loop DFB (WH/BH) and the node-local scratchpad (Quasar); make_kernel binds whichever
+    // the arch selects (scratch_as_scratchpad). Bare DM config -- these instances raw-write disjoint sub-tile
+    // regions with no FIFO ops, so implicit sync stays on (config_2xx default).
+    KernelSpec reader = make_kernel(READER, READER_SCRATCH, READER_SCRATCH_SP, 1, create_reader_datamovement_config());
+    KernelSpec writer = make_kernel(WRITER, WRITER_SCRATCH, WRITER_SCRATCH_SP, 2, create_writer_datamovement_config());
 
     ProgramSpec spec{
         .name = "nlp_create_qkv_heads_decode_interleaved",
         .kernels = {std::move(reader), std::move(writer)},
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = QKV_IN, .spec = input_tensor.tensor_spec()},

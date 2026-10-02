@@ -22,8 +22,10 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include "tt_metal/impl/dispatch/memcpy.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "tt_metal/impl/dispatch/host_device_transfer.hpp"
 
-#include <umd/device/pcie/tlb_window.hpp>
+#include <umd/device/io_window/io_window.hpp>
 
 #include <chrono>
 #include <functional>
@@ -730,7 +732,7 @@ public:
             const uint32_t addr = exec_buf_base_addr + bank_offset;
             std::vector<uint8_t> page_data(
                 exec_buf_data.begin() + data_idx, exec_buf_data.begin() + data_idx + page_size);
-            detail::WriteToDeviceDRAMChannel(device_, bank_id, addr, page_data);
+            tt::tt_metal::slow_dispatch::WriteToDeviceDRAMChannel(*device_, bank_id, addr, page_data);
             data_idx += page_size;
         }
         MetalContext::instance().get_cluster().dram_barrier(device_->id());
@@ -1817,7 +1819,7 @@ public:
         constexpr uint32_t sentinel_pattern = 0x99999999;
         const uint32_t dram_size_words = DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t);
         std::vector<uint32_t> sentinel_data(dram_size_words, sentinel_pattern);
-        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dest_bank_id, dram_base_, sentinel_data);
+        tt::tt_metal::slow_dispatch::WriteToDeviceDRAMChannel(*device_, dest_bank_id, dram_base_, sentinel_data);
         MetalContext::instance().get_cluster().dram_barrier(device_->id());
 
         // Initialize DeviceData tracking (do not pre-populate DRAM since we're writing to it)
@@ -2699,7 +2701,7 @@ public:
         }
         this->mesh_device_ = tt_metal::distributed::MeshDevice::create_unit_mesh(0);
         this->device_ = this->mesh_device_->get_devices()[0];
-        if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(this->device_)) {
+        if (detail::sd_cq_kernel_tests_should_skip(*this->mesh_device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }
 
@@ -2756,9 +2758,9 @@ public:
         bool /*wait_for_completion*/ = true,
         bool /*wait_for_host_writes*/ = false) override {
         const auto& memmap = Common::sd_dispatch_mem_map();
-        const tt::CoreType cq_core_type = Common::sd_cq_kernel_core_type(this->device_);
-        const CoreCoord prefetch_logical = Common::sd_prefetch_core(this->device_);
-        const CoreCoord dispatch_logical = Common::dispatch_core(this->device_);
+        const tt::CoreType cq_core_type = detail::resolve_sd_cq_kernel_core_type(*this->mesh_device_);
+        const CoreCoord prefetch_logical = detail::sd_cq_prefetch_core(*this->mesh_device_);
+        const CoreCoord dispatch_logical = detail::sd_cq_dispatch_core(*this->mesh_device_);
         // CQ0: this is a slow-dispatch (SD) test with no real command queue.
         constexpr uint8_t cq_id = 0;
         const uint32_t entry_size = memmap.prefetch_q_entry_size_bytes();
@@ -2767,13 +2769,11 @@ public:
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
 
         // L1 layout on the prefetch_hd core comes straight from the production memmap so SD
-        // mirrors the FD runtime exactly (PREFETCH_Q_RD/PCIE_RD scalar gap is L1-aligned, not 4 B).
+        // mirrors the FD runtime exactly (the PREFETCH_Q_RD slot is L1-aligned, not 4 B).
         // The memmap constructor already asserts scratch_db_base + ringbuffer_size <= l1_size.
         const uint32_t page_size = Common::SD_PREFETCH_CMDDAT_PAGE_SIZE;
         const uint32_t prefetch_q_rd_ptr_addr =
             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
-        const uint32_t prefetch_q_pcie_rd_ptr_addr =
-            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id);
         const uint32_t prefetch_q_base =
             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
         const uint32_t prefetch_q_size = memmap.prefetch_q_size();
@@ -2808,8 +2808,8 @@ public:
         }
 
         // Physical cores
-        const CoreCoord phys_prefetch = Common::sd_virtual_core(this->device_, prefetch_logical);
-        const CoreCoord phys_disp = Common::sd_virtual_core(this->device_, dispatch_logical);
+        const CoreCoord phys_prefetch = detail::sd_cq_virtual_core(*this->mesh_device_, prefetch_logical);
+        const CoreCoord phys_disp = detail::sd_cq_virtual_core(*this->mesh_device_, dispatch_logical);
         const tt_cxy_pair prefetch_cxy(this->device_->id(), phys_prefetch);
 
         auto& cluster = tt_metal::MetalContext::instance().get_cluster();
@@ -2824,9 +2824,13 @@ public:
         const std::vector<uint32_t> prefetch_q_zeros(prefetch_q_size / sizeof(uint32_t), 0u);
         cluster.write_core(prefetch_q_zeros.data(), prefetch_q_size, prefetch_cxy, prefetch_q_base);
 
-        // FetchQ entries go through the static TLB so each 2-byte write hits L1 directly
-        // instead of round-tripping through the cluster API.
-        tt::umd::TlbWindow* prefetch_q_tlb = cluster.get_static_tlb_window(prefetch_cxy);
+        // FetchQ entries go through a window onto the prefetcher core, anchored at 0, so each write
+        // hits L1 directly at its device address instead of round-tripping through the cluster API.
+        std::unique_ptr<tt::umd::IoWindow> prefetch_q_window = cluster.get_driver()->create_io_window(
+            prefetch_cxy.chip,
+            cluster.get_soc_desc(prefetch_cxy.chip).get_coord_at(prefetch_cxy, tt::CoordSystem::TRANSLATED),
+            /*addr=*/0,
+            {.size = prefetch_q_base + prefetch_q_size});
 
         uint32_t prefetch_q_dev_ptr = prefetch_q_base;
         const uint32_t prefetch_q_dev_fence = prefetch_q_base + prefetch_q_size;
@@ -2844,8 +2848,8 @@ public:
                 TT_FATAL(
                     dram_write_offset + cmd_size_bytes <= this->sd_issue_queue_size(),
                     "SD prefetch: command stream exceeds DRAM-backed issue queue");
-                tt::tt_metal::detail::WriteToDeviceDRAMChannel(
-                    this->device_,
+                tt::tt_metal::slow_dispatch::WriteToDRAMChannel(
+                    *this->mesh_device_,
                     0,
                     Common::QUASAR_SIMULATION_ISSUE_QUEUE_BASE + dram_write_offset,
                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(src), cmd_size_bytes));
@@ -2859,7 +2863,7 @@ public:
                 tt::tt_metal::memcpy_to_device<true>(host_mem_ptr, src, cmd_size_bytes);
                 host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
             }
-            prefetch_q_tlb->write32(prefetch_q_dev_ptr, cmd_size_entry);
+            prefetch_q_window->write32(prefetch_q_dev_ptr, cmd_size_entry);
             prefetch_q_dev_ptr += entry_size;
             if (prefetch_q_dev_ptr >= prefetch_q_dev_fence) {
                 prefetch_q_dev_ptr = prefetch_q_base;
@@ -2904,8 +2908,8 @@ public:
             std::vector<uint32_t> chunk(kChunkBytes / sizeof(uint32_t), this->HOST_DATA_DIRTY_PATTERN);
             for (uint32_t offset = 0; offset < this->sd_completion_queue_size(); offset += kChunkBytes) {
                 const uint32_t chunk_bytes = std::min(kChunkBytes, this->sd_completion_queue_size() - offset);
-                tt::tt_metal::detail::WriteToDeviceDRAMChannel(
-                    this->device_,
+                tt::tt_metal::slow_dispatch::WriteToDRAMChannel(
+                    *this->mesh_device_,
                     0,
                     Common::QUASAR_SIMULATION_COMPLETION_QUEUE_BASE + offset,
                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(chunk.data()), chunk_bytes));
@@ -2953,7 +2957,6 @@ public:
             prefetch_q_base,
             prefetch_q_size,
             prefetch_q_rd_ptr_addr,
-            prefetch_q_pcie_rd_ptr_addr,
             cmddat_q_base,
             cmddat_q_pages,
             scratch_db_base,
@@ -2969,10 +2972,10 @@ public:
             phys_disp);
         const tt_metal::KernelHandle prefetch_kernel = Common::create_sd_cq_kernel(
             program,
-            this->device_,
+            *this->mesh_device_,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
             prefetch_logical,
-            Common::prefetch_dm(),
+            detail::prefetch_dm_processor(),
             prefetch_defines);
         tt_metal::SetRuntimeArgs(program, prefetch_kernel, prefetch_logical, {0u, 0u, 0u});
 
@@ -2991,10 +2994,10 @@ public:
             this->sd_completion_queue_size());
         const tt_metal::KernelHandle dispatch_kernel = Common::create_sd_cq_kernel(
             program,
-            this->device_,
+            *this->mesh_device_,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             dispatch_logical,
-            Common::dispatch_dm(),
+            detail::dispatch_dm_processor(),
             dispatch_defines);
         tt_metal::SetRuntimeArgs(program, dispatch_kernel, dispatch_logical, {0u, 0u, 0u});
 
@@ -3020,7 +3023,7 @@ public:
         }
 
         device_data.overflow_check(this->device_);
-        tt_metal::LaunchProgram(*this->mesh_device_, std::move(program), /*wait_until_cores_done=*/true);
+        tt_metal::LaunchProgram(*this->mesh_device_, std::move(program));
         // Ensure host CPU sees any PCIe-written completion queue data before validating.
         tt_driver_atomics::mfence();
         // DRAM-backed Quasar CQs need a staging-buffer readback before validation; host-backed queues are
@@ -3089,7 +3092,8 @@ public:
             // Read the dispatch kernel's DRAM completion writes into the host staging buffer so device_data.validate()
             // sees the correct data.
             const auto& memmap = Common::sd_dispatch_mem_map();
-            const CoreCoord phys_disp = Common::sd_virtual_core(this->device_, Common::dispatch_core(this->device_));
+            const CoreCoord phys_disp =
+                detail::sd_cq_virtual_core(*this->mesh_device_, detail::sd_cq_dispatch_core(*this->mesh_device_));
             const tt_cxy_pair dispatch_cxy(this->device_->id(), phys_disp);
             // CQ0: this is a slow-dispatch (SD) test with no real command queue.
             const uint32_t completion_q_wr_l1 =
@@ -3113,8 +3117,8 @@ public:
                 bytes_written,
                 this->sd_completion_queue_size());
 
-            tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-                this->device_,
+            tt::tt_metal::slow_dispatch::ReadFromDRAMChannel(
+                *this->mesh_device_,
                 0,
                 Common::QUASAR_SIMULATION_COMPLETION_QUEUE_BASE,
                 std::span<uint8_t>(quasar_completion_buf_.data(), bytes_written));
@@ -3202,8 +3206,8 @@ private:
     // Copy dst.size() bytes out of the completion region, starting region_offset bytes past its base.
     void read_completion_region(uint32_t region_offset, std::span<uint8_t> dst) {
         if (mgr_->is_dram_backed()) {
-            tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-                this->device_, completion_dram_channel(), completion_dram_addr() + region_offset, dst);
+            tt::tt_metal::slow_dispatch::ReadFromDeviceDRAMChannel(
+                *this->device_, completion_dram_channel(), completion_dram_addr() + region_offset, dst);
             return;
         }
         std::memcpy(dst.data(), completion_region_host_ptr() + region_offset, dst.size());
@@ -3834,7 +3838,8 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
         const uint32_t num_banks = remote_device_->allocator_impl()->get_num_banks(BufferType::DRAM);
 
         for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
-            tt::tt_metal::detail::WriteToDeviceDRAMChannel(remote_device_, bank_id, remote_dram_base, dirty_data);
+            tt::tt_metal::slow_dispatch::WriteToDeviceDRAMChannel(
+                *remote_device_, bank_id, remote_dram_base, dirty_data);
         }
         MetalContext::instance().get_cluster().dram_barrier(remote_device_->id());
     }
@@ -3896,7 +3901,8 @@ TEST_P(PrefetcherLinearPackedHTestFixture, RelayLinearPackedHTest) {
         const uint32_t num_banks = remote_device_->allocator_impl()->get_num_banks(BufferType::DRAM);
 
         for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
-            tt::tt_metal::detail::WriteToDeviceDRAMChannel(remote_device_, bank_id, remote_dram_base, dirty_data);
+            tt::tt_metal::slow_dispatch::WriteToDeviceDRAMChannel(
+                *remote_device_, bank_id, remote_dram_base, dirty_data);
         }
         MetalContext::instance().get_cluster().dram_barrier(remote_device_->id());
     }

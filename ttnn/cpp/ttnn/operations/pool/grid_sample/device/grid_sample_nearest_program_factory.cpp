@@ -34,7 +34,6 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
         tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()),
         tt::tt_metal::datatype_to_dataformat_converter(grid_tensor.dtype()),
         tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype()));
-    tt::tt_metal::IDevice* const device = output_tensor.device();
 
     // Shape and dimensions
     const auto& [input_shape, grid_shape, output_shape] =
@@ -45,9 +44,8 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
     const uint32_t grid_batching_factor = get_grid_batching_factor(grid_tensor, use_precomputed_grid, "nearest");
     const bool enable_split_reader =
         should_use_split_reader(input_tensor, grid_tensor, use_precomputed_grid, "nearest");
-    tt::tt_metal::CoreRangeSet all_cores, core_group_1, core_group_2;
+    tt::tt_metal::CoreRangeSet all_cores;
     uint32_t num_cores, grid_nsticks_per_core, output_nsticks_per_core = 0;
-    uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
     std::vector<CoreCoord> logical_cores;
 
     if (is_sharded) {
@@ -59,23 +57,20 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
         logical_cores = corerange_to_cores(
             all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
     } else {
-        const auto compute_grid_size = device->compute_with_storage_grid_size();
-        uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
-        if (output_tensor.shard_spec().has_value()) {
-            grid_nsticks = output_tensor.shard_spec().value().shape[0] * output_tensor.shard_spec().value().num_cores();
-        } else {
-            grid_nsticks = tt::round_up(grid_nsticks, compute_grid_size.x * compute_grid_size.y);
-        }
-        auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
-            tt::tt_metal::split_work_to_cores(compute_grid_size, grid_nsticks);
-
-        std::tie(num_cores, all_cores, core_group_1, core_group_2) =
-            std::make_tuple(num_cores_used, all_cores_range, core_group_1_range, core_group_2_range);
-        num_sticks_per_core_group_1 = num_sticks_1;
-        num_sticks_per_core_group_2 = num_sticks_2;
-        grid_nsticks_per_core = num_sticks_1;
-        output_nsticks_per_core = num_sticks_1;
-        logical_cores = corerange_to_cores(all_cores, num_cores, true);
+        const auto output_shard_spec = output_tensor.shard_spec().value();
+        all_cores = output_shard_spec.grid;
+        num_cores = output_shard_spec.num_cores();
+        output_nsticks_per_core = output_shard_spec.shape[0];
+        const uint32_t output_sticks_per_grid_stick =
+            operation_attributes.batch_output_channels ? 1U : grid_batching_factor;
+        TT_FATAL(
+            output_nsticks_per_core % output_sticks_per_grid_stick == 0,
+            "Nearest grid_sample output shard height must be divisible by the number of output rows per grid row ({})",
+            output_sticks_per_grid_stick);
+        // Each packed grid row expands to K output rows when batching along width.
+        grid_nsticks_per_core = output_nsticks_per_core / output_sticks_per_grid_stick;
+        logical_cores = corerange_to_cores(
+            all_cores, num_cores, output_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
     }
 
     uint32_t cb_idx = tt::CBIndex::c_0;
@@ -227,8 +222,7 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
 
         for (uint32_t i = 0; i < num_cores; i++) {
             const CoreCoord& core = logical_cores[i];
-            const uint32_t grid_sticks =
-                core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
+            const uint32_t grid_sticks = grid_nsticks_per_core;
 
             // Runtime arguments for interleaved reader - expanded row by row
             writer_desc.emplace_runtime_args(

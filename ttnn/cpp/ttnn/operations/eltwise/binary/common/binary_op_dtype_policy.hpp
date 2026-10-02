@@ -18,6 +18,12 @@ using DT = tt::tt_metal::DataType;
 
 inline constexpr std::array float_only{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B};
 
+// NEXTAFTER steps by one ULP of the destination format, so it is defined only where the value in
+// DST is itself that format. A block-float tile packs against a shared exponent, and a bfloat16
+// step is not the next representable BFP8/BFP4 value: it rounds away on pack and the op returns
+// its input. Measured on the unrestricted version, BFLOAT4_B was a no-op for every element.
+inline constexpr std::array ulp_step_float{DT::BFLOAT16, DT::FLOAT32};
+
 inline constexpr std::array float_and_int32{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::INT32};
 
 inline constexpr std::array float_and_int32_uint32{

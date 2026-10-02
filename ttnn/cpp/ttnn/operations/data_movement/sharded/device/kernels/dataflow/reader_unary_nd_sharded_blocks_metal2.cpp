@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: This is the Metal 2.0 fork of reader_unary_nd_sharded_blocks.cpp, which lives beside it. Ops
-// ported to Metal 2.0 bind this file; the original serves the consumers still on the legacy API. Until
-// the last of them migrates and the original is retired, changes here likely belong there too.
+// NOTE: This forked reader_unary_nd_sharded_blocks.cpp during the Metal 2.0 migration. Its last legacy
+// binder has migrated and the original is retired, so this is the only copy and the _metal2 suffix is
+// historical.
 //
 // The binding names below (dfb::in, tensor::src) and the named argument set are this fork's interface:
 // every later consumer inherits them, so they are taken from the kernel's own vocabulary rather than
@@ -28,7 +28,10 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb_in(dfb::in);
-    const uint32_t tile_size_bytes = dfb_in.get_tile_size();
+    // get_entry_size() (DFB interface entry bytes), not get_tile_size() (descriptor array
+    // unpack_tile_size[]): the latter is not arch-portable to Quasar and can be stale on a DM kernel,
+    // giving a wrong NOC read size -> stray/misaligned access. Byte-identical on WH/BH (entry == tile).
+    const uint32_t tile_size_bytes = dfb_in.get_entry_size();
 
     const auto accessor_src = TensorAccessor(tensor::src);
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {

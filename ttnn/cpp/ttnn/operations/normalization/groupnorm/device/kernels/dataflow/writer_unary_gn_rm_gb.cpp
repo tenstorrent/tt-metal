@@ -28,10 +28,10 @@ void async_read_row_face0(
 }
 
 // L1->L1-copy the row's second half into face 1. Only legal after the face-0 read barrier.
-void copy_row_half_to_face1(const Noc& noc, uint32_t l1_dst_addr, uint32_t element_bytes) {
+static void copy_row_half_to_face1(const Noc& noc, uint32_t l1_dst_addr, uint32_t element_bytes) {
     const uint32_t face_bytes = tt::constants::FACE_HW * element_bytes;
     const uint32_t half_row_bytes = tt::constants::FACE_WIDTH * element_bytes;
-    UnicastEndpoint self;
+    const UnicastEndpoint self;
     noc.async_read(
         self,
         CoreLocalMem<uint32_t>(l1_dst_addr + face_bytes),
@@ -59,9 +59,9 @@ void kernel_main() {
     constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
     constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W =
-        get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr bool GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2") == 1;
+    constexpr bool GROUP_SIZE_SMALLER_THAN_TILE_W =
+        get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W") == 1;
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
@@ -69,7 +69,7 @@ void kernel_main() {
     constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
     constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
-    constexpr uint32_t use_welford = get_named_compile_time_arg_val("groupnorm_mode") > 0;
+    constexpr bool use_welford = get_named_compile_time_arg_val("groupnorm_mode") > 0;
 
     // Non-tile-aligned H*W: host-precomputed corrected reduce scaler, plus a second, row-masked set
     // of mask tiles streamed behind the normal one. See compute/groupnorm.cpp.
@@ -81,9 +81,9 @@ void kernel_main() {
     constexpr uint32_t mask_tiles_per_group = has_row_mask ? 2 * block_w : block_w;
 
     constexpr auto out_args = TensorAccessorArgs<0>();
-    constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-    constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
+    constexpr auto gamma_args = TensorAccessorArgs<decltype(out_args)::next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<decltype(gamma_args)::next_compile_time_args_offset()>();
+    constexpr auto input_mask_args = TensorAccessorArgs<decltype(beta_args)::next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -124,7 +124,7 @@ void kernel_main() {
     constexpr uint32_t dfb_out_id = (fuse_gamma or fuse_beta) ? dfb_out0_id : dfb_reread_write_out_id;
 #endif
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_beta(dfb_beta_id);
@@ -141,13 +141,13 @@ void kernel_main() {
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    uint32_t out_block_hw_normal = out_block_h_normal * block_w;
+    const uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
+    bool extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
-        uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
+        const uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
         num_out_blocks_padded += (residual / out_block_h_normal + 1);
         out_block_h_last = residual % out_block_h_normal;
     }
@@ -334,7 +334,7 @@ void kernel_main() {
             }
 
             // add or copy with previous output results
-            uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+            const uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
             const auto dst_a = TensorAccessor(out_args, out_addr);
 
@@ -346,7 +346,7 @@ void kernel_main() {
                 } else {
                     out_block_h_actual = out_block_h_normal;
                 }
-                dfb_out.wait_front(out_block_hw_normal);
+                dfb_out.wait_front(static_cast<uint16_t>(out_block_hw_normal));
                 uint32_t l1_read_addr = dfb_out.get_read_ptr();
 
 #ifdef UNTILIZE_OUT
@@ -396,7 +396,7 @@ void kernel_main() {
 #endif
                 out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                 noc.async_write_barrier();
-                dfb_out.pop_front(out_block_hw_normal);
+                dfb_out.pop_front(static_cast<uint16_t>(out_block_hw_normal));
             }
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {

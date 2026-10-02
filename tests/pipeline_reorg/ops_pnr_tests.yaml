@@ -14,6 +14,7 @@
       timeout: 50
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
+  budget_type: package_and_release
   category: matmul
 
 - name: ttnn release fused tests
@@ -25,6 +26,7 @@
       timeout: 65
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
+  budget_type: package_and_release
   category: fused
 
 - name: ttnn release reduction tests
@@ -36,6 +38,7 @@
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
+  budget_type: package_and_release
   category: reduction
 
 - name: ttnn release moreh tests
@@ -47,4 +50,5 @@
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
+  budget_type: package_and_release
   category: moreh

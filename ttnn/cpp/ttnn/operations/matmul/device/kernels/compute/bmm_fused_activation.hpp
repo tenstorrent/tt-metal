@@ -96,7 +96,7 @@ struct ActivationApplyHelper {
         } else if constexpr (ACT == KernelActivation::HARDTANH) {
             hardtanh_tile_pack(tile_index, PARAM0, PARAM1);
         } else if constexpr (ACT == KernelActivation::SELU) {
-            // PARAM0 is alpha, PARAM1 is lambda
+            // PARAM0 is the scale, PARAM1 is alpha
             selu_tile_pack(tile_index, PARAM0, PARAM1);
         } else if constexpr (ACT == KernelActivation::SOFTPLUS) {
             // PARAM0 is beta, PARAM2 beta reciprocal, PARAM1 is threshold

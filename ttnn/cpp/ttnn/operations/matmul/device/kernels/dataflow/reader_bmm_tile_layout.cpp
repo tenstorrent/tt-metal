@@ -46,7 +46,7 @@ void kernel_main() {
     uint32_t bcast_B = get_arg_val<uint32_t>(20);
 
     constexpr auto in0_args = TensorAccessorArgs<0>();
-    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+    constexpr auto in1_args = TensorAccessorArgs<decltype(in0_args)::next_compile_time_args_offset()>();
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");

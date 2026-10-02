@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <graph_tracking.hpp>
+#include <internal/graph_function_abort.hpp>
 
 #include <algorithm>
+#include <any>
+#include <string>
+#include <string_view>
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -123,7 +127,9 @@ void track_program_l1(GraphTracker& tracker, detail::ProgramImpl& program, const
     }
     // Scratchpads stack on the same program-scope L1 region as the dataflow buffers, one region per
     // binding: kernels may only share a scratchpad spec across disjoint cores.
-    const auto& hal = MetalContext::instance().hal();
+    // The program's own context, not the default one. A program built on a mock device
+    // sizes kernels_ from that device's HAL, which registers fewer programmable cores.
+    const auto& hal = MetalContext::instance(program.get_context_id()).hal();
     for (uint32_t core_type = 0; core_type < hal.get_programmable_core_type_count(); core_type++) {
         for (const auto& [_, kernel] : program.get_kernels(core_type)) {
             for (const auto& scratchpad : kernel->scratchpad_binding_handles()) {
@@ -236,3 +242,17 @@ void GraphTracker::clear_hook() {
 }
 
 }  // namespace tt::tt_metal
+
+namespace tt::tt_metal::internal {
+
+void unwind_open_functions(std::string_view reason) {
+    const auto& processors = GraphTracker::instance().get_processors();
+    if (processors.empty()) {
+        return;
+    }
+    std::any payload{GraphFunctionAbort{std::string(reason), true}};
+    std::for_each(
+        processors.begin(), processors.end(), [&](auto& processor) { processor->track_function_end(payload); });
+}
+
+}  // namespace tt::tt_metal::internal

@@ -29,9 +29,9 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr std::uint32_t onetile = 1;
     DataflowBuffer dfb_id_in0_obj(dfb_id_in0);
-    std::uint32_t src0_tile_bytes = dfb_id_in0_obj.get_entry_size();
+    const std::uint32_t src0_tile_bytes = dfb_id_in0_obj.get_entry_size();
 
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
     std::uint32_t Ht = get_arg(args::Ht);
     std::uint32_t start_ht = get_arg(args::start_ht);
     std::uint32_t start_mask_id = get_arg(args::start_mask_id);
@@ -42,7 +42,7 @@ void kernel_main() {
 
     const auto addr_mask = TensorAccessor(tensor::mask);
 
-#if CAUSAL_MASK
+#ifdef CAUSAL_MASK
     constexpr std::uint32_t num_tiles_causal_mask = get_arg(args::num_tiles_causal_mask);
     std::uint32_t mask_start_ht = get_arg(args::mask_start_ht);
     std::uint32_t mask_offset = get_arg(args::mask_offset);
@@ -61,7 +61,7 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(tensor::src);
 
-    Noc noc;
+    const Noc noc;
 
     {
         constexpr std::uint32_t dfb_max_scaler = dfb::max_scaler;
@@ -77,12 +77,12 @@ void kernel_main() {
     }
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
-    std::uint32_t i_tile = 0;
+    const std::uint32_t i_tile = 0;
     std::uint32_t curr_tile = tile_offset;
     for (std::uint32_t i = 0; i < num_blks; ++i) {
         for (std::uint32_t j = 0; j < Wt; j += blk) {
-            std::uint32_t rem = (j + blk > Wt) ? (Wt - j) : blk;  // clamped final block
-            dfb_id_in0_obj.reserve_back(rem);
+            const std::uint32_t rem = (j + blk > Wt) ? (Wt - j) : blk;  // clamped final block
+            dfb_id_in0_obj.reserve_back(static_cast<uint16_t>(rem));
             std::uint32_t write_offset = 0;
             for (std::uint32_t r = 0; r < rem; ++r) {
                 noc.async_read(
@@ -91,18 +91,18 @@ void kernel_main() {
                 write_offset += src0_tile_bytes;
             }
             noc.async_read_barrier();
-            dfb_id_in0_obj.push_back(rem);
+            dfb_id_in0_obj.push_back(static_cast<uint16_t>(rem));
         }
         if (in0_pad > 0) {
-            dfb_id_in0_obj.reserve_back(in0_pad);
-            dfb_id_in0_obj.push_back(in0_pad);
+            dfb_id_in0_obj.reserve_back(static_cast<uint16_t>(in0_pad));
+            dfb_id_in0_obj.push_back(static_cast<uint16_t>(in0_pad));
         }
 
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
 // Recall that the total attention tensor size in tiles is NC,1,Wt
 // For fused scale-mask softmax we write Wt attention tiles for every partHt*Wt
 // of slice of tensor that was assigned to our core, then we skip to next batch
-#if CAUSAL_MASK
+#ifdef CAUSAL_MASK
         for (std::uint32_t j = 0; j < Wt; j += blk) {
             std::uint32_t rem = (j + blk > Wt) ? (Wt - j) : blk;  // clamped final block
             dfb_id_attn_obj.reserve_back(rem);

@@ -18,16 +18,25 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
-from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU, TorchExpert
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
+    ACTIVATION_CLAMPED_SILU_GLU,
+    ACTIVATION_SILU,
+    ACTIVATION_SITU,
+    ACTIVATION_SWIGLUOAI,
+    CLAMPED_SILU_GLU_LIMIT,
+    TorchExpert,
+)
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
+    TtRoutedExpert,
+    routed_expert_weight_memory_config,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
-
 
 SINGLE_CHIP_MESH_PARAMS = [
     pytest.param(
@@ -39,10 +48,11 @@ SINGLE_CHIP_MESH_PARAMS = [
 
 # Device activation -> the TorchExpert reference that must match it. Keeping the pairing
 # in one place stops a case from measuring one activation against another's golden.
-# SwiGluOai is absent on purpose: its reference lives in test_swigluoai_routed_expert.py.
 _TORCH_ACTIVATION = {
     ttnn.RoutedExpertActivation.Silu: ACTIVATION_SILU,
     ttnn.RoutedExpertActivation.SituGlu: ACTIVATION_SITU,
+    ttnn.RoutedExpertActivation.SwiGluOai: ACTIVATION_SWIGLUOAI,
+    ttnn.RoutedExpertActivation.ClampedSiluGlu: ACTIVATION_CLAMPED_SILU_GLU,
 }
 
 # Kimi K3 SiTU-GLU betas. The device kernel bakes SituGluConfigKimi; these must match it,
@@ -58,6 +68,7 @@ def run_single_routed_expert(
     hidden_dim: int,
     active_tokens: int = None,
     x_row_major: bool = False,
+    weights_dram_sharded: bool = False,
     activation=None,
     weight_scale: float = 0.02,
     weights_dtype=ttnn.bfloat4_b,
@@ -93,7 +104,8 @@ def run_single_routed_expert(
     saturation-coverage test), so a saturated bf4 case needs its own bar to stay meaningful.
 
     ``min_cap_frac`` is a ``(gate, up)`` pair of minimum fractions of activation inputs that
-    must land past their respective beta. Set it on any case whose point is the saturated
+    must land past their respective cap (beta for SiTU-GLU, ±limit for clamped SiLU-GLU, where
+    each element is the floor for both of that half's tails). Set it on any case whose point is the saturated
     region: without it, a change to ``weight_scale``, the dims or the seed would quietly drop
     the case back into the near-linear middle of both tanhs while still passing.
     """
@@ -140,22 +152,43 @@ def run_single_routed_expert(
     logger.debug("Running torch reference...")
     with torch.no_grad():
         torch_output_active = torch_expert(torch_active)
-        if torch_activation == ACTIVATION_SITU and min_cap_frac is not None:
-            # How far into each tanh cap the inputs actually reach, so a saturation case can't
+        if min_cap_frac is not None:
+            # How far into each cap the inputs actually reach, so a saturation case can't
             # silently degrade into a near-linear run. Only the cases that assert it pay for the
             # two extra host matmuls (~225 GFLOP at the 5120-token shape, and the perf harness
             # calls this body once per iteration).
             gate_out = torch.nn.functional.linear(torch_active, weights["gate_proj"])
             up_out = torch.nn.functional.linear(torch_active, weights["up_proj"])
-            gate_frac = (gate_out.abs() > _SITU_BETA_GATE).float().mean().item()
-            up_frac = (up_out.abs() > _SITU_BETA_UP).float().mean().item()
-            logger.info(
-                f"SiTU-GLU cap coverage: |gate|>{_SITU_BETA_GATE}: {gate_frac:.1%}, "
-                f"|up|>{_SITU_BETA_UP}: {up_frac:.1%}"
-            )
             gate_min, up_min = min_cap_frac
-            assert gate_frac >= gate_min, f"gate cap coverage {gate_frac:.1%} below {gate_min:.1%}"
-            assert up_frac >= up_min, f"up cap coverage {up_frac:.1%} below {up_min:.1%}"
+
+            if torch_activation == ACTIVATION_SITU:
+                gate_frac = (gate_out.abs() > _SITU_BETA_GATE).float().mean().item()
+                up_frac = (up_out.abs() > _SITU_BETA_UP).float().mean().item()
+                logger.info(
+                    f"SiTU-GLU cap coverage: |gate|>{_SITU_BETA_GATE}: {gate_frac:.1%}, "
+                    f"|up|>{_SITU_BETA_UP}: {up_frac:.1%}"
+                )
+                assert gate_frac >= gate_min, f"gate cap coverage {gate_frac:.1%} below {gate_min:.1%}"
+                assert up_frac >= up_min, f"up cap coverage {up_frac:.1%} below {up_min:.1%}"
+            elif torch_activation == ACTIVATION_CLAMPED_SILU_GLU:
+                # Each tail counted on its own, never an |x| aggregate: a one-sided clamp would
+                # otherwise pass on the other side's coverage. gate<-L is included even though the
+                # kernel does not clamp there, so the stimulus keeps reaching the region where a
+                # two-sided gate clamp would differ.
+                lim = CLAMPED_SILU_GLU_LIMIT
+                tails = [
+                    (f"gate>{lim}", (gate_out > lim).float().mean().item(), gate_min),
+                    (f"gate<-{lim}", (gate_out < -lim).float().mean().item(), gate_min),
+                    (f"up>{lim}", (up_out > lim).float().mean().item(), up_min),
+                    (f"up<-{lim}", (up_out < -lim).float().mean().item(), up_min),
+                ]
+                logger.info(
+                    "clamped SiLU-GLU cap coverage: " + ", ".join(f"{name}: {frac:.1%}" for name, frac, _ in tails)
+                )
+                for name, frac, floor in tails:
+                    assert frac >= floor, f"{name} coverage {frac:.1%} below {floor:.1%}"
+            else:
+                raise ValueError(f"min_cap_frac given for {activation}, which defines no cap to measure")
     logger.debug(f"Torch output shape: {torch_output_active.shape}")
 
     # Create TTNN input: 2D (allocated_tokens, emb_dim), replicated across the 1-device mesh.
@@ -200,6 +233,9 @@ def run_single_routed_expert(
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=weights_dtype,
         activation=activation,
+        # Both placements are swept explicitly: the module's None default would pick ND-sharded on
+        # Blackhole and leave the interleaved path uncovered.
+        weights_dram_nd_sharded=weights_dram_sharded,
     )
 
     # Run TTNN forward
@@ -228,13 +264,25 @@ def run_single_routed_expert(
     logger.debug("Test PASSED!")
 
 
-# Per-model dims as (id_prefix, config, extended_model), each run at its own (emb_dim,
+def to_dram_nd_sharded(tensor, mesh_device):
+    """One weight tensor moved into the production ND-sharded placement, its width taken from its own N.
+
+    The spec is the module's (routed_expert_weight_memory_config), not a test-local one: it is what a
+    TtRoutedExpert built with weights_dram_nd_sharded=True hands the ops, so a raw-tensor test measures
+    the layout the module ships rather than one of its own.
+    """
+    return ttnn.to_memory_config(
+        tensor, routed_expert_weight_memory_config(mesh_device, tensor.shape[-1], dram_nd_sharded=True)
+    )
+
+
+# Per-model dims as (id_prefix, config, extended), each run at its own (emb_dim,
 # MOE_INTERMEDIATE_SIZE). DeepSeek V3 is the baseline and runs by default; every other model is
-# gated behind @pytest.mark.extended_model.
+# `extended` is retained for callers that still gate on it; the tests here run every model.
 SINGLE_EXPERT_MODELS = [
     ("dsv3", DeepSeekV3Config, False),
     ("minimax_m27", MiniMaxM27Config, True),
-    ("glm_51", GLM51Config, True),
+    ("glm_53", GLM53Config, True),
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
     ("gptoss_120b", GptOss120BConfig, True),
@@ -279,28 +327,25 @@ _ISL_ALLOCATED_TOKENS = 5120
 _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 
 # Exhaustive sweep: the full range from empty to fully-packed
-_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
-_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
+_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
+_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_53")
 
 
 def _isl_params(active_sweep, only_models=None):
     """Build the per-model (allocated_tokens, active_tokens, emb_dim, hidden_dim) parametrization over
     `active_sweep`, all against the fixed _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so
-    non-baseline models stay gated behind the extended_model marker; `only_models` restricts to a
-    subset of model names."""
+    every model runs; `only_models` restricts to a subset of model names."""
     params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
+    for name, config, _extended in SINGLE_EXPERT_MODELS:
         if only_models is not None and name not in only_models:
             continue
         for active in active_sweep:
-            marks = (pytest.mark.extended_model,) if extended else ()
             params.append(
                 pytest.param(
                     _ISL_ALLOCATED_TOKENS,
                     active,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
-                    marks=marks,
                     id=f"{name}-isl-{active}",
                 )
             )
@@ -334,6 +379,9 @@ def test_single_routed_expert_functional(
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+# DRAM ND-sharded weights let the FFN read a whole K-row weight slice in one NoC request instead
+# of one per tile. Both layouts are swept so the interleaved default stays covered.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_single_routed_expert_isl_sweep(
     device,
@@ -342,6 +390,7 @@ def test_single_routed_expert_isl_sweep(
     emb_dim: int,
     hidden_dim: int,
     x_row_major: bool,
+    weights_dram_sharded: bool,
 ):
     run_single_routed_expert(
         device,
@@ -350,6 +399,7 @@ def test_single_routed_expert_isl_sweep(
         hidden_dim,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+        weights_dram_sharded=weights_dram_sharded,
     )
 
 
@@ -360,9 +410,9 @@ def test_single_routed_expert_isl_sweep(
 _K3_TOKEN_SWEEP = [32, 64, 128, 256, 512, 1024, 2048, 5120]
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
-@pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_single_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: bool):
     """Kimi K3 routed expert: SiTU-GLU activation at the post-projection dims.
@@ -411,7 +461,6 @@ _K3_SATURATION_TOKENS = 512
 
 
 @pytest.mark.parametrize("weight_scale, weights_dtype, pcc_threshold, min_cap_frac", _K3_SATURATION_CASES)
-@pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_single_routed_expert_k3_saturated(
     device, weight_scale: float, weights_dtype, pcc_threshold: float, min_cap_frac: tuple[float, float]
@@ -430,6 +479,75 @@ def test_single_routed_expert_k3_saturated(
         KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
         KimiK3Config.MOE_INTERMEDIATE_SIZE,
         activation=ttnn.RoutedExpertActivation.SituGlu,
+        weight_scale=weight_scale,
+        weights_dtype=weights_dtype,
+        pcc_threshold=pcc_threshold,
+        min_cap_frac=min_cap_frac,
+    )
+
+
+# DeepSeek-V4 clamped SiLU-GLU. The functional sweep above runs both V4 shapes on the SiLU path
+# at the default weight scale, where gate/up land near O(1) and never reach the limit of 10, so
+# a kernel that dropped either clamp would pass there. These cases scale the weights until the
+# clamps carry the result and assert the coverage.
+#
+# Scales differ per model because coverage tracks gate_out's std, which grows as sqrt(emb_dim).
+# Measured at 512 tokens / seed 42, all four tails within 0.1pp: Pro 2.5% at 0.06 and 16.2% at
+# 0.12; Flash 2.5% at 0.08 and 14.8% at 0.15.
+_DSV4_PARTIAL_CAP_FRAC = (0.02, 0.02)
+_DSV4_PRO_DEEP_CAP_FRAC = (0.14, 0.14)
+_DSV4_FLASH_DEEP_CAP_FRAC = (0.12, 0.12)
+
+# (config, weight_scale, weights_dtype, pcc_threshold, min_cap_frac).
+#
+# bf8 measures 0.99929-0.99943 and a dropped gate clamp gives 0.9936, so the partial cases need
+# a bar inside (0.9936, 0.99929) and take 0.998; the file's usual 0.97 could not separate them.
+# The deep cases only have to clear a 0.949 failure floor and take 0.99.
+#
+# bf4 is the production dtype and measures 0.9753-0.9767, i.e. its quantization error exceeds a
+# dropped-clamp perturbation at the partial scale, so bf4 runs only at the deep scale where
+# clamping dominates.
+_DSV4_CLAMP_CASES = [
+    pytest.param(DeepSeekV4ProConfig, 0.06, ttnn.bfloat8_b, 0.998, _DSV4_PARTIAL_CAP_FRAC, id="pro_partial-bf8"),
+    pytest.param(DeepSeekV4FlashConfig, 0.08, ttnn.bfloat8_b, 0.998, _DSV4_PARTIAL_CAP_FRAC, id="flash_partial-bf8"),
+    pytest.param(DeepSeekV4ProConfig, 0.12, ttnn.bfloat8_b, 0.99, _DSV4_PRO_DEEP_CAP_FRAC, id="pro_deep-bf8"),
+    pytest.param(DeepSeekV4FlashConfig, 0.15, ttnn.bfloat8_b, 0.99, _DSV4_FLASH_DEEP_CAP_FRAC, id="flash_deep-bf8"),
+    pytest.param(DeepSeekV4ProConfig, 0.12, ttnn.bfloat4_b, 0.97, _DSV4_PRO_DEEP_CAP_FRAC, id="pro_deep-bf4"),
+    pytest.param(DeepSeekV4FlashConfig, 0.15, ttnn.bfloat4_b, 0.97, _DSV4_FLASH_DEEP_CAP_FRAC, id="flash_deep-bf4"),
+]
+
+_DSV4_CLAMP_TOKENS = 512
+
+
+@pytest.mark.parametrize("config, weight_scale, weights_dtype, pcc_threshold, min_cap_frac", _DSV4_CLAMP_CASES)
+# Both layouts: row-major is what production feeds the routed expert, and it tilizes inside the
+# per-chunk loop, between BINARY_ACT_INIT() and the BINARY_ACT_TILE calls.
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.skipif(not is_blackhole(), reason="clamped SiLU-GLU routed expert is Blackhole-only")
+def test_single_routed_expert_dsv4_clamped(
+    device,
+    config,
+    weight_scale: float,
+    weights_dtype,
+    pcc_threshold: float,
+    min_cap_frac: tuple[float, float],
+    x_row_major: bool,
+):
+    """DeepSeek-V4 routed expert at V4 Pro and V4 Flash dims, with both clamps exercised.
+
+    Catches a dropped clamp. Does not catch a gate clamped at both ends, at any threshold:
+    silu(x) is within 4.5e-4 of zero for x <= -10, so clamping the gate's lower tail moves each
+    element by at most 4.5e-4 * |up|, which vanishes into bf8 rounding of an O(10-100) FFN
+    output. That case is covered by the op's elementwise test,
+    tests/ttnn/unit_tests/operations/eltwise/test_clamped_silu_glu_sfpu.py.
+    """
+    run_single_routed_expert(
+        device,
+        _DSV4_CLAMP_TOKENS,
+        config.EMB_SIZE,
+        config.MOE_INTERMEDIATE_SIZE,
+        x_row_major=x_row_major,
+        activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
         weight_scale=weight_scale,
         weights_dtype=weights_dtype,
         pcc_threshold=pcc_threshold,

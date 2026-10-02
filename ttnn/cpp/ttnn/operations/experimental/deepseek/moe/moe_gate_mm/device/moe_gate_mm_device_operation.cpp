@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_gate_mm_device_operation.hpp"
+
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm.hpp"
 
 namespace ttnn::operations::experimental::deepseek::moe::moe_gate_mm {

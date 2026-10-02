@@ -114,7 +114,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
              {"host_dst_pcie_addr", host_dst_pcie_addr},
              {"l1_staging_addr", l1_staging_addr},
              {"transfer_size_bytes", kTransferSizeBytes}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -130,7 +130,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
     };
     Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     // Step 5: Host verifies dst hugepage region matches src.
     std::vector<uint32_t> host_dst_readback(expected.size());

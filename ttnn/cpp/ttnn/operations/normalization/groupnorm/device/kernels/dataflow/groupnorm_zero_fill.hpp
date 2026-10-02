@@ -36,7 +36,7 @@
 //     NOC handle to use for the async reads and the trailing read barrier.
 inline void zero_whole_cb(uint32_t dfb_id, const Noc& noc) {
     auto& iface = get_local_cb_interface(dfb_id);
-    DataflowBuffer dfb(dfb_id);
+    const DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     noc.async_write_zeros(dfb, iface.fifo_size);
     noc.write_zeros_l1_barrier();
 }

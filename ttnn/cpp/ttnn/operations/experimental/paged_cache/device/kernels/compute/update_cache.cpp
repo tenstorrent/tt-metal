@@ -9,6 +9,8 @@
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "experimental/kernel_args.h"
+#include "api/compute/pack.h"
 
 // Helper constexpr function to compute num_blocks_per_col
 constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) {
@@ -24,30 +26,31 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
 }
 
 void kernel_main() {
-    constexpr uint32_t cache_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t in_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t untilized_cache_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t untilized_cache2_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t untilized_in_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);
-    constexpr uint32_t num_heads = get_compile_time_arg_val(7);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto num_heads = get_arg(args::num_heads);
 
-    compute_kernel_hw_startup(in_cb, untilized_in_cb);
+    compute_kernel_hw_startup(dfb::in, dfb::untilized_in);
 
     // Untilize input (standalone operation)
     compute_kernel_lib::untilize<
         Wt,
-        in_cb,
-        untilized_in_cb,
+        dfb::in,
+        dfb::untilized_in,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
+        compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);
 
         // Wait on writer to update block, then tilize back
-        compute_kernel_lib::tilize<Wt, untilized_cache2_cb, out_cb>(1);
+#ifdef ARCH_QUASAR
+        // Quasar: tilize_init programs unpack+math only and pack_reconfig_data_format is gasket-only, so
+        // the packer's L1 destination (BFD) still points at dfb::untilized_cache from the untilize above
+        // -> the re-tilized block would land in the untilize ring and dfb::out would never be written
+        // (all-zero cache block). Retarget the packer BFD before packing.
+        pack_init(dfb::out);
+#endif
+        compute_kernel_lib::tilize<Wt, dfb::untilized_cache2, dfb::out>(1);
     }
 }

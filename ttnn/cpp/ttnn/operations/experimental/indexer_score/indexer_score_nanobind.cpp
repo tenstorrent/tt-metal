@@ -209,6 +209,24 @@ void bind_indexer_score(nb::module_& mod) {
         scoring; the reader gates each K band on ONLY the SP shards that band touches, so it scores already-
         arrived shards while farther slabs are still in flight. DSA only -- there is no fused MSA variant.
 
+        Trace-safe capture: pass ``cache_batch_idx_tensor`` (a 1-element uint32 ROW_MAJOR DRAM tensor holding
+        the USER id) instead of ``cache_batch_idx``, together with ``index_cache_num_layers`` /
+        ``index_cache_layer_idx``; the reader recomposes the flat slot on-device. A host ``cache_batch_idx``
+        is re-patched per dispatch and a replay never re-runs that patch, so every replay would score
+        against the slot that was live at capture time.
+
+        For trace replay, ``chunk_start_idx_tensor`` supplies the dynamic chunk position on-device. It must
+        be a 1-element UINT32 row-major DRAM tensor and requires block-cyclic layout. Do not also provide
+        ``chunk_start_idx`` or ``kv_len``; the kernel derives ``kv_len`` from the tensor value.
+
+        ``valid_end_tensor`` (optional, requires ``chunk_start_idx_tensor``) carries this chunk's REAL token
+        end. Without it the derived ``kv_len`` is the end of the PADDED window, so a partial final chunk
+        scores key columns the request never wrote -- causally masked for real query rows, but not for pad
+        rows, whose top-k then diverges from the host-scalar path's. Supply it and the kernel caps the bound
+        at ``ceil32(valid_end)``, reproducing the scalar bound exactly and narrowing the scored extent. Pass
+        the same bound to ``topk_large_indices`` or the two drift: a looser score with a tighter top-k drops
+        real keys, the reverse ranks a stale tail.
+
         Args:
             q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa
             k: [B, 1, T, D] bf16/bfp8_b tiled PERSISTENT all-gather OUTPUT buffer, T = sp*sll. B must be 1
@@ -273,7 +291,12 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_subshard_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
-        nb::arg("block_cyclic_cache_tp_sharded") = false);
+        nb::arg("block_cyclic_cache_tp_sharded") = false,
+        nb::arg("chunk_start_idx_tensor") = nb::none(),
+        nb::arg("valid_end_tensor") = nb::none(),
+        nb::arg("cache_batch_idx_tensor") = nb::none(),
+        nb::arg("index_cache_num_layers") = 1,
+        nb::arg("index_cache_layer_idx") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

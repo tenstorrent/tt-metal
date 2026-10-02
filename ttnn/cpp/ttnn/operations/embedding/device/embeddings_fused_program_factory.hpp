@@ -5,12 +5,13 @@
 #pragma once
 
 #include "embedding_device_operation_types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::prim {
 
 struct EmbeddingsFusedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value);
 };
 

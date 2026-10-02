@@ -14,8 +14,9 @@ operation_attributes_t::attribute_values(): binary_op_type, lhs/rhs/post_activat
            input_layout_a/b, output_layout, equal_nan, the shard volumes, and
            c_tensor_shape_in_pages (the sharded output's tensor shape in pages on the accessor path)
 
-tensor_args_t::to_hash(): input tensor dtypes and memory_configs, plus each
-           sharded input's tensor shape in pages (BufferDistributionSpec::tensor_shape_in_pages)
+tensor_args_t::to_hash(): input tensor dtypes, memory_configs, Alignment, and Tile,
+           plus each sharded input's tensor shape in pages
+           (BufferDistributionSpec::tensor_shape_in_pages)
 
 The default compute_program_hash() combines both of the above.
 
@@ -305,6 +306,30 @@ def test_ng_cache_miss_different_memory_configs(device, isolate_program_cache):
         device, ttnn.add, shape, shape, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_ng_cache_miss_different_alignment(device, isolate_program_cache):
+    """Different tensor alignments -> different cache entries.
+    Alignment is part of tensor_layout and is hashed in to_hash()."""
+    shape = [1, 1, 32, 32]
+    padded = [1, 1, 64, 32]  # > round_up(32, 32); produces Alignment{64,32} not {32,32}
+
+    torch_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_b = torch.rand(shape, dtype=torch.bfloat16)
+    tt_a = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded, 0.0
+    )
+    tt_b = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded, 0.0
+    )
+    with device.cache_entries_counter.measure():
+        tt_out1 = ttnn.add(tt_a, tt_b)
+    assert_with_pcc(torch.add(torch_a, torch_b), ttnn.to_torch(tt_out1), 0.999)
+
+    torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.add, shape, shape, dtype=ttnn.bfloat16)
+    assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
     assert device.cache_entries_counter.total == 2
 
@@ -665,46 +690,9 @@ def test_ng_scalar_dram_sharded_cache_miss_across_page_counts(device, isolate_pr
     assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.parametrize(
-    "out_dtype",
-    [
-        ttnn.bfloat16,
-        pytest.param(
-            ttnn.float32,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="https://github.com/tenstorrent/tt-metal/issues/54138 -- ttnn.where with a preallocated "
-                "float32 output silently ignores the "
-                "predicate and returns t_true. Reproduces on a SINGLE call against a cold program cache, "
-                "so this is a plain correctness bug rather than the cache-key collision finding #3 "
-                "describes. Unfixed; see the docstring. strict so that fixing it fails here and forces "
-                "this marker to be removed rather than lingering as a silent XPASS.",
-            ),
-        ),
-    ],
-    ids=["out_bf16", "out_f32"],
-)
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.float32], ids=["out_bf16", "out_f32"])
 def test_ng_where_scalar_preallocated_output_dtype(device, isolate_program_cache, out_dtype):
-    """Issue #54138 finding #3 predicted a CACHE-HIT defect: a caller-supplied output tensor reaches the
-    key only by proxy through attributes.dtype, which where_operation_with_scalar leaves as std::nullopt,
-    so get_dtype() collapses to the INPUT dtype and the real output dtype never enters the key. The
-    finding was tiered "Blocking (minor)" on the premise that "a single call with the odd value works
-    correctly" and only the cache hit goes wrong.
-
-    Measured on Wormhole, that premise does not hold. With a preallocated FLOAT32 output and bfloat16
-    inputs, a single call against a freshly-cleared program cache already returns the wrong answer --
-    2022 of 2048 elements mismatched, and the output is approximately t_true, i.e. the predicate is
-    dropped entirely. The bfloat16-output case is exact (0/2048) under the same conditions.
-
-    So this domain is broken with or without a cache, which by the issue's own cache-dependence test
-    makes it a report rather than a port blocker: adding the output dtype to the key would only give
-    each dtype its own separately-wrong program. Adding it also costs real cache reuse, because hashing
-    the output tensor's presence stops in-place and out-of-place calls from sharing one entry (it breaks
-    test_ng_cache_mixed_inplace_outofplace_interleaved). The underlying correctness bug must be fixed
-    first; only then is a key entry meaningful.
-
-    This test is parametrized so the passing bfloat16 case pins the behavior that DOES work, and the
-    xfail marks the float32 case that does not."""
+    """Issue #54138: bf16 inputs with a preallocated float32 output gave wrong values."""
     shape = [1, 1, 32, 64]
     torch.manual_seed(0)
 
@@ -722,3 +710,81 @@ def test_ng_where_scalar_preallocated_output_dtype(device, isolate_program_cache
 
     ref = torch.where(pred.bool(), t_true.float(), torch.full(shape, scalar_false))
     assert_with_pcc(ref, ttnn.to_torch(res).float(), 0.999)
+
+
+def test_ng_where_scalar_output_dtype_in_cache_key(device, isolate_program_cache):
+    """bf16 and float32 outputs need separate cache entries."""
+    shape = [1, 1, 64, 128]
+    torch.manual_seed(0)
+    pred = (torch.rand(shape) > 0.5).to(torch.bfloat16)
+    t_true = torch.rand(shape, dtype=torch.bfloat16)
+    tt_pred = ttnn.from_torch(pred, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_true = ttnn.from_torch(t_true, layout=ttnn.TILE_LAYOUT, device=device)
+    ref = torch.where(pred.bool(), t_true.float(), torch.tensor(-1.0))
+
+    for out_dtype in [ttnn.bfloat16, ttnn.float32, ttnn.bfloat16]:
+        out = ttnn.from_torch(torch.zeros(shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn.where(tt_pred, tt_true, -1.0, output_tensor=out)
+        expected = ref if out_dtype == ttnn.float32 else ref.to(torch.bfloat16).float()
+        assert torch.equal(ttnn.to_torch(out).float(), expected), out_dtype
+
+    assert device.num_program_cache_entries() == 2
+
+
+@pytest.mark.parametrize("op", [ttnn.add, ttnn.subtract, ttnn.multiply, ttnn.div])
+def test_scalar_tensor_scalar_value_excluded_from_hash(device, isolate_program_cache, op):
+    """A scalar first operand reaches the kernel as a runtime arg, so its value must not key
+    the cache -- only the operand side does."""
+    shape = (1, 1, 320, 384)
+    torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.5
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    op(1.5, tt_a)
+    ttnn.synchronize_device(device)
+    before = device.num_program_cache_entries()
+
+    for scalar in [2.0, 2.5, 3.0, 4.0, 5.5, 6.25]:
+        result = ttnn.to_torch(op(scalar, tt_a))
+        assert_with_pcc(_torch_scalar_op(op)(scalar, torch_a), result, 0.999)
+
+    ttnn.synchronize_device(device)
+    assert device.num_program_cache_entries() == before
+
+
+@pytest.mark.parametrize("op", [ttnn.subtract, ttnn.div])
+def test_scalar_side_is_in_hash(device, isolate_program_cache, op):
+    """The two operand orders compile different kernels, so they must not share an entry --
+    sharing one would hand back the operands the wrong way round on the second call."""
+    shape = (1, 1, 320, 384)
+    torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.5
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    scalar = 2.0
+
+    tensor_first = ttnn.to_torch(op(tt_a, scalar))
+    ttnn.synchronize_device(device)
+    after_first = device.num_program_cache_entries()
+
+    scalar_first = ttnn.to_torch(op(scalar, tt_a))
+    ttnn.synchronize_device(device)
+
+    assert device.num_program_cache_entries() == after_first + 1
+    assert_with_pcc(_torch_scalar_op(op)(scalar, torch_a), scalar_first, 0.999)
+    assert_with_pcc(_torch_tensor_op(op)(torch_a, scalar), tensor_first, 0.999)
+
+
+def _torch_scalar_op(op):
+    return {
+        ttnn.add: lambda s, t: s + t,
+        ttnn.subtract: lambda s, t: s - t,
+        ttnn.multiply: lambda s, t: s * t,
+        ttnn.div: lambda s, t: s / t,
+    }[op]
+
+
+def _torch_tensor_op(op):
+    return {
+        ttnn.add: lambda t, s: t + s,
+        ttnn.subtract: lambda t, s: t - s,
+        ttnn.multiply: lambda t, s: t * s,
+        ttnn.div: lambda t, s: t / s,
+    }[op]

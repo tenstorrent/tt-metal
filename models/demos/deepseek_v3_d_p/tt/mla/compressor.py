@@ -92,10 +92,14 @@ class TtCompressorUtils:
         ttnn.copy_host_to_device_tensor(host, buf)
         return buf
 
-    def build_rope_table(self, count: int, stride: int):
-        """Build replicated cos/sin tables for compressed or token positions."""
+    def build_rope_table(self, count: int, stride: int, layer_type: str = "compress"):
+        """Build replicated cos/sin tables for compressed or token positions.
+
+        ``layer_type`` picks the reference's rope variant: "compress" is the YaRN-scaled table the
+        HCA/CSA layers share with their compressor, "main" the plain theta=10000 one a sliding-only
+        layer uses (``DeepseekV4Attention.rope_layer_type``)."""
         positions = (torch.arange(count) * stride).unsqueeze(0)
-        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions.to(torch.long), layer_type="compress")
+        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions.to(torch.long), layer_type=layer_type)
         return tuple(self.from_torch(t.repeat_interleave(2, dim=-1)) for t in (cos, sin))
 
     def rope_index_base(self, rows: int):
@@ -147,7 +151,11 @@ class TtCompressorBase(LightweightModule):
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
         self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
-        self.ccl_topology = topology
+        if isinstance(topology, tuple):
+            assert self.sp_axis == 0 and self.tp_axis == 1, "per-axis topology tuple assumes sp_axis=0, tp_axis=1"
+            self.sp_ccl_topology, self.tp_ccl_topology = topology  # (sp_axis_0, tp_axis_1)
+        else:
+            self.sp_ccl_topology = self.tp_ccl_topology = topology
         self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
         self.ccl_num_links = 2 if is_blackhole() else 1
         self.ops = TtCompressorUtils(
@@ -311,7 +319,7 @@ class TtHCACompressor(TtCompressorBase):
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                     num_links=self.ccl_num_links,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=self.ccl_topology,
+                    topology=self.tp_ccl_topology,
                     cluster_axis=self.tp_axis,
                 )
                 tensor = ttnn.experimental.all_gather_async(
@@ -323,7 +331,7 @@ class TtHCACompressor(TtCompressorBase):
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                     num_links=self.ccl_num_links,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=self.ccl_topology,
+                    topology=self.tp_ccl_topology,
                     cluster_axis=self.tp_axis,
                 )
                 if name == "kv":
@@ -363,7 +371,7 @@ class TtHCACompressor(TtCompressorBase):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.sp_ccl_topology,
                 cluster_axis=self.sp_axis,
             )
 

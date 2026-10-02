@@ -24,15 +24,15 @@
   skus:
     wh_n150:
       timeout: 20
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
       timeout: 20
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_quietbox_2:
       timeout: 20
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p300:
       timeout: 20
@@ -40,6 +40,7 @@
       hf_model: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: device_perf
 
 - name: Llama 3.3-70B device perf tests
   cmd: |
@@ -52,10 +53,11 @@
   skus:
     bh_quietbox_2:
       timeout: 30
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
       hf_model: meta-llama/Llama-3.3-70B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: device_perf
 
 - name: Qwen3-32B device perf tests
   cmd: |
@@ -68,40 +70,74 @@
   skus:
     bh_quietbox_2:
       timeout: 30
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
       hf_model: Qwen/Qwen3-32B
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: device_perf
 
+# The base and LoRA perf files used to share one leg that ran both and reported the worst
+# exit code. A hang in the first file left the second one running on a dead card until
+# the job timeout (#57706). Each file is its own leg now, so each starts on reset devices.
+# The old leg's timeout is split between the two (~36 min measured for base, ~4 min for LoRA
+# on wh_n150).
 - name: Stable Diffusion XL device-perf tests
   cmd: |
     export HF_HUB_OFFLINE=0
-    exit_code=0
-    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal || exit_code=$?
-    exit $exit_code
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
   model: sdxl
   skus:
     wh_n150:
-      timeout: 100
+      timeout: 80
     bh_p150:
-      timeout: 60
+      timeout: 45
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: device_perf
+
+- name: Stable Diffusion XL LoRA device-perf tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+    bh_p150:
+      timeout: 15
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+  budget_type: device_perf
+
+- name: Stable Diffusion XL op device-perf tests
+  cmd: |
+    # Host call-stack sampling off: Tracy teardown 30-110 s -> 5-6 s per test; device timings come from the CSV.
+    export TRACY_NO_SYS_TRACE=1
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -m models_device_performance_bare_metal
+  model: sdxl
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+  budget_type: device_perf
 
 - name: ResNet-50 device perf tests
   cmd: |
-    pytest models/demos/vision/classification/resnet50/{arch_dir}/tests/test_perf_device_resnet50.py -m models_device_performance_bare_metal
+    pytest --timeout {pytest_timeout} models/demos/vision/classification/resnet50/{arch_dir}/tests/test_perf_device_resnet50.py -m models_device_performance_bare_metal
   model: resnet50
   skus:
     bh_p150b_civ2:
-      timeout: 7
+      timeout: 9
+      pytest_timeout: 240
       arch_dir: blackhole
     wh_n150:
-      timeout: 5
+      timeout: 10
+      pytest_timeout: 540
       arch_dir: wormhole
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: device_perf
 
 - name: ResNet-50 e2e model perf tests
   cmd: |
@@ -112,10 +148,13 @@
       timeout: 8
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: device_perf
 
 - name: DeepSeek-V3 decode device perf tests (Galaxy)
   cmd: |
     export MESH_DEVICE=TG
+    # Device timings come from CSV; omit the large device-event stream from Tracy.
+    export TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     pytest --timeout=1200 models/demos/deepseek_v3/demo/test_decode_demo_perf.py
   model: deepseek-v3-tg
@@ -124,6 +163,7 @@
       timeout: 20
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: device_perf
 
 - name: DeepSeek-V3 fused-op device perf tests (Galaxy)
   cmd: |
@@ -134,6 +174,8 @@
     PROFILER_DIR="generated/profiler/deepseek_v3_fused_ops_device_perf"
     TRACY_TIMEOUT_PORT=5000
     TRACY_OP_SUPPORT_COUNT=10000
+    # Stop at the first failed case: the Galaxy is not reset between cases, so a hang or an
+    # abort in one case leaves the next ones on devices in an unknown state (#57706).
     run_tracy_case() {
       local name="$1"
       local perf_env_var="$2"
@@ -146,7 +188,7 @@
         --op-support-count "$TRACY_OP_SUPPORT_COUNT" \
         -t "$TRACY_TIMEOUT_PORT" \
         -a device_kernel_duration \
-        -m "pytest $test_target -k \"$k_expr\""
+        -m "pytest $test_target -k \"$k_expr\"" || { rc=$?; echo "--- Case FAILED (rc=$rc): $name"; exit $rc; }
       sleep 10
     }
     run_tracy_case "embedding decode seq1 + prefill seq128" "DS_EMBEDDING_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding.py::test_ds_embedding" "program_cache and not no_program_cache and real_weights and ((trace and decode and 1) or (eager and prefill and 128))"
@@ -165,6 +207,7 @@
   model_family: DeepSeek
   skus:
     wh_galaxy_perf:
-      timeout: 30
+      timeout: 45
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: device_perf

@@ -33,7 +33,7 @@ def run_resnet_50(
         use_pretrained_weight,
         model_location_generator=model_location_generator,
     )
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+    tt_inputs_host, input_mem_config = test_infra.setup_input(device)
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     # First run configures convs JIT
     test_infra.run()

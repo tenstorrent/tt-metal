@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,6 @@
 #include <optional>
 #include <string>
 #include <variant>
-
-#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -30,12 +28,16 @@ struct GeluBwDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-Tensor launch_gelu_bw(
+}  // namespace ttnn::operations::unary_backward::gelu_bw
+
+namespace ttnn::prim {
+
+Tensor gelu_bw(
     const Tensor& grad_output,
     const Tensor& input,
-    bool approximate,
+    operations::unary::GeluVariant variant,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output);
 
-}  // namespace ttnn::operations::unary_backward::gelu_bw
+}  // namespace ttnn::prim

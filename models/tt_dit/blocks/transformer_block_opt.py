@@ -134,6 +134,7 @@ class TransformerBlock(Module):
             q_chunk_size=attention_q_chunk_size,
             is_fsdp=is_fsdp,
             shard_prompt=shard_prompt,
+            per_head_norm=True,
         )
 
         self.norm2 = DistributedLayerNorm(

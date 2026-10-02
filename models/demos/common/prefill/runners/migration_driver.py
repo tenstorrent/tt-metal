@@ -84,10 +84,9 @@ class MigrationDriver:
             self._pair_cross_endpoint()
 
     def _attach_client(self):
-        from models.demos.common.prefill.runners.migration import _import_migration_client, _resolve_queue_names
+        from models.demos.common.prefill.runners.migration import _attach_migration_client
 
-        cmd_q, table_q, resp_q = _resolve_queue_names()
-        client = _import_migration_client().MigrationLayerClient(cmd_q, table_q, resp_q)
+        client, cmd_q, table_q, resp_q = _attach_migration_client()
         logger.info(f"[migration_driver] client attached: cmd={cmd_q} table={table_q} resp={resp_q}")
         return client
 
@@ -456,7 +455,7 @@ def _verify_dst_vs_src_bytes(
         )
         return False
 
-    failures, checked, skipped, tail_tokens = [], 0, 0, 0
+    failures, checked, skipped, unpublished, tail_tokens = [], 0, 0, 0, 0
     for src, dst, real_len in triples:
         for cfg_id, picked in checkable:
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
@@ -473,6 +472,10 @@ def _verify_dst_vs_src_bytes(
                 for pos in range(0, n_full, stride):
                     src_loc = table.lookup(row, pos, src, cfg_id)
                     dst_loc = table.lookup(row, pos, dst, cfg_id)
+                    if src_loc.size_bytes == 0 and dst_loc.size_bytes == 0:
+                        # Unpublished row (e.g. M3 index_k on a dense layer): nothing migrates there.
+                        unpublished += 1
+                        continue
                     try:
                         src_uid = producer._resolve_unique_id(
                             table.get_device_group(src_loc.device_group_index).fabric_node_ids, device_map
@@ -503,6 +506,11 @@ def _verify_dst_vs_src_bytes(
         logger.warning(
             f"[migration_driver] verify bytes: {tail_tokens} trailing token(s) across all pairs fell in a "
             "partial chunk and were NOT compared (real_len is not chunk-aligned)."
+        )
+    if unpublished:
+        logger.info(
+            f"[migration_driver] verify bytes: {unpublished} chunk(s) not compared — their table rows are "
+            "unpublished on both sides (e.g. M3 index_k on a dense layer), so nothing migrates there."
         )
     if skipped:
         logger.warning(
@@ -804,16 +812,16 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
-    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int) -> float:
+    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
-        chunk_bytes = producer._chunk_to_host_array(pool[actual_start : actual_start + producer.CHUNK_SIZE])
-        assert (
-            chunk_bytes.nbytes == payload_bytes
-        ), f"payload {chunk_bytes.nbytes}B != service-expected {payload_bytes}B"
         logger.info(f"[migration_driver] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
-        service.forward_to_tensor_bytes(
-            chunk_bytes, metadata=producer._pack_metadata(slot_id, actual_start, actual_end)
+        producer._push(
+            service,
+            payload_bytes,
+            producer._h2d_rows(producer._chunk_slice(pool, actual_start, actual_isl)),
+            producer._mtp_rows(pool, actual_start, actual_isl),
+            producer._pack_metadata(slot_id, actual_start, actual_end),
         )
         return (time.perf_counter() - push_start) * 1000.0
 
@@ -899,9 +907,14 @@ def main() -> None:
 
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
         sentinel = struct.pack("<iii", -1, -1, -1)
-        payload = producer._chunk_to_host_array([1] * producer.CHUNK_SIZE)
         logger.info("[migration_driver] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        service.forward_to_tensor_bytes(payload, metadata=sentinel)
+        producer._push(
+            service,
+            payload_bytes,
+            producer._h2d_rows(producer._chunk_slice([], 0)),
+            producer._mtp_rows([], 0),
+            sentinel,
+        )
         service.barrier()
     else:
         logger.info("[migration_driver] exiting (the runner keeps its sync-op loop running).")

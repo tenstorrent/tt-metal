@@ -22,9 +22,9 @@ void kernel_main() {
     constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
     constexpr auto block_w = get_arg(args::block_w);
     constexpr auto block_h_const = get_arg(args::block_h);
-    volatile uint32_t block_h_volatile = get_arg(args::block_h);
+    const volatile uint32_t block_h_volatile = get_arg(args::block_h);
     constexpr auto subblock_w_const = get_arg(args::subblock_w);
-    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
+    const volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
@@ -84,7 +84,7 @@ void kernel_main() {
 
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_x2(dfb_x2_id);
-    DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
+    const DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_ex_external2(dfb_ex_external2_id);
 
@@ -92,14 +92,9 @@ void kernel_main() {
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
-    int index_subblock_w_offset = 0;
-    int index_h_offset = 0;
-    int index = 0;
-
-    uint32_t num_tiles_per_partial_result = 2;
-#ifdef RMSNORM
-    num_tiles_per_partial_result = 1;
-#endif
+    uint32_t index_subblock_w_offset = 0;
+    uint32_t index_h_offset = 0;
+    uint32_t index = 0;
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
@@ -128,7 +123,8 @@ void kernel_main() {
     dfb_in.wait_front(num_tiles_per_block);
     pack_reconfig_data_format(dfb_in_id, dfb_x2_id);
 #else
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
+    // full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(dfb_in_id, dfb_in_id, dfb_x2_id);
 #endif
 
@@ -157,6 +153,12 @@ void kernel_main() {
     // waited on above and read by tile index.
     reconfig_data_format(dfb_in_id, dfb_col_mask_packed_id);
     mul_init(dfb_in_id, dfb_col_mask_packed_id);
+    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+    // destination (BFD) is set by pack_init. Retarget it before every pack-target switch, else pack_tile
+    // keeps writing into the previously programmed buffer and the new one is never written (all-zero output).
+#ifdef ARCH_QUASAR
+    pack_init(dfb_x2_id);
+#endif
     dfb_x2.reserve_back(num_tiles_per_block);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
@@ -173,6 +175,9 @@ void kernel_main() {
     dfb_x2.push_back(num_tiles_per_block);
     dfb_x2.wait_front(num_tiles_per_block);
     // E[x] over the masked input.
+#ifdef ARCH_QUASAR
+    pack_init(dfb_ex_partial2_id);
+#endif
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
@@ -187,6 +192,9 @@ void kernel_main() {
     reconfig_data_format(dfb_in_id, dfb_in_id);
 #else
     // E[x],
+#ifdef ARCH_QUASAR
+    pack_init(dfb_ex_partial2_id);
+#endif
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
@@ -208,6 +216,9 @@ void kernel_main() {
     // X^2
     mul_init(dfb_in0, dfb_in0);
     index_h_offset = 0;
+#ifdef ARCH_QUASAR
+    pack_init(dfb_x2_id);
+#endif
     dfb_x2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -219,8 +230,8 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_x2_id);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_x2_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
@@ -254,6 +265,9 @@ void kernel_main() {
 #endif  // RMSNORM
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
+#ifdef ARCH_QUASAR
+    pack_init(dfb_ex_partial2_id);
+#endif
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
@@ -269,11 +283,19 @@ void kernel_main() {
     // global reduce, the combine destination <-- dfb_ex_external2_id, dfb_ex_partial2_id
 #ifdef IS_ALLGATHER_WORKER
     {
+        uint32_t num_tiles_per_partial_result = 2;
+#ifdef RMSNORM
+        num_tiles_per_partial_result = 1;
+#endif
         dfb_scaler_global.wait_front(1);
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external2_id);
         pack_reconfig_data_format(dfb_reduction_out);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_ex_external2_id, dfb_scaler_global_id, dfb_reduction_out);
-        DataflowBuffer(dfb_reduction_out).reserve_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
+#ifdef ARCH_QUASAR
+        pack_init(dfb_reduction_out);
+#endif
+        DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
+            .reserve_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
             tile_regs_acquire();
@@ -298,7 +320,8 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        DataflowBuffer(dfb_reduction_out).push_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
+        DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
+            .push_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
         // The global-reduce scaler tile is pushed once (only on all-gather worker cores) and read by
         // tile index throughout the global reduce above without being popped. Pop it once here, inside
         // the same guard that gated the wait, so the buffer is left balanced on every core.

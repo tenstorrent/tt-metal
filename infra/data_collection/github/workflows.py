@@ -18,6 +18,42 @@ tt_smi_reset_pattern = re.compile(r'"tt_smi_reset":\s*(\[.*\])')
 # Define a regex pattern to match timestamps in ISO 8601 format (e.g., 2025-03-26T19:18:31.7521333Z)
 timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 
+# JIT build telemetry is emitted once per job as a block of self-contained lines, one
+# per metric. Two historical formats are supported:
+#   JIT telemetry [JitBuildState::compile] (ms): count=5660, total=6211227.967, min=438.541, max=2617.981, mean=1097.390
+#   JIT telemetry [JitBuildState::build]: count=82, total=372398.904ms, min=912.363ms, max=6393.631ms, mean=4541.450ms
+# The first carries the unit in "(unit)"; the older second one suffixes it on each value.
+# Numeric groups match digits only, so int()/float() on them never raise. Lines that are
+# not a fully-formed metric record (e.g. "JIT telemetry: 39 registered TelemetryTokens" or
+# "JIT cache stats: ...") simply do not match, so the parser never has to guess.
+jit_telemetry_pattern = re.compile(
+    r"JIT telemetry \[(?P<metric_name>[^\]]+)\]"
+    r"(?:\s*\((?P<unit_paren>[^)]+)\))?"
+    r":\s*"
+    r"count=(?P<sample_count>\d+)\s*,\s*"
+    r"total=(?P<total_value>\d+(?:\.\d+)?)(?P<unit_suffix>ms|B)?\s*,\s*"
+    r"min=(?P<min_value>\d+(?:\.\d+)?)(?:ms|B)?\s*,\s*"
+    r"max=(?P<max_value>\d+(?:\.\d+)?)(?:ms|B)?\s*,\s*"
+    r"mean=(?P<mean_value>\d+(?:\.\d+)?)(?:ms|B)?"
+)
+
+# The per-process cache-stats summary line, e.g.:
+#   JIT cache stats: 0/5660 hits (0.0%) [0 cached, 1032 build-once dedup, 0 merged artifacts, 0 merged genfiles]
+# Only the leading "hits/lookups" pair is required; the bracketed counters are matched
+# best-effort below so a change to that list drops the extras rather than failing. The
+# hit rate is intentionally not stored -- it is derivable (hits / lookups) and, unlike a
+# raw count, cannot be summed across process blocks.
+jit_cache_stats_pattern = re.compile(r"JIT cache stats:\s*(?P<hits>\d+)\s*/\s*(?P<lookups>\d+)\s+hits")
+
+# metric-name -> pattern for each optional bracketed counter. Kept raw-count only so the
+# same sum-across-blocks aggregation used for JIT telemetry stays correct.
+_jit_cache_extra_patterns = {
+    "jit_cache.cached": re.compile(r"(\d+)\s+cached"),
+    "jit_cache.build_once_dedup": re.compile(r"(\d+)\s+build-once dedup"),
+    "jit_cache.merged_artifacts": re.compile(r"(\d+)\s+merged artifacts"),
+    "jit_cache.merged_genfiles": re.compile(r"(\d+)\s+merged genfiles"),
+}
+
 
 def search_for_tt_smi_version_in_log_file_(log_file):
     # Defense-in-depth: resolve and confirm this is a real file before opening.
@@ -175,6 +211,95 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     ]
 
 
+def search_for_jit_telemetry_in_log_file_(log_file):
+    """
+    Extract JIT build-telemetry metric records from a single job log.
+
+    Each metric line is self-contained and already carries its aggregates
+    (count/total/min/max/mean), so parsing is a plain per-line regex match with no
+    cross-line state and no heuristics: a line either is a well-formed metric record
+    or it is ignored. A log with no telemetry returns an empty list.
+
+    ``BuildCacheTelemetry`` is process-wide and emits its block from the process
+    destructor, so a job that runs multiple processes contributes several
+    independent blocks, each cumulative for its own process only. Occurrences of the
+    same metric are therefore aggregated across blocks (counts and totals summed,
+    min/max reduced, mean recomputed as total/count) to give a job-level figure. A
+    metric seen once is passed through with its reported mean.
+
+    The per-process ``JIT cache stats`` line is captured too, as raw-count metrics
+    named ``jit_cache.*`` (hits, lookups, and the bracketed counters). Storing them
+    in the same flat metric shape means no new schema is needed downstream, and the
+    same sum-across-blocks aggregation is correct because they are counters. Returns
+    a list of dicts with keys: metric_name, unit, sample_count, total_value,
+    min_value, max_value, mean_value.
+    """
+    # Defense-in-depth: resolve and confirm this is a real file before opening.
+    log_file = pathlib.Path(log_file).resolve()
+    assert log_file.is_file(), f"Not a readable log file: {log_file}"
+
+    metrics_by_name = {}
+
+    def fold(metric_name, unit, sample_count, total_value, min_value, max_value, mean_value):
+        """Insert a metric or fold a later process block into the running aggregate."""
+        existing = metrics_by_name.get(metric_name)
+        if existing is None:
+            metrics_by_name[metric_name] = {
+                "metric_name": metric_name,
+                "unit": unit,
+                "sample_count": sample_count,
+                "total_value": total_value,
+                "min_value": min_value,
+                "max_value": max_value,
+                "mean_value": mean_value,
+            }
+            return
+        existing["sample_count"] += sample_count
+        existing["total_value"] += total_value
+        existing["min_value"] = min(existing["min_value"], min_value)
+        existing["max_value"] = max(existing["max_value"], max_value)
+        # Recompute from the aggregate rather than averaging per-block means,
+        # which would be wrong when blocks have different sample counts.
+        existing["mean_value"] = existing["total_value"] / existing["sample_count"] if existing["sample_count"] else 0.0
+
+    def fold_counter(metric_name, value):
+        """Fold a single scalar counter as a one-sample metric (min=max=mean=value)."""
+        fold(metric_name, "count", 1, value, value, value, value)
+
+    # errors="replace" so a stray non-UTF-8 byte in a log never aborts the scan.
+    with open(log_file, "r", errors="replace") as log_f:
+        for line in log_f:
+            match = jit_telemetry_pattern.search(line)
+            if match is not None:
+                metric_name = match.group("metric_name").strip()
+                if not metric_name:
+                    continue
+                unit = match.group("unit_paren") or match.group("unit_suffix")
+                fold(
+                    metric_name,
+                    unit.strip() if unit else None,
+                    int(match.group("sample_count")),
+                    float(match.group("total_value")),
+                    float(match.group("min_value")),
+                    float(match.group("max_value")),
+                    float(match.group("mean_value")),
+                )
+                continue
+
+            cache_match = jit_cache_stats_pattern.search(line)
+            if cache_match is not None:
+                fold_counter("jit_cache.hits", float(cache_match.group("hits")))
+                fold_counter("jit_cache.lookups", float(cache_match.group("lookups")))
+                # Bracketed counters are best-effort: a format change drops them
+                # rather than breaking the scan.
+                for metric_name, pattern in _jit_cache_extra_patterns.items():
+                    extra = pattern.search(line)
+                    if extra is not None:
+                        fold_counter(metric_name, float(extra.group(1)))
+
+    return list(metrics_by_name.values())
+
+
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int, workflow_attempt: int):
     logs_dir = _safe_logs_dir(workflow_outputs_dir, workflow_run_id)
 
@@ -187,6 +312,7 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
 
     github_job_ids_to_tt_smi_versions = {}
     github_job_ids_to_tt_smi_resets = {}
+    github_job_ids_to_jit_telemetry = {}
 
     for log_file in log_files:
         filename = log_file.stem
@@ -214,7 +340,16 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
 
         github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset
 
-    return github_job_ids_to_tt_smi_versions, github_job_ids_to_tt_smi_resets
+        jit_telemetry = search_for_jit_telemetry_in_log_file_(safe_log_file)
+        for metric in jit_telemetry:
+            metric["workflow_attempt"] = workflow_attempt
+        github_job_ids_to_jit_telemetry[github_job_id] = jit_telemetry
+
+    return (
+        github_job_ids_to_tt_smi_versions,
+        github_job_ids_to_tt_smi_resets,
+        github_job_ids_to_jit_telemetry,
+    )
 
 
 def parse_github_log_timestamp(line):
@@ -465,8 +600,8 @@ def get_civ2_node_name_and_serial_from_job_log(workflow_outputs_dir, workflow_ru
     From the API, we can always see the annotations.
     E.g. https://api.github.com/repos/tenstorrent/tt-metal/check-runs/<job id>/annotations
 
-    So we should never have to exercise this fallback parser because we always generate pipeline data on each run attempt's jobs only.
-    (Unless github has an outage and doesn't upload annotations for some reason)
+    09/08/2026: Due to Github rate limits, we only download annotations for failed jobs.
+    This is now the usual path to resolve the host_name for CIv2 (tt-ubuntu) runners.
 
     Returns (node_name, serial), each None if not found (CPU-only runners have no serial).
     """

@@ -33,6 +33,7 @@ TestVariant = PrefillModelAdapter
 TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
 DSV3 = get_adapter("deepseek_v3_d_p")
 
+from models.demos.deepseek_v3_d_p.tests import _reuse
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     assert_torus_xy_descriptor,
     fabric2d_device_params,
@@ -41,20 +42,18 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_y_device_params,
 )
 
-# glm_5_2 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
+# glm_5_3 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
 # ADAPTER_PATHS (prefill serving is not wired), so register it locally for the `variant` fixture
 # without modifying the common prefill registry.
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapter
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 
-TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
+TEST_VARIANTS["glm_5_3"] = GLM53Adapter()
 
-# kimi_k3 is TEST-ONLY for the same reason, more strongly: 69 of its 93 layers are KDA
-# linear-attention layers with no TT implementation, so only its MLA layer is testable.
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
-
-TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
-from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
+    download_infinitebench_subset,
+    extract_moe_layer_weights,
+)
 
 # Shared production-policy params for prefill block + transformer tests. LoudBox executes canonical
 # 2x4 Fabric2D and one 4x2 axis-order diagnostic; Galaxy production executes only 8x4 TorusXY.
@@ -339,6 +338,30 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.skip(reason=skip_reason))
 
 
+if _reuse.reuse_enabled():
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """Root mesh_device, kept open across tests while device_params stay the same (see _reuse)."""
+        return _reuse.get_device(request, silicon_arch_name, device_params)
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_makereport(item, call):
+        outcome = yield
+        rep = outcome.get_result()
+        if rep.failed:
+            logger.warning(f"{item.nodeid} {rep.when} failed; dropping the reused mesh device and models")
+            _reuse.mark_dirty()
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_teardown(item, nextitem):
+        yield
+        _reuse.close_if_dirty()
+
+    def pytest_sessionfinish(session, exitstatus):
+        _reuse.close_all()
+
+
 @pytest.fixture(autouse=True)
 def _assert_certified_torus_profile(request):
     """Fail closed after mesh open for every certified TorusXY parametrized case."""
@@ -396,7 +419,7 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             "*.safetensors.index.json",
             "generation_config.json",
             "tokenizer*",
-            "tiktoken*",  # Kimi K2.6 ships its BBPE tokenizer as tiktoken.model
+            "tiktoken*",  # Kimi ships its BBPE tokenizer as tiktoken.model
         ]
 
         # Add custom model code files (needed for trust_remote_code=True)
@@ -487,7 +510,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             "*.safetensors.index.json",
             "generation_config.json",
             "tokenizer*",
-            "tiktoken*",  # Kimi K2.6 ships its BBPE tokenizer as tiktoken.model
+            "tiktoken*",  # Kimi ships its BBPE tokenizer as tiktoken.model
         ]
 
         # Add custom model code files (needed for trust_remote_code=True)
@@ -528,12 +551,6 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
                 if f"model.layers.{layer_id}." in key:
                     required_shards.add(shard_file)
 
-        # Find shard for model.norm (always needed by pretrained_transformer_weights fixture)
-        for key, shard_file in weight_map.items():
-            if "model.norm.weight" in key:
-                required_shards.add(shard_file)
-                break
-
         # Convert shard filenames to patterns
         shard_patterns = []
         for shard_file in sorted(required_shards):
@@ -542,7 +559,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             shard_patterns.append(f"*-{shard_num}-of-*.safetensors")
 
         logger.info(
-            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings + norm..."
+            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings..."
         )
         logger.info(
             f"Required shards: {len(required_shards)} files ({', '.join(sorted(required_shards)[:5])}{'...' if len(required_shards) > 5 else ''})"
@@ -571,7 +588,7 @@ def _resolve_hf_snapshot_dir(path: Path) -> Path:
     return the active snapshot dir (the ``refs/main`` commit, else the newest snapshot that has the
     safetensors index) so callers see the real config.json + shards. Otherwise return `path` as-is.
 
-    Lets ``*_HF_MODEL`` point at either the hub root (``.../hub/models--zai-org--GLM-5.1``) or a plain
+    Lets ``*_HF_MODEL`` point at either the hub root (``.../hub/models--zai-org--GLM-5.3``) or a plain
     checkout dir. The hash snapshot dir also sidesteps the trust_remote_code dot-in-path import issue.
     """
     if (path / "model.safetensors.index.json").exists():
@@ -597,7 +614,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
         variant: The TestVariant to resolve weights for.
         layer_idx: Which layer weights to ensure are available.
         num_layers: Number of layers to download (default: 6).
-                    When >1, downloads additional shards including shard 160 for model.norm.
+                    When >1, downloads the additional per-layer shards.
 
     Returns:
         Path to model directory with weights.
@@ -607,14 +624,14 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
     if env_path:
         model_path = Path(env_path)
         if model_path.exists():
-            # Accept an HF hub-cache root (e.g. /mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.1)
+            # Accept an HF hub-cache root (e.g. /mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.3)
             # by descending into its current snapshot, where config.json + the safetensors index live.
             model_path = _resolve_hf_snapshot_dir(model_path)
             index_file = model_path / "model.safetensors.index.json"
             if index_file.exists():
                 logger.info(f"Using existing model from {variant.env_var}: {model_path}")
                 # Keep the user path absolute but do NOT symlink-resolve it: resolve() would follow a
-                # dot-free symlink (e.g. Kimi-K2_6) back to a dotted real dir (Kimi-K2.6), and HF
+                # dot-free symlink (e.g. Kimi-K2_7-Code) back to a dotted real dir (Kimi-K2.7-Code), and HF
                 # trust_remote_code cannot import a dynamic module whose name contains a '.'. The
                 # safetensors load works through the symlink either way; only the config import cares.
                 # This matches _resolve_config_only, which already loads config from the raw env path.
@@ -648,14 +665,22 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
 
 
 def _unwrap_multimodal_config(cfg):
-    """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
+    """Unwrap a Kimi multimodal wrapper config (K2.7-Code ships
+    ``KimiK25ForConditionalGeneration``) to the inner text_config.
 
     The LM fields the rest of the code reads (hidden_size, n_routed_experts, etc.) live
     under `text_config`.
     """
     if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
         logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
+        # `quantization_config` describes the CHECKPOINT, so HF puts it on the outer wrapper only and
+        # the unwrap drops it. convert_state_dict then falls to passthrough and raises on the first
+        # float8 tensor ("config has no `quantization_config`"). Carry the genuine one across rather
+        # than reconstructing it, so modules_to_not_convert / dequantize survive.
+        outer_quant = getattr(cfg, "quantization_config", None)
         cfg = cfg.text_config
+        if getattr(cfg, "quantization_config", None) is None and outer_quant is not None:
+            cfg.quantization_config = outer_quant
     return cfg
 
 
@@ -687,7 +712,7 @@ def _resolve_hf_config(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_config_only(variant_name: str):
     v = TEST_VARIANTS[variant_name]
-    # Hand-built config takes precedence: some models (e.g. GLM-5.1 `glm_moe_dsa`, DeepSeek-V3.2
+    # Hand-built config takes precedence: some models (e.g. GLM-5.3 `glm_moe_dsa`, DeepSeek-V3.2
     # `deepseek_v32`) are not registered with transformers, so AutoConfig cannot load them. The builder
     # returns a ready HF-attribute config. (Result is lru_cached like the AutoConfig path; tests that
     # mutate config.max_seq_len already rely on this shared/cached object.)
@@ -696,7 +721,9 @@ def _resolve_config_only(variant_name: str):
     # Check environment variable first
     env_path = os.getenv(v.env_var)
     if env_path:
-        model_path = Path(env_path)
+        # Same hub-cache descent get_or_download_model does: *_HF_MODEL may point at the
+        # repo root, whose config.json lives one level down in snapshots/<sha>/.
+        model_path = _resolve_hf_snapshot_dir(Path(env_path))
         if (model_path / "config.json").exists():
             logger.info(f"Using existing config from {v.env_var}: {model_path}")
             return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(model_path), trust_remote_code=True))
@@ -746,7 +773,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     for candidate in candidates:
         if candidate is None:
             continue
-        p = Path(candidate)
+        p = _resolve_hf_snapshot_dir(Path(candidate))
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
             tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=trust_remote_code)
@@ -779,11 +806,24 @@ def model_path(variant) -> Path:
 
 
 @pytest.fixture
-def hf_config(model_path):
+def hf_config(variant, model_path):
     """
     Load HF config for testing.
     Returns None if model path doesn't exist (weights not available).
+
+    `config_builder_overrides_checkpoint` means the adapter's config is authoritative even though
+    the checkpoint's own loads: transformers 5.x nests rope_theta inside rope_parameters, so an
+    AutoConfig-derived config lacks attributes ttMLA reads as plain ones.
+
+    It delegates to `_resolve_config_only` rather than calling the builder directly, so this fixture
+    and `config_only` hand out the SAME object for one variant -- both lru_cached, as the AutoConfig
+    path below already is. Calling the builder here would return a fresh config per request, and the
+    fixtures mutate what they are given (`config.max_seq_len` throughout, `setattr` in
+    pretrained_mla_layer_weights), so a second copy silently drops those mutations for whichever
+    fixture did not make them.
     """
+    if variant.config_builder_overrides_checkpoint and variant.config_builder is not None:
+        return _resolve_config_only(variant.name)
     return _resolve_hf_config(str(model_path))
 
 
@@ -952,9 +992,10 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     """
     Dequantized pretrained weights for N-layer transformer in TT state_dict format.
 
-    Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
+    Extracts embed and per-layer weights (attention, FFN/MoE) using
     sub_state_dict() + convert_state_dict(), matching the format produced
-    by extract_tt_state_dict() in transformer_helpers.py.
+    by extract_tt_state_dict() in transformer_helpers.py. No final norm: the
+    prefill transformer has no norm / LM-head tail.
 
     Parametrize with num_layers (default 6) via indirect fixture or marker:
         @pytest.mark.parametrize("pretrained_transformer_weights", [4], indirect=True)
@@ -989,11 +1030,6 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
         "embed_weight": embed_dequant["weight"].float(),
     }
 
-    # Final norm
-    norm_sd = sub_state_dict(state_dict, f"{prefix}model.norm.")
-    norm_dequant = convert_state_dict(norm_sd, hf_config)
-    result["norm_weight"] = norm_dequant["weight"]
-
     # Per-layer weights
     result["layers"] = []
     for i in range(num_layers):
@@ -1015,23 +1051,7 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
                 "down_proj": layer_dequant["mlp.down_proj.weight"],
             }
         else:
-            layer_dict["gate_weights"] = {
-                "weight": layer_dequant["mlp.gate.weight"],
-                "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"],
-            }
-            layer_dict["routed_expert_weights"] = [
-                {
-                    "gate_proj": layer_dequant[f"mlp.experts.{j}.gate_proj.weight"],
-                    "up_proj": layer_dequant[f"mlp.experts.{j}.up_proj.weight"],
-                    "down_proj": layer_dequant[f"mlp.experts.{j}.down_proj.weight"],
-                }
-                for j in range(n_routed)
-            ]
-            layer_dict["shared_expert_weights"] = {
-                "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
-                "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
-                "down_proj": layer_dequant["mlp.shared_experts.down_proj.weight"],
-            }
+            layer_dict.update(extract_moe_layer_weights(layer_dequant, n_routed=n_routed))
 
         result["layers"].append(layer_dict)
         logger.info(f"Layer {i} loaded ({'dense' if is_dense else 'MoE'})")

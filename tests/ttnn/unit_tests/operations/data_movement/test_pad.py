@@ -58,24 +58,39 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
 
 
 @pytest.mark.parametrize(
-    "shape,padding,torch_padding",
+    "shape,padding,torch_padding,use_multicore",
     [
-        ((8, 1, 1, 1), ((0, 0), (0, 0), (0, 0), (0, 191)), (0, 191, 0, 0, 0, 0, 0, 0)),
-        ((1, 1, 1, 2), ((0, 0), (0, 0), (0, 0), (0, 254)), (0, 254, 0, 0, 0, 0, 0, 0)),
-        ((4, 1, 1, 4), ((0, 0), (0, 0), (0, 0), (0, 60)), (0, 60, 0, 0, 0, 0, 0, 0)),
+        ((8, 1, 1, 1), ((0, 0), (0, 0), (0, 0), (0, 191)), (0, 191, 0, 0, 0, 0, 0, 0), True),
+        ((1, 1, 1, 2), ((0, 0), (0, 0), (0, 0), (0, 254)), (0, 254, 0, 0, 0, 0, 0, 0), True),
+        ((4, 1, 1, 4), ((0, 0), (0, 0), (0, 0), (0, 60)), (0, 60, 0, 0, 0, 0, 0, 0), True),
+        ((1, 1, 1, 1985), ((0, 0), (0, 0), (0, 0), (49290, 0)), (49290, 0, 0, 0, 0, 0, 0, 0), True),
+        pytest.param(
+            (1, 1, 1, 1985),
+            ((0, 0), (0, 0), (0, 0), (49290, 0)),
+            (49290, 0, 0, 0, 0, 0, 0, 0),
+            False,
+            marks=pytest.mark.xfail(
+                raises=AssertionError,
+                strict=True,
+                reason="single-core RM pad writes the padding after the data instead of before it: "
+                "https://github.com/tenstorrent/tt-metal/issues/56323",
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize("value", [0])
-def test_pad_rm_small_to_large_width(device, shape, padding, torch_padding, value):
+def test_pad_rm_small_to_large_width(device, shape, padding, torch_padding, use_multicore, value):
     """Regression test for issue #39875: padding from very small width to large width
-    caused CB allocation to exceed L1 size due to using input width for stick batching."""
+    caused CB allocation to exceed L1 size due to using input width for stick batching,
+    and for wide padded rows whose fixed 16-row CB depth exceeded L1 on both the
+    multi-core and single-core row-major factories."""
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(shape).bfloat16().float()
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value, use_multicore=use_multicore)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
@@ -378,6 +393,126 @@ def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         device.set_program_cache_misses_allowed(False)
+
+
+@pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_pad_rm_sharded_height_only_non_contiguous_grid(device, shard_orient, dtype):
+    """Height-only RM pad on a shard grid with a hole in it.
+
+    Regression test for the Qwen3-32B Blackhole Galaxy decode path, where the RoPE cos/sin slices are
+    height-sharded on ``{[1-0 - 3-7], [5-0 - 6-7]}`` (columns 0 and 4 excluded) and then padded to a
+    tile-aligned height. Deriving the per-core runtime args from the grid's bounding box emitted args
+    for gap core (4, 0), where no kernel runs, and mapped source shards to the wrong cores.
+    """
+    torch.manual_seed(0)
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 7 or compute_grid.y < 8:
+        pytest.skip(f"needs a 7x8 compute grid, device has {compute_grid.x}x{compute_grid.y}")
+
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    num_cores = shard_grid.num_cores()
+    assert num_cores == 40
+
+    # The decode-path tensor: [1, 8, 8, 128] padded to [1, 8, 32, 128], shard [32, 128] on all 40 cores,
+    # so only the first 2 (input) / 8 (output) cores in grid order hold data. Core index 3 in grid order
+    # is (5, 0); a bounding-box walk puts it at (4, 0), the hole.
+    n, c, h, w = 1, 8, 8, 128
+    shard_h = 32
+    padding = ((0, 0), (0, shard_h - h), (0, 0))
+    torch_padding = (0, 0, 0, shard_h - h, 0, 0)
+    value = 0
+
+    torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+    tt_output_tensor = ttnn.pad(tt_input_tensor, padding=padding, value=value, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.to_torch(ttnn.from_device(tt_output_tensor))
+
+    assert tt_output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, tt_output_tensor)
+
+
+@pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_pad_rm_sharded_height_only_non_contiguous_grid_straddles_range_boundary(device, shard_orient, dtype):
+    """Height-only RM pad where one output shard gathers rows from input shards on both sides of the hole.
+
+    Same 40-core grid as the test above, but the input fills all 40 shards ([1, 1, 1280, 128], shard
+    [32, 128]) and the output shard is taller ([40, 128], H padded to 1600). In grid order the input
+    shards on either side of the hole are shard 23 on core (3, 7) and shard 24 on core (5, 0); output
+    shard 19 (rows 760..799) needs rows 24..31 of shard 23 followed by rows 0..31 of shard 24, so the
+    result is only correct if the gather plan emits those source cores in grid order rather than in
+    sorted physical-coordinate order.
+    """
+    torch.manual_seed(0)
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 7 or compute_grid.y < 8:
+        pytest.skip(f"needs a 7x8 compute grid, device has {compute_grid.x}x{compute_grid.y}")
+
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    assert shard_grid.num_cores() == 40
+
+    n, c, h, w = 1, 1, 1280, 128
+    in_shard_h, out_shard_h = 32, 40
+    h_padded = out_shard_h * 40
+    assert h == in_shard_h * 40
+    padding = ((0, 0), (0, h_padded - h), (0, 0))
+    torch_padding = (0, 0, 0, h_padded - h, 0, 0)
+    value = 0
+
+    torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    in_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.types.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (in_shard_h, w), shard_orient),
+    )
+    out_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.types.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (out_shard_h, w), shard_orient),
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=in_mem_config,
+    )
+    tt_output_tensor = ttnn.pad(tt_input_tensor, padding=padding, value=value, memory_config=out_mem_config)
+    tt_output_tensor = ttnn.to_torch(ttnn.from_device(tt_output_tensor))
+
+    assert tt_output_tensor.shape == torch_output_tensor.shape
+    # Report the first mismatching output row so a wrong gather order is visible in the CI log.
+    mismatched_rows = torch.nonzero(~torch.all(torch_output_tensor[0, 0] == tt_output_tensor[0, 0], dim=-1)).flatten()
+    assert (
+        mismatched_rows.numel() == 0
+    ), f"rows differ: {mismatched_rows[:16].tolist()} (first of {mismatched_rows.numel()})"
 
 
 def test_pad_rm_sharded_height_only_override_addr_change(device):

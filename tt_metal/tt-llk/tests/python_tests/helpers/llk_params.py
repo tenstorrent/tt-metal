@@ -167,13 +167,6 @@ class MathOperation(Enum):
     # Legacy LUT variant of tanh'(x): 1 - tanh(x)^2 with tanh from the piecewise
     # LUT (distinct kernel path from the accurate sech2 TanhDerivative above).
     TanhDerivativeLut = OpSpec("tanh_derivative_lut", MathOpType.SFPU_UNARY)
-    # Legacy-compat rsqrt (reciprocal-root method); distinct kernel path from the
-    # accurate Rsqrt (which uses legacy_compat=false).
-    RsqrtCompat = OpSpec("rsqrt_compat", MathOpType.SFPU_UNARY)
-    # Legacy-compat reciprocal (exponent-difference method); distinct kernel path from
-    # the accurate Reciprocal (which uses legacy_compat=false). This is the path the
-    # Compute API's recip_tile() reaches by default, so it is the one production runs.
-    ReciprocalCompat = OpSpec("reciprocal_compat", MathOpType.SFPU_UNARY)
     # Component-wise expm1 shared helper (used by ELU/CELU/SELU); distinct from the
     # standalone Expm1 kernel.
     Expm1Cw = OpSpec("expm1_cw", MathOpType.SFPU_UNARY)
@@ -184,8 +177,22 @@ class MathOperation(Enum):
     Prelu = OpSpec("prelu", MathOpType.SFPU_UNARY)
     Rpow = OpSpec("rpow", MathOpType.SFPU_UNARY)
     UnaryPower = OpSpec("power", MathOpType.SFPU_UNARY)
+    UnaryPowerIterative = OpSpec("power_iterative", MathOpType.SFPU_UNARY)
     Fmod = OpSpec("fmod", MathOpType.SFPU_UNARY)
     Remainder = OpSpec("remainder", MathOpType.SFPU_UNARY)
+    # calculate_remainder_uint32_scalar: unsigned x mod a fixed scalar. cpp_enum_value matches the
+    # SfpuType enumerator.
+    RemainderUint32 = OpSpec("remainder_uint32", MathOpType.SFPU_UNARY)
+    # Tile-structural unary kernels: their result mixes a tile's elements in the pattern the SFPU
+    # lane layout dictates (int_sum's partial column / row sums, tiled_prod's per-lane running
+    # product). cpp_enum_value matches the SfpuType enumerator.
+    SumIntCol = OpSpec("sum_int_col", MathOpType.SFPU_UNARY)
+    SumIntRow = OpSpec("sum_int_row", MathOpType.SFPU_UNARY)
+    TiledProd = OpSpec("tiled_prod", MathOpType.SFPU_UNARY)
+    # (re, im) -> (-im, re) over interleaved complex values (even / odd columns).
+    AltComplexRotate90 = OpSpec("alt_complex_rotate90", MathOpType.SFPU_UNARY)
+    # softcap(x) = beta * tanh(x / beta). cpp_enum_value matches the SfpuType enumerator.
+    Softcap = OpSpec("softcap", MathOpType.SFPU_UNARY)
     UnaryGt = OpSpec("unary_gt", MathOpType.SFPU_UNARY)
     UnaryLt = OpSpec("unary_lt", MathOpType.SFPU_UNARY)
     UnaryGe = OpSpec("unary_ge", MathOpType.SFPU_UNARY)
@@ -223,6 +230,12 @@ class MathOperation(Enum):
     UnaryMaxUint32 = OpSpec("unary_max_uint32", MathOpType.SFPU_UNARY)
     UnaryMinUint32 = OpSpec("unary_min_uint32", MathOpType.SFPU_UNARY)
     BitwiseNot = OpSpec("bitwise_not", MathOpType.SFPU_UNARY)
+    # Unary bitwise with a fixed scalar (calculate_sfpu_unary_bitwise) and scalar - x
+    # (calculate_rsub_scalar_int32), Int32. cpp_enum_value matches the SfpuType enumerator.
+    UnaryBitwiseAnd = OpSpec("bitwise_and", MathOpType.SFPU_UNARY)
+    UnaryBitwiseOr = OpSpec("bitwise_or", MathOpType.SFPU_UNARY)
+    UnaryBitwiseXor = OpSpec("bitwise_xor", MathOpType.SFPU_UNARY)
+    RsubScalarInt32 = OpSpec("rsub_scalar_int32", MathOpType.SFPU_UNARY)
     # logical_not(x) = (x == 0) ? 1 : 0, exercised on the float (DEFAULT-layout)
     # path. cpp_enum_value must match the SfpuType enumerator name.
     # NOTE: main added `LogicalNot` with the same cpp value; keep both so
@@ -232,6 +245,7 @@ class MathOperation(Enum):
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
+    TopKDefuse = OpSpec("topk_defuse", MathOpType.SFPU_UNARY)
     # =============================================================================
     # SFPU BINARY OPERATIONS
     # =============================================================================
@@ -246,6 +260,8 @@ class MathOperation(Enum):
     SfpuElwdiv = OpSpec("DIV", MathOpType.SFPU_BINARY)
     SfpuElwrsub = OpSpec("RSUB", MathOpType.SFPU_BINARY)
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
+    SfpuLogaddexp = OpSpec("LOGADDEXP", MathOpType.SFPU_BINARY)
+    SfpuLogaddexp2 = OpSpec("LOGADDEXP2", MathOpType.SFPU_BINARY)
     SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
     SfpuGtInt = OpSpec("GT_INT", MathOpType.SFPU_BINARY_INT)
     SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)
@@ -268,11 +284,22 @@ class MathOperation(Enum):
     SfpuBitwiseXor = OpSpec("BITWISE_XOR", MathOpType.SFPU_BINARY)
     SfpuDivInt32 = OpSpec("DIV_INT32", MathOpType.SFPU_BINARY)
     SfpuDivInt32Floor = OpSpec("DIV_INT32_FLOOR", MathOpType.SFPU_BINARY)
+    # add_int of ckernel_sfpu_int_sum.h: Dest tile in0 += the tile after it, in place.
+    SfpuIntSumAdd = OpSpec("INT_SUM_ADD", MathOpType.SFPU_BINARY)
+    # Fused GLU activations over (gate, up): silu(min(gate, limit)) * clamp(up, -limit, limit) and
+    # SiTU-GLU (softcapped gate * sigmoid(gate) * softcapped up).
+    SfpuClampedSiluGlu = OpSpec("CLAMPED_SILU_GLU", MathOpType.SFPU_BINARY)
+    SfpuSituGlu = OpSpec("SITU_GLU", MathOpType.SFPU_BINARY)
     SfpuGcd = OpSpec("GCD", MathOpType.SFPU_BINARY)
     SfpuLcm = OpSpec("LCM", MathOpType.SFPU_BINARY)
     SfpuRsubInt32 = OpSpec("RSUB_INT32", MathOpType.SFPU_BINARY)
     SfpuMask = OpSpec("MASK", MathOpType.SFPU_BINARY)
+    # The other two entry points of ckernel_sfpu_mask.h: calculate_mask_posinf fills +inf
+    # where the float mask is zero, calculate_int_mask zeroes Int32 data where the mask is 0.
+    SfpuMaskPosinf = OpSpec("MASK_POSINF", MathOpType.SFPU_BINARY)
+    SfpuIntMask = OpSpec("INT_MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
+    SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
@@ -287,6 +314,7 @@ class MathOperation(Enum):
     SfpuMinUint32 = OpSpec("MIN_UINT32", MathOpType.SFPU_BINARY)
     SfpuRemainderInt32 = OpSpec("REMAINDER_INT32", MathOpType.SFPU_BINARY)
     SfpuRemainderUint32 = OpSpec("REMAINDER_UINT32", MathOpType.SFPU_BINARY)
+    SfpuLgammaStirlingFp32 = OpSpec("LGAMMA_STIRLING_FP32", MathOpType.SFPU_BINARY)
     SfpuFmodInt32 = OpSpec("FMOD_INT32", MathOpType.SFPU_BINARY)
 
     # =============================================================================
@@ -391,6 +419,15 @@ class ReducePool(Enum):
     @property
     def cpp_enum_value(self):
         return f"PoolType::{self.value}"
+
+
+class ReduceOrder(Enum):
+    """Order of the chained SFPU reduce passes in sources/sfpu_reduce_multidim_test.cpp, all under one
+    shared init_reduce. Mirrors the REDUCE_ORDER_* constants there."""
+
+    ColRow = 0  # column, then row: the multi-axis lowering (ttir.max dim=[1,2])
+    RowCol = 1  # row, then column: a column reduce after a row reduce (MAX/MIN only)
+    ColRowCol = 2  # column, row, column: both transitions in one kernel (MAX/MIN only)
 
 
 class DestAccumulation(Enum):
@@ -599,6 +636,17 @@ class StableSort(Enum):
         return str(self.value).lower()
 
 
+class FusedSort(Enum):
+    """Fused-key stable topk: [bf16|u16] packed keys sorted by the unstable network."""
+
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
 class Mailboxes(Enum):
     Unpacker = 0x1FFB8
     Math = Unpacker + 4
@@ -778,8 +826,9 @@ class ReluConfig(Enum):
 class SdpaOp(Enum):
     """Selects which body of llk_sfpu/ckernel_sfpu_sdpa.h the sfpu_sdpa test drives."""
 
-    RecipLegacy = 0  # calculate_recip_first_column<true>, _reciprocal_compat_
-    RecipIter = 1  # calculate_recip_first_column<false>, sfpu_reciprocal_iter
+    RecipIter = (
+        1  # calculate_recip_first_column<is_fp32_dest_acc_en>, sfpu_reciprocal_iter
+    )
     ExpAccurate = 2  # calculate_exponential_first_column<true,  scale>
     ExpPoly = 3  # calculate_exponential_first_column<false, scale>
     Softplus = 4  # calculate_softplus_first_column
@@ -789,7 +838,7 @@ class SdpaOp(Enum):
 class SdpaFwOp(Enum):
     """Selects which body of llk_sfpu/ckernel_sfpu_sdpa_fw.h the sfpu_sdpa_fw test drives."""
 
-    Recip = 0  # calculate_recip_first_column, sfpu_reciprocal_iter<2> or <1> plus bf16 round
+    Recip = 0  # calculate_sdpa_fw_recip_first_column, sfpu_reciprocal_iter<2> or <1> plus bf16 round
     Exp = 1  # calculate_exponential_first_column<scale>, _ckernel_sfpu_exp_accurate_
 
 

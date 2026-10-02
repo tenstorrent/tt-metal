@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -34,6 +35,76 @@ namespace blocks {
 // Router affinity activations applied to the raw gate logits.
 constexpr uint32_t SCORE_FUNC_SIGMOID = 0;       // DeepSeek-V3 / Kimi
 constexpr uint32_t SCORE_FUNC_SQRTSOFTPLUS = 1;  // DeepSeek-V4: sqrt(softplus(x))
+
+// The gate always sorts largest-first on fp32 keys and never uses fused (bf16 + u16) keys. Both stable
+// engines take their tie polarity from this one direction.
+constexpr bool GATE_TOPK_DESCENDING = true;
+constexpr bool GATE_TOPK_FUSED = false;
+constexpr ckernel::TopkTieOrder GATE_TOPK_TIE_ORDER =
+    ckernel::topk_tie_order_from_global_direction(GATE_TOPK_DESCENDING);
+
+// Stable engines: the comparator (STABLE_SORT) works on any key. The rank-tag engine (RANK_STAMPED)
+// stamps a GATE_TAG_BITS-wide chain-position tag into the low mantissa bits of each fp32 key and lets
+// the plain network order ties. It is lossless only while those bits are zero, which holds for keys
+// unpacked through SrcA as TF32 (mantissa bits 12..0 zero) and is certified by the factory as
+// sort_keys_tf32. It sorts stable-by-index only where candidates arrive in index order: the
+// single-group expert top-k and the group-score sort (column == group id), not the grouped path's
+// final top-k, whose winning-group tiles arrive in group-sum order. Everything else keeps the comparator.
+constexpr uint32_t GATE_TAG_BITS = 6;
+constexpr uint32_t TF32_ZERO_LOW_MANTISSA_BITS = 13;  // fp32 mantissa (23) - TF32 mantissa (10)
+static_assert((1u << GATE_TAG_BITS) >= 64, "a two-tile chain (ranks 0..63) must fit the tag field");
+static_assert(GATE_TAG_BITS <= TF32_ZERO_LOW_MANTISSA_BITS, "the rank tag must sit inside the TF32 zero bits");
+
+// The gate's TopK primitives in one place: stable_sort selects stable mode, rank_tag its engine
+// (rank tags, else the comparator). Every call site below goes through these.
+template <bool stable_sort, bool rank_tag>
+constexpr bool gate_comparator_stable() {
+    static_assert(!rank_tag || stable_sort, "rank_tag is a stable-mode engine choice");
+    return stable_sort && !rank_tag;
+}
+
+// tag_bits is a rank-stamped-only parameter; the other engines take the default.
+template <bool rank_tag>
+constexpr uint32_t gate_tag_bits() {
+    return rank_tag ? GATE_TAG_BITS : 16;
+}
+
+template <bool rank_tag>
+ALWI void gate_topk_init() {
+    ckernel::topk_tile_init<GATE_TOPK_FUSED, rank_tag, gate_tag_bits<rank_tag>()>();
+}
+
+template <bool stable_sort, bool rank_tag>
+ALWI void gate_topk_local_sort(uint32_t idst, bool ascending, int end_phase) {
+    ckernel::topk_local_sort<
+        gate_comparator_stable<stable_sort, rank_tag>(),
+        DST_ACCUM_MODE,
+        GATE_TOPK_FUSED,
+        rank_tag,
+        GATE_TOPK_TIE_ORDER>(idst, (int)ascending, end_phase);
+}
+
+template <bool stable_sort, bool rank_tag>
+ALWI void gate_topk_merge(uint32_t idst, int m_iter, int k) {
+    ckernel::topk_merge<
+        /*idir=*/false,
+        gate_comparator_stable<stable_sort, rank_tag>(),
+        DST_ACCUM_MODE,
+        GATE_TOPK_FUSED,
+        rank_tag,
+        GATE_TOPK_TIE_ORDER,
+        gate_tag_bits<rank_tag>()>(idst, m_iter, k);
+}
+
+template <bool stable_sort, bool rank_tag>
+ALWI void gate_topk_rebuild(uint32_t idst, bool ascending, int m_iter, int k, int logk, int skip_second) {
+    ckernel::topk_rebuild<
+        gate_comparator_stable<stable_sort, rank_tag>(),
+        DST_ACCUM_MODE,
+        GATE_TOPK_FUSED,
+        rank_tag,
+        GATE_TOPK_TIE_ORDER>(idst, ascending, m_iter, k, logk, skip_second);
+}
 
 // Widen width_tiles input tiles from their (possibly bf16) source format into an fp32 output CB.
 // The whole gate pipeline computes in fp32, and the downstream two-operand ops (e.g. add_bias) need
@@ -170,7 +241,10 @@ void process_and_sort_tiles(
         transpose_tile(cb_expert_index_template_id, wt + 1, 3);
 
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort<stable_sort>(0, (int)ascending, end_phase);
+        if constexpr (stable_sort) {
+            ckernel::topk_canonicalize_negzero_values(0);
+        }
+        gate_topk_local_sort<stable_sort, /*rank_tag=*/false>(0 /*idst*/, ascending, end_phase);
 
         // pack sorted score tiles
         pack_reconfig_data_format(cb_sorted_group_scores_id);
@@ -228,7 +302,8 @@ void sum_top_experts_per_group(
     cb_top_experts_per_group.pop_front(summed_experts_per_group);
 }
 
-template <bool stable_sort = false>
+// rank_tag: the rank-tag stable engine is valid here because column j of the summed-scores tile is group j.
+template <bool stable_sort = false, bool rank_tag = false>
 void topk_group_scores(
     const uint32_t cb_group_summed_scores_id,
     const uint32_t cb_group_index_template_id,
@@ -239,7 +314,7 @@ void topk_group_scores(
     CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
     CircularBuffer cb_group_index_template(cb_group_index_template_id);
     CircularBuffer cb_sorted_group_order(cb_sorted_group_order_id);
-    topk_tile_init();
+    gate_topk_init<rank_tag>();
     cb_sorted_group_order.reserve_back(1);
 
     // Sort single input and index tile that have already ben transposed.
@@ -256,7 +331,15 @@ void topk_group_scores(
     copy_tile(cb_group_index_template_id, 0, 2);
 
     // llk_topk_sort -> inplace
-    ckernel::topk_local_sort<stable_sort>(0, (int)ascending, log_topk_groups);
+    if constexpr (rank_tag) {
+        // Only tile 0 holds data. The stamp also folds -0.0 into +0.0.
+        ckernel::topk_stamp_tile_rank_range<GATE_TOPK_DESCENDING, GATE_TAG_BITS>(
+            0 /*idst*/, 0 /*dst_tile_index*/, 0 /*rank_base*/);
+    } else if constexpr (gate_comparator_stable<stable_sort, rank_tag>()) {
+        ckernel::topk_canonicalize_negzero_values(0);
+    }
+    gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, log_topk_groups);
+    ckernel::topk_finalize_uint16_indices(2);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -292,7 +375,9 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     }
 }
 
-template <bool stable_sort = false>
+// rank_tag: the rank-tag stable engine is valid only when tile j holds indices above every index in
+// tiles 0..j-1 (single-group expert top-k: yes; the sum-ordered winning groups of the grouped path: no).
+template <bool stable_sort = false, bool indices_pretransposed = false, bool rank_tag = false>
 void topk(
     const uint32_t cb_winning_group_scores_id,
     const uint32_t cb_winning_group_indices_id,
@@ -308,7 +393,7 @@ void topk(
     bool ascending = false;
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
-    topk_tile_init();
+    gate_topk_init<rank_tag>();
     tile_regs_acquire();
     cb_winning_group_scores.wait_front(tiles);
     cb_winning_group_indices.wait_front(tiles);
@@ -322,12 +407,24 @@ void topk(
 
     // transpose and unpack into dest regs
     reconfig_data_format_srca(cb_winning_group_indices_id);
-    transpose_init(cb_winning_group_indices_id);
-    transpose_tile(cb_winning_group_indices_id, 0, 2);
-    transpose_tile(cb_winning_group_indices_id, 1, 3);
+    if constexpr (indices_pretransposed) {
+        copy_init(cb_winning_group_indices_id);
+        copy_tile(cb_winning_group_indices_id, 0, 2);
+        copy_tile(cb_winning_group_indices_id, 1, 3);
+    } else {
+        transpose_init(cb_winning_group_indices_id);
+        transpose_tile(cb_winning_group_indices_id, 0, 2);
+        transpose_tile(cb_winning_group_indices_id, 1, 3);
+    }
     // llk_topk_sort -> inplace
-    ckernel::topk_local_sort<stable_sort>(0, (int)ascending, 4);
-    ckernel::topk_merge<false, stable_sort>(0, 0, 32);
+    if constexpr (rank_tag) {
+        // Both tiles are fresh: positions 0..63. The stamp also folds -0.0 into +0.0.
+        ckernel::topk_stamp_local_positions<GATE_TOPK_DESCENDING, GATE_TAG_BITS>(0 /*idst*/);
+    } else if constexpr (gate_comparator_stable<stable_sort, rank_tag>()) {
+        ckernel::topk_canonicalize_negzero_values(0);
+    }
+    gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, 4 /*end_phase*/);
+    gate_topk_merge<stable_sort, rank_tag>(0 /*idst*/, 0 /*m_iter*/, 32 /*k*/);
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
@@ -337,13 +434,27 @@ void topk(
         transpose_tile(cb_winning_group_scores_id, j, 1);
 
         reconfig_data_format_srca(cb_winning_group_indices_id);
-        transpose_init(cb_winning_group_indices_id);
-        transpose_tile(cb_winning_group_indices_id, j, 3);
+        if constexpr (indices_pretransposed) {
+            copy_init(cb_winning_group_indices_id);
+            copy_tile(cb_winning_group_indices_id, j, 3);
+        } else {
+            transpose_init(cb_winning_group_indices_id);
+            transpose_tile(cb_winning_group_indices_id, j, 3);
+        }
 
-        ckernel::topk_local_sort<stable_sort>(0, (int)ascending, 4);
-        ckernel::topk_merge<false, stable_sort>(0, 0, 32);
+        if constexpr (rank_tag) {
+            // The kept tile 0 was re-tagged by the previous merge; only the fresh tile 1 needs stamping.
+            ckernel::topk_stamp_tile_rank_range<GATE_TOPK_DESCENDING, GATE_TAG_BITS>(
+                0 /*idst*/, 1 /*dst_tile_index*/, 32 /*rank_base*/);
+        } else if constexpr (gate_comparator_stable<stable_sort, rank_tag>()) {
+            ckernel::topk_canonicalize_negzero_values(0);
+        }
+        gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, 4 /*end_phase*/);
+        gate_topk_merge<stable_sort, rank_tag>(0 /*idst*/, 0 /*m_iter*/, 32 /*k*/);
     }
-    ckernel::topk_rebuild<stable_sort>(0, (int)ascending, 0, 32, 5, true);
+    gate_topk_rebuild<stable_sort, rank_tag>(
+        0 /*idst*/, ascending, 0 /*m_iter*/, 32 /*k*/, 5 /*logk*/, true /*skip_second*/);
+    ckernel::topk_finalize_uint16_indices(2);
     tile_regs_commit();
     tile_regs_wait();
     cb_final_indices_transposed.reserve_back(1);

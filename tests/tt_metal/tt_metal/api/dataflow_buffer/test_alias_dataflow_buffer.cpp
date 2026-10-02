@@ -110,15 +110,36 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
     MeshTensor out_b =
         MeshTensor::allocate_on_device(mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b));
 
-    // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
+    // DM kernel configs, chosen per arch so the same spec runs everywhere.
     DataMovementHardwareConfig producer_cfg;
     DataMovementHardwareConfig consumer_cfg;
     if (mesh_device.arch() == ARCH::QUASAR) {
-        producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-        consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        producer_cfg = DataMovementHardwareConfig{
+            .config_2xx =
+                DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
+        consumer_cfg = DataMovementHardwareConfig{
+            .config_2xx =
+                DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        producer_cfg = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                },
+        };
+        consumer_cfg = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::NOC_1,
+                },
+        };
     }
 
     DataflowBufferSpec dfb_a{
@@ -280,7 +301,7 @@ void run_alias_dfb_program(
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> result_a, result_b;
     slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
@@ -317,11 +338,32 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     DataMovementHardwareConfig producer_cfg;
     DataMovementHardwareConfig consumer_cfg;
     if (mesh_device.arch() == ARCH::QUASAR) {
-        producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-        consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        producer_cfg = DataMovementHardwareConfig{
+            .config_2xx =
+                DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
+        consumer_cfg = DataMovementHardwareConfig{
+            .config_2xx =
+                DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        producer_cfg = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                },
+        };
+        consumer_cfg = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::NOC_1,
+                },
+        };
     }
 
     // dfb_borrowed: backed by ring_tensor (L1)
@@ -614,7 +656,7 @@ TEST_F(UnitMeshFixture, AliasDFBDisjointHalvesDataFlow) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> out_la, out_lb, out_ra, out_rb;
     slow_dispatch::ReadFromBuffer(left.out_a.mesh_buffer(), out_la);
@@ -874,7 +916,7 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_a, result_b;
     slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);

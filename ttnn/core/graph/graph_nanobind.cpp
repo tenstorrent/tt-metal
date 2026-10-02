@@ -22,6 +22,7 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include <tt-metalium/graph_tracking.hpp>
+#include <internal/graph_function_abort.hpp>
 
 namespace ttnn::graph {
 
@@ -342,6 +343,24 @@ void py_graph_module(nb::module_& m) {
 
         Must be paired with a prior track_function_start() call.
         )doc");
+
+    m.def(
+        "unwind_open_functions",
+        [](const std::string& reason) { tt::tt_metal::internal::unwind_open_functions(std::string_view(reason)); },
+        R"doc(unwind_open_functions(reason: str = "") -> None
+
+        Close every function scope the active capture still holds open, marking each aborted.
+
+        An operation that throws from a call site with no scope guard never emits its
+        function_end, so the capture keeps recording inside a scope that is already dead.
+        Call this when a new top-level operation is about to start, where nothing can
+        legitimately still be open, to drop those scopes instead of nesting the rest of the
+        capture under them.
+
+        Args:
+            reason: Attached to each closed scope as its abort reason.
+        )doc",
+        nb::arg("reason") = "");
 
     m.def(
         "enable_detailed_buffer_tracing",

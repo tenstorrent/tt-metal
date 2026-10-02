@@ -1,0 +1,2 @@
+# Tokenization depends on the original CRLF bytes.
+pride_and_prejudice.txt -text whitespace=cr-at-eol

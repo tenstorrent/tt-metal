@@ -298,10 +298,18 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
         case UnaryOpType::SELU:
             result.type = KernelActivation::SELU;
-            // param0 is alpha (default 1.67326)
-            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x3fd637bdu;
-            // param1 is lambda (default 1.05070)
-            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x3f8674f5u;
+            // selu(x) is scale * x for x >= 0, and scale * alpha * (exp(x) - 1) for x < 0.
+            // selu_tile_pack takes the scale first and alpha second.
+            //
+            // Each default is the nearest float to the published SELU constant. Shown below as
+            // the published value and the exact value of the float it rounds to, which is what
+            // the bit patterns hold:
+            //   scale  1.0507009873554804934193349852946 -> 1.05070102214813232421875
+            //   alpha  1.6732632423543772848170429916717 -> 1.67326319217681884765625
+            // param0 is scale
+            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x3f867d5fu;
+            // param1 is alpha
+            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x3fd62d7du;
             break;
 
         case UnaryOpType::SOFTPLUS:
@@ -350,12 +358,16 @@ namespace ttnn::prim::qsr::dram_sharded_helpers {
 tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord);
 
 void get_max_page_size_and_num_pages(
-    tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages);
+    const tt::tt_metal::distributed::MeshDevice& device,
+    uint32_t num_tiles,
+    uint32_t tile_size,
+    uint32_t& page_size,
+    uint32_t& num_pages);
 
 void move_common_entries(std::vector<tt::tt_metal::CoreCoord>& v1, std::vector<tt::tt_metal::CoreCoord>& v2, std::vector<tt::tt_metal::CoreCoord>& commons);
 
 void get_optimal_dram_bank_to_reader_assignment(
-    tt::tt_metal::IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
     CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);

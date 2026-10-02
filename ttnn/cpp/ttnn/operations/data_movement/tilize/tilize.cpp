@@ -50,6 +50,19 @@ ttnn::Tensor tilize(
     bool use_low_perf,
     tt::tt_metal::Tile tile,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // A zero-volume input has nothing to tilize. Legacy tolerated the resulting empty program, but the
+    // Metal 2.0 spec validator rejects it (no work cores -> the output DFB has no producer), so
+    // short-circuit to a correctly-shaped empty output the way the sibling tilize_with_val_padding does.
+    if (input_tensor.physical_volume() == 0) {
+        TensorSpec spec(
+            input_tensor.logical_shape(),
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE, tile),
+                memory_config.value_or(input_tensor.memory_config())));
+        return create_device_tensor(spec, input_tensor.device());
+    }
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =

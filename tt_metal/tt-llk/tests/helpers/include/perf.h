@@ -17,10 +17,11 @@
 // counters are compiled (the counter machinery in counters.h is gated by the same flag).
 
 // FIXME: this shouldn't be statically allocated
-constexpr std::uint32_t PERF_INPUT_A = 0x21000;
-constexpr std::uint32_t PERF_INPUT_B = PERF_INPUT_A + 16 * 4096;
-constexpr std::uint32_t PERF_INPUT_C = PERF_INPUT_B + 16 * 4096;
-constexpr std::uint32_t PERF_OUTPUT  = PERF_INPUT_C + 16 * 4096;
+constexpr std::uint32_t PERF_RING_TILES = 16; // Keep in sync with helpers/matmul_sweep.py
+constexpr std::uint32_t PERF_INPUT_A    = 0x21000;
+constexpr std::uint32_t PERF_INPUT_B    = PERF_INPUT_A + PERF_RING_TILES * 4096;
+constexpr std::uint32_t PERF_INPUT_C    = PERF_INPUT_B + PERF_RING_TILES * 4096;
+constexpr std::uint32_t PERF_OUTPUT     = PERF_INPUT_C + PERF_RING_TILES * 4096;
 
 #ifdef PERF_COUNTERS_COMPILED
 // Perf-counter shared config + per-zone data. Must stay below the profiler boundary at
@@ -33,8 +34,8 @@ constexpr std::uint32_t PERF_OUTPUT  = PERF_INPUT_C + 16 * 4096;
 
 constexpr std::uint32_t PERF_ADDRESS(std::uint32_t buffer, std::uint32_t tile)
 {
-    std::uint32_t address = buffer + (tile % 16) * 4096; // Loop every 16 tiles, to prevent escaping memory
-    return address / 16 - 1;                             // Correct the L1 Address for Tensix
+    std::uint32_t address = buffer + (tile % PERF_RING_TILES) * 4096; // Loop every 16 tiles, to prevent escaping memory
+    return address / 16 - 1;                                          // Correct the L1 Address for Tensix
 }
 
 enum class PerfRunType
@@ -56,8 +57,19 @@ inline void _perf_unpack_set_valid(std::uint32_t source)
     std::uint32_t wait_clear_b = set_b ? ckernel::p_stall::SRCB_CLR : 0;
 
 #ifdef ARCH_QUASAR
-    TT_STALLWAIT(ckernel::p_stall::STALL_TDMA, wait_clear_a, wait_clear_b, 0);
-    TT_SETDVALID((set_b << 1) | set_a);
+    (void)wait_clear_a;
+    (void)wait_clear_b;
+    // UNPACR_NOP's set-dvalid-only form (encoding 2) stalling on UNP_STALL_UNP_WR waits for the bank the unpacker
+    // writes next to be free and then sets it valid: the same handshake as the STALLWAIT and SETDVALID below, in one
+    // instruction that also keeps the unpacker's bank sequencing
+    if (set_a)
+    {
+        TT_UNPACR_NOP(ckernel::p_unpacr::UNP_A, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, 2 /*set dvalid only*/);
+    }
+    if (set_b)
+    {
+        TT_UNPACR_NOP(ckernel::p_unpacr::UNP_B, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, 2 /*set dvalid only*/);
+    }
 
 #else
     TT_STALLWAIT(ckernel::p_stall::STALL_TDMA, wait_clear_a | wait_clear_b);
@@ -94,11 +106,21 @@ inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
         constexpr std::uint32_t cond_clear_b = set_b ? ckernel::p_stall::SRCB_CLR : 0;
 
 #ifdef ARCH_QUASAR
-        TTI_STALLWAIT(ckernel::p_stall::STALL_TDMA, cond_clear_a, cond_clear_b, 0);
+        // See _perf_unpack_set_valid
+        (void)cond_clear_a;
+        (void)cond_clear_b;
+        if constexpr (set_a)
+        {
+            TTI_UNPACR_NOP(ckernel::p_unpacr::UNP_A, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, 2 /*set dvalid only*/);
+        }
+        if constexpr (set_b)
+        {
+            TTI_UNPACR_NOP(ckernel::p_unpacr::UNP_B, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, 2 /*set dvalid only*/);
+        }
 #else
         TTI_STALLWAIT(ckernel::p_stall::STALL_TDMA, cond_clear_a | cond_clear_b);
-#endif
         TTI_SETDVALID((set_b << 1) | set_a);
+#endif
     }
 }
 
@@ -119,136 +141,142 @@ inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
     }
 }
 
-inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim)
+inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
 {
     for (std::uint32_t loop = 0; loop < loop_factor; loop++)
     {
-        for (std::uint32_t j = 0; j < kt_dim; j++)
+        for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
-            const std::uint32_t reuse_reg  = ct_dim >= rt_dim ? ckernel::SrcB : ckernel::SrcA;
-            const std::uint32_t reuse_loop = std::min(ct_dim, rt_dim);
+            for (std::uint32_t j = 0; j < kt_dim; j++)
+            {
+                const std::uint32_t reuse_reg  = ct_dim >= rt_dim ? ckernel::SrcB : ckernel::SrcA;
+                const std::uint32_t reuse_loop = std::min(ct_dim, rt_dim);
 
-            const std::uint32_t reload_reg  = ct_dim >= rt_dim ? ckernel::SrcA : ckernel::SrcB;
-            const std::uint32_t reload_loop = std::max(ct_dim, rt_dim);
+                const std::uint32_t reload_reg  = ct_dim >= rt_dim ? ckernel::SrcA : ckernel::SrcB;
+                const std::uint32_t reload_loop = std::max(ct_dim, rt_dim);
 
 #ifdef ARCH_WORMHOLE
 
-            /*
-             * WORMHOLE SCHEME:
-             * Utilizes both source register banks to maximize throughput.
-             * IF CT_DIM >= RT_DIM ->
-             *   SRCB, SRCB, SRCA * CT_DIM, SRCB, SRCB, ...
-             * ELSE ->
-             *   SRCA, SRCA, SRCB * RT_DIM, SRCA, SRCA, ...
-             */
+                /*
+                 * WORMHOLE SCHEME:
+                 * Utilizes both source register banks to maximize throughput.
+                 * IF CT_DIM >= RT_DIM ->
+                 *   SRCB, SRCB, SRCA * CT_DIM, SRCB, SRCB, ...
+                 * ELSE ->
+                 *   SRCA, SRCA, SRCB * RT_DIM, SRCA, SRCA, ...
+                 */
 
-            std::uint32_t reuse_iter = 0;
-            while (reuse_iter < reuse_loop)
-            {
-                const std::uint32_t reuse_burst = std::min(static_cast<std::uint32_t>(2), reuse_loop - reuse_iter);
-
-                for (std::uint32_t i = 0; i < reuse_burst; i++)
+                std::uint32_t reuse_iter = 0;
+                while (reuse_iter < reuse_loop)
                 {
-                    _perf_unpack_set_valid(reuse_reg);
-                }
+                    const std::uint32_t reuse_burst = std::min(static_cast<std::uint32_t>(2), reuse_loop - reuse_iter);
 
-                for (std::uint32_t i = 0; i < reload_loop; i++)
-                {
-                    _perf_unpack_set_valid(reload_reg);
-                }
+                    for (std::uint32_t i = 0; i < reuse_burst; i++)
+                    {
+                        _perf_unpack_set_valid(reuse_reg);
+                    }
 
-                reuse_iter += reuse_burst;
-            }
+                    for (std::uint32_t i = 0; i < reload_loop; i++)
+                    {
+                        _perf_unpack_set_valid(reload_reg);
+                    }
+
+                    reuse_iter += reuse_burst;
+                }
 #endif
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 
-            /*
-             * BLACKHOLE/QUASAR SCHEME:
-             * Utilizes only one source register bank.
-             * IF CT_DIM >= RT_DIM ->
-             *   SRCB, SRCA * CT_DIM, SRCB, SRCA * CT_DIM, ...
-             * ELSE ->
-             *   SRCA, SRCB * RT_DIM, SRCA, SRCB * RT_DIM, ...
-             */
+                /*
+                 * BLACKHOLE/QUASAR SCHEME:
+                 * Utilizes only one source register bank.
+                 * IF CT_DIM >= RT_DIM ->
+                 *   SRCB, SRCA * CT_DIM, SRCB, SRCA * CT_DIM, ...
+                 * ELSE ->
+                 *   SRCA, SRCB * RT_DIM, SRCA, SRCB * RT_DIM, ...
+                 */
 
-            for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter++)
-            {
-                _perf_unpack_set_valid(reuse_reg);
-
-                for (std::uint32_t i = 0; i < reload_loop; i++)
+                for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter++)
                 {
-                    _perf_unpack_set_valid(reload_reg);
+                    _perf_unpack_set_valid(reuse_reg);
+
+                    for (std::uint32_t i = 0; i < reload_loop; i++)
+                    {
+                        _perf_unpack_set_valid(reload_reg);
+                    }
                 }
-            }
 #endif
+            }
         }
     }
 }
 
-inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim)
+inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
 {
     for (std::uint32_t loop = 0; loop < loop_factor; loop++)
     {
-        for (std::uint32_t j = 0; j < kt_dim; j++)
+        for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
-            const std::uint32_t reuse_reg  = ct_dim >= rt_dim ? ckernel::SrcB : ckernel::SrcA;
-            const std::uint32_t reuse_loop = std::min(ct_dim, rt_dim);
+            for (std::uint32_t j = 0; j < kt_dim; j++)
+            {
+                const std::uint32_t reuse_reg  = ct_dim >= rt_dim ? ckernel::SrcB : ckernel::SrcA;
+                const std::uint32_t reuse_loop = std::min(ct_dim, rt_dim);
 
-            const std::uint32_t reload_reg  = ct_dim >= rt_dim ? ckernel::SrcA : ckernel::SrcB;
-            const std::uint32_t reload_loop = std::max(ct_dim, rt_dim);
+                const std::uint32_t reload_reg  = ct_dim >= rt_dim ? ckernel::SrcA : ckernel::SrcB;
+                const std::uint32_t reload_loop = std::max(ct_dim, rt_dim);
 
 #ifdef ARCH_WORMHOLE
 
-            /*
-             * WORMHOLE SCHEME:
-             * Utilizes both source register banks to maximize throughput.
-             * IF CT_DIM >= RT_DIM ->
-             *  SRCA * CT_DIM, SRCB, SRCB, SRCA * CT_DIM, ...
-             * ELSE ->
-             *  SRCB * RT_DIM, SRCA, SRCA, SRCB * RT_DIM, ...
-             */
+                /*
+                 * WORMHOLE SCHEME:
+                 * Utilizes both source register banks to maximize throughput.
+                 * IF CT_DIM >= RT_DIM ->
+                 *  SRCA * CT_DIM, SRCB, SRCB, SRCA * CT_DIM, ...
+                 * ELSE ->
+                 *  SRCB * RT_DIM, SRCA, SRCA, SRCB * RT_DIM, ...
+                 */
 
-            std::uint32_t reuse_iter = 0;
-            while (reuse_iter < reuse_loop)
-            {
-                const std::uint32_t reuse_burst = std::min(static_cast<std::uint32_t>(2), reuse_loop - reuse_iter);
-
-                for (std::uint32_t i = 0; i < reload_loop; i++)
+                std::uint32_t reuse_iter = 0;
+                while (reuse_iter < reuse_loop)
                 {
-                    _perf_math_clear_valid(reload_reg);
-                }
+                    const std::uint32_t reuse_burst = std::min(static_cast<std::uint32_t>(2), reuse_loop - reuse_iter);
 
-                for (std::uint32_t i = 0; i < reuse_burst; i++)
-                {
-                    _perf_math_clear_valid(reuse_reg);
-                }
+                    for (std::uint32_t i = 0; i < reload_loop; i++)
+                    {
+                        _perf_math_clear_valid(reload_reg);
+                    }
 
-                reuse_iter += reuse_burst;
-            }
+                    for (std::uint32_t i = 0; i < reuse_burst; i++)
+                    {
+                        _perf_math_clear_valid(reuse_reg);
+                    }
+
+                    reuse_iter += reuse_burst;
+                }
 #endif
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 
-            /*
-             * BLACKHOLE/QUASAR SCHEME:
-             * Utilizes only one source register bank.
-             * IF CT_DIM >= RT_DIM ->
-             *  SRCA * CT_DIM, SRCB, SRCA * CT_DIM, SRCB, ...
-             * ELSE ->
-             *  SRCB * RT_DIM, SRCA, SRCB * RT_DIM, SRCA, ...
-             */
+                /*
+                 * BLACKHOLE/QUASAR SCHEME:
+                 * Utilizes only one source register bank.
+                 * IF CT_DIM >= RT_DIM ->
+                 *  SRCA * CT_DIM, SRCB, SRCA * CT_DIM, SRCB, ...
+                 * ELSE ->
+                 *  SRCB * RT_DIM, SRCA, SRCB * RT_DIM, SRCA, ...
+                 */
 
-            for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter++)
-            {
-                for (std::uint32_t i = 0; i < reload_loop; i++)
+                for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter++)
                 {
-                    _perf_math_clear_valid(reload_reg);
-                }
+                    for (std::uint32_t i = 0; i < reload_loop; i++)
+                    {
+                        _perf_math_clear_valid(reload_reg);
+                    }
 
-                _perf_math_clear_valid(reuse_reg);
-            }
+                    _perf_math_clear_valid(reuse_reg);
+                }
 #endif
+            }
         }
     }
 }

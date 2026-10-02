@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include "sanitizer/api.h"
 
 #if defined(COMPILE_FOR_TRISC)
 
@@ -67,6 +68,7 @@ inline void llk_math_eltwise_unary_sfpu_silu_scaled(
     std::uint32_t scale_bits,
     std::uint32_t post_scale_bits = 0,
     VectorMode vector_mode = VectorMode::RC) {
+    SAN_HOOK(unsupported());
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_silu_scaled<is_fp32_dest_acc_en, HAS_TAIL_SCALE, HAS_POST_SCALE, ITERATIONS>,
         dst_index,

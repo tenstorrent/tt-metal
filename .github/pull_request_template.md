@@ -9,3 +9,6 @@
 
 ### Notes for reviewers
 <!-- Where should reviewers focus? Call out anything non-obvious, tradeoffs, or areas of uncertainty. -->
+
+### Verification
+<!-- State what steps you took to verify the changes in this PR. -->

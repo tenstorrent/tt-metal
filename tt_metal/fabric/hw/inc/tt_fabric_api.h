@@ -14,7 +14,6 @@
 #include "internal/tt-1xx/risc_common.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <array>
-#include <type_traits>
 
 using namespace tt::tt_fabric;
 

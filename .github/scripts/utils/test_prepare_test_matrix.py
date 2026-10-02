@@ -521,6 +521,8 @@ def test_runtime_smoke_merge_gate_excludes_n150():
         "wh_n300_civ2",
         "wh_llmbox_civ2_viommu",
         "bh_p150b_civ2_viommu",
+        # The cpu-only smoke entry, which runs on a GitHub-hosted runner.
+        "github_hosted_cpu",
     }
     assert "wh_n150_civ2" not in concrete_skus(matrix)
 
@@ -536,6 +538,8 @@ def test_runtime_smoke_merge_gate_routes_prio_on_merge_group():
         "wh_n300_civ2",
         "wh_llmbox_civ2_prio",
         "bh_p150b_civ2_viommu_prio",
+        # No prio twin: a GitHub-hosted runner is not contended, so it routes as-is.
+        "github_hosted_cpu",
     }
 
 
@@ -774,3 +778,77 @@ def test_no_tests_in_yaml_warns_and_passes(tmp_path: Path, body: str, enabled: s
     assert "Traceback" not in result.stderr
     assert re.search(r"^matrix=\[\]$", result.stdout, re.M)
     assert sim_libs_line(result) == "[]"
+
+
+def test_duplicate_name_in_one_yaml_is_rejected(tmp_path: Path):
+    """The SKUs differ deliberately: a check keyed on the emitted "<name> [<sku>]"
+    would miss the real collision, which was same-name entries on different boxes."""
+    path = tmp_path / "tests.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: dup
+              cmd: echo a
+              skus:
+                wh_n150_civ2:
+                  timeout: 5
+              team: llk
+            - name: dup
+              cmd: echo b
+              skus:
+                bh_p100:
+                  timeout: 5
+              team: llk
+            """
+        )
+    )
+    result = _run_matrix_raw(path)
+    assert result.returncode != 0, result.stdout
+    assert "defined more than once" in result.stdout
+
+
+def test_same_name_different_gtest_shard_is_allowed(tmp_path: Path):
+    """llk_merge_gate runs four "LLK FD wormhole" entries differing only by shard."""
+    path = tmp_path / "tests.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: sharded
+              cmd: echo a
+              gtest_shard_total: 2
+              gtest_shard_index: 0
+              skus:
+                wh_n150_civ2:
+                  timeout: 5
+              team: llk
+            - name: sharded
+              cmd: echo b
+              gtest_shard_total: 2
+              gtest_shard_index: 1
+              skus:
+                wh_n150_civ2:
+                  timeout: 5
+              team: llk
+            """
+        )
+    )
+    matrix = run_matrix(path, "ALL_SKUS_IN_TESTS")
+    assert [e["gtest_shard_index"] for e in matrix] == [0, 1]
+
+
+def test_pipeline_reorg_yamls_have_unique_names():
+    """Repo-wide invariant: one test per (name, gtest_shard_index) within each yaml."""
+    offenders = []
+    for path in sorted(PIPELINE.rglob("*.yaml")):
+        entries = yaml.safe_load(path.read_text())
+        if not isinstance(entries, list):
+            continue  # ttsim-skip-list.yaml is a mapping; ttsim_unit_tests.yaml is comments
+        seen = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            key = (str(entry.get("name", "")), str(entry.get("gtest_shard_index", "")))
+            if key in seen:
+                offenders.append(f"{path.name}:{key[0]}")
+            seen.add(key)
+    assert offenders == []

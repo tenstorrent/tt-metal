@@ -89,7 +89,6 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         "Invalid softmax sharded program config for given tensor and sharding shape");
     SoftmaxShardedMultiCoreProgramConfig program_config =
         std::get<SoftmaxShardedMultiCoreProgramConfig>(attributes.program_config);
-    std::uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
 
     // single tile sizes
     std::uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
@@ -292,7 +291,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         .tensor_bindings = reader_tensor_bindings,
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Compute kernel ----
@@ -341,9 +340,9 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     }
 
     // Compute hardware config (Style A) + fp32 unpack modes for every Float32 DFB consumed.
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attributes.compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
-        auto& gen1 = std::get<ComputeGen1Config>(compute_hw);
+        auto& gen1 = compute_hw;
         auto add_unpack = [&](const DFBSpecName& name, tt::DataFormat fmt) {
             if (fmt == tt::DataFormat::Float32) {
                 gen1.unpack_modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
@@ -377,7 +376,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             {{"block_h", program_config.block_h},
              {"block_w", program_config.block_w},
              {"subblock_w", program_config.subblock_w},
-             {"num_subblocks_w", num_subblocks_w}},
+             {"causal_mask", static_cast<std::uint32_t>(attributes.is_causal_mask)},
+             {"sharded_causal_mask", static_cast<std::uint32_t>(mask_sharded_resident)}},
         .hw_config = compute_hw,
     };
 

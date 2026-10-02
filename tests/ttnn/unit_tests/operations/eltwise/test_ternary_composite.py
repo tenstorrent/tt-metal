@@ -224,7 +224,7 @@ def test_lerp_overload_ttnn(input_shapes, value, device):
     golden_tensor = golden_fn(in_data1, in_data2, value)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=2)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_torch, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -245,7 +245,7 @@ def test_lerp_ttnn(input_shapes, device):
     golden_tensor = golden_fn(in_data1, in_data2, in_data3)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=2)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_torch, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -266,7 +266,7 @@ def test_mac_overload_ttnn(input_shapes, value1, value2, device):
     golden_tensor = golden_fn(in_data1, value1, value2)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_torch, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -289,7 +289,7 @@ def test_mac_ttnn(input_shapes, device):
     golden_tensor = golden_fn(in_data1, in_data2, in_data3)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_torch, ulp_threshold=1)
 
 
 def test_mac_output_tensor(device):
@@ -307,11 +307,11 @@ def test_mac_output_tensor(device):
 
     # Verify result is numerically correct
     output_torch = ttnn.to_torch(result)
-    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_torch, ulp_threshold=1)
 
     # Verify the preallocated buffer was written to (should now hold the same values as result)
     preallocated_torch = ttnn.to_torch(preallocated)
-    assert_with_ulp(golden_tensor, preallocated_torch, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=preallocated_torch, ulp_threshold=1)
 
 
 def test_mac_sub_core_grids(device):
@@ -327,7 +327,7 @@ def test_mac_sub_core_grids(device):
     golden_fn = ttnn.get_golden_function(ttnn.mac)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3)
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_torch, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -346,7 +346,7 @@ def test_mac_tts_ttnn(input_shapes, value, device):
     output_tensor = ttnn.mac(input_tensor1, input_tensor2, value)
     golden_tensor = (in_data1.float() * in_data2.float() + value).to(torch.bfloat16)
 
-    assert_with_ulp(golden_tensor, ttnn.to_torch(output_tensor), ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=ttnn.to_torch(output_tensor), ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -365,4 +365,26 @@ def test_mac_tst_ttnn(input_shapes, value, device):
     output_tensor = ttnn.mac(input_tensor1, value, input_tensor3)
     golden_tensor = (in_data1.float() * value + in_data3.float()).to(torch.bfloat16)
 
-    assert_with_ulp(golden_tensor, ttnn.to_torch(output_tensor), ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=ttnn.to_torch(output_tensor), ulp_threshold=1)
+
+
+# The composite fallback of addcmul/addcdiv used to allocate and return a fresh tensor, leaving a
+# preallocated output_tensor unwritten (#57356). Block-float inputs take that fallback for addcdiv
+# always and for addcmul whenever the broadcast is row, column or scalar.
+@pytest.mark.parametrize("op_name", ["addcmul", "addcdiv"])
+@pytest.mark.parametrize(
+    "b_shape", [(8, 4, 768), (8, 1, 768), (8, 4, 1), (8, 1, 1)], ids=["no_bcast", "row", "col", "scalar"]
+)
+def test_addc_ops_block_float_writes_output_tensor(device, op_name, b_shape):
+    torch.manual_seed(0)
+    shape = (8, 4, 768)
+    a, b, c = torch.rand(shape), torch.rand(b_shape), torch.rand(shape) + 0.5
+    ta, tb, tc = (ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device) for x in (a, b, c))
+    out = ttnn.zeros(shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    returned = getattr(ttnn, op_name)(ta, tb, tc, value=2.0, output_tensor=out)
+
+    written = ttnn.to_torch(out).float()
+    expected = getattr(torch, op_name)(*(ttnn.to_torch(t).float() for t in (ta, tb, tc)), value=2.0)
+    assert torch.equal(written, ttnn.to_torch(returned).float())
+    assert torch.allclose(written, expected, rtol=0.05, atol=0.05), (written - expected).abs().max()

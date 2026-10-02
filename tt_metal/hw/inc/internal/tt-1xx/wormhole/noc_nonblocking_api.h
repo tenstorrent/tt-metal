@@ -5,11 +5,14 @@
 #pragma once
 
 #include <stdint.h>
-#include <limits>
+#include <cstddef>
+#include <type_traits>
+#include <utility>
 #include "noc_parameters.h"
 #include "hostdev/dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "internal/risc_attribs.h"
+#include "internal/tt-1xx/cache.h"
 #include "api/debug/assert.h"
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)

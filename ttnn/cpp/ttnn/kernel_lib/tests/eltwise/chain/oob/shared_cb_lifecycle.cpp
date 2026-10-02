@@ -15,11 +15,14 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t total_tiles = get_compile_time_arg_val(0);
     constexpr bool owner_first = get_compile_time_arg_val(1) != 0;
+    constexpr uint32_t window_mode = get_compile_time_arg_val(2);
 
     compute_kernel_hw_startup(cb_in, cb_out);
 
     using namespace compute_kernel_lib;
-    using WindowOwner = CopyTile<input(cb_in, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>;
+    constexpr auto wait = window_mode == 0 ? WaitPolicy::Upfront : WaitPolicy::Cumulative;
+    constexpr auto pop = window_mode == 2 ? PopPolicy::None : PopPolicy::AtEnd;
+    using WindowOwner = CopyTile<input(cb_in, wait, pop, InputTileMapping::Block), Dst::D0>;
     using PeerPopper =
         CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, InputTileMapping::Scalar), Dst::D1>;
 
