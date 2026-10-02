@@ -99,7 +99,7 @@ def migration_environment(request, tmp_path):
         PREFILL_SP="8",
         PREFILL_TP="4",
         PREFILL_NUM_LAYERS="60",
-        PREFILL_MAX_SEQ_LEN="262144",
+        PREFILL_MAX_SEQ_LEN=str(Gemma4ServiceConfig.MAX_SEQ_LEN),
         PREFILL_CHUNK_SIZE=str(Gemma4ServiceConfig.CHUNK_SIZE),
         PREFILL_NUM_USERS=str(Gemma4ServiceConfig.MAX_USER_SLOTS),
         PREFILL_LAYER_ACK_D2H="1",
@@ -120,7 +120,7 @@ def migration_environment(request, tmp_path):
 
 
 @pytest.mark.timeout(14400)
-@pytest.mark.parametrize("context_len", [8192, 16384, 131072, 262144], ids=["8k", "16k", "128k", "256k"])
+@pytest.mark.parametrize("context_len", [8192, 16384, 131072, 262144, 258048], ids=["8k", "16k", "128k", "256k", "252k"])
 def test_prefill_migration(migration_environment, context_len):
     gate, env, output_dir = migration_environment
     env["PREFILL_PCC_SUMMARY_DIR"] = str(output_dir)

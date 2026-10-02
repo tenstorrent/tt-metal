@@ -14,7 +14,7 @@ class Gemma4ServiceConfig:
     MESH_SHAPE = (8, 4)
     # Validation runs may set GEMMA4_TEST_CHUNK_SIZE to test another chunk size.
     CHUNK_SIZE = int(os.environ.get("GEMMA4_TEST_CHUNK_SIZE", 8192))
-    MAX_SEQ_LEN = 262144
+    MAX_SEQ_LEN = int(os.environ.get("GEMMA4_TEST_MAX_SEQ_LEN", 262144))
     MAX_USER_SLOTS = 6
 
 
