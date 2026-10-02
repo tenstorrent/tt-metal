@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -30,6 +31,14 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer cb_in0(dfb::in);
+
+#ifdef ARCH_QUASAR
+    // TEMP DIAGNOSTIC (cross-test hang): the DM's launch-populated base for dfb::in, to compare against
+    // the compute TRISC's view (compute/tilize.cpp) — see project_quasar_graphops_to_torch_double_readback.
+    DPRINT(
+        "QSR tilize reader DFB base: in={}\n",
+        get_local_dfb_interface(static_cast<uint32_t>(dfb::in)).tc_slots[0].base_addr);
+#endif
 
     auto read_tiles = [&](const uint32_t& num_tiles, uint32_t page_id) {
         cb_in0.reserve_back(num_tiles);

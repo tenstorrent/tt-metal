@@ -8,9 +8,24 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "experimental/kernel_args.h"
 
+// TEMP DIAGNOSTIC (cross-test hang): print the launch-populated DFB base this TRISC will unpack from.
+// See project_quasar_graphops_to_torch_double_readback — quasar.tilize faults MEM_READ_NO_RESPONSE on
+// the compute TRISC when run after test_add because g_dfb_interface[dfb::in].tc_slots[0].base_addr is
+// stale (inherited from the prior program's freed buffer) and not reset by the emulator. Comparing this
+// base standalone vs after test_add disambiguates a firmware-gap (trisc.cc) from an emulator-reset gap.
+#include "api/debug/dprint.h"
+#include "api/dataflow/dataflow_buffer.h"  // g_dfb_interface + get_local_dfb_interface
+
 void kernel_main() {
     constexpr auto per_core_block_cnt = get_arg(args::per_core_block_cnt);
     constexpr auto per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
+
+#ifdef ARCH_QUASAR
+    DPRINT(
+        "QSR tilize DFB base: in={} out={}\n",
+        get_local_dfb_interface(static_cast<uint32_t>(dfb::in)).tc_slots[0].base_addr,
+        get_local_dfb_interface(static_cast<uint32_t>(dfb::out)).tc_slots[0].base_addr);
+#endif
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
