@@ -63,6 +63,13 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
+// K splits over CUSTOM_MM_NUM_CALLS back-to-back calls that accumulate into one DEST; 1 is the single-call kernel.
+// More than one call is for test_custom_mm_multi_call, which exercises races at the call boundary, where the
+// unpacker enters call c + 1 while math still works on call c. The result must not depend on that timing.
+constexpr std::uint32_t num_calls   = CUSTOM_MM_NUM_CALLS;
+constexpr std::uint32_t kt_per_call = KT_DIM / num_calls;
+static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly across the calls");
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_custom_mm.h"
@@ -90,22 +97,34 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TILE_SIZE_UNPACK_B,
         params.TILE_SIZE_UNPACK_A);
 
+    if constexpr (num_calls > 1)
+    {
+        // Race cases only. Leave a non-zero SrcA clear value on unpacker 0: a both-bank SrcB clear only corrupts
+        // the SrcA writes it overlaps while unpacker 0's last SrcA clear value is non-zero, and that value outlives
+        // kernels. Without this the race would pass or fail depending on what last ran on the core.
+        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_1, p_unpacr_nop::CLR_SRC);
+    }
+
     // unpB_face_r_dim = in0 (SrcB) face rows in {1,2,4,8}; unpA_dst_format tunes the
     // instruction sequence (post1 only for Bfp4_b). transpose=false.
     _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
 
-    // Single call: SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix).
-    // tile_index_a = tile_index_b = 0; the SrcA walk covers the whole kt*ct grid via
-    // CFGSHIFTMASK, the SrcB walk covers kt via counters.
-    _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
-        L1_ADDRESS(params.buffer_B[0]),
-        L1_ADDRESS(params.buffer_A[0]),
-        0 /* tile_index_a */,
-        0 /* tile_index_b */,
-        params.TILE_SIZE_UNPACK_B,
-        params.TILE_SIZE_UNPACK_A,
-        KT_DIM,
-        CT_DIM);
+    // SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
+    // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct,
+    // and an in0 tile is 4 * in0_face_r_dim 16-byte words (TILE_SIZE_UNPACK_A is a full tile here).
+    // Within a call the SrcA walk covers its kt*ct grid via CFGSHIFTMASK, the SrcB walk covers kt via counters.
+    for (std::uint32_t call = 0; call < num_calls; call++)
+    {
+        _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
+            L1_ADDRESS(params.buffer_B[0]),
+            L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim,
+            call * kt_per_call * CT_DIM /* tile_index_a */,
+            0 /* tile_index_b */,
+            params.TILE_SIZE_UNPACK_B,
+            params.TILE_SIZE_UNPACK_A,
+            kt_per_call,
+            CT_DIM);
+    }
 }
 
 #endif
@@ -138,7 +157,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // finalize MUST be false when split_acc is false (custom_mm.h arg table): with no split
     // accumulation there are no partials to merge, and the DEST already holds A*B.
-    _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM);
+    for (std::uint32_t call = 0; call < num_calls; call++)
+    {
+        if constexpr (num_calls > 1)
+        {
+            // Race cases only. Hold math back before each call so the unpacker runs ahead and reaches call c + 1
+            // while math still holds call c's last SrcA and SrcB banks. Anything call c + 1 issues before its
+            // unpacks, such as a both-bank SrcB clear, then starts on the same bank release as its first SrcA
+            // writes. Without the delay math keeps up with the unpacker and the boundary is never contended.
+            ckernel::wait(2000);
+        }
+        _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+    }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

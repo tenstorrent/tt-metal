@@ -436,6 +436,33 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
 
 
 @dataclass
+class CUSTOM_MM_CALLS(TemplateParameter):
+    """Split a custom_mm test kernel's K over back-to-back execute calls that accumulate into one DEST.
+
+    ``CUSTOM_MM_NUM_CALLS``  number of execute calls; 1 is the single-call kernel. With more than one,
+                             the unpacker first leaves a non-zero SrcA clear value (a both-bank SrcB
+                             clear only corrupts the SrcA writes it overlaps while unpacker 0's last
+                             SrcA clear value is non-zero, and that value outlives kernels), and math
+                             waits 2000 cycles before each call, so the unpacker reaches the next call
+                             while math still holds the previous call's banks.
+    ``CUSTOM_MM_REARM``      compressed kernel only: leave a -inf SrcA clear value after every call,
+                             as a max-reduce or top-k between calls would. It undoes the end-of-call
+                             stall's clear to 0, which otherwise hides a both-bank clear in the execute.
+    """
+
+    num_calls: int = 1
+    rearm: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t CUSTOM_MM_NUM_CALLS = {self.num_calls}u;",
+                f"constexpr bool CUSTOM_MM_REARM = {str(self.rearm).lower()};",
+            ]
+        )
+
+
+@dataclass
 class SAMPLING_PRGM0_HAZARD(TemplateParameter):
     """Cross-op vConstFloatPrgm0 hazard switches for ``sfpu_sampling_test.cpp``.
 
