@@ -257,6 +257,78 @@ def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, 
     return (k_owned, v_owned)
 
 
+def _read_sliding_tail_from_paged_cache(
+    k_cache, v_cache, page_table, user_id, chunk_offset, sliding_window, head_dim, out_dtype
+):
+    """Reconstruct the prior-window K/V tail from the paged cache.
+
+    vLLM APC cache-hit resumes (and scheduler-chunk continuations whose stash
+    chain broke) arrive without ``sliding_tail_in``, yet on the unbounded
+    substrate the prior tokens' K/V already sit in the paged pool — written by
+    this request's earlier chunks or by the prefix-cache donor request. Gather
+    the last ``min(sliding_window, chunk_offset)`` tokens by physical block.
+
+    ``chunk_offset`` is SDPA_CHUNK_ALIGN-floored and gemma4's window divides
+    it in the aligned cases, so the range covers whole blocks; any
+    misalignment returns None and the caller keeps its no-tail warning.
+    Eager-only (per-block ttnn.slice + concat + host page-table read); the
+    serving router already runs resumed prefills serially, so this cost is
+    per-resume, not per-token.
+    """
+    if page_table is None or chunk_offset is None or chunk_offset <= 0:
+        return None
+    if os.environ.get("GEMMA4_SLIDING_TAIL_FROM_CACHE", "1") == "0":
+        return None
+    try:
+        block_size = int(k_cache.padded_shape[2])
+        num_kv = int(k_cache.padded_shape[1])
+        take = min(int(sliding_window), int(chunk_offset))
+        start = chunk_offset - take
+        if block_size <= 0 or chunk_offset % block_size or start % block_size:
+            return None
+        row = page_table
+        if isinstance(row, ttnn.Tensor):
+            row = ttnn.to_torch(ttnn.get_device_tensors(row)[0])
+        if row.dim() > 1:
+            row = row[user_id]
+        lb0, lb1 = start // block_size, chunk_offset // block_size
+        blocks = [int(b) for b in row[lb0:lb1]]
+        if os.environ.get("GEMMA4_DEBUG_PAGED_TAIL", "0") != "0":
+            logger.info(
+                "paged-tail: offset={} user={} take={} pt_shape={} blocks[{}:{}]={}",
+                chunk_offset,
+                user_id,
+                take,
+                tuple(page_table.shape) if hasattr(page_table, "shape") else None,
+                lb0,
+                lb1,
+                blocks,
+            )
+        if not blocks or any(b < 0 or b >= int(k_cache.padded_shape[0]) for b in blocks):
+            return None
+        k_parts = [ttnn.slice(k_cache, [b, 0, 0, 0], [b + 1, num_kv, block_size, head_dim]) for b in blocks]
+        v_parts = [ttnn.slice(v_cache, [b, 0, 0, 0], [b + 1, num_kv, block_size, head_dim]) for b in blocks]
+        k_tail = ttnn.concat(k_parts, dim=2) if len(k_parts) > 1 else k_parts[0]
+        v_tail = ttnn.concat(v_parts, dim=2) if len(v_parts) > 1 else v_parts[0]
+        # Block slices are always partial (one block of a many-block pool), so
+        # they own fresh storage — safe to free once concat copied them out.
+        for p in k_parts + v_parts:
+            if p is not k_tail and p is not v_tail:
+                p.deallocate(True)
+        # Paged pools may hold bfp8 (GEMMA4_KV_BFP8); the [tail | chunk] concat
+        # requires the activations' dtype.
+        if out_dtype is not None and k_tail.dtype != out_dtype:
+            k_cast = ttnn.typecast(k_tail, out_dtype)
+            v_cast = ttnn.typecast(v_tail, out_dtype)
+            k_tail.deallocate(True)
+            v_tail.deallocate(True)
+            k_tail, v_tail = k_cast, v_cast
+        return (k_tail, v_tail)
+    except Exception as e:
+        logger.warning("Gemma4 sliding prefill: paged tail reconstruction failed: {}", e)
+        return None
+
+
 def _zero_extend_ring_fill(t, modulo):
     """Right-pad a bounded ring fill with zeros out to the full window.
 
@@ -421,6 +493,15 @@ def _prefill_forward_single(
     # including the first). Handled via the in-memory window tail below rather
     # than the full-prefix paged read used for full-attention layers.
     sliding_chunked = is_chunked and config.is_sliding and config.sliding_window is not None
+    if os.environ.get("GEMMA4_DEBUG_PAGED_TAIL", "0") != "0" and chunk_offset is not None and chunk_offset > 4096:
+        logger.info(
+            "prefill-branch: layer_sliding={} offset={} is_chunked={} tail_in={} seq={}",
+            bool(config.is_sliding),
+            chunk_offset,
+            is_chunked,
+            sliding_tail_in is not None,
+            int(hidden_states.shape[-2]) if hasattr(hidden_states, "shape") else -1,
+        )
     # KV-shared + generator multi-chunk: current-chunk K/V still arrive via
     # ``shared_kv`` (source layer's keep_kv). Cross-chunk full-attention then
     # reads the source's already-filled paged cache (``need_cross_chunk`` path);
@@ -672,6 +753,34 @@ def _prefill_forward_single(
         )
         hist = ((sliding_window + 31) // 32) * 32
         use_persistent_tail = isinstance(chunk_start_idx, ttnn.Tensor)
+        # No in-memory stash on an APC cache-hit resume (the donor request
+        # wrote the KV, not this one) or when a prior scheduler chunk failed
+        # to stash. On the unbounded substrate (no cache_position_modulo) the
+        # prior window sits in the paged pool at absolute blocks — rebuild the
+        # tail from there instead of silently dropping it. Eager path only;
+        # traced replay keeps its persistent ring.
+        if (
+            sliding_tail_in is None
+            and not use_persistent_tail
+            and chunk_offset is not None
+            and chunk_offset > 0
+            and config.cache_position_modulo is None
+            and kv_cache is not None
+        ):
+            # Unpack kv_cache directly: for KV-shared layers it already points
+            # at the source layer's filled cache (k_cache/v_cache locals are
+            # only bound on the non-shared fill path above).
+            _paged_k, _paged_v = kv_cache
+            sliding_tail_in = _read_sliding_tail_from_paged_cache(
+                _paged_k,
+                _paged_v,
+                page_table,
+                user_id,
+                chunk_offset,
+                sliding_window,
+                config.head_dim,
+                tt_k.dtype,
+            )
         if sliding_tail_in is not None:
             k_tail, v_tail = sliding_tail_in
             # Traced short first-buckets stash an unpadded tail (< hist); pad
@@ -731,15 +840,16 @@ def _prefill_forward_single(
             sdpa_full.deallocate(True)
         else:
             # No in-memory tail. Correct for the first chunk (chunk_offset==0).
-            # Continuation without a tail (e.g. prior scheduler chunk took the
-            # single-chunk path and failed to stash — see post-SDPA stash below)
-            # silently drops the prior window; log so the ~9k remnant cliff is
-            # diagnosable if it regresses.
+            # A continuation reaching here means the paged-cache tail
+            # reconstruction above was inapplicable (bounded ring, traced
+            # replay, no kv_cache/page_table) or failed; windowed SDPA then
+            # runs without the prior window, which measurably garbles the
+            # tokens whose window spans the boundary.
             if chunk_offset is not None and chunk_offset > 0:
                 logger.warning(
-                    "Gemma4 sliding prefill: chunk_start={} without sliding_tail_in; "
-                    "windowed SDPA will miss prior-chunk K/V (vLLM chunked prefill "
-                    "remnant < sliding_window).",
+                    "Gemma4 sliding prefill: chunk_start={} without sliding_tail_in "
+                    "and no paged-cache tail; windowed SDPA will miss prior-chunk "
+                    "K/V for this chunk.",
                     chunk_offset,
                 )
             tt_sdpa = ttnn.transformer.scaled_dot_product_attention(

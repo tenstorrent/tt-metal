@@ -345,7 +345,17 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return None
 
     model_capabilities = {
-        "supports_prefix_caching": False,
+        # Env-gated (default OFF): vLLM automatic prefix caching, for agentic
+        # multi-turn serving (resent system prompt + growing conversation skip
+        # re-prefill). Only valid on the full-length sliding KV path (hybrid
+        # groups OFF, bounded sliding OFF): there every layer's spec is
+        # FullAttentionSpec and the paged pool genuinely retains all positions,
+        # so vLLM block reuse plus the resumed-prefill path (nonzero start_pos
+        # floored to resumed_prefill_token_alignment) serve cache hits
+        # correctly. ``__init__`` raises on the incompatible substrates; spec
+        # rails pin this back to False (``_spec_pt_identity`` keys sessions on
+        # a request's first block id, which shared prefixes would collide).
+        "supports_prefix_caching": os.environ.get("GEMMA4_PREFIX_CACHING", "0") != "0",
         "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower() in ("1", "true", "yes"),
         # Gemma4ModelArgs exposes no get_attn_sdpa_program_config, so Generator
         # cannot derive the resume offset alignment and must be told it. Same pin
@@ -395,17 +405,21 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     # bounded sliding's known >~34k degradation applies. Bounded sliding is tied to
     # this flag (below). This is the pre-#48283 path, restored behind the env gate.
     #
-    # KNOWN BLOCKER (why ON is not the default yet): the hybrid path serves
-    # correctly up to ISL 4096 — including the single-user 2048 prefill that used
-    # to hang (#49083) — but crashes at ISL >= 8192. The full-attention layers'
-    # long-context chunked-prefill SDPA
-    # (``ttnn.transformer.chunked_scaled_dot_product_attention``) TT_FATALs on
-    # ``k_shape[3] == DH``: under the shared kv-cache group the full-attn K/V is
-    # stored at the sliding head_dim (256) while full attention needs DH=512. The
-    # non-chunked paged ops reconcile this via the ``effective_block_size`` override
-    # (see attention/operations.py), but the chunked SDPA op takes no such block/
-    # head_dim knob — fixing it (an op/kernel change, or allocating full-attn its
-    # own head_dim buffer) is the remaining work to make ON viable end-to-end.
+    # The historical ISL >= 8192 crash (full-attn chunked SDPA TT_FATAL on
+    # ``k_shape[3] == DH`` against a shared buffer allocated at the sliding
+    # head_dim view) is addressed in ``allocate_vllm_kv_cache_per_layer``:
+    # a shared buffer is now allocated at the WIDEST head_dim view among its
+    # layers, and the sliding ops reconcile through ``effective_block_size``
+    # (see attention/operations.py) exactly as before.
+    #
+    # Prefix caching (GEMMA4_PREFIX_CACHING) composes with hybrid groups ONLY
+    # in the vLLM-managed sliding-blocks mode (bounded rings OFF): vLLM then
+    # computes window-aware cache hits against SlidingWindowSpec and the
+    # device addresses sliding KV by vLLM block ids, so a cache-hit resume
+    # finds both the full-attn prefix KV and the last-window sliding KV in
+    # the pool. Bounded rings are per-request device state outside vLLM's
+    # accounting and can never serve a cache hit — __init__ refuses that
+    # combination.
     _HYBRID_KV_CACHE_GROUPS_ENABLED = os.environ.get("GEMMA4_HYBRID_KV_CACHE_GROUPS", "0") != "0"
 
     def __init__(self, *args, **kwargs):
@@ -416,8 +430,27 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         if model0 is not None and hasattr(model0, "bounded_sliding_kv_cache"):
             self._bounded_sliding_kv_cache = bool(model0.bounded_sliding_kv_cache)
         else:
-            _bounded_default = "1" if self._HYBRID_KV_CACHE_GROUPS_ENABLED else "0"
+            _prefix_caching_on = self.model_capabilities.get("supports_prefix_caching", False)
+            # Hybrid defaults bounded ON (the ring design), except under
+            # prefix caching, whose hybrid mode is the vLLM-managed
+            # sliding-blocks substrate (rings OFF; see the class comment).
+            _bounded_default = "1" if (self._HYBRID_KV_CACHE_GROUPS_ENABLED and not _prefix_caching_on) else "0"
             self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", _bounded_default) != "0"
+        # Prefix caching needs sliding KV that vLLM can account for: either
+        # full-length sliding KV (hybrid OFF, bounded OFF) or vLLM-managed
+        # window blocks (hybrid ON, bounded OFF). Bounded rings are
+        # per-request device state invisible to the cache manager — a cache
+        # hit would resume against an empty ring — and ring identity keys on
+        # a request's FIRST page-table block id, which shared prefixes
+        # collide. Fail the boot instead of serving wrong KV.
+        if self.model_capabilities.get("supports_prefix_caching") and self._bounded_sliding_kv_cache:
+            raise ValueError(
+                "GEMMA4_PREFIX_CACHING=1 is incompatible with bounded sliding "
+                f"rings (bounded_sliding_kv_cache=True, hybrid_kv_cache_groups="
+                f"{self._HYBRID_KV_CACHE_GROUPS_ENABLED}). Unset "
+                "GEMMA4_BOUNDED_SLIDING_KV_CACHE (and GEMMA4_BOUNDED_SLIDING) "
+                "or disable prefix caching."
+            )
         # PLI models must restage decode inputs from host every step; async lag
         # would restage a stale token. Narrow the instance dict so runtime
         # readers (the decode-sync default below) see False. The vLLM TT plugin
@@ -2844,6 +2877,11 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
 
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
+        # Spec sessions key on a request's FIRST page-table block id
+        # (_spec_pt_identity), unique only while prefix caching is off —
+        # shared prefixes share leading blocks. Pinned False regardless of
+        # GEMMA4_PREFIX_CACHING.
+        "supports_prefix_caching": False,
         # Async overlaps host scheduling with the device decode for the ADAPTIVE
         # BATCHED baseline fallback (conc>1), which returns raw device output the
         # runner reads on the deferred pipeline -- baseline-entry parity (sync
@@ -3969,6 +4007,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
 
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
+        # Pinned off on spec rails: _spec_pt_identity keys sessions on a
+        # request's first block id, which shared prefixes would collide.
+        "supports_prefix_caching": False,
         "output_tokens_per_step": 1,
         # A step this class does not speculate on runs the plain decode; the
         # device sampler keeps that step from pulling [B, vocab] logits to host.
@@ -4858,6 +4899,9 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
 
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
+        # Pinned off on spec rails: _spec_pt_identity keys sessions on a
+        # request's first block id, which shared prefixes would collide.
+        "supports_prefix_caching": False,
         "supports_async_decode": os.environ.get("GEMMA4_SPEC_ASYNC", "0") != "0",
         "supports_sample_on_device": True,
         "output_tokens_per_step": _SPEC_N,

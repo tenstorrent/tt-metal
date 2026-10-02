@@ -833,6 +833,55 @@ class ChunkedPrefillPageTableGuardMixin:
                 # slot 0 legitimately starts at block id 0, and a falsy key
                 # would silently bypass the pool for that request.
                 req_key = int(pt2d[0, 0]) + 1
+        # Slot source: global_user_id is only forwarded on lane-sharded paths
+        # (measured None here on the baseline serving path); the plain per-call
+        # slot arrives as the user_id kwarg. Batched prefill passes a list —
+        # leave those on the legacy key (batched requires num_cached==0, where
+        # the cold-start reset already isolates requests).
+        _slot_src = _gid if isinstance(_gid, int) else kwargs.get("user_id")
+        if req_key is not None and isinstance(_slot_src, int):
+            # Prefix caching makes first-block ids COLLIDE across requests
+            # sharing a cached prefix, and a cache-hit resume starts at
+            # chunk_start>0 so the cold-start stash reset never runs: the
+            # resume then consumed the previous same-prefix request's final
+            # window tail (cross-request contamination, apc_gate3 garbles).
+            # Bind identity to the slot plus a per-slot generation instead:
+            # a call whose start offset is not the slot's expected
+            # continuation offset begins a new generation, so its stash
+            # lookup misses and the sliding path rebuilds the tail from the
+            # paged pool. Scheduler-grant continuations (start == expected)
+            # keep their generation and their exact bf16 stash. A new request
+            # landing exactly on the previous occupant's expected offset is
+            # the residual collision window; slot release isn't visible here.
+            _slot = int(_slot_src)
+            _start = int(num_cached_tokens or 0)
+            _gens = getattr(self, "_g4_slot_tail_gen", None)
+            if _gens is None:
+                _gens = {}
+                self._g4_slot_tail_gen = _gens
+            _gen, _expected = _gens.get(_slot, (0, None))
+            if _start == 0 or _expected is None or _start != _expected:
+                if _gen:
+                    # Free the previous generation's pool slot / spill clone on
+                    # every layer, or dead keys exhaust the 33-slot pool and
+                    # grow the spill dict unboundedly (one key per request).
+                    _stale = ((_slot + 1) << 24) + _gen
+                    for _m in self.model:
+                        for _layer in getattr(_m, "layers", []):
+                            _attn = getattr(_layer, "self_attn", None)
+                            if _attn is not None and hasattr(_attn, "_release_sliding_prefill_tail"):
+                                _attn._release_sliding_prefill_tail(req_key=_stale)
+                _gen += 1
+            _gens[_slot] = (_gen, _start + int(tokens.shape[-1]))
+            req_key = ((_slot + 1) << 24) + _gen
+        if os.environ.get("GEMMA4_DEBUG_PAGED_TAIL", "0") != "0":
+            logger.info(
+                "tail-key: gid={} start={} width={} req_key={}",
+                _gid,
+                int(num_cached_tokens or 0),
+                int(tokens.shape[-1]),
+                req_key,
+            )
         for model in self.model:
             for layer in getattr(model, "layers", []):
                 cfg = getattr(getattr(layer, "self_attn", None), "config", None)
