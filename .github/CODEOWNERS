@@ -560,8 +560,8 @@ ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorren
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions
 
 models/common @tenstorrent/metalium-models-maintainers
-models/common/sampling/ @sraizada-tt @djordje-tt @tchedaTT @mtairum
-models/common/warmup/ @nostojicTT @sraizada-tt @djordje-tt @tchedaTT
+models/common/sampling/ @sraizada-tt @djordje-tt @tchedaTT @tenstorrent/metalium-models-maintainers
+models/common/warmup/ @nostojicTT @sraizada-tt @djordje-tt @tchedaTT @tenstorrent/metalium-models-maintainers
 
 models/datasets/llm_dataset_utils.py @mtairum @uaydonat
 
