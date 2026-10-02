@@ -363,71 +363,85 @@ inline void intra_fused(uint32_t q, uint32_t k, uint32_t lmask, uint32_t o, uint
 }
 
 // ---- fused qk-norm (C5). rowsum(x^2) is the diagonal of x @ x^T, so the per-row inverse rms comes out of one
-// matmul window as a diagonal tile, and the normalization itself is one block-diagonal matmul: 2 blocks per
-// operand instead of 4 (x^2, rowsum, rsqrt, broadcast), and no packed intermediates.
+// matmul window as a diagonal tile, and the normalization itself is one block-diagonal matmul: 2 blocks for both
+// operands instead of 4 per operand (x^2, rowsum, rsqrt, broadcast), and no packed intermediates.
 
-// D[mi] = diag(rsqrt(rowsum(x[mi,:]^2) + eps) [* scale]) for each row-tile of x [Ct, Kt], one DST pass per tile:
-// the Kt products x[mi,ki] @ x[mi,ki]^T accumulate the row sums of squares on the diagonal of DST0 (the
-// off-diagonal x_i.x_j are discarded); the identity is copied to DST1 and applied before and after the SFPU chain
-// (+eps, rsqrt, *scale), so the off-diagonal rsqrt(eps) never leaves DST.
-inline void inv_rms_diag(
-    uint32_t x,
+// D_q = diag(rsqrt(rowsum(q^2) + eps) * scale), D_k = diag(rsqrt(rowsum(k^2) + eps)) for the single row-tile of
+// q, k [1, Kt] in one DST pass: the Kt products q[ki] @ q[ki]^T accumulate the row sums of squares on the diagonal of
+// DST0, k's on DST2 (the off-diagonal x_i.x_j are discarded); the identity is copied to DST1 and applied to both
+// before and after the SFPU chain (+eps, rsqrt, *scale on q), so the off-diagonal rsqrt(eps) never leaves DST.
+// Packs D_q -> o_q[0], D_k -> o_k[0].
+inline void inv_rms_diag_qk(
+    uint32_t q,
+    uint32_t k,
     uint32_t eye,
-    uint32_t o,
-    uint32_t Ct,
+    uint32_t o_q,
+    uint32_t o_k,
     uint32_t Kt,
     uint32_t eps_bits,
-    uint32_t scale_bits,
-    bool do_scale) {
-    cb_reserve_back(o, Ct);
-    pack_reconfig_data_format(o);
-    for (uint32_t mi = 0; mi < Ct; mi++) {
-        tile_regs_acquire();
-        reconfig_data_format(x, x);  // matmul(x, x^T): x on both srcA and srcB
-        matmul_init(x, x, 1);
-        for (uint32_t ki = 0; ki < Kt; ki++) {
-            matmul_tiles(x, x, mi * Kt + ki, mi * Kt + ki, 0);  // DST0 = x_mi @ x_mi^T
-        }
-        reconfig_data_format_srca(eye);
-        copy_init(eye);
-        copy_tile(eye, 0, 1);  // the identity block (cb.eye tile 0)
-        mul_binary_tile_init();
-        sfpu_mul_dst(0, 1, 0);  // diag(rowsum)
-        binop_with_scalar_tile_init();
-        add_unary_tile(0, eps_bits);  // + eps (off-diagonal: eps)
-        rsqrt_tile_init();
-        rsqrt_tile(0);  // off-diagonal: rsqrt(eps), finite
-        if (do_scale) {
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, scale_bits);  // * scale (q only)
-        }
-        mul_binary_tile_init();
-        sfpu_mul_dst(0, 1, 0);  // off-diagonal -> 0
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, o, mi);
-        tile_regs_release();
+    uint32_t scale_bits) {
+    cb_reserve_back(o_q, 1);
+    cb_reserve_back(o_k, 1);
+    pack_reconfig_data_format(o_q);  // o_q, o_k fp32
+    tile_regs_acquire();
+    reconfig_data_format(q, q);  // matmul(x, x^T): x on both srcA and srcB
+    matmul_init(q, q, 1);
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        matmul_tiles(q, q, ki, ki, 0);  // DST0 = q @ q^T
     }
-    cb_push_back(o, Ct);
+    reconfig_data_format(q, k, q, k);  // skipped when q and k share a format
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        matmul_tiles(k, k, ki, ki, 2);  // DST2 = k @ k^T
+    }
+    reconfig_data_format_srca(eye);
+    copy_init(eye);
+    copy_tile(eye, 0, 1);  // the identity block (cb.eye tile 0)
+    mul_binary_tile_init();
+    sfpu_mul_dst(0, 1, 0);  // diag(rowsum)
+    sfpu_mul_dst(2, 1, 2);
+    binop_with_scalar_tile_init();
+    add_unary_tile(0, eps_bits);  // + eps (off-diagonal: eps)
+    add_unary_tile(2, eps_bits);
+    rsqrt_tile_init();
+    rsqrt_tile(0);  // off-diagonal: rsqrt(eps), finite
+    rsqrt_tile(2);
+    binop_with_scalar_tile_init();
+    mul_unary_tile(0, scale_bits);  // * scale (q only)
+    mul_binary_tile_init();
+    sfpu_mul_dst(0, 1, 0);  // off-diagonal -> 0
+    sfpu_mul_dst(2, 1, 2);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, o_q, 0);
+    pack_tile(2, o_k, 0);
+    tile_regs_release();
+    cb_push_back(o_q, 1);
+    cb_push_back(o_k, 1);
 }
 
-// out[mi, ki] = D[mi] @ x[mi, ki]: block-diagonal left multiply (D holds Ct diagonal tiles), one product per tile.
-inline void mm_diag(uint32_t d, uint32_t x, uint32_t o, uint32_t Ct, uint32_t Kt) {
-    cb_reserve_back(o, Ct * Kt);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(x, d);  // matmul(d, x): d->srcB, x->srcA
-    matmul_init(d, x, 0);
-    for (uint32_t mi = 0; mi < Ct; mi++) {
+// o_q[ki] = D_q @ q[ki], o_k[ki] = D_k @ k[ki] (single row-tile, one product per tile) in one block: formats and
+// the matmul MOP configured once, the per-tile DST ping-pong overlapping each pack with the next product.
+inline void mm_diag_qk(uint32_t dq, uint32_t q, uint32_t o_q, uint32_t dk, uint32_t k, uint32_t o_k, uint32_t Kt) {
+    cb_reserve_back(o_q, Kt);
+    cb_reserve_back(o_k, Kt);
+    pack_reconfig_data_format(o_q);  // o_q, o_k fp32
+    reconfig_data_format(q, dq);     // matmul(d, x): d->srcB, x->srcA
+    matmul_init(dq, q, 0);
+    auto run = [&](uint32_t d, uint32_t x, uint32_t o) {
         for (uint32_t ki = 0; ki < Kt; ki++) {
             tile_regs_acquire();
-            matmul_tiles(d, x, mi, mi * Kt + ki, 0);
+            matmul_tiles(d, x, 0, ki, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, o, mi * Kt + ki);
+            pack_tile(0, o, ki);
             tile_regs_release();
         }
-    }
-    cb_push_back(o, Ct * Kt);
+    };
+    run(dq, q, o_q);
+    cb_push_back(o_q, Kt);
+    reconfig_data_format(q, k, dq, dk);  // skipped when the formats match
+    run(dk, k, o_k);
+    cb_push_back(o_k, Kt);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
@@ -447,6 +461,42 @@ inline void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, ui
         }
     }
     cb_push_back(o, Mt * Nt);
+}
+
+// nkd = -(k_beta * decay_exp) -> o_nkd and q_decay = q * decay_exp -> o_q (single row-tile, Kt tiles each) in one
+// block: outputs reserved and formats configured once. QSame: q shares k_beta's (fp32) format, so no srcA reconfig
+// between the two products; otherwise the srcA format and the bcast MOP are re-set for q.
+template <bool QSame>
+inline void kd_qdecay(uint32_t kbeta, uint32_t q, uint32_t col, uint32_t o_nkd, uint32_t o_q, uint32_t Kt) {
+    cb_reserve_back(o_nkd, Kt);
+    cb_reserve_back(o_q, Kt);
+    pack_reconfig_data_format(o_nkd);  // o_nkd, o_q fp32
+    reconfig_data_format(kbeta, col);  // bcast(a,col): a->srcA, col->srcB
+    mul_bcast_cols_init(kbeta, col);
+    negative_tile_init();
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        tile_regs_acquire();
+        mul_tiles_bcast_cols(kbeta, col, ki, 0, 0);
+        negative_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, o_nkd, ki);
+        tile_regs_release();
+    }
+    cb_push_back(o_nkd, Kt);
+    if constexpr (!QSame) {
+        reconfig_data_format_srca(kbeta, q);
+        mul_bcast_cols_init(q, col);
+    }
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        tile_regs_acquire();
+        mul_tiles_bcast_cols(q, col, ki, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, o_q, ki);
+        tile_regs_release();
+    }
+    cb_push_back(o_q, Kt);
 }
 
 // out[0] = copy of src[src_tile] (single 32x32 tile). src must be available.
@@ -711,20 +761,20 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     {
         GDN_ZONE("pp_norm");
         if constexpr (qk_norm) {
-            // q: D = diag(rsqrt(rowsum(q^2) + eps) * scale) from q @ q^T in one DST pass, then q_normed = D @ q
-            // (cb.supd)
-            inv_rms_diag(cb.q, cb.eye, cb.scr3, ct, Kt, eps_bits, scale_bits, /*do_scale=*/true);
-            WAIT(cb.scr3, Ct);
-            mm_diag(cb.scr3, cb.q, cb.supd, ct, Kt);
-            WAIT(cb.supd, ck);
-            POP(cb.scr3, Ct);
+            static_assert(Ct == 1, "the in-kernel qk norm is a single row-tile routine (host gate: chunk_size == 32)");
+            // D_q = diag(rsqrt(rowsum(q^2) + eps) * scale) -> scr3 and D_k = diag(rsqrt(rowsum(k^2) + eps)) -> scr1
+            // from q @ q^T, k @ k^T in one DST pass; then q_normed = D_q @ q (cb.supd), k_normed = D_k @ k (cb.stmp)
+            // in one block.
+            inv_rms_diag_qk(cb.q, cb.k, cb.eye, cb.scr3, cb.scr1, Kt, eps_bits, scale_bits);
+            WAIT(cb.scr3, 1);
+            WAIT(cb.scr1, 1);
+            mm_diag_qk(cb.scr3, cb.q, cb.supd, cb.scr1, cb.k, cb.stmp, Kt);
+            // The normalized q/k are waited for at their first readers (Kk at pp_p1's second block, Q at
+            // pp_kd), so their packs overlap the v_beta block; the pops below are ordered after this thread's
+            // unpacks by the CB protocol.
+            POP(cb.scr3, 1);
+            POP(cb.scr1, 1);
             POP(cb.q, ck);
-            // k: same, no scale -> k_normed (cb.stmp)
-            inv_rms_diag(cb.k, cb.eye, cb.scr3, ct, Kt, eps_bits, scale_bits, /*do_scale=*/false);
-            WAIT(cb.scr3, Ct);
-            mm_diag(cb.scr3, cb.k, cb.stmp, ct, Kt);
-            WAIT(cb.stmp, ck);
-            POP(cb.scr3, Ct);
             POP(cb.k, ck);
             Q = cb.supd;
             Kk = cb.stmp;
@@ -739,6 +789,9 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // the same rule -- a WAIT right after a producing block drains the unpack->math->pack pipeline (~0.2-0.3 us
         // on a one-tile block), so it is placed only where the next block reads the result.
         bcast_cols_mul(cb.v, cb.beta, cb.vbeta, ct, Vt);
+        if constexpr (qk_norm) {
+            WAIT(Kk, ck);  // the normalized k's first reader
+        }
         bcast_cols_mul(Kk, cb.beta, cb.kbeta, ct, Kt);
         POP(cb.beta, Ct);
         POP(cb.v, cv);
@@ -857,23 +910,32 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // operand is handed off NEGATED so the scan forms v_beta + nkd@S as one DST accumulation
         // (nkd @ S, then I @ v_beta accumulated onto it): the negation is an exact SFPU sign flip of
         // the broadcast product before it is packed.
+        // At Ct == 1 the block also forms q_decay = q * decay_exp (cb.qdecay): the same broadcast column, one
+        // reserve/reconfig/init for both outputs (the writers wait per CB, so the push order is free).
         WAIT(cb.decay_exp, Ct);
-        bcast_cols_mul_neg(cb.kbeta, cb.decay_exp, cb.w, ct, Kt);  // nkd -> cb.w (output, no wait)
+        if constexpr (Ct == 1) {
+            if constexpr (qk_norm) {
+                WAIT(Q, ck);  // the normalized q's first reader
+            }
+            kd_qdecay<qk_norm>(cb.kbeta, Q, cb.decay_exp, cb.w, cb.qdecay, Kt);  // nkd -> cb.w, q_decay -> cb.qdecay
+        } else {
+            bcast_cols_mul_neg(cb.kbeta, cb.decay_exp, cb.w, ct, Kt);  // nkd -> cb.w (output, no wait)
+        }
         POP(cb.kbeta, ck);
     }
     // cb.vbeta (v_beta) and cb.Tinv (T_inv) remain pushed for the writer; NOT popped here.
 
     {
         GDN_ZONE("pp_intra");
-        // ---- intra = (q@k^T) * L_mask ; q_decay = q*decay_exp ; k_dec_t ----
+        // ---- intra = (q@k^T) * L_mask ; (q_decay at Ct == 2) ; k_dec_t ----
         intra_fused(Q, Kk, cb.lmask, cb.intra, ct, Kt);  // intra = (q @ k^T) * L_mask, one DST pass per tile
         POP(cb.lmask, cc);
     }
-    {
+    if constexpr (Ct != 1) {
         GDN_ZONE("pp_qdecay");
-        bcast_cols_mul(Q, cb.decay_exp, cb.qdecay, ct, Kt);
-        POP(Q, ck);
+        bcast_cols_mul(Q, cb.decay_exp, cb.qdecay, ct, Kt);  // Ct == 1: formed in pp_kd
     }
+    POP(Q, ck);
     // decay_exp kept alive: reused at the scan to recompute dl = exp(g_sum).
     {
         GDN_ZONE("pp_kdec");

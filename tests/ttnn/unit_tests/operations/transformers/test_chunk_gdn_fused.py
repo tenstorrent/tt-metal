@@ -848,3 +848,64 @@ def test_fused_config_pinned_geometry_matches_free(device):
         device.num_program_cache_entries() == n_pin
     ), "a free fused config compiled a new program after its own pinned geometry: the model's pick is not the default"
     assert torch.equal(o_pin, o_free) and torch.equal(fs_pin, fs_free), "pinned and free geometries disagree"
+
+
+def _make_flat_inputs(device, seq, num_k_heads, num_v_heads, seed):
+    """Flat token-major inputs, the model's contract: raw (un-normalized) q/k [B, T, H*K] and
+    v [B, T, HV*V]; the prep kernel L2-normalizes q/k over K and folds the scale in (qk_norm)."""
+    torch.manual_seed(seed)
+    B, T, H, HV = 1, seq, num_k_heads, num_v_heads
+    q = torch.randn(B, T, H * KDIM).to(torch.bfloat16)
+    k = torch.randn(B, T, H * KDIM).to(torch.bfloat16)
+    v = (0.5 * torch.randn(B, T, HV * VDIM)).to(torch.bfloat16)
+    beta = torch.sigmoid(torch.randn(B, T, HV))
+    g = -F.softplus(torch.randn(B, T, HV)) * 0.5
+    s0 = 0.05 * torch.randn(B, HV, KDIM, VDIM)
+
+    def dev(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tensors = (
+        dev(q, ttnn.bfloat16),
+        dev(k, ttnn.bfloat16),
+        dev(v, ttnn.bfloat16),
+        dev(g, ttnn.float32),
+        dev(beta, ttnn.float32),
+    )
+    return (q, k, v, g, beta, s0), tensors, dev(s0, ttnn.float32)
+
+
+def test_fused_flat_bit_exact_vs_phased(device):
+    """Flat q/k select the in-kernel norm (qk_norm), a prep section no rank-4 case compiles. Fused
+    output == phased output bit for bit on that path too, and both agree with the rank-4
+    host-normalized run to PCC (the norm moves from host fp32 to the SFPU)."""
+    num_k_heads, num_v_heads = 4, 12  # the 27B TP-4 shape
+    _skip_unless_fused_fits(device, num_v_heads)
+    host, tensors, s0 = _make_flat_inputs(device, T_SMALL, num_k_heads, num_v_heads, seed=20260930)
+    const_tiles = _const_tiles(device)
+
+    o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased())
+    o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused())
+    assert torch.equal(o_fu, o_ph), "fused path changed o on the flat (qk_norm) path"
+    assert torch.equal(fs_fu, fs_ph), "fused path changed final_state on the flat (qk_norm) path"
+
+    q, k, v, g, beta, s0_host = host
+    B, T = q.shape[0], q.shape[1]
+
+    def dev(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def host_norm(t):
+        return F.normalize(t.float().reshape(B, T, num_k_heads, KDIM), dim=-1).to(torch.bfloat16)
+
+    tensors_4d = (
+        dev(host_norm(q), ttnn.bfloat16),
+        dev(host_norm(k), ttnn.bfloat16),
+        dev(v.reshape(B, T, num_v_heads, VDIM), ttnn.bfloat16),
+        tensors[3],
+        tensors[4],
+    )
+    o_4d, fs_4d = _run_op(device, tensors_4d, const_tiles, s0, _phased())
+    pcc_o, pcc_s = _pcc(o_4d, o_fu), _pcc(fs_4d, fs_fu)
+    print(f"\nflat vs host-normalized: pcc o={pcc_o} final_state={pcc_s}")
+    assert pcc_o > 0.9999 and pcc_s > 0.9999, f"flat (qk_norm) vs host-normalized rank-4: o {pcc_o} final_state {pcc_s}"
