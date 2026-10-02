@@ -125,7 +125,7 @@ public:
         uint32_t receiver_group_size,
         const McastSenderConfig& sender_config = McastFixedSenderConfig{},
         McastCoreOrder receiver_order = McastCoreOrder::RowMajor);
-    ~Mcast();
+    ~Mcast();  // NOLINT(performance-trivially-destructible): McastImpl is incomplete here.
 
     Mcast(const Mcast&);
     Mcast& operator=(const Mcast&);

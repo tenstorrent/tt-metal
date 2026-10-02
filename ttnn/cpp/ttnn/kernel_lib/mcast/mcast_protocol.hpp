@@ -171,4 +171,4 @@ constexpr ArgumentMetadata decode_compile_time_metadata(const Words& words, bool
 }  // namespace mcast_wire
 }  // namespace dataflow_kernel_lib
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_protocol.inl"
+#include "mcast_protocol.inl"

@@ -5,9 +5,7 @@
 
 // Implementation for mcast_protocol.hpp. Do not include directly.
 
-namespace dataflow_kernel_lib {
-
-namespace mcast_wire {
+namespace dataflow_kernel_lib::mcast_wire {
 
 constexpr TransferMode transfer_mode(uint32_t flags) {
     return static_cast<TransferMode>((flags & TRANSFER_MODE_MASK) >> TRANSFER_MODE_SHIFT);
@@ -267,5 +265,4 @@ constexpr ArgumentMetadata decode_compile_time_metadata(const Words& words, bool
     return metadata;
 }
 
-}  // namespace mcast_wire
-}  // namespace dataflow_kernel_lib
+}  // namespace dataflow_kernel_lib::mcast_wire
