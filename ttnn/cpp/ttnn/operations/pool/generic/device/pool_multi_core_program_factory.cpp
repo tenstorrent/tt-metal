@@ -335,6 +335,28 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         in_h,
         in_w,
         output_layout);
+    const bool indexes_32_bit = return_indices && params.index_format == tt::DataFormat::UInt32;
+
+    // Initialize device compute kernel config with user-provided config or defaults
+    const auto device_compute_kernel_config = init_device_compute_kernel_config(
+        input.device()->arch(),
+        compute_kernel_config,
+        tt::tt_metal::MathFidelity::HiFi4,
+        false,                                                             // math_approx_mode
+        (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,  // fp32_dest_acc_en
+        false,                                                             // packer_l1_acc
+        (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
+    );
+
+    // With fp32_dest_acc_en in half-sync mode DEST holds only 4 fp32 tiles, so a channel chunk must not
+    // exceed 4 tiles (grid_sample applies the same limit). Full-sync DEST holds 8 and keeps the wider chunk.
+    // The chunk width feeds the CB sizes, in_nblocks_c and in_nbytes_leftover below, and both kernels.
+    const bool force_4_tile_chunk =
+        get_fp32_dest_acc_en(device_compute_kernel_config) && !get_dst_full_sync_en(device_compute_kernel_config);
+    if (force_4_tile_chunk && params.MAX_TILES_PER_REDUCTION > 4) {
+        params.MAX_TILES_PER_REDUCTION = 4;
+        params.is_wide_reduction = params.in_ntiles_c > params.MAX_TILES_PER_REDUCTION;
+    }
     uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
     uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
     uint32_t pad_h = pad_t + pad_b;
@@ -549,9 +571,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     uint32_t up_left_wrap_inc = 0;
     uint32_t intra_kernel_right_inc = 0;
     uint32_t intra_kernel_down_left_wrap_inc = 0;
-    bool indexes_32_bit = false;
     if (return_indices) {
-        indexes_32_bit = params.index_format == tt::DataFormat::UInt32;
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         in_idx_cb_id = next_cb_index++;
         add_local_cb(in_idx_cb_id, params.index_nbytes * tile_elems, 1, params.index_format);
@@ -816,6 +836,8 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         intra_kernel_right_inc_cb_id,           // 52
         intra_kernel_down_left_wrap_inc_cb_id,  // 53
         static_cast<uint32_t>(indexes_32_bit),  // 54
+        // reader_pool_2d.cpp-only arg (ignored by reader_mpwi.cpp)
+        params.MAX_TILES_PER_REDUCTION,  // 55 - channel chunk width in tiles
     };
 
     tt::tt_metal::TensorAccessorArgs(reader_indices_buffer).append_to(reader0_ct_args);
@@ -876,7 +898,8 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         pre_tilize_cb_id,               // 13
         is_output_tiled,                // 14
         is_output_block_format,         // 15
-        0,                              // 16: force_max_tiles_per_reduction_4 (off for pool2d)
+        // compute_pool_2d derives its chunk width from arg 16; it must agree with params.MAX_TILES_PER_REDUCTION.
+        static_cast<uint32_t>(force_4_tile_chunk),  // 16: force_max_tiles_per_reduction_4 (fp32 DEST in half-sync)
         // MPWI-only args start here (for compute_mpwi.cpp, not used by compute_pool_2d.cpp)
         in_idx_cb_id,                           // 17
         pack_tmp_cb_id,                         // 18
@@ -902,20 +925,6 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         // compute_pool_2d.cpp-only arg (ignored by compute_mpwi.cpp)
         fast_tilize_cb_id  // 38 - consumer-view alias of pre_tilize_cb_id (full-tile face_geometry)
     };
-
-    // Get device arch for compute kernel config initialization
-    auto device_arch = input.device()->arch();
-
-    // Initialize device compute kernel config with user-provided config or defaults
-    auto device_compute_kernel_config = init_device_compute_kernel_config(
-        device_arch,
-        compute_kernel_config,
-        tt::tt_metal::MathFidelity::HiFi4,
-        false,                                                             // math_approx_mode
-        (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,  // fp32_dest_acc_en
-        false,                                                             // packer_l1_acc
-        (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
-    );
 
     const auto pool_defines_map = get_defines(pool_type);
     KernelDescriptor::Defines compute_defines(pool_defines_map.begin(), pool_defines_map.end());
