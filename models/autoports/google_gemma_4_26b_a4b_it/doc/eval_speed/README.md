@@ -7,81 +7,55 @@ not a claim that the five-task evaluation has been repaired.
 
 ## Current aggregate-suite continuation (2026-10-02)
 
-The user requests the actual combined time of the original five tasks, followed
-by aggregate optimization. See [suite experiment log](suite_20261002.md) for the
-fixed topology, bounded remaining-task gates, forecasts, live CI and current
-handoff. Isolated successes below are prior evidence, not an all-five result.
+The user requests the measured **original five tasks together**, then aggregate
+optimization. As of **10:18 UTC**, the actual combined baseline is still running:
+[CI36983437902](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36983437902),
+job110763074189, runner120-qb2-p03t02, dispatched08:20:06. One persistent loaded
+server, serial C1, exact original tasks,7200s per trial; reused ad58 image,
+native TTc9ec/plugin c9cf, TTI**f245f6ac**, original prompt and configurable-weight
+BFP8. Seed9472, async, wide repetition guard, corrected testbed PATH and the
+submission adapter are declared candidate deviations. No APC/chunked prefill.
+All newer local policies below are **excluded** from this fixed baseline.
 
-CI [36969576147](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36969576147)
-finishes the serial Sympy/sklearn pair in **41m02s dispatch-to-finish**:
-sklearn submits natively in **688.289 seconds**, reward 1 (27 tests), while
-Sympy submits in **898.432 seconds**, reward 0. Astropy's 1,200-second extension
-over-edits a passing intermediate patch into a syntax error; disabling thinking
-also fails. A task-independent focused-completion prompt is being tested.
-That prompt produces **clean native Astropy submission in 655.569 seconds**,
-reward 1, all 427 tests passing. Four original tasks now have clean passing
-evidence across declared policies, not one validated all-five configuration.
-The focused policy **fails its Django regression** (900-second timeout, reward
-0), so it is rejected as a suite-wide default. A fresh prefill BFP8 weight
-control passes the short accuracy gate (prefill top1 .99; traced decode .98),
-but its SWE quality and long-context accuracy are not yet established.
-Focused-prompt Sympy CI also fails (1,200-second timeout, reward 0); all dispatched
-CI is complete. The prefill control is now running a bounded original-prompt
-Sympy trial on the reused local server, with no task-specific guidance. It fails
-at **900.115 seconds**, reward 0, with repeated successful algebra inspections.
-A separate default-off exact-command/result advisory is now under bounded test;
-the numerical improvement alone has not established a better suite candidate.
-The first advisory yields a **639.742-second clean submission**, but reward stays
-0: it fixes the reported bug and breaks two existing regressions. A further
-generic existing-test/diff-review advisory control is pending; no hidden tests
-or task-specific solution are passed to the agent.
-That follow-up also fails. The first **actual five-task combined baseline** is
-now prepared with the original-prompt configurable-weight BFP8 candidate that
-already has three clean solves, excluding the unproven prefill/advisory changes.
-The pre-dispatch runtime forecast is 65 minutes best case, 3h06m40s expected,
-5h20m conservative, plus an explicit 10-hour hard summed agent-budget ceiling.
-These are terminal-event/runtime estimates, **not five-correct-solve estimates**;
-see the suite log for assumptions and the upcoming CI measurement.
-Combined [CI 36981858976](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36981858976)
-failed before trials at 08:11:46 UTC, job **110758014503**, exact TTI **83d9c26a**:
-the new pinned-cache branch omitted the runtime `MODEL_WEIGHTS_DIR` assignment.
-TTI **f245f6ac** fixes this with success/failure environment regression checks;
-93 launcher/overlay tests pass. Same-image, same-suite retry
-[CI 36983437902](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36983437902)
-is dispatched at **08:20:06 UTC** and monitored. No SWE result exists from the
-failed startup. Both long-context policies score **122/128 HF top-1** on the
-saved 14,467-token control; this does not support promoting prefill BFP8.
-The retry is healthy and generating by **08:34 UTC**; results remain pending.
-An exact 172-request offline audit rejects tool-output dedup (only0.077–0.590%
-aggregate input savings) and measures92.68–95.22% matching input-prefix blocks,
-without claiming implemented APC. A separate default-off local policy control
-keeps only the latest assistant reasoning block while preserving all visible
-answers/task/tool evidence; it starts at08:42:51 under a900-second cap. The
-combined suite is unchanged. That history control fails (reward0/timeout).
-The next original-history Sympy control reaches reward1 at its1,200-second
-timeout, all18 tests passing, but **does not submit**. Its once-only submission
-review never triggers, so no policy benefit is established. A separately
-declared temperature-zero control is prepared to test long stochastic detours;
-the actual serial five-task CI remains unchanged and monitored. See the suite
-log for provenance and limitations.
-The greedy control also fails (900.030-second timeout, reward0). It repeats
-searches for deleted source and emits a source-edit command after the deadline;
-Harbor cancellation cleanup is now under investigation as a verifier-race risk.
-No rejected local policy is promoted to the running combined baseline.
-Opt-in owned-process cancellation cleanup is now implemented at TTI36292d7e:
-a Docker delayed-writer control reproduces the leak and prevents it in81ms,
-and a20-second real Harbor timeout smoke stops all3 owned processes with no
-late saved action. An abandoned upstream response still finishes12.36s later;
-that wasted serving work is separately measured, not counted as agent time.
-TTI4fcfdcfb adds opt-in upstream disconnect propagation (58 host tests). Two
-short real timeout smokes prevent late actions; the25-second case interrupts
-decoding after217 partial tokens. A following native replay matches the prior
-parsed response. These are cancellation/plumbing results, not improved reward.
-An old-BFP8/original-T1 repeat-advisory control is prepared; previous advisory
-failures used the new-prefill policy. The actual five-task CI remains fixed.
-The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
-identifies unchanged prefill BFP4 and untested long-context numerical quality;
-it does not establish a cache/position bug.
+The pre-dispatch terminal-event forecast was **65m /3h06m40s /5h20m**
+best/expected/conservative, not a prediction of five correct solves. The
+optimistic bound is exceeded. Final task order, rewards, phase times and total
+dispatch-to-finish remain pending; aggregate counters cannot establish them.
+The earlier startup-only attempt36981858976 failed before trials; f245f6ac
+fixed the pinned-cache environment assignment with93 passing checks.
+
+Prior bounded evidence is not a single all-five result:
+
+| Task | Strongest relevant evidence | Limitation |
+| --- | --- | --- |
+| Django |845.733s clean CI, reward1,104 tests | Candidate, not original release precision |
+| Matplotlib |647.041s clean local, reward1,182 tests | Local/cache state differs from CI |
+| sklearn |688.289s clean CI, reward1,27 tests | Measured in a two-task serial debug run |
+| Astropy |655.569s clean local, reward1,427 tests | Different focused prompt; rejected globally after Django regression |
+| Sympy |1200.028s timeout, reward1,18 tests | Correct patch **without submission**, not a solve time |
+
+Current bounded probe: `local_sympy_old_bfp8_repeat_guarded_seed9472`, started
+**10:12:50**, cap1200s, old BFP8/original T1 plus the existing generic repeat
+advisory v2 and new cancellation guards. Previous advisory trials used the
+new-prefill policy. Accept only clean reward1, then check known-good tasks.
+Local server`gemma4-eval-history-limit` remains exclusively owned by that trial.
+
+New default-off harness repairs at TTI**4fcfdcfb** stop owned container processes
+before verification and cancel abandoned upstream requests.58 host tests,
+a Docker delayed-writer control,20/25-second real timeout smokes and matching
+post-abort native replay validate the plumbing. They are not reward or aggregate
+speedup claims. Prior timeout outcomes with late source edits are flagged.
+Rejected/unpromoted controls include focused prompt, new-prefill precision,
+reasoning-history truncation, greedy sampling and low-yield output dedup.
+Both long-context precision controls score122/128 on one saved HF sequence;
+that is not broad free-generation equivalence. Prefix caching is unimplemented.
+
+See the [suite experiment log](suite_20261002.md) for all forecasts, failures,
+commands, exact provenance, raw artifact locations and live-monitor path.
+The [precision audit](AUTODEBUG.md) documents numerical hypotheses, not a proven
+cache/position bug. Latest TT checkpoint before this handoff is**f8b3c7f615**;
+all scoped changes and evidence are pushed. No ten-task expansion is authorized
+by the evidence yet.
 
 ## Prior checkpoint (2026-10-01 20:26 UTC)
 

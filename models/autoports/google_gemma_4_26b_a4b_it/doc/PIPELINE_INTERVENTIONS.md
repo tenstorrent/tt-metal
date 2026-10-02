@@ -574,6 +574,13 @@ verification overlapped the abandoned work. An old-BFP8/original-T1 repeat-
 advisory probe is prepared, with trustworthy cancellation, while the unchanged
 combined CI remains monitored. Resumed active time~280min, cumulative~9h33m.
 
+10:18 UTC: the old-policy advisory probe starts10:12:50, cap1200s. Performance-
+claim review removes causal wording around subsecond single-run trial deltas;
+matched warmup-only counters verify98.822s versus2.931s without attributing it
+to faster warmed kernels or one cache change. README is consolidated into a
+current handoff, separating ongoing CI from historical probes. Combined results
+remain pending. Resumed active time~287min, cumulative~9h40m.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
