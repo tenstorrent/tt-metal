@@ -1087,13 +1087,14 @@ class OptimizedDecoder(LightweightModule):
         return ttnn.concat(outs, dim=2)
 
     # ---- QKV (packed) ------------------------------------------------------ #
-    def _split_qkv(self, qkv, rows):
-        """qkv: [1,1,rows,qkv_w] -> q[1,rows,nh,hd], k/v[1,rows,nkv,hd]."""
+    def _split_qkv(self, qkv, rows, memory_config=None):
+        """qkv: [1,1,rows,qkv_w] -> q[1,rows,nh,hd], k/v[1,rows,nkv,hd]. ``memory_config``: slice output
+        placement (lets a width-sharded qkv be sliced directly into interleaved L1)."""
         cfg = self.cfg
         q_w, kv_w = self.meta["q_w"], self.meta["kv_w"]
-        q = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, rows, q_w])
-        k = ttnn.slice(qkv, [0, 0, 0, q_w], [1, 1, rows, q_w + kv_w])
-        v = ttnn.slice(qkv, [0, 0, 0, q_w + kv_w], [1, 1, rows, q_w + 2 * kv_w])
+        q = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, rows, q_w], memory_config=memory_config)
+        k = ttnn.slice(qkv, [0, 0, 0, q_w], [1, 1, rows, q_w + kv_w], memory_config=memory_config)
+        v = ttnn.slice(qkv, [0, 0, 0, q_w + kv_w], [1, 1, rows, q_w + 2 * kv_w], memory_config=memory_config)
         q = ttnn.reshape(q, (1, rows, cfg.num_heads, cfg.head_dim))
         k = ttnn.reshape(k, (1, rows, cfg.num_kv_heads, cfg.head_dim))
         v = ttnn.reshape(v, (1, rows, cfg.num_kv_heads, cfg.head_dim))

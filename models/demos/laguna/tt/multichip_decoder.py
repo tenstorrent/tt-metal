@@ -268,6 +268,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
         self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
         self._glu_out_sharded = _parse_binary_env("TT_LAGUNA_GLU_OUT_SHARDED", True)  # decode MLP out stays sharded
+        self._slice_sharded = _parse_binary_env("TT_LAGUNA_SLICE_SHARDED", True)  # decode splits slice the shard
         # 1-token router: eltwise ops read the sharded logits; the EP-select matmul casts the fp32 weights to bf16
         self._router_sharded_logits = _parse_binary_env("TT_LAGUNA_ROUTER_SHARDED_LOGITS", True)
         self._router_fp32_out = self.D > 1 and self.PACK_GATE_UP and _parse_binary_env("TT_LAGUNA_ROUTER_FP32_OUT", True)
@@ -1123,10 +1124,12 @@ class MultichipDecoder(OptimizedDecoder):
         w = self.w
         if sharded and self.use_dram_sharded:
             gu = self._dram_mm(x, w[guk], w[guk + "_ds"], H, 2 * I, ck)  # [.,.,M,2I] width-sharded
-            gu = ttnn.sharded_to_interleaved(gu, ttnn.L1_MEMORY_CONFIG)
+            if not self._slice_sharded:
+                gu = ttnn.sharded_to_interleaved(gu, ttnn.L1_MEMORY_CONFIG)
             shp = list(gu.shape)
-            g = ttnn.slice(gu, [0] * len(shp), shp[:-1] + [I])
-            u = ttnn.slice(gu, [0] * (len(shp) - 1) + [I], shp[:-1] + [2 * I])
+            # the gate/up slices read the width-sharded matmul output directly into interleaved L1
+            g = ttnn.slice(gu, [0] * len(shp), shp[:-1] + [I], memory_config=ttnn.L1_MEMORY_CONFIG)
+            u = ttnn.slice(gu, [0] * (len(shp) - 1) + [I], shp[:-1] + [2 * I], memory_config=ttnn.L1_MEMORY_CONFIG)
             gg = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])  # silu fused: one op
             out = self._dram_mm(gg, w[dk], w[dk + "_ds"], I, H, ck)
             return out if keep_sharded else ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
@@ -1364,14 +1367,18 @@ class MultichipDecoder(OptimizedDecoder):
             # g_proj folded into the QKV matmul at the QKV fidelity (LoFi): HiFi2 doubled this M=32 matmul's
             # math and made it compute-bound (~41 us vs ~22 us)
             qkv = self._dram_mm(ln, None, self.w["wqkvg_ds"], cfg.hidden, self.meta["qkvg_pad"], self._ck_qkv)
-            qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)  # head split in L1 (q -> DRAM before SDPA)
+            # head split in L1 (q -> DRAM before SDPA): the slices read the width-sharded qkv directly
+            split_mem = ttnn.L1_MEMORY_CONFIG
+            if not self._slice_sharded:
+                qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)
             qkv_w = self.meta["qkv_w"]
-            g = ttnn.slice(qkv, [0, 0, 0, qkv_w], [1, 1, B, qkv_w + cfg.num_heads])
+            g = ttnn.slice(qkv, [0, 0, 0, qkv_w], [1, 1, B, qkv_w + cfg.num_heads], memory_config=split_mem)
         else:
+            split_mem = None
             qkv = self._dram_mm(ln, self.w["wqkv"], self.w["wqkv_ds"], cfg.hidden, self.meta["qkv_w"], self._ck_qkv)
             if self.use_dram_sharded:
                 qkv = ttnn.sharded_to_interleaved(qkv, ttnn.DRAM_MEMORY_CONFIG)
-        q, k, v = self._split_qkv(qkv, B)
+        q, k, v = self._split_qkv(qkv, B, memory_config=split_mem)
         q = self._per_head_norm(q, self.w["q_norm"])
         k = self._per_head_norm(k, self.w["k_norm"])
         # share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
