@@ -681,27 +681,31 @@ def test_fused_nv_shapes_bit_exact(device, hk, hv, nv, np_producers):
 
 def test_fused_nv_cache_identity(device):
     """Num_receivers: it must reach attrs.nv, which is hashed, so each distinct NV compiles its
-    own fused program and a repeat is a cache hit. Deltas asserted EXACTLY."""
+    own fused program and a repeat is a cache hit. Deltas asserted EXACTLY. The two pinned NVs are
+    the ones the model does not pick for NP=2 (its free pick depends on the calibration)."""
     hk, hv = NP_BH_KV_HEADS
     nc = 8
     _skip_unless_geometry_fits(device, hv, 4, 2, nc)
+    grid = device.compute_with_storage_grid_size()
+    nv_free = ttnn._ttnn.operations.transformer.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32, 0, 2)[0]
+    nv_a, nv_b = [nv for nv in (1, 2, 4) if nv != nv_free][:2]
     _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20260927)
     const_tiles = _const_tiles(device)
 
     o1, fs1 = _run_op(device, tensors, const_tiles, s0, _fused(np_producers=2))  # NV free -> the model's NV for NP=2
     n1 = device.num_program_cache_entries()
-    o2, fs2 = _run_op(device, tensors, const_tiles, s0, _fused(2, 2))
+    o2, fs2 = _run_op(device, tensors, const_tiles, s0, _fused(nv_a, 2))
     n2 = device.num_program_cache_entries()
-    assert n2 - n1 == 1, f"nv free->2 compiled {n2 - n1} programs (expected 1: nv must be hashed)"
-    o4, fs4 = _run_op(device, tensors, const_tiles, s0, _fused(4, 2))
+    assert n2 - n1 == 1, f"nv free({nv_free})->{nv_a} compiled {n2 - n1} programs (expected 1: nv must be hashed)"
+    o4, fs4 = _run_op(device, tensors, const_tiles, s0, _fused(nv_b, 2))
     n4 = device.num_program_cache_entries()
-    assert n4 - n2 == 1, f"nv 2->4 compiled {n4 - n2} programs (expected 1)"
-    _run_op(device, tensors, const_tiles, s0, _fused(2, 2))
+    assert n4 - n2 == 1, f"nv {nv_a}->{nv_b} compiled {n4 - n2} programs (expected 1)"
+    _run_op(device, tensors, const_tiles, s0, _fused(nv_a, 2))
     n5 = device.num_program_cache_entries()
-    assert n5 - n4 == 0, f"nv 4->2 (already compiled) compiled {n5 - n4} programs (expected 0: cache hit)"
+    assert n5 - n4 == 0, f"nv {nv_b}->{nv_a} (already compiled) compiled {n5 - n4} programs (expected 0: cache hit)"
     _run_op(device, tensors, const_tiles, s0, _fused(np_producers=2))
     n6 = device.num_program_cache_entries()
-    assert n6 - n5 == 0, f"nv 2->free (the model's pick, already compiled) compiled {n6 - n5} programs (expected 0)"
+    assert n6 - n5 == 0, f"nv {nv_a}->free (the model's pick, already compiled) compiled {n6 - n5} programs (expected 0)"
     assert torch.equal(o1, o2) and torch.equal(o1, o4), "o differs across NV values"
     assert torch.equal(fs1, fs2) and torch.equal(fs1, fs4), "final_state differs across NV values"
 
