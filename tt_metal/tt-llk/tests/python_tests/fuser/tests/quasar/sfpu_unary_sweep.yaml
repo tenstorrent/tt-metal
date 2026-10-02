@@ -1,0 +1,39 @@
+# Sweep unary SFPU operations and independent input/output formats.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float32]
+    stimuli:
+      include:
+        - 0.005
+        - [0.01, 1.0]
+        - 1.5
+        - [2.0, 10.0]
+      exclude:
+        - [0.1, 0.2]
+        - [3.0, 4.0]
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: [Float16_b, Float32]
+
+operations:
+  - math:
+      - type: "Fpu"
+        in0: "input_A"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+        unpack_to_dest: true
+        block_size: [32, 32]
+      - type: "UnarySfpu"
+        operation: all
+        approximation_mode: all
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - output: "sfpu_out"
+        packer: "Packer"
+        block_size: [32, 32]

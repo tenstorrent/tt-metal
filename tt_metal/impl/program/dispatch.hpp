@@ -190,6 +190,9 @@ void reserve_space_in_kernel_config_buffer(
     uint32_t program_ordering_sync_count,
     ProgramDispatchMetadata& dispatch_md);
 
+// Refresh cached CB payloads without reserving or submitting queue commands.
+void update_circular_buffer_configs(ProgramCommandSequence& cached_program_command_sequence);
+
 void update_program_dispatch_commands(
     detail::ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
@@ -220,6 +223,14 @@ TraceNode create_trace_node(
     distributed::MeshDevice* mesh_device,
     uint32_t num_workers,
     bool use_prefetcher_cache);
+
+// Serialize the same command fragments as write_program_command_sequence for reuse across devices.
+void pack_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    vector_aligned<uint32_t>& packed);
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,

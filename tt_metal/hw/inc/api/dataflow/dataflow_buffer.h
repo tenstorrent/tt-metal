@@ -301,8 +301,6 @@ public:
 #endif // DFB_DESCRIPTORS_DEFINED
 
 #ifdef COMPILE_FOR_TRISC
-// This can be enabled on Quasar once GH issue #49608 is resolved.
-#ifndef ARCH_QUASAR
     uint32_t get_tile_address(uint32_t tile_index);
 
     // Reads one scalar element from a tile at specified tile_index. element_offset is an index into the tile as a T[]
@@ -311,7 +309,6 @@ public:
     // Values are mailbox-broadcast to all TRISC threads as a zero-extended uint32_t; MATH/PACK cast back to T.
     template <typename T = uint32_t>
     T read_tile_value(uint32_t tile_index, uint32_t element_offset);
-#endif
 #endif
 
     void finish() { finish_impl(); }
@@ -329,6 +326,36 @@ public:
     // cache strategy.
     uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
     uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
+
+#ifdef COMPILE_FOR_TRISC
+    // Returns the LLKOperand pointing to the front (reading address) of the DFB
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
+    template <typename Operand>
+    [[nodiscard]] Operand front() const {
+#ifdef UCK_CHLKC_MATH
+        return Operand{0};
+#else
+        return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+#endif
+    }
+
+    // Returns the LLKOperand pointing to the back (writing address) of the DFB
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
+    template <typename Operand>
+    [[nodiscard]] Operand back() const {
+#ifdef UCK_CHLKC_MATH
+        return Operand{0};
+#else
+        return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+#endif
+    }
+#endif
 
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).

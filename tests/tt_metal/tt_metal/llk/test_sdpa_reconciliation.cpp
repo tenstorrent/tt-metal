@@ -324,11 +324,10 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
             "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunk_compile_limits.cpp",
             core,
             ComputeConfig{.math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false, .compile_args = args});
-        auto* device = devices_.at(0)->get_devices()[0];
         if (fits) {
-            EXPECT_NO_THROW(program.impl().compile(device));
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
-            EXPECT_THROW(program.impl().compile(device), std::runtime_error);
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
         }
     }
 }

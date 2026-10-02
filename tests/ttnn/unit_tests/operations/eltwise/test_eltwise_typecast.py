@@ -33,6 +33,36 @@ def _make_fp32_to_int32_input(shape):
     return make_typecast_test_input(shape, torch.float32, in_low, in_high)
 
 
+@pytest.mark.parametrize("num_tiles", [1, 128])
+@pytest.mark.parametrize("memory_config", mem_configs)
+def test_typecast_uint32_to_fp32_rounding(device, num_tiles, memory_config):
+    generator = torch.Generator().manual_seed(52787)
+    values = torch.randint(0, 2**32, (num_tiles * 1024,), dtype=torch.int64, generator=generator)
+    # Include every uint32 binade requiring rounding, both midpoint parities,
+    # and the 23-bit split boundaries used by the conversion kernel.
+    boundaries = [0, 1, 2**32 - 1, 2164260993]
+    for exponent in range(24, 32):
+        ulp = 1 << (exponent - 23)
+        for offset in (0, ulp, 1 << 23):
+            midpoint = (1 << exponent) + offset + ulp // 2
+            boundaries.extend((midpoint - 1, midpoint, midpoint + 1))
+    for high in (1, 2, 127, 128, 255, 256, 510, 511):
+        boundaries.extend(((high << 23) - 1, high << 23, (high << 23) + 1))
+    values[: len(boundaries)] = torch.tensor(boundaries, dtype=torch.int64)
+    expected = values.to(torch.float32).reshape(1, 1, num_tiles * 32, 32)
+    # Preserve all 32 input bits, including values above INT32_MAX.
+    input_tensor = ttnn.from_torch(
+        values.to(torch.uint32).reshape(expected.shape),
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    output = ttnn.to_torch(ttnn.typecast(input_tensor, ttnn.float32, memory_config=memory_config))
+    # Compare bits: PCC and tolerances would hide one-ULP conversion errors.
+    assert torch.equal(output.view(torch.int32), expected.view(torch.int32))
+
+
 @pytest.mark.parametrize(
     "tt_input_dtype, tt_output_dtype, expected",
     [

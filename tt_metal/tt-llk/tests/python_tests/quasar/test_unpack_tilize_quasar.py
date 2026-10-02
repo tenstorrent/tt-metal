@@ -88,7 +88,7 @@ def generate_unpack_tilize_combinations(
             if in_fmt.is_32_bit()
             else (
                 (DestAccumulation.No,)
-                if in_fmt in [DataFormat.Float16, DataFormat.Int16]
+                if in_fmt in [DataFormat.Int16]
                 else (DestAccumulation.No, DestAccumulation.Yes)
             )
         )
@@ -153,8 +153,11 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
+        DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int16,
+        DataFormat.Int8,
+        DataFormat.UInt8,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,

@@ -1,0 +1,246 @@
+dest_acc: true
+skip_for_perf: true
+
+indexes:
+  subblock:
+    in0: {count: 8}
+    in1: {count: 8}
+    dest: [0, 1]
+    out: {count: 8}
+  mask:
+    in0: {count: 8}
+    in1: [0, 1, 0, 1, 0, 1, 0, 1]
+    dest: [0, 1]
+    out: {count: 8}
+  scalar_broadcast:
+    in0: {count: 8}
+    in1: {count: 8, step: 0}
+    dest: [0, 1]
+    out: {count: 8}
+  sum_tiles:
+    in0: {count: 8}
+    in1: {count: 8, step: 0}
+    dest: {count: 8, step: 0}
+  sum_squares:
+    in0: {count: 8}
+    in1: {count: 8}
+    dest: {count: 8, step: 0}
+  scalar:
+    in0: [0]
+    in1: [0]
+    dest: [0]
+    out: [0]
+  copy_columns:
+    in0: [0, 2, 4, 6, 1, 3, 5, 7]
+    dest: [0]
+    out: [0, 2, 4, 6, 1, 3, 5, 7]
+  affine:
+    in0: {count: 8}
+    in1: [0, 1, 0, 1, 0, 1, 0, 1]
+    dest: [0]
+    out: {count: 8}
+
+operands:
+  - {name: x, dims: [128, 64], format: Float32}  # c_0
+  - {name: input_mask, dims: [32, 64], format: Float16_b, stimuli: 1.0}  # c_7
+  - {name: ones, dims: [32, 32], format: Float16_b, stimuli: 1.0}  # c_26
+  - {name: scaler, dims: [32, 32], format: Float16_b, stimuli: 0.011048543456039806}  # c_2: 1/sqrt(128*64)
+  - {name: mean, dims: [32, 32], format: Float32, stimuli: 0.0}  # received c_15
+  - {name: variance, dims: [32, 32], format: Float32, stimuli: 1.0}  # received c_15, second use
+  - {name: eps, dims: [32, 32], format: Float16_b, stimuli: 1.0e-5}  # c_3
+  - {name: beta, dims: [32, 64], format: Float16_b}  # c_6
+  - {name: masked, dims: [128, 64], format: Float32}  # c_13, version 0
+  - {name: sum_x, dims: [32, 32], format: Float32}  # c_17
+  - {name: mean_partial, dims: [32, 32], format: Float32}  # c_8, sent to sender
+  - {name: centered, dims: [128, 64], format: Float32}  # c_13, version 1
+  - {name: centered_masked, dims: [128, 64], format: Float32}  # c_13, version 2
+  - {name: sum_squared, dims: [32, 32], format: Float32}  # c_17
+  - {name: variance_partial, dims: [32, 32], format: Float32}  # c_8, sent to sender
+  - {name: rstd, dims: [32, 32], format: Float32}  # c_17
+  - {name: normalized, dims: [128, 64], format: Float32}  # c_13, version 3
+  - {name: copied, dims: [128, 64], format: Float32}  # c_1 (exactly one affine enabled)
+  - {name: output, dims: [128, 64], format: Float32}  # c_16
+
+operations:
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        broadcast_type: ROW
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: x
+        in1: input_mask
+        indexes: mask
+    pack:
+      - output: masked
+        packer: Packer
+        block_size: [32, 32]
+        indexes: subblock
+
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        math_fidelity: HiFi4
+        acc_to_dest: true
+        block_size: [32, 32]
+        in0: masked
+        in1: ones
+        indexes: sum_tiles
+    pack:
+      - output: sum_x
+        packer: Packer
+        block_size: [32, 32]
+        indexes: scalar
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_SCALAR
+        reduce_pool: SUM
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: sum_x
+        in1: scaler
+        indexes: scalar
+    pack:
+      - output: mean_partial
+        packer: Packer
+        block_size: [32, 32]
+        indexes: scalar
+
+  # Wait for the received mean; a receiver must not perform a global reduction.
+  - math:
+      - type: Fpu
+        operation: Elwsub
+        unpacker: UnpackerAB
+        broadcast_type: SCALAR
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: masked
+        in1: mean
+        indexes: scalar_broadcast
+    pack:
+      - output: centered
+        packer: Packer
+        block_size: [32, 32]
+        indexes: subblock
+
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        broadcast_type: ROW
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: centered
+        in1: input_mask
+        indexes: mask
+    pack:
+      - output: centered_masked
+        packer: Packer
+        block_size: [32, 32]
+        indexes: subblock
+
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        math_fidelity: HiFi4
+        acc_to_dest: true
+        block_size: [32, 32]
+        in0: centered_masked
+        in1: centered_masked
+        indexes: sum_squares
+    pack:
+      - output: sum_squared
+        packer: Packer
+        block_size: [32, 32]
+        indexes: scalar
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_SCALAR
+        reduce_pool: SUM
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: sum_squared
+        in1: scaler
+        indexes: scalar
+    pack:
+      - output: variance_partial
+        packer: Packer
+        block_size: [32, 32]
+        indexes: scalar
+
+  - math:
+      - type: Fpu
+        operation: Elwadd
+        unpacker: UnpackerAB
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: variance
+        in1: eps
+        indexes: scalar
+      - type: UnarySfpu
+        operation: Rsqrt
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {dest: [0]}
+    pack:
+      - output: rstd
+        packer: Packer
+        block_size: [32, 32]
+        indexes: scalar
+
+  # Retain c_13 after the square reduction; normalize it in the same subblock order.
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        broadcast_type: SCALAR
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: centered_masked
+        in1: rstd
+        indexes: scalar_broadcast
+    pack:
+      - output: normalized
+        packer: Packer
+        block_size: [32, 32]
+        indexes: subblock
+
+  - math:
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: normalized
+        indexes: copy_columns
+    pack:
+      - output: copied
+        packer: Packer
+        block_size: [32, 32]
+        indexes: copy_columns
+
+  - math:
+      - type: Fpu
+        operation: Elwadd
+        unpacker: UnpackerAB
+        broadcast_type: ROW
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: copied
+        in1: beta
+        indexes: affine
+    pack:
+      - output: output
+        packer: Packer
+        block_size: [32, 32]
+        indexes: affine

@@ -154,7 +154,11 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
-OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
+OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<EnumT>,
+    std::optional<DataType> dtype,
+    const std::optional<binary::BinaryOpParams>& op_params) :
     binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
@@ -226,10 +230,16 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
         // (a-b)**2
         case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
         // gelu(a+b)
-        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::BIAS_GELU: {
             binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::GELU;
+            const auto* gelu_params =
+                op_params.has_value() ? std::get_if<binary::BiasGeluParams>(&op_params.value()) : nullptr;
+            const bool fast_and_approximate = gelu_params != nullptr && gelu_params->fast_and_approximate;
+            // The parameter is required: without it this reaches gelu_tile's default template
+            // argument, which is the approximate variant, where ttnn.gelu defaults to exact.
+            postprocess = unary::EltwiseUnaryWithParam{unary::UnaryOpType::GELU, fast_and_approximate ? 1.0f : 0.0f};
             break;
+        }
         case BinaryOpType::LOGICAL_AND:
             process_lhs = unary::UnaryOpType::NEZ;
             process_rhs = unary::UnaryOpType::NEZ;
@@ -699,8 +709,16 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
         scalar);
 }
 
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<FpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<SfpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
@@ -803,6 +821,12 @@ bool is_native_L1_sharding(
 
     // Both tensors have identical shape and memory config (no broadcast on any dimension)
     if ((a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
+        // A sharded input must carry the output's exact memory config: the factories borrow the shards in
+        // place, so another layout, shard spec or orientation maps core i's inputs to tiles its output shard
+        // does not hold. b needs no check of its own: the condition above makes its memory config a's.
+        if (a.memory_config().is_sharded() && c.is_sharded() && a.memory_config() != c) {
+            return false;
+        }
         if (is_uneven(a) || is_uneven(*b)) {
             // Uneven shards are safe when all tensors (a, b, c) are L1 sharded with identical
             // shard specs -- each core sees the same tile counts for all tensors, matching legacy
@@ -817,24 +841,6 @@ bool is_native_L1_sharding(
         if (a.memory_config().buffer_type() == BufferType::DRAM ||
             b->memory_config().buffer_type() == BufferType::DRAM || c.buffer_type() == BufferType::DRAM) {
             return false;
-        }
-
-        // Check if output grid differs from input grids - if so, cannot use native sharding
-        // This will force resharding through interleaved path
-        if (c.is_sharded() && c.shard_spec().has_value()) {
-            const auto& c_grid = c.shard_spec()->grid;
-            if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
-                const auto& a_grid = a.memory_config().shard_spec()->grid;
-                if (a_grid != c_grid) {
-                    return false;
-                }
-            }
-            if (b->memory_config().is_sharded() && b->memory_config().shard_spec().has_value()) {
-                const auto& b_grid = b->memory_config().shard_spec()->grid;
-                if (b_grid != c_grid) {
-                    return false;
-                }
-            }
         }
 
         if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {

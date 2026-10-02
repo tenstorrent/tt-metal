@@ -1537,7 +1537,7 @@ inline void noc_semaphore_set_remote(
         NOC_UNICAST_WRITE_VC,
         /*posted=*/false,
         noc);
-    SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", dst_noc_addr);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", dst_noc_addr, noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1606,7 +1606,7 @@ inline void noc_semaphore_set_multicast(
         vc,
         /*posted=*/false,
         noc);
-    SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", dst_noc_addr_multicast);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", dst_noc_addr_multicast, noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1671,7 +1671,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
         NOC_MULTICAST_WRITE_VC,
         /*posted=*/false,
         noc);
-    SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", dst_noc_addr_multicast);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", dst_noc_addr_multicast, noc);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -2279,7 +2279,7 @@ template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc(
     uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, 0, addr, 0, vc, posted, noc_id);
-    SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", addr);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", addr, noc_id);
 
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
@@ -2324,7 +2324,7 @@ template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc_multicast(
     uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index, uint8_t vc = NOC_MULTICAST_WRITE_VC) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, vc, posted, noc_id);
-    SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", addr);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", addr, noc_id);
 
     WAYPOINT("NIMW");
     DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, addr, 4);

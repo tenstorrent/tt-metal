@@ -10,11 +10,6 @@
 // interface: every later consumer inherits them, so they are taken from the kernel's own vocabulary
 // rather than any one op's locals, and are not renamed once a consumer exists.
 //
-// ALSO DUPLICATED BY: copy/typecast/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp
-// — a second Metal 2.0 fork of the same kernel, in a consumer's directory rather than beside the
-// original. The two are functionally identical (that one names the accessor `tensor::output`). They
-// should be consolidated onto this copy; until then a change here likely belongs there too.
-//
 // TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
 // list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
@@ -33,15 +28,19 @@ void kernel_main() {
     // its consumer.
     DataflowBuffer dfb(dfb::out);
 
-    // Get page size from the DFB entry size (works for both TILE and ROW_MAJOR layouts)
+#ifdef ENTRIES_PER_PAGE
+    // The op sets these when a page spans several DFB entries, or is shorter than one.
+    constexpr uint32_t onepage = ENTRIES_PER_PAGE;
+    constexpr uint32_t page_bytes = PAGE_BYTES;
+#else
+    // One page per DFB entry (works for both TILE and ROW_MAJOR layouts)
+    constexpr uint32_t onepage = 1;
     const uint32_t page_bytes = dfb.get_entry_size();
+#endif
 
 #ifdef OUT_SHARDED
-    dfb.wait_front(num_pages);
+    dfb.wait_front(num_pages * onepage);
 #else
-
-    // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
-    constexpr uint32_t onepage = 1;
 
     const auto s = TensorAccessor(tensor::dst);
 

@@ -13,6 +13,9 @@ ChronologicalSelectionsOperation::program_factory_t ChronologicalSelectionsOpera
 void ChronologicalSelectionsOperation::validate_on_program_cache_miss(
     const operation_attributes_t& a, const tensor_args_t& in) {
     kda_factory_detail::check_actual_start(in.actual_start, in.actual_start, "chronological_selections");
+    if (in.actual_end) {
+        kda_factory_detail::check_actual_start(in.actual_start, *in.actual_end, "chronological_selections");
+    }
     TT_FATAL(
         a.sequence_parallel_axis < in.actual_start.device()->shape().dims() && a.local_rows > 0 &&
             a.local_rows % tt::constants::TILE_HEIGHT == 0,

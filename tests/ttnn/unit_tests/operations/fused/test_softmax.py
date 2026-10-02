@@ -326,7 +326,8 @@ def test_softmax(device, batch_size, h, w, dim):
     )
 
 
-@pytest.mark.merge_gate
+# Not in the Merge Gate: fails sporadically on wh_n150, see #58082.
+# @pytest.mark.merge_gate
 def test_softmax_with_3D(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 1500, 1500), -10, 10, dtype=torch.bfloat16)
@@ -848,6 +849,26 @@ def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, fp32_
         rtol=0.09,
         atol=0.01,
         frobenius_threshold=0.05,
+    )
+
+
+def test_scale_mask_softmax_causal_large_kernel(device):
+    # #51231: the large-kernel reader must read each row's own causal mask row, not row 0's.
+    # Wt = 637 selects the large kernel; 256 tile-rows give every core 2+ rows to expose a stale mask.
+    torch.manual_seed(0)
+    shape = (1, 1, 256 * 32, 637 * 32)
+    scale = 0.75
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    attention_mask = torch.zeros(shape, dtype=torch.bfloat16)
+    attention_mask[torch.rand_like(attention_mask, dtype=torch.float32) < 0.2] = float("-inf")
+    torch_output = F.softmax(torch_input * scale + attention_mask, dim=-1, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    ttnn_mask = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    ttnn_output = ttnn.to_torch(ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask, is_causal_mask=True))
+
+    assert_numeric_metrics(
+        torch_output, ttnn_output, pcc_threshold=0.999, rtol=0.09, atol=0.01, frobenius_threshold=0.05
     )
 
 

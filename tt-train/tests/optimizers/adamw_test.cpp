@@ -216,6 +216,7 @@ static void run_step_and_compare(const AdamWCase& pc) {
         fused_state["exp_avg_sq"] = serialization::NamedParameters{{"theta", v0_tensor}};
         fused_state["steps"] = initial_steps;
         fused_state["lr"] = pc.lr;
+        fused_state["initial_lr"] = pc.lr;
         fused_state["beta1"] = pc.beta1;
         fused_state["beta2"] = pc.beta2;
         fused_state["epsilon"] = pc.epsilon;
@@ -407,6 +408,7 @@ TEST_F(AdamWWeightDecaySkip1DTest, SkipsDecayOn1DParamsOnly) {
             {"weight", autograd::create_tensor(to_tt_bf16(v2_0), false)}};
         state["steps"] = initial_steps;
         state["lr"] = lr;
+        state["initial_lr"] = lr;
         state["beta1"] = beta1;
         state["beta2"] = beta2;
         state["epsilon"] = epsilon;
@@ -518,6 +520,7 @@ static void run_effective_betas_step_and_compare(bool use_beta_setters) {
         state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(v0), false)}};
         state["steps"] = initial_steps;
         state["lr"] = lr;
+        state["initial_lr"] = lr;
         state["beta1"] = state_beta1;
         state["beta2"] = state_beta2;
         state["epsilon"] = epsilon;

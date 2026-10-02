@@ -101,7 +101,7 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
                 {"H", H},
                 {"skip_negative_entries", operation_attributes.skip_negative_entries},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(input_mesh_tensor.device().arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (needs_noc_copy) {
         // Interleaved: bind the input tensor and turn on the NoC copies.

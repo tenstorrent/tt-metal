@@ -1,0 +1,56 @@
+# --- Meshes ---------------------------------------------------------------
+# Single-galaxy 4-stage pipeline ring of 2x2 stages, Z-connected variant.
+# - Each mesh id is one 2x2 RING+LINE stage (4 ASICs) on a single host.
+# - Four stages occupy half of one 32-ASIC galaxy; inter-stage links form a
+#   closed ring (mesh 3 -> mesh 0 loops back) and are forced onto the Z
+#   routers (assign_z_direction), so opening the fabric as a Torus exercises
+#   the inter-mesh deadlock-avoidance path of #56298 with the inter-mesh links
+#   on Z routers. Pairs with single_galaxy_2x2_ring_4stage_ring (the non-Z
+#   variant that routes the same inter-mesh links over N/S/E/W).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 2 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

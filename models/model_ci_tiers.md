@@ -43,6 +43,8 @@ These models use the [weekly Agentic Research pipeline](#agentic-research-model-
 | Model implementation | System | Tier | Weekly coverage |
 |----------------------|--------|------|-----------------|
 | Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
+| Gemma4 31B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC, trace and API tests; GPQA 10/198 subset; fixed-length serving performance |
+| Qwen3.8-27B QB2 TP4 | BH QuietBox 2 | 3 | Full decoder serving; linear-attention convolution PCC; GPQA 10/198 subset; API and fixed-length performance |
 
 ## Daily Model Pipelines
 
@@ -72,8 +74,8 @@ it is classified differently on different systems.
 | Flux.1-schnell | BH QuietBox 2 |
 | Flux.1-dev | BH QuietBox 2, BH Single Galaxy |
 | Flux.2-dev | BH QuietBox 2, BH Single Galaxy |
-| Wan2.2-T2V-A14B | WH Galaxy, BH SC4 |
-| Wan2.2-I2V-A14B | WH Galaxy, BH SC4 |
+| Wan2.2-T2V-A14B | WH Galaxy, BH QuietBox 2, BH SC1, BH SC4 |
+| Wan2.2-I2V-A14B | WH Galaxy, BH SC1, BH SC4 |
 | Z-Image-Turbo | BH QuietBox 2 |
 | TT-DiT (shared) | WH N150, BH QuietBox 2 |
 | TT-DiT encoders (shared) | WH LLMBox |
@@ -121,6 +123,7 @@ it is classified differently on different systems.
 | Qwen3-0.6B | WH N150, BH P150 |
 | Qwen3-1.7B | WH N150, BH P150 |
 | Gemma-4-E2B | WH N150, BH P150 |
+| PaddleOCR-VL-1.6 | BH P150 |
 | Gemma-4-E4B | BH P300, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
@@ -128,6 +131,7 @@ it is classified differently on different systems.
 | HunyuanImage-3.0 | BH QuietBox 2 |
 | Panoptic-DeepLab | BH P150 |
 | BEVFormer | BH P150 |
+| DiffusionDrive | WH N300 |
 | Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
 | Stable Diffusion 3.5 Large | WH LLMBox |
 | Mochi-1-preview | WH LLMBox, WH Galaxy |
@@ -146,6 +150,7 @@ it is classified differently on different systems.
 | VAD v2 | WH N150 |
 | OpenPDN-MNIST | WH N150 |
 | YuNet | WH N150 |
+| VibeVoice-1.5B | BH P150 |
 
 
 # Pipelines
@@ -251,17 +256,32 @@ and hardware pair has its own tier, test coverage, and time budget.
 | Time budgets | [time_budget.yaml](../.github/time_budget.yaml) |
 | Shared runner | [models-e2e-tests-impl.yaml](../.github/workflows/models-e2e-tests-impl.yaml) |
 
-Each test entry contains an explicit `cmd: |` block with its environment, setup,
-test, and cleanup commands. Keep those commands in the YAML so reviewers and
-dashboards can read the full procedure in one place. To reproduce a test locally,
-run its block from the checkout with the required hardware and model weights.
+Each test entry contains a `cmd`, either as an inline block or as a model-owned
+runner under its demo directory. Keep the complete procedure in one of those
+locations so reviewers can inspect it and developers can run the same command
+locally with the required hardware and model weights.
+
+Before each single-host model test, **Check device readiness (tt-check)** installs
+the latest tt-check release and runs `tt-check --json` with the installed TTNN
+build. It resets the assigned devices and prints the full JSON output in the CI
+log, also saved to `generated/test_logs/tt-check.log`. A failed check stops the
+model test. This step has a separate five-minute timeout. Its replay timings include device work,
+communications, readback, and CPU validation.
 
 For a manual run, select **Run workflow** in GitHub Actions. Choose `model`, `sku`,
 and `tier`, or leave them at `all`. Use `vllm-tt-plugin-ref` to select a plugin
-branch or tag. It temporarily defaults to `yieldthought/llama31-qb2-serving`
-for both manual and scheduled runs, until [vllm-tt-plugin #116](https://github.com/tenstorrent/vllm-tt-plugin/pull/116)
-merges. A selection with no matching tests fails before the build starts. The
+branch or tag. Both manual and scheduled runs default to `main`. A selection with no matching tests fails before the build starts. The
 Saturday schedule becomes active after the workflow is merged to the default branch.
+
+Gemma4 31B QB2 uses Tier 3. Its weekly command runs two real-weight decoder comparisons (full and sliding
+attention), twelve client/adapter checks, five representative API checks,
+**10 of 198 GPQA Diamond questions**
+(seed 42, 32768 output tokens), and fixed-length 128-input/128-output performance on separate
+one-slot and 32-slot servers. The default benchmark also offers 1024-token inputs; weekly CI selects
+the shorter shapes to fit the existing timeout. Performance records label server capacity independently of request concurrency. The subset
+and smaller output budget bound CI runtime; they do not reproduce the separately
+reported full-dataset benchmark. The command saves actual request counts, raw
+responses, scoring inputs and timing definitions.
 
 To add a model:
 
@@ -269,10 +289,26 @@ To add a model:
 2. For each SKU, set `tier` and `timeout` in minutes.
 3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
    `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
-   the budget. The initial QB2 Tier 3 budget is **12 minutes**, including setup,
-   model tests, serving, and reporting. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
+   the budget. The QB2 Tier 3 budget is:
+
+   - **Llama3.1-8B:** 12 minutes
+   - **Gemma4 31B:** 40 minutes
+   - **Qwen3.8-27B:** 50 minutes
+   - **Total:** 12 + 40 + 50 = 102 minutes
+
+   The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
    passed all 24 model tests and completed 54 of 56 serving requests before its
    timeout; the budget includes room for completion and runner variance.
+
+   Gemma allows up to 20 minutes for each server startup within its total allowance;
+   periodic metadata snapshots distinguish slow loading from stopped progress.
+   Gemma's allowance covers the measured 15½-minute CI setup/checks, about 5½ minutes
+   for GPQA, the remaining performance/reporting work, and runner variance.
+
+   Qwen's allowance covers model tests, three server startups, GPQA, API checks,
+   and fixed-length performance. Measured CI runs completed in 42–44 minutes,
+   leaving 6–8 minutes for runner variance.
+
 4. Add any new model or SKU to the workflow's manual choices. Add the required
    targets to [model_targets.yaml](model_targets.yaml).
 

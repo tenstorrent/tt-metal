@@ -9,6 +9,7 @@ import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity
+from models.demos.gemma4_d_p.tt.ccl import ccl_allgather, ccl_partition_rows
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
@@ -126,6 +127,15 @@ def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=N
     return caches_4d, caches_2d
 
 
+def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len):
+    """Reason this chunk geometry is unusable, or None. The ring SDPA validates the rest at compile."""
+    if max_seq_len <= 0 or prefill_chunk_size <= 0:
+        return "sequence and chunk lengths must be positive"
+    if prefill_chunk_size % (cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
+        return "prefill chunks must divide max_seq_len and contain whole CP-local tiles"
+    return None
+
+
 class Gemma4Model:
     """Galaxy prefill model with ring-cache outputs for disaggregation."""
 
@@ -149,12 +159,9 @@ class Gemma4Model:
         ), "Expected a multimodal Gemma4 state_dict with model.language_model.* keys"
         mesh_device = mesh_config.device
 
-        if max_seq_len <= 0 or prefill_chunk_size <= 0:
-            raise ValueError("sequence and chunk lengths must be positive")
-        if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE):
-            raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
-        if prefill_chunk_size < 1024 * mesh_config.cp_degree:
-            raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
+        geometry_error = prefill_chunk_geometry_error(prefill_chunk_size, mesh_config.cp_degree, max_seq_len)
+        if geometry_error:
+            raise ValueError(geometry_error)
 
         self.mesh_device = mesh_device
         self.hf_config = hf_config
@@ -285,10 +292,12 @@ class Gemma4Model:
     ):
         """Prefill one user's chunk and return its final decoder hidden states.
 
-        The caller owns trace staging. Migration acknowledgements follow each
-        layer's KV writes.
+        ``hidden_states`` holds this TP device's 1/TP of the chunk's rows, as
+        ``transform_and_embed_prefill_inputs_device`` returns them. The caller owns
+        trace staging. Migration acknowledgements follow each layer's KV writes.
         """
-        seq_len = hidden_states.shape[2]
+        tp = self.mesh_config.tp_degree if self.mesh_config is not None else 1
+        seq_len = hidden_states.shape[2] * tp
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
@@ -335,13 +344,15 @@ class Gemma4Model:
                 else:
                     ttnn.synchronize_device(self.mesh_device)
                     on_layer_complete(i)
+        hidden_states = ccl_allgather(hidden_states, self.mesh_config, self.ccl_manager, dim=2)
         return hidden_states
 
     def embed_tokens(self, tokens):
         """Embed input tokens and scale by sqrt(hidden_size).
 
         Embedding is column-parallel (hidden dim sharded across TP devices).
-        All-gather reconstructs full hidden dim after lookup.
+        All-gather reconstructs full hidden dim after lookup; then the tiled
+        result keeps this TP device's 1/TP of the rows, which the layers carry.
         """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
@@ -354,11 +365,11 @@ class Gemma4Model:
             from models.demos.gemma4_d_p.tt.ccl import ccl_allgather
 
             embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
-        return embeds
+        return ccl_partition_rows(ttnn.to_layout(embeds, ttnn.TILE_LAYOUT), self.mesh_config)
 
     def transform_and_embed_prefill_inputs_device(self, tokens):
-        """Embed CP-sharded tokens into tiled hidden states."""
+        """Embed CP-sharded tokens into tiled hidden states, keeping this TP device's 1/TP of the rows."""
         assert (
             len(tokens.shape) == 2 and tokens.shape[0] == 1
         ), f"Expected tokens shaped [1, sequence_length], got {tokens.shape}"
-        return ttnn.to_layout(self.embed_tokens(tokens), ttnn.TILE_LAYOUT)
+        return self.embed_tokens(tokens)
