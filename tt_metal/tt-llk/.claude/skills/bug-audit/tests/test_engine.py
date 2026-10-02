@@ -1242,6 +1242,37 @@ def test_severity_rater_sees_every_merged_site_and_the_worst_one_it_must_cover(
     assert item["hunters_worst"] == "high", item
 
 
+def test_every_program_and_helper_spawn_allows_is_used():
+    # spawn.py is the allowlist of what the skill may start; an entry nothing uses only widens it
+    import ast
+    import glob
+
+    sys.path.insert(0, ENGINE)
+    import spawn
+
+    used_programs, used_helpers = set(), set()
+    for path in glob.glob(os.path.join(SKILL, "engine", "*.py")) + glob.glob(
+        os.path.join(SKILL, "mining", "*.py")
+    ):
+        for n in ast.walk(ast.parse(open(path).read())):
+            if (
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and isinstance(n.func.value, ast.Name)
+                and n.func.value.id == "spawn"
+            ):
+                used_helpers.add(n.func.attr)
+                if n.args and isinstance(n.args[0], ast.Constant):
+                    used_programs.add(n.args[0].value)
+    if "shell_run" in used_helpers:
+        used_programs.add("sh")
+    assert set(spawn.PROGRAMS) == used_programs, set(spawn.PROGRAMS) ^ used_programs
+    helpers = {
+        n for n in dir(spawn) if callable(getattr(spawn, n)) and not n.startswith("_")
+    }
+    assert helpers - {"subprocess"} == used_helpers, helpers ^ used_helpers
+
+
 def test_every_spawn_user_imports_it_before_first_use():
     import ast
     import glob
