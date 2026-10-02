@@ -158,11 +158,14 @@ def test_sequential_layer_pages_select_request_not_physical_slot():
 
 @pytest.mark.parametrize("compact", [False, True])
 @pytest.mark.parametrize("sample", [False, True], ids=["host_logits", "device_sampling_contract"])
-def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, compact, sample):
+@pytest.mark.parametrize("existing_decode_state", [False, True])
+def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, compact, sample, existing_decode_state):
     from models.tt_transformers.tt import generator as generator_module
 
     generator = object.__new__(Generator)
     generator.data_parallel = 1
+    if existing_decode_state:
+        generator._slots_prefilled_since_decode = {7}
     generator.model_args = [
         SimpleNamespace(
             max_batch_size=32,
@@ -244,7 +247,12 @@ def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, co
     assert packed[rows, 64].tolist() == [11, 22, 33]
     assert args["user_id"] == rows
     assert args["page_tables_per_layer"][0][rows].tolist() == [[10, 11], [20, 21], [30, 31]]
-    assert generator._slots_prefilled_since_decode == {31, 4, 17}
+    # The version-1 decode contract takes explicit reload commands. Prefill
+    # must neither infer a later reload nor overwrite existing decode state.
+    if existing_decode_state:
+        assert generator._slots_prefilled_since_decode == {7}
+    else:
+        assert not hasattr(generator, "_slots_prefilled_since_decode")
 
 
 def test_single_user_forward_passes_explicit_layer_tables():
