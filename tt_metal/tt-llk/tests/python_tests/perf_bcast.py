@@ -33,7 +33,7 @@ PERF_FORMATS = input_output_formats([DataFormat.Float32, DataFormat.Int32], same
 # Eight 32-bit tiles fill both DEST halves in two blocks of four, so every DEST tile slot is measured.
 NUM_TILES = 8
 
-# Passes over the tile set inside TILE_LOOP, enough to amortise profiler overhead.
+# Passes over the tile set inside TILE_LOOP, enough to amortize profiler overhead.
 LOOP_FACTOR_VALUE = 32
 
 DEST_ACC = DestAccumulation.Yes
