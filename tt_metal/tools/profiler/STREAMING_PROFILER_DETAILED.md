@@ -14,7 +14,9 @@ full reference: usage (§1), the current design (§2), the designs it replaced (
 wire format (§4), the offline Tracy tools (§5), and — in the companion
 [`STREAMING_PROFILER_FINDINGS.md`](STREAMING_PROFILER_FINDINGS.md), §6 — the complete dated record of the findings
 and benchmarks that produced all of it. The findings record is a separate file only because of the 500 KB
-per-file pre-commit limit.
+per-file pre-commit limit. One mechanism has its own short document:
+[`STREAMING_PROFILER_ZONE_IDS.md`](STREAMING_PROFILER_ZONE_IDS.md), how a zone site's id is made at link time
+and rebased at load so ids are dense, 16-bit and collision-free.
 
 It consolidates, unchanged in substance, the former standalone zone-format, architecture, hang-runbook,
 harness and direct-push-plan notes.
@@ -1068,7 +1070,8 @@ clock. Packets are sized by need. `word0 = type(5) | id27` in all of them; the i
 zone id (`hostdev/profiler_zone_id.h`: a zone site's id is the address of a one-byte handle in the
 non-ALLOC `.tt_zone_ids` section, and the host gives each image the next block of the id space when it
 loads it, rebasing the `lui`/`addi` immediates through the image's relocations), ELF-name-resolved on the
-host.
+host. How the id is made, linked, rebased and resolved is its own document:
+[`STREAMING_PROFILER_ZONE_IDS.md`](STREAMING_PROFILER_ZONE_IDS.md).
 
 | type | name | words | payload after word0 | expresses |
 |---|---|---|---|---|
