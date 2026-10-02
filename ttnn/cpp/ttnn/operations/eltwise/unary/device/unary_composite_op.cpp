@@ -383,20 +383,6 @@ Tensor logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_m
     return ttnn::logical_not(x, output_mem_config, x);
 }
 
-}  // namespace ttnn
-
-namespace ttnn::operations::unary {
-
-Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::multiply(input, (1.0f / 2.0f), std::nullopt, output_mem_config);
-    Tensor floor_res = ttnn::floor(result, output_mem_config);
-    return ttnn::ne(result, floor_res, std::nullopt, output_mem_config);
-}
-
-}  // namespace ttnn::operations::unary
-
-namespace ttnn {
-
 // Global Norm
 Tensor normalize_global(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     return detail::_make_global_from_hw_impl(normalize_hw, y, output_mem_config);
