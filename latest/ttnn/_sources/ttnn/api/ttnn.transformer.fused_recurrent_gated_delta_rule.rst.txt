@@ -1,8 +1,0 @@
-﻿ttnn.transformer.fused\_recurrent\_gated\_delta\_rule
-=====================================================
-
-.. currentmodule:: ttnn.transformer
-
-.. _ttnn.transformer.fused_recurrent_gated_delta_rule:
-
-.. autooperation:: ttnn.transformer.fused_recurrent_gated_delta_rule
