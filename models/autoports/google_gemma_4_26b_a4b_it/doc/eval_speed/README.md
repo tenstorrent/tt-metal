@@ -42,6 +42,9 @@ The pre-dispatch runtime forecast is 65 minutes best case, 3h06m40s expected,
 5h20m conservative, plus an explicit 10-hour hard summed agent-budget ceiling.
 These are terminal-event/runtime estimates, **not five-correct-solve estimates**;
 see the suite log for assumptions and the upcoming CI measurement.
+Combined [CI 36981858976](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36981858976)
+is dispatched at 08:03:11 UTC, job **110758014503**, exact TTI **83d9c26a**.
+It is monitored continuously; ordering, rewards and total time are pending.
 The [precision audit](AUTODEBUG.md) confirms fresh BFP8 weight provenance but
 identifies unchanged prefill BFP4 and untested long-context numerical quality;
 it does not establish a cache/position bug.

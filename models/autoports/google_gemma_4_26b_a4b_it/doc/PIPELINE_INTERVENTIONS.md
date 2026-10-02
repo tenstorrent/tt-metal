@@ -482,6 +482,14 @@ and host-tested but is not enabled in this baseline. A saved-HF long numerical
 control is prepared to investigate quality separately without another expensive
 CPU generation. Active resumed time is about 149 minutes, cumulative 7h22m.
 
+08:04 UTC: actual combined CI **36981858976 / 110758014503** starts on
+`120-qb2-p04t07` with exact TTI **83d9c26a**, reused image and no build. It is
+continuously monitored through the verified HTTP alias. All 220 selected host
+checks pass. The local server is stopped idle and devices are unowned before a
+separate bounded long-context teacher-forcing check starts locally. Full-suite
+ordering/results/time and long-control agreement are pending; no success is
+claimed merely from dispatch or the zero rebuild count.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
