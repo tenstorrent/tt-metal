@@ -50,6 +50,7 @@ from .optimized_decoder import (
     OptimizedDecoder,
     PrecisionPolicy,
     _cached_device_tensor,
+    _decode_shard_cores,
     _dram_weight_memcfg,
     _hf_rope_tables,
     _sparse_pc,
@@ -1299,9 +1300,15 @@ class MultichipDecoder(OptimizedDecoder):
         cfg = self.cfg
         B = x_1BH.shape[-2]
         residual = x_1BH
-        ln = self._rms(x_1BH, self.w["input_ln"])
+        fold_g = self.use_dram_sharded and self.meta.get("qkvg_pad")
+        # with g_proj folded into QKV, ln's only decode consumer is that matmul: hand it off sharded
+        ln = self._rms(
+            x_1BH,
+            self.w["input_ln"],
+            out_cores=_decode_shard_cores(cfg.hidden, self.meta["qkvg_pad"]) if fold_g else None,
+        )
         g = None
-        if self.use_dram_sharded and self.meta.get("qkvg_pad"):
+        if fold_g:
             # g_proj folded into the QKV matmul (HiFi2 = the gate's own fidelity; decode is DRAM-bound)
             qkv = self._dram_mm(ln, None, self.w["wqkvg_ds"], cfg.hidden, self.meta["qkvg_pad"], self._ck_gate)
             qkv = ttnn.sharded_to_interleaved(qkv, ttnn.DRAM_MEMORY_CONFIG)

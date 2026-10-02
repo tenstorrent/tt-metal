@@ -787,14 +787,16 @@ class OptimizedDecoder(LightweightModule):
         return ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
 
     # ---- shared ops -------------------------------------------------------- #
-    def _rms(self, x, weight):
+    def _rms(self, x, weight, out_cores=None):
         # Decode-sized rows: the interleaved norm runs on ONE core (~65 us for [32, 3072]); width-shard
         # the row across cores (same 32-core split as the QKV matmul input) and normalize in L1.
         rows = x.shape[-2]
         if len(x.shape) == 4 and x.shape[0] * x.shape[1] == 1 and rows <= 128 and x.layout == ttnn.TILE_LAYOUT:
             m = ((rows + TILE - 1) // TILE) * TILE
             h = x.shape[-1]
-            num_cores = _decode_shard_cores(h, h)
+            # out_cores: shard on the NEXT DRAM-sharded matmul's input grid and return the sharded result
+            # (no sharded->interleaved here + no interleaved->sharded in _dram_mm)
+            num_cores = out_cores or _decode_shard_cores(h, h)
             grid = _core_grid(num_cores)
             block_w = h // TILE // num_cores
             x_sh = ttnn.to_memory_config(x, _width_sharded_l1(m, h, num_cores))
@@ -812,7 +814,7 @@ class OptimizedDecoder(LightweightModule):
                 ),
                 memory_config=x_sh.memory_config(),
             )
-            return ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
+            return out if out_cores else ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
         return ttnn.rms_norm(x, weight=weight, epsilon=self.cfg.eps, compute_kernel_config=self._norm_ck)
 
     def _per_head_norm(self, x, weight):
@@ -859,7 +861,9 @@ class OptimizedDecoder(LightweightModule):
             return ttnn.linear(x, w_il, compute_kernel_config=ck)
         m = ((x.shape[-2] + TILE - 1) // TILE) * TILE
         num_cores = _decode_shard_cores(k, n)
-        x_sh = ttnn.to_memory_config(x, _width_sharded_l1(m, k, num_cores))
+        target = _width_sharded_l1(m, k, num_cores)
+        owned = not (x.is_sharded() and x.memory_config() == target)  # already handed off sharded (_rms)
+        x_sh = ttnn.to_memory_config(x, target) if owned else x
         out = ttnn.linear(
             x_sh,
             w_ds,
@@ -867,7 +871,8 @@ class OptimizedDecoder(LightweightModule):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=ck,
         )
-        ttnn.deallocate(x_sh)
+        if owned:
+            ttnn.deallocate(x_sh)
         return out
 
     def _glu_mlp(self, x, key, H, I, ck, sharded):
