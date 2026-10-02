@@ -30,6 +30,12 @@ KERNEL = r"""
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
+#ifndef MC_BARRIER
+#define MC_BARRIER 0
+#endif
+#ifndef MC_BARRIER_EVERY
+#define MC_BARRIER_EVERY 1
+#endif
 // scratch layout (CB 0, same address on every core)
 constexpr uint32_t SRC = 0, MC = 16384, FLOOD = 4 * 16384, CNT = 5 * 16384, WORD = CNT + 64, RD = 6 * 16384;
 
@@ -50,6 +56,11 @@ void kernel_main() {
             for (uint32_t c = 0; c < chain; ++c) {
                 const bool linked = MC_LINKED && c + 1 < chain;
                 noc_async_write_multicast(base + SRC, rect | (base + MC + (c % 3) * piece), piece, ndest, linked);
+#if MC_BARRIER == 3
+                noc_async_full_barrier();  // one multicast in flight at a time (use with MC_LINKED 0)
+#elif MC_BARRIER == 4
+                noc_async_write_barrier();  // one multicast's acks back before the next (use with MC_LINKED 0)
+#endif
 #if ATOMIC_IN_CHAIN
                 if (linked && c == 0) {
                     noc_semaphore_inc(helper, 1);  // violates: another command buffer while the chain is open
@@ -64,6 +75,15 @@ void kernel_main() {
 #endif
 #if DRAIN_ATOMICS
             noc_async_atomic_barrier();
+#endif
+#if MC_BARRIER == 1
+            if ((it + 1) % MC_BARRIER_EVERY == 0) {
+                noc_async_write_barrier();  // every multicast so far acknowledged
+            }
+#elif MC_BARRIER == 2
+            if ((it + 1) % MC_BARRIER_EVERY == 0) {
+                noc_async_full_barrier();  // reads, writes, atomics, posted writes all done
+            }
 #endif
             noc_async_writes_flushed();
         }
@@ -402,6 +422,8 @@ def _skeleton(device, iters, dram):
         ("DRAIN_ATOMICS", "0"),
         ("SEM_MCAST", "1"),
         ("FLOOD_INLINE", "0"),
+        ("MC_BARRIER", os.environ.get("NOC_PROBE_MC_BARRIER", "0")),
+        ("MC_BARRIER_EVERY", os.environ.get("NOC_PROBE_MC_BARRIER_EVERY", "1")),
     ]
     src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
