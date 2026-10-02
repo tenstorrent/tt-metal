@@ -197,15 +197,64 @@ ALL_TEST_PARAMS = list(
 )
 
 
+# Experiment (bistability repro, not for merge): tiny configs only.
+def _repro_tiny(_p):
+    _f, _c, _thr, _nb = _p
+    _td, _fl = _c.tile_dimensions, _c.face_layout_config
+    return (
+        _td.rt_dim == 1 and _td.ct_dim == 1 and _td.kt_dim == 1 and _nb == 1
+        and _thr == 0 and _fl.num_faces == 4 and not _fl.partial_face_math
+        and not _fl.partial_face_in0 and _td.in0_tile_r_dim == 32
+        and not _fl.unpack_transpose_faces.value
+    )
+
+
+ALL_TEST_PARAMS = [_p for _p in ALL_TEST_PARAMS if _repro_tiny(_p) and (str(_p[0]).endswith('LoFi') and _p[1].dest_acc == DestAccumulation.No and _p[1].stochastic_rnd == StochasticRounding.No)]
+
+
+from dataclasses import dataclass as _dataclass
+
+from helpers.test_variant_parameters import TemplateParameter as _TemplateParameter
+
+
+@_dataclass
+class REPRO_KNOB(_TemplateParameter):
+    repro_pad: int = 0
+    repro_delay: int = 0
+    repro_tail: int = 0
+    repro_tail_u: int = 0
+    repro_tail_m: int = 0
+    repro_tail_ma: int = 0
+    repro_inj: int = 0
+    repro_inj_at: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr int REPRO_PAD = {self.repro_pad};\n"
+            f"constexpr int REPRO_DELAY = {self.repro_delay};\n"
+            f"constexpr int REPRO_TAIL = {self.repro_tail};\n"
+            f"constexpr int REPRO_TAIL_U = {self.repro_tail_u};\n"
+            f"constexpr int REPRO_TAIL_M = {self.repro_tail_m};\n"
+            f"constexpr int REPRO_TAIL_MA = {self.repro_tail_ma};\n"
+            f"constexpr int REPRO_INJ = {self.repro_inj};\n"
+            f"constexpr int REPRO_INJ_AT = {self.repro_inj_at};"
+        )
+
+
+REPRO_KNOBS = [(2, 0, 0, 20000, 20000, 0, 0, 0), (2, 0, 0, 20000, 20000, 0, 1, 0), (2, 0, 0, 20000, 20000, 0, 1, 1), (2, 0, 0, 20000, 20000, 0, 1, 2), (2, 0, 0, 20000, 20000, 0, 1, 4), (2, 0, 0, 20000, 20000, 0, 1, 8), (2, 0, 0, 20000, 20000, 0, 1, 16), (2, 0, 0, 20000, 20000, 0, 1, 32), (2, 0, 0, 20000, 20000, 0, 1, 64), (2, 0, 0, 20000, 20000, 0, 1, 128), (2, 0, 0, 20000, 20000, 0, 1, 256), (2, 0, 0, 20000, 20000, 0, 1, 512), (2, 0, 0, 20000, 20000, 0, 2, 0), (2, 0, 0, 20000, 20000, 0, 2, 1), (2, 0, 0, 20000, 20000, 0, 2, 2), (2, 0, 0, 20000, 20000, 0, 2, 4), (2, 0, 0, 20000, 20000, 0, 2, 8), (2, 0, 0, 20000, 20000, 0, 2, 16), (2, 0, 0, 20000, 20000, 0, 2, 32), (2, 0, 0, 20000, 20000, 0, 2, 64), (2, 0, 0, 20000, 20000, 0, 2, 128), (2, 0, 0, 20000, 20000, 0, 2, 256), (2, 0, 0, 20000, 20000, 0, 2, 512), (2, 0, 0, 20000, 20000, 0, 3, 0), (2, 0, 0, 20000, 20000, 0, 3, 1), (2, 0, 0, 20000, 20000, 0, 3, 2), (2, 0, 0, 20000, 20000, 0, 3, 4), (2, 0, 0, 20000, 20000, 0, 3, 8), (2, 0, 0, 20000, 20000, 0, 3, 16), (2, 0, 0, 20000, 20000, 0, 3, 32), (2, 0, 0, 20000, 20000, 0, 3, 64), (2, 0, 0, 20000, 20000, 0, 3, 128), (2, 0, 0, 20000, 20000, 0, 3, 256), (2, 0, 0, 20000, 20000, 0, 3, 512)]
+
+
 @pytest.mark.perf
 @pytest.mark.parametrize(
     "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
 )
+@pytest.mark.parametrize("repro_knob", REPRO_KNOBS)
 def test_perf_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
     num_blocks,
+    repro_knob,
     perf_report,
 ):
     """
@@ -256,6 +305,7 @@ def test_perf_math_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
+            REPRO_KNOB(*repro_knob),
         ],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),
