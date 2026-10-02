@@ -104,8 +104,9 @@ the run's state.
    lead. With the question, give the rough size: count the `unfixed` sibling locations under the chosen scope's
    paths in the deep reads. After init, `--in-scope` prints the exact count.
 
-The audit is static: nothing is built, run or tested (*references/measurement-history.md*, "Why the audit is
-static"). A developer confirms a finding by running the relevant tests while debugging it.
+The audit is static: nothing is run or tested, and hunters never build. A verifier may compile a small probe when
+that settles a question (what code a construct generates), never more (*references/measurement-history.md*, "Why
+the audit is static"). A developer confirms a finding by running the relevant tests while debugging it.
 
 ## Running an audit
 Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative to this skill directory.
@@ -383,8 +384,9 @@ in `references/measurement-history.md`. What matters when running an audit:
   silently.
 - **Never persist verdicts by hand.** Always go through `persist_wave.py`. A hand-persisted wave once contaminated
   two unrelated in-flight batches.
-- **Hunters do not execute.** Workflow agents have run on-device experiments without being asked. Static hunts are
-  told not to build, run or touch hardware, and the headless drivers enforce it: their sessions deny builds, test
+- **Nothing runs.** Workflow agents have run on-device experiments without being asked. Hunters are told not to
+  build, run or touch hardware; verifiers, trace auditors and the fix writer not to run tests, the code or hardware
+  (a compile-only probe is allowed). The headless drivers enforce it: their sessions deny builds, test
   runners, card tools and tree-changing commands (`common.STATIC_DENY`), and workflow agents inherit those rules.
   Read-only commands are unaffected. Each wave records how many calls were refused (`blocked_actions` in the run's
   headless state). The rules match command text, so they are a guard, not a sandbox.

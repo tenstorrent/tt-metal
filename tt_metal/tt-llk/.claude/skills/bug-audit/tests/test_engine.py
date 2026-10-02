@@ -1968,6 +1968,19 @@ globalThis.pipeline = (xs, f) => Promise.all(xs.map(f));
     }, got
 
 
+def test_agents_that_read_the_tree_never_run_tests_and_hunters_never_build():
+    # tests and launches showed no benefit and made the runtime hard to bound; a verifier may compile a probe, a
+    # hunter (one per batch, so thousands per run) may not build at all
+    hunter = "Do NOT build, run tests, run the code, or touch any device or hardware"
+    others = "Do NOT run tests, run the code, or touch any device or hardware. A compile-only check"
+    wave = open(os.path.join(ENGINE, "audit-wave.js")).read()
+    assert (
+        wave.count(hunter) == 1 and wave.count(others) == 2
+    )  # verifier, trace auditor
+    for script in ("recheck-wave.js", "fix-wave.js"):
+        assert open(os.path.join(ENGINE, script)).read().count(others) == 1, script
+
+
 def test_every_program_and_helper_spawn_allows_is_used():
     # spawn.py is the allowlist of what the skill may start; an entry nothing uses only widens it
     import ast

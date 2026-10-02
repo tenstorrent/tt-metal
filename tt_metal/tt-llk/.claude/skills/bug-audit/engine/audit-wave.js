@@ -182,6 +182,7 @@ OUTPUT: return the JSON object (the harness persists it). "files_skipped" should
 read a file, list it there and leave it out of files_read.`
 
 const verifyPrompt = (f, lens, root) => `Adversarially examine this claimed bug in the tree at ${root}. Your job is to find out whether it is REAL.
+Do NOT run tests, run the code, or touch any device or hardware. A compile-only check (compiling a small probe to inspect the generated code) is fine when it settles the question.
 
 File: ${f.file}:${f.line}
 Category: ${f.category}   Severity claimed: ${f.severity}
@@ -240,7 +241,7 @@ function traceSample(res) {
 }
 
 const tracePrompt = (batch, sample, root) => `You are auditing another auditor's contract-trace ledger in the tree at ${root}.
-Read-only. ${ROOTS[batch] ? 'This is a benchmark tree: do NOT run git log/show/blame or read any other checkout, issue or PR.' : ''}
+Do NOT run tests, run the code, or touch any device or hardware. A compile-only check (compiling a small probe to inspect the generated code) is fine when it settles the question. ${ROOTS[batch] ? 'This is a benchmark tree: do NOT run git log/show/blame or read any other checkout, issue or PR.' : ''}
 
 For each boundary below, independently open BOTH sides and decide whether they really agree: argument types and
 widths (including narrowing into bit fields), argument order and count, units, counts both sides derive, the

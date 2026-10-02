@@ -46,6 +46,7 @@ ${(it.prior_reasons || []).map((r) => `- ${r.slice(0, 700)}`).join('\n') || '- n
 
 const prompt = (it, lens) => `Settle whether this claimed bug in the tree at ${ROOT} is REAL. The earlier verifiers either
 disagreed or died, it is a random re-examination of a refutation, or it is an unverified lead.
+Do NOT run tests, run the code, or touch any device or hardware. A compile-only check (compiling a small probe to inspect the generated code) is fine when it settles the question.
 ${itemText(it)}
 
 Reachability of library code: a public API, LLK or header-library entry point is reachable by default, even when this
