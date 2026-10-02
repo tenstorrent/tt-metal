@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 
-# Two copies kept in step: tt-metal `.github/workflows/eltwise-eltwise-accuracy-report-command.yaml`, and
+# Two copies kept in step: tt-metal `.github/workflows/eltwise-accuracy-report-command.yaml`, and
 # tenstorrent/tt-eltwise-accuracy-report `docs/tt-metal-eltwise-accuracy-report-command.yaml`.
 # Setup, tokens and what it measures: that repository's `docs/pr-command.md`.
 
