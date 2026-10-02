@@ -4,18 +4,14 @@
 
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 
-#include <algorithm>
 #include <atomic>
 #include <deque>
 #include <functional>
-#include <map>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/indestructible.hpp>
@@ -29,63 +25,42 @@ namespace api = tt::tt_metal::experimental::streaming_profiler;
 
 namespace tt::tt_metal::experimental::streaming_profiler::detail {
 static_assert(OBSERVABILITY_EVENT_ID_BITS == TT_OBSERVABILITY_EVENT_ID_BITS);
-static_assert(OBSERVABILITY_EVENT_LOCAL_BITS == TT_OBSERVABILITY_EVENT_LOCAL_BITS);
-static_assert(OBSERVABILITY_EVENT_TU_COUNT == TT_OBSERVABILITY_EVENT_TU_COUNT);
-std::atomic<const ObservabilityEventTu*> ObservabilityEventRegistry::tus[OBSERVABILITY_EVENT_TU_COUNT];
+static_assert(OBSERVABILITY_EVENT_ID_COUNT == TT_OBSERVABILITY_EVENT_ID_COUNT);
+std::atomic<const ObservabilityEventInfo*> ObservabilityEventRegistry::sites[OBSERVABILITY_EVENT_ID_COUNT];
 }  // namespace tt::tt_metal::experimental::streaming_profiler::detail
 
 namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
-static_assert(TT_ZONE_STALL_ID == (TT_OBSERVABILITY_EVENT_RESERVED_TU << TT_OBSERVABILITY_EVENT_LOCAL_BITS));
+static_assert(TT_ZONE_STALL_ID < api::detail::OBSERVABILITY_EVENT_ID_COUNT);
 
 constexpr api::ObservabilityEventInfo kStallObservabilityEvent{.name = api::STALL_ZONE_NAME};
-constexpr const api::ObservabilityEventInfo* kStallObservabilityEvents[1] = {&kStallObservabilityEvent};
-constexpr api::detail::ObservabilityEventTu kStallTu{kStallObservabilityEvents};
 
-// Builds the tables behind api::detail::observability_event_of from the event-name registry as ELFs load. Nothing is
-// ever freed: a record may hold an observability event's address for the life of the process, and a reader may still be
-// walking a replaced table.
+// Fills the table behind api::detail::observability_event_of from the zone-name registry as ELFs load. Nothing is ever
+// freed: a record may hold a site's address for the life of the process. Ids are unique per process by construction
+// (each image owns a block), so a slot is written once; a repeat is a registry fault and the first writer wins.
 class ObservabilityEventTables {
 public:
     void add(std::span<const tt::llrt::ObservabilityEventMetaEntry* const> entries) {
         std::lock_guard<std::mutex> lk(mu_);
-        std::map<uint32_t, std::vector<const api::ObservabilityEventInfo*>> grown;
         for (const tt::llrt::ObservabilityEventMetaEntry* e : entries) {
-            const uint32_t tu = TT_OBSERVABILITY_EVENT_TU_OF(e->event_id),
-                           local = TT_OBSERVABILITY_EVENT_LOCAL_OF(e->event_id);
-            auto [it, fresh] = grown.try_emplace(tu);
-            if (fresh) {
-                if (const api::detail::ObservabilityEventTu* cur =
-                        api::detail::ObservabilityEventRegistry::tus[tu].load(std::memory_order_relaxed)) {
-                    it->second.assign(cur->observability_events.begin(), cur->observability_events.end());
-                }
+            if (e->event_id >= api::detail::OBSERVABILITY_EVENT_ID_COUNT) {
+                continue;
             }
-            if (local >= it->second.size()) {
-                it->second.resize(local + 1, nullptr);
+            auto& slot = api::detail::ObservabilityEventRegistry::sites[e->event_id];
+            if (slot.load(std::memory_order_relaxed) == nullptr) {
+                slot.store(
+                    &sites_.emplace_back(
+                        api::ObservabilityEventInfo{.name = e->name, .location = {.file = e->file, .line = e->line}}),
+                    std::memory_order_release);
             }
-            if (it->second[local] == nullptr) {
-                it->second[local] = &observability_events_.emplace_back(
-                    api::ObservabilityEventInfo{.name = e->name, .location = {.file = e->file, .line = e->line}});
-            }
-        }
-        for (auto& [tu, v] : grown) {
-            auto arr = std::make_unique<const api::ObservabilityEventInfo*[]>(v.size());
-            std::copy(v.begin(), v.end(), arr.get());
-            auto t = std::make_unique<api::detail::ObservabilityEventTu>(api::detail::ObservabilityEventTu{
-                std::span<const api::ObservabilityEventInfo* const>(arr.get(), v.size())});
-            api::detail::ObservabilityEventRegistry::tus[tu].store(t.get(), std::memory_order_release);
-            arrays_.push_back(std::move(arr));
-            tus_.push_back(std::move(t));
         }
     }
 
 private:
     std::mutex mu_;
-    std::deque<api::ObservabilityEventInfo> observability_events_;
-    std::vector<std::unique_ptr<const api::ObservabilityEventInfo*[]>> arrays_;
-    std::vector<std::unique_ptr<api::detail::ObservabilityEventTu>> tus_;
+    std::deque<api::ObservabilityEventInfo> sites_;
 };
 
 }  // namespace
@@ -93,8 +68,8 @@ private:
 void init_observability_event_registry() {
     static std::once_flag once;
     std::call_once(once, [] {
-        api::detail::ObservabilityEventRegistry::tus[TT_OBSERVABILITY_EVENT_RESERVED_TU].store(
-            &kStallTu, std::memory_order_release);
+        api::detail::ObservabilityEventRegistry::sites[TT_ZONE_STALL_ID].store(
+            &kStallObservabilityEvent, std::memory_order_release);
         static ttsl::Indestructible<ObservabilityEventTables> tables;
         tt::llrt::ObservabilityEventMetaRegistry::instance().set_listener(
             [](std::span<const tt::llrt::ObservabilityEventMetaEntry* const> entries) { tables.get().add(entries); });

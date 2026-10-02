@@ -2,10 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Host-side observability event id -> source location table, harvested from each ELF's .tt_observability_event_meta /
-// .tt_observability_event_str. Filled from llrt::get_risc_binary(), which every device-executed binary passes through,
-// so an id is registered before the kernel that emits it can run. Handed to its listener as it grows, since kernels
-// stream events while later ones are still compiling. Never persisted: structural ids change between builds.
+// Host-side zone id -> source location table for the streaming profiler, built as each ELF loads
+// (llrt::get_cached_binary, llrt/llrt.cpp). An image links its zone ids densely from one fixed VMA
+// (hostdev/observability_event_id.h); here it is given the next block of the process-wide 16-bit id space, its ids
+// are rebased there inside the loaded image (ElfFile::RebaseZoneIds), and its .tt_observability_event_meta /
+// .tt_observability_event_str records are harvested with the rebased ids. An id is therefore unique across every image
+// of this process by construction, and named strictly before the kernel that emits it can run. Handed to its listener
+// as it grows, since kernels stream zones while later ones are still compiling. Never persisted: ids are assigned in
+// load order.
 #pragma once
 
 #include <cstdint>
@@ -30,18 +34,21 @@ class ObservabilityEventMetaRegistry {
 public:
     static ObservabilityEventMetaRegistry& instance();
 
-    // Harvest event names from an already-open ELF. `elf_path` is the idempotency key and diagnostic label only.
-    // A no-op for an ELF without .tt_observability_event_meta, so it can be called for every binary. Idempotent per
-    // path. Never throws: failing to name an event must not fail a run.
-    void ingest_elf(const ll_api::ElfFile& elf, const std::string& elf_path);
+    // Gives the image at PATH its id block and rebases ELF there; harvests its names on the first call for a
+    // path (a later call for the same path rebases to the same block and registers nothing). A malformed
+    // section is reported, not thrown: failing to name a zone must not fail a run. Throws only when the id
+    // space is exhausted.
+    void ingest_elf(const std::string& elf_path, ll_api::ElfFile& elf);
 
     // One listener, called under the registry's lock with each ELF's new entries as they register, after a replay of
     // every entry already registered. Entries never move or die.
     using Listener = std::function<void(std::span<const ObservabilityEventMetaEntry* const>)>;
     void set_listener(Listener listener);
 
-    // Ids registered twice with different locations; nonzero means two TUs got the same tu_id.
-    uint64_t collisions() const;
+    // Ids handed out so far; the next image's block starts here and the space ends at TT_ZONE_STALL_ID.
+    uint32_t ids_assigned() const;
+    // Records whose id fell outside their image's block or repeated one; their zones render as Zone_<id>.
+    uint64_t malformed_records() const;
     // ELFs whose .tt_observability_event_meta failed a format guard (a stale layout in the JIT cache).
     uint64_t foreign_sections() const;
 

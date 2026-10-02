@@ -42,8 +42,8 @@ public:
     ~ElfFile();
 
     // Uncopyable -- because of the owning buffer & pimpl object.
-    ElfFile(ElfFile const&) = delete;
-    ElfFile operator=(ElfFile const&) = delete;
+    ElfFile(const ElfFile&) = delete;
+    ElfFile operator=(const ElfFile&) = delete;
 
     // Move constructable & assignable -- take ownership
     ElfFile(ElfFile&& s) noexcept : pimpl_(s.pimpl_), contents_(s.contents_), segments_(std::move(s.segments_)) {
@@ -57,7 +57,7 @@ public:
         return *this;
     }
 
-    std::vector<Segment> const& GetSegments() const { return segments_; }
+    const std::vector<Segment>& GetSegments() const { return segments_; }
 
     // Get the contents of a named section. Returns empty span if not found.
     std::span<std::byte> GetSectionContents(std::string_view section_name, uint64_t& virtual_address) const;
@@ -76,7 +76,7 @@ public:
     // Weaken data symbols, remove all others. Keep STRONG_NAMES
     // strong (can be non-data symbols).  Names can be exact or simple
     // globs ending in '*'.
-    void WeakenDataSymbols(std::span<std::string_view const> strong_names);
+    void WeakenDataSymbols(std::span<const std::string_view> strong_names);
 
     // Convert the executable to a relinkable object file. Relocations
     // are removed, allocatable sections are placed at zero, their
@@ -87,6 +87,13 @@ public:
 
     // XIPify
     void MakeExecuteInPlace();
+
+    // Streaming-profiler zone ids (hostdev/observability_event_id.h): move the non-ALLOC .tt_observability_event_ids
+    // section to BASE, re-resolving every relocation against it -- the lui/addi pair each zone site
+    // materializes its id with, and the id word of each .tt_observability_event_meta record -- so the image emits
+    // ids [BASE, BASE + size). Needs the link's relocations (-Wl,--emit-relocs). Returns the
+    // section's size, 0 when the image has no zone sites.
+    uint32_t RebaseZoneIds(address_t base);
 
 private:
     class Impl;

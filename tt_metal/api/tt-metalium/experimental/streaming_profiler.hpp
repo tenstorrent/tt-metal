@@ -73,25 +73,20 @@ class Callback;
 
 // Implementation detail.
 namespace detail {
-inline constexpr uint32_t OBSERVABILITY_EVENT_ID_BITS = 27;
-inline constexpr uint32_t OBSERVABILITY_EVENT_LOCAL_BITS = 14;
-inline constexpr uint32_t OBSERVABILITY_EVENT_TU_COUNT =
-    1u << (OBSERVABILITY_EVENT_ID_BITS - OBSERVABILITY_EVENT_LOCAL_BITS);
+// Zone ids are 16-bit and assigned per process: each device image gets the next block as it loads
+// (hostdev/observability_event_id.h), so the table is flat and a lookup is one load.
+inline constexpr uint32_t OBSERVABILITY_EVENT_ID_BITS = 16;
+inline constexpr uint32_t OBSERVABILITY_EVENT_ID_COUNT = 1u << OBSERVABILITY_EVENT_ID_BITS;
 
-struct ObservabilityEventTu {
-    std::span<const ObservabilityEventInfo* const> observability_events;
-};
 struct ObservabilityEventRegistry {
-    static std::atomic<const ObservabilityEventTu*> tus[OBSERVABILITY_EVENT_TU_COUNT];
+    static std::atomic<const ObservabilityEventInfo*> sites[OBSERVABILITY_EVENT_ID_COUNT];
 };
 inline constexpr ObservabilityEventInfo UNNAMED_OBSERVABILITY_EVENT{};
 
 inline const ObservabilityEventInfo& observability_event_of(uint32_t event_id) {
-    const ObservabilityEventTu* tu =
-        ObservabilityEventRegistry::tus[event_id >> OBSERVABILITY_EVENT_LOCAL_BITS].load(std::memory_order_acquire);
-    const uint32_t local = event_id & ((1u << OBSERVABILITY_EVENT_LOCAL_BITS) - 1u);
-    const ObservabilityEventInfo* s =
-        tu != nullptr && local < tu->observability_events.size() ? tu->observability_events[local] : nullptr;
+    const ObservabilityEventInfo* s = event_id < OBSERVABILITY_EVENT_ID_COUNT
+                                          ? ObservabilityEventRegistry::sites[event_id].load(std::memory_order_acquire)
+                                          : nullptr;
     return s != nullptr ? *s : UNNAMED_OBSERVABILITY_EVENT;
 }
 
