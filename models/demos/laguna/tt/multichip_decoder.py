@@ -1310,8 +1310,9 @@ class MultichipDecoder(OptimizedDecoder):
         )
         g = None
         if fold_g:
-            # g_proj folded into the QKV matmul (HiFi2 = the gate's own fidelity; decode is DRAM-bound)
-            qkv = self._dram_mm(ln, None, self.w["wqkvg_ds"], cfg.hidden, self.meta["qkvg_pad"], self._ck_gate)
+            # g_proj folded into the QKV matmul at the QKV fidelity (LoFi): HiFi2 doubled this M=32 matmul's
+            # math and made it compute-bound (~41 us vs ~22 us)
+            qkv = self._dram_mm(ln, None, self.w["wqkvg_ds"], cfg.hidden, self.meta["qkvg_pad"], self._ck_qkv)
             qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)  # head split in L1 (q -> DRAM before SDPA)
             qkv_w = self.meta["qkv_w"]
             g = ttnn.slice(qkv, [0, 0, 0, qkv_w], [1, 1, B, qkv_w + cfg.num_heads])
