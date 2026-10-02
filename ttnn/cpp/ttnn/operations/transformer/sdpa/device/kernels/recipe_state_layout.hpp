@@ -10,12 +10,12 @@ struct StateTransfer {
     enum Word : uint32_t { Operation, Slot, Numerator, Maximum, Denominator, Chunks, Words };
     static constexpr uint32_t page_bytes = 4096;
 
-    // Raw bytes of one Q block's state planes, for q_tiles query tile rows:
-    // numerator (FP32; the BF16 recipes' CB also holds a second plane per row for a rescaled group's chunk
-    // PV), BF16 maxima, and the FP32 denominator.
+    // Raw bytes of one Q block's state planes, for q_tiles query tile rows: the FP32 numerator (the BF16
+    // recipes' CB also holds per-chunk scratch beside it, which is not transferred), BF16 maxima, and the
+    // FP32 denominator.
     template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
     static constexpr uint32_t plane_bytes(uint32_t plane) {
-        return plane == 0 ? q_tiles * d_tiles * 4096 * (fp32 ? 1 : 2) : plane == 1 ? q_tiles * 2048 : q_tiles * 4096;
+        return plane == 0 ? q_tiles * d_tiles * 4096 : plane == 1 ? q_tiles * 2048 : q_tiles * 4096;
     }
 
     // Transfer pages per plane. An odd Q tile count leaves the BF16 maxima plane half a page long; its
@@ -26,8 +26,8 @@ struct StateTransfer {
     }
 
     // Host-side page count for a runtime Q chunk; matches pages<fp32, q_tiles>.
-    static constexpr uint32_t page_count(bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4) {
-        const uint32_t numerator = q_tiles * d_tiles * 4096 * (fp32 ? 1 : 2);
+    static constexpr uint32_t page_count(bool /*fp32*/, uint32_t q_tiles, uint32_t d_tiles = 4) {
+        const uint32_t numerator = q_tiles * d_tiles * 4096;
         const uint32_t maxima = q_tiles * 2048;
         const uint32_t denominator = q_tiles * 4096;
         const auto ceil_pages = [](uint32_t bytes) { return (bytes + page_bytes - 1) / page_bytes; };
