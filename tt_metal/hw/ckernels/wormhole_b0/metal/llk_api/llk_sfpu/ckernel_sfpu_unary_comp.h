@@ -8,7 +8,6 @@
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
-#include "ckernel_ops.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
@@ -41,144 +40,73 @@ namespace sfpu {
 // v == s (IS_EQUAL) or v != s.
 template <int ITERATIONS, bool IS_EQUAL>
 inline void _calculate_unary_comp_equal_(std::uint32_t value) {
-    constexpr std::uint32_t v = p_sfpu::LREG0;
-    constexpr std::uint32_t s = p_sfpu::LREG1;
-    constexpr std::uint32_t abs_v = p_sfpu::LREG2;
-    constexpr std::uint32_t abs_s = p_sfpu::LREG3;
-    constexpr std::uint32_t sum = p_sfpu::LREG4;
-    constexpr std::uint32_t inf = p_sfpu::LREG5;
-    constexpr std::uint32_t unequal_result = IS_EQUAL ? p_sfpu::LCONST_0 : p_sfpu::LCONST_1;
-    constexpr std::uint32_t equal_result = IS_EQUAL ? p_sfpu::LCONST_1 : p_sfpu::LCONST_0;
-
-    TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_UPPER, (value >> 16) & 0xFFFF);
-    TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
-    TTI_SFPSETSGN(0, s, abs_s, 1);  // SFPSETSGN_MOD1_ARG_IMM
-    TTI_SFPLOADI(inf, sfpi::SFPLOADI_MOD0_FLOATB, 0x7f80);
+    const sfpi::vFloat s = Converter::as_float(value);
+    const sfpi::vFloat abs_s = sfpi::setsgn(s, 0);
+    const sfpi::vInt inf = 0x7f800000;
+    constexpr float equal_result = IS_EQUAL ? 1.0f : 0.0f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(v, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-        TTI_SFPSTORE(unequal_result, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = IS_EQUAL ? 0.0f : 1.0f;
+        const sfpi::vFloat sum = sfpi::setsgn(v, 0) + abs_s;
+        const sfpi::vInt diff = sfpi::as<sfpi::vInt>(v) ^ sfpi::as<sfpi::vInt>(s);
 
-        TTI_SFPSETSGN(0, v, abs_v, 1);  // SFPSETSGN_MOD1_ARG_IMM
-        TTI_SFPMAD(p_sfpu::LCONST_1, abs_v, abs_s, sum, 0);
-        TTI_SFPXOR(0, s, v, 0);
-
-        // if abs(v) + abs(s) == 0; treats every ±subnormal as equal to zero
-        TTI_SFPSETCC(0, sum, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TTI_SFPSTORE(equal_result, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-        TTI_SFPENCC(0, 0, 0, 0);
-
-        // if abs(v) + abs(s) <= inf; rejects NaN
-        TTI_SFPIADD(0, inf, sum, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
-        // if v ^ s == 0; the two are bitwise identical
-        TTI_SFPSETCC(0, v, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TTI_SFPSTORE(equal_result, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
-        TTI_SFPENCC(0, 0, 0, 0);
+        // treats every ±subnormal as equal to zero
+        v_if(sum == 0.0f) { sfpi::dst_reg[0] = equal_result; }
+        v_endif;
+        // abs(v) + abs(s) <= inf rejects NaN, then the two are bitwise identical
+        v_if(sfpi::as<sfpi::vInt>(sum) <= inf && diff == 0) { sfpi::dst_reg[0].mode(ADDR_MOD_2) = equal_result; }
+        v_endif;
     }
 }
 
 // v > s (IS_GREATER) or v < s.
 template <int ITERATIONS, bool IS_GREATER>
 inline void _calculate_unary_comp_strict_(std::uint32_t value) {
-    constexpr std::uint32_t v = p_sfpu::LREG0;
-    constexpr std::uint32_t s = p_sfpu::LREG1;
-    constexpr std::uint32_t abs_v = p_sfpu::LREG2;
-    constexpr std::uint32_t abs_s = p_sfpu::LREG3;
-    constexpr std::uint32_t sum = p_sfpu::LREG4;
-    constexpr std::uint32_t inf = p_sfpu::LREG5;
-    constexpr std::uint32_t copy = p_sfpu::LREG6;
-    constexpr std::uint32_t work = p_sfpu::LREG7;
-
-    TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_UPPER, (value >> 16) & 0xFFFF);
-    TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
-    TTI_SFPSETSGN(0, s, abs_s, 1);  // SFPSETSGN_MOD1_ARG_IMM
-    TTI_SFPLOADI(inf, sfpi::SFPLOADI_MOD0_FLOATB, 0x7f80);
+    const sfpi::vFloat s = Converter::as_float(value);
+    const sfpi::vFloat abs_s = sfpi::setsgn(s, 0);
+    const sfpi::vInt inf = 0x7f800000;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(v, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-        TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = 0.0f;
+        const sfpi::vFloat sum = sfpi::setsgn(v, 0) + abs_s;
 
-        TTI_SFPSETSGN(0, v, abs_v, 1);  // SFPSETSGN_MOD1_ARG_IMM
-        TTI_SFPMAD(p_sfpu::LCONST_1, abs_v, abs_s, sum, 0);
-
-        if constexpr (IS_GREATER) {
-            // if v > s: swap a copy of v against a copy of s and see whether v was the
-            // maximum. SFPSWAP writes both operands, so the scalar goes in through a copy.
-            TTI_SFPMOV(0, s, work, 0);
-            TTI_SFPMOV(0, v, copy, 0);
-            TTI_SFPSWAP(0, work, copy, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-            TTI_SFPXOR(0, v, copy, 0);
-            TTI_SFPSETCC(0, copy, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-        } else {
-            // if v < s: same, reading the maximum instead.
-            TTI_SFPMOV(0, s, work, 0);
-            TTI_SFPMOV(0, v, copy, 0);
-            TTI_SFPSWAP(0, work, copy, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);
-            TTI_SFPXOR(0, v, copy, 0);
-            TTI_SFPSETCC(0, copy, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        // v > s when v is not the minimum, v < s when it is not the maximum
+        const sfpi::vFloat bound = IS_GREATER ? sfpi::min(v, s) : sfpi::max(v, s);
+        // abs(v) + abs(s) != 0 rejects both zero or ±subnormal, <= inf rejects NaN
+        v_if(
+            (sfpi::as<sfpi::vInt>(bound) ^ sfpi::as<sfpi::vInt>(v)) != 0 && sum != 0.0f &&
+            sfpi::as<sfpi::vInt>(sum) <= inf) {
+            sfpi::dst_reg[0].mode(ADDR_MOD_2) = 1.0f;
         }
-        // if abs(v) + abs(s) != 0; rejects if both are zero or ±subnormal
-        TTI_SFPSETCC(0, sum, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-        // if abs(v) + abs(s) <= inf; rejects NaN
-        TTI_SFPIADD(0, inf, sum, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
-        TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
-        TTI_SFPENCC(0, 0, 0, 0);
+        v_endif;
     }
 }
 
 // v >= s (IS_GREATER) or v <= s.
 template <int ITERATIONS, bool IS_GREATER>
 inline void _calculate_unary_comp_weak_(std::uint32_t value) {
-    constexpr std::uint32_t v = p_sfpu::LREG0;
-    constexpr std::uint32_t s = p_sfpu::LREG1;
-    constexpr std::uint32_t abs_v = p_sfpu::LREG2;
-    constexpr std::uint32_t abs_s = p_sfpu::LREG3;
-    constexpr std::uint32_t sum = p_sfpu::LREG4;
-    constexpr std::uint32_t inf = p_sfpu::LREG5;
-    constexpr std::uint32_t copy = p_sfpu::LREG6;
-    constexpr std::uint32_t work = p_sfpu::LREG7;
-
-    TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_UPPER, (value >> 16) & 0xFFFF);
-    TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
-    TTI_SFPSETSGN(0, s, abs_s, 1);  // SFPSETSGN_MOD1_ARG_IMM
-    TTI_SFPLOADI(inf, sfpi::SFPLOADI_MOD0_FLOATB, 0x7f80);
+    const sfpi::vFloat s = Converter::as_float(value);
+    const sfpi::vFloat abs_s = sfpi::setsgn(s, 0);
+    const sfpi::vInt inf = 0x7f800000;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(v, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-        TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = 1.0f;
+        const sfpi::vFloat sum = sfpi::setsgn(v, 0) + abs_s;
 
-        TTI_SFPSETSGN(0, v, abs_v, 1);  // SFPSETSGN_MOD1_ARG_IMM
-        TTI_SFPMAD(p_sfpu::LCONST_1, abs_v, abs_s, sum, 0);
-
-        // if the strict comparison the other way holds: v < s for >=, v > s for <=
-        if constexpr (IS_GREATER) {
-            // if v < s: same, reading the maximum instead.
-            TTI_SFPMOV(0, s, work, 0);
-            TTI_SFPMOV(0, v, copy, 0);
-            TTI_SFPSWAP(0, work, copy, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);
-            TTI_SFPXOR(0, v, copy, 0);
-            TTI_SFPSETCC(0, copy, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-        } else {
-            // if v > s: swap a copy of v against a copy of s and see whether v was the
-            // maximum. SFPSWAP writes both operands, so the scalar goes in through a copy.
-            TTI_SFPMOV(0, s, work, 0);
-            TTI_SFPMOV(0, v, copy, 0);
-            TTI_SFPSWAP(0, work, copy, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-            TTI_SFPXOR(0, v, copy, 0);
-            TTI_SFPSETCC(0, copy, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-        }
-        // if abs(v) + abs(s) != 0; every ±subnormal stays equal to zero
-        TTI_SFPSETCC(0, sum, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-        TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-        TTI_SFPENCC(0, 0, 0, 0);
-
-        // if abs(v) + abs(s) > inf; v or s is NaN
-        TTI_SFPIADD(0, inf, sum, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
-        TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
-        TTI_SFPENCC(0, 0, 0, 0);
+        // the strict comparison the other way: v < s for >=, v > s for <=;
+        // abs(v) + abs(s) != 0 keeps every ±subnormal equal to zero
+        const sfpi::vFloat bound = IS_GREATER ? sfpi::max(v, s) : sfpi::min(v, s);
+        v_if((sfpi::as<sfpi::vInt>(bound) ^ sfpi::as<sfpi::vInt>(v)) != 0 && sum != 0.0f) { sfpi::dst_reg[0] = 0.0f; }
+        v_endif;
+        // abs(v) + abs(s) > inf: v or s is NaN
+        v_if(sfpi::as<sfpi::vInt>(sum) > inf) { sfpi::dst_reg[0].mode(ADDR_MOD_2) = 0.0f; }
+        v_endif;
     }
 }
 
