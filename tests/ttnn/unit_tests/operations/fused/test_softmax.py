@@ -929,3 +929,66 @@ def test_softmax_large_kernel_mask_padded(device, shape, dim):
         ulp_threshold=15,
         check_ulp=True,
     )
+
+
+@pytest.mark.parametrize(
+    "op, batch, heads, sq, sk",
+    [
+        # one-tile mask [batch, 1, 32, W] shared by every head (the height the out-of-place ops accept)
+        ("scale_mask_softmax", 1, 160, 32, 128),
+        ("scale_mask_softmax", 2, 96, 32, 128),
+        ("attention_softmax", 1, 160, 32, 128),
+        # Wt = 256 selects the streaming large kernel
+        ("scale_mask_softmax", 1, 160, 32, 8192),
+        # taller mask with fewer query rows than keys, shared by every head (in place only)
+        ("scale_mask_softmax_in_place", 1, 160, 64, 128),
+        ("scale_mask_softmax_in_place", 1, 46, 96, 256),
+        ("attention_softmax_", 1, 160, 64, 128),
+        # two batches with a taller mask, where one core's rows cross the batch boundary
+        ("scale_mask_softmax_in_place", 2, 37, 96, 128),
+        # mask with more query rows than keys
+        ("scale_mask_softmax_in_place", 1, 64, 256, 64),
+        ("scale_mask_softmax_in_place", 1, 1, 8448, 64),
+        # square mask, unchanged
+        ("scale_mask_softmax_in_place", 1, 160, 64, 64),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_scale_mask_softmax_causal_mask_height_differs_from_width(device, op, batch, heads, sq, sk, dtype):
+    """The causal-mask reader must rewind to the mask's first row every mask-height tile rows, as the
+    host assigns each core its starting mask row. It rewound every Wt rows instead, so a core whose rows
+    crossed into the next head read the wrong mask rows whenever the mask was not square."""
+    if dtype == ttnn.float32 and sk > 1024:
+        pytest.skip("the large-kernel case is covered in bfloat16")
+    torch.manual_seed(0)
+    scale = 1.0 if op.startswith("attention_softmax") else 0.75
+
+    torch_input = torch.randn((batch, heads, sq, sk), dtype=torch.bfloat16)
+    attention_mask = torch.zeros((batch, 1, sq, sk), dtype=torch.bfloat16)
+    attention_mask[torch.rand_like(attention_mask, dtype=torch.float32) < 0.2] = float("-inf")
+    torch_output = F.softmax(torch_input.float() * scale + attention_mask.float(), dim=-1)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_mask = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+
+    if op == "scale_mask_softmax":
+        ttnn_output = ttnn.scale_mask_softmax(ttnn_input, scale, ttnn_mask, is_causal_mask=True)
+    elif op == "scale_mask_softmax_in_place":
+        ttnn_output = ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask, is_causal_mask=True)
+    elif op == "attention_softmax":
+        ttnn_output = ttnn.transformer.attention_softmax(
+            ttnn_input, head_size=None, attention_mask=ttnn_mask, causal_mask=True
+        )
+    else:
+        ttnn_output = ttnn.transformer.attention_softmax_(
+            ttnn_input, head_size=None, attention_mask=ttnn_mask, causal_mask=True
+        )
+
+    assert_numeric_metrics(
+        torch_output,
+        ttnn.to_torch(ttnn_output).float(),
+        pcc_threshold=0.999,
+        rtol=0.09,
+        atol=0.01,
+        frobenius_threshold=0.05,
+    )
