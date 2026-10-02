@@ -3212,11 +3212,11 @@ class Gemma4DFlashBase(Gemma4ForCausalLM):
             except Exception:
                 pass
             self._spec_drop_session("baseline prefill")
-            if self._SPEC_BLOCK > 1:
-                # gemma4's prefill KV-history write (_left_pad_kv_to_hist) is not
-                # trace-safe; the dFlash spec prefill runs untraced for the same
-                # reason. Keep the adaptive batched baseline prefill untraced too.
-                kwargs["enable_trace"] = False
+            # Every dFlash-rail prefill runs untraced: _left_pad_kv_to_hist is
+            # not trace-safe, and warmup_model_prefill above skipped capture for
+            # this reason. Letting a GEMMA4_DFLASH_SERVE_BLOCK=1 runtime prefill
+            # keep enable_trace=True made it attempt a capture warmup never did.
+            kwargs["enable_trace"] = False
             return super().prefill_forward(*args, **kwargs)
         drafter = self._spec_get_drafter()
         model0 = self.model[0]
@@ -3675,160 +3675,6 @@ class Gemma4DFlashForCausalLM(Gemma4DFlashBase):
         if self._SPEC_BLOCK <= 1:
             return Gemma4ForCausalLM.warmup_model_decode(self, *args, **kwargs)
         return super().warmup_model_decode(*args, **kwargs)
-
-    def _spec_pending_is_mine(self, page_table):
-        """True when the pending session was captured for the request whose
-        page table this is. Unknown identity on either side (no page table)
-        falls back to True: that is the pre-existing single-session behaviour,
-        and the scheduler's mirror still owns the width contract."""
-        owner = getattr(self, "_spec_pending_owner", None)
-        cur = self._spec_pt_identity(page_table)
-        if owner is None or cur is None:
-            return True
-        return owner == cur
-
-    def _spec_active_is_mine(self, page_table):
-        """True when the LIVE session belongs to the request whose page table
-        this is. Unknown identity on either side falls back to True, matching
-        _spec_pending_is_mine: the scheduler's mirror still owns the width
-        contract, and a missing page table is not evidence of a hand-off."""
-        owner = getattr(self, "_spec_active_owner", None)
-        cur = self._spec_pt_identity(page_table)
-        if owner is None or cur is None:
-            return True
-        return owner == cur
-
-    def _spec_drop_session(self, why):
-        """Drop the single global spec session (pending taps AND any live one).
-
-        Called on every path that serves a prefill as plain baseline. The taps
-        are only valid for the prompt they were captured from, and the session
-        slot is global: leaving it armed lets an unrelated later solo decode
-        bootstrap another prompt's residuals, and leaving a live session armed
-        lets it outlive the request whose width the scheduler reserved. The
-        plugin's scheduler mirrors exactly these transitions, so the reserved
-        width and the emitted width stay in lockstep.
-        """
-        if self._spec_pending is not None or self._spec_active:
-            logger.info(f"Gemma4DFlash: dropping spec session ({why})")
-        self._spec_pending = None
-        self._spec_pending_owner = None
-        if self._spec_active:
-            self._spec_release_decoder()
-        # DISARM the residual-tap hook. capture() arms it with buffers=tap_bufs,
-        # which are sized for the fused DECODE body (P_v rows), and nothing
-        # disarms it when the session ends -- so it stays armed after any spec
-        # request. A later prefill served as plain baseline then runs the eager
-        # chunked forward with that hook still live and ttnn.copy's a full
-        # prefill chunk into a P_v-row buffer, killing the engine:
-        #   TT_FATAL: Input tensor shape Shape([1, 1, 4096, 5376]) does not
-        #   match output tensor shape Shape([1, 1, 6, 5376])
-        # (copy_device_operation.cpp:112 -- 4096 = prefill chunk, 6 = P_v at
-        # GEMMA4_DFLASH_VERIFY=5). Reproduced on a P150x8 256K benchmark sweep at
-        # the first point above GEMMA4_DFLASH_MAX_SPEC_ISL: 131072 served fine,
-        # 196608 took the engine down. Disarming here covers every drop path.
-        try:
-            self.model[0].dflash_capture_taps(None)
-        except Exception:
-            pass
-
-    # -- prefill: capture taps (untraced) ------------------------------------
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
-        """Warm the prefill buckets eagerly: this rail never replays a prefill trace.
-
-        Every prefill on the dFlash rails runs untraced at runtime -- the drafter
-        reads residual taps from a python hook that a traced replay does not run,
-        and ``_left_pad_kv_to_hist`` is not trace-safe (see ``prefill_forward``).
-        The inherited warmup only cleared ``enable_trace`` for bounded sliding, so
-        an unbounded dFlash server captured every prefill bucket at warmup and
-        then never replayed one: warmup work and trace-region space spent on
-        traces that cannot be used (tt-metal#57853).
-
-        The warmup itself still runs, eagerly, so the buckets are warm.
-        """
-        super().warmup_model_prefill(
-            kv_cache,
-            enable_trace=False,
-            can_sample_on_device=can_sample_on_device,
-            greedy_only=greedy_only,
-        )
-
-    def prefill_forward(self, *args, **kwargs):
-        tokens = kwargs.get("tokens")
-        if tokens is None and args:
-            tokens = args[0]
-        # Baseline pickup: dFlash spec is B=1 block-output. In a non-block-output
-        # / throughput deployment (GEMMA4_DFLASH_SERVE_BLOCK=1) or for any
-        # batched (concurrency>1) prefill, serve via the plain baseline path and
-        # skip the drafter tap capture entirely.
-        if self._SPEC_BLOCK <= 1 or (tokens is not None and int(tokens.shape[0]) != 1):
-            # model0's dFlash tap-capture state is SHARED; a prior solo session
-            # can leave it armed (with decode-sized buffers). Disarm before a
-            # plain baseline prefill so the tap hook does not fire on it (a stale
-            # buffer copy would shape-mismatch against the prefill hidden).
-            try:
-                self.model[0].dflash_capture_taps(None)
-            except Exception:
-                pass
-            self._spec_drop_session("baseline prefill")
-            if self._SPEC_BLOCK > 1:
-                # gemma4's prefill KV-history write (_left_pad_kv_to_hist) is not
-                # trace-safe; the dFlash spec prefill runs untraced for the same
-                # reason. Keep the adaptive batched baseline prefill untraced too.
-                kwargs["enable_trace"] = False
-            return super().prefill_forward(*args, **kwargs)
-        drafter = self._spec_get_drafter()
-        model0 = self.model[0]
-        # Boot warmup prefills feed all-zero dummy tokens (and warmup_prefill=1);
-        # capturing their taps would seed the drafter ctx with garbage. Only the
-        # REAL prompt prefill sets the pending spec session.
-        is_warmup = bool(kwargs.get("warmup_prefill")) or (tokens is not None and int(tokens.abs().sum()) == 0)
-        # Force EAGER prefill: the residual taps are captured by a python hook in
-        # the eager forward, which a traced replay skips. enable_trace=False gates
-        # the prefill-bucket trace; GEMMA4_CHUNKED_PREFILL_TRACE=0 (model spec)
-        # gates the per-chunk trace so multi-chunk prefills (ISL > one chunk)
-        # still fire the hook -- without it the drafter gets empty taps at ISL
-        # above the chunk size and the request fails.
-        kwargs["enable_trace"] = False
-        if is_warmup:
-            return super().prefill_forward(*args, **kwargs)
-        # SPEC-ISL CEILING (GEMMA4_DFLASH_MAX_SPEC_ISL, 0=off): above this prompt
-        # length the fused-verify capture no longer fits in DRAM alongside the
-        # batched-baseline persistent buffers (max_num_seqs>1) -- the capture
-        # allocation OOMs (bank_manager.cpp:462) and kills the engine. Serve such
-        # requests as plain baseline through the existing solo-no-session adaptive
-        # path instead: skip the tap capture entirely so decode finds no pending
-        # session. Frontier measured on P150x8 @ ctx=262144:
-        # max_num_seqs=32 -> 131072 OK / 196608 OOM; 16 -> 196608 OK / 229376 OOM;
-        # 1 -> 253952 OK. Keeps full batch fallback capacity while long-context
-        # requests degrade gracefully to baseline speed rather than crashing.
-        _max_spec_isl = int(os.environ.get("GEMMA4_DFLASH_MAX_SPEC_ISL", "0"))
-        if _max_spec_isl > 0:
-            _pl = kwargs.get("prompt_lens")
-            _n0 = int(_pl[0]) if _pl is not None else int(tokens.shape[1])
-            if _n0 > _max_spec_isl:
-                logger.info(
-                    f"Gemma4DFlash: prompt {_n0} > spec ceiling {_max_spec_isl}; "
-                    "serving as plain baseline (no spec session)"
-                )
-                self._spec_drop_session("prompt over spec ceiling")
-                return super().prefill_forward(*args, **kwargs)
-        model0.dflash_capture_taps(drafter.target_layer_ids, keep_last=12)
-        try:
-            out = super().prefill_forward(*args, **kwargs)
-        finally:
-            taps = model0.pop_dflash_taps()
-            model0.dflash_capture_taps(None)
-        prompt_lens = kwargs.get("prompt_lens")
-        n = int(prompt_lens[0]) if prompt_lens is not None else int(tokens.shape[1])
-        self._spec_pending = (taps, n)
-        self._spec_pending_owner = self._spec_pt_identity(kwargs.get("page_table"))
-        # The runner releases by STATE SLOT, not by page table, so record the
-        # slot too: release_request(row) has to tell "my request finished" from
-        # "some other request finished" (see release_request).
-        self._spec_owner_slot = _spec_first_slot(kwargs.get("empty_slots"))
-        self._spec_active = False
-        return out
 
     def _spec_bootstrap(self, anchor_id, start, page_table, kv_cache, page_tables_per_layer=None):
         # A carry never crosses sessions, and this must happen BEFORE the
