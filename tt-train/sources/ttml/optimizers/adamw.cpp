@@ -37,15 +37,16 @@ AdamW::AdamW(ttml::serialization::NamedParameters parameters, const AdamWConfig&
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
+            // The kernel needs the moments in the parameter's own dtype.
             m_exp_avg.emplace(
                 name,
                 autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE)),
                     /* requires_grad */ false));
             m_exp_avg_sq.emplace(
                 name,
                 autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE)),
                     /* requires_grad */ false));
         }
     }
@@ -78,18 +79,18 @@ void AdamW::step() {
         }
 
         auto gradients = theta_ptr->get_grad();
-        auto param = theta_ptr->get_value(autograd::PreferredPrecision::HALF);
+        // The kernel updates the parameter and its state in place: write through the native tensors.
+        auto param = theta_ptr->get_value_for_update();
+        auto exp_avg = m_exp_avg.at(name)->get_value_for_update();
+        auto exp_avg_sq = m_exp_avg_sq.at(name)->get_value_for_update();
 
-        const auto& exp_avg = m_exp_avg.at(name)->get_value(autograd::PreferredPrecision::HALF);
-        const auto& exp_avg_sq = m_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
-
-        std::optional<ttnn::Tensor> max_exp_avg_sq;
+        std::optional<autograd::MutableTensorView> max_exp_avg_sq;
         if (m_config.amsgrad) {
-            max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
+            max_exp_avg_sq.emplace(m_max_exp_avg_sq.at(name)->get_value_for_update());
         }
 
         float weight_decay = m_config.weight_decay;
-        if (m_config.weight_decay_skip_1d && is_effectively_1d(param)) {
+        if (m_config.weight_decay_skip_1d && is_effectively_1d(param.tensor())) {
             weight_decay = 0.0F;
         }
 
@@ -98,7 +99,7 @@ void AdamW::step() {
             gradients,
             exp_avg,
             exp_avg_sq,
-            max_exp_avg_sq,
+            max_exp_avg_sq ? &*max_exp_avg_sq : nullptr,
             m_config.lr,
             m_config.beta1,
             m_config.beta2,
@@ -233,7 +234,7 @@ void AdamW::init_max_exp_avg_sq() {
             m_max_exp_avg_sq.emplace(
                 name,
                 autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE)),
                     /* requires_grad */ false));
         }
     }

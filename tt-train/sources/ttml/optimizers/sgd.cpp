@@ -17,6 +17,7 @@ namespace ttml::optimizers {
 
 SGD::SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    require_bf16_parameters(m_parameters, "SGD");
     validate_config();
     if (m_config.momentum > 0.0) {
         for (const auto& [name, tensor_ptr] : m_parameters) {
@@ -51,20 +52,21 @@ void SGD::step() {
             continue;
         }
         auto gradients = theta_ptr->get_grad();
-        auto param = theta_ptr->get_value(autograd::PreferredPrecision::HALF);
+        // The kernel updates the parameter and the momentum buffer in place, and only exists for bf16.
+        auto param = theta_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
 
-        std::optional<ttnn::Tensor> momentum_buffer;
+        std::optional<autograd::MutableTensorView> momentum_buffer;
         bool first_momentum_update = false;
         if (m_config.momentum > 0.0) {
             auto it = m_momentum.find(name);
             if (it == m_momentum.end()) {
                 auto buf = autograd::create_tensor(
-                    core::zeros_like(param),
+                    core::zeros_like(param.tensor()),
                     /* requires_grad */ false);
                 it = m_momentum.emplace(name, std::move(buf)).first;
             }
             first_momentum_update = m_momentum_initialized.insert(name).second;
-            momentum_buffer = it->second->get_value(autograd::PreferredPrecision::HALF);
+            momentum_buffer.emplace(it->second->get_value_for_update(autograd::PreferredPrecision::HALF));
         }
 
         // A buffer's first update must produce buf = g (PyTorch seeds fresh buffers with the raw
@@ -78,7 +80,7 @@ void SGD::step() {
             dampening,
             m_config.weight_decay,
             m_config.nesterov,
-            momentum_buffer);
+            momentum_buffer ? &*momentum_buffer : nullptr);
     }
     m_steps++;
 }

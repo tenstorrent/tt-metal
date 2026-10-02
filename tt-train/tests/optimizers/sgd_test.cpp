@@ -10,6 +10,7 @@
 #include <cstdlib>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/autocast_tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "optimizers/sgd.hpp"
@@ -435,13 +436,15 @@ TEST_F(SGDValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
     auto param = to_tt(test_utils::make_uniform_xarray<float>(param_shape, -1.0F, 1.0F, 123U));
     auto grad = to_tt(test_utils::make_uniform_xarray<float>(grad_shape, -1.0F, 1.0F, 124U));
 
+    ttml::autograd::AutocastTensor param_value(param);
+    auto param_view = param_value.get_value_for_update();
     EXPECT_ANY_THROW(ttml::metal::sgd(
-        param,
+        param_view,
         grad,
         /* lr */ 1e-2f,
         /* momentum */ 0.0f,
         /* dampening */ 0.0f,
         /* weight_decay */ 0.0f,
         /* nesterov */ false,
-        /* momentum_buffer */ std::nullopt));
+        /* momentum_buffer */ nullptr));
 }

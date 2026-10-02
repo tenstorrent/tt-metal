@@ -11,6 +11,7 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/adamw.hpp"
+#include "optimizers/adamw_composite.hpp"
 #include "optimizers/sgd.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -273,23 +274,26 @@ TEST_F(AutogradTensorTest, AutocastTensorSetTensorKeepsHeldReferencesValid) {
     EXPECT_TRUE(all_equal(held, 4.0F)) << "a reference returned by get_tensor() no longer follows the tensor";
 }
 
-// Disabled: fused optimizers leave a cached FULL view stale — https://github.com/tenstorrent/tt-metal/issues/41657
-TEST_F(AutogradTensorTest, DISABLED_FullViewTracksFusedAdamWStep) {
+TEST_F(AutogradTensorTest, FullViewTracksFusedAdamWStep) {
     optimizers::AdamWConfig config;
     config.lr = 1e-2F;
     expect_full_view_tracks_fused_step<optimizers::AdamW>(config);
 }
 
-// Disabled: fused optimizers leave a cached FULL view stale — https://github.com/tenstorrent/tt-metal/issues/41657
-TEST_F(AutogradTensorTest, DISABLED_FullViewTracksFusedSGDStep) {
+// MorehAdamW writes the parameter through ttnn::moreh_adamw output tensors, outside tt-train's fused wrappers.
+TEST_F(AutogradTensorTest, FullViewTracksMorehAdamWStep) {
+    optimizers::AdamWCompositeConfig config;
+    config.lr = 1e-2F;
+    expect_full_view_tracks_fused_step<optimizers::MorehAdamW>(config);
+}
+
+TEST_F(AutogradTensorTest, FullViewTracksFusedSGDStep) {
     optimizers::SGDConfig config;
     config.lr = 1e-1F;
     expect_full_view_tracks_fused_step<optimizers::SGD>(config);
 }
 
-// Disabled: for an fp32-native parameter the fused step updates only the bf16 copy, so the stored value never
-// moves — https://github.com/tenstorrent/tt-metal/issues/41657
-TEST_F(AutogradTensorTest, DISABLED_NativeValueTracksFusedAdamWStepOnFp32Parameter) {
+TEST_F(AutogradTensorTest, NativeValueTracksFusedAdamWStepOnFp32Parameter) {
     auto [theta, grad] = make_parameter(ttnn::DataType::FLOAT32);
     ASSERT_EQ(theta->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32);
 
