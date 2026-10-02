@@ -267,6 +267,8 @@ def test_pipeline_distilled(
                     prompt=prompt,
                     thresholds=thresholds,
                     temporal_width=int(os.environ.get("VBENCH_TEMPORAL_WIDTH", "0")),
+                    # The clips must be exactly what this configuration rendered (NUM_FRAMES / HEIGHT / WIDTH).
+                    clip_shape=(num_frames, height, width),
                 )
             else:
                 assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
