@@ -490,6 +490,17 @@ separate bounded long-context teacher-forcing check starts locally. Full-suite
 ordering/results/time and long-control agreement are pending; no success is
 claimed merely from dispatch or the zero rebuild count.
 
+08:20 UTC: first combined CI fails before trials due to an introduced pinned-
+cache launcher omission (`MODEL_WEIGHTS_DIR`); TTI **f245f6ac** fixes publication
+with 93 passing launcher/overlay tests. Same-image/config retry **36983437902**
+is dispatched and monitored. The broader config checks expose one expected
+GPQA-presence conflict with this SWE-only diagnostic branch; not hidden.
+Long-context old/new-prefill teacher forcing both score 122/128 top-1; no
+numerical or outcome evidence promotes the new policy. Timing differences are
+JIT-cache-confounded and are not reported as precision speedups. Local devices
+are closed and unowned. Active resumed time is about 169 minutes, cumulative
+about **7h42m**; no further user intervention or image build.
+
 - TTFT: `doc/ttft_optimization/`.
 - Remote benchmarks/evals:
   `readiness_vllm/ttft_optimization_remote/README.md`.
