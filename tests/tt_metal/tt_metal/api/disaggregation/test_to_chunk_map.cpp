@@ -19,7 +19,7 @@
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
-#include "internal/disaggregation/kv_layout_spec.hpp"
+#include "internal/disaggregation/cache_tensor_layout_spec.hpp"
 #include "internal/disaggregation/noc_addr.hpp"
 #include "internal/disaggregation/to_chunk_map.hpp"
 

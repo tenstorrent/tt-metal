@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/disaggregation/kv_layout_spec.hpp>
+#include <internal/disaggregation/cache_tensor_layout_spec.hpp>
 
 #include <tt_stl/assert.hpp>
 
