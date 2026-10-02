@@ -13,6 +13,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
@@ -71,6 +72,27 @@ std::set<std::string> emitted_names(const StreamAssignment& a) {
     return names;
 }
 
+TEST(StreamAssignmentTest, CreditPlanKeepsEachVcsReasons) {
+    CreditTransportPlan plan{};
+    // No reason has been added yet
+    EXPECT_FALSE(plan.any_vc_uses_counters());
+
+    // Add reasons for VC1 and assert that only those two reasons are present
+    plan.add_counter_reason(1, L1CreditCounterReason::MULTI_TXQ);
+    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
+    EXPECT_FALSE(plan.vc_uses_counters(0));
+    EXPECT_TRUE(plan.vc_uses_counters(1));
+    EXPECT_FALSE(plan.vc_uses_counters(2));
+    EXPECT_TRUE(plan.any_vc_uses_counters());
+    EXPECT_EQ(
+        plan.reasons(1),
+        (std::vector<L1CreditCounterReason>{L1CreditCounterReason::MULTI_TXQ, L1CreditCounterReason::EXPRESS}));
+
+    // Invalid VC index should throw
+    EXPECT_ANY_THROW(plan.add_counter_reason(builder_config::MAX_NUM_VCS, L1CreditCounterReason::EXPRESS));
+    EXPECT_ANY_THROW(plan.vc_uses_counters(builder_config::MAX_NUM_VCS));
+}
+
 TEST(StreamAssignmentTest, Legacy2DFitsAndPlacesDeterministically) {
     const auto a = make_stream_assignment(stream_requirements(legacy_2d_placement(), CreditTransportPlan{}));
     // The layout: the vc0 sender-free-slots base pinned at the worker-facing constant (the bottom
@@ -95,8 +117,8 @@ TEST(StreamAssignmentTest, Legacy2DFitsAndPlacesDeterministically) {
 
 TEST(StreamAssignmentTest, ExpressFullFitsWithVc1OnCounters) {
     CreditTransportPlan plan{};
-    plan.vc1_uses_counters = true;
-    plan.vc2_uses_counters = true;
+    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
+    plan.add_counter_reason(2, L1CreditCounterReason::NO_COMPLETION_REGISTER);
     const auto a = make_stream_assignment(stream_requirements(express_full_placement(), plan));
     // 3 receivers (VC1 and VC2 both have one, so VC2's lands on channel 2) + 5 acked + 5 completed
     // + 8 downstream + 9 sender-free = 30, exactly filling the region below the pinned pair, with
@@ -110,7 +132,7 @@ TEST(StreamAssignmentTest, ExpressFullFitsWithVc1OnCounters) {
 TEST(StreamAssignmentTest, Vc2ReceiverTakesChannelOneWhenVc1IsAbsent) {
     // Receiver roles use dense channel indices: when VC1 is absent, VC2 occupies channel 1.
     CreditTransportPlan plan{};
-    plan.vc2_uses_counters = true;
+    plan.add_counter_reason(2, L1CreditCounterReason::NO_COMPLETION_REGISTER);
     const auto a = make_stream_assignment(stream_requirements(vc2_without_vc1_placement(), plan));
     EXPECT_TRUE(a.has(StreamRole::RECEIVER_PKTS_SENT, 1, 0));
     EXPECT_LT(a.id(StreamRole::RECEIVER_PKTS_SENT, 1, 0), k_unused_stream_id);
@@ -122,7 +144,7 @@ TEST(StreamAssignmentTest, ExpressFullWithVc1OnRegistersOverruns) {
     // Maximal express with VC1 on registers needs 33 registers, exceeding the 30 below the pinned
     // pair. VC2 stays on counters so this isolates the register budget.
     CreditTransportPlan plan{};
-    plan.vc2_uses_counters = true;
+    plan.add_counter_reason(2, L1CreditCounterReason::NO_COMPLETION_REGISTER);
     EXPECT_ANY_THROW(make_stream_assignment(stream_requirements(express_full_placement(), plan)));
 }
 
@@ -143,7 +165,7 @@ TEST(StreamAssignmentTest, BoundaryOnRegistersStatesFullNeedAndHitsTheBudgetWall
 
 TEST(StreamAssignmentTest, ExpressVc1AbsentFits) {
     CreditTransportPlan plan{};
-    plan.vc1_uses_counters = true;
+    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
 
     // VC1 is absent, so the need is 1 receiver + 5 acked + 5 completed + 4 downstream + 5
     // sender-free = 20 registers.
@@ -158,8 +180,8 @@ TEST(StreamAssignmentTest, ExpressVc1AbsentFits) {
 
 TEST(StreamAssignmentTest, PinnedIdThirtyHasAtMostOneLiveConsumer) {
     CreditTransportPlan plan{};
-    plan.vc1_uses_counters = true;
-    plan.vc2_uses_counters = true;
+    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
+    plan.add_counter_reason(2, L1CreditCounterReason::NO_COMPLETION_REGISTER);
     auto need = stream_requirements(express_full_placement(), plan);  // vc2_present == true
     need.tensix_relay_present = true;
     EXPECT_ANY_THROW(make_stream_assignment(need));
@@ -186,7 +208,7 @@ TEST(StreamAssignmentTest, BoundaryChipAgreementOnTheBoundaryOnlyChannel) {
     // narrower mesh routers. The host-only VC0-counter/VC1-register plan keeps a VC1 completed group
     // present while testing these placement pins.
     CreditTransportPlan plan{};
-    plan.vc0_uses_counters = true;  // VC0 credits on counters, VC1 left on registers
+    plan.add_counter_reason(0, L1CreditCounterReason::MULTI_TXQ);  // VC0 credits on counters, VC1 left on registers
     const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
     EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 0, 4), 4u);
     EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 0, 3), 3u);
@@ -201,7 +223,7 @@ TEST(StreamAssignmentTest, FreeSlotsEmitPlacementWhileAckedEmitsActivity) {
     // table carries the sentinel there (activity is a transport-plan question, and VC0 is on
     // counters here).
     CreditTransportPlan plan{};
-    plan.vc0_uses_counters = true;
+    plan.add_counter_reason(0, L1CreditCounterReason::MULTI_TXQ);
     const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
     std::map<std::string, uint32_t> values;
     for (const auto& [name, value] : a.named_args()) {
@@ -215,7 +237,7 @@ TEST(StreamAssignmentTest, FreeSlotsEmitPlacementWhileAckedEmitsActivity) {
 
 TEST(StreamAssignmentTest, InactiveConsumersEmitTheSentinel) {
     CreditTransportPlan plan{};
-    plan.vc1_uses_counters = true;
+    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
     const auto a = make_stream_assignment(stream_requirements(express_vc1_absent_placement(), plan));
     std::map<std::string, uint32_t> values;
     for (const auto& [name, value] : a.named_args()) {
